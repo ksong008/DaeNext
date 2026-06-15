@@ -40,6 +40,7 @@ mod client;
 mod direct;
 mod display;
 mod dns;
+mod dns_listener;
 mod events;
 mod execution;
 mod execution_types;
@@ -65,6 +66,7 @@ pub(super) use self::metrics::*;
 #[path = "runtime/workers.rs"]
 mod workers;
 use self::display::*;
+use self::dns_listener::*;
 pub(super) use self::workers::*;
 #[path = "runtime/resources.rs"]
 mod resources;

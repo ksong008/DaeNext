@@ -112,6 +112,26 @@ pub(crate) fn start_resident_dataplane_workers(
             );
         }
     };
+    let dns_bind_listener = match prepare_resident_dns_bind_listener(&config.dns.bind) {
+        Ok(listener) => listener,
+        Err(err) => {
+            return (
+                json!({
+                    "status": "fail",
+                    "enabled": true,
+                    "error": err,
+                    "event_file": Value::Null,
+                    "event_file_status": "disabled",
+                    "event_log": "product-log-sink",
+                }),
+                None,
+            );
+        }
+    };
+    let dns_bind_listener_report = dns_bind_listener
+        .as_ref()
+        .map(ResidentDnsBindListener::report)
+        .unwrap_or_else(disabled_dns_bind_listener_report);
 
     let reload_generation = RESIDENT_RELOAD_GENERATION.fetch_add(1, Ordering::Relaxed);
     let resource_config = ResidentRuntimeResourceConfig::from_config(config);
@@ -224,6 +244,27 @@ pub(crate) fn start_resident_dataplane_workers(
             }),
         );
     }
+    if let Some(dns_bind_listener) = dns_bind_listener {
+        let stop = owner.stop_handle();
+        let dns = Arc::clone(&dns);
+        let event_file = owner.event_file();
+        let event_lock = owner.event_lock();
+        let metrics = owner.metrics();
+        owner.register_thread(
+            "dns-bind-listener",
+            "dns-bind-listener",
+            thread::spawn(move || {
+                resident_dns_bind_listener_loop(
+                    dns_bind_listener,
+                    dns,
+                    stop,
+                    event_file,
+                    event_lock,
+                    metrics,
+                )
+            }),
+        );
+    }
     for health_group in &health_groups {
         let stop = owner.stop_handle();
         let health_group = Arc::clone(health_group);
@@ -262,6 +303,18 @@ pub(crate) fn start_resident_dataplane_workers(
     start_map.insert("enabled".to_owned(), json!(true));
     start_map.insert("tcp_worker_started".to_owned(), json!(true));
     start_map.insert("udp_session_manager_started".to_owned(), json!(true));
+    start_map.insert(
+        "dns_bind_listener_started".to_owned(),
+        json!(
+            dns_bind_listener_report["enabled"]
+                .as_bool()
+                .unwrap_or(false)
+        ),
+    );
+    start_map.insert(
+        "dns_bind_listener".to_owned(),
+        dns_bind_listener_report.clone(),
+    );
     start_map.insert("resources".to_owned(), resource_config.json());
     start_map.insert(
         "tcp_flow_stack_bytes".to_owned(),
