@@ -10,6 +10,7 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(super) enum VmessAeadUdpWrapperKind {
     PlainTcp,
+    TlsTcp,
     WebSocketPlain,
     WebSocketTls,
     HttpUpgradePlain,
@@ -30,6 +31,10 @@ pub(super) struct VmessAeadUdpOverTcpSession {
 impl VmessAeadUdpOverTcpSession {
     pub(super) fn plain(id: String) -> Self {
         Self::new(id, VmessAeadUdpWrapperKind::PlainTcp)
+    }
+
+    pub(super) fn tls(id: String) -> Self {
+        Self::new(id, VmessAeadUdpWrapperKind::TlsTcp)
     }
 
     pub(super) fn websocket_plain(id: String) -> Self {
@@ -237,6 +242,20 @@ async fn open_vmess_underlay(
             .await?;
             Ok(VmessAeadUdpUnderlay::PlainTcp { stream })
         }
+        VmessAeadUdpWrapperKind::TlsTcp => {
+            let mut client = open_async_resident_tls_client(proxy).await?;
+            let tls_underlay = async_resident_tls_underlay_name(&client);
+            write_vmess_stream_bytes(
+                &mut client,
+                first_write,
+                "write VMess TLS AEAD UDP-over-TCP session first packet",
+            )
+            .await?;
+            Ok(VmessAeadUdpUnderlay::TlsTcp {
+                client,
+                tls_underlay,
+            })
+        }
         VmessAeadUdpWrapperKind::WebSocketPlain => {
             let mut stream = open_proxy_tcp_stream_async(proxy).await?;
             websocket_handshake_async(
@@ -361,7 +380,8 @@ async fn poll_vmess_underlay_plaintext(
             | VmessAeadUdpUnderlay::HttpUpgradePlain { stream } => {
                 Pin::new(stream).poll_read(cx, &mut read_buf)
             }
-            VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
+            VmessAeadUdpUnderlay::TlsTcp { client, .. }
+            | VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
                 Pin::new(client).poll_read(cx, &mut read_buf)
             }
             VmessAeadUdpUnderlay::WebSocketPlain { stream, state } => {
@@ -390,6 +410,10 @@ async fn poll_vmess_underlay_plaintext(
 enum VmessAeadUdpUnderlay {
     PlainTcp {
         stream: tokio::net::TcpStream,
+    },
+    TlsTcp {
+        client: AsyncResidentTlsClient,
+        tls_underlay: &'static str,
     },
     WebSocketPlain {
         stream: tokio::net::TcpStream,
@@ -429,6 +453,11 @@ impl VmessAeadUdpUnderlay {
     fn evidence_fields(&self) -> (&'static str, &'static str, Option<&'static str>) {
         match self {
             Self::PlainTcp { .. } => ("tokio-stream-session", "tcp-stream-reused", None),
+            Self::TlsTcp { tls_underlay, .. } => (
+                "tokio-stream-session",
+                "tls-tcp-stream-reused",
+                Some(*tls_underlay),
+            ),
             Self::WebSocketPlain { .. } => (
                 "tokio-wrapper-stream-session",
                 "websocket-tunnel-reused",
@@ -464,7 +493,9 @@ impl VmessAeadUdpUnderlay {
             | Self::HttpUpgradePlain { stream } => {
                 let _ = stream.shutdown().await;
             }
-            Self::WebSocketTls { client, .. } | Self::HttpUpgradeTls { client, .. } => {
+            Self::TlsTcp { client, .. }
+            | Self::WebSocketTls { client, .. }
+            | Self::HttpUpgradeTls { client, .. } => {
                 client.shutdown().await;
             }
             Self::GrpcTls {
@@ -498,7 +529,8 @@ async fn write_vmess_wrapped_bytes(
             write_vmess_stream_bytes(stream, payload, "write VMess wrapped UDP session packet")
                 .await
         }
-        VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
+        VmessAeadUdpUnderlay::TlsTcp { client, .. }
+        | VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
             write_vmess_stream_bytes(
                 client,
                 payload,

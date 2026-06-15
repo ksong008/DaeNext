@@ -172,11 +172,6 @@ pub(crate) fn build_juicity_proxy_plan(
         ));
     }
     let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
-    if !allow_insecure && parsed.pinned_certchain_sha256.is_empty() {
-        return Err(format!(
-            "resident dataplane generic QUIC handler requires Juicity allow_insecure or pinned_certchain_sha256 for node {node_tag}; resident shape remains fail-closed for this config"
-        ));
-    }
     let server_name = if parsed.sni.is_empty() {
         parsed.server.clone()
     } else {

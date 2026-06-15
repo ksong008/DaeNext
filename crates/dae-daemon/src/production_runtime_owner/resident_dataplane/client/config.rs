@@ -23,7 +23,7 @@ pub(super) fn boring_vless_connector(
         SslVerifyMode::PEER
     });
     builder.set_read_ahead(boring_read_ahead_enabled(proxy));
-    if proxy.flow == XTLS_RPRX_VISION {
+    if is_xtls_rprx_vision_flow(&proxy.flow) {
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))
             .map_err(|err| format!("set VLESS BoringSSL min TLS version: {err}"))?;
@@ -119,7 +119,7 @@ pub(super) fn rustls_vless_client_config(
         ClientConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|err| format!("create VLESS Reality rustls provider: {err}"))?
-    } else if proxy.flow == XTLS_RPRX_VISION {
+    } else if is_xtls_rprx_vision_flow(&proxy.flow) {
         ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
     } else {
         ClientConfig::builder()
@@ -326,7 +326,7 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
 }
 
 pub(super) fn boring_read_ahead_enabled(proxy: &ResidentProxyPlan) -> bool {
-    proxy.flow != XTLS_RPRX_VISION
+    !is_xtls_rprx_vision_flow(&proxy.flow)
 }
 
 #[cfg(test)]

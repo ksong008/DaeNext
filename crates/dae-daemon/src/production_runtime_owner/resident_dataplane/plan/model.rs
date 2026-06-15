@@ -327,6 +327,8 @@ impl ResidentProxyProtocolPlan {
             },
             Self::VlessMuxTcpTls { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-vless-mux-tcp",
+                // Policy-closed: this resident mux row is scoped to TCP stream
+                // carriage and has no admitted UDP packet executor.
                 udp_executor: "policy-closed",
                 packet_semantics: "multiplexed-stream",
                 udp_policy_closed: true,
@@ -339,6 +341,8 @@ impl ResidentProxyProtocolPlan {
             },
             Self::HttpProxyTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-http-connect",
+                // Protocol-closed: RFC HTTP CONNECT establishes a TCP tunnel;
+                // UDP requires a different protocol such as CONNECT-UDP/MASQUE.
                 udp_executor: "protocol-closed",
                 packet_semantics: "protocol-closed",
                 udp_policy_closed: true,
@@ -357,6 +361,8 @@ impl ResidentProxyProtocolPlan {
             },
             Self::ShadowsocksSimpleObfsHttpTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-shadowsocks-simple-obfs-http-stream",
+                // Policy-closed by the plugin contract: SIP003/plugin wrappers
+                // are TCP stream wrappers here, not resident UDP packet relays.
                 udp_executor: "plugin-udp-policy-closed",
                 packet_semantics: "tcp-stream-wrapper",
                 udp_policy_closed: true,

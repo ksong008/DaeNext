@@ -10,7 +10,7 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
 ) -> Result<RelayStats, RelayError> {
     let mut stats = RelayStats::default();
     let mut stripper = VlessResponseStripper::default();
-    let vision_enabled = flow == XTLS_RPRX_VISION;
+    let vision_enabled = is_xtls_rprx_vision_flow(flow);
     let mut vision = vision_enabled.then(|| VisionUnpadder::new(user_uuid));
     let mut downlink_direct = false;
     let mut vision_uplink_mode = VisionUplinkMode::Padding;

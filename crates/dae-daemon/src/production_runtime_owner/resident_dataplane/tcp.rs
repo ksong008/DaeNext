@@ -55,6 +55,7 @@ use dae_outbound::{
     tuic::{
         authenticate_tuic_connection, build_tuic_runtime_client_config, write_tuic_connect_request,
     },
+    vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,
     vmess::{
         VMessAeadTcpClientSessionStart, VMessMetadata, aead_tcp_client_session_start,

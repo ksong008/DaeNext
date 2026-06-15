@@ -54,21 +54,21 @@ pub(crate) const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatri
     ),
     udp_remote_live_entry(
         "vmess",
-        "AEAD plain TCP endpoints use the resident TCP relay and UDP-over-TCP exchange; TLS and transport combinations remain fail-closed",
+        "AEAD TCP and TLS/TCP endpoints use the resident stream relay and UDP-over-TCP exchange; remaining unsupported transport combinations stay fail-closed",
         &[
-            "resident_dataplane::plan admits VMess AEAD plain TCP endpoint shapes",
+            "resident_dataplane::plan admits VMess AEAD TCP and TLS/TCP endpoint shapes",
             "dae_outbound::vmess exposes reusable AEAD session/chunk codecs for resident relay",
-            "resident_dataplane::tcp sends VMess header/chunks and relays response chunks",
-            "resident_dataplane::udp dispatches through the VMess AEAD UDP-over-TCP exchange",
+            "resident_dataplane::tcp sends VMess header/chunks over plain TCP or TLS and relays response chunks",
+            "resident_dataplane::udp dispatches through the VMess AEAD UDP-over-TCP exchange over plain TCP or TLS",
             "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
             "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     udp_remote_live_entry(
         "hysteria2",
-        "pinned QUIC/H3 authenticated endpoints use the resident QUIC relay and UDP datagram path; port hopping remains fail-closed",
+        "pinned QUIC/H3 authenticated endpoints use the resident QUIC relay and UDP datagram path; port hopping planner/executor is admitted, with remote live matrix evidence still required",
         &[
-            "resident_dataplane::plan admits single-port pinned Hysteria2 endpoint shapes",
+            "resident_dataplane::plan admits single-port and port-hopping pinned Hysteria2 endpoint shapes",
             "dae_outbound::hysteria2 exposes H3 auth and TCP stream request/response helpers",
             "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a Hysteria2 stream",
             "resident_dataplane::udp sends and parses Hysteria2 UDP datagrams over the marked QUIC endpoint",
@@ -90,9 +90,9 @@ pub(crate) const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatri
     ),
     udp_remote_live_entry(
         "juicity",
-        "pinned or explicit-insecure QUIC authenticated endpoints use the resident QUIC relay and stream packet UDP path",
+        "WebPKI-verified, pinned, or explicit-insecure QUIC authenticated endpoints use the resident QUIC relay and stream packet UDP path",
         &[
-            "resident_dataplane::plan admits Juicity endpoint shapes with pinned certchain or explicit insecure verification",
+            "resident_dataplane::plan admits Juicity endpoint shapes with system-root WebPKI verification, pinned certchain, or explicit insecure verification",
             "dae_outbound::juicity exposes EKM auth stream and TCP stream request helpers",
             "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a Juicity stream",
             "resident_dataplane::udp sends and parses Juicity stream packet frames over the marked QUIC endpoint",
