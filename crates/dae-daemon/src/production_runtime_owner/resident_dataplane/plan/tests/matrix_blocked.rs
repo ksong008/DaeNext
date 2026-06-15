@@ -32,14 +32,50 @@ pub(super) fn resident_dataplane_plan_admits_nested_chain_without_flattening() {
         "resident-parent-connect-chain"
     );
 
-    let err = build_resident_proxy_plan_for_node(
+    let deep = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "too_deep".to_owned(),
         too_deep_chain_fixture_url(),
     )
-    .unwrap_err();
-    assert!(err.contains("admits two-node chains only"));
+    .unwrap();
+    assert_eq!(deep.server_host, fixture_host(FixtureEndpoint::Tertiary));
+    let first_parent = deep.chain_parent.as_ref().unwrap();
+    assert_eq!(
+        first_parent.server_host,
+        fixture_host(FixtureEndpoint::Primary)
+    );
+    let second_parent = first_parent.chain_parent.as_ref().unwrap();
+    assert_eq!(
+        second_parent.server_host,
+        fixture_host(FixtureEndpoint::Secondary)
+    );
+    let graph = deep.executable_graph_value();
+    assert_eq!(graph["chain"]["mode"], "parent-proxy");
+    assert_eq!(graph["chain"]["parentCount"], 2);
+    assert_eq!(graph["chain"]["flattened"], false);
+
+    let ssr_cipher = shadowsocksr_stream_cipher_specs()
+        .first()
+        .expect("ShadowsocksR stream cipher table must not be empty")
+        .cipher;
+    let ssr_chain = format!(
+        "{} -> {}",
+        socks5_fixture_url(
+            &fixture_host(FixtureEndpoint::Primary),
+            fixture_port(FixtureEndpoint::Primary.slot())
+        ),
+        shadowsocksr_http_simple_fixture_url(ssr_cipher)
+    );
+    let ssr_child = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "ssr_child_chain".to_owned(),
+        ssr_chain,
+    )
+    .unwrap();
+    assert_eq!(ssr_child.protocol, "shadowsocksr");
+    assert!(ssr_child.chain_parent.is_some());
 }
 
 #[test]
