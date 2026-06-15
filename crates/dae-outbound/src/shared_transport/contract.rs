@@ -86,10 +86,5 @@ pub const MUX_DATA_PLANE_DEFERRED: bool = true;
 
 pub const XHTTP_PACKET_MAX_BYTES_DEFAULT: usize = 1 << 20;
 pub const XHTTP_PACKET_MIN_GAP_MS_DEFAULT: u64 = 30;
-pub const XHTTP_UNSUPPORTED_EXTRA_FIELDS: &[&str] = &[
-    "noSSEHeader",
-    "scMaxBufferedPosts",
-    "downloadSettings.xhttpSettings.mode",
-    "downloadSettings.xhttpSettings.extra except xmux",
-];
+pub const XHTTP_UNSUPPORTED_EXTRA_FIELDS: &[&str] = &[];
 pub const XHTTP_TRUE_DATA_PLANE_DEFERRED: bool = true;

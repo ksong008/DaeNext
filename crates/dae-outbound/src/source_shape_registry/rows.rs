@@ -406,14 +406,13 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "tcp-stream-h3-packet-up",
         "registry:xhttp-h3-wrapper",
     ),
-    blocked_row(
+    scoped_evidence_admitted_row(
         "xhttp-extended-settings-wrapper",
         "multi-protocol",
         &["vless"],
         "standard-or-fingerprint-aware-tls-or-reality",
         "xhttp",
         "extended-xhttp",
-        "missing-stream-wrapper",
         "registry:xhttp-extended-settings-wrapper",
     ),
     // Policy-closed: these rows require non-Rust-native ABI/runtime/executor
