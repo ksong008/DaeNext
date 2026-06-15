@@ -103,6 +103,21 @@ pub(super) fn expand_resident_dns_request_qname_rules_with_resolver(
     rules: &[RoutingRule],
     resolver: &ResidentGeodataStore,
 ) -> Result<Vec<RoutingRule>, String> {
+    expand_resident_dns_qname_rules_with_resolver(rules, resolver, "dns.routing.request qname")
+}
+
+pub(super) fn expand_resident_dns_response_qname_rules_with_resolver(
+    rules: &[RoutingRule],
+    resolver: &ResidentGeodataStore,
+) -> Result<Vec<RoutingRule>, String> {
+    expand_resident_dns_qname_rules_with_resolver(rules, resolver, "dns.routing.response qname")
+}
+
+fn expand_resident_dns_qname_rules_with_resolver(
+    rules: &[RoutingRule],
+    resolver: &ResidentGeodataStore,
+    context: &str,
+) -> Result<Vec<RoutingRule>, String> {
     let mut geodata_report = geodata::GeodataResolutionReport::default();
     let mut rules = rules.to_vec();
     for rule in &mut rules {
@@ -110,7 +125,7 @@ pub(super) fn expand_resident_dns_request_qname_rules_with_resolver(
             if function.name != "qname" {
                 continue;
             }
-            expand_resident_dns_qname_function(function, &resolver, &mut geodata_report)?;
+            expand_resident_dns_qname_function(function, &resolver, &mut geodata_report, context)?;
         }
     }
     Ok(rules)
@@ -120,6 +135,7 @@ fn expand_resident_dns_qname_function(
     function: &mut Function,
     resolver: &geodata::GeodataResolver,
     geodata_report: &mut geodata::GeodataResolutionReport,
+    context: &str,
 ) -> Result<(), String> {
     let mut expanded = Vec::new();
     for param in &function.params {
@@ -135,7 +151,7 @@ fn expand_resident_dns_qname_function(
             "ext" => {
                 let (filename, code) = param.val.split_once(':').ok_or_else(|| {
                     format!(
-                        "dns.routing.request qname ext parameter must be file:code, got {}",
+                        "{context} ext parameter must be file:code, got {}",
                         param.val
                     )
                 })?;
@@ -147,16 +163,49 @@ fn expand_resident_dns_qname_function(
                 )?);
             }
             "geoip" => {
-                return Err(
-                    "dns.routing.request qname cannot use geoip parameters; use geosite or ext geosite data"
-                        .to_owned(),
-                );
+                return Err(format!(
+                    "{context} cannot use geoip parameters; use geosite or ext geosite data"
+                ));
             }
             _ => expanded.push(param.clone()),
         }
     }
     function.params = expanded;
     Ok(())
+}
+
+pub(super) fn expand_resident_dns_response_ip_params_with_resolver(
+    params: &[dae_config::Param],
+    resolver: &ResidentGeodataStore,
+) -> Result<Vec<dae_config::Param>, String> {
+    let mut geodata_report = geodata::GeodataResolutionReport::default();
+    let mut expanded = Vec::new();
+    for param in params {
+        match param.key.as_str() {
+            "geoip" => expanded.extend(geodata::load_geoip_params(
+                resolver,
+                "geoip",
+                &param.val,
+                &mut geodata_report,
+            )?),
+            "ext" => {
+                let (filename, code) = param.val.split_once(':').ok_or_else(|| {
+                    format!(
+                        "dns.routing.response ip ext parameter must be file:code, got {}",
+                        param.val
+                    )
+                })?;
+                expanded.extend(geodata::load_geoip_params(
+                    resolver,
+                    filename,
+                    code,
+                    &mut geodata_report,
+                )?);
+            }
+            _ => expanded.push(param.clone()),
+        }
+    }
+    Ok(expanded)
 }
 
 pub(super) fn update_new_resident_routing_map(

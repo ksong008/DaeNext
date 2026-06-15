@@ -44,6 +44,7 @@ pub use netutils::{
 pub use resolve::guard_synthetic_asis_lookup;
 pub use routing::{
     DnsDomainSet, DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex,
-    DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher,
+    DnsResponseMatchKind, DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher,
+    ResponseMatcher,
 };
 pub use upstream::{Upstream, UpstreamResolver, UpstreamResolverStats};
