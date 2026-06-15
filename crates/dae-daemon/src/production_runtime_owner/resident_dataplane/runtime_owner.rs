@@ -25,7 +25,7 @@ impl std::fmt::Debug for ResidentRuntimeOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResidentRuntimeOwner")
             .field("task_count", &self.tasks.len())
-            .field("event_file", &self.event_file)
+            .field("event_file_status", &"disabled")
             .field("reload_generation", &self.reload_generation)
             .field("resource_config", &self.resource_config.json())
             .field(
@@ -119,6 +119,8 @@ impl ResidentRuntimeOwner {
             "taskCount": self.tasks.len(),
             "runtimeHandle": self.manual_probe_runtime_value(),
             "resources": self.resource_config.json(),
+            "eventLog": "product-log-sink",
+            "eventFileStatus": "disabled",
             "eventWriter": self.event_writer.metrics_snapshot(),
             "tasks": self.tasks.iter().map(|task| {
                 json!({
@@ -320,7 +322,9 @@ impl ResidentRuntimeOwner {
             "manual_probe_runtime_stopped": manual_probe_runtime_stopped,
             "event_writer": event_writer,
             "shutdown_elapsed_ns": shutdown_elapsed_ns,
-            "event_file": path_string(&self.event_file),
+            "event_file": Value::Null,
+            "event_file_status": "disabled",
+            "event_log": "product-log-sink",
             "tasks": task_results,
         })
     }
@@ -332,6 +336,8 @@ impl ResidentRuntimeOwner {
             "reloadGeneration": self.reload_generation,
             "taskCount": self.tasks.len(),
             "runtimeHandle": self.manual_probe_runtime_value(),
+            "eventLog": "product-log-sink",
+            "eventFileStatus": "disabled",
             "eventWriter": self.event_writer.metrics_snapshot(),
         })
     }

@@ -83,6 +83,7 @@ impl ResidentRuntimeResourceConfig {
             },
             "eventWriter": {
                 "queueDepth": self.event_queue_depth.json(),
+                "filePersistence": "disabled",
             },
             "manualProbe": {
                 "concurrency": self.manual_probe_concurrency.json(),
