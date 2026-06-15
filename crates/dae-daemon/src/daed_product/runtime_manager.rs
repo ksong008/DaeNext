@@ -10,6 +10,7 @@ pub(super) struct ProductRuntimeState {
     pub(super) config: Option<Config>,
     pub(super) last_error: Option<String>,
     pub(super) last_transition_at: Option<String>,
+    pub(super) runtime_started_at: Option<String>,
     pub(super) last_report: Option<Value>,
     pub(super) reload_count: u64,
     pub(super) stop_count: u64,
@@ -126,6 +127,8 @@ impl ProductRuntimeManager {
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
         let previous_runtime = inner.runtime.take();
         let previous_config = inner.config.clone();
+        let previous_runtime_started_at = inner.runtime_started_at.clone();
+        let previous_runtime_was_running = previous_runtime.is_some();
         if let Some(runtime) = previous_runtime.as_ref() {
             inner.traffic_carry = inner.traffic_carry.absorb_runtime(runtime);
         }
@@ -133,11 +136,17 @@ impl ProductRuntimeManager {
 
         match start_product_runtime_instance(&config, source) {
             Ok((runtime, report)) => {
+                let transition_at = now_text();
                 inner.runtime = Some(runtime);
                 inner.config = Some(config);
                 inner.reload_count += 1;
                 inner.last_error = None;
-                inner.last_transition_at = Some(now_text());
+                inner.last_transition_at = Some(transition_at.clone());
+                inner.runtime_started_at = Some(runtime_started_at_after_success(
+                    previous_runtime_was_running,
+                    previous_runtime_started_at,
+                    transition_at,
+                ));
                 inner.last_report = Some(report.clone());
                 Ok(RuntimeStartOutcome { report })
             }
@@ -149,12 +158,14 @@ impl ProductRuntimeManager {
                         Ok((runtime, report)) => {
                             inner.runtime = Some(runtime);
                             inner.config = Some(previous.clone());
+                            inner.runtime_started_at = previous_runtime_started_at.clone();
                             inner.last_report = Some(report);
                             Some(true)
                         }
                         Err(restore_err) => {
                             inner.runtime = None;
                             inner.config = None;
+                            inner.runtime_started_at = None;
                             inner.last_error = Some(format!(
                                 "{start_err}\nrestore failed while restoring previous product runtime: {restore_err}"
                             ));
@@ -172,6 +183,9 @@ impl ProductRuntimeManager {
                     None => start_err,
                 };
                 inner.last_transition_at = Some(now_text());
+                if restored != Some(true) {
+                    inner.runtime_started_at = None;
+                }
                 inner.last_error = Some(message.clone());
                 Err(message)
             }
@@ -188,6 +202,7 @@ impl ProductRuntimeManager {
         let reclaim = was_running.then(|| allocator_reclaim(AllocatorReclaimReason::StopRuntime));
         inner.config = None;
         inner.traffic_carry = RuntimeTrafficCarry::default();
+        inner.runtime_started_at = None;
         inner.stop_count += 1;
         inner.last_transition_at = Some(now_text());
         inner.last_report = None;
@@ -220,6 +235,10 @@ impl ProductRuntimeManager {
                         "lastTransitionAt".to_owned(),
                         json!(inner.last_transition_at.clone()),
                     );
+                    map.insert(
+                        "startedAt".to_owned(),
+                        json!(inner.runtime_started_at.clone()),
+                    );
                     map.insert("lastError".to_owned(), json!(inner.last_error.clone()));
                     map.insert("reloadCount".to_owned(), json!(inner.reload_count));
                     map.insert("stopCount".to_owned(), json!(inner.stop_count));
@@ -233,7 +252,7 @@ impl ProductRuntimeManager {
                 "attachBackend": "fake-resident-runtime-test-only",
                 "netnsLinkMode": "fake-test-only",
                 "fakeRuntime": true,
-                "startedAt": fake.started_at,
+                "startedAt": inner.runtime_started_at.clone().unwrap_or_else(|| fake.started_at.clone()),
                 "tproxyPort": fake.tproxy_port,
                 "lastTransitionAt": inner.last_transition_at,
                 "lastError": inner.last_error,
@@ -247,6 +266,7 @@ impl ProductRuntimeManager {
                 "attachBackend": Value::Null,
                 "netnsLinkMode": Value::Null,
                 "fakeRuntime": product_runtime_fake_start_enabled(),
+                "startedAt": Value::Null,
                 "lastTransitionAt": inner.last_transition_at,
                 "lastError": inner.last_error,
                 "reloadCount": inner.reload_count,
@@ -348,6 +368,18 @@ fn runtime_traffic_metric_u64(metrics: &Value, key: &str) -> u64 {
                 .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
         })
         .unwrap_or(0)
+}
+
+pub(super) fn runtime_started_at_after_success(
+    previous_runtime_was_running: bool,
+    previous_runtime_started_at: Option<String>,
+    transition_at: String,
+) -> String {
+    if previous_runtime_was_running {
+        previous_runtime_started_at.unwrap_or(transition_at)
+    } else {
+        transition_at
+    }
 }
 
 pub(super) fn start_product_runtime_instance(
