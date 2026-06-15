@@ -173,6 +173,7 @@ pub(super) fn start_with_options(
 
         let mut resident_lan_attach = Vec::new();
         let mut resident_lan_routing = Vec::new();
+        let mut resident_routing_apply_cache = ResidentRoutingApplyCache::default();
         for iface in &lan_ifaces {
             if ok {
                 let lan_kernel_parameters =
@@ -242,10 +243,16 @@ pub(super) fn start_with_options(
                                     native_runtime.loaded_map_id("outbound_connectivity_map"),
                                     config,
                                     &geodata,
+                                    &mut resident_routing_apply_cache,
                                 )
                             })
                     } else {
-                        update_new_resident_routing_map(&before_lan_map_ids, config, &geodata)
+                        update_new_resident_routing_map(
+                            &before_lan_map_ids,
+                            config,
+                            &geodata,
+                            &mut resident_routing_apply_cache,
+                        )
                     };
                     match routing_update {
                         Ok((value, id)) => {
