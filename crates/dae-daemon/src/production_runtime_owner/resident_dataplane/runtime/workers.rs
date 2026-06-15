@@ -7,7 +7,6 @@ pub(crate) fn start_resident_dataplane_workers(
     geodata: &ResidentGeodataStore,
 ) -> (Value, Option<ResidentDataplaneRuntime>) {
     let event_file = artifact_dir.join("resident-production-dataplane-events.jsonl");
-    let _ = fs::remove_file(&event_file);
     let plan = match build_resident_dataplane_plan_with_geodata(config, geodata) {
         Ok(plan) => plan,
         Err(err) => {
@@ -16,7 +15,9 @@ pub(crate) fn start_resident_dataplane_workers(
                     "status": "fail",
                     "enabled": false,
                     "error": err,
-                    "event_file": path_string(&event_file),
+                    "event_file": Value::Null,
+                    "event_file_status": "disabled",
+                    "event_log": "product-log-sink",
                 }),
                 None,
             );
@@ -28,7 +29,9 @@ pub(crate) fn start_resident_dataplane_workers(
                 "status": "pass",
                 "enabled": false,
                 "reason": plan.unsupported_reason,
-                "event_file": path_string(&event_file),
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
             }),
             None,
         );
@@ -39,7 +42,9 @@ pub(crate) fn start_resident_dataplane_workers(
                 "status": "fail",
                 "enabled": true,
                 "error": "resident dataplane plan is enabled without a default proxy group plan",
-                "event_file": path_string(&event_file),
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
             }),
             None,
         );
@@ -50,7 +55,9 @@ pub(crate) fn start_resident_dataplane_workers(
                 "status": "fail",
                 "enabled": true,
                 "error": "resident dataplane plan is enabled without an admitted default proxy candidate",
-                "event_file": path_string(&event_file),
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
             }),
             None,
         );
@@ -64,7 +71,9 @@ pub(crate) fn start_resident_dataplane_workers(
                         "status": "fail",
                         "enabled": true,
                         "error": err,
-                        "event_file": path_string(&event_file),
+                        "event_file": Value::Null,
+                        "event_file_status": "disabled",
+                        "event_log": "product-log-sink",
                     }),
                     None,
                 );
@@ -79,7 +88,9 @@ pub(crate) fn start_resident_dataplane_workers(
                     "status": "fail",
                     "enabled": true,
                     "error": format!("clone resident TCP listener: {err}"),
-                    "event_file": path_string(&event_file),
+                    "event_file": Value::Null,
+                    "event_file_status": "disabled",
+                    "event_log": "product-log-sink",
                 }),
                 None,
             );
@@ -93,7 +104,9 @@ pub(crate) fn start_resident_dataplane_workers(
                     "status": "fail",
                     "enabled": true,
                     "error": format!("clone resident UDP socket: {err}"),
-                    "event_file": path_string(&event_file),
+                    "event_file": Value::Null,
+                    "event_file_status": "disabled",
+                    "event_log": "product-log-sink",
                 }),
                 None,
             );
@@ -151,7 +164,9 @@ pub(crate) fn start_resident_dataplane_workers(
                     "status": "fail",
                     "enabled": true,
                     "error": err,
-                    "event_file": path_string(&event_file),
+                    "event_file": Value::Null,
+                    "event_file_status": "disabled",
+                    "event_log": "product-log-sink",
                 }),
                 None,
             );
@@ -277,7 +292,9 @@ pub(crate) fn start_resident_dataplane_workers(
         "event_queue_depth_env".to_owned(),
         json!(RESIDENT_EVENT_QUEUE_DEPTH_ENV),
     );
-    start_map.insert("event_file".to_owned(), json!(path_string(&event_file)));
+    start_map.insert("event_file".to_owned(), Value::Null);
+    start_map.insert("event_file_status".to_owned(), json!("disabled"));
+    start_map.insert("event_log".to_owned(), json!("product-log-sink"));
     start_map.insert("reload_generation".to_owned(), json!(reload_generation));
     start_map.insert("runtime_owner".to_owned(), owner.task_registry_value());
     start_map.insert(

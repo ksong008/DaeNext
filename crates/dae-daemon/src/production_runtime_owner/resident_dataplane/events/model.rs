@@ -161,14 +161,6 @@ impl ResidentEvent {
         self.decision.persist || self.lossless()
     }
 
-    pub(super) fn max_entries(&self) -> usize {
-        self.decision.max_entries
-    }
-
-    pub(super) fn max_bytes(&self) -> u64 {
-        self.decision.max_bytes
-    }
-
     pub(super) fn into_serializable_value(mut self) -> Value {
         if let Value::Object(map) = &mut self.value {
             map.entry("eventSchemaVersion".to_owned())

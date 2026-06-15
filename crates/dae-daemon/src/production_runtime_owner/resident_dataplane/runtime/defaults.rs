@@ -81,7 +81,8 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "min": RESIDENT_EVENT_QUEUE_DEPTH_MIN,
                 "max": RESIDENT_EVENT_QUEUE_DEPTH_MAX,
             },
-            "model": "bounded channel with a single JSONL writer; packet and debug events use nonblocking enqueue while lifecycle and error events are preserved",
+            "filePersistence": "disabled",
+            "model": "bounded resident event dispatcher; admitted events are forwarded to the product log sink and no runtime JSONL event file is created",
         },
         "manualProbe": {
             "concurrency": {

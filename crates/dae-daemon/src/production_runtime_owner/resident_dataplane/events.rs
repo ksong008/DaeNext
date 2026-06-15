@@ -1,5 +1,4 @@
-use std::fs::{self, OpenOptions};
-use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -22,7 +21,6 @@ pub(crate) type ResidentEventLogPolicy =
 
 const DEFAULT_RESIDENT_EVENT_LOG_MAX_ENTRIES: usize = 10_000;
 const DEFAULT_RESIDENT_EVENT_LOG_MAX_BYTES: u64 = 50 * 1024 * 1024;
-const RESIDENT_EVENT_LOG_PRUNE_INTERVAL: u64 = 256;
 
 static EVENT_LOG_SINK: OnceLock<Mutex<Option<ResidentEventLogSink>>> = OnceLock::new();
 static EVENT_LOG_POLICY: OnceLock<Mutex<Option<ResidentEventLogPolicy>>> = OnceLock::new();
@@ -62,10 +60,7 @@ pub(crate) fn set_event_log_policy(policy: Option<ResidentEventLogPolicy>) {
 }
 
 fn clear_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, [])?;
+    let _ = path;
     EVENT_LOG_APPEND_COUNT.store(0, Ordering::Relaxed);
     Ok(())
 }
@@ -117,8 +112,8 @@ fn normalize_event_log_decision(
 }
 
 fn prune_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
-    let decision = normalize_event_log_decision(event_log_decision(&Value::Null));
-    prune_resident_event_log_file_with_limits(path, decision.max_entries, decision.max_bytes)
+    let _ = path;
+    Ok(())
 }
 
 fn persist_resident_event_direct(
@@ -126,6 +121,7 @@ fn persist_resident_event_direct(
     lock: &Mutex<()>,
     event: ResidentEvent,
 ) -> io::Result<ResidentEventPersistOutcome> {
+    let _ = (path, lock);
     let persist = event.should_persist();
     if !persist {
         return Ok(ResidentEventPersistOutcome {
@@ -133,110 +129,22 @@ fn persist_resident_event_direct(
             pruned: false,
         });
     }
-    let max_bytes = event.max_bytes();
-    let max_entries = event.max_entries();
     let value = event.into_serializable_value();
-    let mut pruned = false;
-    {
-        let _guard = lock
-            .lock()
-            .map_err(|_| io::Error::other("resident event log lock poisoned"))?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        writeln!(file, "{value}")?;
-        let count = EVENT_LOG_APPEND_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        let should_prune_by_count = count % RESIDENT_EVENT_LOG_PRUNE_INTERVAL == 0;
-        let should_prune_by_size = fs::metadata(path)
-            .map(|metadata| metadata.len() > max_bytes)
-            .unwrap_or(false);
-        if should_prune_by_count || should_prune_by_size {
-            prune_resident_event_log_file_with_limits(path, max_entries, max_bytes)?;
-            pruned = true;
-        }
-    }
-
+    EVENT_LOG_APPEND_COUNT.fetch_add(1, Ordering::Relaxed);
     if let Some(sink) = event_log_sink() {
         sink(&value);
     }
 
     Ok(ResidentEventPersistOutcome {
         persisted: true,
-        pruned,
+        pruned: false,
     })
-}
-
-fn prune_resident_event_log_file_with_limits(
-    path: &Path,
-    max_entries: usize,
-    max_bytes: u64,
-) -> io::Result<()> {
-    let data = match read_tail_bytes(path, max_bytes) {
-        Ok(data) => data,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-    let tmp_path = path.with_extension("jsonl.tmp");
-    write_pruned_event_tail(&tmp_path, &data, max_entries)?;
-    fs::rename(tmp_path, path)
-}
-
-fn resident_event_line_allowed_by_policy(line: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return false;
-    };
-    ResidentEvent::new(value).should_persist()
-}
-
-fn write_pruned_event_tail(path: &Path, data: &[u8], max_entries: usize) -> io::Result<()> {
-    let mut ranges = Vec::new();
-    let mut start = 0_usize;
-    while start < data.len() {
-        let end = data[start..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|offset| start + offset)
-            .unwrap_or(data.len());
-        if end > start
-            && let Ok(line) = std::str::from_utf8(&data[start..end])
-            && resident_event_line_allowed_by_policy(line)
-        {
-            ranges.push((start, end));
-        }
-        start = end.saturating_add(1);
-    }
-    let keep_from = ranges.len().saturating_sub(max_entries);
-    let file = fs::File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    for (start, end) in ranges.into_iter().skip(keep_from) {
-        writer.write_all(&data[start..end])?;
-        writer.write_all(b"\n")?;
-    }
-    writer.flush()
-}
-
-fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
-    let mut file = fs::File::open(path)?;
-    let size = file.metadata()?.len();
-    if size == 0 {
-        return Ok(Vec::new());
-    }
-    let offset = size.saturating_sub(max_bytes);
-    file.seek(SeekFrom::Start(offset))?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)?;
-    if offset > 0
-        && let Some(newline) = data.iter().position(|byte| *byte == b'\n')
-    {
-        data = data.split_off(newline + 1);
-    }
-    Ok(data)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     static EVENT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -248,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_event_log_policy_filters_and_prunes_file() {
+    fn resident_event_log_policy_filters_and_dispatches_to_sink() {
         let _guard = event_test_guard();
         let dir = std::env::temp_dir().join(format!(
             "resident-event-log-test-{}-{}",
@@ -258,7 +166,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("events.jsonl");
         let lock = Mutex::new(());
-        set_event_log_sink(None);
+        let captured = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let sink_captured = Arc::clone(&captured);
+        set_event_log_sink(Some(Arc::new(move |event| {
+            sink_captured.lock().unwrap().push(event.clone());
+        })));
         set_event_log_policy(Some(Arc::new(|event| ResidentEventLogDecision {
             persist: event.get("event").and_then(Value::as_str) != Some("drop"),
             level: Some("info".to_owned()),
@@ -272,16 +184,18 @@ mod tests {
         append_event(&path, &lock, json!({"event": "keep", "value": 4}));
         prune_resident_event_log_file_direct(&path).unwrap();
 
-        let lines = fs::read_to_string(&path).unwrap();
-        assert!(!lines.contains("\"value\":1"));
-        assert!(!lines.contains("\"value\":2"));
-        assert!(lines.contains("\"value\":3"));
-        assert!(lines.contains("\"value\":4"));
-        assert!(lines.contains("\"residentLogLevel\":\"info\""));
+        let events = captured.lock().unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0]["value"], json!(1));
+        assert_eq!(events[1]["value"], json!(3));
+        assert_eq!(events[2]["value"], json!(4));
+        assert_eq!(events[0]["residentLogLevel"], json!("info"));
+        drop(events);
 
         clear_resident_event_log_file_direct(&path).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        assert!(!path.exists());
 
+        set_event_log_sink(None);
         set_event_log_policy(None);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -297,7 +211,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("events.jsonl");
         let lock = Mutex::new(());
-        set_event_log_sink(None);
+        let captured = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let sink_captured = Arc::clone(&captured);
+        set_event_log_sink(Some(Arc::new(move |event| {
+            sink_captured.lock().unwrap().push(event.clone());
+        })));
         set_event_log_policy(Some(Arc::new(|_| ResidentEventLogDecision {
             persist: false,
             level: Some("debug".to_owned()),
@@ -312,20 +230,22 @@ mod tests {
             json!({"event": "tcp_connection_failed", "error": "sample"}),
         );
 
-        let lines = fs::read_to_string(&path).unwrap();
-        assert!(!lines.contains("tcp_connection_finished"));
-        assert!(lines.contains("tcp_connection_failed"));
-        assert!(lines.contains("\"lifecycleClass\":\"error\""));
-        assert!(lines.contains("\"severity\":\"error\""));
-        assert!(lines.contains("\"priority\":90"));
-        assert!(lines.contains("\"residentLogLevel\":\"debug\""));
+        let events = captured.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["event"], json!("tcp_connection_failed"));
+        assert_eq!(events[0]["lifecycleClass"], json!("error"));
+        assert_eq!(events[0]["severity"], json!("error"));
+        assert_eq!(events[0]["priority"], json!(90));
+        assert_eq!(events[0]["residentLogLevel"], json!("debug"));
+        assert!(!path.exists());
 
+        set_event_log_sink(None);
         set_event_log_policy(None);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn resident_events_bounded_writer_records_metrics_and_flushes_jsonl() {
+    fn resident_events_bounded_writer_records_metrics_and_dispatches_to_sink_without_jsonl_file() {
         let _guard = event_test_guard();
         let dir = std::env::temp_dir().join(format!(
             "resident-event-writer-test-{}-{}",
@@ -335,7 +255,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("events.jsonl");
         let fallback_lock = Mutex::new(());
-        set_event_log_sink(None);
+        let captured = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let sink_captured = Arc::clone(&captured);
+        set_event_log_sink(Some(Arc::new(move |event| {
+            sink_captured.lock().unwrap().push(event.clone());
+        })));
         set_event_log_policy(None);
         let mut writer =
             ResidentEventWriterRuntime::start(path.clone(), Arc::new(Mutex::new(())), 64);
@@ -362,13 +286,16 @@ mod tests {
         let shutdown = writer.shutdown();
         assert_eq!(shutdown["status"], "pass");
 
-        let lines = fs::read_to_string(&path).unwrap();
-        assert!(lines.contains("tcp_worker_started"));
-        assert!(lines.contains("tcp_connection_failed"));
-        assert!(lines.contains("\"eventSchemaVersion\":1"));
-        assert!(lines.contains("\"lifecycleClass\":\"startup\""));
-        assert!(lines.contains("\"lifecycleClass\":\"error\""));
+        let events = captured.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["event"], json!("tcp_worker_started"));
+        assert_eq!(events[1]["event"], json!("tcp_connection_failed"));
+        assert_eq!(events[0]["eventSchemaVersion"], json!(1));
+        assert_eq!(events[0]["lifecycleClass"], json!("startup"));
+        assert_eq!(events[1]["lifecycleClass"], json!("error"));
+        assert!(!path.exists());
 
+        set_event_log_sink(None);
         fs::remove_dir_all(dir).unwrap();
     }
 }
