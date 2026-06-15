@@ -92,6 +92,23 @@ pub enum DnsRequestMatchKind {
     Fallback,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DnsResponseMatchSpec {
+    pub kind: DnsResponseMatchKind,
+    pub value: u16,
+    pub not: bool,
+    pub upstream: DnsResponseOutboundIndex,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DnsResponseMatchKind {
+    DomainSet,
+    IpSet,
+    QType,
+    Upstream,
+    Fallback,
+}
+
 #[derive(Clone, Debug)]
 struct RequestMatchSet {
     match_type: DnsMatchType,
@@ -243,6 +260,47 @@ impl RequestMatchSet {
 }
 
 impl ResponseMatcher {
+    pub fn from_shared_typed_sets(
+        domain_sets: Vec<DnsDomainSet>,
+        lpm_sets: Vec<Vec<IpPrefix>>,
+        matches: Vec<DnsResponseMatchSpec>,
+    ) -> Result<Self, DnsError> {
+        if matches
+            .last()
+            .map(|set| set.kind != DnsResponseMatchKind::Fallback)
+            .unwrap_or(true)
+        {
+            return Err(DnsError::Resolve(
+                "fallback rule MUST be the last".to_owned(),
+            ));
+        }
+        let max_domain_bit = domain_sets.iter().map(|set| set.bit + 1).max().unwrap_or(0);
+        let mut domain_matcher = DomainMatcher::new(max_domain_bit.max(matches.len()).max(1));
+        for set in domain_sets {
+            domain_matcher.add_shared_set(set.bit, set.patterns);
+        }
+        let matches = matches
+            .into_iter()
+            .map(|set| ResponseMatchSet {
+                match_type: match set.kind {
+                    DnsResponseMatchKind::DomainSet => DnsMatchType::DomainSet,
+                    DnsResponseMatchKind::IpSet => DnsMatchType::IpSet,
+                    DnsResponseMatchKind::QType => DnsMatchType::QType,
+                    DnsResponseMatchKind::Upstream => DnsMatchType::Upstream,
+                    DnsResponseMatchKind::Fallback => DnsMatchType::Fallback,
+                },
+                value: set.value,
+                not: set.not,
+                upstream: set.upstream,
+            })
+            .collect();
+        Ok(Self {
+            domain_matcher,
+            lpm_sets,
+            matches,
+        })
+    }
+
     pub fn from_fixture_value(value: &Value) -> Result<Self, DnsError> {
         let matches = required_array(value, "matches")?
             .iter()
@@ -531,6 +589,72 @@ mod tests {
                 {"type": "fallback", "upstream": "reject"}
             ]
         }))
+        .unwrap();
+
+        assert_eq!(
+            matcher
+                .match_response(
+                    "www.example.com",
+                    1,
+                    &["203.0.113.42".parse().unwrap()],
+                    DnsRequestOutboundIndex(2),
+                )
+                .unwrap(),
+            DnsResponseOutboundIndex::ACCEPT
+        );
+        assert_eq!(
+            matcher
+                .match_response(
+                    "www.example.com",
+                    1,
+                    &["198.51.100.42".parse().unwrap()],
+                    DnsRequestOutboundIndex(2),
+                )
+                .unwrap(),
+            DnsResponseOutboundIndex::REJECT
+        );
+    }
+
+    #[test]
+    fn response_matcher_typed_sets_cover_qname_qtype_ip_upstream_and_fallback() {
+        let patterns = SharedDomainSet::new(vec!["example.com".to_owned()], DomainKey::Suffix)
+            .expect("domain set");
+        let matcher = ResponseMatcher::from_shared_typed_sets(
+            vec![DnsDomainSet { bit: 0, patterns }],
+            vec![vec![IpPrefix::parse("203.0.113.0/24").unwrap()]],
+            vec![
+                DnsResponseMatchSpec {
+                    kind: DnsResponseMatchKind::DomainSet,
+                    value: 0,
+                    not: false,
+                    upstream: DnsResponseOutboundIndex::LOGICAL_AND,
+                },
+                DnsResponseMatchSpec {
+                    kind: DnsResponseMatchKind::QType,
+                    value: 1,
+                    not: false,
+                    upstream: DnsResponseOutboundIndex::LOGICAL_AND,
+                },
+                DnsResponseMatchSpec {
+                    kind: DnsResponseMatchKind::IpSet,
+                    value: 0,
+                    not: false,
+                    upstream: DnsResponseOutboundIndex::LOGICAL_AND,
+                },
+                DnsResponseMatchSpec {
+                    kind: DnsResponseMatchKind::Upstream,
+                    value: 2,
+                    not: false,
+                    upstream: DnsResponseOutboundIndex::ACCEPT,
+                },
+                DnsResponseMatchSpec {
+                    kind: DnsResponseMatchKind::Fallback,
+                    value: 0,
+                    not: false,
+                    upstream: DnsResponseOutboundIndex::REJECT,
+                },
+            ],
+        )
         .unwrap();
 
         assert_eq!(
