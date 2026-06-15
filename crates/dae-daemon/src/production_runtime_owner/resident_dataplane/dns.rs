@@ -1,15 +1,23 @@
 use std::collections::BTreeMap;
+use std::future::poll_fn;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
+use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
 use dae_dns::{
-    DnsDomainSet, DnsPacketView, DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex,
-    DnsResponseMatchKind, DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher,
-    ResponseMatcher,
+    DOH_MEDIA_TYPE, DnsDomainSet, DnsPacketView, DnsRequestMatchKind, DnsRequestMatchSpec,
+    DnsRequestOutboundIndex, DnsResponseMatchKind, DnsResponseMatchSpec, DnsResponseOutboundIndex,
+    RequestMatcher, ResponseMatcher, build_doh_request, dns_data_with_zero_id,
+    restore_packed_response_request_id, validate_doh_response,
 };
 use dae_routing::IpPrefix;
+use http::Request;
+use quinn::crypto::rustls::QuicClientConfig;
+use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream as TokioTcpStream;
 use tokio::sync::OnceCell;
 use tokio::time;
 
@@ -19,12 +27,21 @@ use super::super::resident_routing::{
     expand_resident_dns_response_qname_rules_with_resolver,
 };
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
-use super::tcp::set_socket_mark;
+use super::direct::open_direct_tcp_connection_async;
+use super::tcp::{open_marked_quic_endpoint, set_socket_mark};
 
 const DNS_RCODE_REFUSED: u16 = 5;
 const DNS_RESPONSE_FLAGS_REFUSED: u16 = 0x8180 | DNS_RCODE_REFUSED;
 const DNS_RESPONSE_READ_LIMIT: usize = 4096;
 const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
+const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
+const DNS_DOH_RESPONSE_READ_LIMIT: usize = 1024 * 1024;
+const DNS_DEFAULT_PORT: u16 = 53;
+const DNS_TLS_DEFAULT_PORT: u16 = 853;
+const DNS_HTTPS_DEFAULT_PORT: u16 = 443;
+const DNS_DEFAULT_DOH_PATH: &str = "/dns-query";
+const DNS_DOH3_ALPN: &str = "h3";
+const DNS_DOQ_ALPN: &str = "doq";
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsPlan {
@@ -71,6 +88,7 @@ struct ResidentDnsUpstream {
     tag: String,
     target: ResidentDnsUpstreamTarget,
     scheme: ResidentDnsUpstreamScheme,
+    path: String,
 }
 
 #[derive(Clone, Debug)]
@@ -84,6 +102,8 @@ struct ResidentDnsUpstreams {
 #[derive(Clone, Debug)]
 struct ResidentDnsUpstreamTarget {
     authority: String,
+    host: String,
+    port: u16,
     literal_addr: Option<SocketAddr>,
     resolved_addr: Arc<OnceCell<SocketAddr>>,
 }
@@ -102,7 +122,10 @@ impl ResidentDnsUpstreamTarget {
 
 impl PartialEq for ResidentDnsUpstreamTarget {
     fn eq(&self, other: &Self) -> bool {
-        self.authority == other.authority && self.literal_addr == other.literal_addr
+        self.authority == other.authority
+            && self.host == other.host
+            && self.port == other.port
+            && self.literal_addr == other.literal_addr
     }
 }
 
@@ -119,7 +142,12 @@ async fn resolve_dns_upstream_async(authority: &str) -> Result<SocketAddr, Strin
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResidentDnsUpstreamScheme {
     Udp,
+    Tcp,
     TcpUdp,
+    Tls,
+    Https,
+    Quic,
+    Http3,
 }
 
 pub(super) fn build_resident_dns_plan(
@@ -212,7 +240,7 @@ async fn forward_dns_to_upstream_async(
     mark: u32,
 ) -> Result<Vec<u8>, String> {
     match upstream.scheme {
-        ResidentDnsUpstreamScheme::Udp | ResidentDnsUpstreamScheme::TcpUdp => {
+        ResidentDnsUpstreamScheme::Udp => {
             let target = upstream.target.resolve().await?;
             forward_dns_udp_async(target, payload, mark)
                 .await
@@ -223,6 +251,27 @@ async fn forward_dns_to_upstream_async(
                     )
                 })
         }
+        ResidentDnsUpstreamScheme::Tcp => forward_dns_tcp_async(upstream, payload, mark).await,
+        ResidentDnsUpstreamScheme::TcpUdp => {
+            let target = upstream.target.resolve().await?;
+            let response = forward_dns_udp_async(target, payload, mark)
+                .await
+                .map_err(|err| {
+                    format!(
+                        "forward DNS to upstream {} {}: {err}",
+                        upstream.tag, upstream.target.authority
+                    )
+                })?;
+            if dns_response_truncated(&response) {
+                forward_dns_tcp_async(upstream, payload, mark).await
+            } else {
+                Ok(response)
+            }
+        }
+        ResidentDnsUpstreamScheme::Tls => forward_dns_tls_async(upstream, payload, mark).await,
+        ResidentDnsUpstreamScheme::Https => forward_dns_https_async(upstream, payload, mark).await,
+        ResidentDnsUpstreamScheme::Quic => forward_dns_quic_async(upstream, payload, mark).await,
+        ResidentDnsUpstreamScheme::Http3 => forward_dns_h3_async(upstream, payload, mark).await,
     }
 }
 
@@ -1039,31 +1088,70 @@ fn parse_dns_upstream(index: u8, tag: &str, link: &str) -> Result<ResidentDnsUps
         .ok_or_else(|| format!("DNS upstream {tag} has no scheme: {link}"))?;
     let scheme = match scheme {
         "udp" => ResidentDnsUpstreamScheme::Udp,
+        "tcp" => ResidentDnsUpstreamScheme::Tcp,
         "tcp+udp" | "udp+tcp" => ResidentDnsUpstreamScheme::TcpUdp,
+        "tls" => ResidentDnsUpstreamScheme::Tls,
+        "https" => ResidentDnsUpstreamScheme::Https,
+        "quic" => ResidentDnsUpstreamScheme::Quic,
+        "h3" | "http3" => ResidentDnsUpstreamScheme::Http3,
         other => {
             return Err(format!(
                 "resident DNS upstream {tag} uses unsupported scheme {other}; resident DNS upstream shape remains fail-closed until this scheme is admitted"
             ));
         }
     };
-    let authority = rest.split('/').next().unwrap_or(rest);
-    let target = parse_dns_upstream_authority(authority)?;
+    let (authority, path) = split_dns_upstream_authority_and_path(rest, scheme);
+    let target = parse_dns_upstream_authority(authority, scheme.default_port())?;
     Ok(ResidentDnsUpstream {
         index,
         tag: tag.to_owned(),
         target,
         scheme,
+        path,
     })
 }
 
-fn parse_dns_upstream_authority(authority: &str) -> Result<ResidentDnsUpstreamTarget, String> {
+impl ResidentDnsUpstreamScheme {
+    const fn default_port(self) -> u16 {
+        match self {
+            Self::Udp | Self::Tcp | Self::TcpUdp => DNS_DEFAULT_PORT,
+            Self::Tls | Self::Quic => DNS_TLS_DEFAULT_PORT,
+            Self::Https | Self::Http3 => DNS_HTTPS_DEFAULT_PORT,
+        }
+    }
+
+    const fn default_path(self) -> &'static str {
+        match self {
+            Self::Https | Self::Http3 => DNS_DEFAULT_DOH_PATH,
+            Self::Udp | Self::Tcp | Self::TcpUdp | Self::Tls | Self::Quic => "",
+        }
+    }
+}
+
+fn split_dns_upstream_authority_and_path(
+    rest: &str,
+    scheme: ResidentDnsUpstreamScheme,
+) -> (&str, String) {
+    match rest.find('/') {
+        Some(index) => (&rest[..index], rest[index..].to_owned()),
+        None => (rest, scheme.default_path().to_owned()),
+    }
+}
+
+fn parse_dns_upstream_authority(
+    authority: &str,
+    default_port: u16,
+) -> Result<ResidentDnsUpstreamTarget, String> {
     let authority = authority.trim();
     if authority.is_empty() {
         return Err("DNS upstream authority is empty".to_owned());
     }
-    let (authority, literal_addr) = dns_upstream_authority_with_default_port(authority)?;
+    let (authority, host, port, literal_addr) =
+        dns_upstream_authority_with_default_port(authority, default_port)?;
     Ok(ResidentDnsUpstreamTarget {
         authority,
+        host,
+        port,
         literal_addr,
         resolved_addr: Arc::new(OnceCell::new()),
     })
@@ -1071,13 +1159,19 @@ fn parse_dns_upstream_authority(authority: &str) -> Result<ResidentDnsUpstreamTa
 
 fn dns_upstream_authority_with_default_port(
     authority: &str,
-) -> Result<(String, Option<SocketAddr>), String> {
+    default_port: u16,
+) -> Result<(String, String, u16, Option<SocketAddr>), String> {
     if let Ok(addr) = authority.parse::<SocketAddr>() {
-        return Ok((addr.to_string(), Some(addr)));
+        return Ok((
+            addr.to_string(),
+            addr.ip().to_string(),
+            addr.port(),
+            Some(addr),
+        ));
     }
     if let Ok(ip) = authority.parse::<IpAddr>() {
-        let addr = SocketAddr::new(ip, 53);
-        return Ok((addr.to_string(), Some(addr)));
+        let addr = SocketAddr::new(ip, default_port);
+        return Ok((addr.to_string(), ip.to_string(), default_port, Some(addr)));
     }
     if let Some(rest) = authority.strip_prefix('[') {
         let Some((host, tail)) = rest.split_once(']') else {
@@ -1089,7 +1183,7 @@ fn dns_upstream_authority_with_default_port(
             Some(port) => port
                 .parse::<u16>()
                 .map_err(|err| format!("DNS upstream {authority} has invalid port: {err}"))?,
-            None if tail.is_empty() => 53,
+            None if tail.is_empty() => default_port,
             None => {
                 return Err(format!(
                     "DNS upstream {authority} has unexpected text after bracketed host"
@@ -1098,19 +1192,27 @@ fn dns_upstream_authority_with_default_port(
         };
         if let Ok(ip) = host.parse::<IpAddr>() {
             let addr = SocketAddr::new(ip, port);
-            return Ok((addr.to_string(), Some(addr)));
+            return Ok((addr.to_string(), ip.to_string(), port, Some(addr)));
         }
-        return Ok((format!("[{host}]:{port}"), None));
+        return Ok((format!("[{host}]:{port}"), host.to_owned(), port, None));
     }
     if authority.matches(':').count() > 1 {
         return Err(format!(
             "DNS upstream {authority} is an IPv6 literal and must be bracketed when a port is supplied"
         ));
     }
-    if authority.rsplit_once(':').is_some() {
-        return Ok((authority.to_owned(), None));
+    if let Some((host, port)) = authority.rsplit_once(':') {
+        let port = port
+            .parse::<u16>()
+            .map_err(|err| format!("DNS upstream {authority} has invalid port: {err}"))?;
+        return Ok((authority.to_owned(), host.to_owned(), port, None));
     }
-    Ok((format!("{authority}:53"), None))
+    Ok((
+        format!("{authority}:{default_port}"),
+        authority.to_owned(),
+        default_port,
+        None,
+    ))
 }
 
 async fn forward_dns_udp_async(
@@ -1147,6 +1249,533 @@ async fn forward_dns_udp_async(
     .map_err(|err| format!("receive DNS UDP response: {err}"))?;
     response.truncate(read);
     Ok(response)
+}
+
+async fn forward_dns_tcp_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let mut stream = open_dns_tcp_stream_async(upstream, mark).await?;
+    time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        forward_dns_framed_stream_async(&mut stream, payload),
+    )
+    .await
+    .map_err(|_| "DNS TCP exchange timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "forward DNS over TCP to upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })
+}
+
+async fn forward_dns_tls_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let stream = open_dns_tcp_stream_async(upstream, mark).await?;
+    let config = resident_dns_tls_client_config(&[])?;
+    let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
+        format!(
+            "invalid DNS TLS server name {}: {err}",
+            upstream.target.host
+        )
+    })?;
+    let connector = tokio_rustls::TlsConnector::from(config);
+    let mut tls = time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        connector.connect(server_name, stream),
+    )
+    .await
+    .map_err(|_| "DNS TLS handshake timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "connect DNS TLS upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        forward_dns_framed_stream_async(&mut tls, payload),
+    )
+    .await
+    .map_err(|_| "DNS TLS exchange timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "forward DNS over TLS to upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })
+}
+
+async fn forward_dns_https_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let stream = open_dns_tcp_stream_async(upstream, mark).await?;
+    let config = resident_dns_tls_client_config(&["http/1.1"])?;
+    let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
+        format!(
+            "invalid DNS HTTPS server name {}: {err}",
+            upstream.target.host
+        )
+    })?;
+    let connector = tokio_rustls::TlsConnector::from(config);
+    let mut tls = time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        connector.connect(server_name, stream),
+    )
+    .await
+    .map_err(|_| "DNS HTTPS TLS handshake timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "connect DNS HTTPS upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    let doh = build_doh_request(
+        &upstream.target.authority,
+        &upstream.target.authority,
+        &upstream.path,
+        payload,
+    )
+    .map_err(|err| format!("build DoH request: {err}"))?;
+    let request_target = doh_request_target(&upstream.path, doh.dns_query.as_deref());
+    let request = http1_doh_request_bytes(&doh, &request_target);
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        tls.write_all(&request)
+            .await
+            .map_err(|err| format!("write DoH request: {err}"))?;
+        tls.flush()
+            .await
+            .map_err(|err| format!("flush DoH request: {err}"))?;
+        let raw = read_to_end_capped_async(&mut tls, DNS_DOH_RESPONSE_READ_LIMIT).await?;
+        parse_doh_http_response(payload, &raw)
+    })
+    .await
+    .map_err(|_| "DNS HTTPS exchange timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "forward DNS over HTTPS to upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })
+}
+
+async fn forward_dns_quic_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let mut endpoint = open_marked_quic_endpoint(mark)?;
+    endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOQ_ALPN)?);
+    let remote = upstream.target.resolve().await?;
+    let connection = time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        endpoint
+            .connect(remote, &upstream.target.host)
+            .map_err(|err| format!("connect DoQ endpoint: {err}"))?,
+    )
+    .await
+    .map_err(|_| "DNS QUIC handshake timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "connect DNS QUIC upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    let (mut send, mut recv) = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connection.open_bi())
+        .await
+        .map_err(|_| "DNS QUIC stream open timeout".to_owned())?
+        .map_err(|err| format!("open DNS QUIC stream: {err}"))?;
+    let query = dns_data_with_zero_id(payload);
+    let response = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        write_dns_tcp_message_async(&mut send, &query).await?;
+        send.finish()
+            .map_err(|err| format!("finish DNS QUIC request stream: {err}"))?;
+        let response = read_dns_tcp_message_async(&mut recv).await?;
+        restore_dns_response_id(payload, &response)
+    })
+    .await
+    .map_err(|_| "DNS QUIC exchange timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "forward DNS over QUIC to upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    connection.close(0_u32.into(), b"dns-query done");
+    endpoint.wait_idle().await;
+    Ok(response)
+}
+
+async fn forward_dns_h3_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let mut endpoint = open_marked_quic_endpoint(mark)?;
+    endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOH3_ALPN)?);
+    let remote = upstream.target.resolve().await?;
+    let connection = time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        endpoint
+            .connect(remote, &upstream.target.host)
+            .map_err(|err| format!("connect DoH3 endpoint: {err}"))?,
+    )
+    .await
+    .map_err(|_| "DNS H3 handshake timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "connect DNS H3 upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    let h3_connection = h3_quinn::Connection::new(connection.clone());
+    let (mut driver, mut client) = h3::client::new(h3_connection)
+        .await
+        .map_err(|err| format!("create DNS H3 client: {err:?}"))?;
+    let driver_task = tokio::spawn(async move { poll_fn(|cx| driver.poll_close(cx)).await });
+
+    let response = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        let doh = build_doh_request(
+            &upstream.target.authority,
+            &upstream.target.authority,
+            &upstream.path,
+            payload,
+        )
+        .map_err(|err| format!("build DoH3 request: {err}"))?;
+        let uri = if let Some(query) = doh.dns_query.as_deref() {
+            format!(
+                "https://{}{}",
+                upstream.target.authority,
+                doh_request_target(&upstream.path, Some(query))
+            )
+        } else {
+            format!("https://{}{}", upstream.target.authority, upstream.path)
+        };
+        let mut builder = Request::builder()
+            .method(doh.method.as_str())
+            .uri(uri)
+            .header(http::header::ACCEPT, DOH_MEDIA_TYPE);
+        if !doh.content_type.is_empty() {
+            builder = builder.header(http::header::CONTENT_TYPE, doh.content_type.as_str());
+        }
+        let request = builder
+            .body(())
+            .map_err(|err| format!("build DoH3 HTTP request: {err}"))?;
+        let mut stream = client
+            .send_request(request)
+            .await
+            .map_err(|err| format!("send DoH3 request: {err:?}"))?;
+        if !doh.body.is_empty() {
+            stream
+                .send_data(Bytes::copy_from_slice(&doh.body))
+                .await
+                .map_err(|err| format!("send DoH3 body: {err:?}"))?;
+        }
+        stream
+            .finish()
+            .await
+            .map_err(|err| format!("finish DoH3 request: {err:?}"))?;
+        let response = stream
+            .recv_response()
+            .await
+            .map_err(|err| format!("recv DoH3 response: {err:?}"))?;
+        let content_type = response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .map(|value| value.as_bytes().to_vec())
+            .unwrap_or_default();
+        let status = response.status();
+        let mut body = Vec::new();
+        while let Some(mut chunk) = stream
+            .recv_data()
+            .await
+            .map_err(|err| format!("recv DoH3 response body: {err:?}"))?
+        {
+            let remaining = chunk.remaining();
+            if body.len().saturating_add(remaining) > DNS_DOH_RESPONSE_READ_LIMIT {
+                return Err(format!(
+                    "DoH3 response exceeds read limit {DNS_DOH_RESPONSE_READ_LIMIT}"
+                ));
+            }
+            body.extend_from_slice(&chunk.copy_to_bytes(remaining));
+        }
+        validate_doh_response(status.as_u16(), status.as_str(), &content_type)
+            .map_err(|err| err.to_string())?;
+        restore_dns_response_id(payload, &body)
+    })
+    .await
+    .map_err(|_| "DNS H3 exchange timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "forward DNS over HTTP/3 to upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    drop(client);
+    connection.close(0_u32.into(), b"dns-query done");
+    endpoint.wait_idle().await;
+    let _ = driver_task.await;
+    Ok(response)
+}
+
+async fn open_dns_tcp_stream_async(
+    upstream: &ResidentDnsUpstream,
+    mark: u32,
+) -> Result<TokioTcpStream, String> {
+    let connected =
+        open_direct_tcp_connection_async(upstream.target.authority.clone(), mark, false)
+            .await
+            .map_err(|err| {
+                format!(
+                    "connect DNS upstream {} {}: {err}",
+                    upstream.tag, upstream.target.authority
+                )
+            })?;
+    TokioTcpStream::from_std(connected.stream).map_err(|err| format!("adopt DNS TCP stream: {err}"))
+}
+
+async fn forward_dns_framed_stream_async<S>(
+    stream: &mut S,
+    payload: &[u8],
+) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    write_dns_tcp_message_async(stream, payload).await?;
+    stream
+        .flush()
+        .await
+        .map_err(|err| format!("flush DNS framed request: {err}"))?;
+    read_dns_tcp_message_async(stream).await
+}
+
+async fn write_dns_tcp_message_async<S>(stream: &mut S, payload: &[u8]) -> Result<(), String>
+where
+    S: AsyncWrite + Unpin,
+{
+    let len = u16::try_from(payload.len())
+        .map_err(|_| format!("DNS request exceeds TCP frame limit: {}", payload.len()))?;
+    stream
+        .write_all(&len.to_be_bytes())
+        .await
+        .map_err(|err| format!("write DNS TCP frame length: {err}"))?;
+    stream
+        .write_all(payload)
+        .await
+        .map_err(|err| format!("write DNS TCP frame payload: {err}"))
+}
+
+async fn read_dns_tcp_message_async<S>(stream: &mut S) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut len = [0_u8; 2];
+    stream
+        .read_exact(&mut len)
+        .await
+        .map_err(|err| format!("read DNS TCP response length: {err}"))?;
+    let len = u16::from_be_bytes(len) as usize;
+    if len > DNS_TCP_MESSAGE_READ_LIMIT {
+        return Err(format!("DNS TCP response length {len} exceeds read limit"));
+    }
+    let mut response = vec![0_u8; len];
+    stream
+        .read_exact(&mut response)
+        .await
+        .map_err(|err| format!("read DNS TCP response payload: {err}"))?;
+    Ok(response)
+}
+
+fn resident_dns_tls_client_config(alpn: &[&str]) -> Result<Arc<ClientConfig>, String> {
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = alpn
+        .iter()
+        .map(|protocol| protocol.as_bytes().to_vec())
+        .collect();
+    Ok(Arc::new(config))
+}
+
+fn resident_dns_quic_client_config(alpn: &str) -> Result<quinn::ClientConfig, String> {
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut crypto = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    crypto.alpn_protocols = vec![alpn.as_bytes().to_vec()];
+    Ok(quinn::ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(crypto)
+            .map_err(|err| format!("build DNS QUIC client TLS config: {err}"))?,
+    )))
+}
+
+fn http1_doh_request_bytes(doh: &dae_dns::DohRequest, target: &str) -> Vec<u8> {
+    let mut request = Vec::new();
+    request.extend_from_slice(doh.method.as_bytes());
+    request.extend_from_slice(b" ");
+    request.extend_from_slice(target.as_bytes());
+    request.extend_from_slice(b" HTTP/1.1\r\nHost: ");
+    request.extend_from_slice(doh.host.as_bytes());
+    request.extend_from_slice(b"\r\nAccept: ");
+    request.extend_from_slice(doh.accept.as_bytes());
+    request.extend_from_slice(b"\r\nConnection: close\r\n");
+    if !doh.content_type.is_empty() {
+        request.extend_from_slice(b"Content-Type: ");
+        request.extend_from_slice(doh.content_type.as_bytes());
+        request.extend_from_slice(b"\r\n");
+    }
+    if !doh.body.is_empty() {
+        request.extend_from_slice(b"Content-Length: ");
+        request.extend_from_slice(doh.body.len().to_string().as_bytes());
+        request.extend_from_slice(b"\r\n");
+    }
+    request.extend_from_slice(b"\r\n");
+    request.extend_from_slice(&doh.body);
+    request
+}
+
+fn doh_request_target(path: &str, dns_query: Option<&str>) -> String {
+    match dns_query {
+        Some(query) if path.contains('?') => format!("{path}&dns={query}"),
+        Some(query) => format!("{path}?dns={query}"),
+        None => path.to_owned(),
+    }
+}
+
+async fn read_to_end_capped_async<S>(stream: &mut S, limit: usize) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut out = Vec::new();
+    let mut buf = [0_u8; 8192];
+    loop {
+        let read = stream
+            .read(&mut buf)
+            .await
+            .map_err(|err| format!("read HTTP response: {err}"))?;
+        if read == 0 {
+            return Ok(out);
+        }
+        if out.len().saturating_add(read) > limit {
+            return Err(format!("HTTP response exceeds read limit {limit}"));
+        }
+        out.extend_from_slice(&buf[..read]);
+    }
+}
+
+fn parse_doh_http_response(request: &[u8], raw: &[u8]) -> Result<Vec<u8>, String> {
+    let header_end = find_http_header_end(raw).ok_or_else(|| "DoH response has no header end")?;
+    let headers = &raw[..header_end];
+    let mut body = raw[header_end + 4..].to_vec();
+    let header_text = std::str::from_utf8(headers)
+        .map_err(|err| format!("DoH response headers are not UTF-8: {err}"))?;
+    let mut lines = header_text.split("\r\n");
+    let status = lines
+        .next()
+        .ok_or_else(|| "DoH response has no status line".to_owned())?;
+    let status_code = status
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| format!("DoH response status line is malformed: {status}"))?
+        .parse::<u16>()
+        .map_err(|err| format!("parse DoH response status code: {err}"))?;
+    let mut content_type = Vec::new();
+    let mut chunked = false;
+    let mut content_length = None;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim();
+        match name.as_str() {
+            "content-type" => content_type = value.as_bytes().to_vec(),
+            "content-length" => {
+                content_length = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|err| format!("parse DoH content-length: {err}"))?,
+                );
+            }
+            "transfer-encoding" if value.to_ascii_lowercase().contains("chunked") => chunked = true,
+            _ => {}
+        }
+    }
+    validate_doh_response(status_code, status, &content_type).map_err(|err| err.to_string())?;
+    if chunked {
+        body = decode_http_chunked_body(&body)?;
+    } else if let Some(len) = content_length {
+        if body.len() < len {
+            return Err(format!(
+                "DoH response body shorter than content-length: {} < {len}",
+                body.len()
+            ));
+        }
+        body.truncate(len);
+    }
+    restore_dns_response_id(request, &body)
+}
+
+fn find_http_header_end(raw: &[u8]) -> Option<usize> {
+    raw.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn decode_http_chunked_body(raw: &[u8]) -> Result<Vec<u8>, String> {
+    let mut offset = 0_usize;
+    let mut out = Vec::new();
+    loop {
+        let line_end = raw[offset..]
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .map(|index| offset + index)
+            .ok_or_else(|| "chunked DoH body has no chunk-size line end".to_owned())?;
+        let line = std::str::from_utf8(&raw[offset..line_end])
+            .map_err(|err| format!("chunked DoH size line is not UTF-8: {err}"))?;
+        let size_hex = line.split(';').next().unwrap_or_default().trim();
+        let size = usize::from_str_radix(size_hex, 16)
+            .map_err(|err| format!("parse chunked DoH size {size_hex:?}: {err}"))?;
+        offset = line_end + 2;
+        if size == 0 {
+            return Ok(out);
+        }
+        let end = offset
+            .checked_add(size)
+            .ok_or_else(|| "chunked DoH body size overflow".to_owned())?;
+        if raw.len() < end + 2 {
+            return Err("chunked DoH body is truncated".to_owned());
+        }
+        out.extend_from_slice(&raw[offset..end]);
+        if &raw[end..end + 2] != b"\r\n" {
+            return Err("chunked DoH chunk missing trailing CRLF".to_owned());
+        }
+        offset = end + 2;
+    }
+}
+
+fn restore_dns_response_id(request: &[u8], response: &[u8]) -> Result<Vec<u8>, String> {
+    if request.len() < 2 {
+        return Err("DNS request is too short to restore response id".to_owned());
+    }
+    let request_id = u16::from_be_bytes([request[0], request[1]]);
+    restore_packed_response_request_id(response, request_id)
+        .ok_or_else(|| "DNS response is too short to restore request id".to_owned())
+}
+
+fn dns_response_truncated(response: &[u8]) -> bool {
+    response
+        .get(2..4)
+        .map(|flags| u16::from_be_bytes([flags[0], flags[1]]) & 0x0200 != 0)
+        .unwrap_or(false)
 }
 
 fn build_reject_response(request: &[u8], view: &DnsPacketView<'_>) -> Result<Vec<u8>, String> {
@@ -1409,6 +2038,159 @@ mod tests {
             .unwrap(),
             ResidentDnsResponseAction::Reject
         ));
+    }
+
+    #[test]
+    fn resident_dns_plan_admits_official_upstream_schemes() {
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            udpup: 'udp://1.1.1.1'
+            tcpup: 'tcp://dns.example'
+            tcpudp: 'tcp+udp://dns.google:53'
+            tlsup: 'tls://dns.google'
+            httpsup: 'https://dns.google/dns-query'
+            quicup: 'quic://dns.example'
+            h3up: 'h3://dns.example/custom'
+            http3up: 'http3://[2001:db8::1]/dns-query'
+          }
+          routing {
+            request {
+              fallback: h3up
+            }
+          }
+        }
+        "#;
+        let config = parse_config(input);
+        let geodata = test_geodata();
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+        assert_eq!(plan.request_actions.len(), 8);
+        match plan.request_default_action {
+            ResidentDnsRequestAction::Upstream(upstream) => {
+                assert_eq!(upstream.tag, "h3up");
+                assert_eq!(upstream.scheme, ResidentDnsUpstreamScheme::Http3);
+                assert_eq!(upstream.target.authority, "dns.example:443");
+                assert_eq!(upstream.path, "/custom");
+            }
+            other => panic!("expected h3 upstream fallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resident_dns_upstream_parser_applies_default_ports_and_paths() {
+        let cases = [
+            (
+                "udp",
+                "udp://1.1.1.1",
+                ResidentDnsUpstreamScheme::Udp,
+                "1.1.1.1:53",
+                "1.1.1.1",
+                53,
+                "",
+            ),
+            (
+                "tcp",
+                "tcp://dns.example",
+                ResidentDnsUpstreamScheme::Tcp,
+                "dns.example:53",
+                "dns.example",
+                53,
+                "",
+            ),
+            (
+                "tls",
+                "tls://dns.example",
+                ResidentDnsUpstreamScheme::Tls,
+                "dns.example:853",
+                "dns.example",
+                853,
+                "",
+            ),
+            (
+                "https",
+                "https://dns.example",
+                ResidentDnsUpstreamScheme::Https,
+                "dns.example:443",
+                "dns.example",
+                443,
+                DNS_DEFAULT_DOH_PATH,
+            ),
+            (
+                "quic",
+                "quic://dns.example",
+                ResidentDnsUpstreamScheme::Quic,
+                "dns.example:853",
+                "dns.example",
+                853,
+                "",
+            ),
+            (
+                "h3",
+                "h3://dns.example/custom",
+                ResidentDnsUpstreamScheme::Http3,
+                "dns.example:443",
+                "dns.example",
+                443,
+                "/custom",
+            ),
+            (
+                "http3",
+                "http3://[2001:db8::1]",
+                ResidentDnsUpstreamScheme::Http3,
+                "[2001:db8::1]:443",
+                "2001:db8::1",
+                443,
+                DNS_DEFAULT_DOH_PATH,
+            ),
+        ];
+        for (tag, link, scheme, authority, host, port, path) in cases {
+            let upstream = parse_dns_upstream(0, tag, link).unwrap();
+            assert_eq!(upstream.scheme, scheme, "{tag}");
+            assert_eq!(upstream.target.authority, authority, "{tag}");
+            assert_eq!(upstream.target.host, host, "{tag}");
+            assert_eq!(upstream.target.port, port, "{tag}");
+            assert_eq!(upstream.path, path, "{tag}");
+        }
+    }
+
+    #[test]
+    fn resident_dns_doh_http_response_parser_restores_request_id() {
+        let mut packed = a_response([203, 0, 113, 42]);
+        packed[0] = 0;
+        packed[1] = 0;
+        let mut raw =
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: "
+                .to_vec();
+        raw.extend_from_slice(packed.len().to_string().as_bytes());
+        raw.extend_from_slice(b"\r\n\r\n");
+        raw.extend_from_slice(&packed);
+
+        let restored = parse_doh_http_response(QUERY, &raw).unwrap();
+        assert_eq!(&restored[0..2], &[0x12, 0x34]);
+        assert_eq!(&restored[2..], &packed[2..]);
+    }
+
+    #[test]
+    fn resident_dns_doh_http_response_parser_decodes_chunked_body() {
+        let mut packed = a_response([203, 0, 113, 42]);
+        packed[0] = 0;
+        packed[1] = 0;
+        let split = 9;
+        let mut raw =
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nTransfer-Encoding: chunked\r\n\r\n"
+                .to_vec();
+        raw.extend_from_slice(format!("{split:x}\r\n").as_bytes());
+        raw.extend_from_slice(&packed[..split]);
+        raw.extend_from_slice(b"\r\n");
+        raw.extend_from_slice(format!("{:x}\r\n", packed.len() - split).as_bytes());
+        raw.extend_from_slice(&packed[split..]);
+        raw.extend_from_slice(b"\r\n0\r\n\r\n");
+
+        let restored = parse_doh_http_response(QUERY, &raw).unwrap();
+        assert_eq!(&restored[0..2], &[0x12, 0x34]);
+        assert_eq!(&restored[2..], &packed[2..]);
     }
 
     #[test]
