@@ -137,14 +137,31 @@ pub(super) fn handle_reload(
     notify_systemd("READY=1")
 }
 
-pub(super) fn validate_resident_runtime_reload_config(config: &Config) -> Result<(), String> {
-    for iface in config
-        .global
-        .lan_interface
-        .iter()
-        .flatten()
-        .chain(config.global.wan_interface.iter().flatten())
-    {
+pub(crate) fn validate_resident_runtime_reload_config(config: &Config) -> Result<(), String> {
+    let lan_ifaces = config.global.lan_interface.as_deref().unwrap_or(&[]);
+    if lan_ifaces.iter().all(|iface| iface.trim().is_empty()) {
+        return Err(
+            "resident reload rejected before current runtime swap: global.lan_interface must specify at least one existing LAN interface"
+                .to_owned(),
+        );
+    }
+
+    for iface in lan_ifaces {
+        let iface = iface.trim();
+        if iface.is_empty() || iface == "auto" {
+            return Err(format!(
+                "resident reload rejected before current runtime swap: global.lan_interface must name an existing LAN interface, got {iface:?}"
+            ));
+        }
+        let sysfs = Path::new("/sys/class/net").join(iface);
+        if !sysfs.exists() {
+            return Err(format!(
+                "resident reload rejected before current runtime swap: configured LAN interface {iface:?} does not exist"
+            ));
+        }
+    }
+
+    for iface in config.global.wan_interface.iter().flatten() {
         let iface = iface.trim();
         if iface.is_empty() || iface == "auto" {
             continue;
@@ -152,7 +169,7 @@ pub(super) fn validate_resident_runtime_reload_config(config: &Config) -> Result
         let sysfs = Path::new("/sys/class/net").join(iface);
         if !sysfs.exists() {
             return Err(format!(
-                "resident reload rejected before current runtime swap: configured interface {iface:?} does not exist"
+                "resident reload rejected before current runtime swap: configured WAN interface {iface:?} does not exist"
             ));
         }
     }

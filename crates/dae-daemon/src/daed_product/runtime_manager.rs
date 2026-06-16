@@ -405,6 +405,8 @@ pub(super) fn start_product_runtime_instance(
         ));
     }
 
+    crate::service_contract::validate_resident_runtime_reload_config(config)?;
+
     let mut runtime = start_resident_production_runtime(config)?;
     let state = runtime.product_state_summary();
     let dataplane_enabled = state["residentDataplane"]["enabled"]

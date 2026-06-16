@@ -42,6 +42,27 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
 }
 
 #[test]
+pub(crate) fn product_runtime_start_rejects_missing_lan_before_resident_start() {
+    let sections = parse_config(
+        r#"
+global {
+  log_level: info
+}
+routing {
+  fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let err = start_product_runtime_instance(&config, "test").unwrap_err();
+
+    assert!(err.contains("rejected before current runtime swap"));
+    assert!(err.contains("global.lan_interface"));
+    assert!(err.contains("must specify"));
+}
+
+#[test]
 pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
     let manager = ProductRuntimeManager::new();
     {

@@ -30,12 +30,38 @@ mod tests {
     }
 
     #[test]
-    fn resident_reload_preflight_rejects_missing_interface_before_swap() {
+    fn resident_reload_preflight_rejects_missing_lan_interface_before_swap() {
+        let config = minimal_config();
+        let err = validate_resident_runtime_reload_config(&config).unwrap_err();
+        assert!(err.contains("rejected before current runtime swap"));
+        assert!(err.contains("global.lan_interface"));
+        assert!(err.contains("must specify"));
+    }
+
+    #[test]
+    fn resident_reload_preflight_rejects_lan_auto_before_swap() {
+        let mut config = minimal_config();
+        config.global.lan_interface = Some(vec!["auto".to_owned()]);
+        let err = validate_resident_runtime_reload_config(&config).unwrap_err();
+        assert!(err.contains("rejected before current runtime swap"));
+        assert!(err.contains("global.lan_interface"));
+        assert!(err.contains("auto"));
+    }
+
+    #[test]
+    fn resident_reload_preflight_rejects_missing_lan_device_before_swap() {
         let mut config = minimal_config();
         config.global.lan_interface = Some(vec!["dae-missing-a4-interface".to_owned()]);
         let err = validate_resident_runtime_reload_config(&config).unwrap_err();
         assert!(err.contains("rejected before current runtime swap"));
         assert!(err.contains("dae-missing-a4-interface"));
+    }
+
+    #[test]
+    fn resident_reload_preflight_accepts_existing_lan_device_before_swap() {
+        let mut config = minimal_config();
+        config.global.lan_interface = Some(vec!["lo".to_owned()]);
+        validate_resident_runtime_reload_config(&config).unwrap();
     }
 
     #[test]
