@@ -12,6 +12,8 @@ pub(crate) struct ResidentTcpRouter {
     pub(in crate::production_runtime_owner::resident_dataplane) routing_tuple_map_id: u32,
     routing_tuple_map_fd: OwnedFd,
     pub(in crate::production_runtime_owner::resident_dataplane) routing_matcher: RoutingMatcher,
+    pub(in crate::production_runtime_owner::resident_dataplane) domain_routing:
+        Option<Arc<ResidentDnsDomainRouting>>,
     pub(in crate::production_runtime_owner::resident_dataplane) dial_mode: TcpDialMode,
     pub(in crate::production_runtime_owner::resident_dataplane) sniffing_timeout: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) so_mark_from_dae: u32,
@@ -23,6 +25,7 @@ impl ResidentTcpRouter {
         proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
         routing_tuple_map_id: Option<u32>,
         routing_matcher: RoutingMatcher,
+        domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
         dial_mode: TcpDialMode,
         sniffing_timeout: Duration,
         so_mark_from_dae: u32,
@@ -43,6 +46,7 @@ impl ResidentTcpRouter {
             routing_tuple_map_id,
             routing_tuple_map_fd,
             routing_matcher,
+            domain_routing,
             dial_mode,
             sniffing_timeout,
             so_mark_from_dae,
@@ -55,6 +59,7 @@ impl ResidentTcpRouter {
         routing_tuple_map_id: u32,
         routing_tuple_map_fd: OwnedFd,
         routing_matcher: RoutingMatcher,
+        domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
         dial_mode: TcpDialMode,
         sniffing_timeout: Duration,
         so_mark_from_dae: u32,
@@ -68,6 +73,7 @@ impl ResidentTcpRouter {
             routing_tuple_map_id,
             routing_tuple_map_fd,
             routing_matcher,
+            domain_routing,
             dial_mode,
             sniffing_timeout,
             so_mark_from_dae,
@@ -92,6 +98,7 @@ impl ResidentTcpRouter {
             1,
             routing_tuple_map_fd,
             routing_matcher,
+            None,
             dial_mode,
             sniffing_timeout,
             so_mark_from_dae,
@@ -165,6 +172,7 @@ impl ResidentTcpRouter {
             final_mark = outcome.mark;
             userspace_route_executed = true;
             userspace_route_must = outcome.must;
+            self.record_sniffed_domain_route(sniffed_domain, original_dst.ip());
         }
 
         let second_choose = userspace_route_executed.then(|| {
@@ -212,6 +220,13 @@ impl ResidentTcpRouter {
                 }))
             }
         }
+    }
+
+    fn record_sniffed_domain_route(&self, sniffed_domain: &str, ip: IpAddr) {
+        let Some(domain_routing) = self.domain_routing.as_ref() else {
+            return;
+        };
+        let _ = domain_routing.record_sniffed_domain_ip(sniffed_domain, ip);
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn lookup_routing_result(
