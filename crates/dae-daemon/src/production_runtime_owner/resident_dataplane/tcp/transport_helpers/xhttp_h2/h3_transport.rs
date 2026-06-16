@@ -1,3 +1,7 @@
+use super::xmux::{
+    XhttpXmuxClientLease, XhttpXmuxKey, XhttpXmuxRequestHandle, note_xhttp_xmux_request,
+    select_xhttp_h3_xmux_client,
+};
 use super::*;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -197,6 +201,38 @@ pub(crate) async fn send_xhttp_h3_packet_up_request(
         ));
     }
     drain_xhttp_h3_response_body(stream).await
+}
+
+pub(super) async fn refresh_xhttp_h3_packet_up_client_if_needed(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    connection: &mut Option<XhttpH3Connection>,
+    xmux_request: &mut Option<XhttpXmuxRequestHandle>,
+) -> Result<(), String> {
+    let Some(request) = xmux_request.as_ref() else {
+        return Ok(());
+    };
+    if request.use_for_packet_up_post() {
+        return Ok(());
+    }
+
+    let replacement = open_xhttp_h3_proxy_client(proxy, endpoint, mark).await?;
+    *client = replacement.client;
+    if let Some(new_connection) = replacement.connection
+        && let Some(old_connection) = connection.replace(new_connection)
+    {
+        old_connection
+            .close(b"resident xhttp h3 packet-up client replaced")
+            .await;
+    }
+    *xmux_request = replacement
+        .xmux_lease
+        .as_ref()
+        .map(XhttpXmuxClientLease::request_handle);
+    drop(replacement.xmux_lease);
+    Ok(())
 }
 
 async fn drain_xhttp_h3_response_body(
