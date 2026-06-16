@@ -52,14 +52,18 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
 }
 
 pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpRequest) -> Value {
-    let runtime = app.runtime.summary();
+    let runtime_delta = app.runtime.runtime_overview_delta_state();
     let window_sec = query_u64(request, "windowSec")
         .unwrap_or(60)
         .clamp(1, 3_600);
     let max_points = query_usize(request, "maxPoints")
         .unwrap_or(120)
         .clamp(1, 1_000);
-    let traffic = resident_runtime_traffic_stats(&runtime, window_sec, max_points);
+    let traffic = resident_runtime_traffic_stats_from_metrics(
+        runtime_delta.resident_dataplane_metrics.as_ref(),
+        window_sec,
+        max_points,
+    );
     let process = current_process_metrics();
     let allocator_live_heap = allocator_live_heap_bytes();
     json!({
@@ -84,7 +88,7 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
         "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
         "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
         "goroutines": process.thread_count,
-        "reloadCount": runtime["reloadCount"].clone(),
+        "reloadCount": runtime_delta.reload_count,
         "samples": traffic.samples,
     })
 }

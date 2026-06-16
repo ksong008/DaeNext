@@ -81,6 +81,12 @@ pub(super) struct RuntimeStartOutcome {
     pub(super) report: Value,
 }
 
+#[derive(Debug, Default)]
+pub(super) struct RuntimeOverviewDeltaState {
+    pub(super) reload_count: u64,
+    pub(super) resident_dataplane_metrics: Option<Value>,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductRuntimeLifecycleLogMode {
     StartupRestore,
@@ -298,6 +304,25 @@ impl ProductRuntimeManager {
                     metrics
                 }),
             Some(ProductRuntimeInstance::Fake(_)) | None => None,
+        }
+    }
+
+    pub(super) fn runtime_overview_delta_state(&self) -> RuntimeOverviewDeltaState {
+        let Ok(inner) = self.inner.lock() else {
+            return RuntimeOverviewDeltaState::default();
+        };
+        let resident_dataplane_metrics = match inner.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => runtime
+                .resident_dataplane_metrics_snapshot()
+                .map(|mut metrics| {
+                    inner.traffic_carry.apply_to_metrics(&mut metrics);
+                    metrics
+                }),
+            Some(ProductRuntimeInstance::Fake(_)) | None => None,
+        };
+        RuntimeOverviewDeltaState {
+            reload_count: inner.reload_count,
+            resident_dataplane_metrics,
         }
     }
 
