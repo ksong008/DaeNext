@@ -35,6 +35,7 @@ use self::quic::{
 use self::shadowsocks::{Shadowsocks2022DatagramSession, ShadowsocksAeadDatagramSession};
 use self::socks5::Socks5UdpAssociateSession;
 use self::trojan::TrojanUdpStreamSession;
+#[cfg(test)]
 pub(super) use self::vless::vless_udp_length_frame;
 use self::vless::{VlessXhttpH2UdpSession, VlessXhttpH3UdpSession, VlessXudpStreamSession};
 

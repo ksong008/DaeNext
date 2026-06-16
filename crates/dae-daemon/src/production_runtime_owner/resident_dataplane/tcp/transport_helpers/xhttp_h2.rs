@@ -24,6 +24,7 @@ pub(crate) use self::relay::{relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhtt
 
 mod parts;
 pub(crate) use self::parts::{open_xhttp_packet_up_parts, open_xhttp_stream_parts};
+#[cfg(test)]
 pub(crate) use self::request::{
     xhttp_h1_request_bytes, xhttp_h2_request, xhttp_session_path_suffix, xhttp_uri,
 };
