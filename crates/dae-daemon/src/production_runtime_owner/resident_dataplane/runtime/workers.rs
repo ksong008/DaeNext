@@ -174,11 +174,12 @@ pub(crate) fn start_resident_dataplane_workers(
             routing_matcher.clone(),
         ))
     });
-    let dns = Arc::new(plan.dns.with_domain_routing(dns_domain_routing));
+    let dns = Arc::new(plan.dns.with_domain_routing(dns_domain_routing.clone()));
     let tcp_router = match ResidentTcpRouter::new(
         plan.proxies,
         routing_tuple_map_id,
         routing_matcher,
+        dns_domain_routing,
         plan.tcp_dial_mode,
         plan.sniffing_timeout,
         config.global.so_mark_from_dae,
@@ -370,8 +371,8 @@ pub(crate) fn start_resident_dataplane_workers(
         json!({
             "enabled": domain_routing_map_id.is_some(),
             "map_id": domain_routing_map_id,
-            "source": "resident DNS accepted response cache",
-            "scope": "accepted DNS responses update domain_routing_map for kernel domain routing hits",
+            "source": "resident DNS accepted response cache and TCP domain++ sniffed-domain learning",
+            "scope": "accepted DNS responses and TCP sniffed domains update domain_routing_map for kernel domain routing hits",
         }),
     );
     start_map.insert(

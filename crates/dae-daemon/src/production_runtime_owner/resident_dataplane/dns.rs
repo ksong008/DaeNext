@@ -59,6 +59,7 @@ const DNS_HTTPS_DEFAULT_PORT: u16 = 443;
 const DNS_DEFAULT_DOH_PATH: &str = "/dns-query";
 const DNS_DOH3_ALPN: &str = "h3";
 const DNS_DOQ_ALPN: &str = "doq";
+const TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS: i64 = 600;
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsPlan {
@@ -107,6 +108,7 @@ struct ResidentDnsDomainRoutingState {
     owner: DomainRoutingOwner,
     cache: DnsCacheStore,
     domain_bitmap: Vec<u32>,
+    sniff_owners: BTreeMap<String, i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,6 +117,13 @@ struct ResidentDnsDomainRoutingUpdatePlan {
     entry: DnsCacheEntry,
     bitmap: Vec<u32>,
     ips: Vec<DomainRoutingIpKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResidentDomainRoutingIpUpdatePlan {
+    owner_key: String,
+    bitmap: Vec<u32>,
+    ip: DomainRoutingIpKey,
 }
 
 impl ResidentDnsDomainRouting {
@@ -126,6 +135,7 @@ impl ResidentDnsDomainRouting {
                 owner: DomainRoutingOwner::default(),
                 cache: DnsCacheStore::default(),
                 domain_bitmap: Vec::new(),
+                sniff_owners: BTreeMap::new(),
             }),
         }
     }
@@ -136,20 +146,7 @@ impl ResidentDnsDomainRouting {
             .state
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        for expired in state.cache.sweep(now_unix) {
-            if expired.route_owner_key.is_empty() {
-                continue;
-            }
-            state
-                .owner
-                .apply_dns_event_by_id(
-                    self.map_id,
-                    DomainRoutingDnsEvent::remove(&expired.route_owner_key),
-                )
-                .map_err(|err| {
-                    format!("remove expired resident DNS domain routing owner: {err}")
-                })?;
-        }
+        self.sweep_expired_locked(now_unix, &mut state)?;
         let Some(plan) = build_resident_dns_domain_routing_update_plan(
             &self.routing_matcher,
             &mut state.domain_bitmap,
@@ -174,6 +171,77 @@ impl ResidentDnsDomainRouting {
         state
             .cache
             .insert_without_route_owner_key(now_unix, plan.key, plan.entry);
+        Ok(())
+    }
+
+    pub(super) fn record_sniffed_domain_ip(
+        &self,
+        domain: &str,
+        ip: IpAddr,
+    ) -> Result<bool, String> {
+        let now_unix = unix_now();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
+        self.sweep_expired_locked(now_unix, &mut state)?;
+        let Some(plan) = build_resident_domain_routing_ip_update_plan(
+            &self.routing_matcher,
+            &mut state.domain_bitmap,
+            "tcp-sniff",
+            domain,
+            ip,
+        )?
+        else {
+            return Ok(false);
+        };
+        state
+            .owner
+            .apply_dns_event_by_id(
+                self.map_id,
+                DomainRoutingDnsEvent::from_keys(&plan.owner_key, &plan.bitmap, [plan.ip]),
+            )
+            .map_err(|err| format!("apply resident TCP sniff domain routing update: {err}"))?;
+        state.sniff_owners.insert(
+            plan.owner_key,
+            now_unix.saturating_add(TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS),
+        );
+        Ok(true)
+    }
+
+    fn sweep_expired_locked(
+        &self,
+        now_unix: i64,
+        state: &mut ResidentDnsDomainRoutingState,
+    ) -> Result<(), String> {
+        for expired in state.cache.sweep(now_unix) {
+            if expired.route_owner_key.is_empty() {
+                continue;
+            }
+            state
+                .owner
+                .apply_dns_event_by_id(
+                    self.map_id,
+                    DomainRoutingDnsEvent::remove(&expired.route_owner_key),
+                )
+                .map_err(|err| {
+                    format!("remove expired resident DNS domain routing owner: {err}")
+                })?;
+        }
+        let expired_sniff_owners = state
+            .sniff_owners
+            .iter()
+            .filter_map(|(owner, deadline)| (*deadline <= now_unix).then(|| owner.clone()))
+            .collect::<Vec<_>>();
+        for owner in expired_sniff_owners {
+            state
+                .owner
+                .apply_dns_event_by_id(self.map_id, DomainRoutingDnsEvent::remove(&owner))
+                .map_err(|err| {
+                    format!("remove expired resident TCP sniff domain routing owner: {err}")
+                })?;
+            state.sniff_owners.remove(&owner);
+        }
         Ok(())
     }
 }
@@ -317,6 +385,31 @@ fn build_resident_dns_domain_routing_update_plan(
         entry: plan.entry,
         bitmap,
         ips,
+    }))
+}
+
+fn build_resident_domain_routing_ip_update_plan(
+    routing_matcher: &RoutingMatcher,
+    domain_bitmap: &mut Vec<u32>,
+    owner_prefix: &str,
+    domain: &str,
+    ip: IpAddr,
+) -> Result<Option<ResidentDomainRoutingIpUpdatePlan>, String> {
+    let domain = domain.trim().trim_end_matches('.');
+    if domain.is_empty() || ip.is_unspecified() {
+        return Ok(None);
+    }
+    let bitmap = routing_matcher
+        .domain_bitmap_for_domain_into(domain, domain_bitmap)
+        .map_err(|err| format!("match resident sniffed domain routing bitmap: {err}"))?
+        .to_vec();
+    if bitmap.iter().all(|word| *word == 0) {
+        return Ok(None);
+    }
+    Ok(Some(ResidentDomainRoutingIpUpdatePlan {
+        owner_key: format!("{owner_prefix}|{domain}|{ip}"),
+        bitmap,
+        ip: ip_to_key(ip),
     }))
 }
 
@@ -566,6 +659,41 @@ mod tests {
             &mut bitmap_buffer,
             1_700_000_000,
             &response,
+        )
+        .unwrap();
+
+        assert_eq!(plan, None);
+    }
+
+    #[test]
+    fn resident_tcp_sniff_domain_routing_update_plan_records_target_ip() {
+        let matcher = domain_routing_test_matcher();
+        let mut bitmap_buffer = Vec::new();
+        let plan = build_resident_domain_routing_ip_update_plan(
+            &matcher,
+            &mut bitmap_buffer,
+            "tcp-sniff",
+            "www.example.com.",
+            "198.51.100.10".parse().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(plan.owner_key, "tcp-sniff|www.example.com|198.51.100.10");
+        assert_eq!(plan.bitmap, vec![0x1]);
+        assert_eq!(plan.ip, ip_to_key("198.51.100.10".parse().unwrap()));
+    }
+
+    #[test]
+    fn resident_tcp_sniff_domain_routing_update_plan_skips_unmatched_domain() {
+        let matcher = domain_routing_test_matcher();
+        let mut bitmap_buffer = Vec::new();
+        let plan = build_resident_domain_routing_ip_update_plan(
+            &matcher,
+            &mut bitmap_buffer,
+            "tcp-sniff",
+            "invalid.test",
+            "198.51.100.10".parse().unwrap(),
         )
         .unwrap();
 

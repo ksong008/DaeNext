@@ -77,6 +77,7 @@ use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,
     relay_tcp_direct_async,
 };
+use super::dns::ResidentDnsDomainRouting;
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
 use super::plan::{
