@@ -31,17 +31,39 @@ pub(crate) fn resident_runtime_traffic_stats(
     resident_live_runtime_traffic_stats(runtime, window_sec, max_points).unwrap_or_default()
 }
 
+pub(crate) fn resident_runtime_traffic_stats_from_metrics(
+    metrics: Option<&Value>,
+    window_sec: u64,
+    max_points: usize,
+) -> RuntimeTrafficStats {
+    metrics
+        .map(|metrics| {
+            resident_live_runtime_traffic_stats_from_metrics(metrics, window_sec, max_points)
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn resident_live_runtime_traffic_stats(
     runtime: &Value,
     window_sec: u64,
     max_points: usize,
 ) -> Option<RuntimeTrafficStats> {
     let metrics = runtime.pointer("/residentDataplane/metrics")?;
+    Some(resident_live_runtime_traffic_stats_from_metrics(
+        metrics, window_sec, max_points,
+    ))
+}
+
+fn resident_live_runtime_traffic_stats_from_metrics(
+    metrics: &Value,
+    window_sec: u64,
+    max_points: usize,
+) -> RuntimeTrafficStats {
     let upload_total = event_u64(metrics, "uploadTotal");
     let download_total = event_u64(metrics, "downloadTotal");
     let (upload_rate, download_rate, samples) =
         live_runtime_traffic_rate_samples(upload_total, download_total, window_sec, max_points);
-    Some(RuntimeTrafficStats {
+    RuntimeTrafficStats {
         upload_total,
         download_total,
         upload_rate,
@@ -49,7 +71,7 @@ pub(crate) fn resident_live_runtime_traffic_stats(
         active_connections: event_u64(metrics, "activeTcpConnections"),
         udp_sessions: event_u64(metrics, "activeUdpSessions"),
         samples,
-    })
+    }
 }
 
 pub(crate) fn live_runtime_traffic_rate_samples(
