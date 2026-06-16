@@ -1,14 +1,27 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
+use std::mem::size_of;
+use std::net::{IpAddr, Ipv4Addr};
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::slice;
 
+use dae_core_types::OutboundIndex;
+use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT};
+use dae_ebpf_support::{
+    BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
+};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
 
 use super::*;
 
+const BPF_L4_UDP: u8 = 17;
+
 pub(super) fn run_resident_udp_session_manager(
     socket: UdpSocket,
-    proxy_group: Arc<ResidentProxyGroupPlan>,
+    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    default_outbound: u8,
+    routing_tuple_map_id: Option<u32>,
     dns: Arc<ResidentDnsPlan>,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
@@ -35,7 +48,9 @@ pub(super) fn run_resident_udp_session_manager(
     };
     runtime.block_on(run_resident_udp_session_manager_async(
         socket,
-        proxy_group,
+        proxy_groups,
+        default_outbound,
+        routing_tuple_map_id,
         dns,
         stop,
         event_file,
@@ -49,7 +64,9 @@ pub(super) fn run_resident_udp_session_manager(
 
 async fn run_resident_udp_session_manager_async(
     socket: UdpSocket,
-    proxy_group: Arc<ResidentProxyGroupPlan>,
+    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    default_outbound: u8,
+    routing_tuple_map_id: Option<u32>,
     dns: Arc<ResidentDnsPlan>,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
@@ -67,6 +84,18 @@ async fn run_resident_udp_session_manager_async(
         );
         return;
     }
+    let router = match ResidentUdpRouter::new(proxy_groups, default_outbound, routing_tuple_map_id)
+    {
+        Ok(router) => router,
+        Err(err) => {
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({"event": "udp_session_manager_start_failed", "error": err}),
+            );
+            return;
+        }
+    };
     let socket = match AsyncFd::new(socket) {
         Ok(socket) => socket,
         Err(err) => {
@@ -78,15 +107,18 @@ async fn run_resident_udp_session_manager_async(
             return;
         }
     };
+    let default_proxy_group = router.default_proxy_group();
     append_event(
         &event_file,
         &event_lock,
         json!({
             "event": "udp_session_manager_started",
-            "proxy_group": proxy_group.group_name,
-            "group_policy": proxy_group.group_policy_name(),
-            "candidate_count": proxy_group.candidate_count(),
-            "admitted_candidate_count": proxy_group.admitted_candidate_count(),
+            "proxy_group": default_proxy_group.group_name,
+            "group_policy": default_proxy_group.group_policy_name(),
+            "candidate_count": default_proxy_group.candidate_count(),
+            "admitted_candidate_count": default_proxy_group.admitted_candidate_count(),
+            "default_outbound": default_outbound,
+            "routing_tuple_map_id": router.routing_tuple_map_id,
             "session_limit": session_limit,
             "packetSessionManager": {
                 "schemaVersion": 1,
@@ -124,7 +156,7 @@ async fn run_resident_udp_session_manager_async(
                 match packet {
                     Ok(packet) => handle_manager_packet(
                         packet,
-                        &proxy_group,
+                        &router,
                         &dns,
                         &event_file,
                         &event_lock,
@@ -179,7 +211,7 @@ async fn run_resident_udp_session_manager_async(
 
 fn handle_manager_packet(
     packet: UdpOriginalDstPacket,
-    proxy_group: &Arc<ResidentProxyGroupPlan>,
+    router: &ResidentUdpRouter,
     dns: &Arc<ResidentDnsPlan>,
     event_file: &PathBuf,
     event_lock: &Arc<Mutex<()>>,
@@ -198,20 +230,39 @@ fn handle_manager_packet(
         );
         return;
     };
-    let proxy = match proxy_group.select_proxy_for_udp() {
-        Ok(proxy) => proxy,
+    let selection = match router.select(packet.peer, original_dst) {
+        Ok(selection) => selection,
         Err(err) => {
-            append_udp_proxy_selection_failed(
+            append_udp_route_selection_failed(
                 event_file,
                 event_lock,
                 packet.peer,
                 original_dst,
                 err,
-                proxy_group,
             );
             return;
         }
     };
+    let proxy_selection = match selection {
+        ResidentUdpSelection::Proxy(selection) => selection,
+        ResidentUdpSelection::Block(selection) => {
+            append_event(
+                event_file,
+                event_lock,
+                json!({
+                    "event": "udp_packet_dropped",
+                    "reason": "resident UDP selected block outbound",
+                    "peer": resident_socket_addr_display(packet.peer),
+                    "original_dst": resident_socket_addr_display(original_dst),
+                    "initial_outbound": selection.initial_outbound,
+                    "final_outbound": selection.final_outbound,
+                    "network": resident_udp_network_name(original_dst),
+                }),
+            );
+            return;
+        }
+    };
+    let proxy = Arc::clone(&proxy_selection.proxy);
     let key = UdpSessionKey::new(&proxy, packet.peer, original_dst);
     if !sessions.contains_key(&key) {
         if sessions.len() >= session_limit {
@@ -247,6 +298,7 @@ fn handle_manager_packet(
         packet,
         original_dst,
         proxy,
+        force_proxy_packet: proxy_selection.force_proxy_packet,
     };
     let Some(entry) = sessions.get(&key) else {
         return;
@@ -296,8 +348,224 @@ fn is_udp_would_block(err: &str) -> bool {
     err.contains("WouldBlock") || err.contains("Resource temporarily unavailable")
 }
 
+struct ResidentUdpRouter {
+    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    default_outbound: u8,
+    routing_tuple_map_id: u32,
+    routing_tuple_map_fd: Option<OwnedFd>,
+}
+
+impl ResidentUdpRouter {
+    fn new(
+        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        default_outbound: u8,
+        routing_tuple_map_id: Option<u32>,
+    ) -> Result<Self, String> {
+        let routing_tuple_map_id = routing_tuple_map_id.ok_or_else(|| {
+            "resident UDP router needs routing_tuples_map id for compatible per-packet outbound selection"
+                .to_owned()
+        })?;
+        let routing_tuple_map_fd = open_map_fd(routing_tuple_map_id).map_err(|err| {
+            format!("open routing_tuples_map id {routing_tuple_map_id} for resident UDP: {err}")
+        })?;
+        Self::from_parts(
+            proxy_groups,
+            default_outbound,
+            routing_tuple_map_id,
+            Some(routing_tuple_map_fd),
+        )
+    }
+
+    fn from_parts(
+        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        default_outbound: u8,
+        routing_tuple_map_id: u32,
+        routing_tuple_map_fd: Option<OwnedFd>,
+    ) -> Result<Self, String> {
+        if proxy_groups.is_empty() {
+            return Err("resident UDP router needs at least one proxy outbound".to_owned());
+        }
+        if !proxy_groups.contains_key(&default_outbound) {
+            return Err(format!(
+                "resident UDP default outbound {} has no Rust proxy plan",
+                OutboundIndex(default_outbound)
+            ));
+        }
+        Ok(Self {
+            proxy_groups,
+            default_outbound,
+            routing_tuple_map_id,
+            routing_tuple_map_fd,
+        })
+    }
+
+    fn default_proxy_group(&self) -> &ResidentProxyGroupPlan {
+        self.proxy_groups
+            .get(&self.default_outbound)
+            .expect("default outbound was validated")
+    }
+
+    fn select(
+        &self,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
+    ) -> Result<ResidentUdpSelection, String> {
+        let initial = self.lookup_routing_result(peer, original_dst)?;
+        self.select_from_routing_result(original_dst, initial)
+    }
+
+    fn select_from_routing_result(
+        &self,
+        original_dst: SocketAddr,
+        initial: BpfRoutingResult,
+    ) -> Result<ResidentUdpSelection, String> {
+        let force_proxy_packet = original_dst.port() == 53 && initial.must > 0;
+        if original_dst.port() == 53 && !force_proxy_packet {
+            return self
+                .select_proxy_from_group(self.default_outbound, initial.mark)
+                .map(|proxy| {
+                    ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
+                        proxy,
+                        force_proxy_packet,
+                    })
+                });
+        }
+        match initial.outbound {
+            OUTBOUND_BLOCK => Ok(ResidentUdpSelection::Block(ResidentUdpRouteSelection {
+                initial_outbound: initial.outbound,
+                final_outbound: OUTBOUND_BLOCK,
+            })),
+            OUTBOUND_DIRECT => Err(
+                "resident UDP selected direct outbound but direct UDP execution is not implemented; keeping fail-closed"
+                    .to_owned(),
+            ),
+            OUTBOUND_CONTROL_PLANE_ROUTING => Err(
+                "resident UDP selected control-plane routing but UDP has no reliable domain/SNI reroute path; DNS domain_routing_map must resolve this before userspace"
+                    .to_owned(),
+            ),
+            outbound => self
+                .select_proxy_from_group(outbound, initial.mark)
+                .map(|proxy| {
+                    ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
+                        proxy,
+                        force_proxy_packet,
+                    })
+                }),
+        }
+    }
+
+    fn select_proxy_from_group(
+        &self,
+        outbound: u8,
+        mark: u32,
+    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        let Some(proxy_group) = self.proxy_groups.get(&outbound) else {
+            return Err(format!(
+                "resident UDP selected outbound {} but no Rust proxy plan is available; unsupported protocol must stay fail-closed until implemented",
+                OutboundIndex(outbound)
+            ));
+        };
+        let proxy = proxy_group.select_proxy_for_udp()?;
+        if mark == 0 || proxy.mark == mark {
+            return Ok(proxy);
+        }
+        let mut overridden = proxy.as_ref().clone();
+        overridden.mark = mark;
+        Ok(Arc::new(overridden))
+    }
+
+    fn lookup_routing_result(
+        &self,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
+    ) -> Result<BpfRoutingResult, String> {
+        let Some(fd) = self.routing_tuple_map_fd.as_ref() else {
+            return Err("resident UDP router has no routing_tuples_map fd".to_owned());
+        };
+        let key = BpfTuplesKey {
+            sip: udp_ip_addr_bytes(peer.ip()),
+            dip: udp_ip_addr_bytes(original_dst.ip()),
+            sport: peer.port().to_be(),
+            dport: original_dst.port().to_be(),
+            l4proto: BPF_L4_UDP,
+            padding: [0; 3],
+        };
+        let mut result = BpfRoutingResult::default();
+        lookup_map_elem_bytes(fd.as_raw_fd(), bytes_of(&key), bytes_of_mut(&mut result)).map_err(
+            |err| {
+                format!(
+                    "lookup routing_tuples_map id {} for {} -> {} udp: {err}",
+                    self.routing_tuple_map_id, peer, original_dst
+                )
+            },
+        )?;
+        Ok(result)
+    }
+}
+
+struct ResidentUdpProxySelection {
+    proxy: Arc<ResidentProxyPlan>,
+    force_proxy_packet: bool,
+}
+
+struct ResidentUdpRouteSelection {
+    initial_outbound: u8,
+    final_outbound: u8,
+}
+
+enum ResidentUdpSelection {
+    Proxy(ResidentUdpProxySelection),
+    Block(ResidentUdpRouteSelection),
+}
+
+fn append_udp_route_selection_failed(
+    event_file: &PathBuf,
+    event_lock: &Arc<Mutex<()>>,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    err: String,
+) {
+    append_event(
+        event_file,
+        event_lock,
+        json!({
+            "event": "udp_exchange_failed",
+            "peer": resident_socket_addr_display(peer),
+            "original_dst": resident_socket_addr_display(original_dst),
+            "error": err,
+            "network": resident_udp_network_name(original_dst),
+        }),
+    );
+}
+
+fn udp_ip_addr_bytes(addr: IpAddr) -> BpfIpBytes {
+    match addr {
+        IpAddr::V4(addr) => udp_ipv4_mapped_ip_bytes(addr),
+        IpAddr::V6(addr) => BpfIpBytes {
+            u6_addr8: addr.octets(),
+        },
+    }
+}
+
+fn udp_ipv4_mapped_ip_bytes(addr: Ipv4Addr) -> BpfIpBytes {
+    let mut out = [0_u8; 16];
+    out[10] = 0xff;
+    out[11] = 0xff;
+    out[12..16].copy_from_slice(&addr.octets());
+    BpfIpBytes { u6_addr8: out }
+}
+
+fn bytes_of<T>(value: &T) -> &[u8] {
+    unsafe { slice::from_raw_parts((value as *const T).cast::<u8>(), size_of::<T>()) }
+}
+
+fn bytes_of_mut<T>(value: &mut T) -> &mut [u8] {
+    unsafe { slice::from_raw_parts_mut((value as *mut T).cast::<u8>(), size_of::<T>()) }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpSettingsPlan;
@@ -376,6 +644,110 @@ mod tests {
         assert!(!is_udp_would_block("permission denied"));
     }
 
+    #[test]
+    fn udp_router_selects_proxy_from_routing_tuple_outbound() {
+        let router = test_udp_router();
+        let original_dst = SocketAddr::new(Ipv4Addr::new(142, 250, 72, 238).into(), 443);
+
+        let selected_default = router
+            .select_from_routing_result(original_dst, route_result(2, 0))
+            .unwrap();
+        let selected_sg = router
+            .select_from_routing_result(original_dst, route_result(3, 0))
+            .unwrap();
+
+        assert_eq!(selected_proxy_group_name(selected_default), "proxy");
+        assert_eq!(selected_proxy_group_name(selected_sg), "sg");
+    }
+
+    #[test]
+    fn udp_router_blocks_when_kernel_selected_block() {
+        let router = test_udp_router();
+        let original_dst = SocketAddr::new(Ipv4Addr::new(203, 0, 113, 10).into(), 443);
+        let selection = router
+            .select_from_routing_result(original_dst, route_result(OUTBOUND_BLOCK, 0))
+            .unwrap();
+
+        match selection {
+            ResidentUdpSelection::Block(route) => {
+                assert_eq!(route.initial_outbound, OUTBOUND_BLOCK);
+                assert_eq!(route.final_outbound, OUTBOUND_BLOCK);
+            }
+            ResidentUdpSelection::Proxy(_) => panic!("block outbound must not select a proxy"),
+        }
+    }
+
+    #[test]
+    fn udp_router_fails_closed_for_direct_and_control_plane_routing() {
+        let router = test_udp_router();
+        let original_dst = SocketAddr::new(Ipv4Addr::new(203, 0, 113, 10).into(), 443);
+
+        let direct = select_udp_route_err(&router, original_dst, route_result(OUTBOUND_DIRECT, 0));
+        assert!(direct.contains("direct UDP execution is not implemented"));
+
+        let control_plane = select_udp_route_err(
+            &router,
+            original_dst,
+            route_result(OUTBOUND_CONTROL_PLANE_ROUTING, 0),
+        );
+        assert!(control_plane.contains("domain_routing_map must resolve this"));
+    }
+
+    #[test]
+    fn udp_router_overrides_proxy_mark_from_routing_result() {
+        let router = test_udp_router();
+        let original_dst = SocketAddr::new(Ipv4Addr::new(142, 250, 72, 238).into(), 443);
+        let selection = router
+            .select_from_routing_result(original_dst, route_result(3, 0x1234_5678))
+            .unwrap();
+
+        match selection {
+            ResidentUdpSelection::Proxy(selection) => {
+                assert_eq!(selection.proxy.group_name, "sg");
+                assert_eq!(selection.proxy.mark, 0x1234_5678);
+            }
+            ResidentUdpSelection::Block(_) => panic!("route mark override must keep proxy route"),
+        }
+    }
+
+    #[test]
+    fn udp_router_keeps_dns_packets_on_resident_dns_path() {
+        let router = test_udp_router();
+        let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
+        let selection = router
+            .select_from_routing_result(dns_dst, route_result(OUTBOUND_BLOCK, 0))
+            .unwrap();
+
+        assert_eq!(selected_proxy_group_name(selection), "proxy");
+    }
+
+    #[test]
+    fn udp_router_respects_must_dns_as_plain_udp_route() {
+        let router = test_udp_router();
+        let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
+        let block = router
+            .select_from_routing_result(dns_dst, route_result_must(OUTBOUND_BLOCK, 0, 1))
+            .unwrap();
+        match block {
+            ResidentUdpSelection::Block(route) => {
+                assert_eq!(route.initial_outbound, OUTBOUND_BLOCK);
+                assert_eq!(route.final_outbound, OUTBOUND_BLOCK);
+            }
+            ResidentUdpSelection::Proxy(_) => panic!("must block DNS must not use resident DNS"),
+        }
+
+        let proxy = router
+            .select_from_routing_result(dns_dst, route_result_must(3, 0, 1))
+            .unwrap();
+        match proxy {
+            ResidentUdpSelection::Proxy(selection) => {
+                assert_eq!(selection.proxy.group_name, "sg");
+                assert!(selection.force_proxy_packet);
+            }
+            ResidentUdpSelection::Block(_) => panic!("user outbound DNS must select proxy"),
+        }
+    }
+
     fn ipv4_mapped_socket_addr(addr: Ipv4Addr, port: u16) -> SocketAddr {
         let mut octets = [0_u8; 16];
         octets[10] = 0xff;
@@ -386,6 +758,61 @@ mod tests {
 
     fn ipv4_socket_display(addr: Ipv4Addr, port: u16) -> String {
         SocketAddr::new(IpAddr::V4(addr), port).to_string()
+    }
+
+    fn test_udp_router() -> ResidentUdpRouter {
+        let mut groups = BTreeMap::new();
+        groups.insert(
+            2,
+            ResidentProxyGroupPlan::fixed_single_for_test(test_udp_proxy_with_group("proxy", 0)),
+        );
+        groups.insert(
+            3,
+            ResidentProxyGroupPlan::fixed_single_for_test(test_udp_proxy_with_group("sg", 0x2222)),
+        );
+        ResidentUdpRouter::from_parts(Arc::new(groups), 2, 1, None).unwrap()
+    }
+
+    fn route_result(outbound: u8, mark: u32) -> BpfRoutingResult {
+        route_result_must(outbound, mark, 0)
+    }
+
+    fn route_result_must(outbound: u8, mark: u32, must: u8) -> BpfRoutingResult {
+        BpfRoutingResult {
+            outbound,
+            mark,
+            must,
+            ..Default::default()
+        }
+    }
+
+    fn selected_proxy_group_name(selection: ResidentUdpSelection) -> String {
+        match selection {
+            ResidentUdpSelection::Proxy(selection) => selection.proxy.group_name.clone(),
+            ResidentUdpSelection::Block(_) => panic!("expected proxy route"),
+        }
+    }
+
+    fn select_udp_route_err(
+        router: &ResidentUdpRouter,
+        original_dst: SocketAddr,
+        result: BpfRoutingResult,
+    ) -> String {
+        match router.select_from_routing_result(original_dst, result) {
+            Ok(_) => panic!("expected resident UDP route selection to fail"),
+            Err(err) => err,
+        }
+    }
+
+    fn test_udp_proxy_with_group(group_name: &str, mark: u32) -> ResidentProxyPlan {
+        let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::Socks5Tcp {
+            username: String::new(),
+            password: String::new(),
+        });
+        proxy.group_name = group_name.to_owned();
+        proxy.node_tag = group_name.to_owned();
+        proxy.mark = mark;
+        proxy
     }
 
     fn test_udp_proxy(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
