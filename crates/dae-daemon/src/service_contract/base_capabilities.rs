@@ -156,11 +156,6 @@ fn insert_runtime_state_contract_capabilities(report: &mut Value) {
             json!("production-admission"),
         );
         report.insert("runtime_state_contract_ready".to_owned(), json!(true));
-        report.insert("runtime_state_contract_ready".to_owned(), json!(true));
-        report.insert(
-            "runtime_state_report_schema".to_owned(),
-            json!("runtime-state"),
-        );
         report.insert(
             "runtime_state_report_schema".to_owned(),
             json!("runtime-state"),
