@@ -13,6 +13,27 @@ pub(crate) async fn open_h2_body_stream(
     ),
     String,
 > {
+    let initial_chunks = if first_payload.is_empty() {
+        Vec::new()
+    } else {
+        vec![Bytes::copy_from_slice(first_payload)]
+    };
+    open_h2_body_stream_with_initial_chunks(client, proxy, initial_chunks, context).await
+}
+
+pub(crate) async fn open_h2_body_stream_with_initial_chunks(
+    client: AsyncResidentTlsClient,
+    proxy: &ResidentProxyPlan,
+    initial_chunks: Vec<Bytes>,
+    context: &str,
+) -> Result<
+    (
+        h2::SendStream<Bytes>,
+        h2::RecvStream,
+        tokio::task::JoinHandle<()>,
+    ),
+    String,
+> {
     let (mut sender, connection) =
         time::timeout(RESIDENT_CONNECT_TIMEOUT, h2::client::handshake(client))
             .await
@@ -26,24 +47,14 @@ pub(crate) async fn open_h2_body_stream(
         h2_body_authority(proxy),
         h2_body_request_path(&proxy.stream_path)
     );
-    let request = http::Request::builder()
-        .method(http::Method::PUT)
-        .uri(uri)
-        .header(http::header::ACCEPT_ENCODING, "identity")
-        .header(http::header::USER_AGENT, "dae-rust-native-resident")
-        .body(())
-        .map_err(|err| format!("build {context} HTTP/2 request: {err}"))?;
+    let request = h2_body_request(uri, context)?;
     let (response, mut send_stream) = sender
         .send_request(request, false)
         .map_err(|err| format!("send {context} HTTP/2 request headers: {err}"))?;
-    if !first_payload.is_empty() {
-        send_h2_data_with_context(
-            &mut send_stream,
-            Bytes::copy_from_slice(first_payload),
-            false,
-            context,
-        )
-        .await?;
+    for chunk in initial_chunks {
+        if !chunk.is_empty() {
+            send_h2_data_with_context(&mut send_stream, chunk, false, context).await?;
+        }
     }
     let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
         .await
@@ -59,7 +70,130 @@ pub(crate) async fn open_h2_body_stream(
     Ok((send_stream, response.into_body(), connection_task))
 }
 
-pub(crate) async fn relay_tcp_over_h2_body(
+pub(crate) async fn open_h2_body_stream_with_deferred_response(
+    client: AsyncResidentTlsClient,
+    proxy: &ResidentProxyPlan,
+    initial_chunks: Vec<Bytes>,
+    context: &'static str,
+) -> Result<
+    (
+        h2::SendStream<Bytes>,
+        tokio::task::JoinHandle<Result<h2::RecvStream, String>>,
+        tokio::task::JoinHandle<()>,
+    ),
+    String,
+> {
+    let (mut sender, connection) =
+        time::timeout(RESIDENT_CONNECT_TIMEOUT, h2::client::handshake(client))
+            .await
+            .map_err(|_| format!("{context} HTTP/2 handshake timeout"))?
+            .map_err(|err| format!("{context} HTTP/2 client handshake: {err}"))?;
+    let connection_task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let uri = format!(
+        "https://{}{}",
+        h2_body_authority(proxy),
+        h2_body_request_path(&proxy.stream_path)
+    );
+    let request = h2_body_request(uri, context)?;
+    let (response, mut send_stream) = sender
+        .send_request(request, false)
+        .map_err(|err| format!("send {context} HTTP/2 request headers: {err}"))?;
+    for chunk in initial_chunks {
+        if !chunk.is_empty() {
+            send_h2_data_with_context(&mut send_stream, chunk, false, context).await?;
+        }
+    }
+    // V2Ray HTTP/2 transports expose a writable connection before the server
+    // response is available; keep uploading client bytes while headers arrive.
+    let response_task = tokio::spawn(async move {
+        let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
+            .await
+            .map_err(|_| format!("{context} HTTP/2 response headers timeout"))?
+            .map_err(|err| format!("read {context} HTTP/2 response headers: {err}"))?;
+        if response.status() != http::StatusCode::OK {
+            return Err(format!(
+                "{context} HTTP/2 response status {}",
+                response.status()
+            ));
+        }
+        Ok(response.into_body())
+    });
+    Ok((send_stream, response_task, connection_task))
+}
+
+pub(crate) async fn relay_tcp_over_deferred_h2_body(
+    inbound: &mut TokioTcpStream,
+    send_stream: &mut h2::SendStream<Bytes>,
+    mut response_task: tokio::task::JoinHandle<Result<h2::RecvStream, String>>,
+    stop: Arc<AtomicBool>,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+    strip_vless_response_header: bool,
+    context: &str,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut inbound_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            response = &mut response_task => {
+                let mut recv_stream = response
+                    .map_err(|err| format!("join {context} HTTP/2 response task: {err}"))??;
+                return relay_tcp_over_ready_h2_body(
+                    inbound,
+                    send_stream,
+                    &mut recv_stream,
+                    stop,
+                    stats,
+                    metrics,
+                    strip_vless_response_header,
+                    context,
+                    inbound_closed,
+                )
+                .await;
+            }
+            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        send_h2_data_with_context(send_stream, Bytes::new(), true, context).await?;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        send_h2_data_with_context(
+                            send_stream,
+                            Bytes::copy_from_slice(&inbound_buf[..read]),
+                            false,
+                            context,
+                        )
+                        .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        send_h2_data_with_context(send_stream, Bytes::new(), true, context).await?;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for {context} relay: {err}")),
+                }
+            }
+            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
+                if inbound_closed && last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_tcp_over_ready_h2_body(
     inbound: &mut TokioTcpStream,
     send_stream: &mut h2::SendStream<Bytes>,
     recv_stream: &mut h2::RecvStream,
@@ -68,8 +202,8 @@ pub(crate) async fn relay_tcp_over_h2_body(
     metrics: &ResidentDataplaneMetrics,
     strip_vless_response_header: bool,
     context: &str,
+    mut inbound_closed: bool,
 ) -> Result<DirectTcpRelayStats, String> {
-    let mut inbound_closed = false;
     let mut response_closed = false;
     let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
@@ -324,4 +458,14 @@ fn h2_body_request_path(path: &str) -> String {
     } else {
         format!("/{path}")
     }
+}
+
+fn h2_body_request(uri: String, context: &str) -> Result<http::Request<()>, String> {
+    http::Request::builder()
+        .method(http::Method::PUT)
+        .uri(uri)
+        .header(http::header::ACCEPT_ENCODING, "identity")
+        .header(http::header::USER_AGENT, "dae-rust-native-resident")
+        .body(())
+        .map_err(|err| format!("build {context} HTTP/2 request: {err}"))
 }
