@@ -85,32 +85,6 @@ impl UdpExchangeResult {
     }
 }
 
-pub(super) fn append_udp_proxy_selection_failed(
-    event_file: &PathBuf,
-    event_lock: &Arc<Mutex<()>>,
-    peer: SocketAddr,
-    original_dst: SocketAddr,
-    err: String,
-    proxy_group: &ResidentProxyGroupPlan,
-) {
-    let network = udp_network_name(original_dst);
-    append_event(
-        event_file,
-        event_lock,
-        json!({
-            "event": "udp_exchange_failed",
-            "peer": resident_socket_addr_display(peer),
-            "original_dst": resident_socket_addr_display(original_dst),
-            "error": err,
-            "proxy_group": proxy_group.group_name,
-            "group_policy": proxy_group.group_policy_name(),
-            "network": network,
-            "outbound": proxy_group.group_name,
-            "policy": proxy_group.group_policy_name(),
-        }),
-    );
-}
-
 pub(super) fn record_udp_exchange_result(
     proxy: &ResidentProxyPlan,
     packet: UdpOriginalDstPacket,

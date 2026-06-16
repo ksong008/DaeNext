@@ -63,6 +63,19 @@ pub(crate) fn start_resident_dataplane_workers(
             None,
         );
     };
+    let Some(default_outbound) = plan.default_outbound else {
+        return (
+            json!({
+                "status": "fail",
+                "enabled": true,
+                "error": "resident dataplane plan is enabled without a default outbound id",
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
+            }),
+            None,
+        );
+    };
     let routing_matcher =
         match build_resident_userspace_routing_matcher_with_geodata(config, geodata) {
             Ok(matcher) => matcher,
@@ -168,6 +181,7 @@ pub(crate) fn start_resident_dataplane_workers(
         .filter(|group| group.needs_background_checks())
         .cloned()
         .collect::<Vec<_>>();
+    let udp_proxy_groups = Arc::new(plan.proxies.clone());
     let dns_domain_routing = domain_routing_map_id.map(|map_id| {
         Arc::new(dns::ResidentDnsDomainRouting::new(
             map_id,
@@ -227,7 +241,7 @@ pub(crate) fn start_resident_dataplane_workers(
     }
     {
         let stop = owner.stop_handle();
-        let proxy_group = Arc::clone(&proxy_group);
+        let udp_proxy_groups = Arc::clone(&udp_proxy_groups);
         let dns = Arc::clone(&dns);
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
@@ -239,7 +253,9 @@ pub(crate) fn start_resident_dataplane_workers(
             thread::spawn(move || {
                 resident_udp_loop(
                     udp_socket,
-                    proxy_group,
+                    udp_proxy_groups,
+                    default_outbound,
+                    routing_tuple_map_id,
                     dns,
                     stop,
                     event_file,

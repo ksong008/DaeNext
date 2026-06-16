@@ -7,6 +7,7 @@ pub(super) struct ManagedUdpPacket {
     pub(super) packet: UdpOriginalDstPacket,
     pub(super) original_dst: SocketAddr,
     pub(super) proxy: Arc<ResidentProxyPlan>,
+    pub(super) force_proxy_packet: bool,
 }
 
 pub(super) struct UdpSessionEntry {
@@ -71,10 +72,11 @@ async fn run_udp_session_actor(
                     .reset(time::Instant::now() + RESIDENT_UDP_SESSION_IDLE_TIMEOUT);
                 packets += 1;
                 if executor.is_none() {
-                    executor = Some(UdpSessionExecutor::new(
-                        &managed.proxy,
-                        managed.original_dst,
-                    ));
+                    executor = Some(if managed.force_proxy_packet {
+                        UdpSessionExecutor::new_proxy_packet(&managed.proxy)
+                    } else {
+                        UdpSessionExecutor::new(&managed.proxy, managed.original_dst)
+                    });
                     session_proxy = Some(Arc::clone(&managed.proxy));
                 }
                 let exchange = match executor.as_mut() {

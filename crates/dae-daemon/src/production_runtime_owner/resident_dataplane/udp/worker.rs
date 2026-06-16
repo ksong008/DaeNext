@@ -1,8 +1,12 @@
+use std::collections::BTreeMap;
+
 use super::*;
 
 pub(crate) fn resident_udp_loop(
     socket: std::net::UdpSocket,
-    proxy_group: Arc<ResidentProxyGroupPlan>,
+    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    default_outbound: u8,
+    routing_tuple_map_id: Option<u32>,
     dns: Arc<ResidentDnsPlan>,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
@@ -14,7 +18,9 @@ pub(crate) fn resident_udp_loop(
 ) {
     run_resident_udp_session_manager(
         socket,
-        proxy_group,
+        proxy_groups,
+        default_outbound,
+        routing_tuple_map_id,
         dns,
         stop,
         event_file,
