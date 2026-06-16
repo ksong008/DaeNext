@@ -181,6 +181,12 @@ impl Drop for XhttpXmuxClientLease {
     }
 }
 
+pub(super) fn note_xhttp_xmux_request(xmux_lease: Option<&XhttpXmuxClientLease>) {
+    if let Some(lease) = xmux_lease {
+        let _ = lease.note_request();
+    }
+}
+
 impl XhttpXmuxH2Manager {
     fn new(config: ResidentXhttpXmuxPlan) -> Self {
         let config = config.official_normalized();
