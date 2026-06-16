@@ -1,3 +1,4 @@
+use super::request::{xhttp_h3_packet_up_request, xhttp_h3_request, xhttp_session_path_suffix};
 use super::xmux::{
     XhttpXmuxClientLease, XhttpXmuxKey, XhttpXmuxRequestHandle, note_xhttp_xmux_request,
     select_xhttp_h3_xmux_client,

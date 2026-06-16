@@ -1,4 +1,11 @@
 use super::*;
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicI32, Ordering},
+};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct XhttpXmuxKey {
@@ -525,4 +532,56 @@ where
         };
     let mut manager = manager.lock().await;
     manager.select(new_client).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn xmux_usage(left_requests: i32, unreusable_at: Option<Instant>) -> Arc<XhttpXmuxUsage> {
+        Arc::new(XhttpXmuxUsage {
+            open_usage: AtomicI32::new(0),
+            left_requests: AtomicI32::new(left_requests),
+            unreusable_at,
+        })
+    }
+
+    #[test]
+    fn xhttp_xmux_packet_up_uses_official_left_request_switch_boundary() {
+        let handle = XhttpXmuxRequestHandle {
+            usage: xmux_usage(2, None),
+        };
+
+        assert!(handle.use_for_packet_up_post());
+        assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 1);
+        assert!(!handle.use_for_packet_up_post());
+        assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn xhttp_xmux_packet_up_switches_when_client_is_past_reusable_deadline() {
+        let handle = XhttpXmuxRequestHandle {
+            usage: xmux_usage(10, Some(Instant::now() - Duration::from_secs(1))),
+        };
+
+        assert!(!handle.use_for_packet_up_post());
+        assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 9);
+    }
+
+    #[test]
+    fn xhttp_xmux_request_handle_does_not_extend_open_usage_lease() {
+        let usage = xmux_usage(4, None);
+        assert_eq!(usage.open_usage.load(Ordering::Acquire), 0);
+
+        let handle = {
+            let lease = XhttpXmuxClientLease::open(Arc::clone(&usage));
+            assert_eq!(usage.open_usage.load(Ordering::Acquire), 1);
+            let handle = lease.request_handle();
+            assert!(handle.use_for_packet_up_post());
+            handle
+        };
+
+        assert_eq!(usage.open_usage.load(Ordering::Acquire), 0);
+        assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 3);
+    }
 }
