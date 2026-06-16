@@ -487,6 +487,87 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn handle_vmess_h2_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess H2 AEAD TCP session: {err}"))?;
+    let (mut h2_send, mut h2_recv, connection_task) =
+        open_h2_body_stream(client, &selection.proxy, &session.first_write, "VMess H2").await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    let result = relay_tcp_over_vmess_h2_body(
+        inbound,
+        &mut h2_send,
+        &mut h2_recv,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+    )
+    .await;
+    connection_task.abort();
+    result
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &stats,
+                "wrapped-h2-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("h2");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "wrapped-h2-aead",
+                "vmess",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &err,
+                "wrapped-h2-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("h2");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "wrapped-h2-aead",
+                "vmess",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
 pub(crate) async fn open_grpc_h2_stream(
     client: AsyncResidentTlsClient,
     proxy: &ResidentProxyPlan,

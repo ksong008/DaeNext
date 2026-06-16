@@ -17,6 +17,95 @@ pub(crate) fn http_content_length(head: &[u8]) -> Result<usize, String> {
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_vless_h2_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let client =
+        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
+    let tls_underlay = async_tls_underlay_name(&client);
+    let key = selection.proxy.vless_key()?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build VLESS H2 TCP request: {err}"))?;
+    let (mut h2_send, mut h2_recv, connection_task) =
+        open_h2_body_stream(client, &selection.proxy, &request, "VLESS H2").await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    let result = relay_tcp_over_h2_body(
+        inbound,
+        &mut h2_send,
+        &mut h2_recv,
+        stop,
+        initial_stats,
+        metrics,
+        true,
+        "VLESS H2",
+    )
+    .await;
+    connection_task.abort();
+    result
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &stats,
+                "async-proxy-h2-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("h2");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-h2-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &err,
+                "async-proxy-h2-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("h2");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-h2-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_vless_grpc_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
@@ -343,6 +432,22 @@ pub(crate) async fn handle_resident_proxy_tcp_connection_async(
     {
         let id = id.clone();
         return handle_vmess_grpc_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
+        && selection.proxy.net == "h2"
+    {
+        let id = id.clone();
+        return handle_vmess_h2_proxy_tcp_connection_async(
             &mut inbound,
             peer,
             original_dst,

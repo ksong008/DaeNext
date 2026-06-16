@@ -3,6 +3,7 @@ pub(super) fn canonical_resident_vless_net(net: &str) -> String {
     match net {
         "" | "tcp" => "tcp".to_owned(),
         "ws" | "websocket" => "websocket".to_owned(),
+        "http" | "h2" => "h2".to_owned(),
         "httpupgrade" => "httpupgrade".to_owned(),
         "grpc" => "grpc".to_owned(),
         "xhttp" => "xhttp".to_owned(),

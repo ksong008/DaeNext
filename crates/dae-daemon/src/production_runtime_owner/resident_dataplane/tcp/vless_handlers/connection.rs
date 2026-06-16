@@ -59,6 +59,18 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
+    if selection.proxy.net == "h2" {
+        return handle_vless_h2_tcp_connection_async(
+            inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            sniff,
+            metrics,
+        )
+        .await;
+    }
     if selection.proxy.net == "meek" {
         return handle_vless_meek_tcp_connection_async(
             inbound,
