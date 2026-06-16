@@ -12,6 +12,25 @@ pub(crate) fn hysteria2_fixture_url_with_pin(_ps: &str, server: &str, pin_sha256
         insecure: false,
         sni: fixture_host(FixtureEndpoint::Authority),
         pin_sha256: pin_sha256.to_owned(),
+        obfs: String::new(),
+        obfs_password: String::new(),
+        max_tx: 0,
+        max_rx: 0,
+    }
+    .export_url()
+}
+
+pub(crate) fn hysteria2_salamander_fixture_url(add: &str, port: u16) -> String {
+    Hysteria2Link {
+        name: String::new(),
+        user: fixture_user(),
+        password: String::new(),
+        server: format!("{add}:{port}"),
+        insecure: false,
+        sni: fixture_host(FixtureEndpoint::Authority),
+        pin_sha256: fixture_pin_sha256(),
+        obfs: "salamander".to_owned(),
+        obfs_password: fixture_secret(),
         max_tx: 0,
         max_rx: 0,
     }

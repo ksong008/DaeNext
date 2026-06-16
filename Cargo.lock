@@ -231,6 +231,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
 
 [[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "blake3"
 version = "1.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -607,6 +616,7 @@ name = "dae-daemon"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "blake2",
  "boring",
  "bytes",
  "dae-aya-bpf-loader",
@@ -624,12 +634,14 @@ dependencies = [
  "dae-routing",
  "dae-sniffing",
  "fastrand",
+ "getrandom 0.3.4",
  "h2",
  "h3",
  "h3-quinn",
  "http",
  "libc",
  "quinn",
+ "quinn-udp",
  "regex",
  "rusqlite",
  "rustls",

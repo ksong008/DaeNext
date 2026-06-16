@@ -20,6 +20,21 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
     ));
 
+    let hysteria2_obfs = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "hy2_salamander_live".to_owned(),
+        hysteria2_salamander_fixture_url(&primary_host, fixture_port(1)),
+    )
+    .unwrap();
+    assert!(matches!(
+        hysteria2_obfs.handler,
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            ref obfs,
+            ..
+        } if obfs.is_salamander()
+    ));
+
     let hysteria2_hopping = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),

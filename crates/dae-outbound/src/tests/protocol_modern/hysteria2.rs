@@ -27,6 +27,11 @@ pub(super) fn hysteria2_rust_native_matches_nativelden_fixture() {
         assert_eq!(parsed.insecure, case["insecure"].as_bool().unwrap());
         assert_eq!(parsed.sni, case["sni"].as_str().unwrap());
         assert_eq!(parsed.pin_sha256, case["pinSHA256"].as_str().unwrap());
+        assert_eq!(parsed.obfs, case["obfs"].as_str().unwrap());
+        assert_eq!(
+            parsed.obfs_password,
+            case["obfs_password"].as_str().unwrap()
+        );
         assert_eq!(parsed.max_tx, case["maxTx"].as_u64().unwrap());
         assert_eq!(parsed.max_rx, case["maxRx"].as_u64().unwrap());
         assert_eq!(parsed.export_url(), case["export"].as_str().unwrap());

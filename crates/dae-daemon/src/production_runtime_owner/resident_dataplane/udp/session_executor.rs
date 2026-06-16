@@ -979,9 +979,14 @@ mod datagram_udp_pending_tests {
 
     #[test]
     fn quic_datagram_pending_results_do_not_forward_empty_reply() {
-        let hysteria2 =
-            Hysteria2QuicDatagramSession::new("auth".to_owned(), String::new(), 0, Vec::new())
-                .pending_response_result();
+        let hysteria2 = Hysteria2QuicDatagramSession::new(
+            "auth".to_owned(),
+            String::new(),
+            0,
+            ResidentHysteria2ObfsPlan::none(),
+            Vec::new(),
+        )
+        .pending_response_result();
         assert!(!hysteria2.reply_forwarded);
         assert!(hysteria2.payload.is_empty());
         assert_eq!(hysteria2.execution_label, "quic-udp-datagram");
@@ -1272,6 +1277,7 @@ pub(super) struct Hysteria2QuicDatagramSession {
     auth: String,
     pin_sha256: String,
     max_rx: u64,
+    obfs: ResidentHysteria2ObfsPlan,
     port_hop_ports: Vec<u16>,
     endpoint: Option<quinn::Endpoint>,
     connection: Option<quinn::Connection>,
@@ -1358,11 +1364,18 @@ impl QuicUdpFragmentBuffer {
 }
 
 impl Hysteria2QuicDatagramSession {
-    fn new(auth: String, pin_sha256: String, max_rx: u64, port_hop_ports: Vec<u16>) -> Self {
+    fn new(
+        auth: String,
+        pin_sha256: String,
+        max_rx: u64,
+        obfs: ResidentHysteria2ObfsPlan,
+        port_hop_ports: Vec<u16>,
+    ) -> Self {
         Self {
             auth,
             pin_sha256,
             max_rx,
+            obfs,
             port_hop_ports,
             endpoint: None,
             connection: None,
@@ -1444,7 +1457,7 @@ impl Hysteria2QuicDatagramSession {
         if self.connection.is_some() {
             return Ok(());
         }
-        let mut endpoint = open_marked_quic_endpoint(proxy.mark)?;
+        let mut endpoint = open_marked_hysteria2_quic_endpoint(proxy.mark, &self.obfs)?;
         endpoint.set_default_client_config(
             build_hysteria2_pinned_client_config(self.pin_sha256.clone())
                 .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,

@@ -46,18 +46,19 @@ use super::dns::{ResidentDnsPlan, handle_resident_dns_udp_async};
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
 use super::plan::{
-    ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentXhttpHttpVersion,
-    ResidentXhttpMode,
+    ResidentHysteria2ObfsPlan, ResidentProxyGroupPlan, ResidentProxyPlan,
+    ResidentProxyProtocolPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,
     XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts, XhttpStreamUploadClient,
     XhttpUploadClient, close_xhttp_download_client, close_xhttp_stream_upload_client,
     close_xhttp_upload_client, collect_vmess_grpc_decrypted,
-    decode_vmess_grpc_response_stream_async, open_grpc_h2_stream, open_marked_quic_endpoint,
-    open_xhttp_packet_up_parts, open_xhttp_stream_parts, poll_xhttp_download_data,
-    resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async, send_grpc_hunk,
-    send_h2_data, send_xhttp_packet_up_request, send_xhttp_stream_data, set_socket_mark,
+    decode_vmess_grpc_response_stream_async, open_grpc_h2_stream,
+    open_marked_hysteria2_quic_endpoint, open_marked_quic_endpoint, open_xhttp_packet_up_parts,
+    open_xhttp_stream_parts, poll_xhttp_download_data, resolve_hysteria2_quic_remote_async,
+    resolve_proxy_udp_addr_async, send_grpc_hunk, send_h2_data, send_xhttp_packet_up_request,
+    send_xhttp_stream_data, set_socket_mark,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};
 use super::{

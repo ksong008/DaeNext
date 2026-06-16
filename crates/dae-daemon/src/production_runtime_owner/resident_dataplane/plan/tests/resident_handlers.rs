@@ -281,6 +281,7 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
             auth: fixture_secret(),
             pin_sha256: "sha256:fixture".to_owned(),
             max_rx: 0,
+            obfs: ResidentHysteria2ObfsPlan::none(),
             port_hop_ports: vec![fixture_port(1)],
         },
         ResidentProxyProtocolPlan::TuicQuicTcp {
