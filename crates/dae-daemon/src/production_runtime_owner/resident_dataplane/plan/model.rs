@@ -577,6 +577,7 @@ pub(crate) enum ResidentProxyProtocolPlan {
         auth: String,
         pin_sha256: String,
         max_rx: u64,
+        obfs: ResidentHysteria2ObfsPlan,
         port_hop_ports: Vec<u16>,
     },
     TuicQuicTcp {
@@ -601,6 +602,34 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProto
     pub(in crate::production_runtime_owner::resident_dataplane) udp_executor: &'static str,
     pub(in crate::production_runtime_owner::resident_dataplane) packet_semantics: &'static str,
     pub(in crate::production_runtime_owner::resident_dataplane) udp_policy_closed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentHysteria2ObfsPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) mode: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) password: String,
+}
+
+impl ResidentHysteria2ObfsPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn none() -> Self {
+        Self {
+            mode: String::new(),
+            password: String::new(),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn salamander(
+        password: String,
+    ) -> Self {
+        Self {
+            mode: "salamander".to_owned(),
+            password,
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn is_salamander(&self) -> bool {
+        self.mode == "salamander"
+    }
 }
 
 impl ResidentProxyProtocolPlan {
@@ -1002,11 +1031,14 @@ impl ResidentProxyProtocolPlan {
             Self::Hysteria2QuicTcp {
                 auth,
                 pin_sha256,
+                obfs,
                 port_hop_ports,
                 ..
             } => {
                 compact_string(auth);
                 compact_string(pin_sha256);
+                compact_string(&mut obfs.mode);
+                compact_string(&mut obfs.password);
                 port_hop_ports.shrink_to_fit();
             }
             Self::TuicQuicTcp {

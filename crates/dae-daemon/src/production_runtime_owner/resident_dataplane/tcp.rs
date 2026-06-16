@@ -80,10 +80,11 @@ use super::direct::{
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
 use super::plan::{
-    ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan,
-    ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion, ResidentXhttpMetaPlacement,
-    ResidentXhttpMode, ResidentXhttpPaddingMethod, ResidentXhttpPaddingPlacement,
-    ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement, ResidentXhttpXmuxPlan,
+    ResidentHysteria2ObfsPlan, ResidentProxyGroupPlan, ResidentProxyPlan,
+    ResidentProxyProtocolPlan, ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion,
+    ResidentXhttpMetaPlacement, ResidentXhttpMode, ResidentXhttpPaddingMethod,
+    ResidentXhttpPaddingPlacement, ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement,
+    ResidentXhttpXmuxPlan,
 };
 use super::vision::{
     VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,

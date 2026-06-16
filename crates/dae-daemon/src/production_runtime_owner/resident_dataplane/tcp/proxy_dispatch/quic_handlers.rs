@@ -14,11 +14,13 @@ pub(crate) async fn handle_quic_tcp_connection_async(
             auth,
             pin_sha256,
             max_rx,
+            obfs,
             port_hop_ports,
         } => {
             let auth = auth.clone();
             let pin_sha256 = pin_sha256.clone();
             let max_rx = *max_rx;
+            let obfs = obfs.clone();
             let port_hop_ports = port_hop_ports.clone();
             handle_hysteria2_quic_tcp_connection_async(
                 inbound,
@@ -31,6 +33,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 &auth,
                 &pin_sha256,
                 max_rx,
+                &obfs,
                 &port_hop_ports,
             )
             .await
@@ -101,9 +104,10 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     auth: &str,
     pin_sha256: &str,
     max_rx: u64,
+    obfs: &ResidentHysteria2ObfsPlan,
     port_hop_ports: &[u16],
 ) -> Result<Value, String> {
-    let mut endpoint = open_marked_quic_endpoint(selection.mark)?;
+    let mut endpoint = open_marked_hysteria2_quic_endpoint(selection.mark, obfs)?;
     endpoint.set_default_client_config(
         build_hysteria2_pinned_client_config(pin_sha256.to_owned())
             .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,

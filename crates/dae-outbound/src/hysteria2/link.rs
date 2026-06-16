@@ -11,6 +11,8 @@ pub struct Hysteria2Link {
     pub insecure: bool,
     pub sni: String,
     pub pin_sha256: String,
+    pub obfs: String,
+    pub obfs_password: String,
     pub max_tx: u64,
     pub max_rx: u64,
 }
@@ -62,6 +64,11 @@ impl Hysteria2Link {
             insecure,
             sni: query_value(&query, "sni").unwrap_or_default(),
             pin_sha256: query_value(&query, "pinSHA256").unwrap_or_default(),
+            obfs: query_value(&query, "obfs").unwrap_or_default(),
+            obfs_password: query_value(&query, "obfs-password")
+                .or_else(|| query_value(&query, "obfsPassword"))
+                .or_else(|| query_value(&query, "obfs_password"))
+                .unwrap_or_default(),
             max_tx,
             max_rx,
         })
@@ -86,6 +93,12 @@ impl Hysteria2Link {
         }
         if !self.pin_sha256.is_empty() {
             query.push(("pinSHA256", Cow::Borrowed(&self.pin_sha256)));
+        }
+        if !self.obfs.is_empty() {
+            query.push(("obfs", Cow::Borrowed(&self.obfs)));
+        }
+        if !self.obfs_password.is_empty() {
+            query.push(("obfs-password", Cow::Borrowed(&self.obfs_password)));
         }
         if self.max_tx > 0 && self.max_rx > 0 {
             query.push(("maxTx", Cow::Owned(self.max_tx.to_string())));

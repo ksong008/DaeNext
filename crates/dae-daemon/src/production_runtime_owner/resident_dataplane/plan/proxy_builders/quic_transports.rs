@@ -94,6 +94,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
             "resident dataplane generic QUIC handler requires Hysteria2 auth for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
+    let obfs = resident_hysteria2_obfs_plan(&parsed.obfs, &parsed.obfs_password, &node_tag)?;
     let server = hysteria2_server_contract(&parsed.server);
     let (server_port, port_hop_ports) = if server.port_hopping {
         let schedule =
@@ -149,12 +150,40 @@ pub(crate) fn build_hysteria2_proxy_plan(
             auth,
             pin_sha256: parsed.pin_sha256,
             max_rx: parsed.max_rx,
+            obfs,
             port_hop_ports,
         },
         chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
+}
+
+fn resident_hysteria2_obfs_plan(
+    mode: &str,
+    password: &str,
+    node_tag: &str,
+) -> Result<ResidentHysteria2ObfsPlan, String> {
+    let mode = mode.trim().to_ascii_lowercase();
+    if mode.is_empty() {
+        if !password.is_empty() {
+            return Err(format!(
+                "resident dataplane Hysteria2 obfs-password requires obfs=salamander for node {node_tag}; resident shape remains fail-closed for this config"
+            ));
+        }
+        return Ok(ResidentHysteria2ObfsPlan::none());
+    }
+    if mode != "salamander" {
+        return Err(format!(
+            "resident dataplane Hysteria2 obfs admits official salamander only for node {node_tag}; got {mode}"
+        ));
+    }
+    if password.is_empty() {
+        return Err(format!(
+            "resident dataplane Hysteria2 salamander obfs requires obfs-password for node {node_tag}; resident shape remains fail-closed for this config"
+        ));
+    }
+    Ok(ResidentHysteria2ObfsPlan::salamander(password.to_owned()))
 }
 
 pub(crate) fn build_juicity_proxy_plan(

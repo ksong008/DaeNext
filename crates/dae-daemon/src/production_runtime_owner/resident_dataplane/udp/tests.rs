@@ -251,6 +251,7 @@ mod tests {
                     auth: String::new(),
                     pin_sha256: String::new(),
                     max_rx: 0,
+                    obfs: ResidentHysteria2ObfsPlan::none(),
                     port_hop_ports: Vec::new(),
                 },
                 UdpExecutorShape::Hysteria2,

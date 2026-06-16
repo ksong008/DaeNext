@@ -329,6 +329,8 @@ pub(super) fn hysteria2_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         insecure: false,
         sni: fixture_host(FixtureEndpoint::Authority),
         pin_sha256: fixture_pin_sha256(),
+        obfs: String::new(),
+        obfs_password: String::new(),
         max_tx: 0,
         max_rx: 0,
     }

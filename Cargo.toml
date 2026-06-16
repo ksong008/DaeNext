@@ -42,6 +42,7 @@ aes-gcm = "0.10"
 aya = { version = "0.13.1", default-features = false }
 aya-ebpf = { version = "0.1.1", default-features = false }
 base64 = "0.22"
+blake2 = "0.10"
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 boring = "5.1"
 bytes = "1"
@@ -73,10 +74,12 @@ h2 = "0.4"
 hashbrown = "0.15"
 http = "1"
 fastrand = "2"
+getrandom = "0.3"
 hkdf = "0.12"
 libc = "0.2"
 md-5 = "0.10"
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+udp = { package = "quinn-udp", version = "0.5", default-features = false, features = ["tracing"] }
 regex = "1"
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
 rustls = "0.23"
