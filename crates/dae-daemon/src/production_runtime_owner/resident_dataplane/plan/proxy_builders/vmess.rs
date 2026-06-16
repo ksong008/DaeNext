@@ -16,15 +16,16 @@ pub(crate) fn build_vmess_proxy_plan(
     let net = match parsed.net.as_str() {
         "" | "tcp" => "tcp".to_owned(),
         "ws" | "websocket" => "websocket".to_owned(),
+        "http" | "h2" => "h2".to_owned(),
         "httpupgrade" => "httpupgrade".to_owned(),
         "grpc" => "grpc".to_owned(),
         other => other.to_owned(),
     };
     match net.as_str() {
-        "tcp" | "websocket" | "httpupgrade" | "grpc" => {}
+        "tcp" | "websocket" | "httpupgrade" | "grpc" | "h2" => {}
         other => {
             return Err(format!(
-                "resident dataplane generic AEAD TCP handler admits only VMess tcp, websocket, httpupgrade, and grpc endpoints for node {node_tag}; got {other}"
+                "resident dataplane generic AEAD TCP handler admits only VMess tcp, websocket, httpupgrade, grpc, and h2 endpoints for node {node_tag}; got {other}"
             ));
         }
     }
@@ -56,19 +57,31 @@ pub(crate) fn build_vmess_proxy_plan(
             }
         ));
     }
+    if net == "h2" && parsed.tls != "tls" {
+        return Err(format!(
+            "resident dataplane VMess h2 handler admits TLS HTTP/2 endpoints only for node {node_tag}; got tls={}",
+            if parsed.tls.is_empty() {
+                "none"
+            } else {
+                parsed.tls.as_str()
+            }
+        ));
+    }
     let server_port = parsed.port.parse::<u16>().map_err(|err| {
         format!(
             "invalid VMess port {} for node {node_tag}: {err}",
             parsed.port
         )
     })?;
-    let stream_host = if matches!(net.as_str(), "websocket" | "httpupgrade" | "grpc") {
+    let stream_host = if matches!(net.as_str(), "websocket" | "httpupgrade" | "grpc" | "h2") {
         resident_stream_host(&parsed.host, &parsed.add)
     } else {
         String::new()
     };
     let stream_path = if net == "grpc" {
         resident_grpc_service_name(&parsed.path)
+    } else if net == "h2" {
+        resident_stream_path(&parsed.path)
     } else if matches!(net.as_str(), "websocket" | "httpupgrade") {
         resident_stream_path(&parsed.path)
     } else {
@@ -76,6 +89,7 @@ pub(crate) fn build_vmess_proxy_plan(
     };
     let tls = if (net == "tcp" && parsed.tls == "tls")
         || net == "grpc"
+        || net == "h2"
         || (matches!(net.as_str(), "websocket" | "httpupgrade") && parsed.tls == "tls")
     {
         "tls"
@@ -91,7 +105,7 @@ pub(crate) fn build_vmess_proxy_plan(
     } else {
         String::new()
     };
-    let alpn = if net == "grpc" {
+    let alpn = if matches!(net.as_str(), "grpc" | "h2") {
         vec!["h2".to_owned()]
     } else {
         Vec::new()

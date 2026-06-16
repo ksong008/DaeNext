@@ -220,6 +220,7 @@ impl ResidentExecutableGraphDescriptor {
             "websocket" => ("admitted", "resident-websocket-binary-frame", Value::Null),
             "httpupgrade" => ("admitted", "resident-http-upgrade-stream", Value::Null),
             "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
+            "h2" => ("admitted", "resident-http2-body-stream", Value::Null),
             "meek" => ("admitted", "resident-meek-polling", Value::Null),
             "mux" => ("admitted", "resident-shared-mux-stream", Value::Null),
             "xhttp" => (

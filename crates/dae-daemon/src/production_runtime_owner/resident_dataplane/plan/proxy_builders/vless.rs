@@ -27,16 +27,18 @@ pub(crate) fn build_vless_proxy_plan(
                 vless.flow
             ));
         }
-        "websocket" | "httpupgrade" | "grpc" | "xhttp" | "meek" if !vless.flow.is_empty() => {
+        "websocket" | "httpupgrade" | "grpc" | "h2" | "xhttp" | "meek"
+            if !vless.flow.is_empty() =>
+        {
             return Err(format!(
                 "resident dataplane vless wrapped-stream handler admits only empty flow, got '{}' for node {node_tag}; resident shape remains fail-closed for this config",
                 vless.flow
             ));
         }
-        "tcp" | "websocket" | "httpupgrade" | "grpc" | "xhttp" | "meek" => {}
+        "tcp" | "websocket" | "httpupgrade" | "grpc" | "h2" | "xhttp" | "meek" => {}
         other => {
             return Err(format!(
-                "resident dataplane vless handler currently supports tcp, websocket, httpupgrade, grpc, xhttp, and meek transports only, got {other} for node {node_tag}"
+                "resident dataplane vless handler currently supports tcp, websocket, httpupgrade, grpc, h2, xhttp, and meek transports only, got {other} for node {node_tag}"
             ));
         }
     }
@@ -55,6 +57,12 @@ pub(crate) fn build_vless_proxy_plan(
     if vless.mux && vless.tls != "tls" {
         return Err(format!(
             "resident dataplane vless mux transport admits standard tls underlay only for node {node_tag}; got {}",
+            vless.tls
+        ));
+    }
+    if net == "h2" && vless.tls != "tls" {
+        return Err(format!(
+            "resident dataplane vless h2 transport admits standard tls underlay only for node {node_tag}; got {}",
             vless.tls
         ));
     }
@@ -141,14 +149,17 @@ pub(crate) fn build_vless_proxy_plan(
             &node_tag,
         )?;
     }
-    let alpn = if matches!(net.as_str(), "grpc" | "xhttp") && vless.alpn.is_empty() {
+    let alpn = if matches!(net.as_str(), "grpc" | "h2" | "xhttp") && vless.alpn.is_empty() {
         vec!["h2".to_owned()]
     } else {
         split_alpn(&vless.alpn)
     };
     let stream_host = if let Some(meek_options) = &meek_options {
         meek_options.host.clone()
-    } else if matches!(net.as_str(), "websocket" | "httpupgrade" | "grpc" | "xhttp") {
+    } else if matches!(
+        net.as_str(),
+        "websocket" | "httpupgrade" | "grpc" | "h2" | "xhttp"
+    ) {
         resident_stream_host(&vless.host, &server_name)
     } else {
         String::new()
@@ -157,6 +168,8 @@ pub(crate) fn build_vless_proxy_plan(
         resident_grpc_service_name(&vless.path)
     } else if let Some(meek_options) = &meek_options {
         meek_options.path.clone()
+    } else if net == "h2" {
+        resident_stream_path(&vless.path)
     } else if net == "xhttp" {
         resident_xhttp_stream_path(&vless.path)
     } else if matches!(net.as_str(), "websocket" | "httpupgrade") {

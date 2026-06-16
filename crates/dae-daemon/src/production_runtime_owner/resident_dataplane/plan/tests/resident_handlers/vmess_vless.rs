@@ -271,6 +271,48 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     );
     assert!(!vmess_grpc_graph.to_string().contains(&authority_host));
 
+    let vmess_h2 = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vmess_h2_live".to_owned(),
+        vmess_fixture_url_with_sni(
+            &primary_host,
+            fixture_port(5),
+            "h2",
+            &authority_host,
+            "/vmess-h2",
+            "tls",
+            &authority_host,
+        ),
+    )
+    .unwrap();
+    assert_eq!(vmess_h2.protocol, "vmess");
+    assert_eq!(vmess_h2.net, "h2");
+    assert_eq!(vmess_h2.server_host, primary_host);
+    assert_eq!(vmess_h2.server_name, authority_host);
+    assert_eq!(vmess_h2.stream_host, authority_host);
+    assert_eq!(vmess_h2.stream_path, "/vmess-h2");
+    assert_eq!(vmess_h2.tls, "tls");
+    assert_eq!(vmess_h2.alpn, vec!["h2".to_owned()]);
+    assert!(matches!(
+        vmess_h2.handler,
+        ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+    ));
+    let vmess_h2_graph = vmess_h2.executable_graph_value();
+    assert_eq!(vmess_h2_graph["streamWrapper"], "h2");
+    assert_eq!(vmess_h2_graph["securityUnderlay"], "standard-tls");
+    assert_eq!(
+        vmess_h2_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+        "resident-http2-body-stream"
+    );
+    assert!(
+        vmess_h2_graph["streamWrapperEndpoint"]["hostHash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    assert!(!vmess_h2_graph.to_string().contains(&authority_host));
+
     let vless_websocket = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
@@ -369,13 +411,52 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
             .contains(&authority_host)
     );
 
+    let vless_h2 = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_h2_live".to_owned(),
+        vless_fixture_url(
+            "vless-h2",
+            &primary_host,
+            fixture_port(8),
+            "h2",
+            &authority_host,
+            "/vless-h2",
+            &authority_host,
+            "",
+            "",
+        ),
+    )
+    .unwrap();
+    assert_eq!(vless_h2.protocol, "vless");
+    assert_eq!(vless_h2.server_host, primary_host);
+    assert_eq!(vless_h2.server_name, authority_host);
+    assert_eq!(vless_h2.net, "h2");
+    assert_eq!(vless_h2.stream_host, authority_host);
+    assert_eq!(vless_h2.stream_path, "/vless-h2");
+    assert_eq!(vless_h2.alpn, vec!["h2".to_owned()]);
+    assert!(matches!(
+        vless_h2.handler,
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+    ));
+    let vless_h2_graph = vless_h2.executable_graph_value();
+    assert_eq!(vless_h2_graph["streamWrapper"], "h2");
+    assert_eq!(
+        vless_h2_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+        "resident-http2-body-stream"
+    );
+    assert_eq!(vless_h2_graph["streamWrapperEndpoint"]["path"], "/vless-h2");
+    assert!(!vless_h2_graph.to_string().contains(&authority_host));
+
     vec![
         anytls,
         vmess,
         vmess_tls,
         vmess_websocket,
         vmess_httpupgrade,
+        vmess_h2,
         vless_websocket,
         vless_httpupgrade,
+        vless_h2,
     ]
 }
