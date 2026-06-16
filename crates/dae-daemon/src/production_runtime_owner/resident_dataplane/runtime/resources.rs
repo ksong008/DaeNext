@@ -55,7 +55,7 @@ impl ResidentRuntimeResourceConfig {
                 None,
                 None,
                 global.resident_manual_probe_concurrency,
-                RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT,
+                resident_manual_latency_probe_concurrency_default(),
                 RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MIN,
                 RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX,
             ),
