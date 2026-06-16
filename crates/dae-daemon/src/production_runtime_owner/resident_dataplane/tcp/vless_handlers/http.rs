@@ -31,27 +31,29 @@ pub(crate) async fn handle_vless_h2_tcp_connection_async(
             .await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
-    let request = packet::first_write_bytes(
+    let initial_chunks = vless_h2_initial_data_chunks(
         &key,
         &selection.proxy.flow,
-        "tcp",
         &selection.route.dial_target,
-        false,
         &sniff.payload,
+    )?;
+    let (mut h2_send, response_task, connection_task) = open_h2_body_stream_with_deferred_response(
+        client,
+        &selection.proxy,
+        initial_chunks,
+        "VLESS H2",
     )
-    .map_err(|err| format!("build VLESS H2 TCP request: {err}"))?;
-    let (mut h2_send, mut h2_recv, connection_task) =
-        open_h2_body_stream(client, &selection.proxy, &request, "VLESS H2").await?;
+    .await?;
     let mut initial_stats = DirectTcpRelayStats::default();
     if !sniff.payload.is_empty() {
         initial_stats.client_to_direct += sniff.payload.len();
         metrics.add_upload(sniff.payload.len());
     }
 
-    let result = relay_tcp_over_h2_body(
+    let result = relay_tcp_over_deferred_h2_body(
         inbound,
         &mut h2_send,
-        &mut h2_recv,
+        response_task,
         stop,
         initial_stats,
         metrics,
@@ -103,6 +105,40 @@ pub(crate) async fn handle_vless_h2_tcp_connection_async(
             );
             Ok::<Value, String>(event)
         })
+}
+
+fn vless_h2_initial_data_chunks(
+    key: &[u8; 16],
+    flow: &str,
+    dial_target: &str,
+    sniff_payload: &[u8],
+) -> Result<Vec<Bytes>, String> {
+    let request = packet::first_write_bytes(key, flow, "tcp", dial_target, false, &[])
+        .map_err(|err| format!("build VLESS H2 TCP request: {err}"))?;
+    let mut chunks = vec![Bytes::from(request)];
+    if !sniff_payload.is_empty() {
+        chunks.push(Bytes::copy_from_slice(sniff_payload));
+    }
+    Ok(chunks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vless_h2_initial_payload_is_not_coalesced_with_request_header() {
+        let key = [7_u8; 16];
+        let sniff = b"TLS-client-hello";
+        let chunks = vless_h2_initial_data_chunks(&key, "", "203.0.113.10:443", sniff).unwrap();
+        let coalesced =
+            packet::first_write_bytes(&key, "", "tcp", "203.0.113.10:443", false, sniff).unwrap();
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].as_ref(), sniff);
+        assert!(coalesced.starts_with(chunks[0].as_ref()));
+        assert_eq!(&coalesced[chunks[0].len()..], sniff);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
