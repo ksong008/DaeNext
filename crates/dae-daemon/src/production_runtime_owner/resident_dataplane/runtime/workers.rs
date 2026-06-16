@@ -4,6 +4,7 @@ pub(crate) fn start_resident_dataplane_workers(
     config: &Config,
     artifact_dir: &Path,
     routing_tuple_map_id: Option<u32>,
+    domain_routing_map_id: Option<u32>,
     geodata: &ResidentGeodataStore,
 ) -> (Value, Option<ResidentDataplaneRuntime>) {
     let event_file = artifact_dir.join("resident-production-dataplane-events.jsonl");
@@ -167,7 +168,13 @@ pub(crate) fn start_resident_dataplane_workers(
         .filter(|group| group.needs_background_checks())
         .cloned()
         .collect::<Vec<_>>();
-    let dns = Arc::new(plan.dns);
+    let dns_domain_routing = domain_routing_map_id.map(|map_id| {
+        Arc::new(dns::ResidentDnsDomainRouting::new(
+            map_id,
+            routing_matcher.clone(),
+        ))
+    });
+    let dns = Arc::new(plan.dns.with_domain_routing(dns_domain_routing));
     let tcp_router = match ResidentTcpRouter::new(
         plan.proxies,
         routing_tuple_map_id,
@@ -353,6 +360,19 @@ pub(crate) fn start_resident_dataplane_workers(
     start_map.insert(
         "routing_tuple_map_id".to_owned(),
         json!(routing_tuple_map_id),
+    );
+    start_map.insert(
+        "domain_routing_map_id".to_owned(),
+        json!(domain_routing_map_id),
+    );
+    start_map.insert(
+        "dns_domain_routing".to_owned(),
+        json!({
+            "enabled": domain_routing_map_id.is_some(),
+            "map_id": domain_routing_map_id,
+            "source": "resident DNS accepted response cache",
+            "scope": "accepted DNS responses update domain_routing_map for kernel domain routing hits",
+        }),
     );
     start_map.insert(
         "tcp_dial_mode".to_owned(),

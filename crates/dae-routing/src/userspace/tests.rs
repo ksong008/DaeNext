@@ -113,4 +113,38 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("domain bitmap buffer too short"));
     }
+
+    #[test]
+    fn userspace_matcher_exposes_domain_bitmap_for_dns_routing_cache() {
+        let matcher = RoutingMatcher::from_fixture_value(&serde_json::json!({
+            "domain_sets": [
+                {"bit": 0, "key": "suffix", "patterns": ["example.com"]},
+                {"bit": 3, "key": "full", "patterns": ["api.service.test"]}
+            ],
+            "matches": [
+                {"type": "domain_set", "outbound": "direct"},
+                {"type": "fallback", "outbound": "block"},
+                {"type": "fallback", "outbound": "block"},
+                {"type": "domain_set", "outbound": "block"}
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            matcher
+                .domain_bitmap_for_domain("WWW.EXAMPLE.COM.")
+                .unwrap(),
+            vec![0x1]
+        );
+        assert_eq!(
+            matcher
+                .domain_bitmap_for_domain("api.service.test.")
+                .unwrap(),
+            vec![0x8]
+        );
+        assert_eq!(
+            matcher.domain_bitmap_for_domain("invalid.test").unwrap(),
+            vec![0]
+        );
+    }
 }

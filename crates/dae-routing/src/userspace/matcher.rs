@@ -131,6 +131,24 @@ impl RoutingMatcher {
         self.domain_matcher.bitmap_words()
     }
 
+    pub fn domain_bitmap_for_domain_into<'a>(
+        &'a self,
+        domain: &str,
+        domain_bitmap: &'a mut Vec<u32>,
+    ) -> Result<&'a [u32], RoutingError> {
+        domain_bitmap.resize(self.domain_bitmap_words(), 0);
+        let words = self
+            .domain_matcher
+            .fill_domain_bitmap(domain, domain_bitmap)?;
+        Ok(&domain_bitmap[..words])
+    }
+
+    pub fn domain_bitmap_for_domain(&self, domain: &str) -> Result<Vec<u32>, RoutingError> {
+        let mut domain_bitmap = Vec::new();
+        self.domain_bitmap_for_domain_into(domain, &mut domain_bitmap)?;
+        Ok(domain_bitmap)
+    }
+
     pub(super) fn prepare_domain_bitmap<'a>(
         &'a self,
         query: &Query,
