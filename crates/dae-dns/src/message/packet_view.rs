@@ -250,11 +250,7 @@ fn wire_name_to_canonical_string(wire: &[u8]) -> Result<String, DnsError> {
         }
         offset += 1;
         if len == 0 {
-            if out.is_empty() {
-                out.push('.');
-            } else {
-                out.push('.');
-            }
+            out.push('.');
             return Ok(out);
         }
         let end = offset + len as usize;

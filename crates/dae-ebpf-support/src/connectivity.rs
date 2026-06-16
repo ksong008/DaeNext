@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
 
@@ -168,13 +168,10 @@ impl ConnectivityMapFdCache {
             return Ok(plan);
         }
 
-        if !self.maps.contains_key(&map_id) {
-            self.maps.insert(map_id, open_map_fd(map_id)?);
-        }
-        let fd = self
-            .maps
-            .get(&map_id)
-            .expect("connectivity map fd cache inserted map id");
+        let fd = match self.maps.entry(map_id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(open_map_fd(map_id)?),
+        };
         let key = [plan.key.outbound, plan.key.l4proto, plan.key.ipversion];
         let value = plan.value.to_ne_bytes();
         if let Err(err) = update_map_elem_bytes(fd.as_raw_fd(), &key, &value) {
