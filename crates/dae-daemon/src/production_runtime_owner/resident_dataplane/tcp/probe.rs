@@ -1,4 +1,7 @@
 use super::*;
+
+pub(crate) const RESIDENT_TCP_PROBE_FAILED_HANDLER_JOIN_GRACE: Duration =
+    Duration::from_millis(100);
 pub(crate) async fn probe_resident_proxy_tcp_async(
     proxy: &ResidentProxyPlan,
     scheme: &str,
@@ -131,13 +134,8 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
         other => Err(format!("resident TCP probe unsupported scheme: {other}")),
     };
     stop.store(true, Ordering::Relaxed);
-    let handler_result = match time::timeout(timeout, &mut handle).await {
-        Ok(joined) => joined.map_err(|err| format!("join resident TCP probe handler: {err}"))?,
-        Err(_) => {
-            handle.abort();
-            Err("join resident TCP probe handler: timeout".to_owned())
-        }
-    };
+    let handler_result =
+        join_resident_tcp_probe_handler_async(&mut handle, timeout, response_result.is_err()).await;
     match response_result {
         Ok(()) => Ok(()),
         Err(response_err) => match handler_result {
@@ -147,6 +145,29 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
             )),
             Err(handler_err) => Err(format!("{response_err}; handler_error={handler_err}")),
         },
+    }
+}
+
+pub(crate) async fn join_resident_tcp_probe_handler_async(
+    handle: &mut tokio::task::JoinHandle<Result<Value, String>>,
+    timeout: Duration,
+    response_failed: bool,
+) -> Result<Value, String> {
+    let join_timeout = if response_failed {
+        std::cmp::min(timeout, RESIDENT_TCP_PROBE_FAILED_HANDLER_JOIN_GRACE)
+    } else {
+        timeout
+    };
+    match time::timeout(join_timeout, &mut *handle).await {
+        Ok(joined) => joined.map_err(|err| format!("join resident TCP probe handler: {err}"))?,
+        Err(_) => {
+            handle.abort();
+            if response_failed {
+                Err("join resident TCP probe handler: timeout after probe failure".to_owned())
+            } else {
+                Err("join resident TCP probe handler: timeout".to_owned())
+            }
+        }
     }
 }
 

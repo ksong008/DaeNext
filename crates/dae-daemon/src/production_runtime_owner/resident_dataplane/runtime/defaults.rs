@@ -25,7 +25,8 @@ pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_ENV: &str = "RESIDENT_EVENT_QUEUE_DE
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_DEFAULT: usize = 4096;
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_MIN: usize = 64;
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_MAX: usize = 65_536;
-pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT: usize = 8;
+pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MIN: usize = 8;
+pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MAX: usize = 32;
 pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MIN: usize = 1;
 pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX: usize = 128;
 pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_DEFAULT: usize = 1;
@@ -86,7 +87,12 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
         "manualProbe": {
             "concurrency": {
                 "configKey": "resident_manual_probe_concurrency",
-                "default": RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT,
+                "default": resident_manual_latency_probe_concurrency_default(),
+                "defaultPolicy": format!(
+                    "available_parallelism * 4 clamped to {}..{}",
+                    RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MIN,
+                    RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MAX
+                ),
                 "min": RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MIN,
                 "max": RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX,
             },
@@ -100,4 +106,26 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
             },
         },
     })
+}
+
+pub(crate) fn resident_manual_latency_probe_concurrency_default() -> usize {
+    std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get().saturating_mul(4))
+        .unwrap_or(RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MIN)
+        .clamp(
+            RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MIN,
+            RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MAX,
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resident_manual_probe_auto_default_stays_in_safe_range() {
+        let value = resident_manual_latency_probe_concurrency_default();
+        assert!(value >= RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MIN);
+        assert!(value <= RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MAX);
+    }
 }

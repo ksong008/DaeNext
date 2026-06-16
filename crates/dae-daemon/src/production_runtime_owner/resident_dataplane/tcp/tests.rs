@@ -79,6 +79,23 @@ fn resident_tcp_probe_status_matches_compatible_http_check_rules() {
     assert!(!resident_tcp_probe_status_ok("/", 500));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn resident_tcp_probe_handler_join_uses_short_grace_after_probe_failure() {
+    let mut handle = tokio::spawn(async { std::future::pending::<Result<Value, String>>().await });
+    let started = Instant::now();
+    let err = join_resident_tcp_probe_handler_async(&mut handle, Duration::from_secs(30), true)
+        .await
+        .unwrap_err();
+
+    assert!(err.contains("timeout after probe failure"));
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "failed TCP probe waited too long for handler cleanup: {:?}",
+        started.elapsed()
+    );
+    assert!(time::timeout(Duration::from_secs(1), handle).await.is_ok());
+}
+
 #[test]
 fn simple_obfs_http_status_accepts_ok_or_switching_protocols() {
     assert!(validate_simple_obfs_http_response_status(b"HTTP/1.1 200 OK\r\n\r\n").is_ok());
