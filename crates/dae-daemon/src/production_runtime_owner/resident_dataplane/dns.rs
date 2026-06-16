@@ -2,17 +2,21 @@ use std::collections::BTreeMap;
 use std::future::poll_fn;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
+use dae_control::{DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingOwner, ip_to_key};
 use dae_dns::{
-    DOH_MEDIA_TYPE, DnsDomainSet, DnsPacketView, DnsRequestMatchKind, DnsRequestMatchSpec,
-    DnsRequestOutboundIndex, DnsResponseMatchKind, DnsResponseMatchSpec, DnsResponseOutboundIndex,
-    RequestMatcher, ResponseMatcher, build_doh_request, dns_data_with_zero_id,
+    DOH_MEDIA_TYPE, DnsCacheEntry, DnsCacheKey, DnsCacheStore, DnsDomainSet, DnsPacketView,
+    DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind,
+    DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher,
+    build_doh_request, build_response_cache_plan_from_packet, dns_data_with_zero_id,
     restore_packed_response_request_id, validate_doh_response,
 };
 use dae_routing::IpPrefix;
+use dae_routing::RoutingMatcher;
 use http::Request;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
@@ -64,6 +68,7 @@ pub(super) struct ResidentDnsPlan {
     response_matcher: Option<ResponseMatcher>,
     response_actions: Vec<ResidentDnsResponseAction>,
     response_default_action: ResidentDnsResponseAction,
+    domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
     mark: u32,
 }
 
@@ -76,8 +81,100 @@ impl ResidentDnsPlan {
             response_matcher: None,
             response_actions: Vec::new(),
             response_default_action: ResidentDnsResponseAction::Accept,
+            domain_routing: None,
             mark,
         }
+    }
+
+    pub(super) fn with_domain_routing(
+        mut self,
+        domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
+    ) -> Self {
+        self.domain_routing = domain_routing;
+        self
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ResidentDnsDomainRouting {
+    map_id: u32,
+    routing_matcher: RoutingMatcher,
+    state: Mutex<ResidentDnsDomainRoutingState>,
+}
+
+#[derive(Debug)]
+struct ResidentDnsDomainRoutingState {
+    owner: DomainRoutingOwner,
+    cache: DnsCacheStore,
+    domain_bitmap: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResidentDnsDomainRoutingUpdatePlan {
+    key: DnsCacheKey,
+    entry: DnsCacheEntry,
+    bitmap: Vec<u32>,
+    ips: Vec<DomainRoutingIpKey>,
+}
+
+impl ResidentDnsDomainRouting {
+    pub(super) fn new(map_id: u32, routing_matcher: RoutingMatcher) -> Self {
+        Self {
+            map_id,
+            routing_matcher,
+            state: Mutex::new(ResidentDnsDomainRoutingState {
+                owner: DomainRoutingOwner::default(),
+                cache: DnsCacheStore::default(),
+                domain_bitmap: Vec::new(),
+            }),
+        }
+    }
+
+    fn record_accepted_response(&self, response: &[u8]) -> Result<(), String> {
+        let now_unix = unix_now();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
+        for expired in state.cache.sweep(now_unix) {
+            if expired.route_owner_key.is_empty() {
+                continue;
+            }
+            state
+                .owner
+                .apply_dns_event_by_id(
+                    self.map_id,
+                    DomainRoutingDnsEvent::remove(&expired.route_owner_key),
+                )
+                .map_err(|err| {
+                    format!("remove expired resident DNS domain routing owner: {err}")
+                })?;
+        }
+        let Some(plan) = build_resident_dns_domain_routing_update_plan(
+            &self.routing_matcher,
+            &mut state.domain_bitmap,
+            now_unix,
+            response,
+        )?
+        else {
+            return Ok(());
+        };
+        let owner_key = plan.entry.route_owner_key.clone();
+        state
+            .owner
+            .apply_dns_event_by_id(
+                self.map_id,
+                DomainRoutingDnsEvent::from_keys(
+                    &owner_key,
+                    &plan.bitmap,
+                    plan.ips.iter().copied(),
+                ),
+            )
+            .map_err(|err| format!("apply resident DNS domain routing response: {err}"))?;
+        state
+            .cache
+            .insert_without_route_owner_key(now_unix, plan.key, plan.entry);
+        Ok(())
     }
 }
 
@@ -181,8 +278,60 @@ pub(super) fn build_resident_dns_plan(
         response_matcher,
         response_actions: upstreams.response_actions,
         response_default_action,
+        domain_routing: None,
         mark: config.global.so_mark_from_dae,
     })
+}
+
+fn build_resident_dns_domain_routing_update_plan(
+    routing_matcher: &RoutingMatcher,
+    domain_bitmap: &mut Vec<u32>,
+    now_unix: i64,
+    response: &[u8],
+) -> Result<Option<ResidentDnsDomainRoutingUpdatePlan>, String> {
+    let Some(mut plan) = build_response_cache_plan_from_packet(now_unix, response, None)
+        .map_err(|err| format!("build resident DNS response cache plan: {err}"))?
+    else {
+        return Ok(None);
+    };
+    if plan.entry.ips.is_empty() {
+        return Ok(None);
+    }
+    let bitmap = routing_matcher
+        .domain_bitmap_for_domain_into(&plan.key.qname, domain_bitmap)
+        .map_err(|err| format!("match resident DNS response domain routing bitmap: {err}"))?
+        .to_vec();
+    if bitmap.iter().all(|word| *word == 0) {
+        return Ok(None);
+    }
+    let ips = plan
+        .entry
+        .ips
+        .iter()
+        .copied()
+        .map(ip_to_key)
+        .collect::<Vec<_>>();
+    plan.entry.domain_bitmap = bitmap.clone();
+    Ok(Some(ResidentDnsDomainRoutingUpdatePlan {
+        key: plan.key,
+        entry: plan.entry,
+        bitmap,
+        ips,
+    }))
+}
+
+fn record_accepted_dns_response(plan: &ResidentDnsPlan, response: &[u8]) -> Result<(), String> {
+    if let Some(domain_routing) = plan.domain_routing.as_ref() {
+        domain_routing.record_accepted_response(response)?;
+    }
+    Ok(())
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0)
 }
 
 pub(super) async fn handle_resident_dns_udp_async(
@@ -211,7 +360,10 @@ pub(super) async fn handle_resident_dns_udp_async(
                 DnsRequestOutboundIndex::ASIS,
             )?;
             match response_action {
-                ResidentDnsResponseAction::Accept => Ok(response),
+                ResidentDnsResponseAction::Accept => {
+                    record_accepted_dns_response(plan, &response)?;
+                    Ok(response)
+                }
                 ResidentDnsResponseAction::Reject => build_reject_response(payload, &request),
                 ResidentDnsResponseAction::Upstream(upstream) => {
                     resolve_dns_response_routing(plan, payload, &request, upstream).await
@@ -235,7 +387,10 @@ async fn resolve_dns_response_routing(
         let response = forward_dns_to_upstream_async(&upstream, request_payload, plan.mark).await?;
         let response_action = select_response_action(plan, request, &response, &upstream)?;
         match response_action {
-            ResidentDnsResponseAction::Accept => return Ok(response),
+            ResidentDnsResponseAction::Accept => {
+                record_accepted_dns_response(plan, &response)?;
+                return Ok(response);
+            }
             ResidentDnsResponseAction::Reject => {
                 return build_reject_response(request_payload, request);
             }
@@ -358,6 +513,63 @@ mod tests {
         response.extend_from_slice(&4_u16.to_be_bytes());
         response.extend_from_slice(&address);
         response
+    }
+
+    fn domain_routing_test_matcher() -> RoutingMatcher {
+        RoutingMatcher::from_fixture_value(&serde_json::json!({
+            "domain_sets": [
+                {"bit": 0, "key": "suffix", "patterns": ["example.com"]}
+            ],
+            "matches": [
+                {"type": "domain_set", "outbound": "direct"},
+                {"type": "fallback", "outbound": "block"}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn resident_dns_domain_routing_update_plan_records_accepted_response_ips() {
+        let matcher = domain_routing_test_matcher();
+        let mut bitmap_buffer = Vec::new();
+        let plan = build_resident_dns_domain_routing_update_plan(
+            &matcher,
+            &mut bitmap_buffer,
+            1_700_000_000,
+            &a_response([203, 0, 113, 42]),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(plan.key.qname, "example.com.");
+        assert_eq!(plan.entry.route_owner_key, "example.com.|1|1");
+        assert_eq!(plan.bitmap, vec![0x1]);
+        assert_eq!(plan.ips, vec![ip_to_key("203.0.113.42".parse().unwrap())]);
+        assert_eq!(plan.entry.domain_bitmap, vec![0x1]);
+    }
+
+    #[test]
+    fn resident_dns_domain_routing_update_plan_skips_unmatched_domain() {
+        let matcher = domain_routing_test_matcher();
+        let mut bitmap_buffer = Vec::new();
+        let mut response = a_response([203, 0, 113, 42]);
+        response[13] = b'i';
+        response[14] = b'n';
+        response[15] = b'v';
+        response[16] = b'a';
+        response[17] = b'l';
+        response[18] = b'i';
+        response[19] = b'd';
+
+        let plan = build_resident_dns_domain_routing_update_plan(
+            &matcher,
+            &mut bitmap_buffer,
+            1_700_000_000,
+            &response,
+        )
+        .unwrap();
+
+        assert_eq!(plan, None);
     }
 
     #[test]

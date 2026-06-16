@@ -6,6 +6,13 @@ pub(super) fn discover_routing_tuple_map(
     discover_reusable_map(native_runtime, handoff, ROUTING_TUPLES_MAP_NAME)
 }
 
+pub(super) fn discover_domain_routing_map(
+    native_runtime: &NativeEbpfRuntimeState,
+    handoff: &LiveLoadedTproxyListenSocketMap,
+) -> Result<DomainRoutingMapDiscovery, String> {
+    discover_reusable_map(native_runtime, handoff, DOMAIN_ROUTING_MAP_NAME)
+}
+
 pub(super) fn discover_reusable_map(
     native_runtime: &NativeEbpfRuntimeState,
     handoff: &LiveLoadedTproxyListenSocketMap,

@@ -330,26 +330,50 @@ pub(super) fn start_with_options(
                 match live_handoff.as_ref() {
                     Some(handoff) => match discover_routing_tuple_map(&native_runtime, handoff) {
                         Ok(discovery) => {
-                            let (mut value, runtime) = start_resident_dataplane_workers(
-                                handoff,
-                                config,
-                                &artifact_dir,
-                                discovery.id,
-                                &geodata,
-                            );
-                            if let Value::Object(map) = &mut value {
-                                map.insert(
-                                    "routing_tuple_map_source".to_owned(),
-                                    json!(discovery.source),
-                                );
-                                map.insert(
-                                    "routing_tuple_candidate_map_ids".to_owned(),
-                                    json!(discovery.candidate_map_ids),
-                                );
+                            match discover_domain_routing_map(&native_runtime, handoff) {
+                                Ok(domain_routing_discovery) => {
+                                    let (mut value, runtime) = start_resident_dataplane_workers(
+                                        handoff,
+                                        config,
+                                        &artifact_dir,
+                                        discovery.id,
+                                        domain_routing_discovery.id,
+                                        &geodata,
+                                    );
+                                    if let Value::Object(map) = &mut value {
+                                        map.insert(
+                                            "routing_tuple_map_source".to_owned(),
+                                            json!(discovery.source),
+                                        );
+                                        map.insert(
+                                            "routing_tuple_candidate_map_ids".to_owned(),
+                                            json!(discovery.candidate_map_ids),
+                                        );
+                                        map.insert(
+                                            "domain_routing_map_source".to_owned(),
+                                            json!(domain_routing_discovery.source),
+                                        );
+                                        map.insert(
+                                            "domain_routing_candidate_map_ids".to_owned(),
+                                            json!(domain_routing_discovery.candidate_map_ids),
+                                        );
+                                    }
+                                    ok &= value["status"].as_str() == Some("pass");
+                                    dataplane = runtime;
+                                    value
+                                }
+                                Err(err) => {
+                                    ok = false;
+                                    json!({
+                                        "status": "fail",
+                                        "enabled": true,
+                                        "error": err,
+                                        "routing_tuple_map_source": discovery.source,
+                                        "routing_tuple_candidate_map_ids": discovery.candidate_map_ids,
+                                        "domain_routing_map_source": "discovery-error",
+                                    })
+                                }
                             }
-                            ok &= value["status"].as_str() == Some("pass");
-                            dataplane = runtime;
-                            value
                         }
                         Err(err) => {
                             ok = false;

@@ -15,6 +15,7 @@ pub(super) const DEFAULT_NATIVE_BACKEND_LEGACY_ENV: &str = "DAE_RUST_NATIVE_EBPF
 pub(super) const DEFAULT_RESIDENT_DATAPLANE_ENV: &str = "RESIDENT_DATAPLANE";
 pub(super) const DEFAULT_RESIDENT_DATAPLANE_LEGACY_ENV: &str = "DAE_RUST_RESIDENT_DATAPLANE";
 pub(super) const COOKIE_PID_MAP_NAME: &str = "cookie_pid_map";
+pub(super) const DOMAIN_ROUTING_MAP_NAME: &str = "domain_routing_map";
 pub(super) const LPM_ARRAY_MAP_NAME: &str = "lpm_array_map";
 pub(super) const ROUTING_TUPLES_MAP_NAME: &str = "routing_tuples_map";
 pub(super) const TGID_PNAME_MAP_NAME: &str = "tgid_pname_map";
@@ -34,3 +35,4 @@ pub(super) struct ReusableMapDiscovery {
 }
 
 pub(super) type RoutingTupleMapDiscovery = ReusableMapDiscovery;
+pub(super) type DomainRoutingMapDiscovery = ReusableMapDiscovery;
