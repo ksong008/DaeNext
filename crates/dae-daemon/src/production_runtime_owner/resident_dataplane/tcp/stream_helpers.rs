@@ -151,14 +151,14 @@ pub(super) fn simple_obfs_tls_application_data_frame(payload: &[u8]) -> Result<V
 }
 
 pub(super) struct AsyncPrefixTcpReader<'a, S> {
-    pub(super) prefix: VecDeque<u8>,
+    pub(super) prefix: CursorBytes,
     pub(super) stream: &'a mut S,
 }
 
 impl<'a, S> AsyncPrefixTcpReader<'a, S> {
     pub(super) fn new(prefix: Vec<u8>, stream: &'a mut S) -> Self {
         Self {
-            prefix: VecDeque::from(prefix),
+            prefix: CursorBytes::new(prefix),
             stream,
         }
     }
@@ -173,12 +173,7 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        while buf.remaining() > 0 {
-            let Some(byte) = self.prefix.pop_front() else {
-                break;
-            };
-            buf.put_slice(&[byte]);
-        }
+        self.prefix.drain_to_read_buf(buf);
         if buf.remaining() == 0 || !self.prefix.is_empty() {
             return Poll::Ready(Ok(()));
         }
@@ -187,8 +182,8 @@ where
 }
 
 pub(super) struct AsyncSimpleObfsTlsAppDataReader<'a, S> {
-    pub(super) prefix: VecDeque<u8>,
-    pub(super) frame: VecDeque<u8>,
+    pub(super) prefix: CursorBytes,
+    pub(super) frame: CursorBytes,
     pub(super) state: AsyncSimpleObfsTlsReadState,
     pub(super) stream: &'a mut S,
 }
@@ -210,8 +205,8 @@ impl Default for AsyncSimpleObfsTlsReadState {
 impl<'a, S> AsyncSimpleObfsTlsAppDataReader<'a, S> {
     pub(super) fn new(prefix: Vec<u8>, stream: &'a mut S) -> Self {
         Self {
-            prefix: VecDeque::from(prefix),
-            frame: VecDeque::new(),
+            prefix: CursorBytes::new(prefix),
+            frame: CursorBytes::default(),
             state: AsyncSimpleObfsTlsReadState::default(),
             stream,
         }
@@ -229,16 +224,9 @@ where
     ) -> Poll<std::io::Result<()>> {
         let initial_filled = out.filled().len();
         loop {
-            while out.remaining() > 0 {
-                if let Some(byte) = self.prefix.pop_front() {
-                    out.put_slice(&[byte]);
-                    continue;
-                }
-                if let Some(byte) = self.frame.pop_front() {
-                    out.put_slice(&[byte]);
-                    continue;
-                }
-                break;
+            self.prefix.drain_to_read_buf(out);
+            if out.remaining() > 0 {
+                self.frame.drain_to_read_buf(out);
             }
             if out.filled().len() > initial_filled || out.remaining() == 0 {
                 return Poll::Ready(Ok(()));
@@ -319,11 +307,42 @@ where
                             }
                         }
                     }
-                    self.frame = VecDeque::from(buf);
+                    self.frame = CursorBytes::new(buf);
                     self.state = AsyncSimpleObfsTlsReadState::default();
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct CursorBytes {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl CursorBytes {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.offset >= self.bytes.len()
+    }
+
+    fn drain_to_read_buf(&mut self, out: &mut ReadBuf<'_>) -> bool {
+        if self.is_empty() || out.remaining() == 0 {
+            return false;
+        }
+        let available = &self.bytes[self.offset..];
+        let len = available.len().min(out.remaining());
+        out.put_slice(&available[..len]);
+        self.offset += len;
+        if self.offset >= self.bytes.len() {
+            self.bytes.clear();
+            self.offset = 0;
+        }
+        true
     }
 }
 
