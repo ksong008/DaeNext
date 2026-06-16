@@ -198,13 +198,7 @@ impl DnsCacheStore {
     }
 
     pub fn sweep(&mut self, now_unix: i64) -> Vec<DnsCacheEntry> {
-        let expired = self.entries.expired_keys(now_unix);
-        let mut removed = Vec::with_capacity(expired.len());
-        for key in expired {
-            if let Some(entry) = self.entries.remove(&key) {
-                removed.push(entry);
-            }
-        }
+        let removed = self.entries.remove_expired_entries(now_unix);
         self.stats.expired_removal_total += removed.len() as u64;
         self.stats.remove_callback_total += removed.len() as u64;
         removed

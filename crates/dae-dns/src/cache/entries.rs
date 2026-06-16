@@ -137,23 +137,6 @@ impl DnsCacheEntries {
         }
     }
 
-    pub(super) fn expired_keys(&self, now_unix: i64) -> Vec<DnsCacheKey> {
-        match self {
-            Self::Small(entries) => entries
-                .iter()
-                .filter_map(|(key, entry)| {
-                    (entry.cache_expires_at() <= now_unix).then_some(key.clone())
-                })
-                .collect(),
-            Self::Map(entries) => entries
-                .iter()
-                .filter_map(|(key, entry)| {
-                    (entry.cache_expires_at() <= now_unix).then_some(key.clone())
-                })
-                .collect(),
-        }
-    }
-
     pub(super) fn remove_expired(&mut self, now_unix: i64) -> usize {
         match self {
             Self::Small(entries) => {
@@ -173,6 +156,27 @@ impl DnsCacheEntries {
                 entries.retain(|_, entry| entry.cache_expires_at() > now_unix);
                 before - entries.len()
             }
+        }
+    }
+
+    pub(super) fn remove_expired_entries(&mut self, now_unix: i64) -> Vec<DnsCacheEntry> {
+        match self {
+            Self::Small(entries) => {
+                let mut removed = Vec::new();
+                let mut index = 0;
+                while index < entries.len() {
+                    if entries[index].1.cache_expires_at() <= now_unix {
+                        removed.push(entries.swap_remove(index).1);
+                    } else {
+                        index += 1;
+                    }
+                }
+                removed
+            }
+            Self::Map(entries) => entries
+                .extract_if(|_, entry| entry.cache_expires_at() <= now_unix)
+                .map(|(_, entry)| entry)
+                .collect(),
         }
     }
 
