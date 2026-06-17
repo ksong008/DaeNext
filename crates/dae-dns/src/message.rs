@@ -336,7 +336,7 @@ fn read_name(packet: &[u8], mut offset: usize, depth: usize) -> Result<(String, 
         return Err(DnsError::CompressionLoop);
     }
     let start = offset;
-    let mut labels = Vec::new();
+    let mut name = String::with_capacity(packet.len().saturating_sub(offset).min(255));
     loop {
         if offset >= packet.len() {
             return Err(DnsError::UnexpectedEof);
@@ -349,16 +349,16 @@ fn read_name(packet: &[u8], mut offset: usize, depth: usize) -> Result<(String, 
             let ptr = (((len & 0x3f) as usize) << 8) | packet[offset + 1] as usize;
             let (suffix, _) = read_name(packet, ptr, depth + 1)?;
             if suffix != "." {
-                labels.push(suffix.trim_end_matches('.').to_owned());
+                name.push_str(&suffix);
             }
-            return Ok((join_labels(labels), offset + 2));
+            return Ok((finish_name(name), offset + 2));
         }
         if len & 0xc0 != 0 {
             return Err(DnsError::InvalidDnsName);
         }
         offset += 1;
         if len == 0 {
-            return Ok((join_labels(labels), offset));
+            return Ok((finish_name(name), offset));
         }
         let end = offset + len as usize;
         if end > packet.len() {
@@ -369,16 +369,17 @@ fn read_name(packet: &[u8], mut offset: usize, depth: usize) -> Result<(String, 
         if label.is_empty() || start == end {
             return Err(DnsError::InvalidDnsName);
         }
-        labels.push(label.to_owned());
+        name.push_str(label);
+        name.push('.');
         offset = end;
     }
 }
 
-fn join_labels(labels: Vec<String>) -> String {
-    if labels.is_empty() {
+fn finish_name(name: String) -> String {
+    if name.is_empty() {
         ".".to_owned()
     } else {
-        format!("{}.", labels.join("."))
+        name
     }
 }
 

@@ -436,7 +436,7 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
 ) -> (Vec<NodeLatencyWrite>, HashSet<i64>) {
     let mut results = Vec::new();
     let mut tested_ids = HashSet::new();
-    let mut node_ids_by_link_hash = BTreeMap::<String, Vec<i64>>::new();
+    let mut node_ids_by_link_hash = HashMap::<String, Vec<i64>>::new();
     for (id, node_link, _) in nodes {
         node_ids_by_link_hash
             .entry(runtime_link_hash(node_link))
@@ -450,13 +450,9 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
         let Some(link_hash) = runtime_latency_snapshot_link_hash(snapshot) else {
             continue;
         };
-        let matched_ids = node_ids_by_link_hash
-            .get(link_hash)
-            .cloned()
-            .unwrap_or_default();
-        if matched_ids.is_empty() {
+        let Some(matched_ids) = node_ids_by_link_hash.get(link_hash) else {
             continue;
-        }
+        };
         let checked_at = snapshot
             .get("checkedAtUnix")
             .and_then(Value::as_i64)
@@ -473,7 +469,7 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
             .and_then(Value::as_str)
             .filter(|message| !message.is_empty())
             .map(str::to_owned);
-        for node_id in matched_ids {
+        for &node_id in matched_ids {
             tested_ids.insert(node_id);
             results.push(NodeLatencyWrite {
                 node_id,
