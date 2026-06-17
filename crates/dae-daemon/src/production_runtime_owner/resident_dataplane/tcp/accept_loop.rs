@@ -151,7 +151,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
         .set_nodelay(true)
         .map_err(|err| format!("set inbound TCP_NODELAY: {err}"))?;
     let sniff = sniff_initial_tcp_payload_async(&mut inbound, router.sniffing_timeout).await?;
-    let selection = router.select(peer, original_dst, &sniff.domain)?;
+    let selection = router.select(peer, original_dst, &sniff.domain).await?;
     match selection {
         TcpSelection::Direct(selection) => {
             let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));

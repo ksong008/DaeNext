@@ -102,6 +102,65 @@ impl ResidentDnsPlan {
         self.domain_routing = domain_routing;
         self
     }
+
+    pub(super) async fn resolve_domain_has_ip_for_dial(
+        &self,
+        domain: &str,
+        destination: IpAddr,
+    ) -> bool {
+        let first_qtype = if destination.is_ipv4() {
+            DNS_QTYPE_A
+        } else {
+            DNS_QTYPE_AAAA
+        };
+        let second_qtype = if first_qtype == DNS_QTYPE_A {
+            DNS_QTYPE_AAAA
+        } else {
+            DNS_QTYPE_A
+        };
+        self.cached_domain_has_ip(domain, first_qtype, true)
+            || self
+                .resolve_domain_qtype_has_ip_for_dial(domain, first_qtype)
+                .await
+            || self.cached_domain_has_ip(domain, second_qtype, true)
+            || self
+                .resolve_domain_qtype_has_ip_for_dial(domain, second_qtype)
+                .await
+    }
+
+    pub(super) fn cached_domain_has_ip(
+        &self,
+        domain: &str,
+        qtype: u16,
+        ignore_fixed_ttl: bool,
+    ) -> bool {
+        let key = DnsCacheKey::new(domain, qtype, 1);
+        self.cache
+            .lookup_key_has_any_ip(&key, ignore_fixed_ttl)
+            .unwrap_or(false)
+    }
+
+    async fn resolve_domain_qtype_has_ip_for_dial(&self, domain: &str, qtype: u16) -> bool {
+        let Ok(query) = build_dns_query_packet(0, domain, qtype) else {
+            return false;
+        };
+        let Ok(request) = DnsPacketView::parse(&query) else {
+            return false;
+        };
+        let synthetic_dst = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DNS_DEFAULT_PORT);
+        let Ok(response) = handle_resident_dns_request_without_preference(
+            self,
+            synthetic_dst,
+            &query,
+            &request,
+            false,
+        )
+        .await
+        else {
+            return false;
+        };
+        dns_response_has_any_ip(&response).unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -159,6 +218,21 @@ impl ResidentDnsRuntimeCache {
             return Ok(None);
         };
         Ok(entry.fill_packed_response(request.id()))
+    }
+
+    fn lookup_key_has_any_ip(
+        &self,
+        key: &DnsCacheKey,
+        ignore_fixed_ttl: bool,
+    ) -> Result<bool, String> {
+        let now_unix = unix_now();
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        Ok(store
+            .lookup(now_unix, key, ignore_fixed_ttl)
+            .is_some_and(|entry| entry.has_any_ip))
     }
 
     fn insert_response(
@@ -878,6 +952,36 @@ fn dns_response_has_any_ip(response: &[u8]) -> Result<bool, String> {
         }
     }
     Ok(false)
+}
+
+fn build_dns_query_packet(id: u16, domain: &str, qtype: u16) -> Result<Vec<u8>, String> {
+    let domain = domain.trim().trim_end_matches('.');
+    if domain.is_empty() || domain.parse::<IpAddr>().is_ok() {
+        return Err(format!("not a resolvable domain name: {domain:?}"));
+    }
+    let mut packet = Vec::with_capacity(12 + domain.len() + 6);
+    packet.extend_from_slice(&id.to_be_bytes());
+    packet.extend_from_slice(&0x0100_u16.to_be_bytes());
+    packet.extend_from_slice(&1_u16.to_be_bytes());
+    packet.extend_from_slice(&0_u16.to_be_bytes());
+    packet.extend_from_slice(&0_u16.to_be_bytes());
+    packet.extend_from_slice(&0_u16.to_be_bytes());
+    for label in domain.split('.') {
+        if label.is_empty() {
+            return Err(format!("domain contains an empty label: {domain:?}"));
+        }
+        let len = u8::try_from(label.len())
+            .map_err(|_| format!("domain label is too long in {domain:?}"))?;
+        if len > 63 {
+            return Err(format!("domain label is too long in {domain:?}"));
+        }
+        packet.push(len);
+        packet.extend_from_slice(label.as_bytes());
+    }
+    packet.push(0);
+    packet.extend_from_slice(&qtype.to_be_bytes());
+    packet.extend_from_slice(&1_u16.to_be_bytes());
+    Ok(packet)
 }
 
 async fn resolve_dns_response_routing(
