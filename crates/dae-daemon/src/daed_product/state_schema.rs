@@ -2,17 +2,38 @@ use super::*;
 pub(super) fn ensure_state_schema(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        set_private_state_dir_permissions(parent)?;
     }
     let conn = open_state_connection(path)?;
     apply_state_schema(&conn)?;
+    set_private_db_permissions(path)?;
     Ok(())
 }
 
 pub(super) fn open_state_connection(path: &Path) -> io::Result<Connection> {
+    if let Some(parent) = path.parent()
+        && parent.exists()
+    {
+        set_private_state_dir_permissions(parent)?;
+    }
     let conn = Connection::open(path).map_err(sqlite_io_error)?;
+    set_private_db_permissions(path)?;
     conn.execute_batch("PRAGMA foreign_keys = OFF;")
         .map_err(sqlite_io_error)?;
     Ok(conn)
+}
+
+fn set_private_state_dir_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o750))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {

@@ -14,6 +14,51 @@ pub(crate) fn storage_paths_match_runtime_contract() {
     assert_eq!(query_json_storage(&storage, &paths), vec![String::new()]);
 }
 
+#[cfg(unix)]
+#[test]
+pub(crate) fn state_schema_initialization_sets_private_file_and_dir_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+
+    assert_eq!(
+        fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert_eq!(
+        fs::metadata(&state).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+pub(crate) fn state_schema_open_repairs_existing_wide_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+    fs::set_permissions(&state, fs::Permissions::from_mode(0o666)).unwrap();
+
+    let conn = open_state_connection(&state).unwrap();
+    drop(conn);
+
+    assert_eq!(
+        fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert_eq!(
+        fs::metadata(&state).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 pub(crate) fn jwt_roundtrip_uses_user_secret() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
