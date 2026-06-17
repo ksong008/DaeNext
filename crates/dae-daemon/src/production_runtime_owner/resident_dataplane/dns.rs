@@ -10,11 +10,11 @@ use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
 use dae_control::{DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingOwner, ip_to_key};
 use dae_dns::{
     DOH_MEDIA_TYPE, DnsCacheEntry, DnsCacheKey, DnsCacheStore, DnsDomainSet, DnsPacketView,
-    DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind,
-    DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher,
-    build_doh_request, build_response_cache_plan_from_packet, dns_data_with_zero_id,
-    restore_packed_response_request_id, validate_dns_packet_response_for_request_fast,
-    validate_doh_response,
+    DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseCachePlan,
+    DnsResponseMatchKind, DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher,
+    ResponseMatcher, build_doh_request, build_response_cache_plan_from_packet,
+    dns_data_with_zero_id, restore_packed_response_request_id,
+    validate_dns_packet_response_for_request_fast, validate_doh_response,
 };
 use dae_routing::IpPrefix;
 use dae_routing::RoutingMatcher;
@@ -23,7 +23,7 @@ use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, OwnedMutexGuard};
 use tokio::time;
 
 use super::super::resident_routing::{
@@ -49,6 +49,8 @@ use self::transport::parse_doh_http_response;
 use self::transport::{forward_dns_to_upstream_async, forward_dns_udp_async};
 
 const DNS_RESPONSE_FLAGS_EMPTY_NOERROR: u16 = 0x8180;
+const DNS_QTYPE_A: u16 = 1;
+const DNS_QTYPE_AAAA: u16 = 28;
 const DNS_RESPONSE_READ_LIMIT: usize = 4096;
 const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
 const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
@@ -70,11 +72,14 @@ pub(super) struct ResidentDnsPlan {
     response_actions: Vec<ResidentDnsResponseAction>,
     response_default_action: ResidentDnsResponseAction,
     domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
+    cache: Arc<ResidentDnsRuntimeCache>,
+    fixed_domain_ttl: Arc<BTreeMap<String, i64>>,
+    ipversion_prefer: Option<u16>,
     mark: u32,
 }
 
 impl ResidentDnsPlan {
-    pub(super) const fn asis(mark: u32) -> Self {
+    pub(super) fn asis(mark: u32) -> Self {
         Self {
             request_matcher: None,
             request_actions: Vec::new(),
@@ -83,6 +88,9 @@ impl ResidentDnsPlan {
             response_actions: Vec::new(),
             response_default_action: ResidentDnsResponseAction::Accept,
             domain_routing: None,
+            cache: Arc::new(ResidentDnsRuntimeCache::default()),
+            fixed_domain_ttl: Arc::new(BTreeMap::new()),
+            ipversion_prefer: None,
             mark,
         }
     }
@@ -93,6 +101,105 @@ impl ResidentDnsPlan {
     ) -> Self {
         self.domain_routing = domain_routing;
         self
+    }
+}
+
+#[derive(Debug, Default)]
+struct ResidentDnsRuntimeCache {
+    store: Mutex<DnsCacheStore>,
+    inflight: Mutex<BTreeMap<DnsCacheKey, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+struct ResidentDnsInflightGuard<'a> {
+    cache: &'a ResidentDnsRuntimeCache,
+    key: DnsCacheKey,
+    lock: Arc<tokio::sync::Mutex<()>>,
+    _guard: OwnedMutexGuard<()>,
+}
+
+impl ResidentDnsRuntimeCache {
+    async fn lock_key(&self, key: DnsCacheKey) -> Result<ResidentDnsInflightGuard<'_>, String> {
+        let lock = {
+            let mut inflight = self
+                .inflight
+                .lock()
+                .map_err(|_| "resident DNS inflight lock poisoned".to_owned())?;
+            inflight
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let guard = Arc::clone(&lock).lock_owned().await;
+        Ok(ResidentDnsInflightGuard {
+            cache: self,
+            key,
+            lock,
+            _guard: guard,
+        })
+    }
+
+    fn lookup_response(
+        &self,
+        request: &DnsPacketView<'_>,
+        ignore_fixed_ttl: bool,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let now_unix = unix_now();
+        let question = request
+            .questions()
+            .next()
+            .ok_or_else(|| "DNS request has no question".to_owned())?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        let Some(entry) = store
+            .lookup_packet_question(now_unix, &question, ignore_fixed_ttl)
+            .map_err(|err| format!("lookup resident DNS response cache: {err}"))?
+        else {
+            return Ok(None);
+        };
+        Ok(entry.fill_packed_response(request.id()))
+    }
+
+    fn insert_response(
+        &self,
+        now_unix: i64,
+        key: DnsCacheKey,
+        entry: DnsCacheEntry,
+    ) -> Result<(), String> {
+        self.store
+            .lock()
+            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?
+            .insert(now_unix, key, entry);
+        Ok(())
+    }
+
+    fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<Option<DnsCacheEntry>, String> {
+        let question = request
+            .questions()
+            .next()
+            .ok_or_else(|| "DNS request has no question".to_owned())?;
+        self.store
+            .lock()
+            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?
+            .remove_packet_question(&question)
+            .map_err(|err| format!("remove resident DNS response cache entry: {err}"))
+    }
+}
+
+impl Drop for ResidentDnsInflightGuard<'_> {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.lock) != 3 {
+            return;
+        }
+        if let Ok(mut inflight) = self.cache.inflight.lock() {
+            if inflight
+                .get(&self.key)
+                .is_some_and(|current| Arc::ptr_eq(current, &self.lock))
+            {
+                inflight.remove(&self.key);
+            }
+        }
     }
 }
 
@@ -140,7 +247,7 @@ impl ResidentDnsDomainRouting {
         }
     }
 
-    fn record_accepted_response(&self, response: &[u8]) -> Result<(), String> {
+    fn record_accepted_response(&self, cache_plan: &DnsResponseCachePlan) -> Result<(), String> {
         let now_unix = unix_now();
         let mut state = self
             .state
@@ -150,8 +257,7 @@ impl ResidentDnsDomainRouting {
         let Some(plan) = build_resident_dns_domain_routing_update_plan(
             &self.routing_matcher,
             &mut state.domain_bitmap,
-            now_unix,
-            response,
+            cache_plan,
         )?
         else {
             return Ok(());
@@ -207,6 +313,36 @@ impl ResidentDnsDomainRouting {
             now_unix.saturating_add(TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS),
         );
         Ok(true)
+    }
+
+    fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
+        let Some(removed) = state
+            .cache
+            .remove_packet_question(
+                &request
+                    .questions()
+                    .next()
+                    .ok_or_else(|| "DNS request has no question".to_owned())?,
+            )
+            .map_err(|err| format!("remove resident DNS domain routing cache entry: {err}"))?
+        else {
+            return Ok(());
+        };
+        if removed.route_owner_key.is_empty() {
+            return Ok(());
+        }
+        state
+            .owner
+            .apply_dns_event_by_id(
+                self.map_id,
+                DomainRoutingDnsEvent::remove(&removed.route_owner_key),
+            )
+            .map_err(|err| format!("remove resident DNS domain routing owner: {err}"))?;
+        Ok(())
     }
 
     fn sweep_expired_locked(
@@ -339,6 +475,8 @@ pub(super) fn build_resident_dns_plan(
     geodata: &ResidentGeodataStore,
 ) -> Result<ResidentDnsPlan, String> {
     let upstreams = parse_dns_upstreams(config)?;
+    let fixed_domain_ttl = parse_fixed_domain_ttl(&config.dns.fixed_domain_ttl)?;
+    let ipversion_prefer = parse_ipversion_prefer(config.dns.ipversion_prefer)?;
     let request_default_action =
         parse_request_default_action(&config.dns.routing.request.fallback, &upstreams.by_tag)?;
     let request_matcher = build_request_matcher(config, &upstreams, geodata)?;
@@ -353,42 +491,94 @@ pub(super) fn build_resident_dns_plan(
         response_actions: upstreams.response_actions,
         response_default_action,
         domain_routing: None,
+        cache: Arc::new(ResidentDnsRuntimeCache::default()),
+        fixed_domain_ttl: Arc::new(fixed_domain_ttl),
+        ipversion_prefer,
         mark: config.global.so_mark_from_dae,
     })
+}
+
+fn parse_ipversion_prefer(value: i32) -> Result<Option<u16>, String> {
+    match value {
+        0 => Ok(None),
+        4 => Ok(Some(DNS_QTYPE_A)),
+        6 => Ok(Some(DNS_QTYPE_AAAA)),
+        other => Err(format!("unknown dns.ipversion_prefer: {other}")),
+    }
+}
+
+fn parse_fixed_domain_ttl(values: &[String]) -> Result<BTreeMap<String, i64>, String> {
+    let mut fixed = BTreeMap::new();
+    for raw in values {
+        let (domain, ttl) = raw
+            .split_once(':')
+            .ok_or_else(|| format!("bad dns.fixed_domain_ttl entry {raw:?}: missing ':'"))?;
+        let domain = canonical_fixed_ttl_domain(domain);
+        if domain.is_empty() {
+            return Err(format!(
+                "bad dns.fixed_domain_ttl entry {raw:?}: domain is empty"
+            ));
+        }
+        fixed.insert(domain, parse_i64_base0(ttl.trim())?);
+    }
+    Ok(fixed)
+}
+
+fn canonical_fixed_ttl_domain(domain: &str) -> String {
+    domain.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn parse_i64_base0(raw: &str) -> Result<i64, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("failed to parse ttl: empty value".to_owned());
+    }
+    let (negative, digits) = raw
+        .strip_prefix('-')
+        .map(|rest| (true, rest))
+        .unwrap_or((false, raw));
+    let (base, digits) = if let Some(rest) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        (16, rest)
+    } else if digits.len() > 1 && digits.starts_with('0') {
+        (8, &digits[1..])
+    } else {
+        (10, digits)
+    };
+    let parsed = i64::from_str_radix(digits, base)
+        .map_err(|err| format!("failed to parse ttl {raw:?}: {err}"))?;
+    Ok(if negative { -parsed } else { parsed })
 }
 
 fn build_resident_dns_domain_routing_update_plan(
     routing_matcher: &RoutingMatcher,
     domain_bitmap: &mut Vec<u32>,
-    now_unix: i64,
-    response: &[u8],
+    cache_plan: &DnsResponseCachePlan,
 ) -> Result<Option<ResidentDnsDomainRoutingUpdatePlan>, String> {
-    let Some(mut plan) = build_response_cache_plan_from_packet(now_unix, response, None)
-        .map_err(|err| format!("build resident DNS response cache plan: {err}"))?
-    else {
-        return Ok(None);
-    };
-    if plan.entry.ips.is_empty() {
+    if cache_plan.entry.ips.is_empty() {
         return Ok(None);
     }
     let bitmap = routing_matcher
-        .domain_bitmap_for_domain_into(&plan.key.qname, domain_bitmap)
+        .domain_bitmap_for_domain_into(&cache_plan.key.qname, domain_bitmap)
         .map_err(|err| format!("match resident DNS response domain routing bitmap: {err}"))?
         .to_vec();
     if bitmap.iter().all(|word| *word == 0) {
         return Ok(None);
     }
-    let ips = plan
+    let ips = cache_plan
         .entry
         .ips
         .iter()
         .copied()
         .map(ip_to_key)
         .collect::<Vec<_>>();
-    plan.entry.domain_bitmap = bitmap.clone();
+    let mut entry = cache_plan.entry.clone();
+    entry.domain_bitmap = bitmap.clone();
     Ok(Some(ResidentDnsDomainRoutingUpdatePlan {
-        key: plan.key,
-        entry: plan.entry,
+        key: cache_plan.key.clone(),
+        entry,
         bitmap,
         ips,
     }))
@@ -420,10 +610,52 @@ fn build_resident_domain_routing_ip_update_plan(
 }
 
 fn record_accepted_dns_response(plan: &ResidentDnsPlan, response: &[u8]) -> Result<(), String> {
+    let now_unix = unix_now();
+    let fixed_domain_ttl = fixed_domain_ttl_for_response(plan, response)?;
+    let Some(cache_plan) =
+        build_response_cache_plan_from_packet(now_unix, response, fixed_domain_ttl)
+            .map_err(|err| format!("build resident DNS response cache plan: {err}"))?
+    else {
+        return Ok(());
+    };
+    plan.cache
+        .insert_response(now_unix, cache_plan.key.clone(), cache_plan.entry.clone())?;
     if let Some(domain_routing) = plan.domain_routing.as_ref() {
-        domain_routing.record_accepted_response(response)?;
+        domain_routing.record_accepted_response(&cache_plan)?;
     }
     Ok(())
+}
+
+fn remove_dns_response_cache_for_request(
+    plan: &ResidentDnsPlan,
+    request: &DnsPacketView<'_>,
+) -> Result<(), String> {
+    let _ = plan.cache.remove_request(request)?;
+    if let Some(domain_routing) = plan.domain_routing.as_ref() {
+        domain_routing.remove_request(request)?;
+    }
+    Ok(())
+}
+
+fn fixed_domain_ttl_for_response(
+    plan: &ResidentDnsPlan,
+    response: &[u8],
+) -> Result<Option<i64>, String> {
+    if plan.fixed_domain_ttl.is_empty() {
+        return Ok(None);
+    }
+    let response = DnsPacketView::parse(response)
+        .map_err(|err| format!("parse DNS response for fixed TTL: {err}"))?;
+    let Some(question) = response.questions().next() else {
+        return Ok(None);
+    };
+    let qname = question
+        .qname_to_canonical_string()
+        .map_err(|err| format!("read DNS response qname for fixed TTL: {err}"))?;
+    Ok(plan
+        .fixed_domain_ttl
+        .get(&canonical_fixed_ttl_domain(&qname))
+        .copied())
 }
 
 fn unix_now() -> i64 {
@@ -463,22 +695,130 @@ async fn handle_resident_dns_request_async(
     if request.question_count() == 0 {
         return Err("DNS request has no question".to_owned());
     }
-    let action = select_request_action(plan, &request)?;
+    if let Some(response) =
+        handle_ipversion_preference(plan, original_dst, payload, &request, allow_asis).await?
+    {
+        return Ok(response);
+    }
+    handle_resident_dns_request_without_preference(
+        plan,
+        original_dst,
+        payload,
+        &request,
+        allow_asis,
+    )
+    .await
+}
+
+async fn handle_ipversion_preference(
+    plan: &ResidentDnsPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+    request: &DnsPacketView<'_>,
+    allow_asis: bool,
+) -> Result<Option<Vec<u8>>, String> {
+    let Some(preferred_qtype) = plan.ipversion_prefer else {
+        return Ok(None);
+    };
+    if request.question_count() != 1 {
+        return Ok(None);
+    }
+    let question = request
+        .questions()
+        .next()
+        .ok_or_else(|| "DNS request has no question".to_owned())?;
+    let requested_qtype = question.qtype();
+    if !matches!(requested_qtype, DNS_QTYPE_A | DNS_QTYPE_AAAA) {
+        return Ok(None);
+    }
+    if requested_qtype == preferred_qtype {
+        return Ok(None);
+    }
+    let preferred_payload = dns_request_with_qtype(payload, request, preferred_qtype)?;
+    let preferred_request = DnsPacketView::parse(&preferred_payload)
+        .map_err(|err| format!("parse preferred DNS request: {err}"))?;
+    let preferred_future = handle_resident_dns_request_without_preference(
+        plan,
+        original_dst,
+        &preferred_payload,
+        &preferred_request,
+        allow_asis,
+    );
+    let requested_future = handle_resident_dns_request_without_preference(
+        plan,
+        original_dst,
+        payload,
+        request,
+        allow_asis,
+    );
+    tokio::pin!(preferred_future);
+    tokio::pin!(requested_future);
+    let mut requested = None;
+    let preferred = loop {
+        tokio::select! {
+            preferred = &mut preferred_future => break preferred,
+            requested_result = &mut requested_future, if requested.is_none() => {
+                requested = Some(requested_result);
+            }
+        }
+    };
+    if let Ok(response) = preferred.as_ref() {
+        if dns_response_has_any_ip(response)? {
+            return build_reject_response(payload, request).map(Some);
+        }
+    }
+    let requested = match requested {
+        Some(requested) => requested,
+        None => requested_future.await,
+    };
+    match requested {
+        Ok(response) => Ok(Some(response)),
+        Err(requested_err) => match preferred {
+            Ok(_) => Err(requested_err),
+            Err(preferred_err) => Err(format!(
+                "{requested_err}; preferred lookup: {preferred_err}"
+            )),
+        },
+    }
+}
+
+async fn handle_resident_dns_request_without_preference(
+    plan: &ResidentDnsPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+    request: &DnsPacketView<'_>,
+    allow_asis: bool,
+) -> Result<Vec<u8>, String> {
+    let action = select_request_action(plan, request)?;
+    if matches!(action, ResidentDnsRequestAction::Reject) {
+        remove_dns_response_cache_for_request(plan, request)?;
+        return build_reject_response(payload, request);
+    }
+    if let ResidentDnsRequestAction::AsIs = action {
+        if !allow_asis {
+            return Err(
+                "dns request routing cannot use \"asis\" for locally bound dns listener; configure an explicit upstream instead"
+                    .to_owned(),
+            );
+        }
+    }
+    if let Some(response) = plan.cache.lookup_response(request, false)? {
+        return Ok(response);
+    }
+    let key = dns_cache_key_for_request(request)?;
+    let _inflight = plan.cache.lock_key(key).await?;
+    if let Some(response) = plan.cache.lookup_response(request, false)? {
+        return Ok(response);
+    }
     match action {
         ResidentDnsRequestAction::AsIs => {
-            if !allow_asis {
-                return Err(
-                    "dns request routing cannot use \"asis\" for locally bound dns listener; configure an explicit upstream instead"
-                        .to_owned(),
-                );
-            }
             let response = forward_dns_udp_async(original_dst, payload, plan.mark)
                 .await
                 .map_err(|err| format!("forward DNS asis to {original_dst}: {err}"))?;
-            validate_dns_response_for_request(&request, &response, true)?;
+            validate_dns_response_for_request(request, &response, true)?;
             let response_action = select_response_action_for_upstream(
                 plan,
-                &request,
+                request,
                 &response,
                 DnsRequestOutboundIndex::ASIS,
             )?;
@@ -487,17 +827,57 @@ async fn handle_resident_dns_request_async(
                     record_accepted_dns_response(plan, &response)?;
                     Ok(response)
                 }
-                ResidentDnsResponseAction::Reject => build_reject_response(payload, &request),
+                ResidentDnsResponseAction::Reject => build_reject_response(payload, request),
                 ResidentDnsResponseAction::Upstream(upstream) => {
-                    resolve_dns_response_routing(plan, payload, &request, upstream).await
+                    resolve_dns_response_routing(plan, payload, request, upstream).await
                 }
             }
         }
-        ResidentDnsRequestAction::Reject => build_reject_response(payload, &request),
+        ResidentDnsRequestAction::Reject => unreachable!("reject handled before cache lookup"),
         ResidentDnsRequestAction::Upstream(ref upstream) => {
-            resolve_dns_response_routing(plan, payload, &request, upstream.clone()).await
+            resolve_dns_response_routing(plan, payload, request, upstream.clone()).await
         }
     }
+}
+
+fn dns_cache_key_for_request(request: &DnsPacketView<'_>) -> Result<DnsCacheKey, String> {
+    let question = request
+        .questions()
+        .next()
+        .ok_or_else(|| "DNS request has no question".to_owned())?;
+    let qname = question
+        .qname_to_canonical_string()
+        .map_err(|err| format!("read DNS request qname for cache key: {err}"))?;
+    Ok(DnsCacheKey::new(qname, question.qtype(), question.qclass()))
+}
+
+fn dns_request_with_qtype(
+    payload: &[u8],
+    request: &DnsPacketView<'_>,
+    qtype: u16,
+) -> Result<Vec<u8>, String> {
+    let qtype_offset = request
+        .answer_offset()
+        .checked_sub(4)
+        .ok_or_else(|| "DNS request question section is truncated".to_owned())?;
+    if payload.len() < qtype_offset + 2 {
+        return Err("DNS request qtype offset is outside packet".to_owned());
+    }
+    let mut out = payload.to_vec();
+    out[qtype_offset..qtype_offset + 2].copy_from_slice(&qtype.to_be_bytes());
+    Ok(out)
+}
+
+fn dns_response_has_any_ip(response: &[u8]) -> Result<bool, String> {
+    let response = DnsPacketView::parse(response)
+        .map_err(|err| format!("parse DNS response answers: {err}"))?;
+    for answer in response.answers() {
+        let answer = answer.map_err(|err| format!("read DNS response answer: {err}"))?;
+        if answer.ip().is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn resolve_dns_response_routing(
@@ -564,6 +944,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     const QUERY: &[u8] = &[
         0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
@@ -654,6 +1035,13 @@ mod tests {
         response
     }
 
+    fn response_with_question_qtype(mut response: Vec<u8>, qtype: u16) -> Vec<u8> {
+        let view = DnsPacketView::parse(&response).unwrap();
+        let qtype_offset = view.answer_offset() - 4;
+        response[qtype_offset..qtype_offset + 2].copy_from_slice(&qtype.to_be_bytes());
+        response
+    }
+
     fn domain_routing_test_matcher() -> RoutingMatcher {
         RoutingMatcher::from_fixture_value(&serde_json::json!({
             "domain_sets": [
@@ -671,11 +1059,14 @@ mod tests {
     fn resident_dns_domain_routing_update_plan_records_accepted_response_ips() {
         let matcher = domain_routing_test_matcher();
         let mut bitmap_buffer = Vec::new();
+        let response = a_response([203, 0, 113, 42]);
+        let cache_plan = build_response_cache_plan_from_packet(1_700_000_000, &response, None)
+            .unwrap()
+            .unwrap();
         let plan = build_resident_dns_domain_routing_update_plan(
             &matcher,
             &mut bitmap_buffer,
-            1_700_000_000,
-            &a_response([203, 0, 113, 42]),
+            &cache_plan,
         )
         .unwrap()
         .unwrap();
@@ -699,16 +1090,77 @@ mod tests {
         response[17] = b'l';
         response[18] = b'i';
         response[19] = b'd';
+        let cache_plan = build_response_cache_plan_from_packet(1_700_000_000, &response, None)
+            .unwrap()
+            .unwrap();
 
         let plan = build_resident_dns_domain_routing_update_plan(
             &matcher,
             &mut bitmap_buffer,
-            1_700_000_000,
-            &response,
+            &cache_plan,
         )
         .unwrap();
 
         assert_eq!(plan, None);
+    }
+
+    #[test]
+    fn resident_dns_response_cache_honors_fixed_domain_ttl() {
+        let request = DnsPacketView::parse(QUERY).unwrap();
+        let mut plan = ResidentDnsPlan::asis(0);
+        plan.fixed_domain_ttl = Arc::new(BTreeMap::from([("example.com".to_owned(), 0)]));
+
+        record_accepted_dns_response(&plan, &a_response([203, 0, 113, 42])).unwrap();
+
+        assert!(
+            plan.cache
+                .lookup_response(&request, false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            plan.cache
+                .lookup_response(&request, true)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn resident_dns_ipversion_prefer_rejects_non_preferred_when_preferred_has_ip() {
+        let mut plan = ResidentDnsPlan::asis(0);
+        plan.ipversion_prefer = Some(DNS_QTYPE_A);
+        record_accepted_dns_response(&plan, &a_response([203, 0, 113, 42])).unwrap();
+        record_accepted_dns_response(
+            &plan,
+            &response_with_question_qtype(a_response([198, 51, 100, 42]), DNS_QTYPE_AAAA),
+        )
+        .unwrap();
+
+        let aaaa_query = query_with_qtype(DNS_QTYPE_AAAA);
+        let response =
+            handle_resident_dns_udp_async(&plan, "127.0.0.1:53".parse().unwrap(), &aaaa_query)
+                .await
+                .unwrap();
+
+        assert_eq!(&response[0..2], &[0x12, 0x34]);
+        assert_eq!(u16::from_be_bytes([response[2], response[3]]) & 0x000f, 0);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+    }
+
+    #[tokio::test]
+    async fn resident_dns_inflight_lock_serializes_same_key() {
+        let cache = ResidentDnsRuntimeCache::default();
+        let key = DnsCacheKey::new("example.com.", DNS_QTYPE_A, 1);
+        let first = cache.lock_key(key.clone()).await.unwrap();
+        let second = cache.lock_key(key);
+        assert!(
+            time::timeout(Duration::from_millis(10), second)
+                .await
+                .is_err()
+        );
+        drop(first);
+        assert!(cache.inflight.lock().unwrap().is_empty());
     }
 
     #[test]
