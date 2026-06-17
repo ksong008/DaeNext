@@ -16,8 +16,8 @@ pub(super) fn run_contract() -> LoaderOutput {
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "rust-aya-bpf-loader-native-runtime-contract",
-            "binary": "dae-aya-bpf-loader",
+            "name": "rust-ebpf-loader-native-runtime-contract",
+            "binary": "dae-ebpf-loader",
             "compiled_native_ebpf": cfg!(feature = "native-ebpf"),
             "scope": "Rust/Aya loads the selected daemon eBPF object and pins all maps/programs for native control-plane ownership",
             "native_userspace_outbound_ready": true,
@@ -82,7 +82,7 @@ pub(super) fn run_cgroup_monitor_contract() -> LoaderOutput {
         "{}\n",
         json!({
             "name": "rust-cgroup-pname-monitor-attach-contract",
-            "binary": "dae-aya-bpf-loader",
+            "binary": "dae-ebpf-loader",
             "scope": "Rust attaches pinned cgroup pname monitor programs and pins bpf_link objects for native control-plane lifetime ownership",
             "native_pname_routing_semantics_ready": true,
             "pname_source": "bpf_get_current_comm",
@@ -123,7 +123,7 @@ pub(super) fn run_tc_attach_contract() -> LoaderOutput {
         "{}\n",
         json!({
             "name": "rust-tc-tcx-attach-pin-contract",
-            "binary": "dae-aya-bpf-loader",
+            "binary": "dae-ebpf-loader",
             "scope": "Rust/Aya attaches pinned TC sched classifier programs for LAN/WAN/dae0/dae0peer and pins TCX bpf_link lifetime for native control-plane cleanup",
             "native_userspace_outbound_ready": true,
             "native_routing_dns_sniff_group_ready": true,
@@ -152,7 +152,7 @@ pub(super) fn run_tproxy_listener_contract() -> LoaderOutput {
         "{}\n",
         json!({
             "name": "rust-tproxy-listener-sockmap-handoff-contract",
-            "binary": "dae-aya-bpf-loader",
+            "binary": "dae-ebpf-loader",
             "scope": "Rust opens TCP/UDP tproxy listeners in the caller netns, writes listen_socket_map key 0/1, and hands listener fds back to native userspace handlers",
             "native_userspace_tcp_udp_handlers_ready": true,
             "native_routing_dns_sniff_group_outbound_ready": true,

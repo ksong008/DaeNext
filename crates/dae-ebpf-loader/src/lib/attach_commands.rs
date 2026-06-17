@@ -106,7 +106,7 @@ pub(crate) fn run_tc_attach_pin(options: TcAttachPinOptions) -> LoaderOutput {
 
 #[cfg(not(feature = "native-ebpf"))]
 pub(crate) fn run_tc_attach_pin(_options: TcAttachPinOptions) -> LoaderOutput {
-    LoaderOutput::error("tc-attach attach-pin requires dae-aya-bpf-loader feature native-ebpf")
+    LoaderOutput::error("tc-attach attach-pin requires dae-ebpf-loader feature native-ebpf")
 }
 
 pub(crate) fn run_tproxy_listener_open_handoff(

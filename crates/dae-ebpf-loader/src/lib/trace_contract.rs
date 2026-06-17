@@ -5,7 +5,7 @@ pub(super) fn run_trace_loader_contract() -> LoaderOutput {
         "{}\n",
         json!({
             "name": "rust-aya-trace-loader-contract",
-            "binary": "dae-aya-bpf-loader",
+            "binary": "dae-ebpf-loader",
             "compiled_native_ebpf": cfg!(feature = "native-ebpf"),
             "scope": "Rust/Aya trace CO-RE side-load contract is retained for audit but temporarily disabled",
             "core_sideload_enabled": gate.enabled,

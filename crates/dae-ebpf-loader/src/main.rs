@@ -5,7 +5,7 @@ fn main() {
     if args == ["connectivity-map", "serve"] {
         let stdin = io::stdin();
         let stdout = io::stdout();
-        if let Err(err) = dae_aya_bpf_loader::run_connectivity_map_serve(
+        if let Err(err) = dae_ebpf_loader::run_connectivity_map_serve(
             BufReader::new(stdin.lock()),
             stdout.lock(),
         ) {
@@ -18,7 +18,7 @@ fn main() {
         let stdin = io::stdin();
         let stdout = io::stdout();
         if let Err(err) =
-            dae_aya_bpf_loader::run_connectivity_map_serve_binary(stdin.lock(), stdout.lock())
+            dae_ebpf_loader::run_connectivity_map_serve_binary(stdin.lock(), stdout.lock())
         {
             let _ = writeln!(io::stderr(), "connectivity-map serve-binary failed: {err}");
             std::process::exit(1);
@@ -28,7 +28,7 @@ fn main() {
     if args == ["domain-routing-map", "serve"] {
         let stdin = io::stdin();
         let stdout = io::stdout();
-        if let Err(err) = dae_aya_bpf_loader::run_domain_routing_map_serve(
+        if let Err(err) = dae_ebpf_loader::run_domain_routing_map_serve(
             BufReader::new(stdin.lock()),
             stdout.lock(),
         ) {
@@ -40,7 +40,7 @@ fn main() {
     if args == ["domain-routing-map", "serve-owner"] {
         let stdin = io::stdin();
         let stdout = io::stdout();
-        if let Err(err) = dae_aya_bpf_loader::run_domain_routing_map_owner_serve(
+        if let Err(err) = dae_ebpf_loader::run_domain_routing_map_owner_serve(
             BufReader::new(stdin.lock()),
             stdout.lock(),
         ) {
@@ -50,15 +50,15 @@ fn main() {
         return;
     }
     if args == ["routing-map", "apply"] {
-        run_json_stdin_command(dae_aya_bpf_loader::run_routing_map_apply_json);
+        run_json_stdin_command(dae_ebpf_loader::run_routing_map_apply_json);
         return;
     }
     if args == ["domain-routing-map", "apply"] {
-        run_json_stdin_command(dae_aya_bpf_loader::run_domain_routing_map_apply_json);
+        run_json_stdin_command(dae_ebpf_loader::run_domain_routing_map_apply_json);
         return;
     }
 
-    let output = dae_aya_bpf_loader::run_with_args(args);
+    let output = dae_ebpf_loader::run_with_args(args);
     if !output.stdout.is_empty() {
         print!("{}", output.stdout);
     }
@@ -68,7 +68,7 @@ fn main() {
     std::process::exit(output.exit_code);
 }
 
-fn run_json_stdin_command(handler: fn(&str) -> dae_aya_bpf_loader::LoaderOutput) {
+fn run_json_stdin_command(handler: fn(&str) -> dae_ebpf_loader::LoaderOutput) {
     let mut input = String::new();
     if let Err(err) = io::stdin().read_to_string(&mut input) {
         let _ = writeln!(io::stderr(), "read stdin failed: {err}");

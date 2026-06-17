@@ -14,9 +14,9 @@ pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> Loade
         Some("contract") if args.len() == 1 => run_contract(),
         Some("load-pin") => run_load_pin_command(&args[1..]),
         Some(command) => {
-            LoaderOutput::usage(format!("unsupported dae-aya-bpf-loader command: {command}"))
+            LoaderOutput::usage(format!("unsupported dae-ebpf-loader command: {command}"))
         }
-        None => LoaderOutput::usage("missing dae-aya-bpf-loader command"),
+        None => LoaderOutput::usage("missing dae-ebpf-loader command"),
     }
 }
 
@@ -41,7 +41,7 @@ pub(super) fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
             Err(err) => LoaderOutput::usage(err),
         },
         Some("serve") if args.len() == 1 => LoaderOutput::usage(
-            "connectivity-map serve requires the dae-aya-bpf-loader stdio entrypoint",
+            "connectivity-map serve requires the dae-ebpf-loader stdio entrypoint",
         ),
         Some(subcommand) => LoaderOutput::usage(format!(
             "unsupported connectivity-map subcommand: {subcommand}"
@@ -53,13 +53,13 @@ pub(super) fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
 pub(super) fn run_domain_routing_map_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("apply") if args.len() == 1 => LoaderOutput::usage(
-            "domain-routing-map apply requires the dae-aya-bpf-loader stdio entrypoint",
+            "domain-routing-map apply requires the dae-ebpf-loader stdio entrypoint",
         ),
         Some("serve") if args.len() == 1 => LoaderOutput::usage(
-            "domain-routing-map serve requires the dae-aya-bpf-loader stdio entrypoint",
+            "domain-routing-map serve requires the dae-ebpf-loader stdio entrypoint",
         ),
         Some("serve-owner") if args.len() == 1 => LoaderOutput::usage(
-            "domain-routing-map serve-owner requires the dae-aya-bpf-loader stdio entrypoint",
+            "domain-routing-map serve-owner requires the dae-ebpf-loader stdio entrypoint",
         ),
         Some(subcommand) => LoaderOutput::usage(format!(
             "unsupported domain-routing-map subcommand: {subcommand}"
@@ -71,7 +71,7 @@ pub(super) fn run_domain_routing_map_command(args: &[String]) -> LoaderOutput {
 pub(super) fn run_routing_map_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("apply") if args.len() == 1 => LoaderOutput::usage(
-            "routing-map apply requires the dae-aya-bpf-loader stdio entrypoint",
+            "routing-map apply requires the dae-ebpf-loader stdio entrypoint",
         ),
         Some(subcommand) => {
             LoaderOutput::usage(format!("unsupported routing-map subcommand: {subcommand}"))

@@ -115,5 +115,5 @@ pub(super) fn write_embedded_native_aya_object() -> Result<(PathBuf, impl FnOnce
 
 #[cfg(not(feature = "native-ebpf"))]
 pub(super) fn run_load_pin(_options: BpfLoaderLoadPinOptions) -> LoaderOutput {
-    LoaderOutput::error("bpf-loader load-pin requires dae-aya-bpf-loader feature native-ebpf")
+    LoaderOutput::error("bpf-loader load-pin requires dae-ebpf-loader feature native-ebpf")
 }

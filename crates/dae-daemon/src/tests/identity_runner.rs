@@ -74,7 +74,7 @@ pub(super) fn daemon_runner_bpf_loader_contract_outputs_json() {
     let json: Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(
         json["name"].as_str().unwrap(),
-        "rust-aya-bpf-loader-native-runtime-contract"
+        "rust-ebpf-loader-native-runtime-contract"
     );
     assert!(
         json["native_bpf_loader_enabled_for_product"]

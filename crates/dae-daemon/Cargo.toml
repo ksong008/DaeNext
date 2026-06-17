@@ -9,7 +9,7 @@ repository.workspace = true
 # Default Rust-native daemon builds include the native Aya/eBPF loader and use
 # the allocator selected by live RSS A/B.
 default = ["native-ebpf", "allocator-jemalloc"]
-native-ebpf = ["dae-aya-bpf-loader/native-ebpf", "dae-ebpf-support/aya-loader"]
+native-ebpf = ["dae-ebpf-loader/native-ebpf", "dae-ebpf-support/aya-loader"]
 allocator-system = []
 allocator-jemalloc = [
     "dep:tikv-jemallocator",
@@ -18,7 +18,7 @@ allocator-jemalloc = [
 ]
 
 [dependencies]
-dae-aya-bpf-loader.workspace = true
+dae-ebpf-loader.workspace = true
 dae-config.workspace = true
 dae-control.workspace = true
 dae-core-types.workspace = true
