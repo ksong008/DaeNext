@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::super::*;
+    use dae_config::{Config, DynamicFunctionValue, Function, Global, Routing, RoutingRule};
     use serde_json::json;
 
     #[test]
@@ -39,6 +40,14 @@ mod tests {
             json!(
                 "ingress: wan_ingress before lan_ingress; egress: lan_egress before wan_egress; tc-netlink backend switch keeps native priority/handle"
             )
+        );
+        assert_eq!(
+            policy["role_attach_plan"]["tcPriorityOrdering"][0]["roles"][0]["role"],
+            json!("wan_ingress")
+        );
+        assert_eq!(
+            policy["role_attach_plan"]["tcPriorityOrdering"][1]["roles"][0]["role"],
+            json!("lan_egress")
         );
     }
 
@@ -148,12 +157,19 @@ mod tests {
                 "pname": {
                     "source": "current_comm",
                     "coreEnabled": false,
-                    "currentTaskArgvEnabled": false
+                    "currentTaskArgvEnabled": false,
+                    "officialArgvSemanticsImplemented": false
                 },
                 "linkLifecycle": {
                     "status": "owned-by-aya-runtime",
                     "releaseBoundary": "resident-runtime-reset"
                 }
+            },
+            "resident_interface_monitor": {
+                "status": "pass",
+                "reattachImplemented": false,
+                "startupLazyBindAllowed": false,
+                "interfaces": []
             },
             "executed_steps": [],
             "resident_lan_routing": []
@@ -169,11 +185,48 @@ mod tests {
             evidence["cgroupLinkLifecycle"]["releaseBoundary"],
             json!("resident-runtime-reset")
         );
+        assert_eq!(
+            evidence["residentInterfaceState"]["reattachImplemented"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn resident_routing_process_name_requirement_detects_pname_rules() {
+        let mut config = minimal_resident_config();
+        assert!(!resident_routing_requires_process_name(&config));
+        config.routing.rules.push(RoutingRule {
+            and_functions: vec![Function {
+                name: "pname".to_owned(),
+                not: false,
+                params: Vec::new(),
+            }],
+            outbound: Function {
+                name: "direct".to_owned(),
+                not: false,
+                params: Vec::new(),
+            },
+        });
+        assert!(resident_routing_requires_process_name(&config));
     }
 
     #[cfg(feature = "native-ebpf")]
     #[test]
     fn resident_native_backend_defaults_to_auto() {
         assert_eq!(default_native_backend(), AttachBackend::Auto);
+    }
+
+    fn minimal_resident_config() -> Config {
+        Config {
+            global: Global::default(),
+            subscription: Vec::new(),
+            node: Vec::new(),
+            group: Vec::new(),
+            routing: Routing {
+                rules: Vec::new(),
+                fallback: DynamicFunctionValue::String("direct".to_owned()),
+            },
+            dns: Default::default(),
+        }
     }
 }

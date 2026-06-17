@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 
 use crate::config_validate::load_config_file;
 use crate::production_runtime_owner::{
-    ResidentProductionRuntime, start_resident_production_runtime,
+    ResidentProductionRuntime, configured_lan_ifaces, configured_wan_ifaces,
+    start_resident_production_runtime, validate_resident_runtime_interfaces,
 };
 
 mod types;

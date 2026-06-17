@@ -39,10 +39,35 @@ pub(super) fn resident_interface_attach_options(
             },
             "same_interface_tc_netlink_applies_to_all_tc_roles": false,
             "same_interface_tcx_order_policy": "ingress: wan_ingress before lan_ingress; egress: lan_egress before wan_egress; tc-netlink backend switch keeps native priority/handle",
+            "role_attach_plan": resident_interface_role_attach_plan(),
             "dae0_dae0peer_link_layer_unchanged": true,
             "dae0_dae0peer_attach_backend_unchanged": true,
         }),
     )
+}
+
+fn resident_interface_role_attach_plan() -> Value {
+    json!({
+        "schemaVersion": 1,
+        "startupOrdering": "resident startup attaches physical interface roles before resident dataplane workers start",
+        "tcPriorityOrdering": [
+            {
+                "direction": "ingress",
+                "roles": [
+                    {"role": "wan_ingress", "priority": 1, "handleMinor": 2},
+                    {"role": "lan_ingress", "priority": 2, "handleMinor": 4}
+                ]
+            },
+            {
+                "direction": "egress",
+                "roles": [
+                    {"role": "lan_egress", "priority": 1, "handleMinor": 2},
+                    {"role": "wan_egress", "priority": 2, "handleMinor": 4}
+                ]
+            }
+        ],
+        "tcxOrderEvidence": "native attach reports tcx_order_verified and tcx_program_order per role",
+    })
 }
 
 pub(super) fn overlapping_interfaces(lan_ifaces: &[String], wan_ifaces: &[String]) -> Vec<String> {

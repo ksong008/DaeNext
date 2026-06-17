@@ -138,42 +138,14 @@ pub(super) fn handle_reload(
 }
 
 pub(crate) fn validate_resident_runtime_reload_config(config: &Config) -> Result<(), String> {
-    let lan_ifaces = config.global.lan_interface.as_deref().unwrap_or(&[]);
-    if lan_ifaces.iter().all(|iface| iface.trim().is_empty()) {
-        return Err(
-            "resident reload rejected before current runtime swap: global.lan_interface must specify at least one existing LAN interface"
-                .to_owned(),
-        );
-    }
-
-    for iface in lan_ifaces {
-        let iface = iface.trim();
-        if iface.is_empty() || iface == "auto" {
-            return Err(format!(
-                "resident reload rejected before current runtime swap: global.lan_interface must name an existing LAN interface, got {iface:?}"
-            ));
-        }
-        let sysfs = Path::new("/sys/class/net").join(iface);
-        if !sysfs.exists() {
-            return Err(format!(
-                "resident reload rejected before current runtime swap: configured LAN interface {iface:?} does not exist"
-            ));
-        }
-    }
-
-    for iface in config.global.wan_interface.iter().flatten() {
-        let iface = iface.trim();
-        if iface.is_empty() || iface == "auto" {
-            continue;
-        }
-        let sysfs = Path::new("/sys/class/net").join(iface);
-        if !sysfs.exists() {
-            return Err(format!(
-                "resident reload rejected before current runtime swap: configured WAN interface {iface:?} does not exist"
-            ));
-        }
-    }
-    Ok(())
+    let lan_ifaces = configured_lan_ifaces(config);
+    let wan_ifaces = configured_wan_ifaces(config)
+        .map_err(|err| format!("resident reload rejected before current runtime swap: {err}"))?;
+    validate_resident_runtime_interfaces(
+        &lan_ifaces,
+        &wan_ifaces,
+        "resident reload rejected before current runtime swap",
+    )
 }
 
 pub(super) fn swap_runtime_with_restore<R>(
