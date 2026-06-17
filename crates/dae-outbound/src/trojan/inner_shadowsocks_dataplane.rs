@@ -39,6 +39,8 @@ pub struct TrojanGoInnerShadowsocksRequest {
     pub inner_shadowsocks_request_metadata_present: bool,
 }
 
+// Trojan-Go transport dataplane tests keep layered protocol inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn tcp_exchange_over_inner_shadowsocks_stream<S>(
     stream: &mut S,
     proxy: &str,

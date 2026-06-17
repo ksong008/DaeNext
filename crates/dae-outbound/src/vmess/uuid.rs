@@ -1,7 +1,7 @@
 use sha1::{Digest, Sha1};
 
 pub fn normalize_vmess_uuid(input: &str) -> String {
-    let len = input.as_bytes().len();
+    let len = input.len();
     if !(32..=36).contains(&len) {
         return string_to_uuid5(input);
     }

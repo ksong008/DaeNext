@@ -158,25 +158,13 @@ impl Default for Routing {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Dns {
     pub ipversion_prefer: i32,
     pub fixed_domain_ttl: Vec<KeyableString>,
     pub upstream: Vec<KeyableString>,
     pub routing: DnsRouting,
     pub bind: String,
-}
-
-impl Default for Dns {
-    fn default() -> Self {
-        Self {
-            ipversion_prefer: 0,
-            fixed_domain_ttl: Vec::new(),
-            upstream: Vec::new(),
-            routing: DnsRouting::default(),
-            bind: String::new(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Default)]

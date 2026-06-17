@@ -93,6 +93,8 @@ pub fn tcp_exchange_over_xhttp_h3_loopback(
     ))
 }
 
+// Report assembly keeps xHTTP/H3 evidence fields explicit.
+#[allow(clippy::too_many_arguments)]
 fn vless_xhttp_h3_report(
     proxy: &str,
     target: &str,

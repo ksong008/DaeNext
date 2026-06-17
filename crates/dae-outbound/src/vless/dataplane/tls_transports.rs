@@ -69,6 +69,8 @@ pub struct VlessHttpsHttpUpgradeTlsExchangeReport {
     pub true_dataplane: bool,
 }
 
+// VLESS transport dataplane tests keep layered protocol inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn tcp_exchange_over_wss_tls_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,
@@ -136,6 +138,8 @@ where
     })
 }
 
+// VLESS transport dataplane tests keep layered protocol inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn tcp_exchange_over_https_httpupgrade_tls_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,

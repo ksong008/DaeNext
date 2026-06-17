@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(routing.match_type, ACTIVE_TCP_MATCH_TYPE_FALLBACK);
         assert_eq!(routing.outbound, ACTIVE_TCP_OUTBOUND_PROXY);
         assert!(!routing.must);
-        assert!(ACTIVE_TCP_DEFAULT_MPTCP);
+        const { assert!(ACTIVE_TCP_DEFAULT_MPTCP) };
 
         let value = active_tcp_routing_fallback_value(&routing);
         assert_eq!(value[17], ACTIVE_TCP_MATCH_TYPE_FALLBACK);

@@ -40,14 +40,13 @@ fn main() {
         b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
     ];
     bench("dns_validate_response", iters, || {
-        black_box(
-            validate_dns_packet_response_for_request(
-                black_box(&req),
-                black_box(Some(resp.as_slice())),
-                black_box(true),
-            )
-            .unwrap(),
-        );
+        validate_dns_packet_response_for_request(
+            black_box(&req),
+            black_box(Some(resp.as_slice())),
+            black_box(true),
+        )
+        .unwrap();
+        black_box(());
     });
 
     let payload = [0x12, 0x34, 0x56, 0x78];

@@ -71,6 +71,6 @@ fn case_anytls_reuse_underlay_preserves_tcp_mark_mptcp_boundary() {
     assert_eq!(underlay.underlay_network, "tcp");
     assert_eq!(underlay.underlay_mark, 1234);
     assert!(underlay.underlay_mptcp);
-    assert!(anytls::contract::IDLE_SESSION_REUSE_MAP);
-    assert!(anytls::contract::SESSION_COUNTER);
+    const { assert!(anytls::contract::IDLE_SESSION_REUSE_MAP) };
+    const { assert!(anytls::contract::SESSION_COUNTER) };
 }

@@ -387,7 +387,7 @@ impl OutboundConnectivityMapOwner {
         let needs_open = self
             .map_fd
             .as_ref()
-            .map_or(true, |(cached_map_id, _)| *cached_map_id != map_id);
+            .is_none_or(|(cached_map_id, _)| *cached_map_id != map_id);
         if needs_open {
             self.map_fd = Some((map_id, open_map_fd(map_id)?));
         }

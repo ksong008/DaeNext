@@ -44,6 +44,8 @@ pub struct TrojanWebSocketRequest {
     pub websocket_request_frame_len: usize,
 }
 
+// Trojan-Go transport dataplane tests keep layered protocol inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn tcp_exchange_over_wss_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,

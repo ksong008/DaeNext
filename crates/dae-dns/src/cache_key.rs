@@ -89,10 +89,7 @@ fn hash_canonical_wire_name_into<H: Hasher>(wire: &[u8], state: &mut H) {
     let mut offset = 0;
     let mut wrote_label = false;
     let mut wrote_terminal = false;
-    loop {
-        let Some(&len) = wire.get(offset) else {
-            break;
-        };
+    while let Some(&len) = wire.get(offset) {
         offset += 1;
         if len == 0 || len & 0xc0 != 0 || len > 63 {
             state.write_u8(b'.');

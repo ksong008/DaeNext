@@ -34,7 +34,8 @@ pub(super) const fn admitted_row(
     }
 }
 
-#[allow(dead_code)]
+// Registry row constructors keep each matrix dimension explicit.
+#[allow(dead_code, clippy::too_many_arguments)]
 pub(super) const fn blocked_row(
     shape_id: &'static str,
     protocol_family: &'static str,
@@ -106,6 +107,8 @@ pub(super) const fn scoped_evidence_admitted_row(
     }
 }
 
+// Registry row constructors keep each matrix dimension explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) const fn scoped_evidence_capability_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
@@ -247,6 +250,8 @@ pub(super) const fn scoped_evidence_legacy_import_admitted_row(
     }
 }
 
+// Registry row constructors keep each matrix dimension explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) const fn not_supported_row(
     shape_id: &'static str,
     protocol_family: &'static str,

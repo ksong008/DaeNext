@@ -171,7 +171,7 @@ mod tests {
         assert!(sniff_used);
         assert!(requires_outbound_adapter);
         assert_eq!(plan.first_choose.dial_target, "example.com:443");
-        assert_eq!(plan.first_choose.should_reroute, true);
+        assert!(plan.first_choose.should_reroute);
         assert_eq!(plan.final_outbound, OUTBOUND_DIRECT);
         assert_eq!(plan.final_mark, 4321);
         assert!(plan.userspace_route_executed);

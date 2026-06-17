@@ -54,5 +54,5 @@ fn case_utls_fingerprint_aliases_match_native_boundaries() {
 
 #[test]
 fn case_utls_wire_stack_remains_deferred() {
-    assert!(shared_transport::U_TLS_WIRE_STACK_DEFERRED);
+    const { assert!(shared_transport::U_TLS_WIRE_STACK_DEFERRED) };
 }

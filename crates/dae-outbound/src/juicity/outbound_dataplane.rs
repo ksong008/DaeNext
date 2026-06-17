@@ -260,9 +260,11 @@ pub fn network_type_label(network_type: NetworkType) -> String {
     }
 }
 
+type JuicityDialerPool = (Vec<ParsedJuicityDialer>, Vec<Dialer>, Vec<String>);
+
 fn build_juicity_dialer_pool(
     options: &JuicityOutboundDataplaneOptions,
-) -> Result<(Vec<ParsedJuicityDialer>, Vec<Dialer>, Vec<String>), OutboundError> {
+) -> Result<JuicityDialerPool, OutboundError> {
     let mut parsed = Vec::new();
     let mut dialers = Vec::new();
     let mut skipped = Vec::new();

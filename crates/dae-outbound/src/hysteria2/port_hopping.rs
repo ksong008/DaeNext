@@ -87,13 +87,13 @@ pub fn parse_port_union(port_expr: &str) -> Result<Vec<u16>, OutboundError> {
     ranges.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     let mut normalized = Vec::<(u16, u16)>::new();
     for (start, end) in ranges {
-        if let Some(last) = normalized.last_mut() {
-            if u32::from(start) <= u32::from(last.1) + 1 {
-                if end > last.1 {
-                    last.1 = end;
-                }
-                continue;
+        if let Some(last) = normalized.last_mut()
+            && u32::from(start) <= u32::from(last.1) + 1
+        {
+            if end > last.1 {
+                last.1 = end;
             }
+            continue;
         }
         normalized.push((start, end));
     }

@@ -124,7 +124,9 @@ fn read_http_head(stream: &mut impl std::io::Read) -> Result<Vec<u8>, String> {
     }
 }
 
-fn parse_http_head(text: &str) -> Result<(&str, Vec<(String, String)>), String> {
+type HttpHead<'a> = (&'a str, Vec<(String, String)>);
+
+fn parse_http_head(text: &str) -> Result<HttpHead<'_>, String> {
     let (head, _) = text
         .split_once("\r\n\r\n")
         .ok_or_else(|| "fixture missing http header terminator".to_owned())?;

@@ -230,10 +230,10 @@ fn parse_allow_insecure(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_
         "allowinsecure",
         "skipVerify",
     ] {
-        if let Some(value) = query_value(query, key) {
-            if parse_bool(&value).unwrap_or(false) {
-                return true;
-            }
+        if let Some(value) = query_value(query, key)
+            && parse_bool(&value).unwrap_or(false)
+        {
+            return true;
         }
     }
     false
@@ -266,7 +266,7 @@ fn escape_userinfo(input: &str) -> String {
 }
 
 fn hex_decode(input: &str) -> Result<Vec<u8>, OutboundError> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err(OutboundError::BadJuicity("odd hex length".to_owned()));
     }
     input

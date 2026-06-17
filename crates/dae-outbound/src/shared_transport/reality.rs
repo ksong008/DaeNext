@@ -221,7 +221,7 @@ fn fixed_hex<const N: usize>(input: &str, err: &str) -> Result<[u8; N], Outbound
 }
 
 fn hex_decode(input: &str) -> Result<Vec<u8>, OutboundError> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err(OutboundError::BadSharedTransport(
             "odd hex length".to_owned(),
         ));

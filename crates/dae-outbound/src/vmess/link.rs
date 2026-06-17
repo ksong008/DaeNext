@@ -235,7 +235,7 @@ fn decode_base64_with(
     engine: &base64::engine::GeneralPurpose,
 ) -> Result<String, OutboundError> {
     let mut padded = input.trim().to_owned();
-    if padded.len() % 4 != 0 {
+    if !padded.len().is_multiple_of(4) {
         padded.extend(std::iter::repeat_n('=', 4 - padded.len() % 4));
     }
     let decoded = engine
