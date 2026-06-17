@@ -438,6 +438,23 @@ pub(super) async fn handle_resident_dns_udp_async(
     original_dst: SocketAddr,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
+    handle_resident_dns_request_async(plan, original_dst, payload, true).await
+}
+
+pub(super) async fn handle_resident_dns_local_async(
+    plan: &ResidentDnsPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    handle_resident_dns_request_async(plan, original_dst, payload, false).await
+}
+
+async fn handle_resident_dns_request_async(
+    plan: &ResidentDnsPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+    allow_asis: bool,
+) -> Result<Vec<u8>, String> {
     let request =
         DnsPacketView::parse(payload).map_err(|err| format!("parse DNS request: {err}"))?;
     if request.response() {
@@ -449,6 +466,12 @@ pub(super) async fn handle_resident_dns_udp_async(
     let action = select_request_action(plan, &request)?;
     match action {
         ResidentDnsRequestAction::AsIs => {
+            if !allow_asis {
+                return Err(
+                    "dns request routing cannot use \"asis\" for locally bound dns listener; configure an explicit upstream instead"
+                        .to_owned(),
+                );
+            }
             let response = forward_dns_udp_async(original_dst, payload, plan.mark)
                 .await
                 .map_err(|err| format!("forward DNS asis to {original_dst}: {err}"))?;
@@ -1117,6 +1140,15 @@ mod tests {
                 .unwrap_err()
                 .contains("QuestionMismatch")
         );
+    }
+
+    #[tokio::test]
+    async fn resident_dns_local_listener_rejects_asis() {
+        let plan = ResidentDnsPlan::asis(0);
+        let err = handle_resident_dns_local_async(&plan, "127.0.0.1:8053".parse().unwrap(), QUERY)
+            .await
+            .unwrap_err();
+        assert!(err.contains("cannot use \"asis\" for locally bound dns listener"));
     }
 
     fn geosite_list(entries: &[Vec<u8>]) -> Vec<u8> {
