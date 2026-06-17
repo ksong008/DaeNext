@@ -1,21 +1,17 @@
-#[cfg(test)]
-mod tests {
+#[path = "tests/loader_contracts.rs"]
+mod loader_contracts;
 
-    #[path = "loader_contracts.rs"]
-    mod loader_contracts;
+#[path = "tests/trace_loader.rs"]
+mod trace_loader;
 
-    #[path = "trace_loader.rs"]
-    mod trace_loader;
+#[path = "tests/attach_commands.rs"]
+mod attach_commands;
 
-    #[path = "attach_commands.rs"]
-    mod attach_commands;
+#[path = "tests/map_parsers.rs"]
+mod map_parsers;
 
-    #[path = "map_parsers.rs"]
-    mod map_parsers;
+#[path = "tests/serve_handlers.rs"]
+mod serve_handlers;
 
-    #[path = "serve_handlers.rs"]
-    mod serve_handlers;
-
-    #[path = "primitives.rs"]
-    mod primitives;
-}
+#[path = "tests/primitives.rs"]
+mod primitives;

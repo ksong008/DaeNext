@@ -87,6 +87,8 @@ pub mod native_ebpf_build {
             .env_remove("CARGO")
             .env_remove("CARGO_ENCODED_RUSTFLAGS")
             .env_remove("RUSTC")
+            .env_remove("RUSTC_WRAPPER")
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
             .env_remove("RUSTDOC")
             .env_remove("RUSTFLAGS")
             .arg("build")
