@@ -1,8 +1,8 @@
 use std::time::Instant;
 
-use dae_dataline_bench::{bench_magic_network, bench_udp_trim};
+use dae_datapath_bench::{bench_magic_network, bench_udp_trim};
 
-mod dae_dataline_bench {
+mod dae_datapath_bench {
     use dae_datapath::{magic_network, udp_endpoint_pool_trim_target};
     use dae_ebpf_support::TPROXY_MARK;
 
