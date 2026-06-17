@@ -55,9 +55,7 @@ scripts/release_gate.sh
 
 Formal release artifacts are defined by the GitHub Actions release workflow.
 The current DaeNext workflow publishes the `dae` Rust workspace artifact,
-source archive, manifest, and checksums. Local `daed` v2/v3 deb/rpm builds are
-allowed for install and smoke testing, but they are not formal release artifacts
-unless a release workflow publishes them.
+source archive, manifest, and checksums.
 
 The `daed` product binary release remains owned by the product release workflow
 that consumes this workspace as its Rust core.
