@@ -12,7 +12,10 @@ pub(super) fn resident_cgroup_attach_evidence(
 ) -> (bool, Value) {
     let cgroup_pname_evidence = json!({
         "source": "current_comm",
+        "fallbackSource": "bpf_get_current_comm",
+        "semantics": "non_core_task_comm",
         "coreEnabled": false,
+        "nonCoreTaskCommEnabled": true,
         "currentTaskArgvEnabled": false,
         "officialArgvSemanticsImplemented": false,
         "coreStatus": "not_implemented",
