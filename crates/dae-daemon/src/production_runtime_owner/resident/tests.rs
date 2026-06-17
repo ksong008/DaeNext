@@ -208,6 +208,52 @@ mod tests {
     }
 
     #[test]
+    fn resident_start_failure_summary_extracts_nested_failures() {
+        let report = json!({
+            "name": "resident-production-runtime",
+            "status": "fail",
+            "start_file": "/run/daed/runtime/42/resident-production-runtime-start.json",
+            "executed_steps": [
+                {
+                    "name": "create-production-netkit-pair",
+                    "status": "fail",
+                    "stderr": "netkit: unknown option \"scrub\"?\nUsage: ..."
+                }
+            ],
+            "resident_dataplane": {
+                "status": "fail",
+                "enabled": true,
+                "error": "resident dataplane plan is enabled without a default proxy group plan"
+            }
+        });
+
+        let summary = resident_start_failure_summary(&report).unwrap();
+        assert!(summary.contains("resident_dataplane"));
+        assert!(summary.contains("default proxy group plan"));
+        assert!(!summary.contains("start_file="));
+        assert!(!summary.contains("netkit: unknown option"));
+    }
+
+    #[test]
+    fn resident_start_failure_summary_falls_back_to_executed_steps() {
+        let report = json!({
+            "name": "resident-production-runtime",
+            "status": "fail",
+            "executed_steps": [
+                {
+                    "name": "attach-peer",
+                    "status": "fail",
+                    "stderr": "tc filter add failed"
+                }
+            ]
+        });
+
+        let summary = resident_start_failure_summary(&report).unwrap();
+        assert!(summary.contains("attach-peer"));
+        assert!(summary.contains("tc filter add failed"));
+    }
+
+    #[test]
     fn resident_routing_process_name_requirement_detects_pname_rules() {
         let mut config = minimal_resident_config();
         assert!(!resident_routing_requires_process_name(&config));

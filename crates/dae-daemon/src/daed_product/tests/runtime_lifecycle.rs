@@ -64,6 +64,22 @@ routing {
 }
 
 #[test]
+pub(crate) fn resident_dataplane_admission_detail_prefers_structured_error() {
+    let state = json!({
+        "residentDataplane": {
+            "enabled": true,
+            "status": "fail",
+            "error": "resident dataplane plan is enabled without a default proxy group plan"
+        }
+    });
+
+    assert_eq!(
+        resident_dataplane_admission_detail(&state),
+        "resident dataplane plan is enabled without a default proxy group plan"
+    );
+}
+
+#[test]
 pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
     let manager = ProductRuntimeManager::new();
     {
