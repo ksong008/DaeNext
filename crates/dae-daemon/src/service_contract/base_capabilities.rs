@@ -1,12 +1,12 @@
 use super::*;
 pub fn service_contract_capabilities(version: &str) -> Value {
-    let control_plane_runtime_state = dae_control::RuntimeStateReport::rust_owned_control_plane();
+    let control_plane_runtime_state = dae_runtime_control::RuntimeStateReport::rust_owned_control_plane();
     let control_plane_runtime_state_ready =
         control_plane_runtime_state.ready_for_product_control_plane();
-    let control_api_typed_report = dae_control::ControlApiTypedReport::formal_runtime_control_api();
+    let control_api_typed_report = dae_runtime_control::ControlApiTypedReport::formal_runtime_control_api();
     let control_plane_typed_report_ready = matches!(
         control_api_typed_report.status,
-        dae_control::ControlApiReportStatus::Pass
+        dae_runtime_control::ControlApiReportStatus::Pass
     ) && control_api_typed_report.runtime_overview_available
         && control_api_typed_report.reload_core_state_available
         && control_api_typed_report.domain_routing_owner_available
@@ -303,9 +303,9 @@ fn insert_runtime_state_contract_capabilities(report: &mut Value) {
 
 pub(super) fn insert_control_plane_service_contract_capabilities(
     report: &mut Value,
-    control_plane_runtime_state: dae_control::RuntimeStateReport,
+    control_plane_runtime_state: dae_runtime_control::RuntimeStateReport,
     control_plane_runtime_state_ready: bool,
-    control_api_typed_report: dae_control::ControlApiTypedReport,
+    control_api_typed_report: dae_runtime_control::ControlApiTypedReport,
     control_plane_typed_report_ready: bool,
 ) {
     if let Value::Object(report) = report {
@@ -361,9 +361,9 @@ pub(super) fn insert_control_plane_service_contract_capabilities(
         report.insert(
             "control_plane_owner_surface".to_owned(),
             json!({
-                "routing_map_owner": "dae-control::RoutingMapOwner",
-                "domain_routing_owner": "dae-control::DomainRoutingOwner",
-                "outbound_connectivity_owner": "dae-control::OutboundConnectivityOwner",
+                "routing_map_owner": "dae-runtime-control::RoutingMapOwner",
+                "domain_routing_owner": "dae-runtime-control::DomainRoutingOwner",
+                "outbound_connectivity_owner": "dae-runtime-control::OutboundConnectivityOwner",
                 "runtime_overview": "formal RuntimeOverview API surface",
                 "runtime_cache_stats": "runtime overview/cache/stats typed surface",
                 "reload_parity": "reload core state plus previous-runtime restore contract",

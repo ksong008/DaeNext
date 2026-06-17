@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
 #[cfg(test)]
-use dae_control::ip_to_key;
+use dae_runtime_control::ip_to_key;
 use dae_dns::{
     DOH_MEDIA_TYPE, DnsCacheKey, DnsDomainSet, DnsPacketView, DnsRequestMatchKind,
     DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind, DnsResponseMatchSpec,

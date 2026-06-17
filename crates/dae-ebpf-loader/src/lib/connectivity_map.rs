@@ -30,7 +30,7 @@ where
     R: BufRead,
     W: Write,
 {
-    let mut owner = dae_control::OutboundConnectivityMapOwner::default();
+    let mut owner = dae_runtime_control::OutboundConnectivityMapOwner::default();
     for line in reader.lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -49,7 +49,7 @@ where
     R: Read,
     W: Write,
 {
-    let mut owner = dae_control::OutboundConnectivityMapOwner::default();
+    let mut owner = dae_runtime_control::OutboundConnectivityMapOwner::default();
     let mut request = [0_u8; 8];
     loop {
         match reader.read_exact(&mut request) {
@@ -64,7 +64,7 @@ where
 }
 
 pub(super) fn handle_connectivity_map_serve_binary_request(
-    owner: &mut dae_control::OutboundConnectivityMapOwner,
+    owner: &mut dae_runtime_control::OutboundConnectivityMapOwner,
     request: [u8; 8],
 ) -> [u8; 8] {
     let map_id = u32::from_le_bytes([request[0], request[1], request[2], request[3]]);
@@ -96,7 +96,7 @@ pub(super) fn handle_connectivity_map_serve_binary_request(
 }
 
 pub(super) fn handle_connectivity_map_serve_line(
-    owner: &mut dae_control::OutboundConnectivityMapOwner,
+    owner: &mut dae_runtime_control::OutboundConnectivityMapOwner,
     line: &str,
 ) -> String {
     let options = match parse_connectivity_map_serve_request(line) {
@@ -127,12 +127,12 @@ pub(super) fn handle_connectivity_map_serve_line(
 pub(super) fn connectivity_map_owner_pass_response(
     map_id: u32,
     event: dae_ebpf_support::ConnectivityEvent,
-    report: dae_control::ConnectivityOwnerApplyReport,
+    report: dae_runtime_control::ConnectivityOwnerApplyReport,
 ) -> Value {
     json!({
         "status": "pass",
         "loader": "rust",
-        "owner": "dae-control",
+        "owner": "dae-runtime-control",
         "scope": "outbound-connectivity-map-update",
         "map_id": map_id,
         "map_id_changed": report.map_id_changed,

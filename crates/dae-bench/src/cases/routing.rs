@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use dae_control::{
+use dae_runtime_control::{
     LpmMapTemplate, RoutingNativeFallback, RoutingNativeMatch, RoutingNativeRule,
     build_routing_native_plan,
 };

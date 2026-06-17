@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use dae_control::{CoreFlip, ReloadCoreState, RuntimeDependencyPlan};
+use dae_runtime_control::{CoreFlip, ReloadCoreState, RuntimeDependencyPlan};
 use dae_datapath::{RouteRule, magic_network_bytes, route_loop, udp_endpoint_pool_trim_target};
 use dae_ebpf_support::{
     DaeParamInput, FeatureGateReport, PinnedMapAction, TPROXY_MARK, Version, build_dae_param,

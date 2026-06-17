@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use dae_control::{CoreFlip, ReloadCoreState};
+use dae_runtime_control::{CoreFlip, ReloadCoreState};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

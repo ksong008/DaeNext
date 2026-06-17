@@ -82,7 +82,7 @@ where
     R: BufRead,
     W: Write,
 {
-    let mut owner = dae_control::DomainRoutingOwner::default();
+    let mut owner = dae_runtime_control::DomainRoutingOwner::default();
     for line in reader.lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -111,7 +111,7 @@ pub(super) fn handle_domain_routing_map_serve_line(line: &str) -> String {
 }
 
 pub(super) fn handle_domain_routing_map_owner_serve_line(
-    owner: &mut dae_control::DomainRoutingOwner,
+    owner: &mut dae_runtime_control::DomainRoutingOwner,
     line: &str,
 ) -> String {
     match parse_domain_routing_map_owner_request(line)
@@ -122,7 +122,7 @@ pub(super) fn handle_domain_routing_map_owner_serve_line(
             "status": "error",
             "loader": "rust",
             "scope": "domain-routing-map-owner",
-            "owner": "dae-control",
+            "owner": "dae-runtime-control",
             "error": err,
         })
         .to_string(),
@@ -252,7 +252,7 @@ pub(super) fn parse_domain_routing_map_owner_request(
 }
 
 pub(super) fn apply_domain_routing_map_owner_request(
-    owner: &mut dae_control::DomainRoutingOwner,
+    owner: &mut dae_runtime_control::DomainRoutingOwner,
     request: DomainRoutingOwnerRequest,
 ) -> Result<Value, String> {
     match request {
@@ -266,14 +266,14 @@ pub(super) fn apply_domain_routing_map_owner_request(
                 .apply_owner_snapshot_by_id(
                     map_id,
                     &owner_key,
-                    dae_control::DomainRoutingOwnerSnapshot::from_keys(&bitmap, &ips),
+                    dae_runtime_control::DomainRoutingOwnerSnapshot::from_keys(&bitmap, &ips),
                 )
                 .map_err(|err| format!("domain routing owner apply failed: {err}"))?;
             Ok(json!({
                 "status": "pass",
                 "loader": "rust",
                 "scope": "domain-routing-map-owner",
-                "owner": "dae-control",
+                "owner": "dae-runtime-control",
                 "op": "sync_owner",
                 "map_id": report.map_id,
                 "map_id_changed": report.map_id_changed,
@@ -295,7 +295,7 @@ pub(super) fn apply_domain_routing_map_owner_request(
                 "status": "pass",
                 "loader": "rust",
                 "scope": "domain-routing-map-owner",
-                "owner": "dae-control",
+                "owner": "dae-runtime-control",
                 "op": "prepare_reload",
                 "map_id": report.map_id,
                 "map_id_changed": report.map_id_changed,

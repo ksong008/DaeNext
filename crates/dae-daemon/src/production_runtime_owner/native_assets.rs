@@ -15,7 +15,7 @@ const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
         id: "control-plane-native-owner",
         queue_index: 1,
         name: "Control Plane Native Owner",
-        primary_crates: &["dae-control", "dae-ebpf-support"],
+        primary_crates: &["dae-runtime-control", "dae-ebpf-support"],
         accepted_native_assets: &[
             "outbound_connectivity_state_owner",
             "domain_routing_owner_tracker",
@@ -46,7 +46,7 @@ const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
         id: "dns-native-hot-path",
         queue_index: 3,
         name: "DNS Native Hot Path",
-        primary_crates: &["dae-dns", "dae-control", "dae-routing"],
+        primary_crates: &["dae-dns", "dae-runtime-control", "dae-routing"],
         accepted_native_assets: &[
             "dns_packet_question_view",
             "dns_request_cache_hit_packet_view",

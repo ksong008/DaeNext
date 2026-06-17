@@ -1,5 +1,5 @@
 [package]
-name = "dae-control"
+name = "dae-runtime-control"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
