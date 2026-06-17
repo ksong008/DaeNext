@@ -74,6 +74,78 @@ pub(crate) fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
 }
 
 #[test]
+pub(crate) fn create_group_rejects_unsupported_policy_before_persisting() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/groups".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"name":"bad","policy":"fastest","policyParams":[]}"#.to_vec(),
+    };
+
+    let response = create_group(&state, &request);
+    assert_eq!(response.status, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported group policy"),
+        "{body}"
+    );
+    let conn = open_state_connection(&state).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM groups", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn update_group_rejects_unsupported_policy_without_mutating_existing_group() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, 'proxy', 'fixed', 3)",
+        [],
+    )
+    .unwrap();
+    let request = HttpRequest {
+        method: "PUT".to_owned(),
+        path: "/api/groups/9".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"policy":"fastest","policyParams":[]}"#.to_vec(),
+    };
+
+    let response = update_group(&state, &request, 9);
+    assert_eq!(response.status, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported group policy"),
+        "{body}"
+    );
+    let (policy, version): (String, i64) = conn
+        .query_row(
+            "SELECT policy, version FROM groups WHERE id = 9",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(policy, "fixed");
+    assert_eq!(version, 3);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn node_lists_keep_manual_subscription_and_runtime_scopes_separate() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
