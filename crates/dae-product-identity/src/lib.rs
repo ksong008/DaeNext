@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-pub const PRODUCT_CRATE_NAME: &str = "dae-product";
+pub const PRODUCT_IDENTITY_CRATE_NAME: &str = "dae-product-identity";
 pub const DAEMON_CRATE_NAME: &str = "dae-daemon";
 pub const PRODUCT_BINARY_NAME: &str = "daed";
 pub const DAEMON_MANIFEST: &str = "crates/dae-daemon/Cargo.toml";
@@ -12,7 +12,8 @@ pub fn daemon_identity(version: &str) -> Value {
     json!({
         "name": PRODUCT_BINARY_NAME,
         "crate": DAEMON_CRATE_NAME,
-        "productCrate": PRODUCT_CRATE_NAME,
+        "productCrate": PRODUCT_IDENTITY_CRATE_NAME,
+        "productIdentityCrate": PRODUCT_IDENTITY_CRATE_NAME,
         "version": version,
         "productSurface": PRODUCT_SURFACE,
         "runtimeState": RUNTIME_STATE_SCHEMA,

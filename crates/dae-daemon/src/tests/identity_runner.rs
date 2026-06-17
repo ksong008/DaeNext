@@ -4,6 +4,14 @@ pub(super) fn daemon_identity_is_production_product() {
     let report = daemon_identity("test-version");
     assert_eq!(report["name"].as_str().unwrap(), "daed");
     assert_eq!(report["crate"].as_str().unwrap(), "dae-daemon");
+    assert_eq!(
+        report["productCrate"].as_str().unwrap(),
+        "dae-product-identity"
+    );
+    assert_eq!(
+        report["productIdentityCrate"].as_str().unwrap(),
+        "dae-product-identity"
+    );
     assert_eq!(report["version"].as_str().unwrap(), "test-version");
     assert!(report["rust_daemon_identity_scaffolded"].as_bool().unwrap());
     assert!(

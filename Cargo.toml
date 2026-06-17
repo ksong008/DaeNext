@@ -4,7 +4,7 @@ members = [
     "crates/dae-config",
     "crates/dae-config-util",
     "crates/dae-daemon",
-    "crates/dae-product",
+    "crates/dae-product-identity",
     "crates/dae-control",
     "crates/dae-core-types",
     "crates/dae-bench",
@@ -64,7 +64,7 @@ dae-geodata = { path = "crates/dae-geodata" }
 dae-golden = { path = "crates/dae-golden" }
 dae-netutil = { path = "crates/dae-netutil" }
 dae-outbound = { path = "crates/dae-outbound" }
-dae-product = { path = "crates/dae-product" }
+dae-product-identity = { path = "crates/dae-product-identity" }
 dae-routing = { path = "crates/dae-routing" }
 dae-sniffing = { path = "crates/dae-sniffing" }
 dae-sysdump = { path = "crates/dae-sysdump" }
