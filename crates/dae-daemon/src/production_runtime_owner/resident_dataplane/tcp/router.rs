@@ -147,6 +147,7 @@ impl ResidentTcpRouter {
         )
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_from_routing_result(
         &self,
         peer: SocketAddr,

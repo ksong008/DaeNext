@@ -6,7 +6,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aes.workspace = true
+aes-gcm.workspace = true
 dae-config-util.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 dae-golden.workspace = true

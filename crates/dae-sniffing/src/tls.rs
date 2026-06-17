@@ -26,7 +26,21 @@ pub fn sniff_tls_sni(data: &[u8]) -> Result<&str, SniffingError> {
     if search.len() < length {
         return Err(SniffingError::NeedMore);
     }
-    extract_sni_from_tls(&search[..length])
+    sniff_tls_client_hello_sni(&search[..length])
+}
+
+pub(crate) fn sniff_tls_client_hello_sni(search: &[u8]) -> Result<&str, SniffingError> {
+    if search.len() < 4 {
+        return Err(SniffingError::NeedMore);
+    }
+    if search[0] != HANDSHAKE_TYPE_HELLO {
+        return Err(SniffingError::NotApplicable);
+    }
+    let length = ((search[1] as usize) << 16) + ((search[2] as usize) << 8) + search[3] as usize;
+    if search.len() < length + 4 {
+        return Err(SniffingError::NeedMore);
+    }
+    extract_sni_from_tls(&search[..length + 4])
 }
 
 fn extract_sni_from_tls(search: &[u8]) -> Result<&str, SniffingError> {
