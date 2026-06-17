@@ -484,7 +484,7 @@ pub fn save_routing_result(
     mark: u32,
     must: bool,
     pid_pname: *const BpfPidPname,
-) {
+) -> bool {
     let mut result = BpfRoutingResult {
         mark,
         must: must as u8,
@@ -504,12 +504,12 @@ pub fn save_routing_result(
             );
             result.pid = (*pid_pname).pid;
         }
-        let _ = helpers::bpf_map_update_elem(
+        helpers::bpf_map_update_elem(
             maps::routing_tuples_map_ptr(),
             key.cast::<c_void>(),
             ptr::addr_of!(result).cast::<c_void>(),
             BPF_ANY,
-        );
+        ) == 0
     }
 }
 
