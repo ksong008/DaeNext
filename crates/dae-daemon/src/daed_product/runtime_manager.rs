@@ -442,9 +442,10 @@ pub(super) fn start_product_runtime_instance(
         .unwrap_or(false);
     let dataplane_status = state["residentDataplane"]["status"].as_str().unwrap_or("");
     if !dataplane_enabled || dataplane_status != "pass" {
+        let dataplane_detail = resident_dataplane_admission_detail(&state);
         runtime.cleanup();
         return Err(format!(
-            "resident production runtime started without admitted userspace dataplane; set {}=1 and require resident_dataplane.status=pass before Rust daed can be the production product path",
+            "resident production runtime started without admitted userspace dataplane: {dataplane_detail}; set {}=1 and require resident_dataplane.status=pass before Rust daed can be the production product path",
             crate::service_contract::RESIDENT_DATAPLANE_ENV
         ));
     }
@@ -470,4 +471,27 @@ pub(super) fn product_runtime_fake_start_enabled() -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+pub(super) fn resident_dataplane_admission_detail(state: &Value) -> String {
+    let dataplane = &state["residentDataplane"];
+    for key in ["error", "reason", "message"] {
+        if let Some(value) = dataplane
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return value.to_owned();
+        }
+    }
+    let enabled = dataplane.get("enabled").and_then(Value::as_bool);
+    let status = dataplane.get("status").and_then(Value::as_str);
+    format!(
+        "resident_dataplane.enabled={}, resident_dataplane.status={}",
+        enabled
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_owned()),
+        status.unwrap_or("unknown")
+    )
 }

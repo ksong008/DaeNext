@@ -538,8 +538,10 @@ pub(super) fn start_with_options(
         if ok {
             Ok(())
         } else {
+            let detail = resident_start_failure_summary(&start_report)
+                .unwrap_or_else(|| "no failed startup step detail was recorded".to_owned());
             Err(format!(
-                "resident production runtime start failed; start_file={}",
+                "resident production runtime start failed: {detail}; start_file={}",
                 path_string(&start_file)
             ))
         }
