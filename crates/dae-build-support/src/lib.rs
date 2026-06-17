@@ -131,10 +131,8 @@ pub mod native_ebpf_build {
         });
         let missing = REQUIRED_BTF_SECTIONS
             .iter()
-            .filter_map(|section| {
-                (!contains_bytes(&bytes, section))
-                    .then(|| String::from_utf8_lossy(trim_section_name(section)).into_owned())
-            })
+            .filter(|section| !contains_bytes(&bytes, section))
+            .map(|section| String::from_utf8_lossy(trim_section_name(section)).into_owned())
             .collect::<Vec<_>>();
         if !missing.is_empty() {
             panic!(

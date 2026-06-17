@@ -105,7 +105,7 @@ pub(super) const fn tproxy_cgroup(
 ) -> KernelProgramCoverageLine {
     KernelProgramCoverageLine {
         surface: KernelProgramSurface::TproxyCgroup,
-        section: section,
+        section,
         rust_section: Some(section),
         program_name,
         status: KernelProgramCoverageStatus::RustNativeAdmitted,

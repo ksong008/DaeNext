@@ -13,19 +13,19 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     assert_eq!(TPROXY_MARK, fixture["tproxy_mark"].as_u64().unwrap() as u32);
 
     assert_layout::<BpfDaeParam>(&fixture, "bpfDaeParam", 24, 4);
-    assert_offset::<BpfDaeParam>(
+    assert_offset(
         &fixture,
         "bpfDaeParam",
         "tproxy_port",
         offset_of!(BpfDaeParam, tproxy_port),
     );
-    assert_offset::<BpfDaeParam>(
+    assert_offset(
         &fixture,
         "bpfDaeParam",
         "dae0peer_mac",
         offset_of!(BpfDaeParam, dae0peer_mac),
     );
-    assert_offset::<BpfDaeParam>(
+    assert_offset(
         &fixture,
         "bpfDaeParam",
         "has_bpf_get_current_task",
@@ -34,7 +34,7 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
 
     assert_layout::<BpfDomainRouting>(&fixture, "bpfDomainRouting", 128, 4);
     assert_layout::<BpfMatchSet>(&fixture, "bpfMatchSet", 24, 4);
-    assert_offset::<BpfMatchSet>(
+    assert_offset(
         &fixture,
         "bpfMatchSet",
         "mark",
@@ -45,7 +45,7 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     assert_layout::<BpfRedirectEntry>(&fixture, "bpfRedirectEntry", 20, 4);
     assert_layout::<BpfRedirectTuple>(&fixture, "bpfRedirectTuple", 32, 1);
     assert_layout::<BpfRoutingResult>(&fixture, "bpfRoutingResult", 36, 4);
-    assert_offset::<BpfRoutingResult>(
+    assert_offset(
         &fixture,
         "bpfRoutingResult",
         "outbound",

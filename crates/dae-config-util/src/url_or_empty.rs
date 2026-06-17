@@ -1,18 +1,9 @@
 use std::fmt;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UrlOrEmpty {
     pub url: Option<String>,
     pub empty: bool,
-}
-
-impl Default for UrlOrEmpty {
-    fn default() -> Self {
-        Self {
-            url: None,
-            empty: false,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

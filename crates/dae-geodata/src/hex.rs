@@ -1,7 +1,7 @@
 use crate::GeoDataError;
 
 pub fn decode_hex(input: &str) -> Result<Vec<u8>, GeoDataError> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err(GeoDataError::InvalidHex(input.to_owned()));
     }
 

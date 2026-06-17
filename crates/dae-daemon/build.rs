@@ -9,7 +9,7 @@ fn emit_product_build_identity() {
     println!("cargo:rerun-if-env-changed=DAE_DAEMON_VERSION");
     if let Some(version) = env::var("DAE_DAEMON_VERSION")
         .ok()
-        .and_then(|value| sanitize_identity(value))
+        .and_then(sanitize_identity)
     {
         println!("cargo:rustc-env=DAE_DAEMON_VERSION={version}");
         return;
