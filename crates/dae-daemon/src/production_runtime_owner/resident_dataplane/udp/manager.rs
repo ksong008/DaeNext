@@ -2,32 +2,24 @@
 #![allow(clippy::too_many_arguments)]
 
 use std::collections::{BTreeMap, HashMap};
-use std::hash::{Hash, Hasher};
 use std::io;
-use std::mem::size_of;
-use std::net::{IpAddr, Ipv4Addr};
-use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::Path;
-use std::slice;
 
-use dae_core_types::OutboundIndex;
-use dae_datapath::{
-    OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode,
-    outbound_is_reserved,
-};
-use dae_ebpf_support::{
-    BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
-};
-use dae_routing::{Query, RoutingMatcher};
-use dae_sniffing::{PacketSniffer, is_sniffing_error};
+#[cfg(not(test))]
+use dae_datapath::TcpDialMode;
+#[cfg(test)]
+use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode};
+use dae_ebpf_support::BpfRoutingResult;
+use dae_routing::RoutingMatcher;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
 
 use super::*;
 
-const BPF_L4_UDP: u8 = 17;
-const UDP_PACKET_SNIFFER_TTL: Duration = Duration::from_secs(3);
-const UDP_PACKET_SNIFFER_MAX_ENTRIES: usize = 1024;
+mod router;
+mod sniff;
+use self::router::{ResidentUdpRouter, ResidentUdpSelection};
+use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
 
 pub(super) fn run_resident_udp_session_manager(
     socket: UdpSocket,
@@ -141,7 +133,7 @@ async fn run_resident_udp_session_manager_async(
             "candidate_count": default_proxy_group.candidate_count(),
             "admitted_candidate_count": default_proxy_group.admitted_candidate_count(),
             "default_outbound": default_outbound,
-            "routing_tuple_map_id": router.routing_tuple_map_id,
+            "routing_tuple_map_id": router.routing_tuple_map_id(),
             "session_limit": session_limit,
             "packetSessionManager": {
                 "schemaVersion": 1,
@@ -409,126 +401,6 @@ fn forward_manager_packet(
     }
 }
 
-#[derive(Clone, Copy, Eq)]
-struct UdpSniffKey {
-    peer: SocketAddr,
-    original_dst: SocketAddr,
-}
-
-impl UdpSniffKey {
-    const fn new(peer: SocketAddr, original_dst: SocketAddr) -> Self {
-        Self { peer, original_dst }
-    }
-}
-
-impl PartialEq for UdpSniffKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.peer == other.peer && self.original_dst == other.original_dst
-    }
-}
-
-impl Hash for UdpSniffKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.peer.hash(state);
-        self.original_dst.hash(state);
-    }
-}
-
-struct UdpPendingSniffer {
-    sniffer: PacketSniffer,
-    packets: Vec<UdpOriginalDstPacket>,
-    initial: BpfRoutingResult,
-    created_at: Instant,
-}
-
-struct UdpSniffReady {
-    packets: Vec<UdpOriginalDstPacket>,
-    initial: BpfRoutingResult,
-    sniffed_domain: String,
-}
-
-enum UdpSniffDecision {
-    Ready(UdpSniffReady),
-    Pending,
-}
-
-fn udp_sniff_reroute_decision(
-    packet: UdpOriginalDstPacket,
-    router: &ResidentUdpRouter,
-    original_dst: SocketAddr,
-    initial: BpfRoutingResult,
-    sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>,
-) -> UdpSniffDecision {
-    prune_udp_sniffers(sniffers);
-    if !router.needs_sniffed_domain_for_reroute(original_dst, initial) {
-        return UdpSniffDecision::Ready(UdpSniffReady {
-            packets: vec![packet],
-            initial,
-            sniffed_domain: String::new(),
-        });
-    }
-
-    let key = UdpSniffKey::new(packet.peer, original_dst);
-    if !sniffers.contains_key(&key) {
-        if sniffers.len() >= UDP_PACKET_SNIFFER_MAX_ENTRIES {
-            evict_oldest_udp_sniffer(sniffers);
-        }
-        sniffers.insert(
-            key,
-            UdpPendingSniffer {
-                sniffer: PacketSniffer::new(&packet.payload),
-                packets: vec![packet],
-                initial,
-                created_at: Instant::now(),
-            },
-        );
-    } else if let Some(entry) = sniffers.get_mut(&key) {
-        entry.sniffer.append_data(&packet.payload);
-        entry.packets.push(packet);
-    }
-
-    let Some(entry) = sniffers.get_mut(&key) else {
-        return UdpSniffDecision::Pending;
-    };
-    match entry.sniffer.sniff_udp() {
-        Ok(sniffed_domain) => {
-            let entry = sniffers.remove(&key).expect("sniffer entry exists");
-            UdpSniffDecision::Ready(UdpSniffReady {
-                packets: entry.packets,
-                initial: entry.initial,
-                sniffed_domain,
-            })
-        }
-        Err(err) if entry.sniffer.need_more() && is_sniffing_error(&err) => {
-            UdpSniffDecision::Pending
-        }
-        Err(_) => {
-            let entry = sniffers.remove(&key).expect("sniffer entry exists");
-            UdpSniffDecision::Ready(UdpSniffReady {
-                packets: entry.packets,
-                initial: entry.initial,
-                sniffed_domain: String::new(),
-            })
-        }
-    }
-}
-
-fn prune_udp_sniffers(sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>) {
-    let now = Instant::now();
-    sniffers.retain(|_, entry| now.duration_since(entry.created_at) <= UDP_PACKET_SNIFFER_TTL);
-}
-
-fn evict_oldest_udp_sniffer(sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>) {
-    let Some(oldest) = sniffers
-        .iter()
-        .min_by_key(|(_, entry)| entry.created_at)
-        .map(|(key, _)| *key)
-    else {
-        return;
-    };
-    sniffers.remove(&oldest);
-}
-
 async fn recv_udp_with_original_dst_async(
     socket: &AsyncFd<UdpSocket>,
     payload_pool: &UdpPayloadPool,
@@ -558,246 +430,6 @@ fn is_udp_would_block(err: &str) -> bool {
     err.contains("WouldBlock") || err.contains("Resource temporarily unavailable")
 }
 
-struct ResidentUdpRouter {
-    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
-    default_outbound: u8,
-    routing_tuple_map_id: u32,
-    routing_tuple_map_fd: Option<OwnedFd>,
-    routing_matcher: RoutingMatcher,
-    dial_mode: TcpDialMode,
-}
-
-impl ResidentUdpRouter {
-    fn new(
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
-        default_outbound: u8,
-        routing_tuple_map_id: Option<u32>,
-        routing_matcher: RoutingMatcher,
-        dial_mode: TcpDialMode,
-    ) -> Result<Self, String> {
-        let routing_tuple_map_id = routing_tuple_map_id.ok_or_else(|| {
-            "resident UDP router needs routing_tuples_map id for compatible per-packet outbound selection"
-                .to_owned()
-        })?;
-        let routing_tuple_map_fd = open_map_fd(routing_tuple_map_id).map_err(|err| {
-            format!("open routing_tuples_map id {routing_tuple_map_id} for resident UDP: {err}")
-        })?;
-        Self::from_parts(
-            proxy_groups,
-            default_outbound,
-            routing_tuple_map_id,
-            Some(routing_tuple_map_fd),
-            routing_matcher,
-            dial_mode,
-        )
-    }
-
-    fn from_parts(
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
-        default_outbound: u8,
-        routing_tuple_map_id: u32,
-        routing_tuple_map_fd: Option<OwnedFd>,
-        routing_matcher: RoutingMatcher,
-        dial_mode: TcpDialMode,
-    ) -> Result<Self, String> {
-        if proxy_groups.is_empty() {
-            return Err("resident UDP router needs at least one proxy outbound".to_owned());
-        }
-        if !proxy_groups.contains_key(&default_outbound) {
-            return Err(format!(
-                "resident UDP default outbound {} has no Rust proxy plan",
-                OutboundIndex(default_outbound)
-            ));
-        }
-        Ok(Self {
-            proxy_groups,
-            default_outbound,
-            routing_tuple_map_id,
-            routing_tuple_map_fd,
-            routing_matcher,
-            dial_mode,
-        })
-    }
-
-    fn default_proxy_group(&self) -> &ResidentProxyGroupPlan {
-        self.proxy_groups
-            .get(&self.default_outbound)
-            .expect("default outbound was validated")
-    }
-
-    #[cfg(test)]
-    fn select_from_routing_result(
-        &self,
-        original_dst: SocketAddr,
-        initial: BpfRoutingResult,
-    ) -> Result<ResidentUdpSelection, String> {
-        self.select_from_routing_result_with_domain(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-            original_dst,
-            initial,
-            "",
-        )
-    }
-
-    fn select_from_routing_result_with_domain(
-        &self,
-        peer: SocketAddr,
-        original_dst: SocketAddr,
-        initial: BpfRoutingResult,
-        sniffed_domain: &str,
-    ) -> Result<ResidentUdpSelection, String> {
-        let force_proxy_packet = original_dst.port() == 53 && initial.must > 0;
-        if original_dst.port() == 53 && !force_proxy_packet {
-            return self
-                .select_proxy_from_group(self.default_outbound, initial.mark)
-                .map(|proxy| {
-                    ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
-                        proxy,
-                        force_proxy_packet,
-                    })
-                });
-        }
-        let final_result = if self.should_userspace_reroute(initial.outbound, sniffed_domain) {
-            self.userspace_reroute(peer, original_dst, initial, sniffed_domain)?
-        } else {
-            initial
-        };
-        match final_result.outbound {
-            OUTBOUND_BLOCK => Ok(ResidentUdpSelection::Block(ResidentUdpRouteSelection {
-                initial_outbound: initial.outbound,
-                final_outbound: OUTBOUND_BLOCK,
-            })),
-            OUTBOUND_DIRECT => Err(
-                "resident UDP selected direct outbound but direct UDP execution is not implemented; keeping fail-closed"
-                    .to_owned(),
-            ),
-            OUTBOUND_CONTROL_PLANE_ROUTING => Err(
-                "resident UDP selected control-plane routing but no UDP domain/SNI was available for userspace reroute; DNS domain_routing_map or QUIC sniffing must resolve this before userspace"
-                    .to_owned(),
-            ),
-            outbound => self
-                .select_proxy_from_group(outbound, final_result.mark)
-                .map(|proxy| {
-                    ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
-                        proxy,
-                        force_proxy_packet,
-                    })
-                }),
-        }
-    }
-
-    fn needs_sniffed_domain_for_reroute(
-        &self,
-        original_dst: SocketAddr,
-        initial: BpfRoutingResult,
-    ) -> bool {
-        original_dst.port() != 53
-            && (initial.outbound == OUTBOUND_CONTROL_PLANE_ROUTING
-                || (self.dial_mode == TcpDialMode::DomainPlusPlus
-                    && !outbound_is_reserved(initial.outbound)))
-    }
-
-    fn should_userspace_reroute(&self, outbound: u8, sniffed_domain: &str) -> bool {
-        !sniffed_domain.is_empty()
-            && (outbound == OUTBOUND_CONTROL_PLANE_ROUTING
-                || (self.dial_mode == TcpDialMode::DomainPlusPlus
-                    && !outbound_is_reserved(outbound)))
-    }
-
-    fn userspace_reroute(
-        &self,
-        peer: SocketAddr,
-        original_dst: SocketAddr,
-        initial: BpfRoutingResult,
-        sniffed_domain: &str,
-    ) -> Result<BpfRoutingResult, String> {
-        let mut query = Query::udp(original_dst.ip(), original_dst.port(), sniffed_domain);
-        query.source = Some(peer.ip());
-        query.source_port = Some(peer.port());
-        query.ip_version = Some(routing_ip_version(original_dst.ip()));
-        query.process_name = udp_process_name(&initial.pname);
-        query.dscp = Some(initial.dscp);
-        query.mac = Some(initial.mac);
-        let outcome = self
-            .routing_matcher
-            .match_query_detail(&query)
-            .map_err(|err| format!("resident UDP userspace reroute: {err}"))?;
-        Ok(BpfRoutingResult {
-            outbound: outcome.outbound.value(),
-            mark: outcome.mark,
-            must: u8::from(outcome.must),
-            mac: initial.mac,
-            pname: initial.pname,
-            pid: initial.pid,
-            dscp: initial.dscp,
-            padding: initial.padding,
-        })
-    }
-
-    fn select_proxy_from_group(
-        &self,
-        outbound: u8,
-        mark: u32,
-    ) -> Result<Arc<ResidentProxyPlan>, String> {
-        let Some(proxy_group) = self.proxy_groups.get(&outbound) else {
-            return Err(format!(
-                "resident UDP selected outbound {} but no Rust proxy plan is available; unsupported protocol must stay fail-closed until implemented",
-                OutboundIndex(outbound)
-            ));
-        };
-        let proxy = proxy_group.select_proxy_for_udp()?;
-        if mark == 0 || proxy.mark == mark {
-            return Ok(proxy);
-        }
-        let mut overridden = proxy.as_ref().clone();
-        overridden.mark = mark;
-        Ok(Arc::new(overridden))
-    }
-
-    fn lookup_routing_result(
-        &self,
-        peer: SocketAddr,
-        original_dst: SocketAddr,
-    ) -> Result<BpfRoutingResult, String> {
-        let Some(fd) = self.routing_tuple_map_fd.as_ref() else {
-            return Err("resident UDP router has no routing_tuples_map fd".to_owned());
-        };
-        let key = BpfTuplesKey {
-            sip: udp_ip_addr_bytes(peer.ip()),
-            dip: udp_ip_addr_bytes(original_dst.ip()),
-            sport: peer.port().to_be(),
-            dport: original_dst.port().to_be(),
-            l4proto: BPF_L4_UDP,
-            padding: [0; 3],
-        };
-        let mut result = BpfRoutingResult::default();
-        lookup_map_elem_bytes(fd.as_raw_fd(), bytes_of(&key), bytes_of_mut(&mut result)).map_err(
-            |err| {
-                format!(
-                    "lookup routing_tuples_map id {} for {} -> {} udp: {err}",
-                    self.routing_tuple_map_id, peer, original_dst
-                )
-            },
-        )?;
-        Ok(result)
-    }
-}
-
-struct ResidentUdpProxySelection {
-    proxy: Arc<ResidentProxyPlan>,
-    force_proxy_packet: bool,
-}
-
-struct ResidentUdpRouteSelection {
-    initial_outbound: u8,
-    final_outbound: u8,
-}
-
-enum ResidentUdpSelection {
-    Proxy(ResidentUdpProxySelection),
-    Block(ResidentUdpRouteSelection),
-}
-
 fn append_udp_route_selection_failed(
     event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
@@ -816,43 +448,6 @@ fn append_udp_route_selection_failed(
             "network": resident_udp_network_name(original_dst),
         }),
     );
-}
-
-fn udp_ip_addr_bytes(addr: IpAddr) -> BpfIpBytes {
-    match addr {
-        IpAddr::V4(addr) => udp_ipv4_mapped_ip_bytes(addr),
-        IpAddr::V6(addr) => BpfIpBytes {
-            u6_addr8: addr.octets(),
-        },
-    }
-}
-
-fn udp_ipv4_mapped_ip_bytes(addr: Ipv4Addr) -> BpfIpBytes {
-    let mut out = [0_u8; 16];
-    out[10] = 0xff;
-    out[11] = 0xff;
-    out[12..16].copy_from_slice(&addr.octets());
-    BpfIpBytes { u6_addr8: out }
-}
-
-fn routing_ip_version(addr: IpAddr) -> u8 {
-    match addr {
-        IpAddr::V4(_) => 1,
-        IpAddr::V6(_) => 2,
-    }
-}
-
-fn udp_process_name(raw: &[u8; 16]) -> Option<String> {
-    let end = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
-    (end > 0).then(|| String::from_utf8_lossy(&raw[..end]).into_owned())
-}
-
-fn bytes_of<T>(value: &T) -> &[u8] {
-    unsafe { slice::from_raw_parts((value as *const T).cast::<u8>(), size_of::<T>()) }
-}
-
-fn bytes_of_mut<T>(value: &mut T) -> &mut [u8] {
-    unsafe { slice::from_raw_parts_mut((value as *mut T).cast::<u8>(), size_of::<T>()) }
 }
 
 #[cfg(test)]
