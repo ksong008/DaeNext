@@ -71,6 +71,34 @@ pub(crate) fn jwt_roundtrip_uses_user_secret() {
 }
 
 #[test]
+pub(crate) fn initial_user_creation_is_single_winner_under_concurrency() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+
+    let thread_count = 4;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(thread_count));
+    let mut handles = Vec::new();
+    for index in 0..thread_count {
+        let state = state.clone();
+        let barrier = std::sync::Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            create_user(&state, &format!("admin{index}"), "abc12345")
+        }));
+    }
+
+    let successes = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .filter(Result::is_ok)
+        .count();
+    assert_eq!(successes, 1);
+    assert_eq!(user_count(&state).unwrap(), 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn legacy_password_hash_migrates_to_argon2id_after_successful_login() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
