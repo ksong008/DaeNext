@@ -13,6 +13,22 @@ pub(super) fn source_shape_registry_status_counts(
     json!(counts)
 }
 
+pub(super) fn source_shape_registry_runtime_blocked_row_count(
+    rows: &[dae_outbound::SourceShapeRegistryRow],
+) -> usize {
+    rows.iter()
+        .filter(|row| row.source_support == "source-supported" && row.resident_status == "blocked")
+        .count()
+}
+
+pub(super) fn source_shape_registry_policy_rejected_row_count(
+    rows: &[dae_outbound::SourceShapeRegistryRow],
+) -> usize {
+    rows.iter()
+        .filter(|row| row.source_support == "not-source-supported")
+        .count()
+}
+
 pub(super) fn required_protocol_variant_shape_ids() -> &'static [&'static str] {
     dae_outbound::official_common_source_shape_ids()
 }
