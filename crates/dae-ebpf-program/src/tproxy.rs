@@ -374,14 +374,16 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     let outbound = (route_result & 0xff) as u8;
     let mark = (route_result >> 8) as u32;
     let must = ((route_result >> 40) & 1) != 0;
-    routing::save_routing_result(
+    if !routing::save_routing_result(
         ptr::addr_of!(key),
         ptr::addr_of!(info),
         outbound,
         mark,
         must,
         ptr::null(),
-    );
+    ) {
+        return TC_ACT_SHOT;
+    }
 
     if outbound == routing::ROUTE_OUTBOUND_DIRECT {
         unsafe {
@@ -488,14 +490,16 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         mark = (route_result >> 8) as u32;
         let must = ((route_result >> 40) & 1) != 0;
         if outbound != routing::ROUTE_OUTBOUND_DIRECT || mark != 0 || must {
-            routing::save_routing_result(
+            if !routing::save_routing_result(
                 ptr::addr_of!(key),
                 ptr::addr_of!(info),
                 outbound,
                 mark,
                 must,
                 pid_pname,
-            );
+            ) {
+                return TC_ACT_SHOT;
+            }
         }
     }
 
