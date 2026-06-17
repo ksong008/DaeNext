@@ -1,4 +1,54 @@
 use super::*;
+
+#[test]
+pub(crate) fn subscription_http_body_limit_is_enforced_without_preallocating_limit() {
+    let body = b"vmess://small-node#ok\n";
+    let mut response = Vec::from(&b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"[..]);
+    response.extend_from_slice(body);
+    let parsed = http_response_body_with_limit(&response, 1024).unwrap();
+    assert_eq!(parsed.as_bytes(), body);
+
+    let mut oversized = Vec::from(&b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"[..]);
+    oversized.extend(std::iter::repeat_n(b'a', 17));
+    let err = http_response_body_with_limit(&oversized, 16).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("subscription response body exceeds 16 bytes"),
+        "{err}"
+    );
+}
+
+#[test]
+pub(crate) fn subscription_chunked_body_limit_is_cumulative_and_checks_crlf() {
+    let decoded = decode_chunked_body(b"4\r\nnode\r\n2\r\nok\r\n0\r\n\r\n").unwrap();
+    assert_eq!(decoded, b"nodeok");
+
+    let err =
+        decode_chunked_body_with_limit(b"8\r\n12345678\r\n1\r\n9\r\n0\r\n\r\n", 8).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("decoded subscription body exceeds 8 bytes"),
+        "{err}"
+    );
+
+    let err = decode_chunked_body_with_limit(b"4\r\nnodeXX0\r\n\r\n", 16).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("chunked body chunk missing trailing CRLF"),
+        "{err}"
+    );
+}
+
+#[test]
+pub(crate) fn subscription_response_reader_stops_after_configured_limit() {
+    let mut reader = io::Cursor::new(vec![b'a'; 128 * 1024 + 17]);
+    let err = read_subscription_http_response_with_limit(&mut reader, 16).unwrap_err();
+    assert!(
+        err.to_string().contains("subscription response exceeds"),
+        "{err}"
+    );
+}
+
 #[test]
 pub(crate) fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
     let content = test_config_with_node(
