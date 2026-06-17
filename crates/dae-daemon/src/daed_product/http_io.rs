@@ -235,24 +235,59 @@ fn is_local_origin_host(host: &str) -> bool {
     ip.is_loopback() || local_interface_ips().contains(&ip)
 }
 
+struct IfAddrs {
+    head: *mut libc::ifaddrs,
+}
+
+impl IfAddrs {
+    fn load() -> io::Result<Self> {
+        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+        // SAFETY: getifaddrs initializes `head` on success. The pointer is
+        // owned by IfAddrs and released with freeifaddrs in Drop.
+        let status = unsafe { libc::getifaddrs(&mut head) };
+        if status != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { head })
+    }
+}
+
+impl Drop for IfAddrs {
+    fn drop(&mut self) {
+        if !self.head.is_null() {
+            // SAFETY: `head` came from a successful getifaddrs call and has
+            // not been freed elsewhere because IfAddrs owns it.
+            unsafe { libc::freeifaddrs(self.head) };
+        }
+    }
+}
+
 fn local_interface_ips() -> Vec<std::net::IpAddr> {
     let mut addrs = Vec::new();
-    let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
-    if unsafe { libc::getifaddrs(&mut ifaddrs) } != 0 {
+    let Ok(ifaddrs) = IfAddrs::load() else {
         return addrs;
-    }
-    let mut cursor = ifaddrs;
+    };
+    let mut cursor = ifaddrs.head;
     while !cursor.is_null() {
+        // SAFETY: `cursor` is either the head returned by getifaddrs or an
+        // ifa_next pointer from the same list, and the list stays alive for
+        // this loop through the IfAddrs owner.
         let addr = unsafe { (*cursor).ifa_addr };
         if !addr.is_null() {
+            // SAFETY: `addr` is non-null and points to a sockaddr whose family
+            // field can be read before casting to the matching concrete type.
             match unsafe { (*addr).sa_family as i32 } {
                 libc::AF_INET => {
+                    // SAFETY: sa_family reported AF_INET, so sockaddr_in is
+                    // the layout for this address entry.
                     let sockaddr = unsafe { *(addr.cast::<libc::sockaddr_in>()) };
                     addrs.push(std::net::IpAddr::V4(std::net::Ipv4Addr::from(
                         sockaddr.sin_addr.s_addr.to_ne_bytes(),
                     )));
                 }
                 libc::AF_INET6 => {
+                    // SAFETY: sa_family reported AF_INET6, so sockaddr_in6 is
+                    // the layout for this address entry.
                     let sockaddr = unsafe { *(addr.cast::<libc::sockaddr_in6>()) };
                     addrs.push(std::net::IpAddr::V6(std::net::Ipv6Addr::from(
                         sockaddr.sin6_addr.s6_addr,
@@ -261,9 +296,9 @@ fn local_interface_ips() -> Vec<std::net::IpAddr> {
                 _ => {}
             }
         }
+        // SAFETY: `cursor` is a valid ifaddrs node from the live list.
         cursor = unsafe { (*cursor).ifa_next };
     }
-    unsafe { libc::freeifaddrs(ifaddrs) };
     addrs
 }
 
