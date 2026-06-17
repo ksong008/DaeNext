@@ -62,6 +62,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             run: bench_dns_packet_view_answers_ttl_ip_cname,
         },
         BenchCase {
+            id: "dns/owned_parse_message",
+            default_iters: 100_000,
+            run: bench_dns_owned_parse_message,
+        },
+        BenchCase {
             id: "dns/resolve_asis_guard",
             default_iters: 100_000,
             run: bench_dns_resolve_asis_guard,

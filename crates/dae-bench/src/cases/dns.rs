@@ -4,7 +4,7 @@ use dae_dns::{
     DnsCacheEntry, DnsCacheKey, DnsCacheKeyView, DnsCacheStore, DnsMessage, DnsPacketAnswerView,
     DnsPacketView, DnsQuestion, DnsRequestOutboundIndex, DnsResponseOutboundIndex, RequestMatcher,
     ResponseMatcher, build_doh_request, build_response_cache_plan_from_packet,
-    guard_synthetic_asis_lookup, parse_dns_cache_key_view,
+    guard_synthetic_asis_lookup, parse_dns_cache_key_view, parse_message,
     restore_cached_response_for_packet_question, validate_dns_packet_response_for_request_fast,
     validate_dns_response_for_request_fast, validate_doh_response,
 };

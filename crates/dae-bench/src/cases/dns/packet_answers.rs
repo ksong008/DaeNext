@@ -1,4 +1,37 @@
 use super::*;
+pub(super) fn bench_dns_owned_parse_message(
+    iters: u64,
+    warmup: u64,
+) -> Result<Measurement, String> {
+    let response = dns_response_cache_plan_packet_fixture();
+    Ok(measure(
+        || {
+            let message = parse_message(black_box(&response)).expect("owned dns parse message");
+            let mut checksum = message.id as u64;
+            checksum = checksum.wrapping_add((message.questions.len() as u64) << 8);
+            checksum = checksum.wrapping_add((message.answers.len() as u64) << 16);
+            for answer in &message.answers {
+                checksum = checksum.wrapping_add(answer.ttl() as u64);
+                if let Some(ip) = answer.ip() {
+                    checksum = checksum.wrapping_add(match ip {
+                        std::net::IpAddr::V4(addr) => u32::from(addr) as u64,
+                        std::net::IpAddr::V6(addr) => {
+                            let octets = addr.octets();
+                            u64::from_be_bytes([
+                                octets[0], octets[1], octets[2], octets[3], octets[4], octets[5],
+                                octets[6], octets[7],
+                            ])
+                        }
+                    });
+                }
+            }
+            black_box(checksum)
+        },
+        iters,
+        warmup,
+    ))
+}
+
 pub(super) fn bench_dns_packet_view_answers_ttl_ip_cname(
     iters: u64,
     warmup: u64,
