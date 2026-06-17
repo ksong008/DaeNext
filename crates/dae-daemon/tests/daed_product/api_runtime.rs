@@ -309,10 +309,28 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
     );
     let latency = json_body(&latency);
     assert_eq!(latency["items"][0]["id"].as_i64().unwrap(), node_id);
-    assert!(latency["items"][0]["alive"].as_bool().unwrap());
+    let job_id = latency["job"]["id"].as_u64().unwrap();
+    assert!(matches!(
+        latency["job"]["status"].as_str(),
+        Some("queued" | "running" | "finished")
+    ));
+    probe_handle.join().unwrap();
+    let latency = wait_for_latency_result(port, &token, node_id);
+    assert_eq!(latency["items"][0]["id"].as_i64().unwrap(), node_id);
+    assert!(latency["items"][0]["alive"].as_bool().unwrap(), "{latency}");
     assert!(latency["items"][0]["latencyMs"].is_number(), "{latency}");
     assert!(latency["items"][0]["message"].is_null(), "{latency}");
-    probe_handle.join().unwrap();
+    assert_eq!(latency["job"]["id"].as_u64().unwrap(), job_id);
+    assert_eq!(latency["job"]["status"].as_str(), Some("finished"));
+    let latency_job = json_body(&http_request(
+        port,
+        "GET",
+        "/api/nodes/latencies/job",
+        None,
+        Some(&token),
+    ));
+    assert_eq!(latency_job["job"]["id"].as_u64().unwrap(), job_id);
+    assert_eq!(latency_job["job"]["status"].as_str(), Some("finished"));
 
     let settings = http_request(
         port,
@@ -448,4 +466,29 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
     child.kill().unwrap();
     let _ = child.wait();
     fs::remove_dir_all(temp).unwrap();
+}
+
+fn wait_for_latency_result(port: u16, token: &str, node_id: i64) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last = Value::Null;
+    while Instant::now() < deadline {
+        let response = http_request(port, "GET", "/api/nodes/latencies", None, Some(token));
+        let value = json_body(&response);
+        let Some(items) = value["items"].as_array() else {
+            last = value;
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        };
+        if items.iter().any(|item| {
+            item["id"].as_i64() == Some(node_id)
+                && item["alive"].as_bool() == Some(true)
+                && item["latencyMs"].is_number()
+        }) && value["job"]["status"].as_str() == Some("finished")
+        {
+            return value;
+        }
+        last = value;
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("timed out waiting for latency result: {last}");
 }

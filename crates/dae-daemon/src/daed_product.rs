@@ -170,6 +170,7 @@ struct AppState {
     web_root: PathBuf,
     api_only: bool,
     runtime: Arc<ProductRuntimeManager>,
+    latency_jobs: Arc<LatencyJobManager>,
     http_metrics: Arc<ProductHttpMetrics>,
 }
 

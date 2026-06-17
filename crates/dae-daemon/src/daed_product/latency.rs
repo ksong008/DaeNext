@@ -1,4 +1,132 @@
 use super::*;
+
+#[derive(Debug, Default)]
+pub(crate) struct LatencyJobManager {
+    next_id: AtomicU64,
+    current: Mutex<Option<LatencyJobRecord>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct LatencyJobRecord {
+    id: u64,
+    status: &'static str,
+    total: usize,
+    completed: usize,
+    succeeded: usize,
+    failed: usize,
+    queued_at: String,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    message: Option<String>,
+}
+
+impl LatencyJobManager {
+    pub(crate) fn start_or_current(&self, total: usize) -> io::Result<(LatencyJobRecord, bool)> {
+        let mut current = self
+            .current
+            .lock()
+            .map_err(|_| io::Error::other("latency job manager lock poisoned"))?;
+        if let Some(job) = current.as_ref()
+            && matches!(job.status, "queued" | "running")
+        {
+            return Ok((job.clone(), false));
+        }
+        let id = self
+            .next_id
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let job = LatencyJobRecord {
+            id,
+            status: "queued",
+            total,
+            completed: 0,
+            succeeded: 0,
+            failed: 0,
+            queued_at: now_text(),
+            started_at: None,
+            finished_at: None,
+            message: None,
+        };
+        *current = Some(job.clone());
+        Ok((job, true))
+    }
+
+    pub(crate) fn current_value(&self) -> Value {
+        self.current
+            .lock()
+            .ok()
+            .and_then(|current| current.clone())
+            .map(|job| job.to_value())
+            .unwrap_or(Value::Null)
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.current
+            .lock()
+            .ok()
+            .and_then(|current| current.as_ref().map(|job| job.is_active()))
+            .unwrap_or(false)
+    }
+
+    fn mark_running(&self, id: u64) {
+        self.update_job(id, |job| {
+            job.status = "running";
+            job.started_at = Some(now_text());
+            job.message = Some("manual latency probe running".to_owned());
+        });
+    }
+
+    fn mark_finished(&self, id: u64, completed: usize, succeeded: usize, failed: usize) {
+        self.update_job(id, |job| {
+            job.status = "finished";
+            job.completed = completed;
+            job.succeeded = succeeded;
+            job.failed = failed;
+            job.finished_at = Some(now_text());
+            job.message = Some("manual latency probe finished".to_owned());
+        });
+    }
+
+    fn mark_failed(&self, id: u64, message: String) {
+        self.update_job(id, |job| {
+            job.status = "failed";
+            job.finished_at = Some(now_text());
+            job.message = Some(message);
+        });
+    }
+
+    fn update_job(&self, id: u64, update: impl FnOnce(&mut LatencyJobRecord)) {
+        let Ok(mut current) = self.current.lock() else {
+            return;
+        };
+        let Some(job) = current.as_mut().filter(|job| job.id == id) else {
+            return;
+        };
+        update(job);
+    }
+}
+
+impl LatencyJobRecord {
+    fn is_active(&self) -> bool {
+        matches!(self.status, "queued" | "running")
+    }
+
+    pub(crate) fn to_value(&self) -> Value {
+        json!({
+            "id": self.id,
+            "status": self.status,
+            "total": self.total,
+            "completed": self.completed,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "queuedAt": self.queued_at,
+            "startedAt": self.started_at,
+            "finishedAt": self.finished_at,
+            "message": self.message,
+        })
+    }
+}
+
 pub(crate) fn list_node_latencies_value(
     state: &Path,
     runtime: &ProductRuntimeManager,
@@ -6,6 +134,16 @@ pub(crate) fn list_node_latencies_value(
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     sync_runtime_node_latency_results(&conn, runtime)?;
+    list_stored_node_latencies_from_conn(&conn)
+}
+
+pub(crate) fn list_stored_node_latencies_value(state: &Path) -> io::Result<Value> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    list_stored_node_latencies_from_conn(&conn)
+}
+
+fn list_stored_node_latencies_from_conn(conn: &Connection) -> io::Result<Value> {
     let mut stmt = conn
         .prepare(
             "SELECT n.id, l.latency_ms, COALESCE(l.alive, 0), COALESCE(l.tested_at, ''), l.message
@@ -40,16 +178,119 @@ pub(crate) fn list_node_latencies_value(
     Ok(json!({"items": items}))
 }
 
-pub(crate) fn update_node_latencies(
+pub(crate) fn enqueue_node_latency_job(
     state: &Path,
     config_dir: &Path,
-    runtime: &ProductRuntimeManager,
+    runtime: Arc<ProductRuntimeManager>,
+    jobs: Arc<LatencyJobManager>,
     ids: &[i64],
 ) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
+    let nodes = latency_probe_nodes_for_ids(&conn, ids)?;
+    let (job, should_spawn) = jobs.start_or_current(nodes.len())?;
+    if should_spawn {
+        let state = state.to_path_buf();
+        let config_dir = config_dir.to_path_buf();
+        let runtime_for_thread = Arc::clone(&runtime);
+        let jobs_for_thread = Arc::clone(&jobs);
+        let spawn_result = thread::Builder::new()
+            .name(format!("daed-latency-job-{}", job.id))
+            .spawn(move || {
+                run_node_latency_job(
+                    job.id,
+                    state,
+                    config_dir,
+                    runtime_for_thread,
+                    jobs_for_thread,
+                    nodes,
+                );
+            });
+        if let Err(err) = spawn_result {
+            jobs.mark_failed(job.id, format!("spawn manual latency probe job: {err}"));
+            return Err(io::Error::other(format!(
+                "spawn manual latency probe job: {err}"
+            )));
+        }
+    }
+    let mut value = list_stored_node_latencies_value(state)?;
+    value["job"] = job.to_value();
+    Ok(value)
+}
+
+fn run_node_latency_job(
+    job_id: u64,
+    state: PathBuf,
+    config_dir: PathBuf,
+    runtime: Arc<ProductRuntimeManager>,
+    jobs: Arc<LatencyJobManager>,
+    nodes: Vec<(i64, String, String)>,
+) {
+    jobs.mark_running(job_id);
+    match run_node_latency_job_inner(&state, &config_dir, &runtime, &nodes) {
+        Ok((completed, succeeded, failed)) => {
+            jobs.mark_finished(job_id, completed, succeeded, failed)
+        }
+        Err(err) => jobs.mark_failed(job_id, err.to_string()),
+    }
+}
+
+fn run_node_latency_job_inner(
+    state: &Path,
+    config_dir: &Path,
+    runtime: &ProductRuntimeManager,
+    nodes: &[(i64, String, String)],
+) -> io::Result<(usize, usize, usize)> {
+    let links = nodes
+        .iter()
+        .map(|(_, link, _)| link.clone())
+        .collect::<Vec<_>>();
+    let runtime_snapshots = runtime.probe_node_latencies(&links);
+    let (runtime_results, runtime_tested_ids) =
+        runtime_node_latency_results_for_nodes(nodes, &runtime_snapshots);
+
+    let tested_at = now_text();
+    let fallback_nodes = nodes
+        .iter()
+        .filter(|(id, _, _)| !runtime_tested_ids.contains(id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut results = runtime_results;
+    results.extend(native_probe_unavailable_results(
+        &fallback_nodes,
+        &tested_at,
+    ));
+    let mut conn = open_state_connection(state)?;
+    let tx = conn.transaction().map_err(sqlite_io_error)?;
+    for result in &results {
+        store_node_latency_result(&tx, result)?;
+    }
+    tx.commit().map_err(sqlite_io_error)?;
+    append_log_for_config(
+        config_dir,
+        state,
+        "info",
+        "node latency probe updated by Rust daed",
+    )?;
+    let completed = results.len();
+    let succeeded = results.iter().filter(|result| result.alive).count();
+    Ok((completed, succeeded, completed.saturating_sub(succeeded)))
+}
+
+pub(crate) fn current_node_latency_job_value(jobs: &LatencyJobManager) -> Value {
+    json!({"job": jobs.current_value()})
+}
+
+pub(crate) fn add_node_latency_job_value(value: &mut Value, jobs: &LatencyJobManager) {
+    value["job"] = jobs.current_value();
+}
+
+pub(crate) fn latency_probe_nodes_for_ids(
+    conn: &Connection,
+    ids: &[i64],
+) -> io::Result<Vec<(i64, String, String)>> {
     let target_ids = if ids.is_empty() {
-        all_node_ids(&conn)?
+        all_node_ids(conn)?
     } else {
         ids.to_vec()
     };
@@ -73,34 +314,7 @@ pub(crate) fn update_node_latencies(
             nodes.push(node);
         }
     }
-
-    let links = nodes
-        .iter()
-        .map(|(_, link, _)| link.clone())
-        .collect::<Vec<_>>();
-    let runtime_snapshots = runtime.probe_node_latencies(&links);
-    let (runtime_results, runtime_tested_ids) =
-        runtime_node_latency_results_for_nodes(&nodes, &runtime_snapshots);
-    for result in &runtime_results {
-        store_node_latency_result(&conn, result)?;
-    }
-
-    let tested_at = now_text();
-    let fallback_nodes = nodes
-        .iter()
-        .filter(|(id, _, _)| !runtime_tested_ids.contains(id))
-        .cloned()
-        .collect::<Vec<_>>();
-    for result in native_probe_unavailable_results(&fallback_nodes, &tested_at) {
-        store_node_latency_result(&conn, &result)?;
-    }
-    append_log_for_config(
-        config_dir,
-        state,
-        "info",
-        "node latency probe updated by Rust daed",
-    )?;
-    list_node_latencies_value(state, runtime)
+    Ok(nodes)
 }
 
 pub(crate) fn fake_runtime_probe_node_latencies(links: &[String]) -> Vec<Value> {

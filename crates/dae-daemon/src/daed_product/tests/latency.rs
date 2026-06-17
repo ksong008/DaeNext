@@ -81,6 +81,25 @@ pub(crate) fn insert_config_node(
 }
 
 #[test]
+pub(crate) fn empty_latency_probe_ids_select_all_nodes() {
+    let dir = std::env::temp_dir().join(format!("daed-product-latency-{}", fastrand::u64(..)));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("state.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 11, "one", "socks://127.0.0.1:1080#one", None);
+    insert_config_node(&conn, 12, "two", "socks://127.0.0.1:1081#two", None);
+
+    let nodes = latency_probe_nodes_for_ids(&conn, &[]).unwrap();
+    assert_eq!(
+        nodes.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+        vec![11, 12]
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
     let nodes = vec![
         (
