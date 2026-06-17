@@ -9,7 +9,7 @@ members = [
     "crates/dae-core-types",
     "crates/dae-bench",
     "crates/dae-build-support",
-    "crates/dae-aya-bpf-loader",
+    "crates/dae-ebpf-loader",
     "crates/dae-datapath",
     "crates/dae-dns",
     "crates/dae-ebpf-program",
@@ -53,7 +53,7 @@ dae-build-support = { path = "crates/dae-build-support" }
 dae-config-util = { path = "crates/dae-config-util" }
 dae-config = { path = "crates/dae-config" }
 dae-daemon = { path = "crates/dae-daemon", default-features = false }
-dae-aya-bpf-loader = { path = "crates/dae-aya-bpf-loader" }
+dae-ebpf-loader = { path = "crates/dae-ebpf-loader" }
 dae-control = { path = "crates/dae-control" }
 dae-core-types = { path = "crates/dae-core-types" }
 dae-datapath = { path = "crates/dae-datapath" }

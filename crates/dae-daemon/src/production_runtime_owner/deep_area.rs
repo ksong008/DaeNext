@@ -80,7 +80,7 @@ const DEEP_AREA_SURFACES: &[DeepAreaSurface] = &[
         name: "eBPF Backend / Host Ops",
         primary_crates: &[
             "dae-ebpf-support",
-            "dae-aya-bpf-loader",
+            "dae-ebpf-loader",
             "dae-netutil",
             "dae-daemon",
         ],

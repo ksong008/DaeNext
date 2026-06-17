@@ -10,9 +10,9 @@ pub(super) fn contract_declares_loader_only_scope() {
     let json: Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(
         json["name"].as_str().unwrap(),
-        "rust-aya-bpf-loader-native-runtime-contract"
+        "rust-ebpf-loader-native-runtime-contract"
     );
-    assert_eq!(json["binary"].as_str().unwrap(), "dae-aya-bpf-loader");
+    assert_eq!(json["binary"].as_str().unwrap(), "dae-ebpf-loader");
     assert!(json["native_userspace_outbound_ready"].as_bool().unwrap());
     assert!(json["kernel_ebpf_program_rewrite"].as_bool().unwrap());
     assert_eq!(

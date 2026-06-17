@@ -527,18 +527,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dae-aya-bpf-loader"
-version = "3.0.1"
-dependencies = [
- "dae-build-support",
- "dae-control",
- "dae-ebpf-support",
- "fastrand",
- "libc",
- "serde_json",
-]
-
-[[package]]
 name = "dae-bench"
 version = "3.0.1"
 dependencies = [
@@ -638,12 +626,12 @@ dependencies = [
  "blake2",
  "boring",
  "bytes",
- "dae-aya-bpf-loader",
  "dae-config",
  "dae-control",
  "dae-core-types",
  "dae-datapath",
  "dae-dns",
+ "dae-ebpf-loader",
  "dae-ebpf-support",
  "dae-engine",
  "dae-geodata",
@@ -700,6 +688,18 @@ dependencies = [
  "hashbrown 0.15.5",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "dae-ebpf-loader"
+version = "3.0.1"
+dependencies = [
+ "dae-build-support",
+ "dae-control",
+ "dae-ebpf-support",
+ "fastrand",
+ "libc",
+ "serde_json",
 ]
 
 [[package]]

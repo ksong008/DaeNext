@@ -1,5 +1,5 @@
 [package]
-name = "dae-aya-bpf-loader"
+name = "dae-ebpf-loader"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
