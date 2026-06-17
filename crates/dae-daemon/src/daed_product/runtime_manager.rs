@@ -14,6 +14,7 @@ pub(super) struct ProductRuntimeState {
     pub(super) last_report: Option<Value>,
     pub(super) reload_count: u64,
     pub(super) stop_count: u64,
+    pub(super) lifecycle_epoch: u64,
     pub(super) traffic_carry: RuntimeTrafficCarry,
 }
 
@@ -32,9 +33,17 @@ pub(super) struct FakeProductRuntime {
     pub(super) tproxy_port: u16,
 }
 
-impl FakeProductRuntime {
+pub(super) enum ProductRuntimeProbeHandle {
+    Resident(Box<ResidentManualProbeHandle>),
+    Fake,
+}
+
+impl ProductRuntimeProbeHandle {
     pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
-        fake_runtime_probe_node_latencies(links)
+        match self {
+            Self::Resident(handle) => handle.probe_node_latencies(links),
+            Self::Fake => fake_runtime_probe_node_latencies(links),
+        }
     }
 }
 
@@ -130,21 +139,49 @@ impl ProductRuntimeManager {
         config: Config,
         source: &str,
     ) -> Result<RuntimeStartOutcome, String> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-        let previous_runtime = inner.runtime.take();
-        let previous_config = inner.config.clone();
-        let previous_runtime_started_at = inner.runtime_started_at.clone();
-        let previous_runtime_was_running = previous_runtime.is_some();
-        if let Some(runtime) = previous_runtime.as_ref() {
-            inner.traffic_carry = inner.traffic_carry.absorb_runtime(runtime);
-        }
-        drop(previous_runtime);
+        let (
+            previous_runtime,
+            previous_config,
+            previous_runtime_started_at,
+            previous_runtime_was_running,
+            lifecycle_epoch,
+        ) = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+            inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
+            let previous_runtime = inner.runtime.take();
+            let previous_config = inner.config.clone();
+            let previous_runtime_started_at = inner.runtime_started_at.clone();
+            let previous_runtime_was_running = previous_runtime.is_some();
+            if let Some(runtime) = previous_runtime.as_ref() {
+                inner.traffic_carry = inner.traffic_carry.absorb_runtime(runtime);
+            }
+            (
+                previous_runtime,
+                previous_config,
+                previous_runtime_started_at,
+                previous_runtime_was_running,
+                inner.lifecycle_epoch,
+            )
+        };
 
+        drop(previous_runtime);
         match start_product_runtime_instance(&config, source) {
             Ok((runtime, report)) => {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+                if inner.lifecycle_epoch != lifecycle_epoch {
+                    drop(inner);
+                    drop(runtime);
+                    return Err(
+                        "product runtime reload was superseded by a newer lifecycle operation"
+                            .to_owned(),
+                    );
+                }
                 let transition_at = now_text();
                 inner.runtime = Some(runtime);
                 inner.config = Some(config);
@@ -160,27 +197,49 @@ impl ProductRuntimeManager {
                 Ok(RuntimeStartOutcome { report })
             }
             Err(start_err) => {
-                let restored = previous_config
-                    .as_ref()
-                    .map(|previous| match start_product_runtime_instance(previous, "restore")
-                    {
-                        Ok((runtime, report)) => {
-                            inner.runtime = Some(runtime);
-                            inner.config = Some(previous.clone());
-                            inner.runtime_started_at = previous_runtime_started_at.clone();
-                            inner.last_report = Some(report);
-                            true
-                        }
-                        Err(restore_err) => {
-                            inner.runtime = None;
-                            inner.config = None;
-                            inner.runtime_started_at = None;
-                            inner.last_error = Some(format!(
-                                "{start_err}\nrestore failed while restoring previous product runtime: {restore_err}"
-                            ));
-                            false
-                        }
-                    });
+                let should_restore = self
+                    .inner
+                    .lock()
+                    .map(|inner| inner.lifecycle_epoch == lifecycle_epoch)
+                    .unwrap_or(false);
+                let restore_result = if should_restore {
+                    previous_config
+                        .as_ref()
+                        .map(|previous| start_product_runtime_instance(previous, "restore"))
+                } else {
+                    None
+                };
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+                if inner.lifecycle_epoch != lifecycle_epoch {
+                    if let Some(Ok((runtime, _))) = restore_result {
+                        drop(inner);
+                        drop(runtime);
+                    }
+                    return Err(format!(
+                        "{start_err}\nrestore skipped because product runtime reload was superseded by a newer lifecycle operation"
+                    ));
+                }
+                let restored = restore_result.map(|result| match result {
+                    Ok((runtime, report)) => {
+                        inner.runtime = Some(runtime);
+                        inner.config = previous_config.clone();
+                        inner.runtime_started_at = previous_runtime_started_at.clone();
+                        inner.last_report = Some(report);
+                        true
+                    }
+                    Err(restore_err) => {
+                        inner.runtime = None;
+                        inner.config = None;
+                        inner.runtime_started_at = None;
+                        inner.last_error = Some(format!(
+                            "{start_err}\nrestore failed while restoring previous product runtime: {restore_err}"
+                        ));
+                        false
+                    }
+                });
                 let message = match restored {
                     Some(true) => {
                         format!("{start_err}\nrestore: restored previous product runtime")
@@ -206,6 +265,7 @@ impl ProductRuntimeManager {
             .inner
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
         let was_running = inner.runtime.is_some();
         inner.runtime.take();
         let reclaim = was_running.then(|| allocator_reclaim(AllocatorReclaimReason::StopRuntime));
@@ -337,16 +397,24 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+        let handle = self.node_latency_probe_handle();
+        handle
+            .as_ref()
+            .map(|handle| handle.probe_node_latencies(links))
+            .unwrap_or_default()
+    }
+
+    pub(super) fn node_latency_probe_handle(&self) -> Option<ProductRuntimeProbeHandle> {
         let Ok(inner) = self.inner.lock() else {
-            return Vec::new();
+            return None;
         };
         match inner.runtime.as_ref() {
-            Some(ProductRuntimeInstance::Resident(runtime)) => runtime.probe_node_latencies(links),
-            Some(ProductRuntimeInstance::Fake(fake)) => fake.probe_node_latencies(links),
-            None if product_runtime_fake_start_enabled() => {
-                fake_runtime_probe_node_latencies(links)
-            }
-            None => Vec::new(),
+            Some(ProductRuntimeInstance::Resident(runtime)) => runtime
+                .manual_probe_handle()
+                .map(|handle| ProductRuntimeProbeHandle::Resident(Box::new(handle))),
+            Some(ProductRuntimeInstance::Fake(_)) => Some(ProductRuntimeProbeHandle::Fake),
+            None if product_runtime_fake_start_enabled() => Some(ProductRuntimeProbeHandle::Fake),
+            None => None,
         }
     }
 

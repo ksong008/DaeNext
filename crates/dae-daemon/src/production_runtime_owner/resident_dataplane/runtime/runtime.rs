@@ -30,12 +30,11 @@ impl ResidentDataplaneRuntime {
         )
     }
 
-    pub(in crate::production_runtime_owner) fn probe_node_latencies(
+    pub(in crate::production_runtime_owner) fn manual_probe_handle(
         &self,
-        links: &[String],
-    ) -> Vec<Value> {
+    ) -> ResidentManualProbeHandle {
         self.owner
-            .probe_node_latencies(&self.groups, &self.manual_probe_plans, links)
+            .manual_probe_handle(&self.groups, &self.manual_probe_plans)
     }
 
     pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {

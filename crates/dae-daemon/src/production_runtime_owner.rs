@@ -58,10 +58,10 @@ use report::{live_handoff_json, report_value, socket_options_verified};
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime};
 pub(crate) use resident_dataplane::{
     ResidentEventLogDecision, ResidentEventLogPolicy, ResidentEventLogSink,
-    resident_live_adapter_config_assessment, resident_live_adapter_entry_missing,
-    resident_live_adapter_entry_remote_live_matrix_ready, resident_live_adapter_matrix_contract,
-    resident_live_adapter_udp_probe, resident_live_matrix_evidence_from_env,
-    resident_runtime_defaults_contract,
+    ResidentManualProbeHandle, resident_live_adapter_config_assessment,
+    resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
+    resident_live_adapter_matrix_contract, resident_live_adapter_udp_probe,
+    resident_live_matrix_evidence_from_env, resident_runtime_defaults_contract,
 };
 pub use resident_dataplane::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
