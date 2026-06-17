@@ -37,6 +37,10 @@ pub(crate) fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse 
         .get("policy")
         .and_then(Value::as_str)
         .unwrap_or("random");
+    let policy = match validate_group_policy(policy) {
+        Ok(policy) => policy,
+        Err(err) => return HttpResponse::json(400, json!({"error": err})),
+    };
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -129,13 +133,17 @@ pub(crate) fn update_group(state: &Path, request: &HttpRequest, id: i64) -> Http
     {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
-    if let Some(policy) = body.get("policy").and_then(Value::as_str)
-        && let Err(err) = conn.execute(
+    if let Some(policy) = body.get("policy").and_then(Value::as_str) {
+        let policy = match validate_group_policy(policy) {
+            Ok(policy) => policy,
+            Err(err) => return HttpResponse::json(400, json!({"error": err})),
+        };
+        if let Err(err) = conn.execute(
             "UPDATE groups SET policy = ?1, version = version + 1 WHERE id = ?2",
             params![policy, id],
-        )
-    {
-        return HttpResponse::json(400, json!({"error": err.to_string()}));
+        ) {
+            return HttpResponse::json(400, json!({"error": err.to_string()}));
+        }
     }
     if body.get("policyParams").is_some()
         && let Err(err) = replace_group_policy_params(&conn, id, body.get("policyParams"))
@@ -234,6 +242,19 @@ pub(crate) fn group_nodes_value(conn: &Connection, group_id: i64) -> io::Result<
         items.push(row.map_err(sqlite_io_error)?);
     }
     Ok(items)
+}
+
+fn validate_group_policy(policy: &str) -> Result<&str, String> {
+    let policy = policy.trim();
+    if matches!(
+        policy,
+        "random" | "fixed" | "min" | "min_avg10" | "min_moving_avg"
+    ) {
+        return Ok(policy);
+    }
+    Err(format!(
+        "unsupported group policy {policy:?}; allowed values: random, fixed, min, min_avg10, min_moving_avg"
+    ))
 }
 
 pub(crate) fn group_subscriptions_value(
