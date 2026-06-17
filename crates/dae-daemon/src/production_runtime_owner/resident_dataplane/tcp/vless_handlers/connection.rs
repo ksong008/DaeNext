@@ -135,7 +135,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
     )
     .await
     .map(|stats| {
-        let event = proxy_tcp_finished_event(
+        proxy_tcp_finished_event(
             peer,
             original_dst,
             &selection,
@@ -143,8 +143,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             tls_underlay,
             &stats,
             "async-proxy-tls",
-        );
-        event
+        )
     })
     .or_else(|err| {
         let event = proxy_tcp_failed_event(
@@ -500,6 +499,8 @@ struct AsyncMuxFrameEvent {
 }
 
 impl AsyncMuxFrameBuffer {
+    // The parser exits early on incomplete frames and resumes when more bytes arrive.
+    #[allow(clippy::while_let_loop)]
     fn push(&mut self, bytes: &[u8], expected_id: [u8; 2]) -> Result<AsyncMuxFrameEvent, String> {
         self.pending.extend(bytes.iter().copied());
         let mut event = AsyncMuxFrameEvent::default();

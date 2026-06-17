@@ -128,7 +128,6 @@ pub(crate) fn assert_live_release_and_runtime_state_contract(report: &Value) {
         report["runtime_state_report_schema"].as_str().unwrap(),
         "runtime-state"
     );
-    assert_eq!(report["runtime_state_ready"], report["runtime_state_ready"]);
     assert_eq!(
         report["resident_dataplane_env"].as_str().unwrap(),
         "RESIDENT_DATAPLANE"

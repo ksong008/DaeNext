@@ -1,4 +1,6 @@
 use super::*;
+// Shadowsocks AEAD relay keeps target, cipher, payload, and metrics context explicit.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
     inbound: &mut TokioTcpStream,
     proxy: &mut TokioTcpStream,

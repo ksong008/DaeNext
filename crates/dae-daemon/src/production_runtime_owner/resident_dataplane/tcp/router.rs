@@ -1,3 +1,6 @@
+// Router construction keeps map, matcher, DNS, and socket policy ownership explicit.
+#![allow(clippy::too_many_arguments)]
+
 use super::*;
 pub(crate) const BPF_L4_TCP: u8 = 6;
 pub(crate) const ROUTING_L4_TCP: u8 = 1;

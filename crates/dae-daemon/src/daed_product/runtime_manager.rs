@@ -17,6 +17,9 @@ pub(super) struct ProductRuntimeState {
     pub(super) traffic_carry: RuntimeTrafficCarry,
 }
 
+// Runtime ownership keeps the resident instance inline under the manager mutex;
+// boxing the large variant would change drop and replacement behavior here.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(super) enum ProductRuntimeInstance {
     Resident(ResidentProductionRuntime),
@@ -159,14 +162,14 @@ impl ProductRuntimeManager {
             Err(start_err) => {
                 let restored = previous_config
                     .as_ref()
-                    .and_then(|previous| match start_product_runtime_instance(previous, "restore")
+                    .map(|previous| match start_product_runtime_instance(previous, "restore")
                     {
                         Ok((runtime, report)) => {
                             inner.runtime = Some(runtime);
                             inner.config = Some(previous.clone());
                             inner.runtime_started_at = previous_runtime_started_at.clone();
                             inner.last_report = Some(report);
-                            Some(true)
+                            true
                         }
                         Err(restore_err) => {
                             inner.runtime = None;
@@ -175,7 +178,7 @@ impl ProductRuntimeManager {
                             inner.last_error = Some(format!(
                                 "{start_err}\nrestore failed while restoring previous product runtime: {restore_err}"
                             ));
-                            Some(false)
+                            false
                         }
                     });
                 let message = match restored {

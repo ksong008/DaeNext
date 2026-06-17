@@ -1,3 +1,6 @@
+// UDP packet handlers keep transport-specific context and event metrics explicit.
+#![allow(clippy::too_many_arguments)]
+
 use super::*;
 use serde_json::Value;
 #[derive(Debug)]

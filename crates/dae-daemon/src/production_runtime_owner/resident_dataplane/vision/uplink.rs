@@ -1,5 +1,7 @@
 use super::*;
 
+// Vision uplink state is intentionally explicit across padding, UUID, and TLS tracking.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn drain_vision_uplink_async(
     pending: &mut Vec<u8>,
     client: &mut AsyncVlessTlsClient,

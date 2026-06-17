@@ -171,7 +171,7 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
             }
         }
 
-        if proxy_closed || (inbound_closed && proxy_closed) {
+        if proxy_closed {
             break;
         }
     }

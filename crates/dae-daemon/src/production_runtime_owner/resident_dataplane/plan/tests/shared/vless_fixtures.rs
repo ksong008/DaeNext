@@ -1,4 +1,5 @@
 use super::*;
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn vless_fixture_url(
     _ps: &str,
     add: &str,

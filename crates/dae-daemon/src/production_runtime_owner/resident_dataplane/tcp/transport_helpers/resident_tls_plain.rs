@@ -112,7 +112,7 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
             }
         }
 
-        if proxy_closed || (inbound_closed && proxy_closed) {
+        if proxy_closed {
             break;
         }
     }
@@ -161,6 +161,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn tls_plain_relay_uses_coalesced_flush_threshold() {
         assert!(TLS_PLAIN_RELAY_FLUSH_BYTES >= 64 * 1024);
         assert!(TLS_PLAIN_RELAY_FLUSH_DELAY <= Duration::from_millis(5));

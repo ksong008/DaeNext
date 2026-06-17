@@ -4,7 +4,7 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
     let authority_host = fixture_host(FixtureEndpoint::Authority);
     let primary_port = fixture_port(1);
     let trojan = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "trojan_live".to_owned(),
         trojan_fixture_url("trojan", &primary_host, primary_port),
@@ -21,7 +21,7 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
     ));
 
     let trojan_websocket = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "trojan_ws_live".to_owned(),
         trojan_websocket_fixture_url("trojan-ws", &primary_host, fixture_port(2)),
@@ -59,7 +59,7 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
     assert!(!trojan_websocket_graph.to_string().contains(&authority_host));
 
     let trojan_httpupgrade = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "trojan_httpupgrade_live".to_owned(),
         trojan_httpupgrade_fixture_url("trojan-httpupgrade", &primary_host, fixture_port(3)),
@@ -101,7 +101,7 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
     );
 
     let trojan_grpc = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "trojan_grpc_live".to_owned(),
         trojan_grpc_fixture_url("trojan-grpc", &primary_host, fixture_port(4)),

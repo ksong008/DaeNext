@@ -92,6 +92,8 @@ pub(crate) async fn handle_http_proxy_tcp_connection_async(
         })
 }
 
+// HTTPS proxy setup carries proxy auth, transport metadata, sniff context, and metrics.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_https_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,

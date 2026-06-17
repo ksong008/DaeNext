@@ -4,7 +4,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     let authority_host = fixture_host(FixtureEndpoint::Authority);
     let primary_port = fixture_port(1);
     let socks = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "socks_live".to_owned(),
         socks5_fixture_url(&primary_host, primary_port),
@@ -19,7 +19,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     ));
 
     let http = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "http_live".to_owned(),
         http_proxy_fixture_url(&primary_host, primary_port),
@@ -35,7 +35,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     ));
 
     let https = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "https_live".to_owned(),
         https_proxy_fixture_url(&primary_host, primary_port),
@@ -61,7 +61,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     );
 
     let http_transport = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "http_transport_live".to_owned(),
         http_transport_fixture_url(&primary_host, primary_port),
@@ -82,7 +82,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     ));
 
     let shadowsocks = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "ss_live".to_owned(),
         shadowsocks_fixture_url("ss", &primary_host, primary_port),
@@ -96,7 +96,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     ));
 
     let shadowsocks_2022 = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "ss2022_live".to_owned(),
         ShadowsocksLink {
@@ -128,7 +128,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     ));
 
     let shadowsocks_plugin = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "ss_plugin_live".to_owned(),
         shadowsocks_plugin_fixture_url("ss-plugin", &primary_host, primary_port),
@@ -142,7 +142,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     ));
 
     let shadowsocks_obfs_tls = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "ss_obfs_tls_live".to_owned(),
         shadowsocks_simple_obfs_tls_fixture_url("ss-plugin-tls", &primary_host, primary_port),
@@ -160,7 +160,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     ));
 
     let shadowsocks_v2ray_plugin = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "ss_v2ray_plugin_live".to_owned(),
         shadowsocks_v2ray_plugin_tls_fixture_url("ss-plugin-v2ray", &primary_host, primary_port),
@@ -177,7 +177,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     ));
 
     let shadowsocks_2022_plugin = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "ss2022_plugin_live".to_owned(),
         shadowsocks_2022_simple_obfs_http_fixture_url("ss2022-plugin", &primary_host, primary_port),

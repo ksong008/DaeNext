@@ -269,13 +269,12 @@ impl Drop for ResidentDnsInflightGuard<'_> {
         if Arc::strong_count(&self.lock) != 3 {
             return;
         }
-        if let Ok(mut inflight) = self.cache.inflight.lock() {
-            if inflight
+        if let Ok(mut inflight) = self.cache.inflight.lock()
+            && inflight
                 .get(&self.key)
                 .is_some_and(|current| Arc::ptr_eq(current, &self.lock))
-            {
-                inflight.remove(&self.key);
-            }
+        {
+            inflight.remove(&self.key);
         }
     }
 }
@@ -444,7 +443,8 @@ impl ResidentDnsDomainRouting {
         let expired_sniff_owners = state
             .sniff_owners
             .iter()
-            .filter_map(|(owner, deadline)| (*deadline <= now_unix).then(|| owner.clone()))
+            .filter(|(_, deadline)| **deadline <= now_unix)
+            .map(|(owner, _)| owner.clone())
             .collect::<Vec<_>>();
         for owner in expired_sniff_owners {
             state
@@ -899,10 +899,10 @@ async fn handle_ipversion_preference(
             }
         }
     };
-    if let Ok(response) = preferred.as_ref() {
-        if dns_response_has_any_ip(response)? {
-            return build_reject_response(payload, request).map(Some);
-        }
+    if let Ok(response) = preferred.as_ref()
+        && dns_response_has_any_ip(response)?
+    {
+        return build_reject_response(payload, request).map(Some);
     }
     let requested = match requested {
         Some(requested) => requested,
@@ -931,13 +931,13 @@ async fn handle_resident_dns_request_without_preference(
         remove_dns_response_cache_for_request(plan, request)?;
         return build_reject_response(payload, request);
     }
-    if let ResidentDnsRequestAction::AsIs = action {
-        if !allow_asis {
-            return Err(
+    if let ResidentDnsRequestAction::AsIs = action
+        && !allow_asis
+    {
+        return Err(
                 "dns request routing cannot use \"asis\" for locally bound dns listener; configure an explicit upstream instead"
                     .to_owned(),
             );
-        }
     }
     if let Some(response) = plan.cache.lookup_response(request, false)? {
         return Ok(response);

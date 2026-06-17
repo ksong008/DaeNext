@@ -27,7 +27,7 @@ pub(in crate::production_runtime_owner) fn setup_client_topology(
         LAN_HOST_IFACE,
         LAN_CLIENT_IFACE,
         options.netns_link_mode,
-        |steps, mode| setup_client_link_topology_with_mode(steps, mode),
+        setup_client_link_topology_with_mode,
         |steps| {
             cleanup_partial_link_setup(
                 steps,

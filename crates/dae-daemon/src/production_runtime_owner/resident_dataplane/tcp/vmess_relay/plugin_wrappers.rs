@@ -143,7 +143,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
                 }
             }
         }
-        if proxy_closed || (inbound_closed && proxy_closed) {
+        if proxy_closed {
             break;
         }
     }
@@ -270,7 +270,7 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
                 }
             }
         }
-        if proxy_closed || (inbound_closed && proxy_closed) {
+        if proxy_closed {
             break;
         }
     }

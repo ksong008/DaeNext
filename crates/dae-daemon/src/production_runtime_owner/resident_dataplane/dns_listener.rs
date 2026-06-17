@@ -1,3 +1,6 @@
+// DNS listener tasks keep bind sockets, routing, shutdown, and metrics handles explicit.
+#![allow(clippy::too_many_arguments)]
+
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener, UdpSocket};
 

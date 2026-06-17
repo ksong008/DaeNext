@@ -64,8 +64,8 @@ routing {
         .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "http-proxy")
         .unwrap();
     assert_eq!(http_row["status"].as_str().unwrap(), "protocol-closed");
-    assert_eq!(http_row["ok"].as_bool().unwrap(), true);
-    assert_eq!(http_row["protocol_closed"].as_bool().unwrap(), true);
+    assert!(http_row["ok"].as_bool().unwrap());
+    assert!(http_row["protocol_closed"].as_bool().unwrap());
     assert_eq!(
         http_row["udp_semantics"].as_str().unwrap(),
         "protocol-closed"

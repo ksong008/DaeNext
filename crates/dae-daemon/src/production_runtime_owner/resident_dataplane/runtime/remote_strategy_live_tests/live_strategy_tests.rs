@@ -40,12 +40,10 @@ mod remote_strategy_live_tests {
 
         assert_strategy_selects(
             "fixed(0)",
-            &format!(
-                r#"
+            r#"
         filter: name(node_a, node_b)
         policy: fixed(0)
-        "#
-            ),
+        "#,
             &node_a,
             &node_b,
             check_server,
@@ -53,12 +51,10 @@ mod remote_strategy_live_tests {
         );
         assert_strategy_selects(
             "random",
-            &format!(
-                r#"
+            r#"
         filter: name(node_a, node_b)
         policy: random
-        "#
-            ),
+        "#,
             &node_a,
             &node_b,
             check_server,
@@ -66,12 +62,10 @@ mod remote_strategy_live_tests {
         );
         assert_strategy_selects(
             "min",
-            &format!(
-                r#"
+            r#"
         filter: name(node_a, node_b)
         policy: min
-        "#
-            ),
+        "#,
             &node_a,
             &node_b,
             check_server,
@@ -79,12 +73,10 @@ mod remote_strategy_live_tests {
         );
         assert_strategy_selects(
             "min_avg10",
-            &format!(
-                r#"
+            r#"
         filter: name(node_a, node_b)
         policy: min_avg10
-        "#
-            ),
+        "#,
             &node_a,
             &node_b,
             check_server,
@@ -92,12 +84,10 @@ mod remote_strategy_live_tests {
         );
         assert_strategy_selects(
             "min_moving_avg",
-            &format!(
-                r#"
+            r#"
         filter: name(node_a, node_b)
         policy: min_moving_avg
-        "#
-            ),
+        "#,
             &node_a,
             &node_b,
             check_server,
@@ -105,13 +95,11 @@ mod remote_strategy_live_tests {
         );
         assert_strategy_selects(
             "add_latency",
-            &format!(
-                r#"
+            r#"
         filter: name(node_a)
         filter: name(node_b) [add_latency: 250ms]
         policy: min
-        "#
-            ),
+        "#,
             &node_a,
             &node_b,
             check_server,
@@ -121,13 +109,11 @@ mod remote_strategy_live_tests {
         node_a.set_delay_ms(140);
         node_b.set_delay_ms(110);
         let tolerance_config = live_strategy_config(
-            &format!(
-                r#"
+            r#"
         filter: name(node_a, node_b)
         policy: min
         check_tolerance: 80ms
-        "#
-            ),
+        "#,
             &node_a,
             &node_b,
             check_server,

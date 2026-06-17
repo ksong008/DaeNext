@@ -3,7 +3,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     let primary_host = fixture_host(FixtureEndpoint::Primary);
     let authority_host = fixture_host(FixtureEndpoint::Authority);
     let anytls = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "anytls_live".to_owned(),
         anytls_fixture_url(&primary_host, fixture_port(1)),
@@ -20,7 +20,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     ));
 
     let vmess = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vmess_live".to_owned(),
         vmess_fixture_url("vmess", &primary_host, fixture_port(2), "tcp", "", "", ""),
@@ -36,7 +36,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     ));
 
     let vmess_tls = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vmess_tls_live".to_owned(),
         vmess_fixture_url_with_sni(
@@ -67,7 +67,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     );
 
     let vmess_websocket = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vmess_ws_live".to_owned(),
         vmess_fixture_url(
@@ -106,7 +106,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     assert!(!vmess_websocket_graph.to_string().contains(&authority_host));
 
     let vmess_websocket_tls = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vmess_ws_tls_live".to_owned(),
         vmess_fixture_url_with_sni(
@@ -146,7 +146,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     );
 
     let vmess_httpupgrade = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vmess_httpupgrade_live".to_owned(),
         vmess_fixture_url(
@@ -189,7 +189,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     );
 
     let vmess_httpupgrade_tls = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vmess_httpupgrade_tls_live".to_owned(),
         vmess_fixture_url_with_sni(
@@ -229,7 +229,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     );
 
     let vmess_grpc = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vmess_grpc_live".to_owned(),
         vmess_fixture_url(
@@ -272,7 +272,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     assert!(!vmess_grpc_graph.to_string().contains(&authority_host));
 
     let vmess_h2 = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vmess_h2_live".to_owned(),
         vmess_fixture_url_with_sni(
@@ -314,7 +314,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     assert!(!vmess_h2_graph.to_string().contains(&authority_host));
 
     let vless_websocket = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vless_ws_live".to_owned(),
         vless_fixture_url(
@@ -361,7 +361,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     assert!(!vless_websocket_graph.to_string().contains(&authority_host));
 
     let vless_httpupgrade = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vless_httpupgrade_live".to_owned(),
         vless_fixture_url(
@@ -412,7 +412,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     );
 
     let vless_h2 = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "vless_h2_live".to_owned(),
         vless_fixture_url(

@@ -69,7 +69,6 @@ pub(crate) fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .write(true)
         .open(path)?;
     file.write_all(line)?;
     set_log_file_permissions(path)
@@ -473,7 +472,7 @@ pub(crate) fn prune_log_file_if_needed(
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
-    if size <= max_bytes && last_id % LOG_PRUNE_INTERVAL != 0 {
+    if size <= max_bytes && !last_id.is_multiple_of(LOG_PRUNE_INTERVAL) {
         return Ok(());
     }
     prune_log_file_with_settings(path, max_entries, max_bytes as i64)

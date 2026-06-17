@@ -1,3 +1,6 @@
+// H1 xHTTP stream state stores mutually exclusive full clients or split halves inline.
+#![allow(clippy::large_enum_variant)]
+
 use super::request::{
     write_xhttp_h1_chunk, xhttp_h1_packet_up_request_bytes, xhttp_h1_request_bytes,
     xhttp_session_path_suffix,

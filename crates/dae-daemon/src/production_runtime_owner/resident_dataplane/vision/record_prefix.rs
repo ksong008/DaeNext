@@ -14,7 +14,7 @@ pub(crate) fn could_be_tls_record_prefix(pending: &[u8]) -> bool {
     if pending.is_empty() {
         return true;
     }
-    if !matches!(pending[0], 20 | 21 | 22 | 23) {
+    if !matches!(pending[0], 20..=23) {
         return false;
     }
     if pending.len() == 1 {
@@ -58,7 +58,7 @@ pub(crate) fn peek_complete_tls_record(pending: &[u8]) -> Result<Option<(u8, usi
         return Ok(None);
     }
     let record_type = pending[0];
-    if !matches!(record_type, 20 | 21 | 22 | 23) {
+    if !matches!(record_type, 20..=23) {
         return Err(format!(
             "unexpected TLS record type before VLESS Vision uplink overlay switch: {record_type}"
         ));

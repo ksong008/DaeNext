@@ -1,4 +1,7 @@
 use super::*;
+
+// These names are domain-visible attach roles and intentionally include direction.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner) enum NativeEbpfAttachRole {
     PeerIngress,

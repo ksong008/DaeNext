@@ -316,13 +316,14 @@ pub(crate) fn decode_percent_escapes(value: &str) -> String {
     let mut changed = false;
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
-                out.push((high << 4) | low);
-                changed = true;
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+        {
+            out.push((high << 4) | low);
+            changed = true;
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;

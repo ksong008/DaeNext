@@ -1,8 +1,11 @@
 use super::*;
+
+pub(crate) type TopologyValues = (Value, Option<u32>, Option<[u8; 6]>, Option<[u8; 6]>, u32);
+
 pub(crate) fn read_topology_values(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
-) -> (Value, Option<u32>, Option<[u8; 6]>, Option<[u8; 6]>, u32) {
+) -> TopologyValues {
     let dae_netns_id = effective_dae_netns_id(steps, options.dae_netns_id);
     let dae0_link_detail_step = run_observation_step(
         steps,

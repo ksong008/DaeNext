@@ -63,7 +63,7 @@ pub(crate) fn insert_evidence_sections(
             "post_traffic_host_stats": context.evidence.active_tcp.post_traffic_host_stats.clone(),
             "route_dial_tcp_magic_network_mark_mptcp_observed": context.facts.active_tcp_relay_passed
                 && context.evidence.active_tcp.so_mark_observed
-                && (!context.options.active_tcp_mptcp || context.evidence.active_tcp.mptcp_observed.clone()),
+                && (!context.options.active_tcp_mptcp || context.evidence.active_tcp.mptcp_observed),
             "route_dial_tcp_rust_control_plane_executed": false,
         }),
     );

@@ -125,7 +125,7 @@ fn expand_resident_dns_qname_rules_with_resolver(
             if function.name != "qname" {
                 continue;
             }
-            expand_resident_dns_qname_function(function, &resolver, &mut geodata_report, context)?;
+            expand_resident_dns_qname_function(function, resolver, &mut geodata_report, context)?;
         }
     }
     Ok(rules)
@@ -330,6 +330,8 @@ pub(super) fn build_resident_userspace_routing_matcher_with_geodata(
         .map_err(|err| format!("build resident userspace routing matcher: {err}"))
 }
 
+// Routing map updates keep map fds, metadata, config, geodata, and report source explicit.
+#[allow(clippy::too_many_arguments)]
 fn update_resident_routing_map_fd(
     routing_map_fd: i32,
     routing_info: RuntimeMapInfo,

@@ -170,7 +170,7 @@ async fn relay_tcp_shadowsocksr_stream_async(
                 }
             }
             _ = time::sleep(Duration::from_millis(100)) => {
-                if proxy_closed || (inbound_closed && proxy_closed) {
+                if proxy_closed {
                     break;
                 }
                 if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
@@ -179,7 +179,7 @@ async fn relay_tcp_shadowsocksr_stream_async(
             }
         }
 
-        if proxy_closed || (inbound_closed && proxy_closed) {
+        if proxy_closed {
             break;
         }
     }

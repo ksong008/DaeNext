@@ -84,7 +84,7 @@ pub(crate) async fn relay_tcp_over_quic_stream_async(
             }
         }
 
-        if proxy_closed || (inbound_closed && proxy_closed) {
+        if proxy_closed {
             break;
         }
     }
@@ -303,34 +303,6 @@ fn salamander_hash(key: &[u8], salt: &[u8; HYSTERIA2_SALAMANDER_SALT_LEN]) -> [u
     hash
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hysteria2_salamander_packet_wrapper_roundtrips_payload() {
-        let key = b"obfs-secret";
-        let payload = b"fixture-quic-packet";
-        let packet = salamander_obfuscate_packet(key, payload);
-        assert_eq!(packet.len(), HYSTERIA2_SALAMANDER_SALT_LEN + payload.len());
-        assert_ne!(&packet[HYSTERIA2_SALAMANDER_SALT_LEN..], payload);
-
-        let mut storage = packet;
-        let len = storage.len();
-        let mut bufs = [IoSliceMut::new(&mut storage)];
-        let mut meta = [udp::RecvMeta {
-            len,
-            stride: len,
-            ..Default::default()
-        }];
-        assert!(salamander_deobfuscate_received(
-            key, &mut bufs, &mut meta, 1
-        ));
-        assert_eq!(meta[0].len, payload.len());
-        assert_eq!(&bufs[0][..payload.len()], payload);
-    }
-}
-
 pub(crate) async fn resolve_proxy_udp_addr_async(
     proxy: &ResidentProxyPlan,
 ) -> Result<SocketAddr, String> {
@@ -374,4 +346,32 @@ pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hysteria2_salamander_packet_wrapper_roundtrips_payload() {
+        let key = b"obfs-secret";
+        let payload = b"fixture-quic-packet";
+        let packet = salamander_obfuscate_packet(key, payload);
+        assert_eq!(packet.len(), HYSTERIA2_SALAMANDER_SALT_LEN + payload.len());
+        assert_ne!(&packet[HYSTERIA2_SALAMANDER_SALT_LEN..], payload);
+
+        let mut storage = packet;
+        let len = storage.len();
+        let mut bufs = [IoSliceMut::new(&mut storage)];
+        let mut meta = [udp::RecvMeta {
+            len,
+            stride: len,
+            ..Default::default()
+        }];
+        assert!(salamander_deobfuscate_received(
+            key, &mut bufs, &mut meta, 1
+        ));
+        assert_eq!(meta[0].len, payload.len());
+        assert_eq!(&bufs[0][..payload.len()], payload);
+    }
 }

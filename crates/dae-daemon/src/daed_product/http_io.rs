@@ -232,7 +232,7 @@ fn is_local_origin_host(host: &str) -> bool {
     let Ok(ip) = host.parse::<std::net::IpAddr>() else {
         return false;
     };
-    ip.is_loopback() || local_interface_ips().iter().any(|local| *local == ip)
+    ip.is_loopback() || local_interface_ips().contains(&ip)
 }
 
 fn local_interface_ips() -> Vec<std::net::IpAddr> {

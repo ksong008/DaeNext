@@ -171,10 +171,10 @@ impl AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_> {
 
         loop {
             let mux_id = self.mux_id;
-            if parse_pending_v2ray_plugin_mux_frames(self.state, mux_id)? {
-                if drain_v2ray_plugin_mux_payload(self.state, out)? || out.remaining() == 0 {
-                    return Poll::Ready(Ok(()));
-                }
+            if parse_pending_v2ray_plugin_mux_frames(self.state, mux_id)?
+                && (drain_v2ray_plugin_mux_payload(self.state, out)? || out.remaining() == 0)
+            {
+                return Poll::Ready(Ok(()));
             }
             if self.state.closed {
                 return Poll::Ready(Ok(()));

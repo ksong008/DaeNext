@@ -49,7 +49,7 @@ impl VisionUnpadder {
                     }
                     if self.pending[..16] != self.user_uuid {
                         self.state = VisionUnpadState::Raw;
-                        out.extend(self.pending.drain(..));
+                        out.append(&mut self.pending);
                         break;
                     }
                     self.pending.drain(..16);
@@ -115,20 +115,20 @@ impl VisionUnpadder {
                         }
                         VISION_COMMAND_END => {
                             self.state = VisionUnpadState::Raw;
-                            out.extend(self.pending.drain(..));
+                            out.append(&mut self.pending);
                             break;
                         }
                         VISION_COMMAND_DIRECT => {
                             self.direct_command_seen = true;
                             self.state = VisionUnpadState::Raw;
-                            out.extend(self.pending.drain(..));
+                            out.append(&mut self.pending);
                             break;
                         }
                         _ => unreachable!(),
                     }
                 }
                 VisionUnpadState::Raw => {
-                    out.extend(self.pending.drain(..));
+                    out.append(&mut self.pending);
                     break;
                 }
             }

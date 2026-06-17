@@ -165,10 +165,10 @@ impl XhttpXmuxH3Manager {
         !client.connection.is_finished()
             && client.left_usage != 0
             && client.usage.left_requests.load(Ordering::Acquire) > 0
-            && !client
+            && client
                 .usage
                 .unreusable_at
-                .is_some_and(|deadline| Instant::now() > deadline)
+                .is_none_or(|deadline| Instant::now() <= deadline)
     }
 }
 

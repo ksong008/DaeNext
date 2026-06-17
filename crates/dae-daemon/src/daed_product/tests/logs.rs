@@ -580,7 +580,7 @@ pub(crate) fn resident_product_log_fields_hide_internal_graph_ids() {
         }),
     );
 
-    assert!(fields.get("graphId").is_none());
+    assert!(!fields.contains_key("graphId"));
     let packet_session = fields["packetSession"].as_str();
     assert!(!packet_session.contains("graphId"), "{packet_session}");
     assert!(

@@ -100,29 +100,25 @@ routing {
     );
     assert_eq!(live_row["planner_status"].as_str().unwrap(), "admitted");
     assert_eq!(live_row["admitted_count"].as_u64().unwrap(), 1);
-    assert_eq!(
+    assert!(
         live_row["generated_solver"]["executableGraphReady"]
             .as_bool()
-            .unwrap(),
-        true
+            .unwrap()
     );
-    assert_eq!(
+    assert!(
         live_row["generated_solver"]["runtimeComponentsReady"]
             .as_bool()
-            .unwrap(),
-        true
+            .unwrap()
     );
-    assert_eq!(
-        live_row["generated_solver"]["nativeReady"]
+    assert!(
+        !live_row["generated_solver"]["nativeReady"]
             .as_bool()
-            .unwrap(),
-        false
+            .unwrap()
     );
-    assert_eq!(
-        live_row["generated_solver"]["productionReady"]
+    assert!(
+        !live_row["generated_solver"]["productionReady"]
             .as_bool()
-            .unwrap(),
-        false
+            .unwrap()
     );
     assert_eq!(
         live_row["candidates"][0]["runtimeComponents"]["probeExecutor"]["executor"]

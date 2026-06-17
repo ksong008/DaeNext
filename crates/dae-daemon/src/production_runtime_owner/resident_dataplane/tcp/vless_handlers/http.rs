@@ -122,25 +122,6 @@ fn vless_h2_initial_data_chunks(
     Ok(chunks)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vless_h2_initial_payload_is_not_coalesced_with_request_header() {
-        let key = [7_u8; 16];
-        let sniff = b"TLS-client-hello";
-        let chunks = vless_h2_initial_data_chunks(&key, "", "203.0.113.10:443", sniff).unwrap();
-        let coalesced =
-            packet::first_write_bytes(&key, "", "tcp", "203.0.113.10:443", false, sniff).unwrap();
-
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[1].as_ref(), sniff);
-        assert!(coalesced.starts_with(chunks[0].as_ref()));
-        assert_eq!(&coalesced[chunks[0].len()..], sniff);
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_vless_grpc_tcp_connection_async(
     inbound: &mut TokioTcpStream,
@@ -795,4 +776,23 @@ pub(crate) async fn handle_resident_proxy_tcp_connection_async(
         "resident async TCP dispatcher has no handler for protocol {} net {} tls {}",
         selection.proxy.protocol, selection.proxy.net, selection.proxy.tls
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vless_h2_initial_payload_is_not_coalesced_with_request_header() {
+        let key = [7_u8; 16];
+        let sniff = b"TLS-client-hello";
+        let chunks = vless_h2_initial_data_chunks(&key, "", "203.0.113.10:443", sniff).unwrap();
+        let coalesced =
+            packet::first_write_bytes(&key, "", "tcp", "203.0.113.10:443", false, sniff).unwrap();
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].as_ref(), sniff);
+        assert!(coalesced.starts_with(chunks[0].as_ref()));
+        assert_eq!(&coalesced[chunks[0].len()..], sniff);
+    }
 }

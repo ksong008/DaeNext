@@ -926,7 +926,7 @@ fn reject_unknown_object_fields(
 ) -> Result<(), String> {
     let unsupported = object
         .keys()
-        .filter(|key| !allowed.iter().any(|allowed| key.as_str() == *allowed))
+        .filter(|key| !allowed.contains(&key.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     if unsupported.is_empty() {

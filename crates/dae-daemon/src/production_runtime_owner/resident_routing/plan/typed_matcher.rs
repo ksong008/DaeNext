@@ -1,4 +1,11 @@
 use super::*;
+
+type UserspaceMatcherTypedSets = (
+    Vec<RoutingSharedDomainSet>,
+    Vec<RoutingSharedLpmSet>,
+    Vec<RoutingMatchSet>,
+);
+
 pub(crate) fn domain_set_json(set: &ResidentDomainSet) -> Value {
     json!({
         "rule_index": set.rule_index,
@@ -20,14 +27,7 @@ fn domain_key_name(key: DomainKey) -> &'static str {
 
 pub(crate) fn userspace_matcher_typed_sets(
     plan: &ResidentRoutingPlan,
-) -> Result<
-    (
-        Vec<RoutingSharedDomainSet>,
-        Vec<RoutingSharedLpmSet>,
-        Vec<RoutingMatchSet>,
-    ),
-    String,
-> {
+) -> Result<UserspaceMatcherTypedSets, String> {
     let domain_sets = plan
         .domain_sets
         .iter()

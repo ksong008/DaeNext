@@ -137,9 +137,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     let decoder_result = decoder
         .await
         .map_err(|err| format!("join VMess gRPC response decoder failed: {err}"))?;
-    if let Err(err) = decoder_result {
-        return Err(err);
-    }
+    decoder_result?;
     Ok(stats)
 }
 

@@ -51,10 +51,10 @@ pub(super) fn wait_for_http(port: u16, path: &str, child: &mut Child) {
             }
             panic!("daed exited early: {status}; stderr={stderr}");
         }
-        if let Ok(response) = try_http_request(port, "GET", path, None, None) {
-            if response.contains("200 OK") {
-                return;
-            }
+        if let Ok(response) = try_http_request(port, "GET", path, None, None)
+            && response.contains("200 OK")
+        {
+            return;
         }
         assert!(Instant::now() < deadline, "timed out waiting for daed");
         thread::sleep(Duration::from_millis(50));

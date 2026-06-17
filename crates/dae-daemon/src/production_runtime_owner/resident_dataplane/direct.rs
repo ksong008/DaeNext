@@ -168,7 +168,7 @@ pub(super) async fn relay_tcp_direct_async(
             }
         }
 
-        if direct_closed || (inbound_closed && direct_closed) {
+        if direct_closed {
             break;
         }
     }

@@ -80,9 +80,7 @@ pub(crate) fn build_vmess_proxy_plan(
     };
     let stream_path = if net == "grpc" {
         resident_grpc_service_name(&parsed.path)
-    } else if net == "h2" {
-        resident_stream_path(&parsed.path)
-    } else if matches!(net.as_str(), "websocket" | "httpupgrade") {
+    } else if matches!(net.as_str(), "h2" | "websocket" | "httpupgrade") {
         resident_stream_path(&parsed.path)
     } else {
         String::new()

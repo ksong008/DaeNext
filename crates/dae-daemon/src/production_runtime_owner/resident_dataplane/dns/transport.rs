@@ -605,7 +605,7 @@ where
 }
 
 pub(super) fn parse_doh_http_response(request: &[u8], raw: &[u8]) -> Result<Vec<u8>, String> {
-    let header_end = find_http_header_end(raw).ok_or_else(|| "DoH response has no header end")?;
+    let header_end = find_http_header_end(raw).ok_or("DoH response has no header end")?;
     let headers = &raw[..header_end];
     let mut body = raw[header_end + 4..].to_vec();
     let header_text = std::str::from_utf8(headers)
