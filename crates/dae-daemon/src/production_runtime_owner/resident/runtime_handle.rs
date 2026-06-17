@@ -86,11 +86,10 @@ impl ResidentProductionRuntime {
             .unwrap_or_default()
     }
 
-    pub fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+    pub(crate) fn manual_probe_handle(&self) -> Option<ResidentManualProbeHandle> {
         self.dataplane
             .as_ref()
-            .map(|dataplane| dataplane.probe_node_latencies(links))
-            .unwrap_or_default()
+            .map(ResidentDataplaneRuntime::manual_probe_handle)
     }
 
     pub fn prune_event_log(&self) -> std::io::Result<()> {
