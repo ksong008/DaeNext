@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 pub mod active;
 pub mod active_handoff;
 pub mod dial;

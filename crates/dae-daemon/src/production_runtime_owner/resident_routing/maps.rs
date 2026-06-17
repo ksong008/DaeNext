@@ -297,6 +297,8 @@ fn create_bpf_map(spec: CreateBpfMapSpec) -> io::Result<OwnedFd> {
     let name = spec.name.as_bytes();
     let copy_len = name.len().min(attr.map_name.len() - 1);
     attr.map_name[..copy_len].copy_from_slice(&name[..copy_len]);
+    // SAFETY: attr points to a repr(C) BPF_MAP_CREATE attribute block whose
+    // fields are initialized above and the kernel copies it during syscall.
     let fd = unsafe {
         libc::syscall(
             libc::SYS_bpf,
@@ -308,6 +310,8 @@ fn create_bpf_map(spec: CreateBpfMapSpec) -> io::Result<OwnedFd> {
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: fd is a fresh descriptor returned by the successful bpf syscall
+    // and is transferred into OwnedFd exactly once.
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 }
 

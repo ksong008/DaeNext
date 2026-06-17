@@ -235,6 +235,9 @@ fn open_socket_with_flags(
     protocol: libc::c_int,
     socket_flags: libc::c_int,
 ) -> io::Result<OwnedFd> {
+    // SAFETY: socket is called with a valid address family/type/protocol
+    // combination supplied by this module. A non-negative fd is immediately
+    // wrapped in OwnedFd below so it is closed on all later error paths.
     let fd = unsafe {
         libc::socket(
             family,
@@ -245,6 +248,8 @@ fn open_socket_with_flags(
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: `fd` is a fresh, non-negative descriptor returned by socket and
+    // ownership has not been transferred anywhere else.
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 

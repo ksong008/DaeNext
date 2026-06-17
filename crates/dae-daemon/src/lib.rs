@@ -1,4 +1,5 @@
 #![recursion_limit = "256"]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 mod allocator;
 mod bpf_loader;
