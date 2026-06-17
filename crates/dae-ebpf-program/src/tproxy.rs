@@ -308,31 +308,30 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     if info.l4proto == IPPROTO_TCP && !is_new_tcp(ptr::addr_of!(info)) {
         if let Some(state) = unsafe {
             current_dae_netns_tcp_state(skb, ptr::addr_of!(info), sock_tuple.as_mut_ptr())
-        } {
-            if state != BPF_TCP_LISTEN {
-                let mut redirect_tuple = BpfRedirectTuple {
-                    sip: crate::abi::BpfIpBytes::zeroed(),
-                    dip: crate::abi::BpfIpBytes::zeroed(),
-                };
-                let mut redirect_entry = BpfRedirectEntry {
-                    ifindex: 0,
-                    smac: [0; 6],
-                    dmac: [0; 6],
-                    from_wan: 0,
-                    padding: [0; 3],
-                };
-                return unsafe {
-                    redirect_to_control_plane(
-                        skb,
-                        link_h_len,
-                        ptr::addr_of!(info),
-                        ptr::addr_of!(key),
-                        false,
-                        ptr::addr_of_mut!(redirect_tuple),
-                        ptr::addr_of_mut!(redirect_entry),
-                    )
-                };
-            }
+        } && state != BPF_TCP_LISTEN
+        {
+            let mut redirect_tuple = BpfRedirectTuple {
+                sip: crate::abi::BpfIpBytes::zeroed(),
+                dip: crate::abi::BpfIpBytes::zeroed(),
+            };
+            let mut redirect_entry = BpfRedirectEntry {
+                ifindex: 0,
+                smac: [0; 6],
+                dmac: [0; 6],
+                from_wan: 0,
+                padding: [0; 3],
+            };
+            return unsafe {
+                redirect_to_control_plane(
+                    skb,
+                    link_h_len,
+                    ptr::addr_of!(info),
+                    ptr::addr_of!(key),
+                    false,
+                    ptr::addr_of_mut!(redirect_tuple),
+                    ptr::addr_of_mut!(redirect_entry),
+                )
+            };
         }
         let routing_result = routing::lookup_routing_result(ptr::addr_of!(key));
         if !routing_result.is_null() {
@@ -489,17 +488,17 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         outbound = (route_result & 0xff) as u8;
         mark = (route_result >> 8) as u32;
         let must = ((route_result >> 40) & 1) != 0;
-        if outbound != routing::ROUTE_OUTBOUND_DIRECT || mark != 0 || must {
-            if !routing::save_routing_result(
+        if (outbound != routing::ROUTE_OUTBOUND_DIRECT || mark != 0 || must)
+            && !routing::save_routing_result(
                 ptr::addr_of!(key),
                 ptr::addr_of!(info),
                 outbound,
                 mark,
                 must,
                 pid_pname,
-            ) {
-                return TC_ACT_SHOT;
-            }
+            )
+        {
+            return TC_ACT_SHOT;
         }
     }
 

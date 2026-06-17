@@ -1,5 +1,10 @@
 #![cfg_attr(target_arch = "bpf", no_std)]
 #![cfg_attr(target_arch = "bpf", no_main)]
+// eBPF helper and program entry boundaries use fixed verifier raw-pointer ABI.
+#![cfg_attr(
+    feature = "tproxy-program",
+    allow(clippy::missing_safety_doc, clippy::not_unsafe_ptr_arg_deref)
+)]
 
 #[cfg(feature = "tproxy-program")]
 pub mod abi;

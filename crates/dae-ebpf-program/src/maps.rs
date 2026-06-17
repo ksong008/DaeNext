@@ -77,6 +77,14 @@ impl<K, V, const TYPE: usize, const MAX_ENTRIES: usize> BtfMapDef<K, V, TYPE, MA
     }
 }
 
+impl<K, V, const TYPE: usize, const MAX_ENTRIES: usize> Default
+    for BtfMapDef<K, V, TYPE, MAX_ENTRIES>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const fn size_of<T>() -> u32 {
     core::mem::size_of::<T>() as u32
 }
