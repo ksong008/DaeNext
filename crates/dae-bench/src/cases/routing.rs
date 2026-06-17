@@ -1,11 +1,11 @@
 use std::hint::black_box;
 
+use dae_core_types::OutboundIndex;
+use dae_routing::{DomainKey, DomainMatcher, IpPrefix, Query, RoutingMatcher};
 use dae_runtime_control::{
     LpmMapTemplate, RoutingNativeFallback, RoutingNativeMatch, RoutingNativeRule,
     build_routing_native_plan,
 };
-use dae_core_types::OutboundIndex;
-use dae_routing::{DomainKey, DomainMatcher, IpPrefix, Query, RoutingMatcher};
 use serde_json::Value;
 
 use crate::{BenchCase, Measurement, measure};

@@ -13,8 +13,8 @@ use dae_engine::{
 use serde_json::{Value, json};
 
 use super::ProductionRuntimeOwnerOptions;
-use super::active_tcp::run_active_tcp_probe;
 use super::command::{CommandSpec, path_string, run_observation_command};
+use super::live_tcp_probe::run_active_tcp_probe;
 use super::native_ebpf::native_backend_runtime_decision_for_options;
 use super::{PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE};
 

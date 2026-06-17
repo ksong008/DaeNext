@@ -1,7 +1,6 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use dae_runtime_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker, DomainRoutingView};
 use dae_datapath::{
     DNS_NAT_TIMEOUT_MS, UdpDirectPacketConn, UdpDirectSocketOptions, magic_network_bytes,
 };
@@ -11,6 +10,7 @@ use dae_dns::{
 };
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 use dae_netutil::parse_magic_network;
+use dae_runtime_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker, DomainRoutingView};
 use serde_json::{Value, json};
 
 use super::{RESPONSE_IP, RESPONSE_IP_TEXT, RESPONSE_TTL};

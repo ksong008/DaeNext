@@ -217,7 +217,7 @@ pub(super) fn execute_owner_smoke(
                             outbound_relay_succeeded,
                             so_mark_observed,
                             mptcp_observed,
-                        ) = active_tcp::run_active_tcp_relay_probe(relay_listener, options);
+                        ) = run_active_tcp_relay_probe(relay_listener, options);
                         evidence.active_tcp.relay_accept = relay_accept;
                         evidence.active_tcp.upstream = upstream;
                         evidence.active_tcp.relay_client_traffic = relay_client_traffic;

@@ -1,9 +1,11 @@
 use super::*;
 pub fn service_contract_capabilities(version: &str) -> Value {
-    let control_plane_runtime_state = dae_runtime_control::RuntimeStateReport::rust_owned_control_plane();
+    let control_plane_runtime_state =
+        dae_runtime_control::RuntimeStateReport::rust_owned_control_plane();
     let control_plane_runtime_state_ready =
         control_plane_runtime_state.ready_for_product_control_plane();
-    let control_api_typed_report = dae_runtime_control::ControlApiTypedReport::formal_runtime_control_api();
+    let control_api_typed_report =
+        dae_runtime_control::ControlApiTypedReport::formal_runtime_control_api();
     let control_plane_typed_report_ready = matches!(
         control_api_typed_report.status,
         dae_runtime_control::ControlApiReportStatus::Pass
