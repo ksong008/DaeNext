@@ -220,6 +220,17 @@ impl DnsCacheStore {
         self.entries.contains_key(key)
     }
 
+    pub fn remove(&mut self, key: &DnsCacheKey) -> Option<DnsCacheEntry> {
+        self.entries.remove(key)
+    }
+
+    pub fn remove_packet_question(
+        &mut self,
+        question: &DnsPacketQuestionView<'_>,
+    ) -> Result<Option<DnsCacheEntry>, DnsError> {
+        self.entries.remove_packet_question(question)
+    }
+
     pub fn stats(&self) -> &DnsCacheStats {
         &self.stats
     }
