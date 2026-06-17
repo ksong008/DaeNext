@@ -70,9 +70,9 @@ pub(super) fn run_domain_routing_map_command(args: &[String]) -> LoaderOutput {
 
 pub(super) fn run_routing_map_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
-        Some("apply") if args.len() == 1 => LoaderOutput::usage(
-            "routing-map apply requires the dae-ebpf-loader stdio entrypoint",
-        ),
+        Some("apply") if args.len() == 1 => {
+            LoaderOutput::usage("routing-map apply requires the dae-ebpf-loader stdio entrypoint")
+        }
         Some(subcommand) => {
             LoaderOutput::usage(format!("unsupported routing-map subcommand: {subcommand}"))
         }

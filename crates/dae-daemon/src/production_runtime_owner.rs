@@ -6,12 +6,12 @@ use dae_ebpf_support::{
 };
 use serde_json::{Value, json};
 
-mod active_dns;
-mod active_tcp;
-mod active_udp;
 mod command;
 mod deep_area;
 mod host_ops;
+mod live_dns_probe;
+mod live_tcp_probe;
+mod live_udp_probe;
 mod native_assets;
 mod native_ebpf;
 mod netns_link;
@@ -28,28 +28,29 @@ mod topology;
 mod udp_dns_datapath_contract;
 mod udp_io;
 
-use active_dns::{
+use command::{
+    bpf_dae_snapshot, ensure_safe_run_root, path_string, runtime_resource_leftovers,
+    wait_for_loaded_map_cleanup,
+};
+use live_dns_probe::{
     ActiveDnsEvidence, DEFAULT_ACTIVE_DNS_QNAME, DEFAULT_ACTIVE_DNS_TARGET_PORT,
     DEFAULT_ACTIVE_DNS_UPSTREAM_IP, DEFAULT_ACTIVE_DNS_UPSTREAM_PORT,
     push_active_dns_preflight_checks, run_active_dns_probe,
 };
-use active_tcp::{
+use live_tcp_probe::{
     ActiveTcpEvidence, DEFAULT_ACTIVE_TCP_CLIENT_IP, DEFAULT_ACTIVE_TCP_MPTCP,
     DEFAULT_ACTIVE_TCP_SO_MARK, DEFAULT_ACTIVE_TCP_TARGET_IP, DEFAULT_ACTIVE_TCP_TARGET_PORT,
     attach_lan_program, cleanup_active_tcp_resources, push_active_tcp_preflight_checks,
-    run_active_tcp_probe, setup_client_topology, setup_production_ipv4_datapath,
-    show_host_program_stats, show_lan_program, show_lan_program_stats, show_peer_program_stats,
-    update_existing_routing_map, update_routing_map,
+    run_active_tcp_probe, run_active_tcp_relay_probe, setup_client_topology,
+    setup_production_ipv4_datapath, show_host_program_stats, show_lan_program,
+    show_lan_program_stats, show_peer_program_stats, update_existing_routing_map,
+    update_routing_map,
 };
-use active_udp::{
+use live_udp_probe::{
     ActiveUdpEvidence, DEFAULT_ACTIVE_UDP_TARGET_IP, DEFAULT_ACTIVE_UDP_TARGET_PORT,
     active_udp_loopback_target_cidr, active_udp_loopback_target_present,
     add_active_udp_loopback_target, delete_active_udp_loopback_target,
     push_active_udp_preflight_checks, run_active_udp_probe,
-};
-use command::{
-    bpf_dae_snapshot, ensure_safe_run_root, path_string, runtime_resource_leftovers,
-    wait_for_loaded_map_cleanup,
 };
 use native_ebpf::NativeEbpfRuntimeState;
 pub use netns_link::{NetnsLinkMode, parse_netns_link_mode};

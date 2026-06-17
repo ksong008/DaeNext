@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 
 use serde_json::Value;
 
-use crate::production_runtime_owner::active_tcp::CLIENT_NETNS;
 use crate::production_runtime_owner::command::{CommandSpec, run_observation_command};
+use crate::production_runtime_owner::live_tcp_probe::CLIENT_NETNS;
 
 pub(super) fn run_client_active_dns_probe(
     target: SocketAddr,

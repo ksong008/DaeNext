@@ -7,8 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
-#[cfg(test)]
-use dae_runtime_control::ip_to_key;
 use dae_dns::{
     DOH_MEDIA_TYPE, DnsCacheKey, DnsDomainSet, DnsPacketView, DnsRequestMatchKind,
     DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind, DnsResponseMatchSpec,
@@ -20,6 +18,8 @@ use dae_dns::{
 use dae_routing::IpPrefix;
 #[cfg(test)]
 use dae_routing::RoutingMatcher;
+#[cfg(test)]
+use dae_runtime_control::ip_to_key;
 use http::Request;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};

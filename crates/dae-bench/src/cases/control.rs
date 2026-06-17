@@ -1,15 +1,15 @@
 use std::hint::black_box;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use dae_runtime_control::{
-    DomainRoutingOwner, DomainRoutingOwnerSnapshot, DomainRoutingReloadClearPlan,
-    DomainRoutingSyncPlan, OutboundConnectivityOwner, OutboundConnectivityState,
-};
 use dae_datapath::{
     OUTBOUND_DIRECT, OUTBOUND_USER_DEFINED_MIN, TcpDialMode, choose_dial_target, magic_network_len,
     udp_endpoint_pool_trim_target, write_magic_network_bytes,
 };
 use dae_ebpf_support::{ConnectivityEvent, ConnectivityKey};
+use dae_runtime_control::{
+    DomainRoutingOwner, DomainRoutingOwnerSnapshot, DomainRoutingReloadClearPlan,
+    DomainRoutingSyncPlan, OutboundConnectivityOwner, OutboundConnectivityState,
+};
 
 use crate::{BenchCase, Measurement, measure};
 

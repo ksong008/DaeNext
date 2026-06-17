@@ -5,10 +5,9 @@ fn main() {
     if args == ["connectivity-map", "serve"] {
         let stdin = io::stdin();
         let stdout = io::stdout();
-        if let Err(err) = dae_ebpf_loader::run_connectivity_map_serve(
-            BufReader::new(stdin.lock()),
-            stdout.lock(),
-        ) {
+        if let Err(err) =
+            dae_ebpf_loader::run_connectivity_map_serve(BufReader::new(stdin.lock()), stdout.lock())
+        {
             let _ = writeln!(io::stderr(), "connectivity-map serve failed: {err}");
             std::process::exit(1);
         }
