@@ -13,7 +13,8 @@ use dae_dns::{
     DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind,
     DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher,
     build_doh_request, build_response_cache_plan_from_packet, dns_data_with_zero_id,
-    restore_packed_response_request_id, validate_doh_response,
+    restore_packed_response_request_id, validate_dns_packet_response_for_request_fast,
+    validate_doh_response,
 };
 use dae_routing::IpPrefix;
 use dae_routing::RoutingMatcher;
@@ -47,8 +48,7 @@ use self::routing::{
 use self::transport::parse_doh_http_response;
 use self::transport::{forward_dns_to_upstream_async, forward_dns_udp_async};
 
-const DNS_RCODE_REFUSED: u16 = 5;
-const DNS_RESPONSE_FLAGS_REFUSED: u16 = 0x8180 | DNS_RCODE_REFUSED;
+const DNS_RESPONSE_FLAGS_EMPTY_NOERROR: u16 = 0x8180;
 const DNS_RESPONSE_READ_LIMIT: usize = 4096;
 const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
 const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
@@ -328,6 +328,12 @@ enum ResidentDnsUpstreamScheme {
     Http3,
 }
 
+impl ResidentDnsUpstreamScheme {
+    const fn requires_dns_response_id_match(self) -> bool {
+        matches!(self, Self::Udp | Self::Tcp | Self::TcpUdp | Self::Tls)
+    }
+}
+
 pub(super) fn build_resident_dns_plan(
     config: &Config,
     geodata: &ResidentGeodataStore,
@@ -446,6 +452,7 @@ pub(super) async fn handle_resident_dns_udp_async(
             let response = forward_dns_udp_async(original_dst, payload, plan.mark)
                 .await
                 .map_err(|err| format!("forward DNS asis to {original_dst}: {err}"))?;
+            validate_dns_response_for_request(&request, &response, true)?;
             let response_action = select_response_action_for_upstream(
                 plan,
                 &request,
@@ -478,6 +485,11 @@ async fn resolve_dns_response_routing(
 ) -> Result<Vec<u8>, String> {
     for _ in 0..DNS_RESPONSE_REROUTE_LIMIT {
         let response = forward_dns_to_upstream_async(&upstream, request_payload, plan.mark).await?;
+        validate_dns_response_for_request(
+            request,
+            &response,
+            upstream.scheme.requires_dns_response_id_match(),
+        )?;
         let response_action = select_response_action(plan, request, &response, &upstream)?;
         match response_action {
             ResidentDnsResponseAction::Accept => {
@@ -495,13 +507,24 @@ async fn resolve_dns_response_routing(
     ))
 }
 
+fn validate_dns_response_for_request(
+    request: &DnsPacketView<'_>,
+    response: &[u8],
+    require_matching_id: bool,
+) -> Result<(), String> {
+    let response = DnsPacketView::parse(response)
+        .map_err(|err| format!("parse DNS response for request validation: {err}"))?;
+    validate_dns_packet_response_for_request_fast(request, Some(&response), require_matching_id)
+        .map_err(|err| format!("validate DNS response for request: {err:?}"))
+}
+
 fn build_reject_response(request: &[u8], view: &DnsPacketView<'_>) -> Result<Vec<u8>, String> {
     if request.len() < view.answer_offset() {
         return Err("DNS request question section is truncated".to_owned());
     }
     let mut response = Vec::with_capacity(view.answer_offset());
     response.extend_from_slice(&request[0..2]);
-    response.extend_from_slice(&DNS_RESPONSE_FLAGS_REFUSED.to_be_bytes());
+    response.extend_from_slice(&DNS_RESPONSE_FLAGS_EMPTY_NOERROR.to_be_bytes());
     response.extend_from_slice(&(view.question_count() as u16).to_be_bytes());
     response.extend_from_slice(&0_u16.to_be_bytes());
     response.extend_from_slice(&0_u16.to_be_bytes());
@@ -1066,11 +1089,34 @@ mod tests {
         let view = DnsPacketView::parse(QUERY).unwrap();
         let response = build_reject_response(QUERY, &view).unwrap();
         assert_eq!(&response[0..2], &[0x12, 0x34]);
-        assert_eq!(
-            u16::from_be_bytes([response[2], response[3]]) & 0x000f,
-            DNS_RCODE_REFUSED
-        );
+        assert_eq!(u16::from_be_bytes([response[2], response[3]]) & 0x000f, 0);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
         assert_eq!(&response[12..], &QUERY[12..]);
+    }
+
+    #[test]
+    fn resident_dns_response_validation_matches_id_and_question() {
+        let request = DnsPacketView::parse(QUERY).unwrap();
+        let response = a_response([203, 0, 113, 42]);
+        validate_dns_response_for_request(&request, &response, true).unwrap();
+
+        let mut id_mismatch = response.clone();
+        id_mismatch[0] = 0xab;
+        id_mismatch[1] = 0xcd;
+        assert!(
+            validate_dns_response_for_request(&request, &id_mismatch, true)
+                .unwrap_err()
+                .contains("IdMismatch")
+        );
+        validate_dns_response_for_request(&request, &id_mismatch, false).unwrap();
+
+        let mut qname_mismatch = response;
+        qname_mismatch[13] = b'x';
+        assert!(
+            validate_dns_response_for_request(&request, &qname_mismatch, false)
+                .unwrap_err()
+                .contains("QuestionMismatch")
+        );
     }
 
     fn geosite_list(entries: &[Vec<u8>]) -> Vec<u8> {
