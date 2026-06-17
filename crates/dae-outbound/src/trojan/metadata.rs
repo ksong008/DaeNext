@@ -71,6 +71,10 @@ impl TrojanMetadata {
         Ok(self.encode()?.len())
     }
 
+    pub fn is_empty(&self) -> Result<bool, OutboundError> {
+        Ok(self.len()? == 0)
+    }
+
     pub fn authority(&self) -> String {
         self.address.authority()
     }

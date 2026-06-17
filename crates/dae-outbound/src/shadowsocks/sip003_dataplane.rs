@@ -63,6 +63,8 @@ impl Sip003SimpleObfsHttpOptions {
     }
 }
 
+// SIP003 dataplane tests keep plugin and Shadowsocks inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn simple_obfs_http_shadowsocks_aead_exchange_over_stream<S>(
     stream: &mut S,
     server: &str,

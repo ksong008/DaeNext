@@ -87,6 +87,8 @@ pub fn stream_lifecycle_frames(
     })
 }
 
+// Protocol dataplane tests keep wire inputs explicit at the call boundary.
+#[allow(clippy::too_many_arguments)]
 pub fn tcp_session_reuse_exchange_over_tls_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,

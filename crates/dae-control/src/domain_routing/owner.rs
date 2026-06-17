@@ -95,7 +95,7 @@ impl DomainRoutingOwner {
         } = event;
         self.apply_owner_snapshot_with(
             map_id,
-            &owner_key,
+            owner_key,
             DomainRoutingOwnerSnapshot { bitmap, ips },
             apply,
         )

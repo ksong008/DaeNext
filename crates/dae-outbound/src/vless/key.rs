@@ -16,7 +16,7 @@ pub fn password_to_key(password: &str) -> Result<[u8; 16], OutboundError> {
         if nibble_count >= 32 {
             return Err(OutboundError::BadVless(format!("invalid UUID: {password}")));
         }
-        if nibble_count % 2 == 0 {
+        if nibble_count.is_multiple_of(2) {
             high = nibble << 4;
         } else {
             out[nibble_count / 2] = high | nibble;

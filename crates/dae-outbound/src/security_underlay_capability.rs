@@ -181,6 +181,8 @@ const SECURITY_UNDERLAY_CAPABILITY_ROWS: [SecurityUnderlayCapabilityRow; 8] = [
     ),
 ];
 
+// Ledger row constructors mirror the report columns explicitly.
+#[allow(clippy::too_many_arguments)]
 const fn admitted_row(
     capability_id: &'static str,
     provider: &'static str,
@@ -208,6 +210,8 @@ const fn admitted_row(
     }
 }
 
+// Ledger row constructors mirror the report columns explicitly.
+#[allow(clippy::too_many_arguments)]
 const fn fail_closed_row(
     capability_id: &'static str,
     provider: &'static str,

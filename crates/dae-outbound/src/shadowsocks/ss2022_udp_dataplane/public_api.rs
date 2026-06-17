@@ -24,6 +24,8 @@ pub fn decode_client_packet(
     Ok(decoded)
 }
 
+// SS2022 UDP packet encoding mirrors the wire fields explicitly.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_server_packet(
     cipher: &str,
     password: &str,

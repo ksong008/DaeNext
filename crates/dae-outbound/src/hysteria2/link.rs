@@ -39,10 +39,7 @@ impl Hysteria2Link {
         let (without_fragment, name) = split_once(rest, '#');
         let (authority_path, query_raw) = split_once(without_fragment, '?');
         let authority = authority_path.trim_end_matches('/');
-        let (userinfo, server) = authority
-            .rsplit_once('@')
-            .map(|(user, server)| (user, server))
-            .unwrap_or(("", authority));
+        let (userinfo, server) = authority.rsplit_once('@').unwrap_or(("", authority));
         let (user, password) = parse_userinfo(userinfo)?;
         let query = url::form_urlencoded::parse(query_raw.as_bytes()).collect::<Vec<_>>();
         let insecure = match query_value(&query, "insecure") {

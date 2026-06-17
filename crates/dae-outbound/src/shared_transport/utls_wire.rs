@@ -164,7 +164,7 @@ fn parse_u16_vector(data: &[u8]) -> Result<Option<Vec<String>>, OutboundError> {
         return Ok(None);
     }
     let len = u16_at(data, 0)? as usize;
-    if len % 2 != 0 {
+    if !len.is_multiple_of(2) {
         return Err(bad_utls_wire("TLS u16 vector length is not even"));
     }
     let end = checked_end(2, len, data.len(), "u16 vector")?;
@@ -176,7 +176,7 @@ fn parse_u8_len_u16_vector(data: &[u8]) -> Result<Option<Vec<String>>, OutboundE
         return Ok(None);
     }
     let len = data[0] as usize;
-    if len % 2 != 0 {
+    if !len.is_multiple_of(2) {
         return Err(bad_utls_wire("TLS u8-len u16 vector length is not even"));
     }
     let end = checked_end(1, len, data.len(), "u8-len u16 vector")?;
@@ -299,7 +299,7 @@ fn u24_at(data: &[u8], offset: usize) -> Result<u32, OutboundError> {
 
 fn decode_hex(input: &str) -> Result<Vec<u8>, OutboundError> {
     let input = input.trim();
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err(bad_utls_wire("hex ClientHello record has odd length"));
     }
     input

@@ -1,4 +1,6 @@
 use super::*;
+// SS2022 UDP packet encoding mirrors the wire fields explicitly.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn encode_merged_header_packet(
     conf: &CipherConf2022,
     cipher: &str,

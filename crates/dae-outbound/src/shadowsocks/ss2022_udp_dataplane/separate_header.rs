@@ -1,4 +1,6 @@
 use super::*;
+// SS2022 UDP packet encoding mirrors the wire fields explicitly.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn encode_separate_header_client_packet(
     conf: &CipherConf2022,
     cipher: &str,
@@ -38,6 +40,8 @@ pub(super) fn encode_separate_header_client_packet(
     })
 }
 
+// SS2022 UDP packet encoding mirrors the wire fields explicitly.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn encode_separate_header_server_packet(
     conf: &CipherConf2022,
     cipher: &str,

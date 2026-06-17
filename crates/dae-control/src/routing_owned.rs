@@ -190,9 +190,7 @@ impl RoutingRuleOwner {
         let report =
             self.map_owner
                 .apply_snapshot_with(routing_map_id, lpm_array_map_id, plan, apply)?;
-        if !report.skipped {
-            self.state = Some(state);
-        } else if self.state.is_none() {
+        if !report.skipped || self.state.is_none() {
             self.state = Some(state);
         }
         Ok(RoutingRuleOwnerApplyReport {

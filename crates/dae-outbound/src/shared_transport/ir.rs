@@ -345,7 +345,7 @@ fn parse_i64_digits(input: &str) -> i64 {
 }
 
 fn hex_decode(input: &str) -> Result<Vec<u8>, OutboundError> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err(OutboundError::BadSharedTransport(
             "odd hex length".to_owned(),
         ));

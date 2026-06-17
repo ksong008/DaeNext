@@ -76,6 +76,8 @@ pub struct VMessAeadHttpsHttpUpgradeTlsExchangeReport {
     pub true_dataplane: bool,
 }
 
+// VMess transport dataplane tests keep layered protocol inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn aead_tcp_exchange_over_wss_tls_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,
@@ -157,6 +159,8 @@ where
     })
 }
 
+// VMess transport dataplane tests keep layered protocol inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn aead_tcp_exchange_over_https_httpupgrade_tls_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,

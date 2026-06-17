@@ -83,9 +83,11 @@ pub fn build_synthetic_utls_client_hello_record_hex(
     )?))
 }
 
+type UtlsExtensionBytes = Vec<([u8; 2], Vec<u8>)>;
+
 fn build_extension_entries(
     profile: &UtlsClientHelloProfile,
-) -> Result<Vec<([u8; 2], Vec<u8>)>, OutboundError> {
+) -> Result<UtlsExtensionBytes, OutboundError> {
     profile
         .extension_types
         .iter()

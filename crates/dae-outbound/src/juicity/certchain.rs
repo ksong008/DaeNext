@@ -30,9 +30,7 @@ pub fn generate_cert_chain_hash(raw_certs: &[&[u8]]) -> Vec<u8> {
             None => cert_hash.into(),
         });
     }
-    chain_hash
-        .map(|hash| hash.to_vec())
-        .unwrap_or_else(Vec::new)
+    chain_hash.map(|hash| hash.to_vec()).unwrap_or_default()
 }
 
 pub fn check_pinned_certchain(

@@ -218,10 +218,10 @@ fn parse_allow_insecure(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_
         "allowinsecure",
         "skipVerify",
     ] {
-        if let Some(value) = query_value(query, key) {
-            if parse_bool(&value).unwrap_or(false) {
-                return true;
-            }
+        if let Some(value) = query_value(query, key)
+            && parse_bool(&value).unwrap_or(false)
+        {
+            return true;
         }
     }
     false

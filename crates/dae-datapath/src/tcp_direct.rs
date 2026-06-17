@@ -219,11 +219,8 @@ fn open_tcp_socket_with_flags(
     requested_mptcp: bool,
     socket_flags: libc::c_int,
 ) -> io::Result<(OwnedFd, bool, bool)> {
-    if requested_mptcp {
-        match open_socket_with_flags(family, IPPROTO_MPTCP, socket_flags) {
-            Ok(fd) => return Ok((fd, true, false)),
-            Err(_) => {}
-        }
+    if requested_mptcp && let Ok(fd) = open_socket_with_flags(family, IPPROTO_MPTCP, socket_flags) {
+        return Ok((fd, true, false));
     }
     open_socket_with_flags(family, libc::IPPROTO_TCP, socket_flags)
         .map(|fd| (fd, false, requested_mptcp))
@@ -462,6 +459,8 @@ fn finish_tcp_direct_connection(
     })
 }
 
+// Report assembly keeps the observable socket fields explicit.
+#[allow(clippy::too_many_arguments)]
 fn tcp_direct_dial_report(
     _target: SocketAddr,
     opts: &TcpDirectDialOptions,

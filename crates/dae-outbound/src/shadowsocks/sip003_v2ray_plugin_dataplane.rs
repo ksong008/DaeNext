@@ -93,6 +93,8 @@ impl Sip003V2rayPluginOptions {
     }
 }
 
+// SIP003 dataplane tests keep plugin and Shadowsocks inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn v2ray_plugin_tls_ws_mux_shadowsocks_aead_exchange_over_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,

@@ -117,7 +117,7 @@ pub fn read_mux_frame(stream: &mut impl Read) -> Result<MuxFrame, OutboundError>
             .read_exact(&mut len)
             .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
         let metadata_len = u16::from_be_bytes(len) as usize;
-        if metadata_len < 4 || metadata_len > 512 {
+        if !(4..=512).contains(&metadata_len) {
             return Err(OutboundError::BadSharedTransport(
                 "invalid mux metadata length".to_owned(),
             ));

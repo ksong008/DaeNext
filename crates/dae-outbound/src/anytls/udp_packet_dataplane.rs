@@ -59,6 +59,8 @@ pub struct AnyTlsUdpPacketStreamExchangeReport {
     pub true_dataplane: bool,
 }
 
+// Protocol dataplane tests keep wire inputs explicit at the call boundary.
+#[allow(clippy::too_many_arguments)]
 pub fn udp_packet_stream_exchange_over_tls_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,
