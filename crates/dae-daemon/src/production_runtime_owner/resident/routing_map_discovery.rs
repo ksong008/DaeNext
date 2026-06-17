@@ -295,6 +295,10 @@ pub(super) fn startup_evidence_from_report(start_report: &Value) -> Value {
             .pointer("/resident_cgroup_attach/linkLifecycle")
             .cloned()
             .unwrap_or(Value::Null),
+        "residentInterfaceState": start_report
+            .get("resident_interface_monitor")
+            .cloned()
+            .unwrap_or(Value::Null),
     })
 }
 

@@ -22,7 +22,7 @@ pub(super) struct ResidentLanAttachResult {
     pub link_layer: TcAttachLayer,
 }
 
-pub(super) fn configured_lan_ifaces(config: &Config) -> Vec<String> {
+pub(crate) fn configured_lan_ifaces(config: &Config) -> Vec<String> {
     let mut ifaces = Vec::new();
     for iface in config.global.lan_interface.iter().flatten() {
         let iface = iface.trim();

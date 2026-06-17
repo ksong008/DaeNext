@@ -23,7 +23,8 @@ use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{ResidentDataplaneRuntime, start_resident_dataplane_workers};
 use super::resident_interfaces::{
     attach_resident_lan_egress_program, attach_resident_wan_programs,
-    configure_resident_lan_kernel_parameters, configured_wan_ifaces, interface_link_layer,
+    configure_resident_kernel_parameters, configured_wan_ifaces, interface_link_layer,
+    resident_interface_validation_checks, resident_kernel_feature_checks,
 };
 use super::resident_lan::{
     attach_resident_lan_program, cleanup_resident_lan_programs, configured_lan_ifaces,
@@ -51,6 +52,8 @@ mod start_entry;
 pub use self::start_entry::*;
 mod interface_policy;
 use self::interface_policy::*;
+mod interface_monitor;
+use self::interface_monitor::*;
 mod start_flow;
 use self::start_flow::*;
 mod cgroup_attach;

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod allocator;
 mod bpf_loader;
 mod config_validate;

@@ -4,6 +4,7 @@ pub struct ResidentProductionRuntime {
     pub(super) live_handoff: Option<LiveLoadedTproxyListenSocketMap>,
     pub(super) native_runtime: NativeEbpfRuntimeState,
     pub(super) dataplane: Option<ResidentDataplaneRuntime>,
+    pub(super) interface_monitor: Option<ResidentInterfaceMonitorRuntime>,
     pub(super) start_report: Value,
     pub(super) lan_ifaces: Vec<String>,
     pub(super) native_lan_ifaces: Vec<String>,
@@ -57,6 +58,11 @@ impl ResidentProductionRuntime {
             "fakeRuntime": false,
             "residentRuntimeStarted": self.start_report["resident_runtime_started"].as_bool().unwrap_or(false),
             "residentDataplane": resident_dataplane,
+            "residentInterfaceState": self
+                .interface_monitor
+                .as_ref()
+                .map(ResidentInterfaceMonitorRuntime::snapshot)
+                .unwrap_or_else(|| self.start_report["resident_interface_monitor"].clone()),
             "startupEvidence": self.start_report["startupEvidence"].clone(),
             "artifactDir": self.start_report["artifact_dir"].clone(),
             "startFile": self.start_report["start_file"].clone(),
@@ -111,6 +117,10 @@ impl ResidentProductionRuntime {
             dataplane.shutdown(&mut self.cleanup_steps);
         }
         self.dataplane = None;
+        if let Some(monitor) = self.interface_monitor.as_mut() {
+            monitor.shutdown(&mut self.cleanup_steps);
+        }
+        self.interface_monitor = None;
         self.live_handoff.take();
         let native_peer_attached = self.native_runtime.peer_attached();
         let native_host_attached = self.native_runtime.host_attached();

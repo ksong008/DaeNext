@@ -8,7 +8,12 @@ pub(super) fn start_with_options(
     lan_ifaces: Vec<String>,
     wan_ifaces: Vec<String>,
 ) -> Result<ResidentProductionRuntime, String> {
-    let checks = preflight_checks(&options);
+    let mut checks = preflight_checks(&options);
+    checks.extend(resident_interface_validation_checks(
+        &lan_ifaces,
+        &wan_ifaces,
+    ));
+    checks.extend(resident_kernel_feature_checks(&lan_ifaces, &wan_ifaces));
     let blockers = checks
         .iter()
         .filter(|check| check["status"].as_str() != Some("pass"))
@@ -29,6 +34,7 @@ pub(super) fn start_with_options(
     let param_object = artifact_dir.join("bpf_bpfel.param.o");
     let mut live_handoff = None;
     let mut dataplane = None;
+    let mut interface_monitor = None;
     let mut native_runtime = NativeEbpfRuntimeState::new();
     let mut discovered_map_id = None;
     let mut discovered_routing_map_ids = Vec::new();
@@ -44,7 +50,8 @@ pub(super) fn start_with_options(
         ok &= setup_runtime_topology(&mut executed_steps, &options);
         let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac, dae_netns_id) =
             read_topology_values(&mut executed_steps, &options);
-        ok &= dae0_ifindex.is_some() && dae0_mac.is_some() && dae0peer_mac.is_some();
+        let topology_readiness = resident_topology_readiness(dae0_ifindex, dae0_mac, dae0peer_mac);
+        ok &= topology_readiness["status"].as_str() == Some("pass");
         if let (true, Some(dae0_mac)) = (ok, dae0_mac) {
             ok &= setup_production_ipv4_datapath(&mut executed_steps, dae0_mac);
         }
@@ -150,6 +157,21 @@ pub(super) fn start_with_options(
                 "reason": "peer PARAM-aware attach did not pass",
             })
         };
+        let resident_kernel_parameters = if ok {
+            configure_resident_kernel_parameters(
+                &mut executed_steps,
+                config.global.auto_config_kernel_parameter,
+                &lan_ifaces,
+                &wan_ifaces,
+            )
+        } else {
+            json!({
+                "name": "resident-kernel-parameters",
+                "status": "skipped",
+                "reason": "peer PARAM-aware attach did not pass",
+            })
+        };
+        let pname_rules_required = resident_routing_requires_process_name(config);
         let (cgroup_ok, resident_cgroup_attach) = resident_cgroup_attach_evidence(
             &mut executed_steps,
             &interface_attach_options,
@@ -158,6 +180,7 @@ pub(super) fn start_with_options(
             &wan_ifaces,
             ok,
             &native_param_image,
+            pname_rules_required,
         );
         ok = cgroup_ok;
 
@@ -176,8 +199,6 @@ pub(super) fn start_with_options(
         let mut resident_routing_apply_cache = ResidentRoutingApplyCache::default();
         for iface in &lan_ifaces {
             if ok {
-                let lan_kernel_parameters =
-                    configure_resident_lan_kernel_parameters(&mut executed_steps, iface);
                 let link_layer = match interface_link_layer(iface) {
                     Ok(layer) => layer,
                     Err(err) => {
@@ -284,7 +305,7 @@ pub(super) fn start_with_options(
                     "native_backend": lan_attach.native_backend,
                     "native_attached": lan_attach.native_attached,
                     "link_layer": lan_attach.link_layer.suffix(),
-                    "kernel_parameters": lan_kernel_parameters,
+                    "kernel_parameters": resident_kernel_parameters.clone(),
                     "egress": lan_egress_attach,
                     "show": show,
                 }));
@@ -450,6 +471,19 @@ pub(super) fn start_with_options(
         let attach_outputs_passed = attach_outputs_passed
             || (native_runtime.peer_attached() && native_runtime.host_attached());
         ok &= attach_outputs_passed;
+        let resident_interface_monitor = if ok {
+            let monitor = start_resident_interface_monitor(&lan_ifaces, &wan_ifaces);
+            let snapshot = monitor.snapshot();
+            interface_monitor = Some(monitor);
+            snapshot
+        } else {
+            json!({
+                "status": "skipped",
+                "reason": "previous resident runtime step did not pass",
+                "reattachImplemented": false,
+                "startupLazyBindAllowed": false,
+            })
+        };
 
         let start_report = json!({
             "name": "resident-production-runtime",
@@ -471,18 +505,22 @@ pub(super) fn start_with_options(
             "before_map_ids": before_map_ids,
             "executed_steps": executed_steps,
             "topology_values": topology_values,
+            "topology_readiness": topology_readiness,
             "param_image": param_image,
             "native_param_image": native_param_image,
             "peer_attach_show": peer_attach_show,
             "resident_cgroup_attach": resident_cgroup_attach,
+            "resident_pname_rules_required": pname_rules_required,
             "resident_wan_attach": resident_wan_attach,
             "resident_interface_backend_policy": resident_interface_backend_policy,
+            "resident_kernel_parameters": resident_kernel_parameters,
             "resident_lan_plan": lan_start_plan_json(&lan_ifaces, options.native_ebpf_requested, &resident_lan_attach),
             "resident_native_cgroup_attached": native_runtime.cgroup_attached(),
             "resident_native_lan_ifaces": native_lan_ifaces.clone(),
             "resident_lan_attach": resident_lan_attach,
             "resident_lan_routing": resident_lan_routing,
             "resident_dataplane": resident_dataplane,
+            "resident_interface_monitor": resident_interface_monitor,
             "host_attach_show": host_attach_show,
             "resident_outbound_connectivity": resident_outbound_connectivity,
             "resident_reusable_maps": resident_reusable_maps,
@@ -511,6 +549,9 @@ pub(super) fn start_with_options(
         if let Some(dataplane) = dataplane.as_mut() {
             dataplane.shutdown(&mut cleanup_steps);
         }
+        if let Some(monitor) = interface_monitor.as_mut() {
+            monitor.shutdown(&mut cleanup_steps);
+        }
         drop(live_handoff.take());
         let native_peer_attached = native_runtime.peer_attached();
         let native_host_attached = native_runtime.host_attached();
@@ -528,6 +569,7 @@ pub(super) fn start_with_options(
         live_handoff,
         native_runtime,
         dataplane,
+        interface_monitor,
         start_report: start_report_for_runtime,
         lan_ifaces,
         native_lan_ifaces,
@@ -537,5 +579,35 @@ pub(super) fn start_with_options(
         before_pin_snapshot,
         cleanup_file,
         cleaned: false,
+    })
+}
+
+fn resident_topology_readiness(
+    dae0_ifindex: Option<u32>,
+    dae0_mac: Option<[u8; 6]>,
+    dae0peer_mac: Option<[u8; 6]>,
+) -> Value {
+    let mut missing = Vec::new();
+    if dae0_ifindex.is_none() {
+        missing.push("dae0_ifindex");
+    }
+    if dae0_mac.is_none() {
+        missing.push("dae0_mac");
+    }
+    if dae0peer_mac.is_none() {
+        missing.push("dae0peer_mac");
+    }
+    json!({
+        "status": if missing.is_empty() { "pass" } else { "fail" },
+        "dae0_ifindex_present": dae0_ifindex.is_some(),
+        "dae0_mac_present": dae0_mac.is_some(),
+        "dae0peer_mac_present": dae0peer_mac.is_some(),
+        "missing": missing,
+        "fatal": !missing.is_empty(),
+        "reason": if missing.is_empty() {
+            "production dae0/dae0peer topology values are ready"
+        } else {
+            "production dae0/dae0peer topology values are required before PARAM rewrite and native attach"
+        },
     })
 }

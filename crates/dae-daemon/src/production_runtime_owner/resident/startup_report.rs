@@ -22,6 +22,7 @@ pub(super) fn compact_start_report_for_runtime(start_report: &Value) -> Value {
         "tproxy_port": start_report["tproxy_port"].clone(),
         "resident_runtime_started": start_report["resident_runtime_started"].clone(),
         "resident_dataplane": start_report["resident_dataplane"].clone(),
+        "resident_interface_monitor": start_report["resident_interface_monitor"].clone(),
         "attachBackend": attach_backend,
         "netnsLinkMode": netns_link_mode,
         "startupEvidence": startup_evidence,
