@@ -18,7 +18,7 @@ use bytes::Bytes;
 use dae_core_types::OutboundIndex;
 use dae_datapath::{
     OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode,
-    TcpDirectDialReport, choose_dial_target,
+    TcpDirectDialReport, choose_dial_target, outbound_is_reserved,
 };
 use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
@@ -77,7 +77,7 @@ use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,
     relay_tcp_direct_async,
 };
-use super::dns::ResidentDnsDomainRouting;
+use super::dns::{ResidentDnsDomainRouting, ResidentDnsPlan};
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
 use super::plan::{

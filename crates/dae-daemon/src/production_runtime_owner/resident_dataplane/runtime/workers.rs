@@ -194,6 +194,7 @@ pub(crate) fn start_resident_dataplane_workers(
         routing_tuple_map_id,
         routing_matcher,
         dns_domain_routing,
+        Arc::clone(&dns),
         plan.tcp_dial_mode,
         plan.sniffing_timeout,
         config.global.so_mark_from_dae,

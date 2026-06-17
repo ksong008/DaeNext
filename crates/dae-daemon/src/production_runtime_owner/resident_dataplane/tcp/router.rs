@@ -14,6 +14,7 @@ pub(crate) struct ResidentTcpRouter {
     pub(in crate::production_runtime_owner::resident_dataplane) routing_matcher: RoutingMatcher,
     pub(in crate::production_runtime_owner::resident_dataplane) domain_routing:
         Option<Arc<ResidentDnsDomainRouting>>,
+    pub(in crate::production_runtime_owner::resident_dataplane) dns: Arc<ResidentDnsPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) dial_mode: TcpDialMode,
     pub(in crate::production_runtime_owner::resident_dataplane) sniffing_timeout: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) so_mark_from_dae: u32,
@@ -26,6 +27,7 @@ impl ResidentTcpRouter {
         routing_tuple_map_id: Option<u32>,
         routing_matcher: RoutingMatcher,
         domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
+        dns: Arc<ResidentDnsPlan>,
         dial_mode: TcpDialMode,
         sniffing_timeout: Duration,
         so_mark_from_dae: u32,
@@ -47,6 +49,7 @@ impl ResidentTcpRouter {
             routing_tuple_map_fd,
             routing_matcher,
             domain_routing,
+            dns,
             dial_mode,
             sniffing_timeout,
             so_mark_from_dae,
@@ -60,6 +63,7 @@ impl ResidentTcpRouter {
         routing_tuple_map_fd: OwnedFd,
         routing_matcher: RoutingMatcher,
         domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
+        dns: Arc<ResidentDnsPlan>,
         dial_mode: TcpDialMode,
         sniffing_timeout: Duration,
         so_mark_from_dae: u32,
@@ -74,6 +78,7 @@ impl ResidentTcpRouter {
             routing_tuple_map_fd,
             routing_matcher,
             domain_routing,
+            dns,
             dial_mode,
             sniffing_timeout,
             so_mark_from_dae,
@@ -99,6 +104,7 @@ impl ResidentTcpRouter {
             routing_tuple_map_fd,
             routing_matcher,
             None,
+            Arc::new(ResidentDnsPlan::asis(so_mark_from_dae)),
             dial_mode,
             sniffing_timeout,
             so_mark_from_dae,
@@ -122,14 +128,23 @@ impl ResidentTcpRouter {
         self.sniffing_timeout
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn select(
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn select(
         &self,
         peer: SocketAddr,
         original_dst: SocketAddr,
         sniffed_domain: &str,
     ) -> Result<TcpSelection, String> {
         let initial = self.lookup_routing_result(peer, original_dst)?;
-        self.select_from_routing_result(peer, original_dst, sniffed_domain, initial)
+        let domain_is_real = self
+            .resolve_real_domain_for_dial(original_dst, sniffed_domain, initial.outbound)
+            .await;
+        self.select_from_routing_result_with_domain_real(
+            peer,
+            original_dst,
+            sniffed_domain,
+            initial,
+            domain_is_real,
+        )
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_from_routing_result(
@@ -139,13 +154,30 @@ impl ResidentTcpRouter {
         sniffed_domain: &str,
         initial: BpfRoutingResult,
     ) -> Result<TcpSelection, String> {
+        self.select_from_routing_result_with_domain_real(
+            peer,
+            original_dst,
+            sniffed_domain,
+            initial,
+            false,
+        )
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_from_routing_result_with_domain_real(
+        &self,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
+        sniffed_domain: &str,
+        initial: BpfRoutingResult,
+        domain_is_real: bool,
+    ) -> Result<TcpSelection, String> {
         let destination = original_dst;
         let first_choose = choose_dial_target(
             self.dial_mode,
             initial.outbound,
             destination,
             sniffed_domain,
-            false,
+            domain_is_real,
         );
         let mut final_outbound = initial.outbound;
         let mut final_mark = initial.mark;
@@ -181,7 +213,7 @@ impl ResidentTcpRouter {
                 final_outbound,
                 destination,
                 sniffed_domain,
-                false,
+                domain_is_real,
             )
         });
         let final_choose = second_choose.as_ref().unwrap_or(&first_choose);
@@ -220,6 +252,24 @@ impl ResidentTcpRouter {
                 }))
             }
         }
+    }
+
+    async fn resolve_real_domain_for_dial(
+        &self,
+        original_dst: SocketAddr,
+        sniffed_domain: &str,
+        outbound: u8,
+    ) -> bool {
+        if self.dial_mode != TcpDialMode::Domain
+            || sniffed_domain.is_empty()
+            || original_dst.ip().is_unspecified()
+            || outbound_is_reserved(outbound)
+        {
+            return false;
+        }
+        self.dns
+            .resolve_domain_has_ip_for_dial(sniffed_domain, original_dst.ip())
+            .await
     }
 
     fn record_sniffed_domain_route(&self, sniffed_domain: &str, ip: IpAddr) {

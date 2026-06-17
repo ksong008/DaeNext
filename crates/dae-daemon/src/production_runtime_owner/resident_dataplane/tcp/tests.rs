@@ -457,6 +457,38 @@ fn resident_tcp_selection_keeps_ip_target_when_domain_plus_plus_has_no_sniffed_d
     assert_eq!(selection.route.final_mark, 0x55);
 }
 
+#[test]
+fn resident_tcp_selection_domain_mode_requires_real_domain() {
+    let router = tcp_router_for_test(fallback_matcher("direct", 0x77), TcpDialMode::Domain);
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(91, 108, 56, 177), 443));
+    let initial = BpfRoutingResult {
+        outbound: OutboundIndex::USER_DEFINED_MIN.value(),
+        mark: 0x55,
+        ..BpfRoutingResult::default()
+    };
+
+    let selection = router
+        .select_from_routing_result(peer, dst, "www.example.com", initial)
+        .unwrap();
+    let TcpSelection::Proxy(selection) = selection else {
+        panic!("expected proxy selection");
+    };
+    assert_eq!(selection.route.dial_target, dst.to_string());
+    assert!(selection.route.dial_ip);
+
+    let selection = router
+        .select_from_routing_result_with_domain_real(peer, dst, "www.example.com", initial, true)
+        .unwrap();
+    let TcpSelection::Proxy(selection) = selection else {
+        panic!("expected proxy selection");
+    };
+    assert_eq!(selection.route.dial_target, "www.example.com:443");
+    assert!(!selection.route.dial_ip);
+    assert!(!selection.route.userspace_route_executed);
+    assert_eq!(selection.route.final_mark, 0x55);
+}
+
 fn tcp_router_for_test(
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
