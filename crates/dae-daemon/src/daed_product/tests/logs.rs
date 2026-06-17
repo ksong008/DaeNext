@@ -75,6 +75,7 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
         web_root: dir.clone(),
         api_only: true,
         runtime: Arc::new(ProductRuntimeManager::new()),
+        latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
     };
     for (raw_query, expected_len, expected_level) in [

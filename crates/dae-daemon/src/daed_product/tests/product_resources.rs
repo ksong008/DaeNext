@@ -233,6 +233,7 @@ fn product_test_app(dir: &Path, state: &Path) -> AppState {
         web_root: dir.to_owned(),
         api_only: true,
         runtime: Arc::new(ProductRuntimeManager::new()),
+        latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
     }
 }

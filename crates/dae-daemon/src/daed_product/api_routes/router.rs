@@ -68,6 +68,7 @@ pub(super) fn handle_api_request(
                 ("PATCH", "/logs/settings") => api_set_log_settings(app, request),
                 ("GET", "/nodes/latencies") => api_get_node_latencies(app),
                 ("POST", "/nodes/latencies") => api_test_node_latencies(app, request),
+                ("GET", "/nodes/latencies/job") => api_get_node_latency_job(app),
                 _ if api_path == "/configs"
                     || api_path.starts_with("/configs/")
                     || api_path == "/dns"

@@ -49,6 +49,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         web_root: options.web_root,
         api_only: options.api_only,
         runtime,
+        latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
     };
     match serve_forever(&options.listen, app, startup_started_at) {

@@ -11,6 +11,7 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
         web_root: dir.clone(),
         api_only: true,
         runtime: Arc::new(ProductRuntimeManager::new()),
+        latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
     };
     set_metadata(&state, "runtime_log_level", "info").unwrap();
@@ -182,6 +183,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
         web_root: dir.clone(),
         api_only: true,
         runtime: Arc::new(ProductRuntimeManager::new()),
+        latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
     };
     let request = HttpRequest {
