@@ -32,6 +32,7 @@ dae-outbound.workspace = true
 dae-product.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
+argon2.workspace = true
 boring.workspace = true
 base64.workspace = true
 blake2.workspace = true
