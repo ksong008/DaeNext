@@ -649,7 +649,7 @@ dependencies = [
  "dae-geodata",
  "dae-netutil",
  "dae-outbound",
- "dae-product",
+ "dae-product-identity",
  "dae-routing",
  "dae-sniffing",
  "fastrand",
@@ -784,7 +784,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dae-product"
+name = "dae-product-identity"
 version = "3.0.1"
 dependencies = [
  "serde_json",
