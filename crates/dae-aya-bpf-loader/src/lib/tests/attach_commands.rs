@@ -15,5 +15,19 @@ pub(super) fn cgroup_monitor_contract_declares_pinned_link_lifetime() {
             .as_bool()
             .unwrap()
     );
+    assert_eq!(
+        json["pname_source"].as_str().unwrap(),
+        "bpf_get_current_comm"
+    );
+    assert_eq!(
+        json["pname_semantics"].as_str().unwrap(),
+        "non_core_task_comm"
+    );
+    assert!(!json["core_enabled"].as_bool().unwrap());
+    assert!(
+        !json["official_argv_semantics_implemented"]
+            .as_bool()
+            .unwrap()
+    );
     assert_eq!(json["attach_matrix"].as_array().unwrap().len(), 6);
 }

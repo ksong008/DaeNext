@@ -36,7 +36,7 @@ pub(crate) fn prepare_native_param_object(
         dae0_ifindex,
         dae_netns_id,
         dae0peer_mac,
-        has_bpf_get_current_task: true,
+        has_bpf_get_current_task: false,
     });
     let selected_param_object = PathBuf::from(NATIVE_PARAM_OBJECT_IDENTITY);
     let source_identity = source.identity();

@@ -156,7 +156,10 @@ mod tests {
             "resident_cgroup_attach": {
                 "pname": {
                     "source": "current_comm",
+                    "fallbackSource": "bpf_get_current_comm",
+                    "semantics": "non_core_task_comm",
                     "coreEnabled": false,
+                    "nonCoreTaskCommEnabled": true,
                     "currentTaskArgvEnabled": false,
                     "officialArgvSemanticsImplemented": false
                 },
@@ -180,6 +183,18 @@ mod tests {
             json!("routing_tuples_map")
         );
         assert_eq!(evidence["cgroupPname"]["source"], json!("current_comm"));
+        assert_eq!(
+            evidence["cgroupPname"]["fallbackSource"],
+            json!("bpf_get_current_comm")
+        );
+        assert_eq!(
+            evidence["cgroupPname"]["semantics"],
+            json!("non_core_task_comm")
+        );
+        assert_eq!(
+            evidence["cgroupPname"]["nonCoreTaskCommEnabled"],
+            json!(true)
+        );
         assert_eq!(evidence["cgroupPname"]["coreEnabled"], json!(false));
         assert_eq!(
             evidence["cgroupLinkLifecycle"]["releaseBoundary"],
@@ -208,6 +223,75 @@ mod tests {
             },
         });
         assert!(resident_routing_requires_process_name(&config));
+    }
+
+    #[test]
+    fn cgroup_attach_failure_fails_closed_when_pname_rules_are_required() {
+        let mut executed_steps = Vec::new();
+        let options = ProductionRuntimeOwnerOptions::default();
+        let mut native_runtime = NativeEbpfRuntimeState::default();
+        let native_param_image = json!({
+            "param": {
+                "has_bpf_get_current_task": false
+            }
+        });
+        let wan_ifaces = vec!["wan0".to_owned()];
+
+        let (ok, evidence) = resident_cgroup_attach_evidence(
+            &mut executed_steps,
+            &options,
+            std::path::Path::new("memory:native-ebpf-param"),
+            &mut native_runtime,
+            &wan_ifaces,
+            true,
+            &native_param_image,
+            true,
+        );
+
+        assert!(!ok);
+        assert_eq!(evidence["status"], json!("fail"));
+        assert_eq!(evidence["native_attached"], json!(false));
+        assert_eq!(evidence["pnameRulesRequired"], json!(true));
+        assert_eq!(evidence["controlPlaneEscape"], json!("unavailable"));
+        assert_eq!(evidence["pname"]["source"], json!("current_comm"));
+        assert_eq!(
+            evidence["pname"]["fallbackSource"],
+            json!("bpf_get_current_comm")
+        );
+        assert_eq!(evidence["pname"]["nonCoreTaskCommEnabled"], json!(true));
+        assert_eq!(evidence["pname"]["paramHasBpfGetCurrentTask"], json!(false));
+    }
+
+    #[test]
+    fn cgroup_attach_failure_degrades_only_without_pname_rules() {
+        let mut executed_steps = Vec::new();
+        let options = ProductionRuntimeOwnerOptions::default();
+        let mut native_runtime = NativeEbpfRuntimeState::default();
+        let native_param_image = json!({
+            "param": {
+                "has_bpf_get_current_task": false
+            }
+        });
+        let wan_ifaces = vec!["wan0".to_owned()];
+
+        let (ok, evidence) = resident_cgroup_attach_evidence(
+            &mut executed_steps,
+            &options,
+            std::path::Path::new("memory:native-ebpf-param"),
+            &mut native_runtime,
+            &wan_ifaces,
+            true,
+            &native_param_image,
+            false,
+        );
+
+        assert!(ok);
+        assert_eq!(evidence["status"], json!("degraded"));
+        assert_eq!(evidence["native_attached"], json!(false));
+        assert_eq!(evidence["pnameRulesRequired"], json!(false));
+        assert_eq!(evidence["controlPlaneEscape"], json!("mark_fallback"));
+        assert_eq!(evidence["pname"]["source"], json!("current_comm"));
+        assert_eq!(evidence["pname"]["nonCoreTaskCommEnabled"], json!(true));
     }
 
     #[cfg(feature = "native-ebpf")]

@@ -76,7 +76,7 @@ pub(crate) fn read_topology_values(
             "dae0_mac": mac_string(dae0_mac),
             "dae0peer_mac": mac_string(dae0peer_mac),
             "control_plane_pid": std::process::id(),
-            "has_bpf_get_current_task": true,
+            "has_bpf_get_current_task": false,
         }),
         _ => json!({
             "status": "fail",

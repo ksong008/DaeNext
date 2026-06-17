@@ -141,7 +141,7 @@ fn run_contract() -> RunnerOutput {
         dae0_ifindex: 17,
         dae_netns_id: 23,
         dae0peer_mac: [2, 0, 0, 0, 0, 1],
-        has_bpf_get_current_task: true,
+        has_bpf_get_current_task: false,
     });
     let map_names = map_catalog().iter().map(|map| map.name).collect::<Vec<_>>();
     let pinned_action =

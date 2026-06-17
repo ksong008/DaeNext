@@ -12,7 +12,7 @@ pub(crate) fn write_param_image(
         dae0_ifindex,
         dae_netns_id,
         dae0peer_mac,
-        has_bpf_get_current_task: true,
+        has_bpf_get_current_task: false,
     });
     match write_param_aware_object(&options.source_object, param_object, param) {
         Ok(report) => json!({
