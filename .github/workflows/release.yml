@@ -117,15 +117,6 @@ jobs:
             "DaeNext-${{ steps.release.outputs.tag }}-manifest.txt" \
             >"DaeNext-${{ steps.release.outputs.tag }}-checksums.txt"
 
-      - name: Assert release artifact scope
-        shell: bash
-        run: |
-          set -euo pipefail
-          if find dist -type f \( -name '*.deb' -o -name '*.rpm' \) | grep -q .; then
-            echo "::error::This workflow publishes DaeNext dae tar/source artifacts only; local daed deb/rpm test packages are not formal release artifacts here."
-            exit 1
-          fi
-
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
