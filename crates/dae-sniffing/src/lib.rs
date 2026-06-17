@@ -4,6 +4,7 @@ pub mod error;
 pub mod http;
 pub mod normalize;
 pub mod packet;
+mod quic;
 pub mod stream;
 pub mod tls;
 

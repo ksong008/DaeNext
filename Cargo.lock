@@ -787,9 +787,13 @@ dependencies = [
 name = "dae-sniffing"
 version = "0.1.0"
 dependencies = [
+ "aes",
+ "aes-gcm",
  "dae-config-util",
  "dae-golden",
+ "hkdf",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

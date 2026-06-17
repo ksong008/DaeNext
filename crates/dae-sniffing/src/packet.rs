@@ -1,4 +1,5 @@
 use crate::SniffingError;
+use crate::quic::sniff_quic_initial_sni;
 
 pub const PACKET_SNIFFER_MAX_BUFFERED_BYTES: usize = 64 * 1024;
 pub const PACKET_SNIFFER_MAX_CHUNKS: usize = 64;
@@ -45,10 +46,18 @@ impl PacketSniffer {
         self.need_more
     }
 
-    pub fn sniff_udp(&self) -> Result<String, SniffingError> {
+    pub fn sniff_udp(&mut self) -> Result<String, SniffingError> {
+        self.need_more = false;
         if let Some(err) = &self.data_error {
             return Err(err.clone());
         }
-        Err(SniffingError::NotApplicable)
+        let view = self.data_view();
+        match sniff_quic_initial_sni(&view) {
+            Err(SniffingError::NeedMore) => {
+                self.need_more = true;
+                Err(SniffingError::NeedMore)
+            }
+            result => result,
+        }
     }
 }

@@ -8,6 +8,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use dae_datapath::TcpDialMode;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 use dae_outbound::{
     anytls::{contract as anytls_contract, link as anytls_link},
@@ -31,6 +32,7 @@ use dae_outbound::{
     vless::packet,
     vmess,
 };
+use dae_routing::RoutingMatcher;
 use serde_json::json;
 use tokio::time;
 

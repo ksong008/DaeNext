@@ -189,6 +189,8 @@ pub(crate) fn start_resident_dataplane_workers(
         ))
     });
     let dns = Arc::new(plan.dns.with_domain_routing(dns_domain_routing.clone()));
+    let udp_routing_matcher = routing_matcher.clone();
+    let udp_dial_mode = plan.tcp_dial_mode;
     let tcp_router = match ResidentTcpRouter::new(
         plan.proxies,
         routing_tuple_map_id,
@@ -243,6 +245,7 @@ pub(crate) fn start_resident_dataplane_workers(
     {
         let stop = owner.stop_handle();
         let udp_proxy_groups = Arc::clone(&udp_proxy_groups);
+        let routing_matcher = udp_routing_matcher;
         let dns = Arc::clone(&dns);
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
@@ -257,6 +260,8 @@ pub(crate) fn start_resident_dataplane_workers(
                     udp_proxy_groups,
                     default_outbound,
                     routing_tuple_map_id,
+                    routing_matcher,
+                    udp_dial_mode,
                     dns,
                     stop,
                     event_file,
