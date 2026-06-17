@@ -23,7 +23,7 @@ use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio::sync::{OnceCell, OwnedMutexGuard};
+use tokio::sync::{Mutex as AsyncMutex, OnceCell, OwnedMutexGuard};
 use tokio::time;
 
 use super::super::resident_routing::{
@@ -62,6 +62,7 @@ const DNS_DEFAULT_DOH_PATH: &str = "/dns-query";
 const DNS_DOH3_ALPN: &str = "h3";
 const DNS_DOQ_ALPN: &str = "doq";
 const TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS: i64 = 600;
+const DNS_FORWARDER_CACHE_MAX_ENTRIES: usize = 128;
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsPlan {
@@ -73,6 +74,7 @@ pub(super) struct ResidentDnsPlan {
     response_default_action: ResidentDnsResponseAction,
     domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
     cache: Arc<ResidentDnsRuntimeCache>,
+    forwarders: Arc<ResidentDnsForwarderCache>,
     fixed_domain_ttl: Arc<BTreeMap<String, i64>>,
     ipversion_prefer: Option<u16>,
     mark: u32,
@@ -89,6 +91,7 @@ impl ResidentDnsPlan {
             response_default_action: ResidentDnsResponseAction::Accept,
             domain_routing: None,
             cache: Arc::new(ResidentDnsRuntimeCache::default()),
+            forwarders: Arc::new(ResidentDnsForwarderCache::default()),
             fixed_domain_ttl: Arc::new(BTreeMap::new()),
             ipversion_prefer: None,
             mark,
@@ -519,6 +522,65 @@ impl PartialEq for ResidentDnsUpstreamTarget {
 
 impl Eq for ResidentDnsUpstreamTarget {}
 
+struct ResidentDnsForwarderCache {
+    state: Mutex<ResidentDnsForwarderCacheState>,
+}
+
+impl Default for ResidentDnsForwarderCache {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(ResidentDnsForwarderCacheState::default()),
+        }
+    }
+}
+
+impl std::fmt::Debug for ResidentDnsForwarderCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entries = self
+            .state
+            .lock()
+            .map(|state| state.entries.len())
+            .unwrap_or_default();
+        f.debug_struct("ResidentDnsForwarderCache")
+            .field("entries", &entries)
+            .finish()
+    }
+}
+
+#[derive(Default)]
+struct ResidentDnsForwarderCacheState {
+    entries: BTreeMap<ResidentDnsForwarderKey, ResidentDnsForwarderEntry>,
+    next_tick: u64,
+}
+
+struct ResidentDnsForwarderEntry {
+    last_used: u64,
+    quic: Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct ResidentDnsForwarderKey {
+    scheme: ResidentDnsUpstreamScheme,
+    authority: String,
+    path: String,
+    mark: u32,
+}
+
+struct ResidentDnsQuicForwarder {
+    upstream: ResidentDnsUpstream,
+    mark: u32,
+    endpoint: Option<quinn::Endpoint>,
+    connection: Option<quinn::Connection>,
+}
+
+impl Drop for ResidentDnsQuicForwarder {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            connection.close(0_u32.into(), b"dns forwarder dropped");
+        }
+    }
+}
+
 async fn resolve_dns_upstream_async(authority: &str) -> Result<SocketAddr, String> {
     tokio::net::lookup_host(authority)
         .await
@@ -527,7 +589,7 @@ async fn resolve_dns_upstream_async(authority: &str) -> Result<SocketAddr, Strin
         .ok_or_else(|| format!("DNS upstream {authority} returned no IP address"))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum ResidentDnsUpstreamScheme {
     Udp,
     Tcp,
@@ -566,6 +628,7 @@ pub(super) fn build_resident_dns_plan(
         response_default_action,
         domain_routing: None,
         cache: Arc::new(ResidentDnsRuntimeCache::default()),
+        forwarders: Arc::new(ResidentDnsForwarderCache::default()),
         fixed_domain_ttl: Arc::new(fixed_domain_ttl),
         ipversion_prefer,
         mark: config.global.so_mark_from_dae,
@@ -991,7 +1054,9 @@ async fn resolve_dns_response_routing(
     mut upstream: ResidentDnsUpstream,
 ) -> Result<Vec<u8>, String> {
     for _ in 0..DNS_RESPONSE_REROUTE_LIMIT {
-        let response = forward_dns_to_upstream_async(&upstream, request_payload, plan.mark).await?;
+        let response =
+            forward_dns_to_upstream_async(&upstream, request_payload, plan.mark, &plan.forwarders)
+                .await?;
         validate_dns_response_for_request(
             request,
             &response,
@@ -1535,6 +1600,39 @@ mod tests {
             assert_eq!(upstream.target.port, port, "{tag}");
             assert_eq!(upstream.path, path, "{tag}");
         }
+    }
+
+    #[test]
+    fn resident_dns_forwarder_cache_reuses_doq_by_upstream_and_mark() {
+        let cache = ResidentDnsForwarderCache::default();
+        let upstream = parse_dns_upstream(0, "quic", "quic://dns.example").unwrap();
+        let first = cache.quic_forwarder(&upstream, 0x1234).unwrap();
+        let second = cache.quic_forwarder(&upstream, 0x1234).unwrap();
+        let different_mark = cache.quic_forwarder(&upstream, 0x5678).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &different_mark));
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn resident_dns_forwarder_cache_evicts_oldest_entry() {
+        let cache = ResidentDnsForwarderCache::default();
+        let first = parse_dns_upstream(0, "first", "quic://dns0.example").unwrap();
+        let first_forwarder = cache.quic_forwarder(&first, 0).unwrap();
+        for index in 1..=DNS_FORWARDER_CACHE_MAX_ENTRIES {
+            let upstream = parse_dns_upstream(
+                index as u8,
+                &format!("dns{index}"),
+                &format!("quic://dns{index}.example"),
+            )
+            .unwrap();
+            let _ = cache.quic_forwarder(&upstream, 0).unwrap();
+        }
+
+        let recreated = cache.quic_forwarder(&first, 0).unwrap();
+        assert_eq!(cache.len(), DNS_FORWARDER_CACHE_MAX_ENTRIES);
+        assert!(!Arc::ptr_eq(&first_forwarder, &recreated));
     }
 
     #[test]

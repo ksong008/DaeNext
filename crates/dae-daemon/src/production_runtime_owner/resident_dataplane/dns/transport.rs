@@ -4,6 +4,7 @@ pub(super) async fn forward_dns_to_upstream_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
     mark: u32,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     match upstream.scheme {
         ResidentDnsUpstreamScheme::Udp => {
@@ -36,8 +37,159 @@ pub(super) async fn forward_dns_to_upstream_async(
         }
         ResidentDnsUpstreamScheme::Tls => forward_dns_tls_async(upstream, payload, mark).await,
         ResidentDnsUpstreamScheme::Https => forward_dns_https_async(upstream, payload, mark).await,
-        ResidentDnsUpstreamScheme::Quic => forward_dns_quic_async(upstream, payload, mark).await,
+        ResidentDnsUpstreamScheme::Quic => {
+            let forwarder = forwarders.quic_forwarder(upstream, mark)?;
+            forwarder.lock().await.forward_dns(payload).await
+        }
         ResidentDnsUpstreamScheme::Http3 => forward_dns_h3_async(upstream, payload, mark).await,
+    }
+}
+
+impl ResidentDnsForwarderCache {
+    pub(super) fn quic_forwarder(
+        &self,
+        upstream: &ResidentDnsUpstream,
+        mark: u32,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsQuicForwarder>>, String> {
+        let key = ResidentDnsForwarderKey {
+            scheme: upstream.scheme,
+            authority: upstream.target.authority.clone(),
+            path: upstream.path.clone(),
+            mark,
+        };
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
+        state.next_tick = state.next_tick.wrapping_add(1);
+        let last_used = state.next_tick;
+        if let Some(entry) = state.entries.get_mut(&key) {
+            entry.last_used = last_used;
+            return Ok(Arc::clone(&entry.quic));
+        }
+        if state.entries.len() >= DNS_FORWARDER_CACHE_MAX_ENTRIES {
+            evict_oldest_dns_forwarder(&mut state);
+        }
+        let forwarder = Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
+            upstream: upstream.clone(),
+            mark,
+            endpoint: None,
+            connection: None,
+        }));
+        state.entries.insert(
+            key,
+            ResidentDnsForwarderEntry {
+                last_used,
+                quic: Arc::clone(&forwarder),
+            },
+        );
+        Ok(forwarder)
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.state
+            .lock()
+            .map(|state| state.entries.len())
+            .unwrap_or_default()
+    }
+}
+
+fn evict_oldest_dns_forwarder(state: &mut ResidentDnsForwarderCacheState) {
+    let Some(oldest_key) = state
+        .entries
+        .iter()
+        .min_by_key(|(_, entry)| entry.last_used)
+        .map(|(key, _)| key.clone())
+    else {
+        return;
+    };
+    state.entries.remove(&oldest_key);
+}
+
+impl ResidentDnsQuicForwarder {
+    async fn forward_dns(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        let connection = self.connection().await?;
+        match self.forward_dns_over_connection(&connection, payload).await {
+            Ok(response) => Ok(response),
+            Err(first_err) => {
+                self.close_connection();
+                let connection = self.connection().await?;
+                self.forward_dns_over_connection(&connection, payload)
+                    .await
+                    .map_err(|retry_err| {
+                        format!(
+                            "DNS QUIC cached forwarder retry failed after {first_err}: {retry_err}"
+                        )
+                    })
+            }
+        }
+    }
+
+    async fn connection(&mut self) -> Result<quinn::Connection, String> {
+        if let Some(connection) = self.connection.as_ref() {
+            return Ok(connection.clone());
+        }
+        if self.endpoint.is_none() {
+            let mut endpoint = open_marked_quic_endpoint(self.mark)?;
+            endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOQ_ALPN)?);
+            self.endpoint = Some(endpoint);
+        }
+        let endpoint = self
+            .endpoint
+            .as_ref()
+            .expect("DNS QUIC endpoint is initialized");
+        let remote = self.upstream.target.resolve().await?;
+        let connection = time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            endpoint
+                .connect(remote, &self.upstream.target.host)
+                .map_err(|err| format!("connect DoQ endpoint: {err}"))?,
+        )
+        .await
+        .map_err(|_| "DNS QUIC handshake timeout".to_owned())?
+        .map_err(|err| {
+            format!(
+                "connect DNS QUIC upstream {} {}: {err}",
+                self.upstream.tag, self.upstream.target.authority
+            )
+        })?;
+        self.connection = Some(connection.clone());
+        Ok(connection)
+    }
+
+    async fn forward_dns_over_connection(
+        &self,
+        connection: &quinn::Connection,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let (mut send, mut recv) =
+            time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connection.open_bi())
+                .await
+                .map_err(|_| "DNS QUIC stream open timeout".to_owned())?
+                .map_err(|err| format!("open DNS QUIC stream: {err}"))?;
+        let query = dns_data_with_zero_id(payload);
+        time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+            write_dns_tcp_message_async(&mut send, &query).await?;
+            send.finish()
+                .map_err(|err| format!("finish DNS QUIC request stream: {err}"))?;
+            let response = read_dns_tcp_message_async(&mut recv).await?;
+            restore_dns_response_id(payload, &response)
+        })
+        .await
+        .map_err(|_| "DNS QUIC exchange timeout".to_owned())?
+        .map_err(|err| {
+            format!(
+                "forward DNS over QUIC to upstream {} {}: {err}",
+                self.upstream.tag, self.upstream.target.authority
+            )
+        })
+    }
+
+    fn close_connection(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            connection.close(0_u32.into(), b"dns-query failed");
+        }
     }
 }
 
@@ -190,53 +342,6 @@ async fn forward_dns_https_async(
             upstream.tag, upstream.target.authority
         )
     })
-}
-
-async fn forward_dns_quic_async(
-    upstream: &ResidentDnsUpstream,
-    payload: &[u8],
-    mark: u32,
-) -> Result<Vec<u8>, String> {
-    let mut endpoint = open_marked_quic_endpoint(mark)?;
-    endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOQ_ALPN)?);
-    let remote = upstream.target.resolve().await?;
-    let connection = time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        endpoint
-            .connect(remote, &upstream.target.host)
-            .map_err(|err| format!("connect DoQ endpoint: {err}"))?,
-    )
-    .await
-    .map_err(|_| "DNS QUIC handshake timeout".to_owned())?
-    .map_err(|err| {
-        format!(
-            "connect DNS QUIC upstream {} {}: {err}",
-            upstream.tag, upstream.target.authority
-        )
-    })?;
-    let (mut send, mut recv) = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connection.open_bi())
-        .await
-        .map_err(|_| "DNS QUIC stream open timeout".to_owned())?
-        .map_err(|err| format!("open DNS QUIC stream: {err}"))?;
-    let query = dns_data_with_zero_id(payload);
-    let response = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
-        write_dns_tcp_message_async(&mut send, &query).await?;
-        send.finish()
-            .map_err(|err| format!("finish DNS QUIC request stream: {err}"))?;
-        let response = read_dns_tcp_message_async(&mut recv).await?;
-        restore_dns_response_id(payload, &response)
-    })
-    .await
-    .map_err(|_| "DNS QUIC exchange timeout".to_owned())?
-    .map_err(|err| {
-        format!(
-            "forward DNS over QUIC to upstream {} {}: {err}",
-            upstream.tag, upstream.target.authority
-        )
-    })?;
-    connection.close(0_u32.into(), b"dns-query done");
-    endpoint.wait_idle().await;
-    Ok(response)
 }
 
 async fn forward_dns_h3_async(
