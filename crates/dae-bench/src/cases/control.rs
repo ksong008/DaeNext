@@ -221,7 +221,7 @@ fn bench_domain_routing_owner_merge(iters: u64, warmup: u64) -> Result<Measureme
 
 fn bench_domain_routing_reload_clear(iters: u64, warmup: u64) -> Result<Measurement, String> {
     let owner_a = DomainRoutingOwnerSnapshot::new(&[0x3, 0x8], &["192.0.2.1", "2001:db8::1"]);
-    let stale_keys = owner_a.ips.iter().copied().collect::<Vec<_>>();
+    let stale_keys = owner_a.ips.to_vec();
     Ok(measure(
         || {
             let mut owner = DomainRoutingOwner::default();
