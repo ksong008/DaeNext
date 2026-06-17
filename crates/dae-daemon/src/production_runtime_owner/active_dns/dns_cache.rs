@@ -1,7 +1,7 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use dae_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker, DomainRoutingView};
+use dae_runtime_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker, DomainRoutingView};
 use dae_datapath::{
     DNS_NAT_TIMEOUT_MS, UdpDirectPacketConn, UdpDirectSocketOptions, magic_network_bytes,
 };

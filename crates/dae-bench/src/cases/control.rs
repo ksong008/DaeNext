@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use dae_control::{
+use dae_runtime_control::{
     DomainRoutingOwner, DomainRoutingOwnerSnapshot, DomainRoutingReloadClearPlan,
     DomainRoutingSyncPlan, OutboundConnectivityOwner, OutboundConnectivityState,
 };
@@ -265,7 +265,7 @@ fn connectivity_event(
     }
 }
 
-fn connectivity_update_checksum(update: dae_control::ConnectivityStateUpdate) -> u64 {
+fn connectivity_update_checksum(update: dae_runtime_control::ConnectivityStateUpdate) -> u64 {
     update.key.outbound as u64
         ^ ((update.key.l4proto as u64) << 8)
         ^ ((update.key.ipversion as u64) << 16)
@@ -276,7 +276,7 @@ fn connectivity_update_checksum(update: dae_control::ConnectivityStateUpdate) ->
         ^ ((update.len as u64) << 40)
 }
 
-fn connectivity_owner_update_checksum(update: dae_control::ConnectivityOwnerUpdate) -> u64 {
+fn connectivity_owner_update_checksum(update: dae_runtime_control::ConnectivityOwnerUpdate) -> u64 {
     connectivity_update_checksum(update.state)
         ^ ((update.map_id.unwrap_or_default() as u64) << 7)
         ^ ((update.flush as u64) << 39)

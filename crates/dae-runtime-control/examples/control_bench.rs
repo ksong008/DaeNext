@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use dae_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker};
+use dae_runtime_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker};
 
 fn main() {
     let iters = std::env::var("CONTROL_BENCH_ITERS")

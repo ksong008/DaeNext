@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
 
-use dae_control::{DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingOwner, ip_to_key};
+use dae_runtime_control::{DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingOwner, ip_to_key};
 use dae_dns::{DnsCacheEntry, DnsCacheKey, DnsCacheStore, DnsPacketView, DnsResponseCachePlan};
 use dae_routing::RoutingMatcher;
 
