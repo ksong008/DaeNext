@@ -7,23 +7,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
-use dae_control::{DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingOwner, ip_to_key};
+#[cfg(test)]
+use dae_control::ip_to_key;
 use dae_dns::{
-    DOH_MEDIA_TYPE, DnsCacheEntry, DnsCacheKey, DnsCacheStore, DnsDomainSet, DnsPacketView,
-    DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseCachePlan,
-    DnsResponseMatchKind, DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher,
-    ResponseMatcher, build_doh_request, build_response_cache_plan_from_packet,
-    dns_data_with_zero_id, restore_packed_response_request_id,
-    validate_dns_packet_response_for_request_fast, validate_doh_response,
+    DOH_MEDIA_TYPE, DnsCacheKey, DnsDomainSet, DnsPacketView, DnsRequestMatchKind,
+    DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind, DnsResponseMatchSpec,
+    DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher, build_doh_request,
+    build_response_cache_plan_from_packet, dns_data_with_zero_id,
+    restore_packed_response_request_id, validate_dns_packet_response_for_request_fast,
+    validate_doh_response,
 };
 use dae_routing::IpPrefix;
+#[cfg(test)]
 use dae_routing::RoutingMatcher;
 use http::Request;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio::sync::{Mutex as AsyncMutex, OnceCell, OwnedMutexGuard};
+use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use tokio::time;
 
 use super::super::resident_routing::{
@@ -35,8 +37,16 @@ use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::direct::open_direct_tcp_connection_async;
 use super::tcp::{open_marked_quic_endpoint, set_socket_mark};
 
+mod cache;
+mod domain_routing;
 mod routing;
 mod transport;
+use self::cache::ResidentDnsRuntimeCache;
+pub(super) use self::domain_routing::ResidentDnsDomainRouting;
+#[cfg(test)]
+use self::domain_routing::{
+    build_resident_dns_domain_routing_update_plan, build_resident_domain_routing_ip_update_plan,
+};
 #[cfg(test)]
 use self::routing::parse_dns_upstream;
 use self::routing::{
@@ -163,299 +173,6 @@ impl ResidentDnsPlan {
             return false;
         };
         dns_response_has_any_ip(&response).unwrap_or(false)
-    }
-}
-
-#[derive(Debug, Default)]
-struct ResidentDnsRuntimeCache {
-    store: Mutex<DnsCacheStore>,
-    inflight: Mutex<BTreeMap<DnsCacheKey, Arc<tokio::sync::Mutex<()>>>>,
-}
-
-struct ResidentDnsInflightGuard<'a> {
-    cache: &'a ResidentDnsRuntimeCache,
-    key: DnsCacheKey,
-    lock: Arc<tokio::sync::Mutex<()>>,
-    _guard: OwnedMutexGuard<()>,
-}
-
-impl ResidentDnsRuntimeCache {
-    async fn lock_key(&self, key: DnsCacheKey) -> Result<ResidentDnsInflightGuard<'_>, String> {
-        let lock = {
-            let mut inflight = self
-                .inflight
-                .lock()
-                .map_err(|_| "resident DNS inflight lock poisoned".to_owned())?;
-            inflight
-                .entry(key.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
-        };
-        let guard = Arc::clone(&lock).lock_owned().await;
-        Ok(ResidentDnsInflightGuard {
-            cache: self,
-            key,
-            lock,
-            _guard: guard,
-        })
-    }
-
-    fn lookup_response(
-        &self,
-        request: &DnsPacketView<'_>,
-        ignore_fixed_ttl: bool,
-    ) -> Result<Option<Vec<u8>>, String> {
-        let now_unix = unix_now();
-        let question = request
-            .questions()
-            .next()
-            .ok_or_else(|| "DNS request has no question".to_owned())?;
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        let Some(entry) = store
-            .lookup_packet_question(now_unix, &question, ignore_fixed_ttl)
-            .map_err(|err| format!("lookup resident DNS response cache: {err}"))?
-        else {
-            return Ok(None);
-        };
-        Ok(entry.fill_packed_response(request.id()))
-    }
-
-    fn lookup_key_has_any_ip(
-        &self,
-        key: &DnsCacheKey,
-        ignore_fixed_ttl: bool,
-    ) -> Result<bool, String> {
-        let now_unix = unix_now();
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        Ok(store
-            .lookup(now_unix, key, ignore_fixed_ttl)
-            .is_some_and(|entry| entry.has_any_ip))
-    }
-
-    fn insert_response(
-        &self,
-        now_unix: i64,
-        key: DnsCacheKey,
-        entry: DnsCacheEntry,
-    ) -> Result<(), String> {
-        self.store
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?
-            .insert(now_unix, key, entry);
-        Ok(())
-    }
-
-    fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<Option<DnsCacheEntry>, String> {
-        let question = request
-            .questions()
-            .next()
-            .ok_or_else(|| "DNS request has no question".to_owned())?;
-        self.store
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?
-            .remove_packet_question(&question)
-            .map_err(|err| format!("remove resident DNS response cache entry: {err}"))
-    }
-}
-
-impl Drop for ResidentDnsInflightGuard<'_> {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.lock) != 3 {
-            return;
-        }
-        if let Ok(mut inflight) = self.cache.inflight.lock()
-            && inflight
-                .get(&self.key)
-                .is_some_and(|current| Arc::ptr_eq(current, &self.lock))
-        {
-            inflight.remove(&self.key);
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct ResidentDnsDomainRouting {
-    map_id: u32,
-    routing_matcher: RoutingMatcher,
-    state: Mutex<ResidentDnsDomainRoutingState>,
-}
-
-#[derive(Debug)]
-struct ResidentDnsDomainRoutingState {
-    owner: DomainRoutingOwner,
-    cache: DnsCacheStore,
-    domain_bitmap: Vec<u32>,
-    sniff_owners: BTreeMap<String, i64>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ResidentDnsDomainRoutingUpdatePlan {
-    key: DnsCacheKey,
-    entry: DnsCacheEntry,
-    bitmap: Vec<u32>,
-    ips: Vec<DomainRoutingIpKey>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ResidentDomainRoutingIpUpdatePlan {
-    owner_key: String,
-    bitmap: Vec<u32>,
-    ip: DomainRoutingIpKey,
-}
-
-impl ResidentDnsDomainRouting {
-    pub(super) fn new(map_id: u32, routing_matcher: RoutingMatcher) -> Self {
-        Self {
-            map_id,
-            routing_matcher,
-            state: Mutex::new(ResidentDnsDomainRoutingState {
-                owner: DomainRoutingOwner::default(),
-                cache: DnsCacheStore::default(),
-                domain_bitmap: Vec::new(),
-                sniff_owners: BTreeMap::new(),
-            }),
-        }
-    }
-
-    fn record_accepted_response(&self, cache_plan: &DnsResponseCachePlan) -> Result<(), String> {
-        let now_unix = unix_now();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        self.sweep_expired_locked(now_unix, &mut state)?;
-        let Some(plan) = build_resident_dns_domain_routing_update_plan(
-            &self.routing_matcher,
-            &mut state.domain_bitmap,
-            cache_plan,
-        )?
-        else {
-            return Ok(());
-        };
-        let owner_key = plan.entry.route_owner_key.clone();
-        state
-            .owner
-            .apply_dns_event_by_id(
-                self.map_id,
-                DomainRoutingDnsEvent::from_keys(
-                    &owner_key,
-                    &plan.bitmap,
-                    plan.ips.iter().copied(),
-                ),
-            )
-            .map_err(|err| format!("apply resident DNS domain routing response: {err}"))?;
-        state
-            .cache
-            .insert_without_route_owner_key(now_unix, plan.key, plan.entry);
-        Ok(())
-    }
-
-    pub(super) fn record_sniffed_domain_ip(
-        &self,
-        domain: &str,
-        ip: IpAddr,
-    ) -> Result<bool, String> {
-        let now_unix = unix_now();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        self.sweep_expired_locked(now_unix, &mut state)?;
-        let Some(plan) = build_resident_domain_routing_ip_update_plan(
-            &self.routing_matcher,
-            &mut state.domain_bitmap,
-            "tcp-sniff",
-            domain,
-            ip,
-        )?
-        else {
-            return Ok(false);
-        };
-        state
-            .owner
-            .apply_dns_event_by_id(
-                self.map_id,
-                DomainRoutingDnsEvent::from_keys(&plan.owner_key, &plan.bitmap, [plan.ip]),
-            )
-            .map_err(|err| format!("apply resident TCP sniff domain routing update: {err}"))?;
-        state.sniff_owners.insert(
-            plan.owner_key,
-            now_unix.saturating_add(TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS),
-        );
-        Ok(true)
-    }
-
-    fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        let Some(removed) = state
-            .cache
-            .remove_packet_question(
-                &request
-                    .questions()
-                    .next()
-                    .ok_or_else(|| "DNS request has no question".to_owned())?,
-            )
-            .map_err(|err| format!("remove resident DNS domain routing cache entry: {err}"))?
-        else {
-            return Ok(());
-        };
-        if removed.route_owner_key.is_empty() {
-            return Ok(());
-        }
-        state
-            .owner
-            .apply_dns_event_by_id(
-                self.map_id,
-                DomainRoutingDnsEvent::remove(&removed.route_owner_key),
-            )
-            .map_err(|err| format!("remove resident DNS domain routing owner: {err}"))?;
-        Ok(())
-    }
-
-    fn sweep_expired_locked(
-        &self,
-        now_unix: i64,
-        state: &mut ResidentDnsDomainRoutingState,
-    ) -> Result<(), String> {
-        for expired in state.cache.sweep(now_unix) {
-            if expired.route_owner_key.is_empty() {
-                continue;
-            }
-            state
-                .owner
-                .apply_dns_event_by_id(
-                    self.map_id,
-                    DomainRoutingDnsEvent::remove(&expired.route_owner_key),
-                )
-                .map_err(|err| {
-                    format!("remove expired resident DNS domain routing owner: {err}")
-                })?;
-        }
-        let expired_sniff_owners = state
-            .sniff_owners
-            .iter()
-            .filter(|(_, deadline)| **deadline <= now_unix)
-            .map(|(owner, _)| owner.clone())
-            .collect::<Vec<_>>();
-        for owner in expired_sniff_owners {
-            state
-                .owner
-                .apply_dns_event_by_id(self.map_id, DomainRoutingDnsEvent::remove(&owner))
-                .map_err(|err| {
-                    format!("remove expired resident TCP sniff domain routing owner: {err}")
-                })?;
-            state.sniff_owners.remove(&owner);
-        }
-        Ok(())
     }
 }
 
@@ -687,63 +404,6 @@ fn parse_i64_base0(raw: &str) -> Result<i64, String> {
     let parsed = i64::from_str_radix(digits, base)
         .map_err(|err| format!("failed to parse ttl {raw:?}: {err}"))?;
     Ok(if negative { -parsed } else { parsed })
-}
-
-fn build_resident_dns_domain_routing_update_plan(
-    routing_matcher: &RoutingMatcher,
-    domain_bitmap: &mut Vec<u32>,
-    cache_plan: &DnsResponseCachePlan,
-) -> Result<Option<ResidentDnsDomainRoutingUpdatePlan>, String> {
-    if cache_plan.entry.ips.is_empty() {
-        return Ok(None);
-    }
-    let bitmap = routing_matcher
-        .domain_bitmap_for_domain_into(&cache_plan.key.qname, domain_bitmap)
-        .map_err(|err| format!("match resident DNS response domain routing bitmap: {err}"))?
-        .to_vec();
-    if bitmap.iter().all(|word| *word == 0) {
-        return Ok(None);
-    }
-    let ips = cache_plan
-        .entry
-        .ips
-        .iter()
-        .copied()
-        .map(ip_to_key)
-        .collect::<Vec<_>>();
-    let mut entry = cache_plan.entry.clone();
-    entry.domain_bitmap = bitmap.clone();
-    Ok(Some(ResidentDnsDomainRoutingUpdatePlan {
-        key: cache_plan.key.clone(),
-        entry,
-        bitmap,
-        ips,
-    }))
-}
-
-fn build_resident_domain_routing_ip_update_plan(
-    routing_matcher: &RoutingMatcher,
-    domain_bitmap: &mut Vec<u32>,
-    owner_prefix: &str,
-    domain: &str,
-    ip: IpAddr,
-) -> Result<Option<ResidentDomainRoutingIpUpdatePlan>, String> {
-    let domain = domain.trim().trim_end_matches('.');
-    if domain.is_empty() || ip.is_unspecified() {
-        return Ok(None);
-    }
-    let bitmap = routing_matcher
-        .domain_bitmap_for_domain_into(domain, domain_bitmap)
-        .map_err(|err| format!("match resident sniffed domain routing bitmap: {err}"))?
-        .to_vec();
-    if bitmap.iter().all(|word| *word == 0) {
-        return Ok(None);
-    }
-    Ok(Some(ResidentDomainRoutingIpUpdatePlan {
-        owner_key: format!("{owner_prefix}|{domain}|{ip}"),
-        bitmap,
-        ip: ip_to_key(ip),
-    }))
 }
 
 fn record_accepted_dns_response(plan: &ResidentDnsPlan, response: &[u8]) -> Result<(), String> {
@@ -1329,7 +989,7 @@ mod tests {
                 .is_err()
         );
         drop(first);
-        assert!(cache.inflight.lock().unwrap().is_empty());
+        assert_eq!(cache.inflight_len(), 0);
     }
 
     #[test]
