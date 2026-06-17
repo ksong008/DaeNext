@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "dae-bench"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "base64",
  "dae-cli",
@@ -552,11 +552,11 @@ dependencies = [
 
 [[package]]
 name = "dae-build-support"
-version = "3.0.1"
+version = "3.0.2"
 
 [[package]]
 name = "dae-cli"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "blake3",
  "dae-config",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "dae-config"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-config-util",
  "dae-golden",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "dae-config-util"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "base64",
  "dae-golden",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "dae-core-types"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-golden",
  "serde_json",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "dae-daemon"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "argon2",
  "base64",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "dae-datapath"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "base64",
  "dae-ebpf-support",
@@ -668,7 +668,7 @@ dependencies = [
 
 [[package]]
 name = "dae-dns"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "base64",
  "dae-golden",
@@ -680,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "dae-ebpf-loader"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-build-support",
  "dae-ebpf-support",
@@ -692,14 +692,14 @@ dependencies = [
 
 [[package]]
 name = "dae-ebpf-program"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "aya-ebpf",
 ]
 
 [[package]]
 name = "dae-ebpf-support"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "aya",
  "dae-golden",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "dae-engine"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-config",
  "dae-golden",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "dae-geodata"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-golden",
  "serde_json",
@@ -726,14 +726,14 @@ dependencies = [
 
 [[package]]
 name = "dae-golden"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "dae-netutil"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-golden",
  "serde_json",
@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "dae-outbound"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -773,14 +773,14 @@ dependencies = [
 
 [[package]]
 name = "dae-product-identity"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "dae-routing"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-core-types",
  "dae-geodata",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "dae-runtime-control"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-core-types",
  "dae-ebpf-support",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "dae-sniffing"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "dae-sysdump"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-golden",
  "serde_json",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "dae-trace"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "dae-golden",
  "serde_json",
