@@ -137,7 +137,7 @@ pub(super) fn api_update_password(
             );
         }
     };
-    if hash_password(user.jwt_secret.as_bytes(), current) != user.password_hash {
+    if !verify_password_hash(&user.password_hash, user.jwt_secret.as_bytes(), current) {
         return HttpResponse::json(400, json!({"error": "incorrect password"}));
     }
     if let Err(err) = validate_password_strength(new_password) {

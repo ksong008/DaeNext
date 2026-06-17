@@ -133,18 +133,27 @@ pub(super) fn create_user(state: &Path, username: &str, password: &str) -> io::R
 }
 
 pub(super) fn issue_token(state: &Path, username: &str, password: &str) -> io::Result<String> {
-    let Some(user) = load_user_by_username(state, username)? else {
+    let Some(mut user) = load_user_by_username(state, username)? else {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "incorrect username or password",
         ));
     };
-    let hashed = hash_password(user.jwt_secret.as_bytes(), password);
-    if hashed != user.password_hash {
+    if !verify_password_hash(&user.password_hash, user.jwt_secret.as_bytes(), password) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "incorrect username or password",
         ));
+    }
+    if password_hash_needs_migration(&user.password_hash) {
+        let migrated_hash = hash_password(user.jwt_secret.as_bytes(), password);
+        let conn = open_state_connection(state)?;
+        conn.execute(
+            "UPDATE users SET password_hash = ?1 WHERE id = ?2 AND password_hash = ?3",
+            params![migrated_hash, user.id, user.password_hash],
+        )
+        .map_err(sqlite_io_error)?;
+        user.password_hash = migrated_hash;
     }
     signed_token(&user)
 }

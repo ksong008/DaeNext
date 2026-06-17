@@ -110,7 +110,7 @@ pub(super) fn daed_resetpass_updates_daed_db_users_without_wing_db() {
         port,
         "POST",
         "/api/auth/users",
-        Some(r#"{"username":"admin","password":"abc123"}"#),
+        Some(r#"{"username":"admin","password":"abc12345"}"#),
         None,
     );
     assert!(create.contains("201 Created"), "{create}");

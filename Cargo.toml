@@ -39,6 +39,7 @@ repository = "https://github.com/ksong008/DaeNext"
 [workspace.dependencies]
 aes = "0.8"
 aes-gcm = "0.10"
+argon2 = "0.5"
 aya = { version = "0.13.1", default-features = false }
 aya-ebpf = { version = "0.1.1", default-features = false }
 base64 = "0.22"

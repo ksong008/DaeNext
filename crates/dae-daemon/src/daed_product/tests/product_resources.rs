@@ -63,9 +63,37 @@ pub(crate) fn state_schema_open_repairs_existing_wide_permissions() {
 pub(crate) fn jwt_roundtrip_uses_user_secret() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
-    let token = create_user(&state, "admin", "abc123").unwrap();
+    let token = create_user(&state, "admin", "abc12345").unwrap();
     let user = verify_token(&state, &token).unwrap().unwrap();
     assert_eq!(user.username, "admin");
+    assert!(user.password_hash.starts_with("$argon2id$"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn legacy_password_hash_migrates_to_argon2id_after_successful_login() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    let secret = random_secret_hex().unwrap();
+    let legacy_hash = legacy_password_hash_for_test(secret.as_bytes(), "abc12345");
+    conn.execute(
+        "INSERT INTO users(username, password_hash, jwt_secret, json_storage) VALUES(?1, ?2, ?3, '{}')",
+        params!["admin", legacy_hash, secret],
+    )
+    .unwrap();
+    drop(conn);
+
+    let token = issue_token(&state, "admin", "abc12345").unwrap();
+    assert!(verify_token(&state, &token).unwrap().is_some());
+    let migrated = load_user_by_username(&state, "admin").unwrap().unwrap();
+    assert!(migrated.password_hash.starts_with("$argon2id$"));
+    assert!(verify_password_hash(
+        &migrated.password_hash,
+        migrated.jwt_secret.as_bytes(),
+        "abc12345"
+    ));
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -73,7 +101,7 @@ pub(crate) fn jwt_roundtrip_uses_user_secret() {
 pub(crate) fn token_auth_prefers_bearer_header_over_event_query_token() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
-    let token = create_user(&state, "admin", "abc123").unwrap();
+    let token = create_user(&state, "admin", "abc12345").unwrap();
     let app = product_test_app(&dir, &state);
     let request = token_request(
         "GET",
@@ -91,7 +119,7 @@ pub(crate) fn token_auth_prefers_bearer_header_over_event_query_token() {
 pub(crate) fn token_query_auth_is_limited_to_event_streams() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
-    let token = create_user(&state, "admin", "abc123").unwrap();
+    let token = create_user(&state, "admin", "abc12345").unwrap();
     let app = product_test_app(&dir, &state);
 
     for path in ["/api/events/runtime", "/api/events/logs"] {
@@ -111,7 +139,7 @@ pub(crate) fn token_query_auth_is_limited_to_event_streams() {
 pub(crate) fn token_verifier_rejects_expired_wrong_alg_and_bad_signature() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
-    let token = create_user(&state, "admin", "abc123").unwrap();
+    let token = create_user(&state, "admin", "abc12345").unwrap();
     let user = load_user_by_username(&state, "admin").unwrap().unwrap();
 
     let expired = signed_test_token(
@@ -137,7 +165,7 @@ pub(crate) fn token_verifier_rejects_expired_wrong_alg_and_bad_signature() {
 pub(crate) fn password_update_rotates_secret_and_invalidates_old_token() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
-    let old_token = create_user(&state, "admin", "abc123").unwrap();
+    let old_token = create_user(&state, "admin", "abc12345").unwrap();
     let app = product_test_app(&dir, &state);
     let mut headers = HashMap::new();
     headers.insert("authorization".to_owned(), format!("Bearer {old_token}"));
@@ -146,7 +174,7 @@ pub(crate) fn password_update_rotates_secret_and_invalidates_old_token() {
         path: "/api/user/me/password".to_owned(),
         query: HashMap::new(),
         headers,
-        body: br#"{"currentPassword":"abc123","newPassword":"def456"}"#.to_vec(),
+        body: br#"{"currentPassword":"abc12345","newPassword":"def45678"}"#.to_vec(),
     };
 
     let response = route_request(&app, &request);

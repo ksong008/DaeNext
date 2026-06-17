@@ -31,7 +31,7 @@ pub(super) fn daed_run_serves_minimal_api_and_static_webui() {
         port,
         "POST",
         "/api/auth/users",
-        Some(r#"{"username":"admin","password":"abc123"}"#),
+        Some(r#"{"username":"admin","password":"abc12345"}"#),
         None,
     );
     assert!(create.contains("201 Created"), "{create}");
@@ -95,7 +95,7 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
         port,
         "POST",
         "/api/auth/users",
-        Some(r#"{"username":"admin","password":"abc123"}"#),
+        Some(r#"{"username":"admin","password":"abc12345"}"#),
         None,
     );
     assert!(create.contains("201 Created"), "{create}");
