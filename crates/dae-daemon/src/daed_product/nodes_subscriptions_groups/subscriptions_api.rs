@@ -48,6 +48,11 @@ pub(crate) fn create_subscription(
     if link.is_empty() {
         return HttpResponse::json(400, json!({"error": "link is required"}));
     }
+    if let Some(cron_exp) = body.get("cronExp").and_then(Value::as_str)
+        && let Err(err) = validate_subscription_cron_expression(cron_exp)
+    {
+        return HttpResponse::json(400, json!({"error": err}));
+    }
     let tag = body.get("tag").and_then(Value::as_str);
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
@@ -119,6 +124,11 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
     let tag_present = body.get("tag").is_some();
     let tag = body.get("tag").and_then(Value::as_str);
     let cron_exp = body.get("cronExp").and_then(Value::as_str);
+    if let Some(cron_exp) = cron_exp
+        && let Err(err) = validate_subscription_cron_expression(cron_exp)
+    {
+        return HttpResponse::json(400, json!({"error": err}));
+    }
     let cron_enable = body
         .get("cronEnable")
         .and_then(Value::as_bool)

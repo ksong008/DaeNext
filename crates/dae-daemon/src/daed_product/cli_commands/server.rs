@@ -42,7 +42,11 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             }
         }
     }
-    start_subscription_scheduler(options.state.clone(), options.config_dir.clone());
+    start_subscription_scheduler(
+        options.state.clone(),
+        options.config_dir.clone(),
+        Arc::clone(&runtime),
+    );
     let app = AppState {
         config_dir: options.config_dir,
         state: options.state,
