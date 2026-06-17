@@ -4,10 +4,10 @@ pub(super) fn string_arg<'a>(args: &'a [String], name: &str) -> Option<&'a str> 
         if arg == name {
             return iter.next().map(String::as_str);
         }
-        if let Some((key, value)) = arg.split_once('=') {
-            if key == name {
-                return Some(value);
-            }
+        if let Some((key, value)) = arg.split_once('=')
+            && key == name
+        {
+            return Some(value);
         }
     }
     None
@@ -40,7 +40,7 @@ pub(super) fn hex_encode(bytes: &[u8]) -> String {
 }
 
 pub(super) fn hex_decode(input: &str) -> Result<Vec<u8>, String> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err("odd hex length".to_owned());
     }
     input
