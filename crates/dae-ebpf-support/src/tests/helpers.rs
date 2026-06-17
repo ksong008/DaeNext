@@ -20,12 +20,7 @@ pub(super) fn assert_layout<T>(
     assert_eq!(item["align"].as_u64().unwrap() as usize, align_of::<T>());
 }
 
-pub(super) fn assert_offset<T>(
-    fixture: &Value,
-    struct_name: &str,
-    field_name: &str,
-    offset: usize,
-) {
+pub(super) fn assert_offset(fixture: &Value, struct_name: &str, field_name: &str, offset: usize) {
     let item = fixture_struct(fixture, struct_name);
     let offsets = item["offsets"].as_array().unwrap();
     let expected = offsets

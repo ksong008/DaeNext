@@ -151,10 +151,10 @@ pub fn apply_domain_routing_map_by_id(
         )?;
     }
     for key in deletes {
-        if let Err(err) = delete_map_elem_bytes(map.as_raw_fd(), plain_bytes(key)) {
-            if err.raw_os_error() != Some(libc::ENOENT) {
-                return Err(err);
-            }
+        if let Err(err) = delete_map_elem_bytes(map.as_raw_fd(), plain_bytes(key))
+            && err.raw_os_error() != Some(libc::ENOENT)
+        {
+            return Err(err);
         }
     }
     Ok(DomainRoutingMapApplyReport {
@@ -174,10 +174,10 @@ pub fn apply_domain_routing_map_diff_by_id(
         desired.iter().map(|entry| (entry.key, entry.value)),
         |key, value| update_map_elem_bytes(map.as_raw_fd(), plain_bytes(key), plain_bytes(value)),
         |key| {
-            if let Err(err) = delete_map_elem_bytes(map.as_raw_fd(), plain_bytes(key)) {
-                if err.raw_os_error() != Some(libc::ENOENT) {
-                    return Err(err);
-                }
+            if let Err(err) = delete_map_elem_bytes(map.as_raw_fd(), plain_bytes(key))
+                && err.raw_os_error() != Some(libc::ENOENT)
+            {
+                return Err(err);
             }
             Ok(())
         },

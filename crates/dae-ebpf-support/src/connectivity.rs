@@ -123,7 +123,7 @@ pub struct ConnectivityWritePlan {
 }
 
 pub fn connectivity_write_plan(event: ConnectivityEvent) -> ConnectivityWritePlan {
-    let written = !(event.dryrun && !event.is_init);
+    let written = !event.dryrun || event.is_init;
     ConnectivityWritePlan {
         key: event.key,
         value: u32::from(event.alive),

@@ -185,7 +185,7 @@ impl RoutingMatcher {
         for (index, match_set) in self.matches.iter().enumerate() {
             if !bad_rule
                 && !good_subrule
-                && match_set.matches(index, query, &domain_bitmap, &self.lpm_sets)
+                && match_set.matches(index, query, domain_bitmap, &self.lpm_sets)
             {
                 good_subrule = true;
             }

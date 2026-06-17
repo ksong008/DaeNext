@@ -236,13 +236,9 @@ mod tests {
                 case["value"].clone(),
             );
             assert_eq!(got.is_ok(), case["ok"].as_bool().unwrap());
-            if got.is_ok() {
-                assert_eq!(Value::Object(map), case["map"]);
-            } else {
-                assert_eq!(
-                    got.unwrap_err().to_string(),
-                    case["error"].as_str().unwrap()
-                );
+            match got {
+                Ok(()) => assert_eq!(Value::Object(map), case["map"]),
+                Err(err) => assert_eq!(err.to_string(), case["error"].as_str().unwrap()),
             }
         }
     }
@@ -259,13 +255,9 @@ mod tests {
                 case["value"].as_str().unwrap(),
             );
             assert_eq!(got.is_ok(), case["ok"].as_bool().unwrap());
-            if got.is_ok() {
-                assert_eq!(config.snapshot(), case["after"]);
-            } else {
-                assert_eq!(
-                    got.unwrap_err().to_string(),
-                    case["error"].as_str().unwrap()
-                );
+            match got {
+                Ok(()) => assert_eq!(config.snapshot(), case["after"]),
+                Err(err) => assert_eq!(err.to_string(), case["error"].as_str().unwrap()),
             }
         }
     }

@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod userspace_matcher_tests {
     use super::super::*;
     use std::str::FromStr;
 

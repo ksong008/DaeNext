@@ -11,15 +11,9 @@ pub struct BpfDaeParam {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BpfDomainRouting {
     pub bitmap: [u32; 32],
-}
-
-impl Default for BpfDomainRouting {
-    fn default() -> Self {
-        Self { bitmap: [0; 32] }
-    }
 }
 
 #[repr(C)]
