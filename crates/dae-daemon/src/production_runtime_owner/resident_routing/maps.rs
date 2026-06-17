@@ -77,10 +77,10 @@ pub(super) fn update_outbound_connectivity_map(
         if desired_keys.contains(&key) {
             continue;
         }
-        if let Err(err) = delete_map_elem_bytes(connectivity_fd, &key) {
-            if err.raw_os_error() != Some(libc::ENOENT) {
-                return Err(err.to_string());
-            }
+        if let Err(err) = delete_map_elem_bytes(connectivity_fd, &key)
+            && err.raw_os_error() != Some(libc::ENOENT)
+        {
+            return Err(err.to_string());
         }
         deleted.push(json!({
             "outbound": key[0],
@@ -209,7 +209,7 @@ pub(super) fn open_unique_map(
             candidates.len()
         ));
     }
-    open_map_info(&candidates[0])
+    open_map_info(candidates[0])
 }
 
 pub(super) fn open_optional_unique_map(

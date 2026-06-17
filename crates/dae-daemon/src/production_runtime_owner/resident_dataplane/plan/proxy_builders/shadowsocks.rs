@@ -98,20 +98,19 @@ pub(crate) fn build_shadowsocks_proxy_plan(
             }
         }
         CipherFamily::Aead2022 => {
-            if !plugin.name.is_empty() {
-                if !(plugin.name == "simple-obfs"
+            if !(plugin.name.is_empty()
+                || plugin.name == "simple-obfs"
                     && plugin.opts.obfs == "http"
                     && plugin.opts.tls.is_empty())
-                {
-                    return Err(format!(
-                        "resident dataplane Shadowsocks 2022 plugin wrapper admits simple-obfs http only for node {node_tag}; got {}",
-                        resident_shadowsocks_plugin_display(
-                            &plugin.name,
-                            &plugin.opts.obfs,
-                            &plugin.opts.tls
-                        )
-                    ));
-                }
+            {
+                return Err(format!(
+                    "resident dataplane Shadowsocks 2022 plugin wrapper admits simple-obfs http only for node {node_tag}; got {}",
+                    resident_shadowsocks_plugin_display(
+                        &plugin.name,
+                        &plugin.opts.obfs,
+                        &plugin.opts.tls
+                    )
+                ));
             }
             validate_psk_list(&cipher_info.cipher, &parsed.password)
                 .map_err(|err| format!("admit Shadowsocks 2022 PSK for node {node_tag}: {err}"))?;

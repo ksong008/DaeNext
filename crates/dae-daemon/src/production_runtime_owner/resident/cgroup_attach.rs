@@ -1,5 +1,7 @@
 use super::*;
 
+// Resident startup evidence keeps attach inputs and report artifacts explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resident_cgroup_attach_evidence(
     executed_steps: &mut Vec<Value>,
     interface_attach_options: &ProductionRuntimeOwnerOptions,

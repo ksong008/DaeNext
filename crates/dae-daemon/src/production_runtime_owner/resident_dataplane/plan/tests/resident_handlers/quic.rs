@@ -3,7 +3,7 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     let primary_host = fixture_host(FixtureEndpoint::Primary);
     let authority_host = fixture_host(FixtureEndpoint::Authority);
     let hysteria2 = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "hy2_live".to_owned(),
         hysteria2_fixture_url("hy2", &primary_host, fixture_port(1)),
@@ -21,7 +21,7 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     ));
 
     let hysteria2_obfs = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "hy2_salamander_live".to_owned(),
         hysteria2_salamander_fixture_url(&primary_host, fixture_port(1)),
@@ -36,7 +36,7 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     ));
 
     let hysteria2_hopping = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "hy2_hopping_live".to_owned(),
         hysteria2_fixture_url_with_pin(
@@ -61,7 +61,7 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     ));
 
     let tuic = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "tuic_live".to_owned(),
         tuic_fixture_url("tuic", &primary_host, fixture_port(2), true),
@@ -83,7 +83,7 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     ));
 
     let tuic_verified = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "tuic_verified_live".to_owned(),
         tuic_fixture_url("tuic", &primary_host, fixture_port(2), false),
@@ -106,7 +106,7 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     );
 
     let juicity = build_resident_proxy_plan_for_node(
-        &config,
+        config,
         "proxy".to_owned(),
         "juicity_live".to_owned(),
         juicity_fixture_url("juicity", &primary_host, fixture_port(3), true),

@@ -178,11 +178,10 @@ pub(crate) fn refresh_subscription(
                 .ok()
                 .flatten()
                 .and_then(|value| value.as_object().cloned())
+                && let Value::Object(map) = &mut report
             {
-                if let Value::Object(map) = &mut report {
-                    for (key, value) in subscription {
-                        map.insert(key, value);
-                    }
+                for (key, value) in subscription {
+                    map.insert(key, value);
                 }
             }
             HttpResponse::json(200, report)

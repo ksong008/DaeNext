@@ -110,19 +110,19 @@ pub(crate) fn replace_subscription_nodes(
                 .copied()
                 .unwrap_or(0)
                 == 1
+            && let Some(preserved) = preserved_by_name.get(&parsed.name)
+            && reused_preserved.insert(preserved.id)
         {
-            if let Some(preserved) = preserved_by_name.get(&parsed.name) {
-                if reused_preserved.insert(preserved.id) {
-                    if !subscription_node_changed(preserved, &link, &parsed) {
-                        out.push(json!({
-                            "link": link,
-                            "error": Value::Null,
-                            "node": {"id": preserved.id}
-                        }));
-                        continue;
-                    }
-                    match conn.execute(
-                        "UPDATE nodes
+            if !subscription_node_changed(preserved, &link, &parsed) {
+                out.push(json!({
+                    "link": link,
+                    "error": Value::Null,
+                    "node": {"id": preserved.id}
+                }));
+                continue;
+            }
+            match conn.execute(
+                "UPDATE nodes
                          SET link = ?1,
                              name = ?2,
                              address = ?3,
@@ -130,38 +130,36 @@ pub(crate) fn replace_subscription_nodes(
                              tag = NULL,
                              subscription_id = ?5
                          WHERE id = ?6",
-                        params![
-                            link,
-                            parsed.name,
-                            parsed.address,
-                            parsed.protocol,
-                            subscription_id,
-                            preserved.id
-                        ],
-                    ) {
-                        Ok(_) => {
-                            conn.execute(
-                                "DELETE FROM node_latency_results WHERE node_id = ?1",
-                                params![preserved.id],
-                            )
-                            .map_err(sqlite_io_error)?;
-                            bump_group_versions_for_node(conn, preserved.id)?;
-                            out.push(json!({
-                                "link": link,
-                                "error": Value::Null,
-                                "node": {"id": preserved.id}
-                            }));
-                            continue;
-                        }
-                        Err(err) => {
-                            out.push(json!({
-                                "link": link,
-                                "error": err.to_string(),
-                                "node": Value::Null
-                            }));
-                            continue;
-                        }
-                    }
+                params![
+                    link,
+                    parsed.name,
+                    parsed.address,
+                    parsed.protocol,
+                    subscription_id,
+                    preserved.id
+                ],
+            ) {
+                Ok(_) => {
+                    conn.execute(
+                        "DELETE FROM node_latency_results WHERE node_id = ?1",
+                        params![preserved.id],
+                    )
+                    .map_err(sqlite_io_error)?;
+                    bump_group_versions_for_node(conn, preserved.id)?;
+                    out.push(json!({
+                        "link": link,
+                        "error": Value::Null,
+                        "node": {"id": preserved.id}
+                    }));
+                    continue;
+                }
+                Err(err) => {
+                    out.push(json!({
+                        "link": link,
+                        "error": err.to_string(),
+                        "node": Value::Null
+                    }));
+                    continue;
                 }
             }
         }

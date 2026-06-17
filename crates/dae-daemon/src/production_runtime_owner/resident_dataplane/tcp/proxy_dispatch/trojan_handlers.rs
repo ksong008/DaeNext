@@ -1,3 +1,6 @@
+// Trojan proxy handlers keep protocol credentials, stream state, and event context explicit.
+#![allow(clippy::too_many_arguments)]
+
 use super::*;
 pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,

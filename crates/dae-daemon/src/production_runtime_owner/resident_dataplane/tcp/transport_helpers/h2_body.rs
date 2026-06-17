@@ -123,6 +123,8 @@ pub(crate) async fn open_h2_body_stream_with_deferred_response(
     Ok((send_stream, response_task, connection_task))
 }
 
+// Deferred H2 relay keeps stream halves, state, metrics, and protocol toggles explicit.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_deferred_h2_body(
     inbound: &mut TokioTcpStream,
     send_stream: &mut h2::SendStream<Bytes>,
@@ -391,9 +393,7 @@ pub(crate) async fn relay_tcp_over_vmess_h2_body(
     let decoder_result = decoder
         .await
         .map_err(|err| format!("join VMess H2 response decoder failed: {err}"))?;
-    if let Err(err) = decoder_result {
-        return Err(err);
-    }
+    decoder_result?;
     Ok(stats)
 }
 

@@ -144,10 +144,10 @@ impl XhttpXmuxRequestHandle {
     pub(super) fn use_for_packet_up_post(&self) -> bool {
         let left = self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1;
         left > 0
-            && !self
+            && self
                 .usage
                 .unreusable_at
-                .is_some_and(|deadline| Instant::now() > deadline)
+                .is_none_or(|deadline| Instant::now() <= deadline)
     }
 }
 

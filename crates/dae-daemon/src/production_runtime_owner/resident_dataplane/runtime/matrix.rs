@@ -99,11 +99,7 @@ pub(super) fn resident_expanded_source_matrix_row(
 ) -> Value {
     let candidate_nodes = nodes
         .iter()
-        .filter(|node| {
-            row.link_schemes
-                .iter()
-                .any(|scheme| *scheme == node.scheme.as_str())
-        })
+        .filter(|node| row.link_schemes.contains(&node.scheme.as_str()))
         .collect::<Vec<_>>();
     let candidate_count = candidate_nodes.len();
     let candidate_reports = candidate_nodes

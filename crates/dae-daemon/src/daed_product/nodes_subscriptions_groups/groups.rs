@@ -121,26 +121,26 @@ pub(crate) fn update_group(state: &Path, request: &HttpRequest, id: i64) -> Http
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
-    if let Some(name) = body.get("name").and_then(Value::as_str) {
-        if let Err(err) = conn.execute(
+    if let Some(name) = body.get("name").and_then(Value::as_str)
+        && let Err(err) = conn.execute(
             "UPDATE groups SET name = ?1, version = version + 1 WHERE id = ?2",
             params![name, id],
-        ) {
-            return HttpResponse::json(400, json!({"error": err.to_string()}));
-        }
+        )
+    {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
-    if let Some(policy) = body.get("policy").and_then(Value::as_str) {
-        if let Err(err) = conn.execute(
+    if let Some(policy) = body.get("policy").and_then(Value::as_str)
+        && let Err(err) = conn.execute(
             "UPDATE groups SET policy = ?1, version = version + 1 WHERE id = ?2",
             params![policy, id],
-        ) {
-            return HttpResponse::json(400, json!({"error": err.to_string()}));
-        }
+        )
+    {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
-    if body.get("policyParams").is_some() {
-        if let Err(err) = replace_group_policy_params(&conn, id, body.get("policyParams")) {
-            return HttpResponse::json(400, json!({"error": err.to_string()}));
-        }
+    if body.get("policyParams").is_some()
+        && let Err(err) = replace_group_policy_params(&conn, id, body.get("policyParams"))
+    {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
     get_group(state, id)
 }

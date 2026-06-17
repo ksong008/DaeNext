@@ -1,3 +1,6 @@
+// UDP worker startup keeps socket, routing, session, shutdown, and metrics ownership explicit.
+#![allow(clippy::too_many_arguments)]
+
 use std::collections::BTreeMap;
 
 use super::*;

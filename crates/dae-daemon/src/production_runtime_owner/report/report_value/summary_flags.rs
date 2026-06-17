@@ -34,23 +34,23 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
     );
     report.insert(
         "daemon_owned_production_runtime_owner_smoke_passed".to_owned(),
-        json!(context.options.execute && context.evidence.owner_smoke_passed.clone()),
+        json!(context.options.execute && context.evidence.owner_smoke_passed),
     );
     report.insert(
         "production_listener_bound_during_owner_smoke".to_owned(),
-        json!(context.options.execute && context.evidence.owner_smoke_passed.clone()),
+        json!(context.options.execute && context.evidence.owner_smoke_passed),
     );
     report.insert(
         "listen_socket_map_written_during_owner_smoke".to_owned(),
-        json!(context.options.execute && context.evidence.owner_smoke_passed.clone()),
+        json!(context.options.execute && context.evidence.owner_smoke_passed),
     );
     report.insert(
         "production_tc_attach_smoke_passed".to_owned(),
-        json!(context.options.execute && context.evidence.owner_smoke_passed.clone()),
+        json!(context.options.execute && context.evidence.owner_smoke_passed),
     );
     report.insert(
         "ebpf_attached_during_owner_smoke".to_owned(),
-        json!(context.options.execute && context.evidence.owner_smoke_passed.clone()),
+        json!(context.options.execute && context.evidence.owner_smoke_passed),
     );
     report.insert(
         "production_runtime_active_tcp_executed".to_owned(),
@@ -75,18 +75,14 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
         "active_tcp_original_destination_observed".to_owned(),
         json!(
             context.facts.active_tcp_executed
-                && context
-                    .evidence
-                    .active_tcp
-                    .original_destination_observed
-                    .clone()
+                && context.evidence.active_tcp.original_destination_observed
         ),
     );
     report.insert(
         "active_tcp_reply_path_succeeded".to_owned(),
         json!(
             context.facts.active_tcp_executed
-                && context.evidence.active_tcp.tcp_reply_path_succeeded.clone()
+                && context.evidence.active_tcp.tcp_reply_path_succeeded
         ),
     );
     report.insert(
@@ -109,7 +105,7 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
         "route_dial_tcp_direct_path_executed".to_owned(),
         json!(
             context.facts.active_tcp_relay_passed
-                && context.evidence.active_tcp.outbound_relay_succeeded.clone()
+                && context.evidence.active_tcp.outbound_relay_succeeded
         ),
     );
     report.insert(
@@ -119,8 +115,7 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
     report.insert(
         "so_mark_real_outbound_socket_observed".to_owned(),
         json!(
-            context.facts.active_tcp_relay_passed
-                && context.evidence.active_tcp.so_mark_observed.clone()
+            context.facts.active_tcp_relay_passed && context.evidence.active_tcp.so_mark_observed
         ),
     );
     report.insert(
@@ -128,7 +123,7 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
         json!(
             context.facts.active_tcp_relay_passed
                 && (!context.options.active_tcp_mptcp
-                    || context.evidence.active_tcp.mptcp_observed.clone())
+                    || context.evidence.active_tcp.mptcp_observed)
         ),
     );
     report.insert(
@@ -155,48 +150,32 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
         "active_udp_original_destination_observed".to_owned(),
         json!(
             context.facts.active_udp_executed
-                && context
-                    .evidence
-                    .active_udp
-                    .original_destination_observed
-                    .clone()
+                && context.evidence.active_udp.original_destination_observed
         ),
     );
     report.insert(
         "udp_endpoint_pool_live_recorded".to_owned(),
         json!(
             context.facts.active_udp_executed
-                && context
-                    .evidence
-                    .active_udp
-                    .endpoint_pool_live_recorded
-                    .clone()
+                && context.evidence.active_udp.endpoint_pool_live_recorded
         ),
     );
     report.insert(
         "udp_packetconn_write_read_recorded".to_owned(),
         json!(
             context.facts.active_udp_executed
-                && context
-                    .evidence
-                    .active_udp
-                    .outbound_packet_conn_recorded
-                    .clone()
+                && context.evidence.active_udp.outbound_packet_conn_recorded
         ),
     );
     report.insert(
         "udp_sendpkt_reply_recorded".to_owned(),
         json!(
-            context.facts.active_udp_executed
-                && context.evidence.active_udp.sendpkt_reply_recorded.clone()
+            context.facts.active_udp_executed && context.evidence.active_udp.sendpkt_reply_recorded
         ),
     );
     report.insert(
         "udp_so_mark_real_outbound_socket_observed".to_owned(),
-        json!(
-            context.facts.active_udp_executed
-                && context.evidence.active_udp.so_mark_observed.clone()
-        ),
+        json!(context.facts.active_udp_executed && context.evidence.active_udp.so_mark_observed),
     );
     report.insert(
         "active_udp_tproxy_benchmark_recorded".to_owned(),
@@ -222,51 +201,35 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
         "active_dns_original_destination_observed".to_owned(),
         json!(
             context.facts.active_dns_executed
-                && context
-                    .evidence
-                    .active_dns
-                    .original_destination_observed
-                    .clone()
+                && context.evidence.active_dns.original_destination_observed
         ),
     );
     report.insert(
         "dns_controller_path_recorded".to_owned(),
         json!(
             context.facts.active_dns_executed
-                && context.evidence.active_dns.dns_controller_recorded.clone()
+                && context.evidence.active_dns.dns_controller_recorded
         ),
     );
     report.insert(
         "dns_upstream_query_recorded".to_owned(),
         json!(
             context.facts.active_dns_executed
-                && context
-                    .evidence
-                    .active_dns
-                    .dns_upstream_query_recorded
-                    .clone()
+                && context.evidence.active_dns.dns_upstream_query_recorded
         ),
     );
     report.insert(
         "dns_response_validation_recorded".to_owned(),
         json!(
             context.facts.active_dns_executed
-                && context
-                    .evidence
-                    .active_dns
-                    .dns_response_validation_recorded
-                    .clone()
+                && context.evidence.active_dns.dns_response_validation_recorded
         ),
     );
     report.insert(
         "dns_cache_restore_recorded".to_owned(),
         json!(
             context.facts.active_dns_executed
-                && context
-                    .evidence
-                    .active_dns
-                    .dns_cache_restore_recorded
-                    .clone()
+                && context.evidence.active_dns.dns_cache_restore_recorded
         ),
     );
     report.insert(
@@ -277,22 +240,17 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
                     .evidence
                     .active_dns
                     .domain_routing_owner_migration_recorded
-                    .clone()
         ),
     );
     report.insert(
         "dns_sendpkt_reply_recorded".to_owned(),
         json!(
-            context.facts.active_dns_executed
-                && context.evidence.active_dns.sendpkt_reply_recorded.clone()
+            context.facts.active_dns_executed && context.evidence.active_dns.sendpkt_reply_recorded
         ),
     );
     report.insert(
         "dns_so_mark_upstream_socket_observed".to_owned(),
-        json!(
-            context.facts.active_dns_executed
-                && context.evidence.active_dns.so_mark_observed.clone()
-        ),
+        json!(context.facts.active_dns_executed && context.evidence.active_dns.so_mark_observed),
     );
     report.insert(
         "active_dns_tproxy_benchmark_recorded".to_owned(),
@@ -314,18 +272,14 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
         "live_reload_executed".to_owned(),
         json!(
             context.facts.reload_runtime_executed
-                && context.evidence.reload_runtime.live_reload_executed.clone()
+                && context.evidence.reload_runtime.live_reload_executed
         ),
     );
     report.insert(
         "production_listener_reused".to_owned(),
         json!(
             context.facts.reload_runtime_passed
-                && context
-                    .evidence
-                    .reload_runtime
-                    .production_listener_reused
-                    .clone()
+                && context.evidence.reload_runtime.production_listener_reused
         ),
     );
     report.insert(
@@ -336,7 +290,6 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
                     .evidence
                     .reload_runtime
                     .production_bpf_owner_transferred
-                    .clone()
         ),
     );
     report.insert(
@@ -347,7 +300,6 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
                     .evidence
                     .reload_runtime
                     .production_dns_cache_migrated
-                    .clone()
         ),
     );
     report.insert(
@@ -358,18 +310,13 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
                     .evidence
                     .reload_runtime
                     .dns_cache_migration_guard_verified
-                    .clone()
         ),
     );
     report.insert(
         "bounded_close_verified".to_owned(),
         json!(
             context.facts.reload_runtime_passed
-                && context
-                    .evidence
-                    .reload_runtime
-                    .bounded_close_verified
-                    .clone()
+                && context.evidence.reload_runtime.bounded_close_verified
         ),
     );
     report.insert(
@@ -380,7 +327,6 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
                     .evidence
                     .reload_runtime
                     .runtime_overview_parity_verified
-                    .clone()
         ),
     );
     report.insert(
@@ -391,7 +337,6 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
                     .evidence
                     .reload_runtime
                     .reload_scoped_resources_flushed
-                    .clone()
         ),
     );
     report.insert(
@@ -402,7 +347,6 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
                     .evidence
                     .reload_runtime
                     .invalid_config_restore_verified
-                    .clone()
         ),
     );
 }

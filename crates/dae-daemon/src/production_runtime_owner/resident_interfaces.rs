@@ -558,7 +558,7 @@ default via fe80::1 dev wan_ipv6 proto ra metric 1024 expires 1771sec pref mediu
 
     #[test]
     fn wan_interface_auto_expands_to_default_route_devices() {
-        let configured = vec![
+        let configured = [
             "auto".to_owned(),
             "wan_manual".to_owned(),
             "wan_primary".to_owned(),
@@ -573,7 +573,7 @@ default via fe80::1 dev wan_ipv6 proto ra metric 1024 expires 1771sec pref mediu
 
     #[test]
     fn explicit_wan_interface_names_pass_through_without_auto_resolution() {
-        let configured = vec![
+        let configured = [
             "wan_manual".to_owned(),
             "wan_backup".to_owned(),
             "wan_manual".to_owned(),
@@ -587,7 +587,7 @@ default via fe80::1 dev wan_ipv6 proto ra metric 1024 expires 1771sec pref mediu
 
     #[test]
     fn wan_interface_auto_requires_a_default_route_device() {
-        let configured = vec!["auto".to_owned()];
+        let configured = ["auto".to_owned()];
         let err =
             configured_wan_ifaces_from_values(configured.iter(), || Ok(Vec::new())).unwrap_err();
         assert!(err.contains("wan_interface auto"));

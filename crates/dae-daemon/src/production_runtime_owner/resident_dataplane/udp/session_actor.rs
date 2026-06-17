@@ -101,20 +101,18 @@ async fn run_udp_session_actor(
                     Arc::clone(&context.metrics),
                     exchange,
                 );
-                if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref()) {
-                    if let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
+                if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref())
+                    && let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
                         stop_reason = err;
                         break;
                     }
-                }
             }
             _ = time::sleep(RESIDENT_IDLE_SLEEP), if executor.is_some() => {
-                if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref()) {
-                    if let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
+                if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref())
+                    && let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
                         stop_reason = err;
                         break;
                     }
-                }
             }
             _ = &mut idle_timer => {
                 stop_reason = "idle-timeout".to_owned();

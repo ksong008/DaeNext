@@ -236,6 +236,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn vless_plain_tls_relay_reuses_coalesced_flush_policy() {
         assert!(TLS_PLAIN_RELAY_FLUSH_BYTES >= 64 * 1024);
         assert!(TLS_PLAIN_RELAY_FLUSH_DELAY <= Duration::from_millis(5));

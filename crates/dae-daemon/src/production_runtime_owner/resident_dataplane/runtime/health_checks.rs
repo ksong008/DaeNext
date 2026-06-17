@@ -73,7 +73,8 @@ async fn run_resident_group_health_checks_concurrent_async(
     }
     for chunk in candidates.chunks(concurrency.max(1)) {
         let mut handles = Vec::new();
-        for candidate in chunk.iter().cloned() {
+        for candidate in chunk {
+            let candidate = candidate.clone();
             let group = Arc::clone(&group);
             handles.push(tokio::spawn(async move {
                 run_resident_candidate_health_check_async(&group, &candidate).await;

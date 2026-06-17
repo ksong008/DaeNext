@@ -202,7 +202,7 @@ pub(super) fn parse_group_policy_function(
             let Some(param) = function.params.first() else {
                 return Ok(ResidentGroupPolicyPlan::Fixed { index: 0 });
             };
-            if param.key != "" {
+            if !param.key.is_empty() {
                 return Err(r#"invalid "fixed" param format"#.to_owned());
             }
             let index = param

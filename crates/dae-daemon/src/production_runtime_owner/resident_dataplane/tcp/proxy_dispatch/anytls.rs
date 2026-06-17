@@ -129,13 +129,10 @@ pub(crate) async fn wait_anytls_synack(
             {
                 return Ok(());
             }
-            cmd if matches!(
-                cmd,
-                anytls_contract::CMD_WASTE
-                    | anytls_contract::CMD_SERVER_SETTINGS
-                    | anytls_contract::CMD_UPDATE_PADDING
-                    | anytls_contract::CMD_HEART_RESPONSE
-            ) => {}
+            anytls_contract::CMD_WASTE
+            | anytls_contract::CMD_SERVER_SETTINGS
+            | anytls_contract::CMD_UPDATE_PADDING
+            | anytls_contract::CMD_HEART_RESPONSE => {}
             cmd if cmd == anytls_contract::CMD_ALERT => {
                 return Err(format!(
                     "AnyTLS alert before SYNACK: {} bytes",
@@ -238,13 +235,10 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                         let _ = inbound.shutdown().await;
                         last_activity = Instant::now();
                     }
-                    cmd if matches!(
-                        cmd,
-                        anytls_contract::CMD_WASTE
-                            | anytls_contract::CMD_SERVER_SETTINGS
-                            | anytls_contract::CMD_UPDATE_PADDING
-                            | anytls_contract::CMD_HEART_RESPONSE
-                    ) => {
+                    anytls_contract::CMD_WASTE
+                    | anytls_contract::CMD_SERVER_SETTINGS
+                    | anytls_contract::CMD_UPDATE_PADDING
+                    | anytls_contract::CMD_HEART_RESPONSE => {
                         last_activity = Instant::now();
                     }
                     cmd if cmd == anytls_contract::CMD_ALERT => {
@@ -274,7 +268,7 @@ pub(crate) async fn relay_tcp_over_anytls_async(
             }
         }
 
-        if proxy_closed || (inbound_closed && proxy_closed) {
+        if proxy_closed {
             break;
         }
     }

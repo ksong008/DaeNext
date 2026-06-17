@@ -265,7 +265,7 @@ pub(super) fn notify_systemd(state: &str) -> Result<(), String> {
             use std::os::linux::net::SocketAddrExt;
             use std::os::unix::net::SocketAddr;
 
-            let target = SocketAddr::from_abstract_name(address.as_bytes()[1..].to_vec())
+            let target = SocketAddr::from_abstract_name(&address.as_bytes()[1..])
                 .map_err(|err| format!("failed to parse abstract notify socket: {err}"))?;
             socket
                 .send_to_addr(state.as_bytes(), &target)

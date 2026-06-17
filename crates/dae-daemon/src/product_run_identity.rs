@@ -79,7 +79,7 @@ pub fn product_run_identity_admission_report(
             path_string(&options.config)
         )
     })?;
-    let config_bytes = config.as_bytes().len();
+    let config_bytes = config.len();
     let config_lines = config.lines().count();
     if config.trim().is_empty() {
         return Err(format!(

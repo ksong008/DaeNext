@@ -1,9 +1,13 @@
+// UDP session manager keeps kernel sockets, routing maps, session queues, and metrics explicit.
+#![allow(clippy::too_many_arguments)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::path::Path;
 use std::slice;
 
 use dae_core_types::OutboundIndex;
@@ -234,7 +238,7 @@ fn handle_manager_packet(
     packet: UdpOriginalDstPacket,
     router: &ResidentUdpRouter,
     dns: &Arc<ResidentDnsPlan>,
-    event_file: &PathBuf,
+    event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
     metrics: &Arc<ResidentDataplaneMetrics>,
     active_sessions: &Arc<AtomicUsize>,
@@ -292,7 +296,7 @@ fn forward_manager_packet(
     packet: UdpOriginalDstPacket,
     router: &ResidentUdpRouter,
     dns: &Arc<ResidentDnsPlan>,
-    event_file: &PathBuf,
+    event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
     metrics: &Arc<ResidentDataplaneMetrics>,
     active_sessions: &Arc<AtomicUsize>,
@@ -370,7 +374,7 @@ fn forward_manager_packet(
         let (sender, receiver) = mpsc::channel::<ManagedUdpPacket>(session_queue_depth);
         let context = UdpSessionActorContext {
             dns: Arc::clone(dns),
-            event_file: event_file.clone(),
+            event_file: event_file.to_path_buf(),
             event_lock: Arc::clone(event_lock),
             metrics: Arc::clone(metrics),
             active_sessions: Arc::clone(active_sessions),
@@ -795,7 +799,7 @@ enum ResidentUdpSelection {
 }
 
 fn append_udp_route_selection_failed(
-    event_file: &PathBuf,
+    event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
     peer: SocketAddr,
     original_dst: SocketAddr,

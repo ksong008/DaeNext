@@ -6,17 +6,12 @@ const NETNS_LINK_ENV: &str = "NETNS_LINK";
 const NETNS_LINK_LEGACY_ENV: &str = "DAE_NETNS_LINK";
 const NETNS_LINK_AUTO_POLICY: &str = "netkit_l2_scrub_none_then_compat_netkit_l2_then_veth";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NetnsLinkMode {
+    #[default]
     Auto,
     Veth,
     Netkit,
-}
-
-impl Default for NetnsLinkMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl NetnsLinkMode {

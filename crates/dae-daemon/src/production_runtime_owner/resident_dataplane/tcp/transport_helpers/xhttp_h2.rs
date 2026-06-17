@@ -1,3 +1,6 @@
+// xHTTP stream/client enums keep live H1/H2/H3 transport ownership inline.
+#![allow(clippy::large_enum_variant)]
+
 use super::*;
 
 mod xmux;

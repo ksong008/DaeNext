@@ -108,15 +108,11 @@ routing {
         assert_eq!(row["planner_status"].as_str().unwrap(), "admitted");
         assert_eq!(row["candidate_count"].as_u64().unwrap(), 1);
         assert_eq!(row["admitted_count"].as_u64().unwrap(), 1);
-        assert_eq!(
-            row["generated_solver"]["nativeReady"].as_bool().unwrap(),
-            false
-        );
-        assert_eq!(
-            row["generated_solver"]["productionReady"]
+        assert!(!row["generated_solver"]["nativeReady"].as_bool().unwrap());
+        assert!(
+            !row["generated_solver"]["productionReady"]
                 .as_bool()
-                .unwrap(),
-            false
+                .unwrap()
         );
     }
     for handler in [
@@ -135,29 +131,27 @@ routing {
             .iter()
             .find(|row| row["formal_matrix_handler"].as_str().unwrap() == handler)
             .unwrap();
-        assert_eq!(row["remote_live_matrix"].as_bool().unwrap(), false);
+        assert!(!row["remote_live_matrix"].as_bool().unwrap());
     }
-    assert_eq!(
-        report["resident_live_adapter_remote_live_matrix_ready"]
+    assert!(
+        !report["resident_live_adapter_remote_live_matrix_ready"]
             .as_bool()
-            .unwrap(),
-        false
+            .unwrap()
     );
     let http_row = rows
         .iter()
         .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "http-proxy")
         .unwrap();
-    assert_eq!(http_row["udp_live_adapter"].as_bool().unwrap(), false);
+    assert!(!http_row["udp_live_adapter"].as_bool().unwrap());
     assert_eq!(
         http_row["udp_semantics"].as_str().unwrap(),
         "protocol-closed"
     );
-    assert_eq!(http_row["udp_path_ready"].as_bool().unwrap(), true);
-    assert_eq!(
+    assert!(http_row["udp_path_ready"].as_bool().unwrap());
+    assert!(
         http_row["generated_solver"]["udpLoopbackReady"]
             .as_bool()
-            .unwrap(),
-        true
+            .unwrap()
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     for secret in [

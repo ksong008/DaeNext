@@ -30,7 +30,8 @@ pub(crate) fn assert_protocol_matrix_source_uses_generic_semantics(source: &str)
             "protocol matrix source fixtures must use protocol-generic semantics, found {forbidden}"
         );
     }
-    for forbidden in [["GENERIC", "_"].concat()] {
+    {
+        let forbidden = ["GENERIC", "_"].concat();
         assert!(
             !source.contains(&forbidden),
             "protocol matrix source fixtures must not use hardcoded generic constants, found {forbidden}"

@@ -77,7 +77,7 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
                 }
             }
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
-                if response_closed || (inbound_closed && response_closed) {
+                if response_closed {
                     break;
                 }
                 if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
@@ -154,7 +154,7 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
                 }
             }
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
-                if response_closed || (inbound_closed && response_closed) {
+                if response_closed {
                     break;
                 }
                 if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {

@@ -159,7 +159,7 @@ pub(super) fn write_missing_interface_config(path: &Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-pub(super) fn wait_for_file(path: &PathBuf) {
+pub(super) fn wait_for_file(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(15);
     while !path.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));

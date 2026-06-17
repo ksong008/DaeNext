@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::super::*;
     use dae_config::{Config, DynamicFunctionValue, Function, Global, Routing, RoutingRule};

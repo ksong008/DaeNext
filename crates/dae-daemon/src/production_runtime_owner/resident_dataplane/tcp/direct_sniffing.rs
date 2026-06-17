@@ -1,4 +1,7 @@
 use super::*;
+
+// Direct TCP event assembly keeps sniff, route, dial report, and metrics fields explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_direct_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
@@ -35,6 +38,8 @@ pub(super) async fn handle_direct_tcp_connection_async(
     ))
 }
 
+// Direct finished events preserve all route, sniff, dial, and relay statistics fields.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn direct_tcp_finished_event(
     peer: SocketAddr,
     original_dst: SocketAddr,
