@@ -45,6 +45,19 @@ Build the DaeNext release binary:
 cargo build --release -p dae-cli --bin dae
 ```
 
-`DaeNext` releases publish the `dae` Rust workspace artifact. The `daed`
-product binary is released from the `DaedNext` repository, which consumes this
-workspace as its Rust core.
+Run the same gate used by CI and release:
+
+```bash
+scripts/release_gate.sh
+```
+
+## Release Boundary
+
+Formal release artifacts are defined by the GitHub Actions release workflow.
+The current DaeNext workflow publishes the `dae` Rust workspace artifact,
+source archive, manifest, and checksums. Local `daed` v2/v3 deb/rpm builds are
+allowed for install and smoke testing, but they are not formal release artifacts
+unless a release workflow publishes them.
+
+The `daed` product binary release remains owned by the product release workflow
+that consumes this workspace as its Rust core.

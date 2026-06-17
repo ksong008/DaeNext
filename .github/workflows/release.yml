@@ -41,7 +41,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Install native eBPF toolchain
         run: |
@@ -56,20 +56,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm libelf-dev pkg-config
 
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
 
-      - name: Repository text policy
-        run: scripts/check_no_emoji.sh
-
-      - name: Check workspace
-        run: cargo check --workspace --all-targets
-
-      - name: Test workspace libraries
-        run: cargo test --workspace --lib
-
-      - name: Test service contracts
-        run: cargo test -p dae-daemon --test service_contract
+      - name: Release gate
+        env:
+          DAENEXT_RELEASE_GATE_AUDIT: "1"
+        run: scripts/release_gate.sh
 
       - name: Build dae release binary
         run: |
@@ -82,19 +75,38 @@ jobs:
         run: |
           set -euo pipefail
           artifact_root="DaeNext-${{ steps.release.outputs.tag }}-x86_64-unknown-linux-gnu"
+          rm -rf dist
           mkdir -p "dist/${artifact_root}"
           cp target/release/dae "dist/${artifact_root}/dae"
           cp dae-config-outline.json "dist/${artifact_root}/dae-config-outline.json"
+          binary_sha256="$(sha256sum "dist/${artifact_root}/dae" | awk '{print $1}')"
+          outline_sha256="$(sha256sum "dist/${artifact_root}/dae-config-outline.json" | awk '{print $1}')"
           {
             echo "name=DaeNext"
             echo "artifact=dae"
+            echo "formal_release_source=github-actions-release-workflow"
             echo "tag=${{ steps.release.outputs.tag }}"
             echo "commit=${{ steps.release.outputs.commit }}"
             echo "target=x86_64-unknown-linux-gnu"
             echo "source_repo=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
             echo "rustc=$(rustc --version)"
             echo "cargo=$(cargo --version)"
+            echo "binary_sha256=${binary_sha256}"
+            echo "outline_sha256=${outline_sha256}"
           } >"dist/${artifact_root}/BUILDINFO"
+          {
+            echo "schema_version=1"
+            echo "name=DaeNext"
+            echo "artifact=dae"
+            echo "formal_release_source=github-actions-release-workflow"
+            echo "tag=${{ steps.release.outputs.tag }}"
+            echo "commit=${{ steps.release.outputs.commit }}"
+            echo "target=x86_64-unknown-linux-gnu"
+            echo "binary=dist/${artifact_root}/dae"
+            echo "binary_sha256=${binary_sha256}"
+            echo "outline=dist/${artifact_root}/dae-config-outline.json"
+            echo "outline_sha256=${outline_sha256}"
+          } >"DaeNext-${{ steps.release.outputs.tag }}-manifest.txt"
           tar -C dist -czf "${artifact_root}.tar.gz" "${artifact_root}"
           git archive --format=tar.gz \
             --prefix="DaeNext-${{ steps.release.outputs.tag }}-source/" \
@@ -102,7 +114,17 @@ jobs:
             HEAD
           sha256sum "${artifact_root}.tar.gz" \
             "DaeNext-${{ steps.release.outputs.tag }}-source.tar.gz" \
+            "DaeNext-${{ steps.release.outputs.tag }}-manifest.txt" \
             >"DaeNext-${{ steps.release.outputs.tag }}-checksums.txt"
+
+      - name: Assert release artifact scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find dist -type f \( -name '*.deb' -o -name '*.rpm' \) | grep -q .; then
+            echo "::error::This workflow publishes DaeNext dae tar/source artifacts only; local daed deb/rpm test packages are not formal release artifacts here."
+            exit 1
+          fi
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -113,4 +135,5 @@ jobs:
           files: |
             DaeNext-${{ steps.release.outputs.tag }}-x86_64-unknown-linux-gnu.tar.gz
             DaeNext-${{ steps.release.outputs.tag }}-source.tar.gz
+            DaeNext-${{ steps.release.outputs.tag }}-manifest.txt
             DaeNext-${{ steps.release.outputs.tag }}-checksums.txt
