@@ -100,6 +100,51 @@ pub(crate) fn empty_latency_probe_ids_select_all_nodes() {
 }
 
 #[test]
+pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
+    let dir = std::env::temp_dir().join(format!("daed-product-latency-job-{}", fastrand::u64(..)));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("state.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 11, "one", "socks://127.0.0.1:1080#one", None);
+    insert_config_node(&conn, 12, "two", "socks://127.0.0.1:1081#two", None);
+    drop(conn);
+
+    let runtime = Arc::new(ProductRuntimeManager::new());
+    let jobs = Arc::new(LatencyJobManager::default());
+    let value =
+        enqueue_node_latency_job(&state, &dir, Arc::clone(&runtime), Arc::clone(&jobs), &[])
+            .unwrap();
+
+    assert!(value["items"].as_array().is_some());
+    assert_eq!(value["job"]["total"].as_u64(), Some(2));
+    assert_eq!(value["job"]["completed"].as_u64(), Some(0));
+    assert_eq!(value["job"]["status"].as_str(), Some("queued"));
+
+    let mut current = current_node_latency_job_value(&jobs);
+    for _ in 0..50 {
+        let status = current["job"]["status"].as_str().unwrap_or_default();
+        if status != "queued" && status != "running" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        current = current_node_latency_job_value(&jobs);
+    }
+
+    assert_eq!(current["job"]["status"].as_str(), Some("finished"));
+    assert_eq!(current["job"]["total"].as_u64(), Some(2));
+    assert_eq!(current["job"]["completed"].as_u64(), Some(2));
+    assert_eq!(
+        list_stored_node_latencies_value(&state).unwrap()["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(2),
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
     let nodes = vec![
         (
