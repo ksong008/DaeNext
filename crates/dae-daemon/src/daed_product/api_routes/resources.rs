@@ -20,7 +20,7 @@ pub(super) fn api_section_resource(
     let suffix = api_path.trim_start_matches(kind.prefix());
     if suffix.is_empty() {
         return match request.method.as_str() {
-            "GET" => list_sections(&app.state, kind),
+            "GET" => list_sections(&app.state, request, kind),
             "POST" => create_section(&app.state, request, kind),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
