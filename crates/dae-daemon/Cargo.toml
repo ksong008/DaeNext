@@ -8,7 +8,22 @@ repository.workspace = true
 [features]
 # Default Rust-native daemon builds include the native Aya/eBPF loader and use
 # the allocator selected by live RSS A/B.
-default = ["native-ebpf", "allocator-jemalloc"]
+default = [
+    "product-api",
+    "resident-runtime",
+    "service-contract",
+    "native-ebpf",
+    "allocator-jemalloc",
+]
+product-api = [
+    "resident-runtime",
+    "service-contract",
+    "dep:argon2",
+    "dep:rusqlite",
+    "dep:sha3",
+]
+resident-runtime = ["service-contract"]
+service-contract = []
 native-ebpf = ["dae-ebpf-loader/native-ebpf", "dae-ebpf-support/aya-loader"]
 allocator-system = []
 allocator-jemalloc = [
@@ -16,6 +31,16 @@ allocator-jemalloc = [
     "dep:tikv-jemalloc-ctl",
     "dep:tikv-jemalloc-sys",
 ]
+
+[[bin]]
+name = "daed"
+path = "src/bin/daed.rs"
+required-features = ["product-api"]
+
+[[bin]]
+name = "daed-contract-runner"
+path = "src/bin/daed-contract-runner.rs"
+required-features = ["service-contract"]
 
 [dependencies]
 dae-ebpf-loader.workspace = true
@@ -32,7 +57,7 @@ dae-outbound.workspace = true
 dae-product-identity.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
-argon2.workspace = true
+argon2 = { workspace = true, optional = true }
 boring.workspace = true
 base64.workspace = true
 blake2.workspace = true
@@ -46,13 +71,13 @@ http.workspace = true
 libc.workspace = true
 quinn.workspace = true
 udp.workspace = true
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 rustls.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-sha3.workspace = true
+sha3 = { workspace = true, optional = true }
 tls-parser.workspace = true
 tokio.workspace = true
 tokio-boring.workspace = true
