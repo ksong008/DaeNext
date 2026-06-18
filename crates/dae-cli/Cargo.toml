@@ -8,7 +8,6 @@ repository.workspace = true
 [dependencies]
 blake3.workspace = true
 dae-config.workspace = true
-dae-daemon.workspace = true
 dae-runtime-control.workspace = true
 dae-core-types.workspace = true
 dae-datapath.workspace = true
