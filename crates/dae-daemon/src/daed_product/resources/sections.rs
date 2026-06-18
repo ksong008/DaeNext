@@ -87,11 +87,54 @@ pub(crate) fn api_section_preview(request: &HttpRequest, api_path: &str) -> Http
     HttpResponse::json(200, parsed_routing_value(raw))
 }
 
-pub(crate) fn list_sections(state: &Path, kind: SectionKind) -> HttpResponse {
-    match list_sections_value(state, kind) {
+pub(crate) fn list_sections(
+    state: &Path,
+    request: &HttpRequest,
+    kind: SectionKind,
+) -> HttpResponse {
+    let result = if request_summary_enabled(request) {
+        list_section_summaries_value(state, kind)
+    } else {
+        list_sections_value(state, kind)
+    };
+    match result {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
+}
+
+pub(crate) fn request_summary_enabled(request: &HttpRequest) -> bool {
+    request
+        .query
+        .get("summary")
+        .and_then(|values| values.first())
+        .and_then(|value| parse_boolish(value))
+        .unwrap_or(false)
+}
+
+pub(crate) fn list_section_summaries_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
+    let conn = open_state_connection(state)?;
+    let sql = format!(
+        "SELECT id, name, selected, version FROM {} ORDER BY id",
+        kind.table()
+    );
+    let mut stmt = conn.prepare(&sql).map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(section_summary_resource(
+                row.get(0)?,
+                row.get::<_, Option<String>>(1)?
+                    .unwrap_or_else(|| kind.default_name().to_owned()),
+                row.get::<_, i64>(2)? != 0,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(sqlite_io_error)?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row.map_err(sqlite_io_error)?);
+    }
+    Ok(json!({"items": items}))
 }
 
 pub(crate) fn list_sections_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
@@ -120,6 +163,22 @@ pub(crate) fn list_sections_value(state: &Path, kind: SectionKind) -> io::Result
         items.push(row.map_err(sqlite_io_error)?);
     }
     Ok(json!({"items": items}))
+}
+
+pub(crate) fn section_summary_resource(
+    id: i64,
+    name: String,
+    selected: bool,
+    version: i64,
+) -> Value {
+    json!({
+        "id": id,
+        "name": name,
+        "selected": selected,
+        "version": version,
+        "parseStatus": "ok",
+        "parseError": Value::Null,
+    })
 }
 
 pub(crate) fn get_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {

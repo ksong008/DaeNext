@@ -225,6 +225,86 @@ pub(crate) fn group_subscription_bindings_apply_name_regex_to_matched_nodes() {
 }
 
 #[test]
+pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(9, 'resource_group', 'random', 2);
+            INSERT INTO group_subscriptions(group_id, subscription_id, name_filter_regex)
+                VALUES(9, 7, 'candidate');
+            INSERT INTO group_policy_params(group_id, key, value)
+                VALUES(9, 'filter', 'candidate');
+            "#,
+    )
+    .unwrap();
+    replace_subscription_nodes(
+        &conn,
+        7,
+        &[
+            "http://127.0.0.1:9/candidate-alpha#candidate-alpha".to_owned(),
+            "http://127.0.0.1:9/candidate-beta#candidate-beta".to_owned(),
+            "http://127.0.0.1:9/candidate-gamma#candidate-gamma".to_owned(),
+            "http://127.0.0.1:9/candidate-delta#candidate-delta".to_owned(),
+            "http://127.0.0.1:9/candidate-epsilon#candidate-epsilon".to_owned(),
+            "http://127.0.0.1:9/candidate-zeta#candidate-zeta".to_owned(),
+            "http://127.0.0.1:9/candidate-eta#candidate-eta".to_owned(),
+            "http://127.0.0.1:9/ignored#ignored".to_owned(),
+        ],
+    )
+    .unwrap();
+    insert_config_node(
+        &conn,
+        30,
+        "manual",
+        "http://127.0.0.1:9/manual#manual",
+        None,
+    );
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, 30)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let summary = list_group_summaries_value(&state).unwrap();
+    let group = &summary["items"][0];
+    assert_eq!(group["id"], json!(9));
+    assert_eq!(group["nodeCount"], json!(1));
+    assert_eq!(group["subscriptionCount"], json!(1));
+    assert_eq!(group["firstNode"]["name"], json!("manual"));
+    assert_eq!(group["firstSubscription"]["matchedCount"], json!(7));
+    assert_eq!(
+        group["firstSubscription"]["sampleMatchedNodes"]
+            .as_array()
+            .map(Vec::len),
+        Some(5)
+    );
+    assert_eq!(
+        group["firstSubscription"]["sampleMatchedNodes"][0]["name"],
+        json!("candidate-alpha")
+    );
+    assert!(group.get("nodes").is_none(), "{group}");
+    assert!(group.get("subscriptions").is_none(), "{group}");
+    assert!(
+        group["firstSubscription"].get("matchedNodes").is_none(),
+        "{group}"
+    );
+
+    let full = list_groups_value(&state).unwrap();
+    assert_eq!(
+        full["items"][0]["subscriptions"][0]["matchedNodes"][0]["name"],
+        json!("candidate-alpha")
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn subscription_refresh_preserves_group_bound_nodes_by_unique_name() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

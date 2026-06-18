@@ -60,6 +60,32 @@ pub(crate) fn state_schema_open_repairs_existing_wide_permissions() {
 }
 
 #[test]
+pub(crate) fn section_summary_lists_keep_only_lightweight_fields() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "INSERT INTO configs(id, name, global, selected, version)
+         VALUES(1, 'default', 'global { tproxy_port: 12345 }', 1, 7)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let value = list_section_summaries_value(&state, SectionKind::Config).unwrap();
+    let item = &value["items"][0];
+    assert_eq!(item["id"], json!(1));
+    assert_eq!(item["name"], json!("default"));
+    assert_eq!(item["selected"], json!(true));
+    assert_eq!(item["version"], json!(7));
+    assert_eq!(item["parseStatus"], json!("ok"));
+    assert!(item.get("global").is_none(), "{item}");
+    assert!(item.get("parsedGlobal").is_none(), "{item}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn jwt_roundtrip_uses_user_secret() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

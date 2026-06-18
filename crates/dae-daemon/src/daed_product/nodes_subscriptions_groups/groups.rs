@@ -1,9 +1,60 @@
 use super::*;
-pub(crate) fn list_groups(state: &Path) -> HttpResponse {
-    match list_groups_value(state) {
+
+const GROUP_SUMMARY_MATCHED_NODE_SAMPLE_LIMIT: usize = 5;
+
+pub(crate) fn list_groups(state: &Path, request: &HttpRequest) -> HttpResponse {
+    let result = if request_summary_enabled(request) {
+        list_group_summaries_value(state)
+    } else {
+        list_groups_value(state)
+    };
+    match result {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
+}
+
+pub(crate) fn list_group_summaries_value(state: &Path) -> io::Result<Value> {
+    let conn = open_state_connection(state)?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, policy, version FROM groups ORDER BY id")
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(sqlite_io_error)?;
+    let mut items = Vec::new();
+    for row in rows {
+        let (id, name, policy, version) = row.map_err(sqlite_io_error)?;
+        items.push(group_summary_value(&conn, id, name, policy, version)?);
+    }
+    Ok(json!({"items": items}))
+}
+
+fn group_summary_value(
+    conn: &Connection,
+    group_id: i64,
+    name: String,
+    policy: String,
+    version: i64,
+) -> io::Result<Value> {
+    Ok(json!({
+        "id": group_id,
+        "name": name,
+        "policy": policy,
+        "policyParams": group_policy_params_value(conn, group_id)?,
+        "version": version,
+        "nodeCount": count_group_nodes(conn, group_id)?,
+        "subscriptionCount": count_group_subscriptions(conn, group_id)?,
+        "firstNode": first_group_node_value(conn, group_id)?,
+        "firstSubscription": first_group_subscription_summary_value(conn, group_id)?,
+    }))
 }
 
 pub(crate) fn list_groups_value(state: &Path) -> io::Result<Value> {
@@ -25,6 +76,88 @@ pub(crate) fn list_groups_value(state: &Path) -> io::Result<Value> {
         }
     }
     Ok(json!({"items": items}))
+}
+
+fn count_group_nodes(conn: &Connection, group_id: i64) -> io::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM group_nodes WHERE group_id = ?1",
+        params![group_id],
+        |row| row.get(0),
+    )
+    .map_err(sqlite_io_error)
+}
+
+fn count_group_subscriptions(conn: &Connection, group_id: i64) -> io::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM group_subscriptions WHERE group_id = ?1",
+        params![group_id],
+        |row| row.get(0),
+    )
+    .map_err(sqlite_io_error)
+}
+
+fn first_group_node_value(conn: &Connection, group_id: i64) -> io::Result<Value> {
+    conn.query_row(
+        "SELECT n.id, n.link, n.name, n.address, n.protocol, n.tag, n.subscription_id
+         FROM nodes n
+         JOIN group_nodes gn ON gn.node_id = n.id
+         WHERE gn.group_id = ?1
+         ORDER BY n.id
+         LIMIT 1",
+        params![group_id],
+        node_row_value,
+    )
+    .optional()
+    .map(|value| value.unwrap_or(Value::Null))
+    .map_err(sqlite_io_error)
+}
+
+fn first_group_subscription_summary_value(conn: &Connection, group_id: i64) -> io::Result<Value> {
+    let Some((id, updated_at, link, status, info, tag, name_filter_regex)) = conn
+        .query_row(
+            "SELECT s.id, s.updated_at, s.link, s.status, s.info, s.tag, gs.name_filter_regex
+             FROM subscriptions s
+             JOIN group_subscriptions gs ON gs.subscription_id = s.id
+             WHERE gs.group_id = ?1
+             ORDER BY s.id
+             LIMIT 1",
+            params![group_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sqlite_io_error)?
+    else {
+        return Ok(Value::Null);
+    };
+    let matched_count =
+        count_nodes_for_subscription_filtered(conn, id, name_filter_regex.as_deref())?;
+    let sample_matched_nodes = nodes_for_subscription_filtered_sample_value(
+        conn,
+        id,
+        name_filter_regex.as_deref(),
+        GROUP_SUMMARY_MATCHED_NODE_SAMPLE_LIMIT,
+    )?;
+    Ok(json!({
+        "subscriptionId": id,
+        "nameFilterRegex": name_filter_regex,
+        "matchedCount": matched_count,
+        "sampleMatchedNodes": sample_matched_nodes,
+        "updatedAt": updated_at,
+        "status": status,
+        "info": info,
+        "link": link,
+        "tag": tag,
+    }))
 }
 
 pub(crate) fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse {
@@ -326,6 +459,63 @@ pub(crate) fn nodes_for_subscription_filtered_value(
         let node = row.map_err(sqlite_io_error)?;
         if node_matches_name_filter(&node, filter.as_ref()) {
             items.push(node);
+        }
+    }
+    Ok(items)
+}
+
+pub(crate) fn count_nodes_for_subscription_filtered(
+    conn: &Connection,
+    subscription_id: i64,
+    name_filter_regex: Option<&str>,
+) -> io::Result<usize> {
+    let filter = compile_name_filter(name_filter_regex)?;
+    let mut stmt = conn
+        .prepare("SELECT name FROM nodes WHERE subscription_id = ?1")
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![subscription_id], |row| row.get::<_, String>(0))
+        .map_err(sqlite_io_error)?;
+    let mut count = 0_usize;
+    for row in rows {
+        let name = row.map_err(sqlite_io_error)?;
+        if filter
+            .as_ref()
+            .map(|filter| filter.is_match(&name))
+            .unwrap_or(true)
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+pub(crate) fn nodes_for_subscription_filtered_sample_value(
+    conn: &Connection,
+    subscription_id: i64,
+    name_filter_regex: Option<&str>,
+    limit: usize,
+) -> io::Result<Vec<Value>> {
+    let filter = compile_name_filter(name_filter_regex)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, link, name, address, protocol, tag, subscription_id
+             FROM nodes
+             WHERE subscription_id = ?1
+             ORDER BY id",
+        )
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![subscription_id], node_row_value)
+        .map_err(sqlite_io_error)?;
+    let mut items = Vec::new();
+    for row in rows {
+        let node = row.map_err(sqlite_io_error)?;
+        if node_matches_name_filter(&node, filter.as_ref()) {
+            items.push(node);
+            if items.len() >= limit {
+                break;
+            }
         }
     }
     Ok(items)
