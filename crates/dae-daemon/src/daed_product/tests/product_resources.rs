@@ -363,6 +363,18 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         PRODUCT_HTTP_QUEUE_ENV
     );
     assert_eq!(
+        defaults["http"]["profile"]["env"].as_str().unwrap(),
+        PRODUCT_HTTP_PROFILE_ENV
+    );
+    assert_eq!(
+        defaults["http"]["profile"]["default"].as_str().unwrap(),
+        PRODUCT_HTTP_PROFILE_STANDARD
+    );
+    assert_eq!(
+        defaults["http"]["profile"]["lowMemory"]["queueDefault"],
+        json!(PRODUCT_HTTP_LOW_MEMORY_QUEUE_DEFAULT)
+    );
+    assert_eq!(
         defaults["residentDataplane"]["tcpFlow"]["stackBytes"]["env"]
             .as_str()
             .unwrap(),
@@ -400,6 +412,79 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     assert!(!defaults_text.contains("RESIDENT_UDP_PACKET_STACK_BYTES"));
     assert!(!defaults_text.contains("DAE_"));
     assert!(!defaults_text.contains("DAED_"));
+}
+
+#[test]
+pub(crate) fn product_http_low_memory_profile_only_changes_unconfigured_defaults() {
+    let standard = ProductHttpWorkerConfig::from_config_with_profile(
+        None,
+        ProductHttpProfile::Standard,
+        "test",
+    );
+    assert_eq!(standard.profile.name(), PRODUCT_HTTP_PROFILE_STANDARD);
+    assert!(
+        (PRODUCT_HTTP_WORKER_DEFAULT_MIN..=PRODUCT_HTTP_WORKER_DEFAULT_MAX)
+            .contains(&standard.worker_count)
+    );
+    assert_eq!(standard.queue_capacity, PRODUCT_HTTP_QUEUE_DEFAULT);
+    assert_eq!(
+        standard.worker_stack_bytes,
+        PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT
+    );
+    assert_eq!(standard.worker_count_source, "default");
+
+    let low_memory = ProductHttpWorkerConfig::from_config_with_profile(
+        None,
+        ProductHttpProfile::LowMemory,
+        "test",
+    );
+    assert_eq!(low_memory.profile.name(), PRODUCT_HTTP_PROFILE_LOW_MEMORY);
+    assert!(
+        (PRODUCT_HTTP_LOW_MEMORY_WORKER_DEFAULT_MIN..=PRODUCT_HTTP_LOW_MEMORY_WORKER_DEFAULT_MAX)
+            .contains(&low_memory.worker_count)
+    );
+    assert!(low_memory.worker_count <= standard.worker_count);
+    assert_eq!(
+        low_memory.queue_capacity,
+        PRODUCT_HTTP_LOW_MEMORY_QUEUE_DEFAULT
+    );
+    assert_eq!(
+        low_memory.worker_stack_bytes,
+        PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT
+    );
+    assert_eq!(low_memory.worker_count_source, "default");
+
+    let sections = parse_config(
+        "global { http_workers:'9' http_queue:'512' http_worker_stack_bytes:'1048576' }\n\
+         routing { fallback: direct }\n",
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let configured = ProductHttpWorkerConfig::from_config_with_profile(
+        Some(&config),
+        ProductHttpProfile::LowMemory,
+        "test",
+    );
+    assert_eq!(configured.worker_count, 9);
+    assert_eq!(configured.queue_capacity, 512);
+    assert_eq!(configured.worker_stack_bytes, 1_048_576);
+    assert_eq!(configured.worker_count_source, "config");
+
+    let env_configured = ProductHttpWorkerConfig::from_config_with_profile_and_env(
+        Some(&config),
+        ProductHttpProfile::LowMemory,
+        "test",
+        &|name| match name {
+            PRODUCT_HTTP_WORKERS_ENV => Some("3".to_owned()),
+            PRODUCT_HTTP_QUEUE_ENV => Some("64".to_owned()),
+            PRODUCT_HTTP_WORKER_STACK_BYTES_ENV => Some("786432".to_owned()),
+            _ => None,
+        },
+    );
+    assert_eq!(env_configured.worker_count, 3);
+    assert_eq!(env_configured.queue_capacity, 64);
+    assert_eq!(env_configured.worker_stack_bytes, 786_432);
+    assert_eq!(env_configured.worker_count_source, "env");
 }
 
 #[test]
