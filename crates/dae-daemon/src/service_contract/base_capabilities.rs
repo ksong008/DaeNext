@@ -25,6 +25,15 @@ pub fn service_contract_capabilities(version: &str) -> Value {
     let mut report = json!({
         "name": "dae-daemon-service-contract",
         "version": version,
+        "build_feature_boundaries": {
+            "product_api": cfg!(feature = "product-api"),
+            "resident_runtime": cfg!(feature = "resident-runtime"),
+            "service_contract": cfg!(feature = "service-contract"),
+            "native_ebpf": cfg!(feature = "native-ebpf"),
+            "allocator_jemalloc": cfg!(feature = "allocator-jemalloc"),
+            "allocator_system": cfg!(feature = "allocator-system"),
+            "default_product_path": cfg!(feature = "product-api") && cfg!(feature = "resident-runtime"),
+        },
         "resident_run_service_contract_ready": true,
         "reload_command_service_contract_ready": true,
         "systemd_notify_ready_supported": true,

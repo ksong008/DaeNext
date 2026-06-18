@@ -6,6 +6,7 @@ mod bpf_loader;
 mod config_validate;
 mod control_plane;
 mod control_plane_entrypoint;
+#[cfg(feature = "product-api")]
 mod daed_product;
 mod identity;
 mod lifecycle;
@@ -34,6 +35,7 @@ pub use control_plane::{
 pub use control_plane_entrypoint::{
     control_plane_entrypoint_admission_report, default_control_plane_entrypoint_admission_root,
 };
+#[cfg(feature = "product-api")]
 pub use daed_product::{DaedProductOutput, run_daed_product_with_args_and_version};
 pub use identity::{DAEMON_CRATE_NAME, DAEMON_MANIFEST, PRODUCT_BINARY_NAME, daemon_identity};
 pub use lifecycle::{
