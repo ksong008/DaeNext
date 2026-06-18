@@ -561,7 +561,6 @@ dependencies = [
  "blake3",
  "dae-config",
  "dae-core-types",
- "dae-daemon",
  "dae-datapath",
  "dae-dns",
  "dae-ebpf-support",
