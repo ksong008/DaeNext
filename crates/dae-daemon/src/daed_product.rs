@@ -80,14 +80,22 @@ const PRODUCT_HTTP_QUEUE_ENV: &str = "HTTP_QUEUE";
 const PRODUCT_HTTP_QUEUE_LEGACY_ENV: &str = "DAED_HTTP_QUEUE";
 const PRODUCT_HTTP_WORKER_STACK_BYTES_ENV: &str = "HTTP_WORKER_STACK_BYTES";
 const PRODUCT_HTTP_WORKER_STACK_BYTES_LEGACY_ENV: &str = "DAED_HTTP_WORKER_STACK_BYTES";
+const PRODUCT_HTTP_PROFILE_ENV: &str = "HTTP_PROFILE";
+const PRODUCT_HTTP_PROFILE_LEGACY_ENV: &str = "DAED_HTTP_PROFILE";
+const PRODUCT_HTTP_PROFILE_STANDARD: &str = "standard";
+const PRODUCT_HTTP_PROFILE_LOW_MEMORY: &str = "low-memory";
 const PRODUCT_HTTP_WORKER_DEFAULT_MIN: usize = 4;
 const PRODUCT_HTTP_WORKER_DEFAULT_MAX: usize = 16;
+const PRODUCT_HTTP_LOW_MEMORY_WORKER_DEFAULT_MIN: usize = 2;
+const PRODUCT_HTTP_LOW_MEMORY_WORKER_DEFAULT_MAX: usize = 4;
 const PRODUCT_HTTP_WORKER_MIN: usize = 1;
 const PRODUCT_HTTP_WORKER_MAX: usize = 128;
 const PRODUCT_HTTP_QUEUE_DEFAULT: usize = 256;
+const PRODUCT_HTTP_LOW_MEMORY_QUEUE_DEFAULT: usize = 128;
 const PRODUCT_HTTP_QUEUE_MIN: usize = 16;
 const PRODUCT_HTTP_QUEUE_MAX: usize = 16_384;
 const PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT: usize = 1024 * 1024;
+const PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 const PRODUCT_HTTP_WORKER_STACK_BYTES_MIN: usize = 256 * 1024;
 const PRODUCT_HTTP_WORKER_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
 const PRODUCT_HTTP_WORKER_RECV_TIMEOUT: Duration = Duration::from_millis(100);
@@ -240,11 +248,79 @@ impl ProductHttpMetrics {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProductHttpProfile {
+    Standard,
+    LowMemory,
+}
+
+impl ProductHttpProfile {
+    fn from_env() -> (Self, &'static str) {
+        if let Some(profile) = std::env::var(PRODUCT_HTTP_PROFILE_ENV)
+            .ok()
+            .and_then(|value| Self::parse(&value))
+        {
+            return (profile, "env");
+        }
+        if let Some(profile) = std::env::var(PRODUCT_HTTP_PROFILE_LEGACY_ENV)
+            .ok()
+            .and_then(|value| Self::parse(&value))
+        {
+            return (profile, "compatibility-env");
+        }
+        (Self::Standard, "default")
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | PRODUCT_HTTP_PROFILE_STANDARD => Some(Self::Standard),
+            "low" | "low_memory" | PRODUCT_HTTP_PROFILE_LOW_MEMORY => Some(Self::LowMemory),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Standard => PRODUCT_HTTP_PROFILE_STANDARD,
+            Self::LowMemory => PRODUCT_HTTP_PROFILE_LOW_MEMORY,
+        }
+    }
+
+    fn worker_default_bounds(self) -> (usize, usize) {
+        match self {
+            Self::Standard => (
+                PRODUCT_HTTP_WORKER_DEFAULT_MIN,
+                PRODUCT_HTTP_WORKER_DEFAULT_MAX,
+            ),
+            Self::LowMemory => (
+                PRODUCT_HTTP_LOW_MEMORY_WORKER_DEFAULT_MIN,
+                PRODUCT_HTTP_LOW_MEMORY_WORKER_DEFAULT_MAX,
+            ),
+        }
+    }
+
+    fn queue_default(self) -> usize {
+        match self {
+            Self::Standard => PRODUCT_HTTP_QUEUE_DEFAULT,
+            Self::LowMemory => PRODUCT_HTTP_LOW_MEMORY_QUEUE_DEFAULT,
+        }
+    }
+
+    fn worker_stack_bytes_default(self) -> usize {
+        match self {
+            Self::Standard => PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT,
+            Self::LowMemory => PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ProductHttpWorkerConfig {
+    profile: ProductHttpProfile,
     worker_count: usize,
     queue_capacity: usize,
     worker_stack_bytes: usize,
+    profile_source: &'static str,
     worker_count_source: &'static str,
     queue_capacity_source: &'static str,
     worker_stack_bytes_source: &'static str,
@@ -252,15 +328,35 @@ struct ProductHttpWorkerConfig {
 
 impl ProductHttpWorkerConfig {
     fn from_config(config: Option<&Config>) -> Self {
+        let (profile, profile_source) = ProductHttpProfile::from_env();
+        Self::from_config_with_profile_and_env(config, profile, profile_source, &|name| {
+            std::env::var(name).ok()
+        })
+    }
+
+    #[cfg(test)]
+    fn from_config_with_profile(
+        config: Option<&Config>,
+        profile: ProductHttpProfile,
+        profile_source: &'static str,
+    ) -> Self {
+        Self::from_config_with_profile_and_env(config, profile, profile_source, &|_| None)
+    }
+
+    fn from_config_with_profile_and_env(
+        config: Option<&Config>,
+        profile: ProductHttpProfile,
+        profile_source: &'static str,
+        env_value: &dyn Fn(&str) -> Option<String>,
+    ) -> Self {
         let global = config.map(|config| &config.global);
+        let (default_worker_min, default_worker_max) = profile.worker_default_bounds();
         let default_workers = thread::available_parallelism()
             .map(|parallelism| parallelism.get().saturating_mul(2))
-            .unwrap_or(PRODUCT_HTTP_WORKER_DEFAULT_MIN)
-            .clamp(
-                PRODUCT_HTTP_WORKER_DEFAULT_MIN,
-                PRODUCT_HTTP_WORKER_DEFAULT_MAX,
-            );
+            .unwrap_or(default_worker_min)
+            .clamp(default_worker_min, default_worker_max);
         let (worker_count, worker_count_source) = effective_product_usize_with_legacy(
+            env_value,
             PRODUCT_HTTP_WORKERS_ENV,
             PRODUCT_HTTP_WORKERS_LEGACY_ENV,
             global.and_then(|global| global.http_workers),
@@ -269,25 +365,29 @@ impl ProductHttpWorkerConfig {
             PRODUCT_HTTP_WORKER_MAX,
         );
         let (queue_capacity, queue_capacity_source) = effective_product_usize_with_legacy(
+            env_value,
             PRODUCT_HTTP_QUEUE_ENV,
             PRODUCT_HTTP_QUEUE_LEGACY_ENV,
             global.and_then(|global| global.http_queue),
-            PRODUCT_HTTP_QUEUE_DEFAULT,
+            profile.queue_default(),
             PRODUCT_HTTP_QUEUE_MIN,
             PRODUCT_HTTP_QUEUE_MAX,
         );
         let (worker_stack_bytes, worker_stack_bytes_source) = effective_product_usize_with_legacy(
+            env_value,
             PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
             PRODUCT_HTTP_WORKER_STACK_BYTES_LEGACY_ENV,
             global.and_then(|global| global.http_worker_stack_bytes),
-            PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT,
+            profile.worker_stack_bytes_default(),
             PRODUCT_HTTP_WORKER_STACK_BYTES_MIN,
             PRODUCT_HTTP_WORKER_STACK_BYTES_MAX,
         );
         Self {
+            profile,
             worker_count,
             queue_capacity,
             worker_stack_bytes,
+            profile_source,
             worker_count_source,
             queue_capacity_source,
             worker_stack_bytes_source,
@@ -296,6 +396,8 @@ impl ProductHttpWorkerConfig {
 
     fn sources_json(self) -> Value {
         json!({
+            "profile": self.profile_source,
+            "profileName": self.profile.name(),
             "workers": self.worker_count_source,
             "queue": self.queue_capacity_source,
             "workerStackBytes": self.worker_stack_bytes_source,
@@ -304,6 +406,7 @@ impl ProductHttpWorkerConfig {
 }
 
 fn effective_product_usize_with_legacy(
+    env_value: &dyn Fn(&str) -> Option<String>,
     name: &str,
     legacy_name: &str,
     configured: Option<u64>,
@@ -311,15 +414,10 @@ fn effective_product_usize_with_legacy(
     min: usize,
     max: usize,
 ) -> (usize, &'static str) {
-    if let Some(value) = std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-    {
+    if let Some(value) = env_value(name).and_then(|value| value.trim().parse::<usize>().ok()) {
         return (value.clamp(min, max), "env");
     }
-    if let Some(value) = std::env::var(legacy_name)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
+    if let Some(value) = env_value(legacy_name).and_then(|value| value.trim().parse::<usize>().ok())
     {
         return (value.clamp(min, max), "compatibility-env");
     }
@@ -373,6 +471,23 @@ fn product_runtime_defaults() -> Value {
             },
         },
         "http": {
+            "profile": {
+                "env": PRODUCT_HTTP_PROFILE_ENV,
+                "default": PRODUCT_HTTP_PROFILE_STANDARD,
+                "supported": [
+                    PRODUCT_HTTP_PROFILE_STANDARD,
+                    PRODUCT_HTTP_PROFILE_LOW_MEMORY,
+                ],
+                "lowMemory": {
+                    "workerDefaultPolicy": format!(
+                        "available_parallelism * 2 clamped to {}..{}",
+                        PRODUCT_HTTP_LOW_MEMORY_WORKER_DEFAULT_MIN,
+                        PRODUCT_HTTP_LOW_MEMORY_WORKER_DEFAULT_MAX
+                    ),
+                    "queueDefault": PRODUCT_HTTP_LOW_MEMORY_QUEUE_DEFAULT,
+                    "workerStackBytesDefault": PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT,
+                },
+            },
             "workers": {
                 "configKey": "http_workers",
                 "env": PRODUCT_HTTP_WORKERS_ENV,
