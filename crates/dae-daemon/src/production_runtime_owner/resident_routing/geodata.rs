@@ -1,8 +1,11 @@
 use std::{
     collections::BTreeMap,
-    env, fs,
+    env, fs, io,
     ops::Range,
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
+    ptr::NonNull,
+    slice,
     sync::{Arc, Mutex},
 };
 
@@ -37,6 +40,7 @@ pub(super) struct GeodataLookup {
     pub(super) expanded_string_bytes: usize,
     pub(super) asset_cache_hit: bool,
     pub(super) decoded_entry_cache_hit: bool,
+    pub(super) asset_storage: &'static str,
 }
 
 #[derive(Debug)]
@@ -51,14 +55,124 @@ pub(in crate::production_runtime_owner) struct GeodataResolver {
 #[derive(Clone, Debug)]
 struct CachedGeodataAsset {
     path: PathBuf,
-    data: Arc<[u8]>,
+    data: SharedGeodataBytes,
 }
 
 #[derive(Clone, Debug)]
 struct GeodataAsset {
     path: PathBuf,
-    data: Arc<[u8]>,
+    data: SharedGeodataBytes,
     cache_hit: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SharedGeodataBytes {
+    inner: Arc<GeodataBytes>,
+}
+
+#[derive(Debug)]
+enum GeodataBytes {
+    Mmap(MmapGeodataBytes),
+    Owned(Box<[u8]>),
+}
+
+#[derive(Debug)]
+struct MmapGeodataBytes {
+    ptr: NonNull<u8>,
+    len: usize,
+}
+
+// The mapping is read-only for the process lifetime covered by this value.
+unsafe impl Send for MmapGeodataBytes {}
+unsafe impl Sync for MmapGeodataBytes {}
+
+impl SharedGeodataBytes {
+    fn read(path: &Path) -> Result<Self, String> {
+        match MmapGeodataBytes::map_file(path) {
+            Ok(mapped) => Ok(Self {
+                inner: Arc::new(GeodataBytes::Mmap(mapped)),
+            }),
+            Err(_) => fs::read(path)
+                .map(|data| Self {
+                    inner: Arc::new(GeodataBytes::Owned(data.into_boxed_slice())),
+                })
+                .map_err(|err| format!("read geodata asset {}: {err}", path.display())),
+        }
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        match self.inner.as_ref() {
+            GeodataBytes::Mmap(mapped) => mapped.as_slice(),
+            GeodataBytes::Owned(data) => data,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    fn storage_kind(&self) -> &'static str {
+        match self.inner.as_ref() {
+            GeodataBytes::Mmap(_) => "mmap",
+            GeodataBytes::Owned(_) => "owned",
+        }
+    }
+}
+
+impl MmapGeodataBytes {
+    fn map_file(path: &Path) -> io::Result<Self> {
+        let file = fs::File::open(path)?;
+        let len_u64 = file.metadata()?.len();
+        let len = usize::try_from(len_u64).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("geodata asset {} is too large to map", path.display()),
+            )
+        })?;
+        if len == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("geodata asset {} is empty", path.display()),
+            ));
+        }
+        let mapped = unsafe {
+            // SAFETY: `file` is open for the duration of mmap creation, the mapping
+            // is read-only/private, and the returned pointer/length are owned by
+            // `MmapGeodataBytes` until `Drop` calls `munmap` exactly once.
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        if mapped == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+        let ptr = NonNull::new(mapped.cast::<u8>())
+            .ok_or_else(|| io::Error::other("mmap returned a null pointer"))?;
+        Ok(Self { ptr, len })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        unsafe {
+            // SAFETY: `ptr` and `len` come from a successful immutable mmap and
+            // stay valid until `Drop` unmaps them after the last shared reference.
+            slice::from_raw_parts(self.ptr.as_ptr(), self.len)
+        }
+    }
+}
+
+impl Drop for MmapGeodataBytes {
+    fn drop(&mut self) {
+        unsafe {
+            // SAFETY: this value owns the mmap range and `Drop` runs once, so the
+            // exact pointer/length returned by mmap are unmapped exactly once.
+            libc::munmap(self.ptr.as_ptr().cast(), self.len);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -70,20 +184,20 @@ struct DecodedEntryCacheKey {
 
 #[derive(Clone, Debug)]
 struct CachedDecodedEntry {
-    asset: Arc<[u8]>,
+    asset: SharedGeodataBytes,
     range: Range<usize>,
 }
 
 #[derive(Clone, Debug)]
 struct DecodedEntry {
-    asset: Arc<[u8]>,
+    asset: SharedGeodataBytes,
     range: Range<usize>,
     cache_hit: bool,
 }
 
 impl DecodedEntry {
     fn as_slice(&self) -> &[u8] {
-        &self.asset[self.range.clone()]
+        &self.asset.as_slice()[self.range.clone()]
     }
 }
 
@@ -106,7 +220,7 @@ pub(super) fn load_geoip_params(
     let decoded = resolver.decoded_entry("geoip", &filename, code, &asset)?;
     let loaded = match decoded.as_ref() {
         Some(entry) => load_geoip_entry_bytes(entry.as_slice()),
-        None => load_geoip_bytes(asset.data.as_ref(), code),
+        None => load_geoip_bytes(asset.data.as_slice(), code),
     }
     .map_err(|err| {
         format!(
@@ -133,6 +247,7 @@ pub(super) fn load_geoip_params(
         expanded_string_bytes,
         asset_cache_hit: asset.cache_hit,
         decoded_entry_cache_hit: decoded.as_ref().is_some_and(|entry| entry.cache_hit),
+        asset_storage: asset.data.storage_kind(),
     });
     Ok(loaded
         .value
@@ -158,7 +273,7 @@ pub(super) fn load_geosite_params(
     let decoded = resolver.decoded_entry("geosite", &filename, &code, &asset)?;
     let loaded = match decoded.as_ref() {
         Some(entry) => load_geosite_entry_bytes(entry.as_slice()),
-        None => load_geosite_bytes(asset.data.as_ref(), &code),
+        None => load_geosite_bytes(asset.data.as_slice(), &code),
     }
     .map_err(|err| {
         format!(
@@ -209,6 +324,7 @@ pub(super) fn load_geosite_params(
         expanded_string_bytes,
         asset_cache_hit: asset.cache_hit,
         decoded_entry_cache_hit: decoded.as_ref().is_some_and(|entry| entry.cache_hit),
+        asset_storage: asset.data.storage_kind(),
     });
     Ok(params)
 }
@@ -364,9 +480,7 @@ impl GeodataResolver {
     }
 
     fn read_uncached_asset(&self, cache_key: &str, path: &Path) -> Result<GeodataAsset, String> {
-        let data = fs::read(path)
-            .map(Arc::<[u8]>::from)
-            .map_err(|err| format!("read geodata asset {}: {err}", path.display()))?;
+        let data = SharedGeodataBytes::read(path)?;
         let cached = CachedGeodataAsset {
             path: path.to_path_buf(),
             data,
@@ -408,11 +522,11 @@ impl GeodataResolver {
             }));
         }
 
-        let Ok(range) = decode_entry_range(asset.data.as_ref(), code) else {
+        let Ok(range) = decode_entry_range(asset.data.as_slice(), code) else {
             return Ok(None);
         };
         let cached = CachedDecodedEntry {
-            asset: Arc::clone(&asset.data),
+            asset: asset.data.clone(),
             range,
         };
         self.decoded_entry_cache
@@ -522,6 +636,7 @@ pub(super) fn geodata_report_json(report: &GeodataResolutionReport) -> Value {
                 "expanded_string_bytes": lookup.expanded_string_bytes,
                 "asset_cache_hit": lookup.asset_cache_hit,
                 "decoded_entry_cache_hit": lookup.decoded_entry_cache_hit,
+                "asset_storage": lookup.asset_storage,
             })
         }).collect::<Vec<_>>(),
     })
