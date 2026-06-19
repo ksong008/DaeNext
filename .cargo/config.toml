@@ -1,5 +1,8 @@
 [env]
-JEMALLOC_SYS_WITH_MALLOC_CONF = "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4"
+# Build jemalloc with the product RSS policy by default. Keep this as a build
+# default instead of a systemd Environment= entry so service managers do not
+# need runtime allocator tuning to get bounded arena/decay behavior.
+JEMALLOC_SYS_WITH_MALLOC_CONF = { value = "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4", force = false }
 
 [target.bpfel-unknown-none]
 linker = "bpf-linker"

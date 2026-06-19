@@ -369,6 +369,24 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
             .contains("narenas:4")
     );
     assert_eq!(
+        defaults["allocator"]["jemallocPolicy"]["buildEnv"]
+            .as_str()
+            .unwrap(),
+        PRODUCT_JEMALLOC_BUILD_CONF_ENV
+    );
+    assert_eq!(
+        defaults["allocator"]["jemallocPolicy"]["defaultSource"]
+            .as_str()
+            .unwrap(),
+        PRODUCT_JEMALLOC_BUILD_CONF_SOURCE
+    );
+    let cargo_config =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cargo/config.toml"))
+            .unwrap();
+    assert!(cargo_config.contains(PRODUCT_JEMALLOC_BUILD_CONF_ENV));
+    assert!(cargo_config.contains(PRODUCT_JEMALLOC_CONF_DEFAULT));
+    assert!(cargo_config.contains("force = false"));
+    assert_eq!(
         defaults["allocator"]["reclaim"]["reloadCompleted"],
         json!(true)
     );
