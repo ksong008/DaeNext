@@ -29,14 +29,13 @@ struct ResidentDnsDomainRoutingState {
 pub(super) struct ResidentDnsDomainRoutingUpdatePlan {
     pub(super) key: DnsCacheKey,
     pub(super) entry: DnsCacheEntry,
-    pub(super) bitmap: Vec<u32>,
     pub(super) ips: Vec<DomainRoutingIpKey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResidentDomainRoutingIpUpdatePlan {
     pub(super) owner_key: String,
-    pub(super) bitmap: Vec<u32>,
+    pub(super) bitmap: [u32; 32],
     pub(super) ip: DomainRoutingIpKey,
 }
 
@@ -75,14 +74,13 @@ impl ResidentDnsDomainRouting {
         else {
             return Ok(());
         };
-        let owner_key = plan.entry.route_owner_key.clone();
         state
             .owner
             .apply_dns_event_by_id(
                 self.map_id,
                 DomainRoutingDnsEvent::from_keys(
-                    &owner_key,
-                    &plan.bitmap,
+                    &plan.entry.route_owner_key,
+                    &plan.entry.domain_bitmap,
                     plan.ips.iter().copied(),
                 ),
             )
@@ -206,8 +204,7 @@ pub(super) fn build_resident_dns_domain_routing_update_plan(
     }
     let bitmap = routing_matcher
         .domain_bitmap_for_domain_into(&cache_plan.key.qname, domain_bitmap)
-        .map_err(|err| format!("match resident DNS response domain routing bitmap: {err}"))?
-        .to_vec();
+        .map_err(|err| format!("match resident DNS response domain routing bitmap: {err}"))?;
     if bitmap.iter().all(|word| *word == 0) {
         return Ok(None);
     }
@@ -219,11 +216,11 @@ pub(super) fn build_resident_dns_domain_routing_update_plan(
         .map(ip_to_key)
         .collect::<Vec<_>>();
     let mut entry = cache_plan.entry.clone();
-    entry.domain_bitmap = bitmap.clone();
+    entry.domain_bitmap.clear();
+    entry.domain_bitmap.extend_from_slice(bitmap);
     Ok(Some(ResidentDnsDomainRoutingUpdatePlan {
         key: cache_plan.key.clone(),
         entry,
-        bitmap,
         ips,
     }))
 }
@@ -239,16 +236,23 @@ pub(super) fn build_resident_domain_routing_ip_update_plan(
     if domain.is_empty() || ip.is_unspecified() {
         return Ok(None);
     }
-    let bitmap = routing_matcher
+    let bitmap_words = routing_matcher
         .domain_bitmap_for_domain_into(domain, domain_bitmap)
-        .map_err(|err| format!("match resident sniffed domain routing bitmap: {err}"))?
-        .to_vec();
-    if bitmap.iter().all(|word| *word == 0) {
+        .map_err(|err| format!("match resident sniffed domain routing bitmap: {err}"))?;
+    if bitmap_words.iter().all(|word| *word == 0) {
         return Ok(None);
     }
     Ok(Some(ResidentDomainRoutingIpUpdatePlan {
         owner_key: format!("{owner_prefix}|{domain}|{ip}"),
-        bitmap,
+        bitmap: domain_bitmap_array(bitmap_words),
         ip: ip_to_key(ip),
     }))
+}
+
+fn domain_bitmap_array(bitmap_words: &[u32]) -> [u32; 32] {
+    let mut bitmap = [0; 32];
+    for (index, word) in bitmap_words.iter().copied().enumerate().take(bitmap.len()) {
+        bitmap[index] = word;
+    }
+    bitmap
 }
