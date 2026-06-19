@@ -43,11 +43,13 @@ impl ResidentDnsRuntimeCache {
         })
     }
 
-    pub(super) fn lookup_response(
+    pub(super) fn lookup_response_into(
         &self,
         request: &DnsPacketView<'_>,
         ignore_fixed_ttl: bool,
-    ) -> Result<Option<Vec<u8>>, String> {
+        out: &mut Vec<u8>,
+    ) -> Result<bool, String> {
+        out.clear();
         let now_unix = unix_now();
         let question = request
             .questions()
@@ -61,9 +63,9 @@ impl ResidentDnsRuntimeCache {
             .lookup_packet_question(now_unix, &question, ignore_fixed_ttl)
             .map_err(|err| format!("lookup resident DNS response cache: {err}"))?
         else {
-            return Ok(None);
+            return Ok(false);
         };
-        Ok(entry.fill_packed_response(request.id()))
+        Ok(entry.fill_packed_response_into(request.id(), out).is_some())
     }
 
     pub(super) fn lookup_key_has_any_ip(
