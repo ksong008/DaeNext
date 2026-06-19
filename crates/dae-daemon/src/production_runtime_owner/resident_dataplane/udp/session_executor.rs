@@ -17,6 +17,8 @@ pub(super) enum UdpSessionExecutor {
     FailClosed { reason: String },
 }
 
+const UDP_DATAGRAM_RESPONSE_CAPACITY: usize = 64 * 1024;
+
 mod datagram;
 mod dispatch;
 mod selection;

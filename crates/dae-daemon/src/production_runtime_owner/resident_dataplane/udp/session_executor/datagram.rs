@@ -7,6 +7,7 @@ use super::*;
 pub(super) struct DatagramRelay {
     socket: Option<tokio::net::UdpSocket>,
     remote: Option<SocketAddr>,
+    response_buf: Vec<u8>,
 }
 
 impl DatagramRelay {
@@ -31,16 +32,15 @@ impl DatagramRelay {
         Ok(())
     }
 
-    pub(super) fn poll_response(&self, label: &str) -> Result<Option<Vec<u8>>, String> {
+    pub(super) fn poll_response(&mut self, label: &str) -> Result<Option<Vec<u8>>, String> {
         let Some(socket) = self.socket.as_ref() else {
             return Ok(None);
         };
-        let mut response = vec![0_u8; 64 * 1024];
-        match socket.try_recv_from(&mut response) {
-            Ok((read, _)) => {
-                response.truncate(read);
-                Ok(Some(response))
-            }
+        if self.response_buf.len() < UDP_DATAGRAM_RESPONSE_CAPACITY {
+            self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
+        }
+        match socket.try_recv_from(&mut self.response_buf) {
+            Ok((read, _)) => Ok(Some(self.response_buf[..read].to_vec())),
             Err(err)
                 if matches!(
                     err.kind(),
