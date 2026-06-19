@@ -1,20 +1,121 @@
 #[cfg(test)]
 use super::super::vision::VisionUnpadState;
 use super::*;
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+const UDP_REPLY_SOCKET_CACHE_MAX_ENTRIES: usize = 512;
+
+static UDP_REPLY_SOCKET_CACHE: OnceLock<Mutex<UdpReplySocketCache>> = OnceLock::new();
+
+#[derive(Default)]
+struct UdpReplySocketCache {
+    next_tick: u64,
+    entries: HashMap<SocketAddr, UdpReplySocketEntry>,
+}
+
+struct UdpReplySocketEntry {
+    socket: Arc<UdpSocket>,
+    last_used: u64,
+}
+
 pub(super) fn send_udp_reply(
     original_dst: SocketAddr,
     peer: SocketAddr,
     payload: &[u8],
 ) -> Result<(), String> {
-    let reply = open_transparent_udp_socket_bound_in_netns(PRODUCTION_NETNS, original_dst)
-        .map_err(|err| format!("open transparent UDP reply socket: {err}"))?;
-    reply
+    let reply = cached_udp_reply_socket(original_dst)?;
+    if let Err(first_err) = reply.send_to(payload, peer) {
+        drop_cached_udp_reply_socket(original_dst);
+        let reply = cached_udp_reply_socket(original_dst)?;
+        reply.send_to(payload, peer).map_err(|err| {
+            format!(
+                "send transparent UDP reply: {err}; retry after cached socket error: {first_err}"
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn cached_udp_reply_socket(original_dst: SocketAddr) -> Result<Arc<UdpSocket>, String> {
+    if let Some(socket) = lookup_cached_udp_reply_socket(original_dst)? {
+        return Ok(socket);
+    }
+
+    let socket = Arc::new(
+        open_transparent_udp_socket_bound_in_netns(PRODUCTION_NETNS, original_dst)
+            .map_err(|err| format!("open transparent UDP reply socket: {err}"))?,
+    );
+    socket
         .set_write_timeout(Some(Duration::from_secs(3)))
         .map_err(|err| format!("set UDP reply timeout: {err}"))?;
-    reply
-        .send_to(payload, peer)
-        .map_err(|err| format!("send transparent UDP reply: {err}"))?;
-    Ok(())
+
+    insert_cached_udp_reply_socket(original_dst, socket)
+}
+
+fn lookup_cached_udp_reply_socket(
+    original_dst: SocketAddr,
+) -> Result<Option<Arc<UdpSocket>>, String> {
+    let cache = UDP_REPLY_SOCKET_CACHE.get_or_init(|| Mutex::new(UdpReplySocketCache::default()));
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "resident UDP reply socket cache lock poisoned".to_owned())?;
+    cache.next_tick = cache.next_tick.wrapping_add(1);
+    let last_used = cache.next_tick;
+    let Some(entry) = cache.entries.get_mut(&original_dst) else {
+        return Ok(None);
+    };
+    entry.last_used = last_used;
+    Ok(Some(Arc::clone(&entry.socket)))
+}
+
+fn insert_cached_udp_reply_socket(
+    original_dst: SocketAddr,
+    socket: Arc<UdpSocket>,
+) -> Result<Arc<UdpSocket>, String> {
+    let cache = UDP_REPLY_SOCKET_CACHE.get_or_init(|| Mutex::new(UdpReplySocketCache::default()));
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "resident UDP reply socket cache lock poisoned".to_owned())?;
+    cache.next_tick = cache.next_tick.wrapping_add(1);
+    let last_used = cache.next_tick;
+    if let Some(entry) = cache.entries.get_mut(&original_dst) {
+        entry.last_used = last_used;
+        return Ok(Arc::clone(&entry.socket));
+    }
+    if cache.entries.len() >= UDP_REPLY_SOCKET_CACHE_MAX_ENTRIES {
+        evict_oldest_udp_reply_socket(&mut cache);
+    }
+    cache.entries.insert(
+        original_dst,
+        UdpReplySocketEntry {
+            socket: Arc::clone(&socket),
+            last_used,
+        },
+    );
+    Ok(socket)
+}
+
+fn drop_cached_udp_reply_socket(original_dst: SocketAddr) {
+    let Some(cache) = UDP_REPLY_SOCKET_CACHE.get() else {
+        return;
+    };
+    if let Ok(mut cache) = cache.lock() {
+        cache.entries.remove(&original_dst);
+    }
+}
+
+fn evict_oldest_udp_reply_socket(cache: &mut UdpReplySocketCache) {
+    let Some(oldest) = cache
+        .entries
+        .iter()
+        .min_by_key(|(_, entry)| entry.last_used)
+        .map(|(addr, _)| *addr)
+    else {
+        return;
+    };
+    cache.entries.remove(&oldest);
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Socks5Ud
     control: Option<tokio::net::TcpStream>,
     relay: Option<tokio::net::UdpSocket>,
     relay_addr: Option<SocketAddr>,
+    response_buf: Vec<u8>,
 }
 
 impl Socks5UdpAssociateSession {
@@ -40,8 +41,10 @@ impl Socks5UdpAssociateSession {
             Some(relay) => relay,
             None => return Ok(None),
         };
-        let mut response = vec![0_u8; 64 * 1024];
-        let (read, _) = match relay.try_recv_from(&mut response) {
+        if self.response_buf.len() < UDP_DATAGRAM_RESPONSE_CAPACITY {
+            self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
+        }
+        let (read, _) = match relay.try_recv_from(&mut self.response_buf) {
             Ok(read) => read,
             Err(err)
                 if matches!(
@@ -53,8 +56,7 @@ impl Socks5UdpAssociateSession {
             }
             Err(err) => return Err(format!("receive SOCKS5 UDP datagram: {err}")),
         };
-        response.truncate(read);
-        let decoded = udp_packet::unwrap(&response)
+        let decoded = udp_packet::unwrap(&self.response_buf[..read])
             .map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;
         Ok(Some(
             UdpExchangeResult::new(decoded.payload, "socks5-udp-associate")
