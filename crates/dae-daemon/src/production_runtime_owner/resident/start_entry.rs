@@ -2,6 +2,13 @@ use super::*;
 pub fn start_resident_production_runtime(
     config: &Config,
 ) -> Result<ResidentProductionRuntime, String> {
+    start_resident_production_runtime_with_asset_dirs(config, Vec::<PathBuf>::new())
+}
+
+pub fn start_resident_production_runtime_with_asset_dirs(
+    config: &Config,
+    geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+) -> Result<ResidentProductionRuntime, String> {
     let artifact_dir = resident_runtime_artifact_dir(std::process::id());
     cleanup_stale_resident_runtime_artifacts(&artifact_dir);
     if artifact_dir.exists() {
@@ -39,6 +46,7 @@ pub fn start_resident_production_runtime(
         execute: true,
         ack_root_gate: true,
         source_object,
+        geodata_asset_dirs: geodata_asset_dirs.into_iter().map(Into::into).collect(),
         tproxy_port: config.global.tproxy_port,
         dae_netns_id: DEFAULT_DAE_NETNS_ID,
         netns_link_mode,

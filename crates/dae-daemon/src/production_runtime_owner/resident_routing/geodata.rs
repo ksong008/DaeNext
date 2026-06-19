@@ -18,7 +18,11 @@ use dae_routing::{DomainKey, SharedDomainSet};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::PRODUCT_BINARY_NAME;
+
 use super::types::{IpPrefix, SharedResidentIpPrefixSet};
+
+const DAE_PRODUCT_DIR_NAME: &str = "dae";
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct GeodataResolutionReport {
@@ -342,6 +346,59 @@ fn split_geosite_code_attr(code: &str) -> (String, Option<String>) {
     (code.to_owned(), (!attr.is_empty()).then(|| attr.to_owned()))
 }
 
+fn product_geodata_dir_names(product_binary_name: &str) -> Vec<String> {
+    let primary = if product_binary_name.is_empty() {
+        DAE_PRODUCT_DIR_NAME
+    } else {
+        product_binary_name
+    };
+    vec![primary.to_owned()]
+}
+
+fn product_system_geodata_dirs(product_binary_name: &str) -> Vec<PathBuf> {
+    product_geodata_dir_names(product_binary_name)
+        .into_iter()
+        .flat_map(|name| {
+            [
+                PathBuf::from(format!("/etc/{name}")),
+                PathBuf::from(format!("/usr/local/share/{name}")),
+                PathBuf::from(format!("/usr/share/{name}")),
+            ]
+        })
+        .collect()
+}
+
+fn product_xdg_geodata_dirs(product_binary_name: &str) -> Vec<PathBuf> {
+    let product_names = product_geodata_dir_names(product_binary_name);
+    let mut dirs = Vec::new();
+    if let Ok(data_home) = env::var("XDG_DATA_HOME") {
+        dirs.extend(
+            product_names
+                .iter()
+                .map(|name| PathBuf::from(&data_home).join(name)),
+        );
+    } else if let Ok(home) = env::var("HOME") {
+        dirs.extend(
+            product_names
+                .iter()
+                .map(|name| PathBuf::from(&home).join(".local/share").join(name)),
+        );
+    }
+    if let Ok(data_dirs) = env::var("XDG_DATA_DIRS") {
+        dirs.extend(
+            data_dirs
+                .split(':')
+                .filter(|dir| !dir.is_empty())
+                .flat_map(|dir| {
+                    product_names
+                        .iter()
+                        .map(move |name| PathBuf::from(dir).join(name))
+                }),
+        );
+    }
+    dirs
+}
+
 impl GeodataResolver {
     pub(in crate::production_runtime_owner) fn new(
         asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
@@ -353,22 +410,8 @@ impl GeodataResolver {
             dirs.push(PathBuf::from(dir));
         }
         dirs.extend(asset_dirs.into_iter().map(Into::into));
-        dirs.push(PathBuf::from("/etc/dae"));
-        dirs.push(PathBuf::from("/usr/local/share/dae"));
-        dirs.push(PathBuf::from("/usr/share/dae"));
-        if let Ok(data_home) = env::var("XDG_DATA_HOME") {
-            dirs.push(PathBuf::from(data_home).join("dae"));
-        } else if let Ok(home) = env::var("HOME") {
-            dirs.push(PathBuf::from(home).join(".local/share/dae"));
-        }
-        if let Ok(data_dirs) = env::var("XDG_DATA_DIRS") {
-            dirs.extend(
-                data_dirs
-                    .split(':')
-                    .filter(|dir| !dir.is_empty())
-                    .map(|dir| PathBuf::from(dir).join("dae")),
-            );
-        }
+        dirs.extend(product_system_geodata_dirs(PRODUCT_BINARY_NAME));
+        dirs.extend(product_xdg_geodata_dirs(PRODUCT_BINARY_NAME));
         dirs.dedup();
         Self {
             asset_dirs: dirs,
@@ -640,4 +683,35 @@ pub(super) fn geodata_report_json(report: &GeodataResolutionReport) -> Value {
             })
         }).collect::<Vec<_>>(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAED_PRODUCT_DIR_NAME: &str = "daed";
+
+    #[test]
+    fn geodata_product_dirs_for_daed_prioritize_daed_scope() {
+        assert_eq!(
+            product_system_geodata_dirs(DAED_PRODUCT_DIR_NAME),
+            vec![
+                PathBuf::from("/etc/daed"),
+                PathBuf::from("/usr/local/share/daed"),
+                PathBuf::from("/usr/share/daed"),
+            ]
+        );
+    }
+
+    #[test]
+    fn geodata_product_dirs_for_dae_stay_dae_scoped() {
+        assert_eq!(
+            product_system_geodata_dirs(DAE_PRODUCT_DIR_NAME),
+            vec![
+                PathBuf::from("/etc/dae"),
+                PathBuf::from("/usr/local/share/dae"),
+                PathBuf::from("/usr/share/dae"),
+            ]
+        );
+    }
 }

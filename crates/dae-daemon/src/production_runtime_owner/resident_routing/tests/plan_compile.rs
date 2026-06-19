@@ -1,4 +1,5 @@
 use super::super::OUTBOUND_CONNECTIVITY_MAP_NAME;
+use super::super::build_resident_userspace_routing_matcher;
 use super::super::maps::{resident_user_outbound_ids, runtime_map_name_matches};
 use super::super::plan::build_routing_plan;
 use super::*;
@@ -107,6 +108,64 @@ fn domain_set_matches(
             .iter()
             .map(String::as_str)
             .eq(values.iter().copied())
+}
+
+#[test]
+pub(super) fn resident_routing_domain_rule_indices_match_main_match_positions() {
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    ip(203.0.113.0/24) -> direct
+    domain(full: exact.example.test, suffix: media.example.test) -> proxy
+    port(443) && domain(keyword: video) -> proxy
+    fallback: block
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let plan = build_routing_plan(&config).unwrap();
+
+    let domain_rule_indices = plan
+        .domain_sets
+        .iter()
+        .map(|set| set.rule_index)
+        .collect::<Vec<_>>();
+    assert_eq!(domain_rule_indices, vec![1, 2, 3]);
+    for index in domain_rule_indices {
+        assert_eq!(
+            plan.matches[index].kind, "DomainSet",
+            "domain set bit {index} must point at the main routing match slot"
+        );
+    }
+
+    let matcher = build_resident_userspace_routing_matcher(&config).unwrap();
+    assert_eq!(
+        matcher
+            .domain_bitmap_for_domain("exact.example.test")
+            .unwrap(),
+        vec![0x2]
+    );
+    assert_eq!(
+        matcher
+            .domain_bitmap_for_domain("www.media.example.test")
+            .unwrap(),
+        vec![0x4]
+    );
+    assert_eq!(
+        matcher
+            .domain_bitmap_for_domain("video.invalid.test")
+            .unwrap(),
+        vec![0x8]
+    );
 }
 
 #[test]
