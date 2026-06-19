@@ -68,6 +68,12 @@ pub(crate) fn replace_subscription_nodes(
 ) -> io::Result<Vec<Value>> {
     let existing_nodes = existing_subscription_nodes(conn, subscription_id)?;
     let preserved_ids = preserved_subscription_node_ids(conn, subscription_id)?;
+    let mut existing_name_counts = HashMap::<String, usize>::new();
+    let mut existing_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
+    for node in &existing_nodes {
+        *existing_name_counts.entry(node.name.clone()).or_default() += 1;
+        existing_by_name.insert(node.name.clone(), node.clone());
+    }
     let mut preserved_name_counts = HashMap::<String, usize>::new();
     let mut preserved_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
     for node in existing_nodes
@@ -86,9 +92,29 @@ pub(crate) fn replace_subscription_nodes(
         candidates.push((link.clone(), parsed));
     }
 
+    let mut reusable_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
+    for (name, incoming_count) in &incoming_name_counts {
+        if *incoming_count != 1 {
+            continue;
+        }
+        if preserved_name_counts.get(name).copied().unwrap_or(0) == 1 {
+            if let Some(node) = preserved_by_name.get(name) {
+                reusable_by_name.insert(name.clone(), node.clone());
+            }
+        } else if existing_name_counts.get(name).copied().unwrap_or(0) == 1
+            && let Some(node) = existing_by_name.get(name)
+        {
+            reusable_by_name.insert(name.clone(), node.clone());
+        }
+    }
+    let reusable_ids = reusable_by_name
+        .values()
+        .map(|node| node.id)
+        .collect::<HashSet<_>>();
+
     for node in existing_nodes
         .iter()
-        .filter(|node| !preserved_ids.contains(&node.id))
+        .filter(|node| !reusable_ids.contains(&node.id) && !preserved_ids.contains(&node.id))
     {
         conn.execute(
             "DELETE FROM group_nodes WHERE node_id = ?1",
@@ -105,16 +131,10 @@ pub(crate) fn replace_subscription_nodes(
     }
 
     let mut out = Vec::new();
-    let mut reused_preserved = HashSet::<i64>::new();
+    let mut reused_nodes = HashSet::<i64>::new();
     for (link, parsed) in candidates {
-        if incoming_name_counts.get(&parsed.name).copied().unwrap_or(0) == 1
-            && preserved_name_counts
-                .get(&parsed.name)
-                .copied()
-                .unwrap_or(0)
-                == 1
-            && let Some(preserved) = preserved_by_name.get(&parsed.name)
-            && reused_preserved.insert(preserved.id)
+        if let Some(preserved) = reusable_by_name.get(&parsed.name)
+            && reused_nodes.insert(preserved.id)
         {
             if !subscription_node_changed(preserved, &link, &parsed) {
                 out.push(json!({
