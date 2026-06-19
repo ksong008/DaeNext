@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use aho_corasick::AhoCorasick;
 use regex::{Regex, RegexSet};
 
 use crate::RoutingError;
@@ -58,6 +59,7 @@ struct SharedDomainSetInner {
 #[derive(Debug)]
 enum SharedDomainSetIndex {
     Full(HashSet<String>),
+    Keyword(AhoCorasick),
     Suffix(SuffixDomainSetIndex),
     Regex(RegexSet),
 }
@@ -219,7 +221,19 @@ impl SharedDomainSetIndex {
                     .map(|pattern| pattern.trim_end_matches('.').to_ascii_lowercase())
                     .collect(),
             ))),
-            DomainKey::Keyword => Ok(None),
+            DomainKey::Keyword => {
+                if patterns.iter().any(String::is_empty) {
+                    return Ok(None);
+                }
+                AhoCorasick::new(patterns.iter().map(String::as_str))
+                    .map(Self::Keyword)
+                    .map(Some)
+                    .map_err(|err| {
+                        RoutingError::InvalidFixture(format!(
+                            "invalid keyword domain set index: {err}"
+                        ))
+                    })
+            }
             DomainKey::Suffix => Ok(Some(Self::Suffix(SuffixDomainSetIndex::new(patterns)))),
             DomainKey::Regex => Ok(Some(Self::Regex(regex_set(patterns)?))),
         }
@@ -228,6 +242,7 @@ impl SharedDomainSetIndex {
     fn matches(&self, domain: &str) -> bool {
         match self {
             Self::Full(index) => index.contains(domain),
+            Self::Keyword(index) => index.is_match(domain),
             Self::Suffix(index) => index.matches(domain),
             Self::Regex(regex) => regex.is_match(domain),
         }
@@ -416,6 +431,38 @@ mod tests {
             SharedDomainSet::new([".child.example.com"], DomainKey::Suffix).unwrap();
         assert!(!subdomain_only.matches("child.example.com"));
         assert!(subdomain_only.matches("www.child.example.com"));
+    }
+
+    #[test]
+    fn domain_set_keyword_index_preserves_contains_semantics() {
+        let mut patterns = (0..DOMAIN_SET_INDEX_MIN_PATTERNS)
+            .map(|index| format!("keyword-{index}"))
+            .collect::<Vec<_>>();
+        patterns.push("video".to_owned());
+        let keyword = SharedDomainSet::from_vec(patterns, DomainKey::Keyword).unwrap();
+        assert!(matches!(
+            keyword.inner.index,
+            Some(SharedDomainSetIndex::Keyword(_))
+        ));
+        assert!(keyword.matches("cdn.video.example"));
+        assert!(!keyword.matches("cdn.audio.example"));
+
+        let mut case_sensitive_patterns = (0..DOMAIN_SET_INDEX_MIN_PATTERNS)
+            .map(|index| format!("case-keyword-{index}"))
+            .collect::<Vec<_>>();
+        case_sensitive_patterns.push("Video".to_owned());
+        let case_sensitive =
+            SharedDomainSet::from_vec(case_sensitive_patterns, DomainKey::Keyword).unwrap();
+        assert!(!case_sensitive.matches("cdn.video.example"));
+        assert!(case_sensitive.matches("cdn.Video.example"));
+
+        let mut empty_patterns = (0..DOMAIN_SET_INDEX_MIN_PATTERNS)
+            .map(|index| format!("empty-keyword-{index}"))
+            .collect::<Vec<_>>();
+        empty_patterns.push(String::new());
+        let empty_keyword = SharedDomainSet::from_vec(empty_patterns, DomainKey::Keyword).unwrap();
+        assert!(empty_keyword.inner.index.is_none());
+        assert!(empty_keyword.matches("anything.example"));
     }
 
     fn u32_array(value: &serde_json::Value) -> Vec<u32> {
