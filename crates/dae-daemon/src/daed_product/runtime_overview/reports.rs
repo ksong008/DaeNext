@@ -33,8 +33,6 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         "heapMetricSource": if allocator_live_heap.is_some() { "allocator-stats" } else { "unavailable" },
         "heapCompatBytes": process.heap_alloc_bytes_compat().to_string(),
         "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
-        "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
-        "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
         "allocatorProfile": allocator_profile(),
         "allocatorStats": allocator_stats_json_from(allocator_stats.as_ref()),
         "allocatorDerived": allocator_derived_stats_json_from(
@@ -85,8 +83,6 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
         "heapMetricSource": if allocator_live_heap.is_some() { "allocator-stats" } else { "unavailable" },
         "heapCompatBytes": process.heap_alloc_bytes_compat().to_string(),
         "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
-        "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
-        "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
         "goroutines": process.thread_count,
         "reloadCount": runtime_delta.reload_count,
         "samples": traffic.samples,
