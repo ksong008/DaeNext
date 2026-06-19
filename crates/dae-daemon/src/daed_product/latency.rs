@@ -87,6 +87,21 @@ impl LatencyJobManager {
         });
     }
 
+    fn mark_progress(&self, id: u64, completed: usize, succeeded: usize, failed: usize) {
+        self.update_job(id, |job| {
+            if job.is_active() {
+                job.status = "running";
+                job.completed = completed.min(job.total);
+                job.succeeded = succeeded.min(job.completed);
+                job.failed = failed.min(job.completed.saturating_sub(job.succeeded));
+                job.message = Some(format!(
+                    "manual latency probe running ({}/{})",
+                    job.completed, job.total
+                ));
+            }
+        });
+    }
+
     fn mark_failed(&self, id: u64, message: String) {
         self.update_job(id, |job| {
             job.status = "failed";
@@ -227,7 +242,7 @@ fn run_node_latency_job(
     nodes: Vec<(i64, String, String)>,
 ) {
     jobs.mark_running(job_id);
-    match run_node_latency_job_inner(&state, &config_dir, &runtime, &nodes) {
+    match run_node_latency_job_inner(job_id, &state, &config_dir, &runtime, &jobs, &nodes) {
         Ok((completed, succeeded, failed)) => {
             jobs.mark_finished(job_id, completed, succeeded, failed)
         }
@@ -236,19 +251,93 @@ fn run_node_latency_job(
 }
 
 fn run_node_latency_job_inner(
+    job_id: u64,
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
+    jobs: &LatencyJobManager,
     nodes: &[(i64, String, String)],
 ) -> io::Result<(usize, usize, usize)> {
-    let links = nodes
-        .iter()
-        .map(|(_, link, _)| link.clone())
-        .collect::<Vec<_>>();
-    let runtime_snapshots = runtime.probe_node_latencies(&links);
-    let (runtime_results, runtime_tested_ids) =
-        runtime_node_latency_results_for_nodes(nodes, &runtime_snapshots);
+    let mut conn = open_state_connection(state)?;
+    let mut completed = 0usize;
+    let mut succeeded = 0usize;
 
+    if let Some(handle) = runtime.node_latency_probe_handle() {
+        let chunk_size = handle.probe_concurrency().max(1);
+        for link_chunk in latency_probe_link_chunks(nodes, chunk_size) {
+            let chunk_nodes = latency_probe_nodes_for_links(nodes, &link_chunk);
+            let runtime_snapshots = handle.probe_node_latencies(&link_chunk);
+            let results =
+                node_latency_results_for_runtime_snapshots(&chunk_nodes, &runtime_snapshots);
+            write_node_latency_results(&mut conn, &results)?;
+            completed = completed.saturating_add(results.len());
+            succeeded =
+                succeeded.saturating_add(results.iter().filter(|result| result.alive).count());
+            jobs.mark_progress(
+                job_id,
+                completed,
+                succeeded,
+                completed.saturating_sub(succeeded),
+            );
+        }
+    } else if !nodes.is_empty() {
+        let tested_at = now_text();
+        let results = native_probe_unavailable_results(nodes, &tested_at);
+        write_node_latency_results(&mut conn, &results)?;
+        completed = results.len();
+        succeeded = results.iter().filter(|result| result.alive).count();
+        jobs.mark_progress(
+            job_id,
+            completed,
+            succeeded,
+            completed.saturating_sub(succeeded),
+        );
+    }
+
+    append_log_for_config(
+        config_dir,
+        state,
+        "info",
+        "node latency probe updated by Rust daed",
+    )?;
+    Ok((completed, succeeded, completed.saturating_sub(succeeded)))
+}
+
+pub(crate) fn latency_probe_link_chunks(
+    nodes: &[(i64, String, String)],
+    chunk_size: usize,
+) -> Vec<Vec<String>> {
+    let mut seen = HashSet::new();
+    let mut links = Vec::new();
+    for (_, link, _) in nodes {
+        if seen.insert(link.clone()) {
+            links.push(link.clone());
+        }
+    }
+    links
+        .chunks(chunk_size.max(1))
+        .map(|chunk| chunk.to_vec())
+        .collect()
+}
+
+pub(crate) fn latency_probe_nodes_for_links(
+    nodes: &[(i64, String, String)],
+    links: &[String],
+) -> Vec<(i64, String, String)> {
+    let link_set = links.iter().map(String::as_str).collect::<HashSet<_>>();
+    nodes
+        .iter()
+        .filter(|(_, link, _)| link_set.contains(link.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn node_latency_results_for_runtime_snapshots(
+    nodes: &[(i64, String, String)],
+    runtime_snapshots: &[Value],
+) -> Vec<NodeLatencyWrite> {
+    let (runtime_results, runtime_tested_ids) =
+        runtime_node_latency_results_for_nodes(nodes, runtime_snapshots);
     let tested_at = now_text();
     let fallback_nodes = nodes
         .iter()
@@ -260,21 +349,18 @@ fn run_node_latency_job_inner(
         &fallback_nodes,
         &tested_at,
     ));
-    let mut conn = open_state_connection(state)?;
+    results
+}
+
+fn write_node_latency_results(
+    conn: &mut Connection,
+    results: &[NodeLatencyWrite],
+) -> io::Result<()> {
     let tx = conn.transaction().map_err(sqlite_io_error)?;
-    for result in &results {
+    for result in results {
         store_node_latency_result(&tx, result)?;
     }
-    tx.commit().map_err(sqlite_io_error)?;
-    append_log_for_config(
-        config_dir,
-        state,
-        "info",
-        "node latency probe updated by Rust daed",
-    )?;
-    let completed = results.len();
-    let succeeded = results.iter().filter(|result| result.alive).count();
-    Ok((completed, succeeded, completed.saturating_sub(succeeded)))
+    tx.commit().map_err(sqlite_io_error)
 }
 
 pub(crate) fn current_node_latency_job_value(jobs: &LatencyJobManager) -> Value {

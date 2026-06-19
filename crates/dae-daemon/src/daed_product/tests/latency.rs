@@ -145,6 +145,53 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
 }
 
 #[test]
+pub(crate) fn latency_probe_link_chunks_preserve_unique_order_and_node_mapping() {
+    let nodes = vec![
+        (
+            11,
+            "socks://127.0.0.1:1080#one".to_owned(),
+            "127.0.0.1".to_owned(),
+        ),
+        (
+            12,
+            "socks://127.0.0.1:1081#two".to_owned(),
+            "127.0.0.1".to_owned(),
+        ),
+        (
+            13,
+            "socks://127.0.0.1:1080#one".to_owned(),
+            "127.0.0.1".to_owned(),
+        ),
+        (
+            14,
+            "socks://127.0.0.1:1082#three".to_owned(),
+            "127.0.0.1".to_owned(),
+        ),
+    ];
+
+    let chunks = latency_probe_link_chunks(&nodes, 2);
+    assert_eq!(
+        chunks,
+        vec![
+            vec![
+                "socks://127.0.0.1:1080#one".to_owned(),
+                "socks://127.0.0.1:1081#two".to_owned(),
+            ],
+            vec!["socks://127.0.0.1:1082#three".to_owned()],
+        ]
+    );
+
+    let first_chunk_nodes = latency_probe_nodes_for_links(&nodes, &chunks[0]);
+    assert_eq!(
+        first_chunk_nodes
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect::<Vec<_>>(),
+        vec![11, 12, 13]
+    );
+}
+
+#[test]
 pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
     let nodes = vec![
         (
