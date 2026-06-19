@@ -103,7 +103,7 @@ impl ResidentEventWriterRuntime {
 impl ResidentEventWriterHandle {
     pub(super) fn submit(&self, event: ResidentEvent) {
         let class = event.class();
-        let lossless = event.lossless();
+        let block_on_full_queue = event.block_on_full_queue();
         self.inner.metrics.command_enqueued();
         match self
             .inner
@@ -111,7 +111,9 @@ impl ResidentEventWriterHandle {
             .try_send(ResidentEventWriterCommand::Event(event))
         {
             Ok(()) => {}
-            Err(TrySendError::Full(ResidentEventWriterCommand::Event(event))) if lossless => {
+            Err(TrySendError::Full(ResidentEventWriterCommand::Event(event)))
+                if block_on_full_queue =>
+            {
                 if let Err(err) = self
                     .inner
                     .sender
@@ -180,6 +182,59 @@ impl ResidentEventWriterHandle {
                 "resident event writer control acknowledgement disconnected",
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::mpsc;
+
+    #[test]
+    fn resident_event_writer_drops_datapath_errors_when_queue_is_full() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .send(ResidentEventWriterCommand::Event(ResidentEvent::new(
+                json!({"event": "tcp_worker_started"}),
+            )))
+            .unwrap();
+        let metrics = Arc::new(ResidentEventWriterMetrics::new(1));
+        let handle = ResidentEventWriterHandle {
+            inner: Arc::new(ResidentEventWriterInner {
+                path: std::env::temp_dir().join(format!(
+                    "resident-event-writer-drop-test-{}",
+                    std::process::id()
+                )),
+                lock: Arc::new(Mutex::new(())),
+                sender,
+                metrics: Arc::clone(&metrics),
+            }),
+        };
+
+        handle.submit(ResidentEvent::new(json!({
+            "event": "udp_exchange_failed",
+            "error": "sample",
+        })));
+
+        drop(receiver);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot["droppedCount"], json!(1));
+        assert_eq!(snapshot["droppedByClass"]["error"], json!(1));
+        assert_eq!(snapshot["lastWriteError"], Value::Null);
+    }
+
+    #[test]
+    fn resident_event_full_queue_blocking_policy_is_lifecycle_only() {
+        assert!(ResidentEvent::new(json!({"event": "tcp_worker_started"})).block_on_full_queue());
+        assert!(
+            ResidentEvent::new(json!({"event": "runtime_reload_finished"})).block_on_full_queue()
+        );
+        assert!(ResidentEvent::new(json!({"event": "resident_fatal_error"})).block_on_full_queue());
+        assert!(
+            !ResidentEvent::new(json!({"event": "tcp_connection_failed"})).block_on_full_queue()
+        );
+        assert!(!ResidentEvent::new(json!({"event": "udp_exchange_failed"})).block_on_full_queue());
     }
 }
 
