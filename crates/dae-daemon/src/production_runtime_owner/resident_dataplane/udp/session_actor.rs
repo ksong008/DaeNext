@@ -79,18 +79,31 @@ async fn run_udp_session_actor(
                     });
                     session_proxy = Some(Arc::clone(&managed.proxy));
                 }
-                let exchange = match executor.as_mut() {
-                    Some(executor) => {
-                        executor
-                            .execute(
-                                &context.dns,
-                                &managed.proxy,
-                                managed.original_dst,
-                                &managed.packet.payload,
-                            )
-                            .await
-                    }
-                    None => Err("UDP session executor was not initialized".to_owned()),
+                let (exchange, execute_timed_out) = match executor.as_mut() {
+                    Some(executor) => match time::timeout(
+                        RESIDENT_UDP_RESPONSE_TIMEOUT,
+                        executor.execute(
+                            &context.dns,
+                            &managed.proxy,
+                            managed.original_dst,
+                            &managed.packet.payload,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(exchange) => (exchange, false),
+                        Err(_) => (
+                            Err(format!(
+                                "UDP session executor timed out after {}ms",
+                                RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
+                            )),
+                            true,
+                        ),
+                    },
+                    None => (
+                        Err("UDP session executor was not initialized".to_owned()),
+                        false,
+                    ),
                 };
                 record_udp_exchange_result(
                     &managed.proxy,
@@ -101,6 +114,10 @@ async fn run_udp_session_actor(
                     Arc::clone(&context.metrics),
                     exchange,
                 );
+                if execute_timed_out {
+                    stop_reason = "execute-timeout".to_owned();
+                    break;
+                }
                 if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref())
                     && let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
                         stop_reason = err;

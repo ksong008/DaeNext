@@ -97,32 +97,36 @@ async fn socks5_udp_associate_control_async(
     username: &str,
     password: &str,
 ) -> Result<String, String> {
-    let method = socks5_authenticate_async(stream, username, password).await?;
-    let target =
-        Socks5Address::parse(target).map_err(|err| format!("parse SOCKS5 target: {err}"))?;
-    let request = dae_outbound::socks5::handshake::request(
-        dae_outbound::socks5::Socks5Command::UdpAssociate,
-        &target,
-    )
-    .map_err(|err| format!("build SOCKS5 UDP associate request: {err}"))?;
-    stream
-        .write_all(&request)
-        .await
-        .map_err(|err| format!("write SOCKS5 UDP associate request: {err}"))?;
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        let method = socks5_authenticate_async(stream, username, password).await?;
+        let target =
+            Socks5Address::parse(target).map_err(|err| format!("parse SOCKS5 target: {err}"))?;
+        let request = dae_outbound::socks5::handshake::request(
+            dae_outbound::socks5::Socks5Command::UdpAssociate,
+            &target,
+        )
+        .map_err(|err| format!("build SOCKS5 UDP associate request: {err}"))?;
+        stream
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write SOCKS5 UDP associate request: {err}"))?;
 
-    let mut reply_head = [0_u8; 3];
-    stream
-        .read_exact(&mut reply_head)
-        .await
-        .map_err(|err| format!("read SOCKS5 UDP associate reply head: {err}"))?;
-    let mut reply_bytes = reply_head.to_vec();
-    reply_bytes.extend(read_socks5_address_bytes_async(stream).await?);
-    let parsed = dae_outbound::socks5::handshake::parse_server_reply(&reply_bytes)
-        .map_err(|err| format!("parse SOCKS5 UDP associate reply: {err}"))?;
-    if method == dae_outbound::socks5::handshake::AUTH_NO_ACCEPTABLE_METHODS {
-        return Err("SOCKS5 UDP associate selected no acceptable auth method".to_owned());
-    }
-    Ok(parsed.bind.authority())
+        let mut reply_head = [0_u8; 3];
+        stream
+            .read_exact(&mut reply_head)
+            .await
+            .map_err(|err| format!("read SOCKS5 UDP associate reply head: {err}"))?;
+        let mut reply_bytes = reply_head.to_vec();
+        reply_bytes.extend(read_socks5_address_bytes_async(stream).await?);
+        let parsed = dae_outbound::socks5::handshake::parse_server_reply(&reply_bytes)
+            .map_err(|err| format!("parse SOCKS5 UDP associate reply: {err}"))?;
+        if method == dae_outbound::socks5::handshake::AUTH_NO_ACCEPTABLE_METHODS {
+            return Err("SOCKS5 UDP associate selected no acceptable auth method".to_owned());
+        }
+        Ok(parsed.bind.authority())
+    })
+    .await
+    .map_err(|_| "SOCKS5 UDP associate timeout".to_owned())?
 }
 
 async fn socks5_authenticate_async(
