@@ -434,6 +434,45 @@ mod tests {
     }
 
     #[test]
+    fn domain_matcher_normalizes_queries_and_preserves_regex_semantics() {
+        let mut matcher = DomainMatcher::new(4);
+        matcher
+            .add_set(0, ["example.com"], DomainKey::Suffix)
+            .unwrap();
+        matcher
+            .add_set(1, [".child.example.com"], DomainKey::Suffix)
+            .unwrap();
+        matcher
+            .add_set(2, ["streaming"], DomainKey::Keyword)
+            .unwrap();
+        matcher
+            .add_set(3, [r"^api[0-9]+\.service\.example\.com$"], DomainKey::Regex)
+            .unwrap();
+
+        assert_eq!(matcher.match_domain_bitmap("WWW.EXAMPLE.COM."), vec![0x1]);
+        assert_eq!(matcher.match_domain_bitmap("child.example.com"), vec![0x1]);
+        assert_eq!(
+            matcher.match_domain_bitmap("edge.child.example.com."),
+            vec![0x3]
+        );
+        assert_eq!(
+            matcher.match_domain_bitmap("cdn.streaming.example.com"),
+            vec![0x5]
+        );
+        assert_eq!(
+            matcher.match_domain_bitmap("api42.service.example.com."),
+            vec![0x9]
+        );
+
+        let regex = SharedDomainSet::new([r"^api[0-9]+\.service\.example\.com$"], DomainKey::Regex)
+            .unwrap();
+        assert_eq!(regex.inner.regex.len(), 1);
+        assert!(regex.matches("api42.service.example.com"));
+        assert!(!regex.matches("www.service.example.com"));
+        assert!(SharedDomainSet::new(["("], DomainKey::Regex).is_err());
+    }
+
+    #[test]
     fn domain_set_keyword_index_preserves_contains_semantics() {
         let mut patterns = (0..DOMAIN_SET_INDEX_MIN_PATTERNS)
             .map(|index| format!("keyword-{index}"))

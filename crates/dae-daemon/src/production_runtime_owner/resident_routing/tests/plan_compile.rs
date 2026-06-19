@@ -1,7 +1,7 @@
 use super::super::OUTBOUND_CONNECTIVITY_MAP_NAME;
 use super::super::build_resident_userspace_routing_matcher;
 use super::super::maps::{resident_user_outbound_ids, runtime_map_name_matches};
-use super::super::plan::build_routing_plan;
+use super::super::plan::{build_routing_plan, build_routing_plan_with_asset_dirs};
 use super::*;
 use dae_routing::DomainKey;
 #[test]
@@ -165,6 +165,80 @@ routing {
             .domain_bitmap_for_domain("video.invalid.test")
             .unwrap(),
         vec![0x8]
+    );
+}
+
+#[test]
+pub(super) fn resident_routing_optimizer_preserves_go_order_for_alias_geodata_merge_and_dedup() {
+    let root = test_asset_root("optimizer-order");
+    write_asset(
+        &root,
+        "custom-geoip.dat",
+        geoip_list(&[geoip_entry(
+            "regional",
+            &[(&[198, 51, 100, 0][..], 24)],
+            false,
+        )]),
+    );
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    dport(443) && dip(ext:'custom-geoip:regional') -> proxy
+    ip(203.0.113.2, 203.0.113.1, 203.0.113.1, '2001:db8::1') -> direct
+    domain(domain: example.com) -> proxy
+    domain(suffix: example.com, contains: video, contains: video) -> proxy
+    fallback: block
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let plan = build_routing_plan_with_asset_dirs(&config, [&root]).unwrap();
+
+    assert!(plan.skipped_rules.is_empty());
+    assert_eq!(plan.matches[0].kind, "IpSet");
+    assert_eq!(plan.matches[1].kind, "Port");
+    assert_eq!(
+        plan.matches[0].outbound,
+        OutboundIndex::LOGICAL_AND.value(),
+        "function sorting must keep ip before port after dip/dport aliasing"
+    );
+    assert_eq!(plan.geodata_report.lookups.len(), 1);
+    assert_eq!(plan.geodata_report.lookups[0].filename, "custom-geoip.dat");
+    assert_eq!(plan.geodata_report.lookups[0].code, "regional");
+
+    let explicit_ip_set = plan
+        .lpm_sets
+        .iter()
+        .find(|set| {
+            set.iter()
+                .any(|prefix| prefix.addr.to_string() == "203.0.113.1")
+        })
+        .expect("explicit ip rule must compile after geodata expansion");
+    assert_eq!(
+        explicit_ip_set.len(),
+        3,
+        "duplicate ip params must be removed after sorting"
+    );
+
+    assert_eq!(plan.domain_sets.len(), 2);
+    assert!(
+        plan.domain_sets
+            .iter()
+            .any(|set| { domain_set_matches(set, DomainKey::Keyword, &["video"]) })
+    );
+    assert!(
+        plan.domain_sets
+            .iter()
+            .any(|set| { domain_set_matches(set, DomainKey::Suffix, &["example.com"]) })
     );
 }
 
