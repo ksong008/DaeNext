@@ -42,7 +42,7 @@ pub(super) fn start_with_options(
     let mut start_report_for_runtime = Value::Null;
     let (interface_attach_options, resident_interface_backend_policy) =
         resident_interface_attach_options(&options, &lan_ifaces, &wan_ifaces);
-    let geodata = ResidentGeodataStore::new(Vec::<PathBuf>::new());
+    let geodata = ResidentGeodataStore::new(options.geodata_asset_dirs.clone());
 
     let result = (|| {
         let mut ok = true;

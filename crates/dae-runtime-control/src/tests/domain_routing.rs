@@ -309,6 +309,73 @@ pub(super) fn domain_routing_dns_event_is_normalized_in_rust_and_preserves_multi
 }
 
 #[test]
+pub(super) fn domain_routing_owner_removes_only_the_departing_owner_bitmap() {
+    let mut owner = DomainRoutingOwner::default();
+    let shared_ip = parse_ip_key("192.0.2.1").unwrap();
+    let owner_a_only = parse_ip_key("198.51.100.7").unwrap();
+    let mut applied = Vec::new();
+
+    owner
+        .apply_owner_snapshot_with(
+            77,
+            "owner-a",
+            DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1", "198.51.100.7"]),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    owner
+        .apply_owner_snapshot_with(
+            77,
+            "owner-b",
+            DomainRoutingOwnerSnapshot::new(&[0x4], &["192.0.2.1"]),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(applied[1].1[0].key, shared_ip);
+    assert_eq!(applied[1].1[0].bitmap, bitmap([0x5]));
+    applied.clear();
+
+    let remove_a = owner
+        .apply_owner_snapshot_with(
+            77,
+            "owner-a",
+            DomainRoutingOwnerSnapshot::default(),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(!remove_a.skipped);
+    assert_eq!(remove_a.entries_updated, 1);
+    assert_eq!(remove_a.entries_deleted, 1);
+    assert_eq!(applied[0].1[0].key, shared_ip);
+    assert_eq!(applied[0].1[0].bitmap, bitmap([0x4]));
+    assert_eq!(applied[0].2, vec![owner_a_only]);
+
+    let remove_b = owner
+        .apply_owner_snapshot_with(
+            77,
+            "owner-b",
+            DomainRoutingOwnerSnapshot::default(),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(remove_b.entries_updated, 0);
+    assert_eq!(remove_b.entries_deleted, 1);
+    assert_eq!(applied[1].2, vec![shared_ip]);
+}
+
+#[test]
 pub(super) fn domain_routing_owner_does_not_commit_when_map_apply_fails() {
     let mut owner = DomainRoutingOwner::default();
     let snapshot = DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1"]);

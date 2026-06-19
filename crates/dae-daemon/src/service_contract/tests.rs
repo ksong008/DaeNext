@@ -3,6 +3,7 @@
 mod tests {
     use super::super::*;
     use dae_config::{Global, Routing};
+    use std::path::{Path, PathBuf};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -63,6 +64,30 @@ mod tests {
         let mut config = minimal_config();
         config.global.lan_interface = Some(vec!["lo".to_owned()]);
         validate_resident_runtime_reload_config(&config).unwrap();
+    }
+
+    #[test]
+    fn resident_geodata_asset_dirs_keep_daed_systemd_config_dir_scope() {
+        assert_eq!(
+            resident_config_geodata_asset_dirs(Path::new("/etc/daed/")),
+            vec![PathBuf::from("/etc/daed/")]
+        );
+    }
+
+    #[test]
+    fn resident_geodata_asset_dirs_keep_dae_systemd_config_dir_scope() {
+        assert_eq!(
+            resident_config_geodata_asset_dirs(Path::new("/etc/dae/")),
+            vec![PathBuf::from("/etc/dae/")]
+        );
+    }
+
+    #[test]
+    fn resident_geodata_asset_dirs_use_config_file_parent_scope() {
+        assert_eq!(
+            resident_config_geodata_asset_dirs(Path::new("/etc/dae/config.dae")),
+            vec![PathBuf::from("/etc/dae")]
+        );
     }
 
     #[test]

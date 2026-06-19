@@ -5,9 +5,13 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     }
     let runtime_config = load_config_file(&options.config)
         .map_err(|err| format!("resident run config validation failed: {err}"))?;
+    let geodata_asset_dirs = resident_config_geodata_asset_dirs(&options.config);
     block_service_signals()?;
     let mut state = ResidentServiceState {
-        runtime: Some(start_resident_production_runtime(&runtime_config)?),
+        runtime: Some(start_resident_production_runtime_with_asset_dirs(
+            &runtime_config,
+            geodata_asset_dirs.clone(),
+        )?),
         config: runtime_config,
     };
 
@@ -116,7 +120,12 @@ pub(super) fn handle_reload(
                 &mut state.runtime,
                 &mut state.config,
                 runtime_config,
-                start_resident_production_runtime,
+                |config| {
+                    start_resident_production_runtime_with_asset_dirs(
+                        config,
+                        resident_config_geodata_asset_dirs(&options.config),
+                    )
+                },
             ) {
                 write_progress(&options.progress_file, RELOAD_ERROR, &format!("\n{err}"))?;
                 log_event(options, "reload failed")?;
@@ -135,6 +144,25 @@ pub(super) fn handle_reload(
         }
     }
     notify_systemd("READY=1")
+}
+
+pub(super) fn resident_config_geodata_asset_dirs(config_path: &Path) -> Vec<PathBuf> {
+    vec![resident_config_asset_dir(config_path)]
+}
+
+fn resident_config_asset_dir(config_path: &Path) -> PathBuf {
+    if config_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        == Some("dae")
+    {
+        return config_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+    }
+    config_path.to_path_buf()
 }
 
 pub(crate) fn validate_resident_runtime_reload_config(config: &Config) -> Result<(), String> {

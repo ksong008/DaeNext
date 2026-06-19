@@ -854,14 +854,19 @@ mod tests {
     }
 
     fn a_response(address: [u8; 4]) -> Vec<u8> {
+        a_response_for_query(QUERY, address)
+    }
+
+    fn a_response_for_query(query: &[u8], address: [u8; 4]) -> Vec<u8> {
+        let view = DnsPacketView::parse(query).unwrap();
         let mut response = Vec::new();
-        response.extend_from_slice(&[0x12, 0x34]);
+        response.extend_from_slice(&query[0..2]);
         response.extend_from_slice(&0x8180_u16.to_be_bytes());
         response.extend_from_slice(&1_u16.to_be_bytes());
         response.extend_from_slice(&1_u16.to_be_bytes());
         response.extend_from_slice(&0_u16.to_be_bytes());
         response.extend_from_slice(&0_u16.to_be_bytes());
-        response.extend_from_slice(&QUERY[12..]);
+        response.extend_from_slice(&query[12..view.answer_offset()]);
         response.extend_from_slice(&0xc00c_u16.to_be_bytes());
         response.extend_from_slice(&1_u16.to_be_bytes());
         response.extend_from_slice(&1_u16.to_be_bytes());
@@ -1383,6 +1388,172 @@ mod tests {
     }
 
     #[test]
+    fn resident_dns_request_qname_geodata_matrix_matches_go_surface() {
+        let root = test_asset_root("request-geodata-matrix");
+        write_asset(
+            &root,
+            "geosite.dat",
+            geosite_list(&[geosite_entry(
+                "streaming",
+                &[(2, "media.example.test", &[][..])],
+            )]),
+        );
+        write_asset(
+            &root,
+            "test-geosite.dat",
+            geosite_list(&[geosite_entry(
+                "regional",
+                &[
+                    (2, "example.com", &["cn"][..]),
+                    (2, "ignored.example.test", &["other"][..]),
+                ],
+            )]),
+        );
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+            secondary: 'udp://127.0.0.1:53'
+          }
+          routing {
+            request {
+              qname(geosite:streaming) -> primary
+              qname(ext:'test-geosite:regional@cn') -> secondary
+              fallback: reject
+            }
+          }
+        }
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
+        let geodata = ResidentGeodataStore::new([root]);
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+
+        let media_query =
+            build_dns_query_packet(0x1234, "www.media.example.test", DNS_QTYPE_A).unwrap();
+        let media = DnsPacketView::parse(&media_query).unwrap();
+        match select_request_action(&plan, &media).unwrap() {
+            ResidentDnsRequestAction::Upstream(upstream) => assert_eq!(upstream.tag, "primary"),
+            other => panic!("expected geosite request route to primary, got {other:?}"),
+        }
+
+        let example = DnsPacketView::parse(QUERY).unwrap();
+        match select_request_action(&plan, &example).unwrap() {
+            ResidentDnsRequestAction::Upstream(upstream) => assert_eq!(upstream.tag, "secondary"),
+            other => panic!("expected ext geosite request route to secondary, got {other:?}"),
+        }
+
+        let ignored_query =
+            build_dns_query_packet(0x1234, "ignored.example.test", DNS_QTYPE_A).unwrap();
+        let ignored = DnsPacketView::parse(&ignored_query).unwrap();
+        assert!(matches!(
+            select_request_action(&plan, &ignored).unwrap(),
+            ResidentDnsRequestAction::Reject
+        ));
+    }
+
+    #[test]
+    fn resident_dns_response_geodata_matrix_matches_go_surface() {
+        let root = test_asset_root("response-geodata-matrix");
+        write_asset(
+            &root,
+            "geosite.dat",
+            geosite_list(&[geosite_entry(
+                "apple",
+                &[
+                    (2, "weather.example.test", &["cn"][..]),
+                    (2, "ignored.example.test", &["other"][..]),
+                ],
+            )]),
+        );
+        write_asset(
+            &root,
+            "geoip.dat",
+            geoip_list(&[geoip_entry(
+                "private",
+                &[(&[203, 0, 113, 0][..], 24)],
+                false,
+            )]),
+        );
+        write_asset(
+            &root,
+            "test-geoip.dat",
+            geoip_list(&[geoip_entry(
+                "custom",
+                &[(&[198, 51, 100, 0][..], 24)],
+                false,
+            )]),
+        );
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+            secondary: 'udp://127.0.0.1:53'
+            tertiary: 'udp://127.0.0.2:53'
+            quaternary: 'udp://127.0.0.3:53'
+          }
+          routing {
+            request {
+              fallback: primary
+            }
+            response {
+              qname(geosite:apple@cn) -> secondary
+              ip(geoip:private) -> tertiary
+              ip(ext:'test-geoip:custom') -> quaternary
+              fallback: accept
+            }
+          }
+        }
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
+        let geodata = ResidentGeodataStore::new([root]);
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+        let primary = match &plan.request_default_action {
+            ResidentDnsRequestAction::Upstream(upstream) => upstream.clone(),
+            other => panic!("expected primary request fallback, got {other:?}"),
+        };
+
+        let weather_query =
+            build_dns_query_packet(0x1234, "weather.example.test", DNS_QTYPE_A).unwrap();
+        let weather = DnsPacketView::parse(&weather_query).unwrap();
+        match select_response_action(
+            &plan,
+            &weather,
+            &a_response_for_query(&weather_query, [192, 0, 2, 42]),
+            &primary,
+        )
+        .unwrap()
+        {
+            ResidentDnsResponseAction::Upstream(upstream) => assert_eq!(upstream.tag, "secondary"),
+            other => panic!("expected response qname geosite route to secondary, got {other:?}"),
+        }
+
+        let example = DnsPacketView::parse(QUERY).unwrap();
+        match select_response_action(&plan, &example, &a_response([203, 0, 113, 42]), &primary)
+            .unwrap()
+        {
+            ResidentDnsResponseAction::Upstream(upstream) => assert_eq!(upstream.tag, "tertiary"),
+            other => panic!("expected response geoip route to tertiary, got {other:?}"),
+        }
+        match select_response_action(&plan, &example, &a_response([198, 51, 100, 42]), &primary)
+            .unwrap()
+        {
+            ResidentDnsResponseAction::Upstream(upstream) => assert_eq!(upstream.tag, "quaternary"),
+            other => panic!("expected response ext geoip route to quaternary, got {other:?}"),
+        }
+        assert!(matches!(
+            select_response_action(&plan, &example, &a_response([192, 0, 2, 42]), &primary)
+                .unwrap(),
+            ResidentDnsResponseAction::Accept
+        ));
+    }
+
+    #[test]
     fn resident_dns_plan_rejects_unsupported_request_function() {
         let input = r#"
         global {}
@@ -1478,6 +1649,29 @@ mod tests {
         let mut out = Vec::new();
         for entry in entries {
             push_field_bytes(&mut out, 1, entry);
+        }
+        out
+    }
+
+    fn geoip_list(entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for entry in entries {
+            push_field_bytes(&mut out, 1, entry);
+        }
+        out
+    }
+
+    fn geoip_entry(code: &str, cidrs: &[(&[u8], u64)], inverse_match: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        push_field_string(&mut out, 1, code);
+        for (ip, prefix) in cidrs {
+            let mut cidr = Vec::new();
+            push_field_bytes(&mut cidr, 1, ip);
+            push_field_varint(&mut cidr, 2, *prefix);
+            push_field_bytes(&mut out, 2, &cidr);
+        }
+        if inverse_match {
+            push_field_varint(&mut out, 3, 1);
         }
         out
     }
