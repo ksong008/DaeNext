@@ -599,13 +599,20 @@ async fn handle_resident_dns_request_without_preference(
                     .to_owned(),
             );
     }
-    if let Some(response) = plan.cache.lookup_response(request, false)? {
-        return Ok(response);
+    let mut cached_response = Vec::new();
+    if plan
+        .cache
+        .lookup_response_into(request, false, &mut cached_response)?
+    {
+        return Ok(cached_response);
     }
     let key = dns_cache_key_for_request(request)?;
     let _inflight = plan.cache.lock_key(key).await?;
-    if let Some(response) = plan.cache.lookup_response(request, false)? {
-        return Ok(response);
+    if plan
+        .cache
+        .lookup_response_into(request, false, &mut cached_response)?
+    {
+        return Ok(cached_response);
     }
     match action {
         ResidentDnsRequestAction::AsIs => {
@@ -941,18 +948,20 @@ mod tests {
 
         record_accepted_dns_response(&plan, &a_response([203, 0, 113, 42])).unwrap();
 
+        let mut cached_response = Vec::new();
+        assert!(
+            !plan
+                .cache
+                .lookup_response_into(&request, false, &mut cached_response)
+                .unwrap()
+        );
+        assert!(cached_response.is_empty());
         assert!(
             plan.cache
-                .lookup_response(&request, false)
+                .lookup_response_into(&request, true, &mut cached_response)
                 .unwrap()
-                .is_none()
         );
-        assert!(
-            plan.cache
-                .lookup_response(&request, true)
-                .unwrap()
-                .is_some()
-        );
+        assert!(!cached_response.is_empty());
     }
 
     #[tokio::test]
