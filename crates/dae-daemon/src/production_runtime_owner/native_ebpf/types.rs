@@ -84,30 +84,7 @@ pub(in crate::production_runtime_owner) struct NativeAttachOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::production_runtime_owner) enum NativeEbpfObjectSource {
-    Embedded,
-    File(PathBuf),
-}
-
-impl NativeEbpfObjectSource {
-    pub(in crate::production_runtime_owner) fn identity(&self) -> PathBuf {
-        match self {
-            Self::Embedded => PathBuf::from(EMBEDDED_NATIVE_OBJECT_IDENTITY),
-            Self::File(path) => path.clone(),
-        }
-    }
-
-    pub(in crate::production_runtime_owner) const fn kind(&self) -> &'static str {
-        match self {
-            Self::Embedded => "embedded",
-            Self::File(_) => "file",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner) struct NativeEbpfLoadInput {
-    pub source: NativeEbpfObjectSource,
     pub param: BpfDaeParam,
 }
 

@@ -38,31 +38,6 @@ pub(super) fn resolve_source_object(artifact_dir: &Path) -> Result<PathBuf, Stri
 }
 
 #[cfg(feature = "native-ebpf")]
-pub(super) fn resolve_native_object() -> Result<Option<PathBuf>, String> {
-    if !resident_native_ebpf_enabled() {
-        return Ok(None);
-    }
-    if let Some((env_name, path)) =
-        env_var_with_legacy(DEFAULT_NATIVE_OBJECT_ENV, DEFAULT_NATIVE_OBJECT_LEGACY_ENV)
-    {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Ok(Some(path));
-        }
-        return Err(format!(
-            "{env_name} points to a missing native object: {}",
-            path_string(&path)
-        ));
-    }
-    Ok(None)
-}
-
-#[cfg(not(feature = "native-ebpf"))]
-pub(super) fn resolve_native_object() -> Result<Option<PathBuf>, String> {
-    Ok(None)
-}
-
-#[cfg(feature = "native-ebpf")]
 pub(super) fn resident_native_ebpf_enabled() -> bool {
     env_var_with_legacy(DEFAULT_NATIVE_EBPF_ENV, DEFAULT_NATIVE_EBPF_LEGACY_ENV)
         .map(|(_, value)| value)

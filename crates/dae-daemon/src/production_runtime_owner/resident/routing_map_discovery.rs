@@ -239,19 +239,25 @@ pub(super) fn kernel_visible_map_name_matches(actual: &str, expected: &str) -> b
 pub(super) fn startup_evidence_from_report(start_report: &Value) -> Value {
     let native_object = start_report
         .get("native_object")
-        .filter(|value| !value.is_null());
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            start_report
+                .get("native_object_embedded")
+                .and_then(Value::as_bool)
+                .and_then(|embedded| {
+                    embedded
+                        .then(|| start_report.get("native_object_identity"))
+                        .flatten()
+                })
+        });
     let bpf_loader = native_object.map(|object| {
         let kernel_rewrite = start_report
             .pointer("/native_param_image/rewritten_param_matches")
             .and_then(Value::as_bool)
             .unwrap_or(true);
         json!({
-            "objectSource": "rust-aya-skeleton",
-            "defaultObjectSource": if cfg!(feature = "native-ebpf") {
-                "rust-aya-skeleton"
-            } else {
-                "external-aya-object"
-            },
+            "objectSource": "rust-aya-loader",
+            "defaultObjectSource": "rust-aya-loader",
             "kernelEbpfProgramRewrite": kernel_rewrite,
             "objectPath": object,
             "paramObjectPath": start_report["native_param_object"].clone(),

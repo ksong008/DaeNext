@@ -11,6 +11,7 @@ pub(super) fn collect_loaded_map_ids(
 ) -> Result<BTreeMap<String, u32>, String> {
     use std::os::fd::AsRawFd;
 
+    let before_map_ids = before_map_ids.iter().copied().collect::<BTreeSet<_>>();
     let current = dae_ebpf_support::map_ids()
         .map_err(|err| format!("native eBPF after-load map snapshot failed: {err}"))?;
     let mut loaded_map_ids = BTreeMap::new();

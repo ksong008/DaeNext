@@ -183,7 +183,7 @@ impl NativeEbpfRuntimeState {
     #[cfg(feature = "native-ebpf")]
     pub(super) fn ensure_loaded(
         &mut self,
-        param_object: &Path,
+        _param_object: &Path,
     ) -> Result<&mut dae_ebpf_support::AyaUserspaceLoadedObject, String> {
         if self.loaded.is_none() {
             let pin_root = dae_ebpf_support::default_bpffs_mount()
@@ -197,51 +197,25 @@ impl NativeEbpfRuntimeState {
                 .map_err(|err| format!("native eBPF pin root create failed: {err}"))?;
             let before_map_ids = dae_ebpf_support::map_ids()
                 .map_err(|err| format!("native eBPF before-load map snapshot failed: {err}"))?;
-            let loaded = match self.load_input.clone() {
-                Some(input) => match input.source {
-                    NativeEbpfObjectSource::Embedded => {
-                        dae_ebpf_support::load_aya_userspace_object_bytes(
-                            dae_ebpf_support::AyaUserspaceBytesLoaderOptions {
-                                object_label: EMBEDDED_NATIVE_OBJECT_IDENTITY,
-                                object_data: dae_ebpf_loader::embedded_native_aya_object(),
-                                param: Some(input.param),
-                                map_pin_path: Some(&pin_root),
-                                allow_unsupported_maps: true,
-                                allowed_unsupported_map_names:
-                                    dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
-                                max_entries_overrides: &[],
-                                prepin_lpm_array_map: true,
-                            },
-                        )
-                    }
-                    NativeEbpfObjectSource::File(path) => {
-                        dae_ebpf_support::load_aya_userspace_object(
-                            dae_ebpf_support::AyaUserspaceLoaderOptions {
-                                object: &path,
-                                param: Some(input.param),
-                                map_pin_path: Some(&pin_root),
-                                allow_unsupported_maps: true,
-                                allowed_unsupported_map_names:
-                                    dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
-                                max_entries_overrides: &[],
-                                prepin_lpm_array_map: true,
-                            },
-                        )
-                    }
+            let input = self.load_input.clone().ok_or_else(|| {
+                format!(
+                    "native eBPF load input is missing for embedded object {}",
+                    EMBEDDED_NATIVE_OBJECT_IDENTITY
+                )
+            })?;
+            let loaded = dae_ebpf_support::load_aya_userspace_object_bytes(
+                dae_ebpf_support::AyaUserspaceBytesLoaderOptions {
+                    object_label: EMBEDDED_NATIVE_OBJECT_IDENTITY,
+                    object_data: dae_ebpf_loader::embedded_native_aya_object(),
+                    param: Some(input.param),
+                    map_pin_path: Some(&pin_root),
+                    allow_unsupported_maps: true,
+                    allowed_unsupported_map_names:
+                        dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
+                    max_entries_overrides: &[],
+                    prepin_lpm_array_map: true,
                 },
-                None => dae_ebpf_support::load_aya_userspace_object(
-                    dae_ebpf_support::AyaUserspaceLoaderOptions {
-                        object: param_object,
-                        param: None,
-                        map_pin_path: Some(&pin_root),
-                        allow_unsupported_maps: true,
-                        allowed_unsupported_map_names:
-                            dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
-                        max_entries_overrides: &[],
-                        prepin_lpm_array_map: true,
-                    },
-                ),
-            }?;
+            )?;
             self.loaded_map_ids = collect_loaded_map_ids(&before_map_ids)?;
             self.pin_root = Some(pin_root);
             self.loaded = Some(loaded);

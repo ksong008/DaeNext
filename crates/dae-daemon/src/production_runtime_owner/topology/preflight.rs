@@ -55,24 +55,6 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
     );
     push_check(
         &mut checks,
-        "native-ebpf-object-present",
-        !options.execute
-            || !options.native_ebpf_requested
-            || options
-                .native_ebpf_object
-                .as_ref()
-                .is_none_or(|path| path.is_file()),
-        json!({
-            "native_backend_requested": options.native_ebpf_requested,
-            "path": options.native_ebpf_object.as_ref().map(|path| path_string(path)),
-            "embedded_object": options.native_ebpf_embedded_object,
-            "source_object": path_string(&options.source_object),
-            "required_when_configured": true,
-        }),
-        "configured native eBPF object is missing",
-    );
-    push_check(
-        &mut checks,
         "production-names-free",
         !options.execute
             || (!iface_exists(PRODUCTION_HOST_IFACE)

@@ -27,19 +27,19 @@ pub fn start_resident_production_runtime_with_asset_dirs(
     })?;
 
     let native_ebpf_requested = resident_native_ebpf_enabled();
-    let native_object = resolve_native_object()?;
     let source_object = if native_ebpf_requested {
-        match native_object.as_ref() {
-            Some(path) => path.clone(),
-            #[cfg(feature = "native-ebpf")]
-            None => PathBuf::from(EMBEDDED_NATIVE_OBJECT_IDENTITY),
-            #[cfg(not(feature = "native-ebpf"))]
-            None => resolve_source_object(&artifact_dir)?,
+        #[cfg(feature = "native-ebpf")]
+        {
+            PathBuf::from(EMBEDDED_NATIVE_OBJECT_IDENTITY)
+        }
+        #[cfg(not(feature = "native-ebpf"))]
+        {
+            resolve_source_object(&artifact_dir)?
         }
     } else {
         resolve_source_object(&artifact_dir)?
     };
-    let native_ebpf_embedded_object = native_ebpf_requested && native_object.is_none();
+    let native_ebpf_embedded_object = native_ebpf_requested;
     let native_ebpf_backend = resolve_native_backend()?;
     let netns_link_mode = resolve_netns_link_mode_from_env()?;
     let options = ProductionRuntimeOwnerOptions {
@@ -56,7 +56,6 @@ pub fn start_resident_production_runtime_with_asset_dirs(
         native_ebpf_backend,
         native_ebpf_completed_a3_admission: native_ebpf_requested,
         native_ebpf_embedded_object,
-        native_ebpf_object: native_object,
         ..ProductionRuntimeOwnerOptions::default()
     };
 

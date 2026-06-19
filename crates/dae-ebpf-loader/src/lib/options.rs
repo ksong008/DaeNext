@@ -34,8 +34,6 @@ impl LoaderOutput {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct BpfLoaderLoadPinOptions {
-    pub(super) object: Option<PathBuf>,
-    pub(super) object_source: Option<BpfObjectSource>,
     pub(super) pin_root: PathBuf,
     pub(super) tproxy_port: u16,
     pub(super) control_plane_pid: u32,
@@ -45,30 +43,7 @@ pub(super) struct BpfLoaderLoadPinOptions {
     pub(super) has_bpf_get_current_task: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum BpfObjectSource {
-    ExternalAyaObject,
-    RustAyaSkeleton,
-}
-
-impl BpfObjectSource {
-    pub(super) const fn as_str(self) -> &'static str {
-        match self {
-            Self::ExternalAyaObject => "external-aya-object",
-            Self::RustAyaSkeleton => "rust-aya-skeleton",
-        }
-    }
-
-    pub(super) fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "external-aya-object" => Ok(Self::ExternalAyaObject),
-            "rust-aya-skeleton" => Ok(Self::RustAyaSkeleton),
-            _ => Err(format!(
-                "unsupported bpf-loader object source: {value}; want external-aya-object or rust-aya-skeleton"
-            )),
-        }
-    }
-}
+pub(super) const RUST_AYA_LOADER_OBJECT_SOURCE: &str = "rust-aya-loader";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MapStatsCountRequest {

@@ -128,8 +128,8 @@ pub(crate) fn startup_runtime_evidence_logs_report_interfaces_generically() {
     let report = json!({
         "residentStartupEvidence": {
             "bpfLoader": {
-                "objectSource": "rust-aya-skeleton",
-                "defaultObjectSource": "rust-aya-skeleton",
+                "objectSource": "rust-aya-loader",
+                "defaultObjectSource": "rust-aya-loader",
                 "kernelEbpfProgramRewrite": true
             },
             "loadedEbpf": {
@@ -169,7 +169,7 @@ pub(crate) fn startup_runtime_evidence_logs_report_interfaces_generically() {
     assert_eq!(items[1]["message"], json!("Rust/Aya BPF loader loaded"));
     assert_eq!(
         items[1]["fields"]["object_source"],
-        json!("rust-aya-skeleton")
+        json!("rust-aya-loader")
     );
     assert_eq!(
         items[1]["fields"]["kernel_ebpf_program_rewrite"],

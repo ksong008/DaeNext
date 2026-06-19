@@ -53,7 +53,6 @@ pub struct ProductionRuntimeOwnerOptions {
     pub native_ebpf_backend: AttachBackend,
     pub native_ebpf_completed_a3_admission: bool,
     pub native_ebpf_embedded_object: bool,
-    pub native_ebpf_object: Option<PathBuf>,
 }
 
 impl Default for ProductionRuntimeOwnerOptions {
@@ -93,7 +92,6 @@ impl Default for ProductionRuntimeOwnerOptions {
             native_ebpf_backend: AttachBackend::Auto,
             native_ebpf_completed_a3_admission: false,
             native_ebpf_embedded_object: false,
-            native_ebpf_object: None,
         }
     }
 }
