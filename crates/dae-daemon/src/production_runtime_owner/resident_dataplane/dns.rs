@@ -909,7 +909,6 @@ mod tests {
 
         assert_eq!(plan.key.qname, "example.com.");
         assert_eq!(plan.entry.route_owner_key, "example.com.|1|1");
-        assert_eq!(plan.bitmap, vec![0x1]);
         assert_eq!(plan.ips, vec![ip_to_key("203.0.113.42".parse().unwrap())]);
         assert_eq!(plan.entry.domain_bitmap, vec![0x1]);
     }
@@ -1016,7 +1015,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(plan.owner_key, "tcp-sniff|www.example.com|198.51.100.10");
-        assert_eq!(plan.bitmap, vec![0x1]);
+        assert_eq!(plan.bitmap[0], 0x1);
+        assert!(plan.bitmap[1..].iter().all(|word| *word == 0));
         assert_eq!(plan.ip, ip_to_key("198.51.100.10".parse().unwrap()));
     }
 
