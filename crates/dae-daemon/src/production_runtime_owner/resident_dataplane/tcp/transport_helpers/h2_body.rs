@@ -1,4 +1,7 @@
 use super::*;
+use bytes::BytesMut;
+
+const H2_UPLOAD_READ_CHUNK: usize = 16 * 1024;
 
 pub(crate) async fn open_h2_body_stream(
     client: AsyncResidentTlsClient,
@@ -137,7 +140,7 @@ pub(crate) async fn relay_tcp_over_deferred_h2_body(
 ) -> Result<DirectTcpRelayStats, String> {
     let mut inbound_closed = false;
     let mut last_activity = Instant::now();
-    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut inbound_buf = BytesMut::with_capacity(H2_UPLOAD_READ_CHUNK);
 
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
@@ -157,21 +160,16 @@ pub(crate) async fn relay_tcp_over_deferred_h2_body(
                 )
                 .await;
             }
-            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+            read = read_h2_upload_chunk(inbound, &mut inbound_buf), if !inbound_closed => {
                 match read {
-                    Ok(0) => {
+                    Ok(None) => {
                         inbound_closed = true;
                         send_h2_data_with_context(send_stream, Bytes::new(), true, context).await?;
                         last_activity = Instant::now();
                     }
-                    Ok(read) => {
-                        send_h2_data_with_context(
-                            send_stream,
-                            Bytes::copy_from_slice(&inbound_buf[..read]),
-                            false,
-                            context,
-                        )
-                        .await?;
+                    Ok(Some(chunk)) => {
+                        let read = chunk.len();
+                        send_h2_data_with_context(send_stream, chunk, false, context).await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
                         last_activity = Instant::now();
@@ -208,27 +206,22 @@ async fn relay_tcp_over_ready_h2_body(
 ) -> Result<DirectTcpRelayStats, String> {
     let mut response_closed = false;
     let mut last_activity = Instant::now();
-    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut inbound_buf = BytesMut::with_capacity(H2_UPLOAD_READ_CHUNK);
     let mut vless_response_stripper =
         strip_vless_response_header.then(VlessResponseStripper::default);
 
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
-            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+            read = read_h2_upload_chunk(inbound, &mut inbound_buf), if !inbound_closed => {
                 match read {
-                    Ok(0) => {
+                    Ok(None) => {
                         inbound_closed = true;
                         send_h2_data_with_context(send_stream, Bytes::new(), true, context).await?;
                         last_activity = Instant::now();
                     }
-                    Ok(read) => {
-                        send_h2_data_with_context(
-                            send_stream,
-                            Bytes::copy_from_slice(&inbound_buf[..read]),
-                            false,
-                            context,
-                        )
-                        .await?;
+                    Ok(Some(chunk)) => {
+                        let read = chunk.len();
+                        send_h2_data_with_context(send_stream, chunk, false, context).await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
                         last_activity = Instant::now();
@@ -278,6 +271,18 @@ async fn relay_tcp_over_ready_h2_body(
         }
     }
     Ok(stats)
+}
+
+async fn read_h2_upload_chunk(
+    inbound: &mut TokioTcpStream,
+    buffer: &mut BytesMut,
+) -> std::io::Result<Option<Bytes>> {
+    buffer.reserve(H2_UPLOAD_READ_CHUNK);
+    let read = inbound.read_buf(buffer).await?;
+    if read == 0 {
+        return Ok(None);
+    }
+    Ok(Some(buffer.split_to(read).freeze()))
 }
 
 pub(crate) async fn relay_tcp_over_vmess_h2_body(
