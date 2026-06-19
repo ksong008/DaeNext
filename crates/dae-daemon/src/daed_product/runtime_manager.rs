@@ -268,21 +268,25 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn stop(&self) -> Result<Value, String> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-        inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
-        let was_running = inner.runtime.is_some();
-        inner.runtime.take();
+        let was_running = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+            inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
+            let was_running = inner.runtime.is_some();
+            let stopped_runtime = inner.runtime.take();
+            inner.config = None;
+            inner.traffic_carry = RuntimeTrafficCarry::default();
+            inner.runtime_started_at = None;
+            inner.stop_count += 1;
+            inner.last_transition_at = Some(now_text());
+            inner.last_report = None;
+            inner.last_error = None;
+            drop(stopped_runtime);
+            was_running
+        };
         let reclaim = was_running.then(|| allocator_reclaim(AllocatorReclaimReason::StopRuntime));
-        inner.config = None;
-        inner.traffic_carry = RuntimeTrafficCarry::default();
-        inner.runtime_started_at = None;
-        inner.stop_count += 1;
-        inner.last_transition_at = Some(now_text());
-        inner.last_report = None;
-        inner.last_error = None;
         Ok(json!({
             "stopped": true,
             "wasRunning": was_running,
