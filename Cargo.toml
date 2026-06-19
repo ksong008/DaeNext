@@ -37,6 +37,7 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/ksong008/DaeNext"
 
 [workspace.dependencies]
+aho-corasick = "1"
 aes = "0.8"
 aes-gcm = "0.10"
 argon2 = "0.5"

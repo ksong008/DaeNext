@@ -781,6 +781,7 @@ dependencies = [
 name = "dae-routing"
 version = "3.0.2"
 dependencies = [
+ "aho-corasick",
  "dae-core-types",
  "dae-geodata",
  "dae-golden",
