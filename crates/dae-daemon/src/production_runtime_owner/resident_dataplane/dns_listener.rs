@@ -8,6 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{
     TcpListener as TokioTcpListener, TcpStream as TokioTcpStream, UdpSocket as TokioUdpSocket,
 };
+use tokio::sync::Semaphore;
 use tokio::time;
 
 use super::dns::{ResidentDnsPlan, handle_resident_dns_local_async};
@@ -15,6 +16,7 @@ use super::*;
 
 const DNS_BIND_READ_LIMIT: usize = 4096;
 const DNS_BIND_TCP_READ_LIMIT: usize = u16::MAX as usize;
+const DNS_BIND_UDP_MAX_INFLIGHT: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResidentDnsBindEndpoint {
@@ -241,11 +243,16 @@ async fn run_resident_dns_udp_bind_listener_async(
             "local_addr": local_addr.to_string(),
             "network": "udp",
             "handler": "resident-dns-udp",
+            "max_inflight": DNS_BIND_UDP_MAX_INFLIGHT,
         }),
     );
+    let socket = Arc::new(socket);
+    let semaphore = Arc::new(Semaphore::new(DNS_BIND_UDP_MAX_INFLIGHT));
+    let mut tasks = tokio::task::JoinSet::new();
     let mut buf = vec![0_u8; DNS_BIND_READ_LIMIT];
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
+            Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
             received = socket.recv_from(&mut buf) => {
                 let (read, peer) = match received {
                     Ok(received) => received,
@@ -266,62 +273,34 @@ async fn run_resident_dns_udp_bind_listener_async(
                         continue;
                     }
                 };
-                metrics.udp_opened();
-                metrics.add_upload(read);
-                let response = handle_resident_dns_local_async(&dns, local_addr, &buf[..read]).await;
-                match response {
-                    Ok(response) => {
-                        let response_len = response.len();
-                        match socket.send_to(&response, peer).await {
-                            Ok(sent) => {
-                                metrics.add_download(sent);
-                                append_event(
-                                    &event_file,
-                                    &event_lock,
-                                    json!({
-                                        "event": "dns_bind_query_finished",
-                                        "local_addr": local_addr.to_string(),
-                                        "peer": peer.to_string(),
-                                        "network": "udp",
-                                        "request_bytes": read,
-                                        "response_bytes": response_len,
-                                        "sent_bytes": sent,
-                                        "handler": "resident-dns-udp",
-                                    }),
-                                );
-                            }
-                            Err(err) => append_event(
-                                &event_file,
-                                &event_lock,
-                                json!({
-                                    "event": "dns_bind_response_send_failed",
-                                    "local_addr": local_addr.to_string(),
-                                    "peer": peer.to_string(),
-                                    "network": "udp",
-                                    "request_bytes": read,
-                                    "response_bytes": response_len,
-                                    "error": err.to_string(),
-                                }),
-                            ),
-                        }
-                    }
-                    Err(err) => append_event(
-                        &event_file,
-                        &event_lock,
-                        json!({
-                            "event": "dns_bind_query_failed",
-                            "local_addr": local_addr.to_string(),
-                            "peer": peer.to_string(),
-                            "network": "udp",
-                            "request_bytes": read,
-                            "error": err,
-                        }),
-                    ),
-                }
-                metrics.udp_closed();
+                let request = buf[..read].to_vec();
+                let permit = match Arc::clone(&semaphore).acquire_owned().await {
+                    Ok(permit) => permit,
+                    Err(_) => break,
+                };
+                tasks.spawn(handle_resident_dns_udp_bind_packet_async(
+                    Arc::clone(&socket),
+                    local_addr,
+                    peer,
+                    Arc::clone(&dns),
+                    request,
+                    event_file.clone(),
+                    Arc::clone(&event_lock),
+                    Arc::clone(&metrics),
+                    permit,
+                ));
             }
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {}
         }
+    }
+    if time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        while tasks.join_next().await.is_some() {}
+    })
+    .await
+    .is_err()
+    {
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
     }
     append_event(
         &event_file,
@@ -332,6 +311,72 @@ async fn run_resident_dns_udp_bind_listener_async(
             "network": "udp",
         }),
     );
+}
+
+async fn handle_resident_dns_udp_bind_packet_async(
+    socket: Arc<TokioUdpSocket>,
+    local_addr: SocketAddr,
+    peer: SocketAddr,
+    dns: Arc<ResidentDnsPlan>,
+    request: Vec<u8>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+) {
+    metrics.udp_opened();
+    metrics.add_upload(request.len());
+    let response = handle_resident_dns_local_async(&dns, local_addr, &request).await;
+    match response {
+        Ok(response) => {
+            let response_len = response.len();
+            match socket.send_to(&response, peer).await {
+                Ok(sent) => {
+                    metrics.add_download(sent);
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({
+                            "event": "dns_bind_query_finished",
+                            "local_addr": local_addr.to_string(),
+                            "peer": peer.to_string(),
+                            "network": "udp",
+                            "request_bytes": request.len(),
+                            "response_bytes": response_len,
+                            "sent_bytes": sent,
+                            "handler": "resident-dns-udp",
+                        }),
+                    );
+                }
+                Err(err) => append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({
+                        "event": "dns_bind_response_send_failed",
+                        "local_addr": local_addr.to_string(),
+                        "peer": peer.to_string(),
+                        "network": "udp",
+                        "request_bytes": request.len(),
+                        "response_bytes": response_len,
+                        "error": err.to_string(),
+                    }),
+                ),
+            }
+        }
+        Err(err) => append_event(
+            &event_file,
+            &event_lock,
+            json!({
+                "event": "dns_bind_query_failed",
+                "local_addr": local_addr.to_string(),
+                "peer": peer.to_string(),
+                "network": "udp",
+                "request_bytes": request.len(),
+                "error": err,
+            }),
+        ),
+    }
+    metrics.udp_closed();
 }
 
 async fn run_resident_dns_tcp_bind_listener_async(
