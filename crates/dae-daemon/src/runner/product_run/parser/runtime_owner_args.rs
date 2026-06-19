@@ -81,16 +81,6 @@ pub(crate) fn parse_runtime_owner_arg<'a>(
         _ if arg.starts_with("--production-runtime-object=") => {
             state.production_runtime_object = arg.split_once('=').map(|(_, value)| value.into());
         }
-        "--production-runtime-native-ebpf-object" => {
-            let Some(value) = iter.next() else {
-                usage!("missing run --production-runtime-native-ebpf-object value",);
-            };
-            state.production_runtime_native_ebpf_object = Some(value.into());
-        }
-        _ if arg.starts_with("--production-runtime-native-ebpf-object=") => {
-            state.production_runtime_native_ebpf_object =
-                arg.split_once('=').map(|(_, value)| value.into());
-        }
         "--production-runtime-native-ebpf" => {
             state.production_runtime_native_ebpf_requested = true;
         }

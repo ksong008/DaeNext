@@ -1,10 +1,6 @@
 pub(super) const DEFAULT_SOURCE_OBJECT_ENV: &str = "RESIDENT_BPF_OBJECT";
 pub(super) const DEFAULT_SOURCE_OBJECT_LEGACY_ENV: &str = "DAE_RUST_BPF_OBJECT";
 #[cfg(feature = "native-ebpf")]
-pub(super) const DEFAULT_NATIVE_OBJECT_ENV: &str = "RESIDENT_NATIVE_BPF_OBJECT";
-#[cfg(feature = "native-ebpf")]
-pub(super) const DEFAULT_NATIVE_OBJECT_LEGACY_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
-#[cfg(feature = "native-ebpf")]
 pub(super) const DEFAULT_NATIVE_EBPF_ENV: &str = "RESIDENT_NATIVE_EBPF";
 #[cfg(feature = "native-ebpf")]
 pub(super) const DEFAULT_NATIVE_EBPF_LEGACY_ENV: &str = "DAE_RUST_NATIVE_EBPF";

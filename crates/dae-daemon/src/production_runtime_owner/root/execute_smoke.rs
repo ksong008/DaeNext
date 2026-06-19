@@ -54,24 +54,35 @@ pub(super) fn execute_owner_smoke(
         }
     }
 
-    evidence.param_image = match (dae0_ifindex, dae0peer_mac) {
-        (Some(dae0_ifindex), Some(dae0peer_mac)) => write_param_image(
-            options,
-            param_object,
-            dae0_ifindex,
-            dae0peer_mac,
-            dae_netns_id,
-        ),
-        _ => json!({
+    evidence.param_image = if options.native_ebpf_requested {
+        json!({
             "status": "skipped",
             "path": path_string(param_object),
-            "reason": "topology runtime PARAM values were not available",
-        }),
+            "reason": "native Aya object is selected; external PARAM object image is not used by Rust resident",
+            "source_object": path_string(&options.source_object),
+        })
+    } else {
+        match (dae0_ifindex, dae0peer_mac) {
+            (Some(dae0_ifindex), Some(dae0peer_mac)) => write_param_image(
+                options,
+                param_object,
+                dae0_ifindex,
+                dae0peer_mac,
+                dae_netns_id,
+            ),
+            _ => json!({
+                "status": "skipped",
+                "path": path_string(param_object),
+                "reason": "topology runtime PARAM values were not available",
+            }),
+        }
     };
-    ok &= evidence.param_image["status"].as_str() == Some("pass")
-        && evidence.param_image["rewritten_param_matches"]
-            .as_bool()
-            .unwrap_or(false);
+    if !options.native_ebpf_requested {
+        ok &= evidence.param_image["status"].as_str() == Some("pass")
+            && evidence.param_image["rewritten_param_matches"]
+                .as_bool()
+                .unwrap_or(false);
+    }
     let native_param_object = match (ok, dae0_ifindex, dae0peer_mac) {
         (true, Some(dae0_ifindex), Some(dae0peer_mac)) => {
             let preparation = native_ebpf::prepare_native_param_object(

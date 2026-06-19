@@ -106,7 +106,7 @@ pub(crate) fn insert_header_and_contract(
                 "requested_backend": context.options.native_ebpf_backend.as_str(),
                 "completed_a3_admission": context.options.native_ebpf_completed_a3_admission,
                 "embedded_object": context.options.native_ebpf_embedded_object,
-                "native_object": context.options.native_ebpf_object.as_ref().map(|path| path_string(path)),
+                "native_object": Value::Null,
                 "source_object": path_string(&context.options.source_object),
                 "automatic_enable_allowed": context.options.native_ebpf_requested,
             },

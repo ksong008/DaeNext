@@ -1,7 +1,5 @@
 use super::*;
 pub(crate) fn parse_load_pin_options(args: &[String]) -> Result<BpfLoaderLoadPinOptions, String> {
-    let mut object = None;
-    let mut object_source = None;
     let mut pin_root = None;
     let mut tproxy_port = None;
     let mut control_plane_pid = None;
@@ -12,15 +10,6 @@ pub(crate) fn parse_load_pin_options(args: &[String]) -> Result<BpfLoaderLoadPin
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--object" => {
-                object = Some(parse_next_path(&mut iter, "bpf-loader load-pin --object")?)
-            }
-            "--object-source" => {
-                object_source = Some(BpfObjectSource::parse(next_value(
-                    &mut iter,
-                    "bpf-loader load-pin --object-source",
-                )?)?)
-            }
             "--pin-root" => {
                 pin_root = Some(parse_next_path(
                     &mut iter,
@@ -63,10 +52,6 @@ pub(crate) fn parse_load_pin_options(args: &[String]) -> Result<BpfLoaderLoadPin
                     "bpf-loader load-pin --has-bpf-get-current-task",
                 )?)?)
             }
-            _ if arg.starts_with("--object=") => object = Some(parse_path_value(arg)?),
-            _ if arg.starts_with("--object-source=") => {
-                object_source = Some(BpfObjectSource::parse(split_value(arg)?)?)
-            }
             _ if arg.starts_with("--pin-root=") => pin_root = Some(parse_path_value(arg)?),
             _ if arg.starts_with("--tproxy-port=") => tproxy_port = Some(parse_value(arg)?),
             _ if arg.starts_with("--control-plane-pid=") => {
@@ -83,14 +68,7 @@ pub(crate) fn parse_load_pin_options(args: &[String]) -> Result<BpfLoaderLoadPin
             _ => return Err(format!("unsupported bpf-loader load-pin argument: {arg}")),
         }
     }
-    if object_source == Some(BpfObjectSource::ExternalAyaObject) && object.is_none() {
-        return Err(
-            "bpf-loader load-pin --object-source=external-aya-object requires --object".to_owned(),
-        );
-    }
     Ok(BpfLoaderLoadPinOptions {
-        object,
-        object_source,
         pin_root: pin_root.ok_or_else(|| "missing bpf-loader load-pin --pin-root".to_owned())?,
         tproxy_port: tproxy_port
             .ok_or_else(|| "missing bpf-loader load-pin --tproxy-port".to_owned())?,

@@ -18,7 +18,6 @@ fi
 run_id="${RUN_ID:-$(date +%Y%m%d%H%M%S)-$$}"
 run_root="${RUN_ROOT:-/tmp/dae-daemon-native-ebpf-runtime-gate-${run_id}}"
 config_file="${CONFIG_FILE:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.dae}"
-native_object="${NATIVE_OBJECT:-/tmp/dae-native-bpf_bpfel.o}"
 rust_native_object="${RUST_NATIVE_OBJECT:-target/bpfel-unknown-none/release/libdae_ebpf_program.so}"
 cargo_log="${CARGO_LOG:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.log}"
 cgroup_log="${CGROUP_LOG:-/tmp/dae-native-ebpf-cgroup-gate-${run_id}.log}"
@@ -38,7 +37,7 @@ printf 'global {\n  log_level: info\n}\n' > "$config_file"
 rm -rf "$run_root"
 mkdir -p "$run_root"
 
-echo "building native Aya classifier object: $native_object"
+echo "building native Aya loader object from crates/dae-ebpf-program"
 echo "native object source: crates/dae-ebpf-program"
 cargo +nightly build -Z build-std=core --manifest-path Cargo.toml \
   -p dae-ebpf-program \
@@ -48,16 +47,9 @@ if [[ ! -f "$rust_native_object" ]]; then
   echo "missing Rust native eBPF object after build: $rust_native_object" >&2
   exit 1
 fi
-mkdir -p "$(dirname "$native_object")"
-rust_native_object_real="$(readlink -f "$rust_native_object")"
-native_object_real="$(readlink -m "$native_object")"
-if [[ "$rust_native_object_real" != "$native_object_real" ]]; then
-  cp "$rust_native_object" "$native_object"
-fi
-chmod 0644 "$native_object"
-native_object_symbols="$(llvm-readelf -s "$native_object" 2>/dev/null || true)"
+native_object_symbols="$(llvm-readelf -s "$rust_native_object" 2>/dev/null || true)"
 if ! grep -q ' PARAM$' <<<"$native_object_symbols"; then
-  echo "Rust native eBPF object does not expose expected PARAM symbol: $native_object" >&2
+  echo "Rust native eBPF object does not expose expected PARAM symbol: $rust_native_object" >&2
   exit 1
 fi
 
@@ -79,7 +71,7 @@ fi
 echo "Aya cgroup attach/detach gate passed"
 
 echo "running native eBPF runtime gate: root=$run_root backend=$backend netns_link=$netns_link timeout=$runtime_timeout"
-if ! DAE_RUST_NATIVE_BPF_OBJECT="$native_object" timeout "$runtime_timeout" cargo run --manifest-path Cargo.toml \
+if ! timeout "$runtime_timeout" cargo run --manifest-path Cargo.toml \
   -p dae-daemon \
   --features native-ebpf \
   --bin daed-contract-runner \
@@ -99,7 +91,6 @@ if ! DAE_RUST_NATIVE_BPF_OBJECT="$native_object" timeout "$runtime_timeout" carg
   --production-runtime-native-ebpf-completed-a3-local \
   --production-runtime-native-ebpf-backend "$backend" \
   --production-runtime-netns-link "$netns_link" \
-  --production-runtime-native-ebpf-object "$native_object" \
   --exit-after-ready >"$cargo_log" 2>&1; then
   echo "native eBPF runtime gate failed; tail of cargo log follows" >&2
   tail -c 20000 "$cargo_log" >&2 || true

@@ -18,18 +18,18 @@ pub(crate) fn prepare_native_param_object(
             load_input: None,
         };
     }
-    let Some(source) = native_object_source(options) else {
+    if !options.native_ebpf_embedded_object {
         return NativeParamObjectPreparation {
             selected_param_object: command_param_object.to_path_buf(),
             report: json!({
                 "status": "skipped",
-                "reason": "native eBPF object is not configured; native attach may fail closed before tc command backend",
+                "reason": "native eBPF embedded object is not available",
                 "selected_param_object": path_string(command_param_object),
                 "command_param_object": path_string(command_param_object),
             }),
             load_input: None,
         };
-    };
+    }
     let param = build_dae_param(DaeParamInput {
         tproxy_port: options.tproxy_port,
         control_plane_pid: std::process::id(),
@@ -39,14 +39,13 @@ pub(crate) fn prepare_native_param_object(
         has_bpf_get_current_task: false,
     });
     let selected_param_object = PathBuf::from(NATIVE_PARAM_OBJECT_IDENTITY);
-    let source_identity = source.identity();
     NativeParamObjectPreparation {
         selected_param_object: selected_param_object.clone(),
         report: json!({
             "status": "pass",
             "path": path_string(&selected_param_object),
-            "source_object": path_string(&source_identity),
-            "source_kind": source.kind(),
+            "source_object": EMBEDDED_NATIVE_OBJECT_IDENTITY,
+            "source_kind": "embedded",
             "command_param_object": path_string(command_param_object),
             "rewritten_param_matches": true,
             "previous_param_was_zero": Value::Null,
@@ -63,18 +62,8 @@ pub(crate) fn prepare_native_param_object(
             },
             "location": Value::Null,
         }),
-        load_input: Some(NativeEbpfLoadInput { source, param }),
+        load_input: Some(NativeEbpfLoadInput { param }),
     }
-}
-
-fn native_object_source(options: &ProductionRuntimeOwnerOptions) -> Option<NativeEbpfObjectSource> {
-    if options.native_ebpf_embedded_object {
-        return Some(NativeEbpfObjectSource::Embedded);
-    }
-    options
-        .native_ebpf_object
-        .as_ref()
-        .map(|path| NativeEbpfObjectSource::File(path.clone()))
 }
 
 pub(crate) fn native_backend_runtime_decision_for_options(

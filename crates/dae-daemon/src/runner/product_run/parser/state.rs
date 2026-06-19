@@ -26,7 +26,6 @@ impl Default for ProductRunParsedArgs {
             production_runtime_native_ebpf_requested: false,
             production_runtime_native_ebpf_backend: AttachBackend::Auto,
             production_runtime_native_ebpf_completed_a3_admission: false,
-            production_runtime_native_ebpf_object: None,
             production_runtime_active_tcp_target_ip: None,
             production_runtime_active_tcp_client_ip: None,
             production_runtime_active_tcp_target_port: None,

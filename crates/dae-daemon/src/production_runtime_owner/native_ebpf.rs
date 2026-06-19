@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "native-ebpf")]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(feature = "native-ebpf")]
 use dae_datapath::{ACTIVE_TCP_LAN_FILTER_PREF, ACTIVE_TCP_LAN_HOST_IFACE};

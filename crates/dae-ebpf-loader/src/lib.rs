@@ -5,12 +5,20 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 #[cfg(feature = "native-ebpf")]
-const EMBEDDED_NATIVE_AYA_OBJECT: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/dae-native-bpf_bpfel.o"));
+#[repr(C, align(8))]
+struct AlignedNativeAyaObject<const N: usize>([u8; N]);
+
+#[cfg(feature = "native-ebpf")]
+static EMBEDDED_NATIVE_AYA_OBJECT: AlignedNativeAyaObject<
+    { include_bytes!(concat!(env!("OUT_DIR"), "/dae-native-bpf_bpfel.o")).len() },
+> = AlignedNativeAyaObject(*include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/dae-native-bpf_bpfel.o"
+)));
 
 #[cfg(feature = "native-ebpf")]
 pub fn embedded_native_aya_object() -> &'static [u8] {
-    EMBEDDED_NATIVE_AYA_OBJECT
+    &EMBEDDED_NATIVE_AYA_OBJECT.0
 }
 
 #[path = "lib/options.rs"]

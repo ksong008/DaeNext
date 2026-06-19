@@ -23,19 +23,15 @@ pub(super) fn run_contract() -> LoaderOutput {
             "native_userspace_outbound_ready": true,
             "native_bpf_loader_enabled_for_product": true,
             "kernel_ebpf_program_rewrite": true,
-            "rust_aya_skeleton_object_supported": true,
-            "default_object_source": BpfObjectSource::RustAyaSkeleton.as_str(),
-            "supported_object_sources": [
-                BpfObjectSource::ExternalAyaObject.as_str(),
-                BpfObjectSource::RustAyaSkeleton.as_str(),
-            ],
+            "rust_aya_loader_object_supported": true,
+            "default_object_source": RUST_AYA_LOADER_OBJECT_SOURCE,
+            "supported_object_sources": [RUST_AYA_LOADER_OBJECT_SOURCE],
             "required_pins": {
                 "maps": "pin_root/maps/<map_name>",
                 "programs": "pin_root/programs/<program_name>"
             },
             "object_source": {
-                "external-aya-object": "explicit --object source for an Aya-compatible eBPF object; not embedded by default",
-                "rust-aya-skeleton": "default embedded Rust/Aya eBPF object built from crates/dae-ebpf-program"
+                "rust-aya-loader": "default Rust/Aya eBPF loader object built from crates/dae-ebpf-program"
             },
             "param_source": {
                 "tproxy_port": "host-order u16, converted to BPF big-endian PARAM",
@@ -71,8 +67,8 @@ pub(super) fn run_contract() -> LoaderOutput {
                 "bpf_attach_type": line.role.bpf_attach_type(),
                 "aya_program_kind": line.aya_program_kind.as_str(),
             })).collect::<Vec<_>>(),
-            "listener_smoke": "listen_socket_map key 0/1 remains updated by tproxy-listener helper; Rust skeleton only preserves map ABI",
-            "routing_smoke": "routing-map/domain-routing-map helpers remain userspace-owned; Rust skeleton only preserves map ABI",
+            "listener_smoke": "listen_socket_map key 0/1 remains updated by tproxy-listener helper; Rust Aya loader only preserves map ABI",
+            "routing_smoke": "routing-map/domain-routing-map helpers remain userspace-owned; Rust Aya loader only preserves map ABI",
         })
     ))
 }

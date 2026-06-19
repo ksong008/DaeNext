@@ -25,7 +25,6 @@ pub(crate) fn run_product_run_command(args: &[String], version: &str) -> DaemonO
         production_runtime_native_ebpf_requested,
         production_runtime_native_ebpf_backend,
         production_runtime_native_ebpf_completed_a3_admission,
-        production_runtime_native_ebpf_object,
         production_runtime_active_tcp_target_ip,
         production_runtime_active_tcp_client_ip,
         production_runtime_active_tcp_target_port,
@@ -111,11 +110,12 @@ pub(crate) fn run_product_run_command(args: &[String], version: &str) -> DaemonO
         .execute_reload_runtime_parity = production_runtime_reload_parity;
     options.production_runtime_owner.native_ebpf_requested =
         production_runtime_native_ebpf_requested;
+    options.production_runtime_owner.native_ebpf_embedded_object =
+        production_runtime_native_ebpf_requested && cfg!(feature = "native-ebpf");
     options.production_runtime_owner.native_ebpf_backend = production_runtime_native_ebpf_backend;
     options
         .production_runtime_owner
         .native_ebpf_completed_a3_admission = production_runtime_native_ebpf_completed_a3_admission;
-    options.production_runtime_owner.native_ebpf_object = production_runtime_native_ebpf_object;
     if let Some(source_object) = production_runtime_object {
         options.production_runtime_owner.source_object = source_object;
     }

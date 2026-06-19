@@ -90,10 +90,7 @@ fn load_aya_userspace_object_from_source(
 
     let ebpf = match source {
         AyaUserspaceLoadSource::File(path) => loader.load_file(path),
-        AyaUserspaceLoadSource::Bytes { data, .. } => {
-            let owned = data.to_vec();
-            loader.load(&owned)
-        }
+        AyaUserspaceLoadSource::Bytes { data, .. } => loader.load(data),
     }
     .map_err(|err| format!("aya userspace object load failed: {err:?}"))?;
     let loaded_map_names = ebpf

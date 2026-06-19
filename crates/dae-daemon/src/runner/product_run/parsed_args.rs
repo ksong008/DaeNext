@@ -25,7 +25,6 @@ pub(crate) struct ProductRunParsedArgs {
     pub(super) production_runtime_native_ebpf_requested: bool,
     pub(super) production_runtime_native_ebpf_backend: AttachBackend,
     pub(super) production_runtime_native_ebpf_completed_a3_admission: bool,
-    pub(super) production_runtime_native_ebpf_object: Option<PathBuf>,
     pub(super) production_runtime_active_tcp_target_ip: Option<String>,
     pub(super) production_runtime_active_tcp_client_ip: Option<String>,
     pub(super) production_runtime_active_tcp_target_port: Option<u16>,

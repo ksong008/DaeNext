@@ -128,12 +128,9 @@ pub(super) fn production_runtime_owner_native_ebpf_requested_requires_compiled_l
 }
 
 #[test]
-pub(super) fn production_runtime_owner_native_param_object_keeps_command_param_without_native_object()
+pub(super) fn production_runtime_owner_native_param_object_keeps_command_param_without_native_request()
  {
-    let options = ProductionRuntimeOwnerOptions {
-        native_ebpf_requested: true,
-        ..ProductionRuntimeOwnerOptions::default()
-    };
+    let options = ProductionRuntimeOwnerOptions::default();
     let command_param = std::env::temp_dir().join("dae-native-command-param.o");
     let preparation = native_ebpf::prepare_native_param_object(
         &options,
@@ -150,7 +147,7 @@ pub(super) fn production_runtime_owner_native_param_object_keeps_command_param_w
         report["reason"]
             .as_str()
             .unwrap()
-            .contains("native eBPF object is not configured")
+            .contains("native eBPF backend was not requested")
     );
     assert_eq!(
         report["command_param_object"].as_str().unwrap(),
@@ -183,16 +180,17 @@ pub(super) fn production_runtime_owner_native_param_object_uses_memory_identity_
         preparation.report["source_kind"].as_str().unwrap(),
         "embedded"
     );
+    assert_eq!(
+        preparation.report["source_object"].as_str().unwrap(),
+        native_ebpf::EMBEDDED_NATIVE_OBJECT_IDENTITY
+    );
     assert!(!preparation.report["materialized_object"].as_bool().unwrap());
     assert_eq!(
         preparation.report["param_delivery"].as_str().unwrap(),
         "aya-set-global"
     );
     let load_input = preparation.load_input.unwrap();
-    assert_eq!(
-        load_input.source.identity(),
-        PathBuf::from(native_ebpf::EMBEDDED_NATIVE_OBJECT_IDENTITY)
-    );
+    assert_eq!(load_input.param.dae0_ifindex, 7);
 }
 
 #[test]

@@ -5,7 +5,7 @@ pub fn production_runtime_owner_report(
 ) -> Result<Value, String> {
     validate_options(options)?;
     ensure_safe_run_root(run_root)?;
-    if options.execute && !options.source_object.is_file() {
+    if options.execute && !options.native_ebpf_embedded_object && !options.source_object.is_file() {
         return Err(format!(
             "production runtime owner source object does not exist: {}",
             path_string(&options.source_object)
