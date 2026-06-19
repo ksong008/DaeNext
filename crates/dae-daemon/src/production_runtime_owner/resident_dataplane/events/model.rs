@@ -157,6 +157,15 @@ impl ResidentEvent {
         self.class.is_lossless(self.severity)
     }
 
+    pub(super) fn block_on_full_queue(&self) -> bool {
+        matches!(
+            (self.class, self.severity),
+            (ResidentEventLifecycleClass::Startup, _)
+                | (ResidentEventLifecycleClass::Reload, _)
+                | (_, ResidentEventSeverity::Fatal)
+        )
+    }
+
     pub(super) fn should_persist(&self) -> bool {
         self.decision.persist || self.lossless()
     }
