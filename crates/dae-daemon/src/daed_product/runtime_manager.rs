@@ -45,6 +45,13 @@ impl ProductRuntimeProbeHandle {
             Self::Fake => fake_runtime_probe_node_latencies(links),
         }
     }
+
+    pub(super) fn probe_concurrency(&self) -> usize {
+        match self {
+            Self::Resident(handle) => handle.probe_concurrency(),
+            Self::Fake => 8,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -394,14 +401,6 @@ impl ProductRuntimeManager {
             .lock()
             .ok()
             .and_then(|inner| inner.config.clone())
-    }
-
-    pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
-        let handle = self.node_latency_probe_handle();
-        handle
-            .as_ref()
-            .map(|handle| handle.probe_node_latencies(links))
-            .unwrap_or_default()
     }
 
     pub(super) fn node_latency_probe_handle(&self) -> Option<ProductRuntimeProbeHandle> {

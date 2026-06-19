@@ -273,6 +273,10 @@ impl ResidentRuntimeOwner {
 }
 
 impl ResidentManualProbeHandle {
+    pub(crate) fn probe_concurrency(&self) -> usize {
+        self.resource_config.manual_probe_concurrency.value()
+    }
+
     pub(crate) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
         if links.is_empty() {
             return Vec::new();
