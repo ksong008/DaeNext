@@ -2,13 +2,15 @@ use super::client_io::{
     read_xhttp_download_data, send_xhttp_packet_up_request, send_xhttp_stream_data,
 };
 use super::*;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+const XHTTP_UPLOAD_READ_CHUNK: usize = 16 * 1024;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_xhttp_packet_up(
@@ -24,23 +26,24 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
     let mut inbound_closed = false;
     let mut response_closed = false;
     let mut last_activity = Instant::now();
-    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut inbound_buf = BytesMut::with_capacity(XHTTP_UPLOAD_READ_CHUNK);
     let mut response_stripper = VlessResponseStripper::default();
 
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
-            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+            read = read_xhttp_upload_chunk(inbound, &mut inbound_buf), if !inbound_closed => {
                 match read {
-                    Ok(0) => {
+                    Ok(None) => {
                         inbound_closed = true;
                         last_activity = Instant::now();
                     }
-                    Ok(read) => {
+                    Ok(Some(chunk)) => {
+                        let read = chunk.len();
                         send_xhttp_packet_up_request(
                             upload,
                             session_id,
                             seq,
-                            Bytes::copy_from_slice(&inbound_buf[..read]),
+                            chunk,
                         )
                         .await?;
                         seq = seq.saturating_add(1);
@@ -101,25 +104,21 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
     let mut inbound_closed = false;
     let mut response_closed = false;
     let mut last_activity = Instant::now();
-    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut inbound_buf = BytesMut::with_capacity(XHTTP_UPLOAD_READ_CHUNK);
     let mut response_stripper = VlessResponseStripper::default();
 
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
-            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+            read = read_xhttp_upload_chunk(inbound, &mut inbound_buf), if !inbound_closed => {
                 match read {
-                    Ok(0) => {
+                    Ok(None) => {
                         send_xhttp_stream_data(upload, Bytes::new(), true).await?;
                         inbound_closed = true;
                         last_activity = Instant::now();
                     }
-                    Ok(read) => {
-                        send_xhttp_stream_data(
-                            upload,
-                            Bytes::copy_from_slice(&inbound_buf[..read]),
-                            false,
-                        )
-                        .await?;
+                    Ok(Some(chunk)) => {
+                        let read = chunk.len();
+                        send_xhttp_stream_data(upload, chunk, false).await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
                         last_activity = Instant::now();
@@ -164,4 +163,16 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
         }
     }
     Ok(stats)
+}
+
+async fn read_xhttp_upload_chunk(
+    inbound: &mut TokioTcpStream,
+    buffer: &mut BytesMut,
+) -> std::io::Result<Option<Bytes>> {
+    buffer.reserve(XHTTP_UPLOAD_READ_CHUNK);
+    let read = inbound.read_buf(buffer).await?;
+    if read == 0 {
+        return Ok(None);
+    }
+    Ok(Some(buffer.split_to(read).freeze()))
 }
