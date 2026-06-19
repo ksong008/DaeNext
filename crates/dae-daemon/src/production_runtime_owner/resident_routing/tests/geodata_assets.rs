@@ -68,6 +68,72 @@ routing {
 }
 
 #[test]
+pub(super) fn resident_routing_plan_compiles_geoip_and_ext_as_plain_ip_sets() {
+    let root = test_asset_root("geoip-and-ext");
+    write_asset(
+        &root,
+        "geoip.dat",
+        geoip_list(&[geoip_entry(
+            "private",
+            &[(&[10, 0, 0, 0][..], 8), (&[172, 16, 0, 0][..], 12)],
+            false,
+        )]),
+    );
+    write_asset(
+        &root,
+        "custom-geoip.dat",
+        geoip_list(&[geoip_entry(
+            "regional",
+            &[(&[203, 0, 113, 0][..], 24)],
+            false,
+        )]),
+    );
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    ip(geoip:private) -> proxy
+    dip(ext:'custom-geoip:regional') -> direct
+    fallback: block
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let plan = build_routing_plan_with_asset_dirs(&config, [&root]).unwrap();
+
+    assert!(plan.skipped_rules.is_empty());
+    assert_eq!(plan.geodata_report.lookups.len(), 2);
+    assert_eq!(plan.geodata_report.lookups[0].kind, "geoip");
+    assert_eq!(plan.geodata_report.lookups[0].filename, "geoip.dat");
+    assert_eq!(plan.geodata_report.lookups[0].code, "private");
+    assert_eq!(plan.geodata_report.lookups[0].output_count, 2);
+    assert_eq!(plan.geodata_report.lookups[1].kind, "geoip");
+    assert_eq!(plan.geodata_report.lookups[1].filename, "custom-geoip.dat");
+    assert_eq!(plan.geodata_report.lookups[1].code, "regional");
+    assert_eq!(plan.geodata_report.lookups[1].output_count, 1);
+    assert_eq!(plan.lpm_sets.len(), 2);
+    assert!(plan.lpm_sets.iter().any(|set| {
+        set.iter()
+            .any(|prefix| prefix.addr.to_string() == "10.0.0.0" && prefix.bits == 8)
+            && set
+                .iter()
+                .any(|prefix| prefix.addr.to_string() == "172.16.0.0" && prefix.bits == 12)
+    }));
+    assert!(plan.lpm_sets.iter().any(|set| {
+        set.iter()
+            .any(|prefix| prefix.addr.to_string() == "203.0.113.0" && prefix.bits == 24)
+    }));
+}
+
+#[test]
 pub(super) fn resident_routing_plan_compiles_geosite_attr_from_asset() {
     let root = test_asset_root("geosite");
     write_asset(
@@ -122,6 +188,79 @@ routing {
             .patterns()
             .iter()
             .any(|value| value == "keyword-test")
+    }));
+}
+
+#[test]
+pub(super) fn resident_routing_plan_compiles_geosite_types_and_attr_case() {
+    let root = test_asset_root("geosite-types-attr");
+    write_asset(
+        &root,
+        "geosite.dat",
+        geosite_list(&[geosite_entry(
+            "Regional",
+            &[
+                (3, "full.fixture.invalid.test", &["CN"][..]),
+                (2, "suffix.fixture.invalid.test", &["cn"][..]),
+                (0, "keyword-test", &["Cn"][..]),
+                (1, r"^api[0-9]+\.fixture\.invalid\.test$", &["cN"][..]),
+                (3, "other.fixture.invalid.test", &["other"][..]),
+            ],
+        )]),
+    );
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    domain(geosite:regional@cn) -> proxy
+    fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let plan = build_routing_plan_with_asset_dirs(&config, [&root]).unwrap();
+
+    assert!(plan.skipped_rules.is_empty());
+    assert_eq!(plan.geodata_report.lookups.len(), 1);
+    assert_eq!(plan.geodata_report.lookups[0].kind, "geosite");
+    assert_eq!(plan.geodata_report.lookups[0].filename, "geosite.dat");
+    assert_eq!(plan.geodata_report.lookups[0].code, "regional");
+    assert_eq!(plan.geodata_report.lookups[0].attr.as_deref(), Some("cn"));
+    assert_eq!(plan.geodata_report.lookups[0].output_count, 4);
+    assert_eq!(plan.domain_sets.len(), 4);
+    assert!(
+        plan.domain_sets.iter().any(|set| {
+            domain_set_matches(set, DomainKey::Full, &["full.fixture.invalid.test"])
+        })
+    );
+    assert!(plan.domain_sets.iter().any(|set| {
+        domain_set_matches(set, DomainKey::Suffix, &["suffix.fixture.invalid.test"])
+    }));
+    assert!(
+        plan.domain_sets
+            .iter()
+            .any(|set| { domain_set_matches(set, DomainKey::Keyword, &["keyword-test"]) })
+    );
+    assert!(plan.domain_sets.iter().any(|set| {
+        domain_set_matches(
+            set,
+            DomainKey::Regex,
+            &[r"^api[0-9]+\.fixture\.invalid\.test$"],
+        )
+    }));
+    assert!(!plan.domain_sets.iter().any(|set| {
+        set.values
+            .patterns()
+            .iter()
+            .any(|value| value == "other.fixture.invalid.test")
     }));
 }
 
