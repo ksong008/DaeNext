@@ -27,28 +27,31 @@ impl ResidentEventLifecycleClass {
     }
 
     fn from_event_name(event_name: &str) -> Self {
-        let lower = event_name.to_ascii_lowercase();
-        if lower.contains("fatal")
-            || lower.contains("failed")
-            || lower.contains("error")
-            || lower.contains("panic")
+        if contains_ascii_ignore_case(event_name, "fatal")
+            || contains_ascii_ignore_case(event_name, "failed")
+            || contains_ascii_ignore_case(event_name, "error")
+            || contains_ascii_ignore_case(event_name, "panic")
         {
             Self::Error
-        } else if lower.contains("reload") {
+        } else if contains_ascii_ignore_case(event_name, "reload") {
             Self::Reload
-        } else if lower.contains("startup") || lower.contains("started") {
+        } else if contains_ascii_ignore_case(event_name, "startup")
+            || contains_ascii_ignore_case(event_name, "started")
+        {
             Self::Startup
-        } else if lower.contains("health") || lower.contains("check") {
+        } else if contains_ascii_ignore_case(event_name, "health")
+            || contains_ascii_ignore_case(event_name, "check")
+        {
             Self::Health
-        } else if lower.contains("packet")
-            || lower.contains("udp_exchange")
-            || lower.contains("dns_udp")
+        } else if contains_ascii_ignore_case(event_name, "packet")
+            || contains_ascii_ignore_case(event_name, "udp_exchange")
+            || contains_ascii_ignore_case(event_name, "dns_udp")
         {
             Self::Packet
-        } else if lower.contains("tcp")
-            || lower.contains("connection")
-            || lower.contains("relay")
-            || lower.contains("flow")
+        } else if contains_ascii_ignore_case(event_name, "tcp")
+            || contains_ascii_ignore_case(event_name, "connection")
+            || contains_ascii_ignore_case(event_name, "relay")
+            || contains_ascii_ignore_case(event_name, "flow")
         {
             Self::Flow
         } else {
@@ -99,15 +102,14 @@ impl ResidentEventSeverity {
     }
 
     fn from_event_name(event_name: &str, class: ResidentEventLifecycleClass) -> Self {
-        let lower = event_name.to_ascii_lowercase();
-        if lower.contains("fatal") {
+        if contains_ascii_ignore_case(event_name, "fatal") {
             Self::Fatal
         } else if matches!(class, ResidentEventLifecycleClass::Error) {
             Self::Error
-        } else if lower.contains("dropped")
-            || lower.contains("skipped")
-            || lower.contains("timeout")
-            || lower.contains("timed_out")
+        } else if contains_ascii_ignore_case(event_name, "dropped")
+            || contains_ascii_ignore_case(event_name, "skipped")
+            || contains_ascii_ignore_case(event_name, "timeout")
+            || contains_ascii_ignore_case(event_name, "timed_out")
         {
             Self::Warning
         } else if matches!(
@@ -117,11 +119,46 @@ impl ResidentEventSeverity {
                 | ResidentEventLifecycleClass::Health
         ) {
             Self::Info
-        } else if lower.contains("trace") {
+        } else if contains_ascii_ignore_case(event_name, "trace") {
             Self::Trace
         } else {
             Self::Debug
         }
+    }
+}
+
+fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    !needle.is_empty()
+        && haystack.len() >= needle.len()
+        && haystack
+            .windows(needle.len())
+            .any(|candidate| candidate.eq_ignore_ascii_case(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resident_event_classifier_matches_ascii_case_insensitive_names() {
+        let fatal = ResidentEvent::new(json!({"event": "RESIDENT_FATAL_ERROR"}));
+        assert_eq!(fatal.class(), ResidentEventLifecycleClass::Error);
+        assert_eq!(fatal.severity, ResidentEventSeverity::Fatal);
+
+        let packet = ResidentEvent::new(json!({"event": "UDP_EXCHANGE_FINISHED"}));
+        assert_eq!(packet.class(), ResidentEventLifecycleClass::Packet);
+        assert_eq!(packet.severity, ResidentEventSeverity::Debug);
+
+        let warning = ResidentEvent::new(json!({"event": "tcp_probe_timeout"}));
+        assert_eq!(warning.class(), ResidentEventLifecycleClass::Flow);
+        assert_eq!(warning.severity, ResidentEventSeverity::Warning);
+
+        let startup = ResidentEvent::new(json!({"event": "TCP_WORKER_STARTED"}));
+        assert_eq!(startup.class(), ResidentEventLifecycleClass::Startup);
+        assert_eq!(startup.severity, ResidentEventSeverity::Info);
     }
 }
 
