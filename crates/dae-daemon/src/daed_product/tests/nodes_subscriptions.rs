@@ -389,6 +389,147 @@ pub(crate) fn subscription_refresh_preserves_group_bound_nodes_by_unique_name() 
 }
 
 #[test]
+pub(crate) fn subscription_refresh_updates_unbound_unique_node_by_name() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+             VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a')",
+        [],
+    )
+    .unwrap();
+    replace_subscription_nodes(
+        &conn,
+        7,
+        &["http://127.0.0.1:9/old-endpoint#stable-resource".to_owned()],
+    )
+    .unwrap();
+    let node_id: i64 = conn
+        .query_row(
+            "SELECT id FROM nodes WHERE subscription_id = 7 AND name = 'stable-resource'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
+             VALUES(?1, 37, 1, '2026-06-19T00:00:00Z', NULL, '2026-06-19T00:00:00Z')",
+        params![node_id],
+    )
+    .unwrap();
+
+    let report = replace_subscription_nodes(
+        &conn,
+        7,
+        &["http://127.0.0.2:9/new-endpoint#stable-resource".to_owned()],
+    )
+    .unwrap();
+    assert_eq!(report.len(), 1);
+    assert_eq!(report[0]["node"]["id"], json!(node_id));
+    let (kept_id, kept_link, kept_address): (i64, String, String) = conn
+        .query_row(
+            "SELECT id, link, address FROM nodes WHERE subscription_id = 7 AND name = 'stable-resource'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(kept_id, node_id);
+    assert_eq!(kept_link, "http://127.0.0.2:9/new-endpoint#stable-resource");
+    assert_eq!(kept_address, "127.0.0.2");
+    let latency_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(latency_rows, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn subscription_refresh_scopes_unique_names_by_subscription_and_manual_nodes() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/a', 'fetched', '', 'sub-a');
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(8, 'now', 'https://subscription.invalid/b', 'fetched', '', 'sub-b');
+            "#,
+    )
+    .unwrap();
+    insert_config_node(
+        &conn,
+        1,
+        "shared-a",
+        "http://127.0.0.10:9/manual#shared-a",
+        None,
+    );
+    replace_subscription_nodes(&conn, 7, &["http://127.0.0.1:9/sub-a#shared-a".to_owned()])
+        .unwrap();
+    replace_subscription_nodes(&conn, 8, &["http://127.0.0.8:9/sub-b#shared-a".to_owned()])
+        .unwrap();
+    let sub_a_id: i64 = conn
+        .query_row(
+            "SELECT id FROM nodes WHERE subscription_id = 7 AND name = 'shared-a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let sub_b_id: i64 = conn
+        .query_row(
+            "SELECT id FROM nodes WHERE subscription_id = 8 AND name = 'shared-a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    replace_subscription_nodes(
+        &conn,
+        7,
+        &["http://127.0.0.2:9/sub-a-new#shared-a".to_owned()],
+    )
+    .unwrap();
+
+    let rows = conn
+        .prepare("SELECT id, link, subscription_id FROM nodes WHERE name = 'shared-a' ORDER BY id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (1, "http://127.0.0.10:9/manual#shared-a".to_owned(), None),
+            (
+                sub_a_id,
+                "http://127.0.0.2:9/sub-a-new#shared-a".to_owned(),
+                Some(7)
+            ),
+            (
+                sub_b_id,
+                "http://127.0.0.8:9/sub-b#shared-a".to_owned(),
+                Some(8)
+            ),
+        ]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn subscription_refresh_keeps_group_version_when_preserved_node_is_unchanged() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
