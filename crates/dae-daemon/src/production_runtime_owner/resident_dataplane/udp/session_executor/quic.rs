@@ -194,15 +194,20 @@ impl Hysteria2QuicDatagramSession {
                 .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
         );
         let remote = resolve_hysteria2_quic_remote_async(proxy, &self.port_hop_ports).await?;
-        let connection = endpoint
+        let connecting = endpoint
             .connect(remote, &proxy.server_name)
-            .map_err(|err| format!("connect Hysteria2 QUIC endpoint: {err}"))?
+            .map_err(|err| format!("connect Hysteria2 QUIC endpoint: {err}"))?;
+        let connection = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connecting)
             .await
+            .map_err(|_| "Hysteria2 QUIC connect timeout".to_owned())?
             .map_err(|err| format!("await Hysteria2 QUIC connect: {err}"))?;
-        let auth_report =
-            authenticate_hysteria2_connection(connection.clone(), &self.auth, self.max_rx)
-                .await
-                .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
+        let auth_report = time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            authenticate_hysteria2_connection(connection.clone(), &self.auth, self.max_rx),
+        )
+        .await
+        .map_err(|_| "Hysteria2 QUIC auth timeout".to_owned())?
+        .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
         if !auth_report.auth_ok || !auth_report.udp_enabled {
             connection.close(0x101_u32.into(), b"resident hysteria2 udp auth failed");
             endpoint.wait_idle().await;
@@ -332,14 +337,20 @@ impl TuicQuicDatagramSession {
                 .map_err(|err| format!("build TUIC QUIC client config: {err}"))?,
         );
         let remote = resolve_proxy_udp_addr_async(proxy).await?;
-        let connection = endpoint
+        let connecting = endpoint
             .connect(remote, &proxy.server_name)
-            .map_err(|err| format!("connect TUIC QUIC endpoint: {err}"))?
+            .map_err(|err| format!("connect TUIC QUIC endpoint: {err}"))?;
+        let connection = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connecting)
             .await
+            .map_err(|_| "TUIC QUIC connect timeout".to_owned())?
             .map_err(|err| format!("await TUIC QUIC connect: {err}"))?;
-        authenticate_tuic_connection(&connection, &self.uuid, &self.password)
-            .await
-            .map_err(|err| format!("authenticate TUIC QUIC connection: {err}"))?;
+        time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            authenticate_tuic_connection(&connection, &self.uuid, &self.password),
+        )
+        .await
+        .map_err(|_| "TUIC QUIC auth timeout".to_owned())?
+        .map_err(|err| format!("authenticate TUIC QUIC connection: {err}"))?;
         self.connection = Some(connection);
         self.endpoint = Some(endpoint);
         Ok(())
@@ -400,12 +411,14 @@ impl JuicityQuicStreamPacketSession {
             .map_err(|err| format!("build Juicity UDP stream packet: {err}"))?;
         let request =
             build_juicity_stream_packet_request(&original_dst.to_string(), &request_frame.encoded)?;
-        let (mut send, mut recv) = connection
-            .open_bi()
+        let (mut send, mut recv) =
+            time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connection.open_bi())
+                .await
+                .map_err(|_| "open Juicity UDP stream timeout".to_owned())?
+                .map_err(|err| format!("open Juicity UDP stream: {err}"))?;
+        time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, send.write_all(&request))
             .await
-            .map_err(|err| format!("open Juicity UDP stream: {err}"))?;
-        send.write_all(&request)
-            .await
+            .map_err(|_| "write Juicity UDP stream packet timeout".to_owned())?
             .map_err(|err| format!("write Juicity UDP stream packet: {err}"))?;
         send.finish()
             .map_err(|err| format!("finish Juicity UDP stream packet: {err}"))?;
@@ -435,15 +448,20 @@ impl JuicityQuicStreamPacketSession {
                 .map_err(|err| format!("build Juicity QUIC client config: {err}"))?,
         );
         let remote = resolve_proxy_udp_addr_async(proxy).await?;
-        let connection = endpoint
+        let connecting = endpoint
             .connect(remote, &proxy.server_name)
-            .map_err(|err| format!("connect Juicity QUIC endpoint: {err}"))?
+            .map_err(|err| format!("connect Juicity QUIC endpoint: {err}"))?;
+        let connection = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connecting)
             .await
+            .map_err(|_| "Juicity QUIC connect timeout".to_owned())?
             .map_err(|err| format!("await Juicity QUIC connect: {err}"))?;
-        let (_auth_report, auth_stream) =
-            authenticate_juicity_connection(&connection, &self.uuid, &self.password)
-                .await
-                .map_err(|err| format!("authenticate Juicity QUIC connection: {err}"))?;
+        let (_auth_report, auth_stream) = time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            authenticate_juicity_connection(&connection, &self.uuid, &self.password),
+        )
+        .await
+        .map_err(|_| "Juicity QUIC auth timeout".to_owned())?
+        .map_err(|err| format!("authenticate Juicity QUIC connection: {err}"))?;
         self.auth_stream = Some(auth_stream);
         self.connection = Some(connection);
         self.endpoint = Some(endpoint);
