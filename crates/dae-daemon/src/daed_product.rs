@@ -102,6 +102,8 @@ const PRODUCT_HTTP_WORKER_RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const PRODUCT_MALLOC_ARENA_MAX_ENV: &str = "MALLOC_ARENA_MAX";
 const PRODUCT_MALLOC_ARENA_MAX_DEFAULT: &str = "2";
 const PRODUCT_JEMALLOC_CONF_ENV: &str = "MALLOC_CONF";
+const PRODUCT_JEMALLOC_BUILD_CONF_ENV: &str = "JEMALLOC_SYS_WITH_MALLOC_CONF";
+const PRODUCT_JEMALLOC_BUILD_CONF_SOURCE: &str = ".cargo/config.toml";
 const PRODUCT_JEMALLOC_CONF_DEFAULT: &str =
     "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4";
 const ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV: &str = "ALLOCATOR_IDLE_RECLAIM_ENABLED";
@@ -438,8 +440,10 @@ fn product_runtime_defaults() -> Value {
             },
             "jemallocPolicy": {
                 "env": PRODUCT_JEMALLOC_CONF_ENV,
+                "buildEnv": PRODUCT_JEMALLOC_BUILD_CONF_ENV,
+                "defaultSource": PRODUCT_JEMALLOC_BUILD_CONF_SOURCE,
                 "default": PRODUCT_JEMALLOC_CONF_DEFAULT,
-                "scope": "jemalloc builds; balances throughput and RSS with background purging and bounded arenas",
+                "scope": "jemalloc builds; built in by default from the workspace Cargo config to balance throughput and RSS with background purging and bounded arenas",
             },
             "reclaim": {
                 "startupControlBuilt": true,
