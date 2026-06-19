@@ -21,7 +21,14 @@ struct XhttpXmuxH2Manager {
     config: ResidentXhttpXmuxPlan,
     concurrency: i32,
     connections: i32,
+    opening: usize,
     clients: Vec<XhttpXmuxH2ClientEntry>,
+}
+
+enum XhttpXmuxH2SelectAction {
+    Selected(XhttpXmuxH2SelectedClient),
+    OpenNew,
+    WaitForOpening,
 }
 
 impl XhttpXmuxH2Manager {
@@ -30,24 +37,25 @@ impl XhttpXmuxH2Manager {
         Self {
             concurrency: ResidentXhttpXmuxPlan::sample_range(config.max_concurrency),
             connections: ResidentXhttpXmuxPlan::sample_range(config.max_connections),
+            opening: 0,
             config,
             clients: Vec::new(),
         }
     }
 
-    async fn select<F, Fut>(&mut self, new_sender: F) -> Result<XhttpXmuxH2SelectedClient, String>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<XhttpH2EndpointSender, String>>,
-    {
+    fn select_or_reserve_new(&mut self) -> XhttpXmuxH2SelectAction {
         self.prune();
 
-        if self.reusable_len() == 0 {
-            return self.new_client(new_sender).await;
+        let reusable_len = self.reusable_len();
+        if reusable_len == 0 {
+            return self.reserve_new_or_wait(reusable_len);
         }
 
-        if self.connections > 0 && self.reusable_len() < self.connections as usize {
-            return self.new_client(new_sender).await;
+        if self.connections > 0
+            && reusable_len.saturating_add(self.opening) < self.connections as usize
+        {
+            self.opening = self.opening.saturating_add(1);
+            return XhttpXmuxH2SelectAction::OpenNew;
         }
 
         let candidates = self
@@ -67,7 +75,7 @@ impl XhttpXmuxH2Manager {
             .collect::<Vec<_>>();
 
         if candidates.is_empty() {
-            return self.new_client(new_sender).await;
+            return self.reserve_new_or_wait(reusable_len);
         }
 
         let index = candidates[fastrand::usize(..candidates.len())];
@@ -75,21 +83,31 @@ impl XhttpXmuxH2Manager {
         if client.left_usage > 0 {
             client.left_usage -= 1;
         }
-        Ok(XhttpXmuxH2SelectedClient {
+        XhttpXmuxH2SelectAction::Selected(XhttpXmuxH2SelectedClient {
             sender: client.sender.clone(),
             lease: XhttpXmuxClientLease::open(Arc::clone(&client.usage)),
         })
     }
 
-    async fn new_client<F, Fut>(
+    fn reserve_new_or_wait(&mut self, reusable_len: usize) -> XhttpXmuxH2SelectAction {
+        if self.connections > 0
+            && reusable_len.saturating_add(self.opening) >= self.connections as usize
+        {
+            return XhttpXmuxH2SelectAction::WaitForOpening;
+        }
+        if self.opening == 0 || self.connections > 0 {
+            self.opening = self.opening.saturating_add(1);
+            XhttpXmuxH2SelectAction::OpenNew
+        } else {
+            XhttpXmuxH2SelectAction::WaitForOpening
+        }
+    }
+
+    fn complete_new_client(
         &mut self,
-        new_sender: F,
-    ) -> Result<XhttpXmuxH2SelectedClient, String>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<XhttpH2EndpointSender, String>>,
-    {
-        let sender = new_sender().await?;
+        sender: XhttpH2EndpointSender,
+    ) -> Result<XhttpXmuxH2SelectedClient, String> {
+        self.finish_opening();
         let mut left_usage = -1;
         let sampled_left_usage = ResidentXhttpXmuxPlan::sample_range(self.config.c_max_reuse_times);
         if sampled_left_usage > 0 {
@@ -125,6 +143,10 @@ impl XhttpXmuxH2Manager {
             sender: sender.sender,
             lease: XhttpXmuxClientLease::open(usage),
         })
+    }
+
+    fn finish_opening(&mut self) {
+        self.opening = self.opening.saturating_sub(1);
     }
 
     fn prune(&mut self) {
@@ -189,6 +211,31 @@ where
                 Arc::new(tokio::sync::Mutex::new(XhttpXmuxH2Manager::new(xmux)))
             }))
         };
-    let mut manager = manager.lock().await;
-    manager.select(new_sender).await
+    let mut new_sender = Some(new_sender);
+    loop {
+        let action = {
+            let mut manager = manager.lock().await;
+            manager.select_or_reserve_new()
+        };
+        match action {
+            XhttpXmuxH2SelectAction::Selected(selected) => return Ok(selected),
+            XhttpXmuxH2SelectAction::OpenNew => {
+                let Some(new_sender) = new_sender.take() else {
+                    return Err("resident xHTTP H2 xmux new sender was already consumed".to_owned());
+                };
+                let sender = new_sender().await;
+                let mut manager = manager.lock().await;
+                return match sender {
+                    Ok(sender) => manager.complete_new_client(sender),
+                    Err(err) => {
+                        manager.finish_opening();
+                        Err(err)
+                    }
+                };
+            }
+            XhttpXmuxH2SelectAction::WaitForOpening => {
+                tokio::time::sleep(RESIDENT_IDLE_SLEEP).await;
+            }
+        }
+    }
 }
