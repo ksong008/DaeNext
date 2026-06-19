@@ -307,10 +307,10 @@ pub(crate) fn latency_probe_link_chunks(
     nodes: &[(i64, String, String)],
     chunk_size: usize,
 ) -> Vec<Vec<String>> {
-    let mut seen = HashSet::new();
-    let mut links = Vec::new();
+    let mut seen = HashSet::with_capacity(nodes.len());
+    let mut links = Vec::with_capacity(nodes.len());
     for (_, link, _) in nodes {
-        if seen.insert(link.clone()) {
+        if seen.insert(link.as_str()) {
             links.push(link.clone());
         }
     }
@@ -520,9 +520,9 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
     nodes: &[(i64, String, String)],
     snapshots: &[Value],
 ) -> (Vec<NodeLatencyWrite>, HashSet<i64>) {
-    let mut results = Vec::new();
-    let mut tested_ids = HashSet::new();
-    let mut node_ids_by_link_hash = HashMap::<String, Vec<i64>>::new();
+    let mut results = Vec::with_capacity(snapshots.len().min(nodes.len()));
+    let mut tested_ids = HashSet::with_capacity(nodes.len().min(snapshots.len()));
+    let mut node_ids_by_link_hash = HashMap::<String, Vec<i64>>::with_capacity(nodes.len());
     for (id, node_link, _) in nodes {
         node_ids_by_link_hash
             .entry(runtime_link_hash(node_link))
