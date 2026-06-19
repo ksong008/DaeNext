@@ -219,14 +219,6 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
             > 0
     );
     assert!(
-        overview["heapAllocBytes"]
-            .as_str()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-            > 0
-    );
-    assert!(
         overview["anonymousRssBytes"]
             .as_str()
             .unwrap()
@@ -261,13 +253,10 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
         assert_eq!(overview["allocatorStats"]["available"], json!(false));
         assert_eq!(overview["allocatorDerived"]["available"], json!(false));
     }
-    assert_eq!(overview["heapCompatBytes"], overview["heapAllocBytes"]);
+    assert!(overview.get("heapAllocBytes").is_none());
+    assert!(overview.get("heapAllocBytesSource").is_none());
     assert_eq!(
         overview["heapCompatBytesSource"],
-        json!("compat-alias-rss-anon-not-live-heap")
-    );
-    assert_eq!(
-        overview["heapAllocBytesSource"],
         json!("compat-alias-rss-anon-not-live-heap")
     );
     assert_eq!(overview["allocatorProfile"], json!(allocator_profile()));
@@ -290,7 +279,12 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     let delta = runtime_overview_delta_report(&app, &request);
     assert!(delta["uploadRate"].as_str().is_some());
     assert!(delta["rssBytes"].as_str().is_some());
-    assert!(delta["heapAllocBytes"].as_str().is_some());
+    if allocator_live_heap_bytes().is_some() {
+        assert!(delta["heapLiveBytes"].as_str().is_some());
+    } else {
+        assert_eq!(delta["heapLiveBytes"], Value::Null);
+    }
+    assert!(delta.get("heapAllocBytes").is_none());
     assert!(delta["goroutines"].as_u64().is_some());
     assert!(delta.get("allocatorStats").is_none());
     assert!(delta.get("allocatorDerived").is_none());
@@ -304,13 +298,14 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert!(body.contains("retry: 3000"));
     assert!(body.contains("event: runtime.overview\n"));
     assert!(body.contains("event: runtime.overview.delta\n"));
-    assert!(body.contains("\"heapAllocBytes\""));
+    assert!(body.contains("\"heapLiveBytes\""));
+    assert!(!body.contains("\"heapAllocBytes\""));
     assert!(body.contains("\"anonymousRssBytes\""));
     assert!(body.contains("\"rssAnonBytes\""));
     assert!(body.contains("\"fileRssBytes\""));
     assert!(body.contains("\"rssFileBytes\""));
     assert!(body.contains("\"heapCompatBytes\""));
-    assert!(body.contains("\"heapAllocBytesSource\""));
+    assert!(body.contains("\"heapCompatBytesSource\""));
     assert!(body.contains("\"allocatorProfile\""));
     assert!(body.contains("\"resourcePools\""));
     assert!(body.contains("\"goroutines\""));
