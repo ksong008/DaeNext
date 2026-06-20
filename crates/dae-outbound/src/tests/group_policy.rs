@@ -97,6 +97,20 @@ fn group_selection_matches_nativelden_fixtures() {
 }
 
 #[test]
+fn failed_check_without_latency_marks_dead_without_polluting_latency_history() {
+    let mut group = make_group(2, SelectionPolicy::MinAverage10);
+    group.record_check_result(0, NetworkType::TCP4, Some(80), 1);
+    group.record_check_result(1, NetworkType::TCP4, Some(40), 2);
+    assert_eq!(group.select(NetworkType::TCP4, false).unwrap().index, 1);
+
+    group.record_check_failure_without_latency(1, NetworkType::TCP4, 3);
+    assert_eq!(group.select(NetworkType::TCP4, false).unwrap().index, 0);
+
+    group.record_check_result(1, NetworkType::TCP4, Some(30), 4);
+    assert_eq!(group.select(NetworkType::TCP4, false).unwrap().index, 1);
+}
+
+#[test]
 fn random_and_ipversion_fallback_match_golden_fixtures() {
     let random = fixture("outbound/group/random_alive.json");
     let mut group = make_group(
