@@ -313,6 +313,39 @@ pub(crate) fn runtime_latency_failure_snapshot_is_tested_with_message() {
 }
 
 #[test]
+pub(crate) fn runtime_latency_failed_snapshot_with_placeholder_latency_keeps_message() {
+    let nodes = vec![(
+        22,
+        "socks://127.0.0.1:1080#one".to_owned(),
+        "127.0.0.1:1080".to_owned(),
+    )];
+    let snapshots = vec![json!({
+        "name": "one",
+        "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+        "linkIdentity": {
+            "schemaVersion": 1,
+            "displayName": "one",
+            "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+            "redactedSource": "socks:<redacted>#one",
+        },
+        "latencyMs": 10000,
+        "alive": false,
+        "checkedAtUnix": 85,
+        "message": "TLS handshake failed unexpected EOF",
+    })];
+    let (results, tested_ids) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].node_id, 22);
+    assert_eq!(results[0].latency_ms, Some(10000));
+    assert!(!results[0].alive);
+    assert_eq!(
+        results[0].message.as_deref(),
+        Some("TLS handshake failed unexpected EOF")
+    );
+    assert!(tested_ids.contains(&22));
+}
+
+#[test]
 pub(crate) fn fake_runtime_latency_snapshot_redacts_raw_link() {
     let raw_link = "http://user:secret@127.0.0.1:1/node?token=secret#demo";
     let snapshot = fake_runtime_tcp_latency_snapshot(raw_link);
