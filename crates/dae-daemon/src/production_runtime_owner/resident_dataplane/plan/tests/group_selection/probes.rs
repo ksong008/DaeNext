@@ -156,6 +156,86 @@ pub(super) fn resident_manual_probe_plans_cover_all_admitted_config_nodes() {
 }
 
 #[test]
+pub(super) fn resident_latency_probe_plans_do_not_keep_xhttp_xmux_clients() {
+    let xhttp = vless_xhttp_parser_fixture_url(
+        "packet-up",
+        "h2",
+        r#"{"xmux":{"maxConnections":2},"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["h2"]},"xhttpSettings":{"host":"download.host.invalid","path":"/down?ed=4096","mode":"stream-up","extra":{"xmux":{"maxConnections":3}}}}}"#,
+    );
+    let config_source = r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        xhttp: '__XHTTP__'
+        }
+        group {
+        proxy {
+            filter: name(xhttp)
+            policy: min
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#
+    .replace("__XHTTP__", &xhttp);
+    let config = parse_config(&config_source);
+
+    let runtime_plan = build_resident_dataplane_plan(&config).unwrap();
+    let runtime_proxy = runtime_plan
+        .default_proxy_group()
+        .unwrap()
+        .default_proxy_snapshot()
+        .unwrap();
+    assert!(runtime_proxy.xhttp_xmux.is_some());
+    assert!(
+        runtime_proxy
+            .xhttp_download
+            .as_ref()
+            .unwrap()
+            .xmux
+            .is_some()
+    );
+
+    let group_probe = runtime_plan
+        .default_proxy_group()
+        .unwrap()
+        .probe_candidates()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(group_probe.proxy.xhttp_xmux.is_none());
+    assert!(
+        group_probe
+            .proxy
+            .xhttp_download
+            .as_ref()
+            .unwrap()
+            .xmux
+            .is_none()
+    );
+
+    let manual_plans = build_resident_manual_probe_plans(&config);
+    let manual_probe = manual_plans
+        .get(&xhttp)
+        .expect("xHTTP node should be indexed")
+        .as_ref()
+        .expect("xHTTP node should be admitted");
+    assert!(manual_probe.proxy.xhttp_xmux.is_none());
+    assert!(
+        manual_probe
+            .proxy
+            .xhttp_download
+            .as_ref()
+            .unwrap()
+            .xmux
+            .is_none()
+    );
+}
+
+#[test]
 pub(super) fn resident_dataplane_group_udp_check_uses_group_override_ipv4() {
     let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
     let global_dns_host = fixture_host(FixtureEndpoint::Tertiary);

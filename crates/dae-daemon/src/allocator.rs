@@ -22,6 +22,8 @@ pub enum AllocatorReclaimReason {
     ReloadCompleted,
     StopRuntime,
     IdleMemoryPressure,
+    ManualLatencyProbe,
+    GroupHealthProbe,
 }
 
 impl AllocatorReclaimReason {
@@ -31,6 +33,8 @@ impl AllocatorReclaimReason {
             Self::ReloadCompleted => "reload_completed",
             Self::StopRuntime => "stop_runtime",
             Self::IdleMemoryPressure => "idle_memory_pressure",
+            Self::ManualLatencyProbe => "manual_latency_probe",
+            Self::GroupHealthProbe => "group_health_probe",
         }
     }
 }
@@ -100,6 +104,8 @@ static STARTUP_CONTROL_BUILT_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static RELOAD_COMPLETED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static STOP_RUNTIME_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static IDLE_MEMORY_PRESSURE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static MANUAL_LATENCY_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static GROUP_HEALTH_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static LAST_RECLAIM: OnceLock<Mutex<Option<LastAllocatorReclaim>>> = OnceLock::new();
 
@@ -187,6 +193,8 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
             "reload_completed": RELOAD_COMPLETED_RECLAIMS.load(Ordering::Relaxed),
             "stop_runtime": STOP_RUNTIME_RECLAIMS.load(Ordering::Relaxed),
             "idle_memory_pressure": IDLE_MEMORY_PRESSURE_RECLAIMS.load(Ordering::Relaxed),
+            "manual_latency_probe": MANUAL_LATENCY_PROBE_RECLAIMS.load(Ordering::Relaxed),
+            "group_health_probe": GROUP_HEALTH_PROBE_RECLAIMS.load(Ordering::Relaxed),
         },
         "last": last.as_ref().map(last_allocator_reclaim_json),
     })
@@ -206,6 +214,12 @@ fn increment_reason_counter(reason: AllocatorReclaimReason) {
         AllocatorReclaimReason::IdleMemoryPressure => {
             IDLE_MEMORY_PRESSURE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
+        AllocatorReclaimReason::ManualLatencyProbe => {
+            MANUAL_LATENCY_PROBE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
+        AllocatorReclaimReason::GroupHealthProbe => {
+            GROUP_HEALTH_PROBE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
     };
 }
 
@@ -223,6 +237,17 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
     use tikv_jemalloc_ctl::{arenas, epoch, raw};
 
     let epoch_before = epoch::advance().ok();
+    let (thread_cache_flush_ok, thread_cache_flush) =
+        match jemalloc_void_mallctl(b"thread.tcache.flush\0") {
+            Ok(()) => (true, json!({"status": "pass"})),
+            Err(err) => (
+                false,
+                json!({
+                    "status": "fail",
+                    "error": err,
+                }),
+            ),
+        };
     let narenas = match arenas::narenas::read() {
         Ok(value) => value,
         Err(err) => {
@@ -230,6 +255,7 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
                 "fail",
                 json!({
                     "operation": "jemalloc_arena_purge",
+                    "threadCacheFlush": thread_cache_flush,
                     "error": err.to_string(),
                 }),
             );
@@ -267,7 +293,7 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
         }
     }
     let epoch_after = epoch::advance().ok();
-    let status = if failures.is_empty() {
+    let status = if failures.is_empty() && thread_cache_flush_ok {
         "pass"
     } else {
         "partial"
@@ -275,7 +301,8 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
     (
         status,
         json!({
-            "operation": "jemalloc_arena_purge",
+            "operation": "jemalloc_thread_tcache_flush_and_arena_purge",
+            "threadCacheFlush": thread_cache_flush,
             "arenasObserved": narenas,
             "arenasAttempted": attempted,
             "arenasSkipped": skipped,

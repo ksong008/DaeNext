@@ -112,6 +112,9 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
 
     let runtime = Arc::new(ProductRuntimeManager::new());
     let jobs = Arc::new(LatencyJobManager::default());
+    let reclaim_before = allocator_reclaim_snapshot_json()["reasons"]["manual_latency_probe"]
+        .as_u64()
+        .unwrap_or(0);
     let value =
         enqueue_node_latency_job(&state, &dir, Arc::clone(&runtime), Arc::clone(&jobs), &[])
             .unwrap();
@@ -140,6 +143,10 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
             .map(Vec::len),
         Some(2),
     );
+    let reclaim_after = allocator_reclaim_snapshot_json()["reasons"]["manual_latency_probe"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(reclaim_after > reclaim_before);
 
     fs::remove_dir_all(dir).unwrap();
 }

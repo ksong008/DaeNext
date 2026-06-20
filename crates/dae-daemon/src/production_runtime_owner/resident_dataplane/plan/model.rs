@@ -835,6 +835,27 @@ impl ResidentProxyPlan {
         self.handler.compact_allocations();
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn disable_latency_probe_persistent_caches(
+        &mut self,
+    ) {
+        self.xhttp_xmux = None;
+        if let Some(download) = &mut self.xhttp_download {
+            download.xmux = None;
+        }
+        if let Some(parent) = self.chain_parent.as_mut() {
+            Arc::make_mut(parent).disable_latency_probe_persistent_caches();
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn latency_probe_proxy(
+        &self,
+    ) -> Self {
+        let mut proxy = self.clone();
+        proxy.disable_latency_probe_persistent_caches();
+        proxy.compact_allocations();
+        proxy
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn executable_graph_descriptor(
         &self,
     ) -> ResidentExecutableGraphDescriptor {

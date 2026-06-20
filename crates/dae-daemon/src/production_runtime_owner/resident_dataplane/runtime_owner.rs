@@ -10,16 +10,12 @@ pub(crate) struct ResidentRuntimeOwner {
     udp_sessions_active: Arc<AtomicUsize>,
     resource_config: ResidentRuntimeResourceConfig,
     event_writer: ResidentEventWriterRuntime,
-    manual_probe_runtime: Arc<Mutex<Option<tokio::runtime::Runtime>>>,
-    manual_probe_runtime_error: Option<String>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ResidentManualProbeHandle {
     groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     manual_probe_plans: BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
-    manual_probe_runtime: Arc<Mutex<Option<tokio::runtime::Runtime>>>,
-    manual_probe_runtime_error: Option<String>,
     reload_generation: u64,
     resource_config: ResidentRuntimeResourceConfig,
 }
@@ -38,10 +34,7 @@ impl std::fmt::Debug for ResidentRuntimeOwner {
             .field("event_file_status", &"disabled")
             .field("reload_generation", &self.reload_generation)
             .field("resource_config", &self.resource_config.json())
-            .field(
-                "manual_probe_runtime_available",
-                &self.manual_probe_runtime_error.is_none(),
-            )
+            .field("manual_probe_runtime_persistent", &false)
             .field("event_writer", &self.event_writer.metrics_snapshot())
             .finish_non_exhaustive()
     }
@@ -61,18 +54,6 @@ impl ResidentRuntimeOwner {
             Arc::clone(&event_lock),
             resource_config.event_queue_depth.value(),
         );
-        let (manual_probe_runtime, manual_probe_runtime_error) =
-            match tokio::runtime::Builder::new_current_thread()
-                .enable_io()
-                .enable_time()
-                .build()
-            {
-                Ok(runtime) => (Some(runtime), None),
-                Err(err) => (
-                    None,
-                    Some(format!("start Tokio manual latency probe runtime: {err}")),
-                ),
-            };
         Self {
             stop: Arc::new(AtomicBool::new(false)),
             tasks: Vec::new(),
@@ -83,8 +64,6 @@ impl ResidentRuntimeOwner {
             udp_sessions_active,
             resource_config,
             event_writer,
-            manual_probe_runtime: Arc::new(Mutex::new(manual_probe_runtime)),
-            manual_probe_runtime_error,
         }
     }
 
@@ -120,8 +99,6 @@ impl ResidentRuntimeOwner {
         ResidentManualProbeHandle {
             groups: groups.to_vec(),
             manual_probe_plans: manual_probe_plans.clone(),
-            manual_probe_runtime: Arc::clone(&self.manual_probe_runtime),
-            manual_probe_runtime_error: self.manual_probe_runtime_error.clone(),
             reload_generation: self.reload_generation,
             resource_config: self.resource_config.clone(),
         }
@@ -213,10 +190,6 @@ impl ResidentRuntimeOwner {
         let active_tcp = metrics["activeTcpConnections"].as_u64().unwrap_or(0);
         let active_udp = metrics["activeUdpSessions"].as_u64().unwrap_or(0);
         let legacy_udp_active = self.udp_sessions_active.load(Ordering::Relaxed);
-        let manual_probe_runtime_stopped = match self.manual_probe_runtime.lock() {
-            Ok(mut runtime) => runtime.take().is_some(),
-            Err(poisoned) => poisoned.into_inner().take().is_some(),
-        };
         let event_writer = self.event_writer.shutdown();
         let shutdown_elapsed_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         json!({
@@ -236,8 +209,9 @@ impl ResidentRuntimeOwner {
             "active_udp_sessions_at_shutdown": active_udp,
             "udp_sessions_active_at_shutdown": legacy_udp_active,
             "runtime_handle_owner": "resident-runtime-owner",
-            "manual_probe_runtime_available": self.manual_probe_runtime_error.is_none(),
-            "manual_probe_runtime_stopped": manual_probe_runtime_stopped,
+            "manual_probe_runtime_available": true,
+            "manual_probe_runtime_persistent": false,
+            "manual_probe_runtime_stopped": true,
             "event_writer": event_writer,
             "shutdown_elapsed_ns": shutdown_elapsed_ns,
             "event_file": Value::Null,
@@ -264,10 +238,12 @@ impl ResidentRuntimeOwner {
         json!({
             "schemaVersion": 1,
             "owner": "resident-runtime-owner",
-            "executor": "tokio-current-thread",
+            "executor": "per-probe-tokio-current-thread",
             "scope": "manual-latency-probes",
-            "available": self.manual_probe_runtime_error.is_none(),
-            "error": self.manual_probe_runtime_error.as_deref(),
+            "available": true,
+            "persistent": false,
+            "lifecycle": "created-per-probe-and-dropped-after-probe",
+            "error": Value::Null,
         })
     }
 }
@@ -318,36 +294,20 @@ impl ResidentManualProbeHandle {
             return preferred_latency_snapshots(snapshots);
         }
 
-        let runtime_guard = match self.manual_probe_runtime.lock() {
-            Ok(guard) => guard,
-            Err(_) => {
+        let runtime = match build_transient_probe_runtime("manual latency probe") {
+            Ok(runtime) => runtime,
+            Err(detail) => {
                 snapshots.extend(tasks.into_iter().map(|candidate| {
                     manual_probe_unavailable_snapshot(
                         &candidate.link,
                         "native outbound probe runtime unavailable",
-                        "manual latency probe runtime lock poisoned",
+                        &detail,
                         checked_at,
                         reload_generation,
                     )
                 }));
                 return preferred_latency_snapshots(snapshots);
             }
-        };
-        let Some(runtime) = runtime_guard.as_ref() else {
-            let detail = self
-                .manual_probe_runtime_error
-                .as_deref()
-                .unwrap_or("manual latency probe runtime unavailable");
-            snapshots.extend(tasks.into_iter().map(|candidate| {
-                manual_probe_unavailable_snapshot(
-                    &candidate.link,
-                    "native outbound probe runtime unavailable",
-                    detail,
-                    checked_at,
-                    reload_generation,
-                )
-            }));
-            return preferred_latency_snapshots(snapshots);
         };
 
         let concurrency = self.resource_config.manual_probe_concurrency.value();
@@ -376,8 +336,19 @@ impl ResidentManualProbeHandle {
             });
             snapshots.append(&mut chunk_snapshots);
         }
+        drop(runtime);
         preferred_latency_snapshots(snapshots)
     }
+}
+
+pub(crate) fn build_transient_probe_runtime(
+    scope: &str,
+) -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(|err| format!("start Tokio {scope} runtime: {err}"))
 }
 
 #[cfg(test)]
@@ -415,6 +386,7 @@ mod tests {
         assert_eq!(registry["owner"], "resident-runtime-owner");
         assert_eq!(registry["runtimeHandle"]["owner"], "resident-runtime-owner");
         assert_eq!(registry["runtimeHandle"]["scope"], "manual-latency-probes");
+        assert_eq!(registry["runtimeHandle"]["persistent"], false);
 
         let evidence = owner.shutdown();
         assert_eq!(evidence["owner"], "resident-runtime-owner");
@@ -427,6 +399,7 @@ mod tests {
         assert_eq!(evidence["active_udp_sessions_at_shutdown"], 1);
         assert_eq!(evidence["udp_sessions_active_at_shutdown"], 1);
         assert_eq!(evidence["runtime_handle_owner"], "resident-runtime-owner");
+        assert_eq!(evidence["manual_probe_runtime_persistent"], false);
         assert_eq!(evidence["manual_probe_runtime_stopped"], true);
     }
 }

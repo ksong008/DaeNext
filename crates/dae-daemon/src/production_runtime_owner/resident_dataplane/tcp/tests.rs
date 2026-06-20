@@ -93,7 +93,7 @@ async fn resident_tcp_probe_handler_join_uses_short_grace_after_probe_failure() 
         "failed TCP probe waited too long for handler cleanup: {:?}",
         started.elapsed()
     );
-    assert!(time::timeout(Duration::from_secs(1), handle).await.is_ok());
+    assert!(handle.is_finished());
 }
 
 #[test]
