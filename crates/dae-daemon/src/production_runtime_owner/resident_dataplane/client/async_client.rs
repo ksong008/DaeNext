@@ -83,7 +83,7 @@ impl AsyncVlessTlsClient {
                     .map_err(|err| format!("flush {label}: {err}"))
             }
             AsyncVlessTlsEngine::Boring { tls } => {
-                let raw = tls.get_mut();
+                let raw = tls.get_mut().raw_mut();
                 raw.write_all(payload)
                     .await
                     .map_err(|err| format!("{label}: {err}"))?;

@@ -13,7 +13,7 @@ pub(crate) enum AsyncVlessTlsEngine {
         tls: tokio_rustls::client::TlsStream<AsyncResidentTcpStream>,
     },
     Boring {
-        tls: tokio_boring::SslStream<TokioTcpStream>,
+        tls: tokio_boring::SslStream<AsyncResidentTcpStream>,
     },
 }
 
