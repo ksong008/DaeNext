@@ -409,7 +409,7 @@ impl ResidentProxyGroupPlan {
         Ok(())
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn record_check_result_for_link(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn record_manual_latency_result_for_link(
         &self,
         link: &str,
         network_type: NetworkType,
@@ -432,7 +432,20 @@ impl ResidentProxyGroupPlan {
             )
         })?;
         for index in &indexes {
-            selector.record_check_result(*index, network_type, latency_ms, checked_at_unix);
+            if let Some(latency_ms) = latency_ms {
+                selector.record_check_result(
+                    *index,
+                    network_type,
+                    Some(latency_ms),
+                    checked_at_unix,
+                );
+            } else {
+                selector.record_check_failure_without_latency(
+                    *index,
+                    network_type,
+                    checked_at_unix,
+                );
+            }
         }
         Ok(indexes.len())
     }

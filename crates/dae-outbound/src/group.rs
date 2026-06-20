@@ -111,6 +111,16 @@ impl DialerGroup {
         self.notify_alive(index, network_type, latency_ms.is_some());
     }
 
+    pub fn record_check_failure_without_latency(
+        &mut self,
+        index: usize,
+        network_type: NetworkType,
+        checked_at_unix: i64,
+    ) {
+        self.dialers[index].record_check_failure_without_latency(network_type, checked_at_unix);
+        self.notify_alive(index, network_type, false);
+    }
+
     pub fn notify_alive(&mut self, index: usize, network_type: NetworkType, alive: bool) {
         let alive_index = network_type.collection_index();
         if let Some(alive_set) = self.alive_sets[alive_index].as_mut() {

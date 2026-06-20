@@ -107,6 +107,12 @@ impl Dialer {
         collection.checked_at_unix = checked_at_unix;
     }
 
+    pub fn record_check_failure_without_latency(&mut self, typ: NetworkType, checked_at_unix: i64) {
+        let collection = self.must_get_collection(typ);
+        collection.alive = false;
+        collection.checked_at_unix = checked_at_unix;
+    }
+
     pub fn register_alive_dialer_set(&mut self, alive_set: Option<&AliveDialerSet>) {
         let Some(alive_set) = alive_set else {
             return;
