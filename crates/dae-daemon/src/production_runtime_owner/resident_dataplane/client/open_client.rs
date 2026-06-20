@@ -163,6 +163,7 @@ pub(crate) async fn open_async_boring_resident_tls_client(
     let config = connector
         .configure()
         .map_err(|err| format!("configure VLESS BoringSSL client: {err}"))?;
+    let tcp = AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
         tokio_boring::connect(config, &proxy.server_name, tcp),
