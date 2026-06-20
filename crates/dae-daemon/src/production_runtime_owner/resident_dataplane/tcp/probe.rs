@@ -3,7 +3,7 @@ use super::*;
 pub(crate) const RESIDENT_TCP_PROBE_FAILED_HANDLER_JOIN_GRACE: Duration =
     Duration::from_millis(100);
 pub(crate) async fn probe_resident_proxy_tcp_async(
-    proxy: &ResidentProxyPlan,
+    proxy: Arc<ResidentProxyPlan>,
     scheme: &str,
     target: &str,
     host: &str,
@@ -42,7 +42,7 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
                 mac: String::new(),
             },
         },
-        proxy: Arc::new(proxy.clone()),
+        proxy,
     };
     let sniff = TcpSniffReport {
         payload: if scheme == "https" {
@@ -162,6 +162,7 @@ pub(crate) async fn join_resident_tcp_probe_handler_async(
         Ok(joined) => joined.map_err(|err| format!("join resident TCP probe handler: {err}"))?,
         Err(_) => {
             handle.abort();
+            let _ = time::timeout(RESIDENT_TCP_PROBE_FAILED_HANDLER_JOIN_GRACE, &mut *handle).await;
             if response_failed {
                 Err("join resident TCP probe handler: timeout after probe failure".to_owned())
             } else {

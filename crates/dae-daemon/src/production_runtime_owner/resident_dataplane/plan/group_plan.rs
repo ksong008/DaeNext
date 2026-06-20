@@ -18,7 +18,7 @@ pub(crate) struct ResidentProxyProbePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
     pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
-    pub(in crate::production_runtime_owner::resident_dataplane) proxy: ResidentProxyPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -256,7 +256,7 @@ impl ResidentProxyGroupPlan {
                 redacted_link_source: candidate.redacted_link_source.clone(),
                 tcp_check: self.tcp_check.clone(),
                 udp_check: self.udp_check.clone(),
-                proxy: candidate.proxy.as_ref().clone(),
+                proxy: Arc::new(candidate.proxy.latency_probe_proxy()),
             })
             .collect()
     }

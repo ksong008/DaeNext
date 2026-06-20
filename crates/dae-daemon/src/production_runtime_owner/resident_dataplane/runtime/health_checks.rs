@@ -1,4 +1,6 @@
 use super::*;
+use crate::allocator::{AllocatorReclaimReason, allocator_reclaim};
+
 pub(crate) fn resident_group_health_check_loop(
     group: Arc<plan::ResidentProxyGroupPlan>,
     stop: Arc<AtomicBool>,
@@ -7,7 +9,6 @@ pub(crate) fn resident_group_health_check_loop(
     concurrency: usize,
 ) {
     let interval = group.check_interval();
-    let candidates = group.probe_candidates();
     let concurrency = concurrency.max(1);
     append_event(
         &event_file,
@@ -23,30 +24,16 @@ pub(crate) fn resident_group_health_check_loop(
             "probe": "tokio-proxy-tcp-and-dns-udp-check",
             "tcp_probe_executor": "tokio-proxy-tcp-probe",
             "udp_probe_executor": "tokio-proxy-packet-dns-probe",
-            "tcp_check_target": candidates.first().map(|candidate| candidate.tcp_check.target.clone()),
-            "udp_check_target": candidates.first().map(|candidate| candidate.udp_check.target.authority().to_owned()),
+            "tcp_check_target": group.tcp_check.target.clone(),
+            "udp_check_target": group.udp_check.target.authority().to_owned(),
         }),
     );
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            append_event(
-                &event_file,
-                &event_lock,
-                json!({"event": "resident_health_checker_runtime_failed", "error": err.to_string()}),
-            );
-            return;
-        }
-    };
-    runtime.block_on(run_resident_group_health_checks_concurrent_async(
+    run_resident_group_health_check_round(
         Arc::clone(&group),
-        &candidates,
+        &event_file,
+        &event_lock,
         concurrency,
-    ));
+    );
     loop {
         if interval.is_zero() || sleep_until_stopped(&stop, interval) {
             return;
@@ -54,12 +41,44 @@ pub(crate) fn resident_group_health_check_loop(
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        runtime.block_on(run_resident_group_health_checks_concurrent_async(
+        run_resident_group_health_check_round(
             Arc::clone(&group),
-            &candidates,
+            &event_file,
+            &event_lock,
             concurrency,
-        ));
+        );
     }
+}
+
+fn run_resident_group_health_check_round(
+    group: Arc<plan::ResidentProxyGroupPlan>,
+    event_file: &Path,
+    event_lock: &Mutex<()>,
+    concurrency: usize,
+) {
+    let candidates = group.probe_candidates();
+    if candidates.is_empty() {
+        return;
+    }
+    let runtime = match build_transient_probe_runtime("resident group health probe") {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            append_event(
+                event_file,
+                event_lock,
+                json!({"event": "resident_health_checker_runtime_failed", "error": err}),
+            );
+            return;
+        }
+    };
+    runtime.block_on(run_resident_group_health_checks_concurrent_async(
+        group,
+        &candidates,
+        concurrency,
+    ));
+    drop(runtime);
+    drop(candidates);
+    let _ = allocator_reclaim(AllocatorReclaimReason::GroupHealthProbe);
 }
 
 async fn run_resident_group_health_checks_concurrent_async(
@@ -340,7 +359,7 @@ pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
 ) -> Result<i64, String> {
     let started = Instant::now();
     probe_resident_proxy_tcp_async(
-        &candidate.proxy,
+        Arc::clone(&candidate.proxy),
         &candidate.tcp_check.scheme,
         &candidate.tcp_check.target,
         &candidate.tcp_check.host,

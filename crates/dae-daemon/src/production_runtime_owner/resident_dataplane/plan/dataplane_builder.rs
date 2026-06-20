@@ -90,6 +90,7 @@ pub(crate) fn build_resident_manual_probe_plan(
     let group_name = "__manual_native_probe".to_owned();
     let mut proxy = build_proxy_plan(config, group_name.clone(), node_tag.clone(), link.clone())?;
     proxy.group_policy = "manual_probe".to_owned();
+    proxy.disable_latency_probe_persistent_caches();
     proxy.compact_allocations();
     let group = Group {
         name: group_name,
@@ -109,7 +110,7 @@ pub(crate) fn build_resident_manual_probe_plan(
         link,
         tcp_check: group_tcp_check_plan(config, &group)?,
         udp_check: group_udp_check_plan(config, &group)?,
-        proxy,
+        proxy: Arc::new(proxy),
     })
 }
 

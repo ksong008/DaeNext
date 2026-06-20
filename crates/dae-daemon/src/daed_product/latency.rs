@@ -244,10 +244,16 @@ fn run_node_latency_job(
     jobs.mark_running(job_id);
     match run_node_latency_job_inner(job_id, &state, &config_dir, &runtime, &jobs, &nodes) {
         Ok((completed, succeeded, failed)) => {
-            jobs.mark_finished(job_id, completed, succeeded, failed)
+            jobs.mark_finished(job_id, completed, succeeded, failed);
         }
         Err(err) => jobs.mark_failed(job_id, err.to_string()),
     }
+    drop(nodes);
+    drop(runtime);
+    drop(jobs);
+    drop(config_dir);
+    drop(state);
+    let _ = allocator_reclaim(AllocatorReclaimReason::ManualLatencyProbe);
 }
 
 fn run_node_latency_job_inner(
