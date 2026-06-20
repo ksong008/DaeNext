@@ -1,4 +1,7 @@
 use super::*;
+pub(in crate::production_runtime_owner::resident_dataplane) const RESIDENT_CONTROL_PLANE_SO_MARK:
+    u32 = 0x100;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SelectedGroupNode {
     pub(in crate::production_runtime_owner::resident_dataplane) match_index: usize,
@@ -844,6 +847,21 @@ impl ResidentProxyPlan {
         }
         if let Some(parent) = self.chain_parent.as_mut() {
             Arc::make_mut(parent).disable_latency_probe_persistent_caches();
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_latency_probe_control_mark(
+        &mut self,
+        mark: u32,
+    ) {
+        if mark == 0 {
+            return;
+        }
+        if self.mark == 0 {
+            self.mark = mark;
+        }
+        if let Some(parent) = self.chain_parent.as_mut() {
+            Arc::make_mut(parent).apply_latency_probe_control_mark(mark);
         }
     }
 

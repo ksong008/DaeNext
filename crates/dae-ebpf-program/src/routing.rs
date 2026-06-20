@@ -10,7 +10,8 @@ use crate::packet::{self, IPPROTO_TCP, ParsedPacket};
 use crate::{helpers, maps};
 
 const BPF_ANY: u64 = 0;
-
+const CONTROL_PLANE_SO_MARK: u32 = 0x100;
+const LATENCY_PROBE_HELPER_COMM: [u8; TASK_COMM_LEN] = *b"daed-latency\0\0\0\0";
 const OUTBOUND_DIRECT: u8 = 0;
 const OUTBOUND_BLOCK: u8 = 1;
 const OUTBOUND_MUST_RULES: u8 = 0xfc;
@@ -154,9 +155,20 @@ pub fn pid_pname_for_packet(skb: *mut __sk_buff) -> *mut BpfPidPname {
 pub fn pid_is_control_plane(skb: *mut __sk_buff, pid_pname: *mut BpfPidPname) -> bool {
     if !pid_pname.is_null() {
         let pid_tproxy = crate::abi::param_control_plane_pid();
-        return pid_tproxy != 0 && unsafe { (*pid_pname).pid } == pid_tproxy;
+        if pid_tproxy != 0 && unsafe { (*pid_pname).pid } == pid_tproxy {
+            return true;
+        }
+        if (unsafe { (*skb).mark } & CONTROL_PLANE_SO_MARK) == CONTROL_PLANE_SO_MARK {
+            return unsafe {
+                names_equal(
+                    ptr::addr_of!((*pid_pname).pname).cast::<u8>(),
+                    LATENCY_PROBE_HELPER_COMM.as_ptr(),
+                )
+            };
+        }
+        return false;
     }
-    (unsafe { (*skb).mark } & 0x100) == 0x100
+    (unsafe { (*skb).mark } & CONTROL_PLANE_SO_MARK) == CONTROL_PLANE_SO_MARK
 }
 
 #[inline(always)]

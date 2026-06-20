@@ -3,11 +3,15 @@ use super::*;
 const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 
 fn fingerprint_config(global_tls_fields: &str, source: String) -> Config {
+    fingerprint_config_with_mark(1234, global_tls_fields, source)
+}
+
+fn fingerprint_config_with_mark(mark: u32, global_tls_fields: &str, source: String) -> Config {
     let config_source = r#"
         global {
         lan_interface: daerust0
         allow_insecure: false
-        so_mark_from_dae: 1234
+        so_mark_from_dae: __SO_MARK__
         mptcp: false
         __GLOBAL_TLS_FIELDS__
         }
@@ -25,6 +29,7 @@ fn fingerprint_config(global_tls_fields: &str, source: String) -> Config {
         fallback: direct
         }
         "#
+    .replace("__SO_MARK__", &mark.to_string())
     .replace("__GLOBAL_TLS_FIELDS__", global_tls_fields)
     .replace("__SOURCE__", &source);
     parse_config(&config_source)
@@ -60,6 +65,24 @@ pub(super) fn resident_dataplane_plan_carries_generic_link_fingerprint() {
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "safari_16_0");
     assert_eq!(utls.family, "safari");
+}
+
+#[test]
+pub(super) fn latency_probe_helper_preserves_fingerprint_and_adds_control_mark_when_config_mark_is_zero()
+ {
+    let link = vless_vision_fixture_url("chrome");
+    let config = fingerprint_config_with_mark(0, "", link.clone());
+    let normal_plans = build_resident_manual_probe_plans(&config);
+    let normal = normal_plans.get(&link).unwrap().as_ref().unwrap();
+    assert_eq!(normal.proxy.mark, 0);
+    assert!(normal.proxy.utls_fingerprint.is_some());
+
+    let helper_plans = build_resident_manual_probe_plans_for_helper(&config);
+    let helper = helper_plans.get(&link).unwrap().as_ref().unwrap();
+    assert_eq!(helper.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
+    let utls = helper.proxy.utls_fingerprint.as_ref().unwrap();
+    assert_eq!(utls.source, "link fp");
+    assert_eq!(utls.requested, "chrome");
 }
 
 #[test]

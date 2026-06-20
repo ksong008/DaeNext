@@ -21,6 +21,15 @@ pub(crate) struct ResidentProxyProbePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
 }
 
+impl ResidentProxyProbePlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_latency_probe_control_mark(
+        &mut self,
+        mark: u32,
+    ) {
+        Arc::make_mut(&mut self.proxy).apply_latency_probe_control_mark(mark);
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentTcpCheckPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) scheme: String,
