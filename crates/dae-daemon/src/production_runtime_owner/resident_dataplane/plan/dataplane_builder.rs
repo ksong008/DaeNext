@@ -82,6 +82,16 @@ pub(crate) fn build_resident_manual_probe_plans(
     plans
 }
 
+pub(crate) fn build_resident_manual_probe_plans_for_helper(
+    config: &Config,
+) -> BTreeMap<String, Result<ResidentProxyProbePlan, String>> {
+    let mut plans = build_resident_manual_probe_plans(config);
+    for plan in plans.values_mut().filter_map(|plan| plan.as_mut().ok()) {
+        plan.apply_latency_probe_control_mark(RESIDENT_CONTROL_PLANE_SO_MARK);
+    }
+    plans
+}
+
 pub(crate) fn build_resident_manual_probe_plan(
     config: &Config,
     node_tag: String,

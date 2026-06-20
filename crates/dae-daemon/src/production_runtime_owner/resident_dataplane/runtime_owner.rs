@@ -318,7 +318,7 @@ pub(crate) fn run_resident_manual_latency_probe_helper(
     reload_generation: u64,
     concurrency: usize,
 ) -> Vec<Value> {
-    let manual_probe_plans = plan::build_resident_manual_probe_plans(config);
+    let manual_probe_plans = plan::build_resident_manual_probe_plans_for_helper(config);
     probe_resident_manual_latency_snapshots(
         &manual_probe_plans,
         links,
