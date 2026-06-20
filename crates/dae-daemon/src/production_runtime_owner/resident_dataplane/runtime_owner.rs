@@ -297,7 +297,7 @@ impl ResidentManualProbeHandle {
                 .get("checkedAtUnix")
                 .and_then(Value::as_i64)
                 .unwrap_or_else(unix_now_secs);
-            let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64);
+            let latency_ms = latency_snapshot_group_latency_ms(snapshot);
             for link in links {
                 for group in &self.groups {
                     let _ = group.record_check_result_for_link(
@@ -310,6 +310,15 @@ impl ResidentManualProbeHandle {
             }
         }
     }
+}
+
+fn latency_snapshot_group_latency_ms(snapshot: &Value) -> Option<i64> {
+    let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64);
+    let alive = snapshot
+        .get("alive")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| latency_ms.is_some());
+    if alive { latency_ms } else { None }
 }
 
 pub(crate) fn run_resident_manual_latency_probe_helper(
@@ -471,5 +480,25 @@ mod tests {
         assert_eq!(evidence["runtime_handle_owner"], "resident-runtime-owner");
         assert_eq!(evidence["manual_probe_runtime_persistent"], false);
         assert_eq!(evidence["manual_probe_runtime_stopped"], true);
+    }
+
+    #[test]
+    fn latency_snapshot_group_latency_ignores_failed_placeholder_latency() {
+        let snapshot = json!({
+            "latencyMs": 10000,
+            "alive": false,
+            "message": "TLS handshake failed unexpected EOF",
+        });
+        assert_eq!(latency_snapshot_group_latency_ms(&snapshot), None);
+    }
+
+    #[test]
+    fn latency_snapshot_group_latency_keeps_alive_latency() {
+        let snapshot = json!({
+            "latencyMs": 37,
+            "alive": true,
+            "message": null,
+        });
+        assert_eq!(latency_snapshot_group_latency_ms(&snapshot), Some(37));
     }
 }
