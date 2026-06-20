@@ -336,6 +336,26 @@ pub(crate) fn run_resident_manual_latency_probe_helper(
     )
 }
 
+pub(crate) fn run_resident_manual_latency_probe_helper_streaming<F>(
+    config: &Config,
+    links: &[String],
+    reload_generation: u64,
+    concurrency: usize,
+    mut on_snapshot: F,
+) -> Result<(), String>
+where
+    F: FnMut(Value) -> Result<(), String>,
+{
+    let manual_probe_plans = plan::build_resident_manual_probe_plans_for_helper(config);
+    probe_resident_manual_latency_snapshots_streaming(
+        &manual_probe_plans,
+        links,
+        reload_generation,
+        concurrency,
+        &mut on_snapshot,
+    )
+}
+
 fn probe_resident_manual_latency_snapshots(
     manual_probe_plans: &BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
     links: &[String],
@@ -418,6 +438,91 @@ fn probe_resident_manual_latency_snapshots(
     }
     drop(runtime);
     preferred_latency_snapshots(snapshots)
+}
+
+fn probe_resident_manual_latency_snapshots_streaming<F>(
+    manual_probe_plans: &BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+    links: &[String],
+    reload_generation: u64,
+    concurrency: usize,
+    on_snapshot: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(Value) -> Result<(), String>,
+{
+    if links.is_empty() {
+        return Ok(());
+    }
+    let requested = links
+        .iter()
+        .filter(|link| !link.is_empty())
+        .cloned()
+        .collect::<HashSet<_>>();
+    if requested.is_empty() {
+        return Ok(());
+    }
+
+    let checked_at = unix_now_secs();
+    let mut tasks = Vec::new();
+    for link in requested {
+        match manual_probe_plans.get(&link) {
+            Some(Ok(candidate)) => tasks.push(candidate.clone()),
+            Some(Err(err)) => on_snapshot(manual_probe_unavailable_snapshot(
+                &link,
+                "native outbound probe not admitted for this node",
+                err,
+                checked_at,
+                reload_generation,
+            ))?,
+            None => on_snapshot(manual_probe_unavailable_snapshot(
+                &link,
+                "node is not present in the current runtime config",
+                "materialize/reload runtime before testing this node",
+                checked_at,
+                reload_generation,
+            ))?,
+        }
+    }
+
+    if tasks.is_empty() {
+        return Ok(());
+    }
+
+    let runtime = match build_transient_probe_runtime("manual latency probe") {
+        Ok(runtime) => runtime,
+        Err(detail) => {
+            for candidate in tasks {
+                on_snapshot(manual_probe_unavailable_snapshot(
+                    &candidate.link,
+                    "native outbound probe runtime unavailable",
+                    &detail,
+                    checked_at,
+                    reload_generation,
+                ))?;
+            }
+            return Ok(());
+        }
+    };
+
+    for chunk in tasks.chunks(concurrency.max(1)) {
+        runtime.block_on(async {
+            let mut handles = tokio::task::JoinSet::new();
+            for candidate in chunk.iter().cloned() {
+                handles.spawn(async move {
+                    probe_resident_candidate_tcp_latency_snapshot(candidate, reload_generation)
+                        .await
+                });
+            }
+            while let Some(result) = handles.join_next().await {
+                if let Ok(value) = result {
+                    on_snapshot(value)?;
+                }
+            }
+            Ok::<(), String>(())
+        })?;
+    }
+    drop(runtime);
+    Ok(())
 }
 
 pub(crate) fn build_transient_probe_runtime(

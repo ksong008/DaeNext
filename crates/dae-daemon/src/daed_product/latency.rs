@@ -25,14 +25,26 @@ pub(crate) struct LatencyProbeHelperRequest {
     pub(crate) concurrency: usize,
 }
 
-pub(crate) fn run_latency_probe_helper(
+#[derive(Debug)]
+pub(crate) struct LatencyProbeHelperStreamError {
+    pub(crate) snapshots: Vec<Value>,
+    pub(crate) message: String,
+}
+
+pub(crate) fn run_latency_probe_helper_streaming<F>(
     config_content: &str,
     reload_generation: u64,
     concurrency: usize,
     links: &[String],
-) -> Result<Vec<Value>, String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|err| format!("resolve latency probe helper executable: {err}"))?;
+    mut on_snapshot: F,
+) -> Result<Vec<Value>, LatencyProbeHelperStreamError>
+where
+    F: FnMut(&Value),
+{
+    let current_exe = std::env::current_exe().map_err(|err| LatencyProbeHelperStreamError {
+        snapshots: Vec::new(),
+        message: format!("resolve latency probe helper executable: {err}"),
+    })?;
     let request = LatencyProbeHelperRequest {
         schema_version: 1,
         scope: "manual-latency-probe".to_owned(),
@@ -44,86 +56,187 @@ pub(crate) fn run_latency_probe_helper(
         },
         concurrency: concurrency.max(1),
     };
-    let request_json = serde_json::to_vec(&request)
-        .map_err(|err| format!("encode latency probe helper request: {err}"))?;
+    let request_json =
+        serde_json::to_vec(&request).map_err(|err| LatencyProbeHelperStreamError {
+            snapshots: Vec::new(),
+            message: format!("encode latency probe helper request: {err}"),
+        })?;
     if request_json.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
-        return Err(format!(
-            "latency probe helper request exceeds {} bytes",
-            LATENCY_PROBE_HELPER_MAX_IO_BYTES
-        ));
+        return Err(LatencyProbeHelperStreamError {
+            snapshots: Vec::new(),
+            message: format!(
+                "latency probe helper request exceeds {} bytes",
+                LATENCY_PROBE_HELPER_MAX_IO_BYTES
+            ),
+        });
     }
+
     let mut child = Command::new(current_exe)
-        .args(["latency-probe-helper", "--stdin-json"])
+        .args(["latency-probe-helper", "--stdin-json-lines"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| format!("spawn latency probe helper: {err}"))?;
+        .map_err(|err| LatencyProbeHelperStreamError {
+            snapshots: Vec::new(),
+            message: format!("spawn latency probe helper: {err}"),
+        })?;
     {
         let Some(mut stdin) = child.stdin.take() else {
             let _ = child.kill();
-            return Err("open latency probe helper stdin: unavailable".to_owned());
+            return Err(LatencyProbeHelperStreamError {
+                snapshots: Vec::new(),
+                message: "open latency probe helper stdin: unavailable".to_owned(),
+            });
         };
-        stdin
-            .write_all(&request_json)
-            .map_err(|err| format!("write latency probe helper request: {err}"))?;
+        if let Err(err) = stdin.write_all(&request_json) {
+            let _ = child.kill();
+            return Err(LatencyProbeHelperStreamError {
+                snapshots: Vec::new(),
+                message: format!("write latency probe helper request: {err}"),
+            });
+        }
     }
+
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        return Err(LatencyProbeHelperStreamError {
+            snapshots: Vec::new(),
+            message: "open latency probe helper stdout: unavailable".to_owned(),
+        });
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        return Err(LatencyProbeHelperStreamError {
+            snapshots: Vec::new(),
+            message: "open latency probe helper stderr: unavailable".to_owned(),
+        });
+    };
+
+    let (line_tx, line_rx) = mpsc::channel::<Result<String, String>>();
+    let stdout_reader = thread::spawn(move || {
+        let reader = io::BufReader::new(stdout);
+        for line in reader.lines() {
+            if line_tx
+                .send(line.map_err(|err| format!("read latency probe helper stdout: {err}")))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let (stderr_tx, stderr_rx) = mpsc::channel::<String>();
+    let stderr_reader = thread::spawn(move || {
+        let mut reader = io::BufReader::new(stderr);
+        let mut stderr = String::new();
+        let _ = reader.read_to_string(&mut stderr);
+        let _ = stderr_tx.send(stderr);
+    });
+
+    let mut snapshots = Vec::new();
     let started = Instant::now();
-    loop {
+    let status = loop {
+        drain_latency_probe_helper_lines(
+            &line_rx,
+            reload_generation,
+            &mut snapshots,
+            &mut on_snapshot,
+        )
+        .map_err(|message| LatencyProbeHelperStreamError {
+            snapshots: snapshots.clone(),
+            message,
+        })?;
         match child
             .try_wait()
-            .map_err(|err| format!("wait latency probe helper: {err}"))?
-        {
-            Some(_) => break,
+            .map_err(|err| LatencyProbeHelperStreamError {
+                snapshots: snapshots.clone(),
+                message: format!("wait latency probe helper: {err}"),
+            })? {
+            Some(exit_status) => break Some(exit_status),
             None if started.elapsed() >= LATENCY_PROBE_HELPER_TIMEOUT => {
                 let _ = child.kill();
-                let output = child
-                    .wait_with_output()
-                    .map_err(|err| format!("collect timed-out latency probe helper: {err}"))?;
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!(
-                    "latency probe helper timed out after {:?}: {}",
-                    LATENCY_PROBE_HELPER_TIMEOUT,
-                    stderr.trim()
-                ));
+                break child.wait().ok();
             }
             None => thread::sleep(Duration::from_millis(20)),
         }
+    };
+
+    let _ = stdout_reader.join();
+    let _ = stderr_reader.join();
+    drain_latency_probe_helper_lines(
+        &line_rx,
+        reload_generation,
+        &mut snapshots,
+        &mut on_snapshot,
+    )
+    .map_err(|message| LatencyProbeHelperStreamError {
+        snapshots: snapshots.clone(),
+        message,
+    })?;
+
+    let stderr = stderr_rx.try_recv().unwrap_or_default();
+    let Some(status) = status else {
+        return Err(LatencyProbeHelperStreamError {
+            snapshots,
+            message: "latency probe helper exited without status".to_owned(),
+        });
+    };
+    if started.elapsed() >= LATENCY_PROBE_HELPER_TIMEOUT && !status.success() {
+        return Err(LatencyProbeHelperStreamError {
+            snapshots,
+            message: format!(
+                "latency probe helper timed out after {:?}: {}",
+                LATENCY_PROBE_HELPER_TIMEOUT,
+                stderr.trim()
+            ),
+        });
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|err| format!("collect latency probe helper output: {err}"))?;
-    if output.stdout.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
-        return Err(format!(
-            "latency probe helper stdout exceeds {} bytes",
-            LATENCY_PROBE_HELPER_MAX_IO_BYTES
-        ));
+    if !status.success() {
+        return Err(LatencyProbeHelperStreamError {
+            snapshots,
+            message: format!(
+                "latency probe helper exited with status {}: {}",
+                status,
+                stderr.trim()
+            ),
+        });
     }
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "latency probe helper exited with status {}: {}",
-            output.status,
-            stderr.trim()
-        ));
-    }
-    let response: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|err| format!("parse latency probe helper response: {err}"))?;
-    if response.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
-        return Err("latency probe helper response has unsupported schemaVersion".to_owned());
-    }
-    if response.get("scope").and_then(Value::as_str) != Some("manual-latency-probe") {
-        return Err("latency probe helper response has unsupported scope".to_owned());
-    }
-    if response.get("reloadGeneration").and_then(Value::as_u64) != Some(reload_generation) {
-        return Err("latency probe helper response reloadGeneration mismatch".to_owned());
-    }
-    let snapshots = response
-        .get("snapshots")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "latency probe helper response missing snapshots".to_owned())?
-        .clone();
     Ok(snapshots)
+}
+
+fn drain_latency_probe_helper_lines<F>(
+    line_rx: &Receiver<Result<String, String>>,
+    reload_generation: u64,
+    snapshots: &mut Vec<Value>,
+    on_snapshot: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(&Value),
+{
+    loop {
+        match line_rx.try_recv() {
+            Ok(Ok(line)) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let snapshot: Value = serde_json::from_str(line)
+                    .map_err(|err| format!("parse latency probe helper stream line: {err}"))?;
+                if snapshot.get("reloadGeneration").and_then(Value::as_u64)
+                    != Some(reload_generation)
+                {
+                    return Err("latency probe helper stream reloadGeneration mismatch".to_owned());
+                }
+                snapshots.push(snapshot);
+                if let Some(snapshot) = snapshots.last() {
+                    on_snapshot(snapshot);
+                }
+            }
+            Ok(Err(err)) => return Err(err),
+            Err(mpsc::TryRecvError::Empty) => return Ok(()),
+            Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
 }
 
 pub(crate) fn latency_probe_helper_parent_chunk_size(
@@ -141,6 +254,51 @@ pub(crate) fn latency_probe_helper_parent_chunk_size(
 }
 
 pub(crate) fn latency_probe_helper_response_from_request(input: &[u8]) -> Result<Value, String> {
+    let request = latency_probe_helper_request_from_input(input)?;
+    let config = build_runtime_config_from_content(&request.config.content)?;
+    let snapshots = crate::production_runtime_owner::run_resident_manual_latency_probe_helper(
+        &config,
+        &request.requested_links,
+        request.reload_generation,
+        request.concurrency.max(1),
+    );
+    Ok(json!({
+        "schemaVersion": 1,
+        "scope": "manual-latency-probe",
+        "reloadGeneration": request.reload_generation,
+        "snapshots": snapshots,
+        "errors": [],
+    }))
+}
+
+pub(crate) fn latency_probe_helper_response_lines_from_request<W: Write>(
+    input: &[u8],
+    mut writer: W,
+) -> Result<(), String> {
+    let request = latency_probe_helper_request_from_input(input)?;
+    let config = build_runtime_config_from_content(&request.config.content)?;
+    crate::production_runtime_owner::run_resident_manual_latency_probe_helper_streaming(
+        &config,
+        &request.requested_links,
+        request.reload_generation,
+        request.concurrency.max(1),
+        |snapshot| {
+            serde_json::to_writer(&mut writer, &snapshot)
+                .map_err(|err| format!("write latency probe helper stream snapshot: {err}"))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|err| format!("write latency probe helper stream newline: {err}"))?;
+            writer
+                .flush()
+                .map_err(|err| format!("flush latency probe helper stream: {err}"))?;
+            Ok(())
+        },
+    )
+}
+
+fn latency_probe_helper_request_from_input(
+    input: &[u8],
+) -> Result<LatencyProbeHelperRequest, String> {
     if input.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
         return Err(format!(
             "latency probe helper stdin exceeds {} bytes",
@@ -158,20 +316,7 @@ pub(crate) fn latency_probe_helper_response_from_request(input: &[u8]) -> Result
     if request.config.source != "current-runtime-config" {
         return Err("unsupported latency probe helper config source".to_owned());
     }
-    let config = build_runtime_config_from_content(&request.config.content)?;
-    let snapshots = crate::production_runtime_owner::run_resident_manual_latency_probe_helper(
-        &config,
-        &request.requested_links,
-        request.reload_generation,
-        request.concurrency.max(1),
-    );
-    Ok(json!({
-        "schemaVersion": 1,
-        "scope": "manual-latency-probe",
-        "reloadGeneration": request.reload_generation,
-        "snapshots": snapshots,
-        "errors": [],
-    }))
+    Ok(request)
 }
 
 pub(crate) fn latency_probe_failure_snapshots(
@@ -207,6 +352,25 @@ pub(crate) fn latency_probe_failure_snapshots(
             })
         })
         .collect()
+}
+
+pub(crate) fn latency_probe_failure_snapshots_for_unseen_links(
+    links: &[String],
+    reload_generation: u64,
+    reason: &str,
+    detail: &str,
+    seen_snapshots: &[Value],
+) -> Vec<Value> {
+    let seen_link_hashes = seen_snapshots
+        .iter()
+        .filter_map(runtime_latency_snapshot_link_hash)
+        .collect::<HashSet<_>>();
+    let unseen_links = links
+        .iter()
+        .filter(|link| !seen_link_hashes.contains(runtime_link_hash(link).as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    latency_probe_failure_snapshots(&unseen_links, reload_generation, reason, detail)
 }
 
 fn graph_id_from_runtime_link_hash(link_hash: &str) -> String {
@@ -488,29 +652,58 @@ fn run_node_latency_job_inner(
         let chunk_size = chunk_size.max(1);
         for link_chunk in latency_probe_link_chunks(nodes, chunk_size) {
             let chunk_nodes = latency_probe_nodes_for_links(nodes, &link_chunk);
+            let mut write_error = None;
             let runtime_snapshots =
-                runtime
-                    .probe_node_latencies(&link_chunk)
-                    .unwrap_or_else(|| {
-                        latency_probe_failure_snapshots(
-                            &link_chunk,
-                            0,
-                            "native outbound probe unavailable",
-                            "materialize/reload Rust runtime before testing this node",
-                        )
-                    });
-            let results =
-                node_latency_results_for_runtime_snapshots(&chunk_nodes, &runtime_snapshots);
-            write_node_latency_results(&mut conn, &results)?;
-            completed = completed.saturating_add(results.len());
-            succeeded =
-                succeeded.saturating_add(results.iter().filter(|result| result.alive).count());
-            jobs.mark_progress(
-                job_id,
-                completed,
-                succeeded,
-                completed.saturating_sub(succeeded),
-            );
+                runtime.probe_node_latencies_streaming(&link_chunk, |runtime_snapshots| {
+                    if write_error.is_some() {
+                        return;
+                    }
+                    let results = node_latency_results_for_runtime_snapshots_only(
+                        &chunk_nodes,
+                        runtime_snapshots,
+                    );
+                    if results.is_empty() {
+                        return;
+                    }
+                    match write_node_latency_results(&mut conn, &results) {
+                        Ok(()) => {
+                            completed = completed.saturating_add(results.len());
+                            succeeded = succeeded.saturating_add(
+                                results.iter().filter(|result| result.alive).count(),
+                            );
+                            jobs.mark_progress(
+                                job_id,
+                                completed,
+                                succeeded,
+                                completed.saturating_sub(succeeded),
+                            );
+                        }
+                        Err(err) => write_error = Some(err),
+                    }
+                });
+            if let Some(err) = write_error {
+                return Err(err);
+            }
+            if runtime_snapshots.is_none() {
+                let runtime_snapshots = latency_probe_failure_snapshots(
+                    &link_chunk,
+                    0,
+                    "native outbound probe unavailable",
+                    "materialize/reload Rust runtime before testing this node",
+                );
+                let results =
+                    node_latency_results_for_runtime_snapshots(&chunk_nodes, &runtime_snapshots);
+                write_node_latency_results(&mut conn, &results)?;
+                completed = completed.saturating_add(results.len());
+                succeeded =
+                    succeeded.saturating_add(results.iter().filter(|result| result.alive).count());
+                jobs.mark_progress(
+                    job_id,
+                    completed,
+                    succeeded,
+                    completed.saturating_sub(succeeded),
+                );
+            }
         }
     } else if !nodes.is_empty() {
         let tested_at = now_text();
@@ -590,6 +783,13 @@ fn node_latency_results_for_runtime_snapshots(
         &tested_at,
     ));
     results
+}
+
+pub(crate) fn node_latency_results_for_runtime_snapshots_only(
+    nodes: &[(i64, String, String)],
+    runtime_snapshots: &[Value],
+) -> Vec<NodeLatencyWrite> {
+    runtime_node_latency_results_for_nodes(nodes, runtime_snapshots).0
 }
 
 fn write_node_latency_results(

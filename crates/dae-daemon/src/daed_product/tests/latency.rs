@@ -174,6 +174,26 @@ pub(crate) fn latency_probe_helper_accepts_runtime_config_request() {
 }
 
 #[test]
+pub(crate) fn latency_probe_helper_stream_accepts_runtime_config_request() {
+    let content = test_config_with_node("one", "socks://127.0.0.1:1080#one", "egress");
+    let request = json!({
+        "schemaVersion": 1,
+        "scope": "manual-latency-probe",
+        "reloadGeneration": 7,
+        "requestedLinks": [],
+        "config": {
+            "source": "current-runtime-config",
+            "content": content,
+        },
+        "concurrency": 8,
+    });
+    let mut output = Vec::new();
+    latency_probe_helper_response_lines_from_request(request.to_string().as_bytes(), &mut output)
+        .unwrap();
+    assert!(output.is_empty());
+}
+
+#[test]
 pub(crate) fn latency_probe_link_chunks_preserve_unique_order_and_node_mapping() {
     let nodes = vec![
         (
@@ -304,6 +324,29 @@ pub(crate) fn latency_probe_helper_parent_chunk_size_uses_unique_link_count() {
 }
 
 #[test]
+pub(crate) fn latency_probe_failure_snapshots_only_cover_unseen_links() {
+    let links = vec![
+        "socks://127.0.0.1:1080#one".to_owned(),
+        "socks://127.0.0.1:1081#two".to_owned(),
+    ];
+    let seen = vec![fake_runtime_tcp_latency_snapshot(&links[0])];
+    let failures = latency_probe_failure_snapshots_for_unseen_links(
+        &links,
+        7,
+        "manual latency probe helper failed",
+        "stream interrupted",
+        &seen,
+    );
+
+    assert_eq!(failures.len(), 1);
+    assert_eq!(
+        failures[0]["linkHash"].as_str(),
+        Some(runtime_link_hash(&links[1]).as_str())
+    );
+    assert_eq!(failures[0]["alive"].as_bool(), Some(false));
+}
+
+#[test]
 pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
     let nodes = vec![
         (
@@ -361,6 +404,27 @@ pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
     assert_eq!(results[0].tested_at, iso8601_utc(42));
     assert!(tested_ids.contains(&11));
     assert!(!tested_ids.contains(&12));
+}
+
+#[test]
+pub(crate) fn streaming_latency_snapshot_writes_only_matching_nodes() {
+    let nodes = vec![
+        (
+            11,
+            "socks://127.0.0.1:1080#one".to_owned(),
+            "127.0.0.1:1080".to_owned(),
+        ),
+        (
+            12,
+            "socks://127.0.0.1:1081#two".to_owned(),
+            "127.0.0.1:1081".to_owned(),
+        ),
+    ];
+    let snapshot = fake_runtime_tcp_latency_snapshot(&nodes[0].1);
+    let streaming_results = node_latency_results_for_runtime_snapshots_only(&nodes, &[snapshot]);
+
+    assert_eq!(streaming_results.len(), 1);
+    assert_eq!(streaming_results[0].node_id, 11);
 }
 
 #[test]

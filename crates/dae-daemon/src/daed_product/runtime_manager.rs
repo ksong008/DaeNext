@@ -43,32 +43,55 @@ pub(super) enum ProductRuntimeProbeHandle {
 }
 
 impl ProductRuntimeProbeHandle {
-    pub(super) fn probe_node_latencies_without_group_update(&self, links: &[String]) -> Vec<Value> {
+    pub(super) fn probe_node_latencies_streaming_without_group_update<F>(
+        &self,
+        links: &[String],
+        mut on_snapshots: F,
+    ) -> Vec<Value>
+    where
+        F: FnMut(&[Value]),
+    {
         match self {
             Self::Resident {
                 handle,
                 config_content,
             } => {
                 if let Some(config_content) = config_content.as_deref() {
-                    match run_latency_probe_helper(
+                    match run_latency_probe_helper_streaming(
                         config_content,
                         handle.reload_generation(),
                         handle.probe_concurrency(),
                         links,
+                        |snapshot| on_snapshots(std::slice::from_ref(snapshot)),
                     ) {
                         Ok(snapshots) => snapshots,
-                        Err(err) => latency_probe_failure_snapshots(
-                            links,
-                            handle.reload_generation(),
-                            "manual latency probe helper failed",
-                            &err,
-                        ),
+                        Err(err) => {
+                            let failures = latency_probe_failure_snapshots_for_unseen_links(
+                                links,
+                                handle.reload_generation(),
+                                "manual latency probe helper failed",
+                                &err.message,
+                                &err.snapshots,
+                            );
+                            if !failures.is_empty() {
+                                on_snapshots(&failures);
+                            }
+                            let mut snapshots = err.snapshots;
+                            snapshots.extend(failures);
+                            snapshots
+                        }
                     }
                 } else {
-                    handle.probe_node_latencies_without_group_update(links)
+                    let snapshots = handle.probe_node_latencies_without_group_update(links);
+                    on_snapshots(&snapshots);
+                    snapshots
                 }
             }
-            Self::Fake => fake_runtime_probe_node_latencies(links),
+            Self::Fake => {
+                let snapshots = fake_runtime_probe_node_latencies(links);
+                on_snapshots(&snapshots);
+                snapshots
+            }
         }
     }
 
@@ -485,21 +508,45 @@ impl ProductRuntimeManager {
             .map(|handle| handle.probe_batch_size(unique_link_count))
     }
 
-    pub(super) fn probe_node_latencies(&self, links: &[String]) -> Option<Vec<Value>> {
+    pub(super) fn probe_node_latencies_streaming<F>(
+        &self,
+        links: &[String],
+        mut on_snapshots: F,
+    ) -> Option<Vec<Value>>
+    where
+        F: FnMut(&[Value]),
+    {
         let handle = self.node_latency_probe_handle()?;
         let generation = handle.probe_generation();
-        let snapshots = handle.probe_node_latencies_without_group_update(links);
+        let mut emitted_snapshots = Vec::<Value>::new();
+        let snapshots =
+            handle.probe_node_latencies_streaming_without_group_update(links, |snapshots| {
+                if let Some(generation) = generation
+                    && self.current_probe_generation() != Some(generation)
+                {
+                    return;
+                }
+                handle.apply_latency_probe_snapshots_to_groups(snapshots);
+                on_snapshots(snapshots);
+                emitted_snapshots.extend_from_slice(snapshots);
+            });
         if let Some(generation) = generation
             && self.current_probe_generation() != Some(generation)
         {
-            return Some(latency_probe_failure_snapshots(
+            let failures = latency_probe_failure_snapshots_for_unseen_links(
                 links,
                 generation,
                 "manual latency probe result discarded",
                 "resident runtime generation changed while latency probe was running",
-            ));
+                &emitted_snapshots,
+            );
+            if !failures.is_empty() {
+                on_snapshots(&failures);
+                let mut snapshots = snapshots;
+                snapshots.extend(failures);
+                return Some(snapshots);
+            }
         }
-        handle.apply_latency_probe_snapshots_to_groups(&snapshots);
         Some(snapshots)
     }
 

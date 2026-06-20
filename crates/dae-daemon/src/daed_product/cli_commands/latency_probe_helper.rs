@@ -3,8 +3,10 @@ use super::*;
 const LATENCY_PROBE_HELPER_TASK_COMM: &[u8] = b"daed-latency\0";
 
 pub(crate) fn run_latency_probe_helper_command(args: &[String]) -> DaedProductOutput {
-    if args != ["--stdin-json"] {
-        return DaedProductOutput::usage("latency-probe-helper requires --stdin-json");
+    if args != ["--stdin-json"] && args != ["--stdin-json-lines"] {
+        return DaedProductOutput::usage(
+            "latency-probe-helper requires --stdin-json or --stdin-json-lines",
+        );
     }
     if let Err(err) = set_latency_probe_helper_task_comm() {
         return DaedProductOutput::error(format!("prepare latency probe helper identity: {err}"));
@@ -13,6 +15,14 @@ pub(crate) fn run_latency_probe_helper_command(args: &[String]) -> DaedProductOu
     let mut stdin = io::stdin().take((LATENCY_PROBE_HELPER_MAX_IO_BYTES as u64) + 1);
     if let Err(err) = stdin.read_to_end(&mut input) {
         return DaedProductOutput::error(format!("read latency probe helper stdin: {err}"));
+    }
+    if args == ["--stdin-json-lines"] {
+        let stdout = io::stdout();
+        let mut writer = io::BufWriter::new(stdout.lock());
+        return match latency_probe_helper_response_lines_from_request(&input, &mut writer) {
+            Ok(()) => DaedProductOutput::ok(String::new()),
+            Err(err) => DaedProductOutput::error(format!("latency probe helper failed: {err}")),
+        };
     }
     match latency_probe_helper_response_from_request(&input) {
         Ok(response) => DaedProductOutput::ok(format!("{response}\n")),
