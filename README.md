@@ -148,3 +148,8 @@ and the
 ## Stargazers over time
 
 [![Stargazers over time](https://starchart.cc/ksong008/DaeNext.svg)](https://starchart.cc/ksong008/DaeNext)
+
+## Original Source
+
+This project originates from the dae project:
+[https://github.com/daeuniverse/dae](https://github.com/daeuniverse/dae).
