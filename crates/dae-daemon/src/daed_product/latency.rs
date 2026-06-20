@@ -776,11 +776,7 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
                 latency_ms,
                 alive,
                 tested_at: checked_at.clone(),
-                message: if latency_ms.is_some() {
-                    None
-                } else {
-                    message.clone()
-                },
+                message: if alive { None } else { message.clone() },
             });
         }
     }

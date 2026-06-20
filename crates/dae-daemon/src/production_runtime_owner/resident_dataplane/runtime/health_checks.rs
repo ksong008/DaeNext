@@ -280,20 +280,35 @@ pub(crate) fn latency_snapshot_link_hash(value: &Value) -> Option<&str> {
 pub(crate) fn prefer_latency_snapshot(next: &Value, current: &Value) -> bool {
     let next_latency = next.get("latencyMs").and_then(Value::as_i64);
     let current_latency = current.get("latencyMs").and_then(Value::as_i64);
-    match (next_latency, current_latency) {
-        (Some(_), None) => true,
-        (None, Some(_)) => false,
-        (Some(next), Some(current)) => next < current,
-        (None, None) => {
-            next.get("checkedAtUnix")
-                .and_then(Value::as_i64)
-                .unwrap_or(0)
-                > current
-                    .get("checkedAtUnix")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0)
-        }
+    let next_alive = next
+        .get("alive")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| next_latency.is_some());
+    let current_alive = current
+        .get("alive")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| current_latency.is_some());
+    match (next_alive, current_alive) {
+        (true, false) => true,
+        (false, true) => false,
+        (true, true) => match (next_latency, current_latency) {
+            (Some(next), Some(current)) => next < current,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => latency_snapshot_is_newer(next, current),
+        },
+        (false, false) => latency_snapshot_is_newer(next, current),
     }
+}
+
+fn latency_snapshot_is_newer(next: &Value, current: &Value) -> bool {
+    next.get("checkedAtUnix")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        > current
+            .get("checkedAtUnix")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
 }
 
 pub(crate) fn latency_link_identity_value(
@@ -399,4 +414,58 @@ pub(crate) fn sleep_until_stopped(stop: &AtomicBool, duration: Duration) -> bool
         thread::sleep((duration - elapsed).min(Duration::from_millis(100)));
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferred_latency_snapshots_prefers_newer_failed_error_over_old_placeholder_latency() {
+        let values = preferred_latency_snapshots([
+            json!({
+                "linkHash": "sha256:one",
+                "latencyMs": 10000,
+                "alive": false,
+                "checkedAtUnix": 10,
+                "message": "unavailable",
+            }),
+            json!({
+                "linkHash": "sha256:one",
+                "latencyMs": null,
+                "alive": false,
+                "checkedAtUnix": 11,
+                "message": "TLS handshake failed unexpected EOF",
+            }),
+        ]);
+        assert_eq!(values.len(), 1);
+        assert_eq!(
+            values[0]["message"],
+            json!("TLS handshake failed unexpected EOF")
+        );
+        assert_eq!(values[0]["latencyMs"], Value::Null);
+    }
+
+    #[test]
+    fn preferred_latency_snapshots_keeps_alive_result_over_newer_failure() {
+        let values = preferred_latency_snapshots([
+            json!({
+                "linkHash": "sha256:one",
+                "latencyMs": 120,
+                "alive": true,
+                "checkedAtUnix": 10,
+                "message": null,
+            }),
+            json!({
+                "linkHash": "sha256:one",
+                "latencyMs": null,
+                "alive": false,
+                "checkedAtUnix": 11,
+                "message": "timeout",
+            }),
+        ]);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0]["latencyMs"], json!(120));
+        assert_eq!(values[0]["alive"], json!(true));
+    }
 }
