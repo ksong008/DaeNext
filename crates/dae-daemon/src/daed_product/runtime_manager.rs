@@ -85,8 +85,15 @@ impl ProductRuntimeProbeHandle {
         }
     }
 
-    pub(super) fn probe_concurrency(&self) -> usize {
+    pub(super) fn probe_batch_size(&self, unique_link_count: usize) -> usize {
         match self {
+            Self::Resident {
+                handle,
+                config_content: Some(_),
+            } => latency_probe_helper_parent_chunk_size(
+                handle.probe_concurrency(),
+                unique_link_count,
+            ),
             Self::Resident { handle, .. } => handle.probe_concurrency(),
             Self::Fake => 8,
         }
@@ -473,9 +480,9 @@ impl ProductRuntimeManager {
         }
     }
 
-    pub(super) fn node_latency_probe_concurrency(&self) -> Option<usize> {
+    pub(super) fn node_latency_probe_batch_size(&self, unique_link_count: usize) -> Option<usize> {
         self.node_latency_probe_handle()
-            .map(|handle| handle.probe_concurrency())
+            .map(|handle| handle.probe_batch_size(unique_link_count))
     }
 
     pub(super) fn probe_node_latencies(&self, links: &[String]) -> Option<Vec<Value>> {

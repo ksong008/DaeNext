@@ -221,6 +221,89 @@ pub(crate) fn latency_probe_link_chunks_preserve_unique_order_and_node_mapping()
 }
 
 #[test]
+pub(crate) fn latency_probe_helper_parent_chunk_size_groups_bounded_internal_batches() {
+    assert_eq!(latency_probe_helper_parent_chunk_size(0, 0), 1);
+    assert_eq!(
+        latency_probe_helper_parent_chunk_size(0, 27),
+        LATENCY_PROBE_HELPER_PARENT_MAX_INTERNAL_BATCHES
+    );
+    assert_eq!(latency_probe_helper_parent_chunk_size(8, 1), 1);
+    assert_eq!(
+        latency_probe_helper_parent_chunk_size(8, 27),
+        LATENCY_PROBE_HELPER_PARENT_CONSERVATIVE_LINK_CAP
+    );
+    assert_eq!(latency_probe_helper_parent_chunk_size(32, 129), 32);
+
+    let make_nodes = |count, port_base: i64, prefix: &str| {
+        (0..count)
+            .map(|index| {
+                (
+                    index,
+                    format!("socks://127.0.0.1:{}#{prefix}-{index}", port_base + index),
+                    "127.0.0.1".to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let nodes = make_nodes(27, 10_000, "node");
+    let chunks = latency_probe_link_chunks(
+        &nodes,
+        latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
+    );
+    assert_eq!(
+        chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![16, 11]
+    );
+
+    let nodes = make_nodes(50, 20_000, "many");
+    let chunks = latency_probe_link_chunks(
+        &nodes,
+        latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
+    );
+    assert_eq!(
+        chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![16, 16, 16, 2]
+    );
+
+    let nodes = make_nodes(129, 30_000, "large");
+    let chunks = latency_probe_link_chunks(
+        &nodes,
+        latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
+    );
+    let mut expected = vec![16; 8];
+    expected.push(1);
+    assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), expected);
+}
+
+#[test]
+pub(crate) fn latency_probe_helper_parent_chunk_size_uses_unique_link_count() {
+    let mut nodes = (0..27)
+        .map(|index| {
+            (
+                index,
+                format!("socks://127.0.0.1:{}#node-{index}", 10_000 + index),
+                "127.0.0.1".to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    nodes.push((
+        1000,
+        "socks://127.0.0.1:10000#node-0".to_owned(),
+        "127.0.0.1".to_owned(),
+    ));
+    assert_eq!(latency_probe_unique_link_count(&nodes), 27);
+    let chunks = latency_probe_link_chunks(
+        &nodes,
+        latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
+    );
+    assert_eq!(
+        chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![16, 11]
+    );
+}
+
+#[test]
 pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
     let nodes = vec![
         (
