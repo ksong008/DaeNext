@@ -300,7 +300,7 @@ impl ResidentManualProbeHandle {
             let latency_ms = latency_snapshot_group_latency_ms(snapshot);
             for link in links {
                 for group in &self.groups {
-                    let _ = group.record_check_result_for_link(
+                    let _ = group.record_manual_latency_result_for_link(
                         link,
                         NetworkType::TCP4,
                         latency_ms,
