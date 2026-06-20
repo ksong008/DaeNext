@@ -66,6 +66,7 @@ pub(crate) use resident_dataplane::{
     resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
     resident_live_adapter_matrix_contract, resident_live_adapter_udp_probe,
     resident_live_matrix_evidence_from_env, resident_runtime_defaults_contract,
+    run_resident_manual_latency_probe_helper,
 };
 pub use resident_dataplane::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,

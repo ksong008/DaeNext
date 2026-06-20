@@ -95,6 +95,7 @@ pub(in crate::daed_product) fn api_runtime_reload(
         response.insert("runtimeStarted".to_owned(), json!(false));
         return HttpResponse::json(200, Value::Object(response));
     }
+    let config_content = content.clone();
     drop(content);
     drop(preview);
     if let Err(err) = set_runtime_log_level_from_config(&app.state, &config) {
@@ -118,7 +119,11 @@ pub(in crate::daed_product) fn api_runtime_reload(
     ) {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
-    let runtime = match app.runtime.reload(config, "api-runtime-reload") {
+    let runtime = match app.runtime.reload_with_config_content(
+        config,
+        Some(config_content),
+        "api-runtime-reload",
+    ) {
         Ok(outcome) => outcome.report,
         Err(err) => {
             let mut fields = BTreeMap::new();

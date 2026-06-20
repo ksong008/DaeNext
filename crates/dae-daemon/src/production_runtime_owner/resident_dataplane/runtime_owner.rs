@@ -249,96 +249,166 @@ impl ResidentRuntimeOwner {
 }
 
 impl ResidentManualProbeHandle {
+    pub(crate) fn reload_generation(&self) -> u64 {
+        self.reload_generation
+    }
+
     pub(crate) fn probe_concurrency(&self) -> usize {
         self.resource_config.manual_probe_concurrency.value()
     }
 
-    pub(crate) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
-        if links.is_empty() {
-            return Vec::new();
-        }
-        let requested = links
-            .iter()
-            .filter(|link| !link.is_empty())
-            .cloned()
-            .collect::<HashSet<_>>();
-        if requested.is_empty() {
-            return Vec::new();
-        }
+    pub(crate) fn probe_node_latencies_without_group_update(&self, links: &[String]) -> Vec<Value> {
+        probe_resident_manual_latency_snapshots(
+            &self.manual_probe_plans,
+            links,
+            self.reload_generation,
+            self.probe_concurrency(),
+        )
+    }
 
-        let checked_at = unix_now_secs();
-        let reload_generation = self.reload_generation;
-        let mut snapshots = Vec::new();
-        let mut tasks = Vec::new();
-        for link in requested {
-            match self.manual_probe_plans.get(&link) {
-                Some(Ok(candidate)) => tasks.push(candidate.clone()),
-                Some(Err(err)) => snapshots.push(manual_probe_unavailable_snapshot(
-                    &link,
-                    "native outbound probe not admitted for this node",
-                    err,
-                    checked_at,
-                    reload_generation,
-                )),
-                None => snapshots.push(manual_probe_unavailable_snapshot(
-                    &link,
-                    "node is not present in the current runtime config",
-                    "materialize/reload runtime before testing this node",
-                    checked_at,
-                    reload_generation,
-                )),
+    pub(crate) fn apply_latency_probe_snapshots_to_groups(&self, snapshots: &[Value]) {
+        if self.groups.is_empty() || snapshots.is_empty() {
+            return;
+        }
+        let mut links_by_hash = BTreeMap::<&str, Vec<&str>>::new();
+        for (link, candidate) in &self.manual_probe_plans {
+            let Ok(candidate) = candidate else {
+                continue;
+            };
+            links_by_hash
+                .entry(candidate.link_hash.as_str())
+                .or_default()
+                .push(link.as_str());
+        }
+        if links_by_hash.is_empty() {
+            return;
+        }
+        for snapshot in snapshots {
+            if snapshot.get("admission").is_some() {
+                continue;
+            }
+            let Some(link_hash) = latency_snapshot_link_hash(snapshot) else {
+                continue;
+            };
+            let Some(links) = links_by_hash.get(link_hash) else {
+                continue;
+            };
+            let checked_at = snapshot
+                .get("checkedAtUnix")
+                .and_then(Value::as_i64)
+                .unwrap_or_else(unix_now_secs);
+            let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64);
+            for link in links {
+                for group in &self.groups {
+                    let _ = group.record_check_result_for_link(
+                        link,
+                        NetworkType::TCP4,
+                        latency_ms,
+                        checked_at,
+                    );
+                }
             }
         }
+    }
+}
 
-        if tasks.is_empty() {
+pub(crate) fn run_resident_manual_latency_probe_helper(
+    config: &Config,
+    links: &[String],
+    reload_generation: u64,
+    concurrency: usize,
+) -> Vec<Value> {
+    let manual_probe_plans = plan::build_resident_manual_probe_plans(config);
+    probe_resident_manual_latency_snapshots(
+        &manual_probe_plans,
+        links,
+        reload_generation,
+        concurrency,
+    )
+}
+
+fn probe_resident_manual_latency_snapshots(
+    manual_probe_plans: &BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+    links: &[String],
+    reload_generation: u64,
+    concurrency: usize,
+) -> Vec<Value> {
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let requested = links
+        .iter()
+        .filter(|link| !link.is_empty())
+        .cloned()
+        .collect::<HashSet<_>>();
+    if requested.is_empty() {
+        return Vec::new();
+    }
+
+    let checked_at = unix_now_secs();
+    let mut snapshots = Vec::new();
+    let mut tasks = Vec::new();
+    for link in requested {
+        match manual_probe_plans.get(&link) {
+            Some(Ok(candidate)) => tasks.push(candidate.clone()),
+            Some(Err(err)) => snapshots.push(manual_probe_unavailable_snapshot(
+                &link,
+                "native outbound probe not admitted for this node",
+                err,
+                checked_at,
+                reload_generation,
+            )),
+            None => snapshots.push(manual_probe_unavailable_snapshot(
+                &link,
+                "node is not present in the current runtime config",
+                "materialize/reload runtime before testing this node",
+                checked_at,
+                reload_generation,
+            )),
+        }
+    }
+
+    if tasks.is_empty() {
+        return preferred_latency_snapshots(snapshots);
+    }
+
+    let runtime = match build_transient_probe_runtime("manual latency probe") {
+        Ok(runtime) => runtime,
+        Err(detail) => {
+            snapshots.extend(tasks.into_iter().map(|candidate| {
+                manual_probe_unavailable_snapshot(
+                    &candidate.link,
+                    "native outbound probe runtime unavailable",
+                    &detail,
+                    checked_at,
+                    reload_generation,
+                )
+            }));
             return preferred_latency_snapshots(snapshots);
         }
+    };
 
-        let runtime = match build_transient_probe_runtime("manual latency probe") {
-            Ok(runtime) => runtime,
-            Err(detail) => {
-                snapshots.extend(tasks.into_iter().map(|candidate| {
-                    manual_probe_unavailable_snapshot(
-                        &candidate.link,
-                        "native outbound probe runtime unavailable",
-                        &detail,
-                        checked_at,
-                        reload_generation,
-                    )
-                }));
-                return preferred_latency_snapshots(snapshots);
-            }
-        };
-
-        let concurrency = self.resource_config.manual_probe_concurrency.value();
-        for chunk in tasks.chunks(concurrency) {
-            let groups = self.groups.clone();
-            let mut chunk_snapshots = runtime.block_on(async {
-                let mut handles = Vec::new();
-                for candidate in chunk.iter().cloned() {
-                    let groups = groups.clone();
-                    handles.push(tokio::spawn(async move {
-                        probe_resident_candidate_tcp_latency_snapshot(
-                            groups,
-                            candidate,
-                            reload_generation,
-                        )
+    for chunk in tasks.chunks(concurrency.max(1)) {
+        let mut chunk_snapshots = runtime.block_on(async {
+            let mut handles = Vec::new();
+            for candidate in chunk.iter().cloned() {
+                handles.push(tokio::spawn(async move {
+                    probe_resident_candidate_tcp_latency_snapshot(candidate, reload_generation)
                         .await
-                    }));
+                }));
+            }
+            let mut values = Vec::new();
+            for handle in handles {
+                if let Ok(value) = handle.await {
+                    values.push(value);
                 }
-                let mut values = Vec::new();
-                for handle in handles {
-                    if let Ok(value) = handle.await {
-                        values.push(value);
-                    }
-                }
-                values
-            });
-            snapshots.append(&mut chunk_snapshots);
-        }
-        drop(runtime);
-        preferred_latency_snapshots(snapshots)
+            }
+            values
+        });
+        snapshots.append(&mut chunk_snapshots);
     }
+    drop(runtime);
+    preferred_latency_snapshots(snapshots)
 }
 
 pub(crate) fn build_transient_probe_runtime(
