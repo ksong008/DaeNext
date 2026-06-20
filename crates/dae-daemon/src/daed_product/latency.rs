@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const LATENCY_PROBE_HELPER_MAX_IO_BYTES: usize = 64 * 1024 * 1024;
 const LATENCY_PROBE_HELPER_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const LATENCY_PROBE_HELPER_PARENT_MAX_INTERNAL_BATCHES: usize = 2;
+pub(crate) const LATENCY_PROBE_HELPER_PARENT_CONSERVATIVE_LINK_CAP: usize = 16;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct LatencyProbeHelperConfig {
@@ -122,6 +124,20 @@ pub(crate) fn run_latency_probe_helper(
         .ok_or_else(|| "latency probe helper response missing snapshots".to_owned())?
         .clone();
     Ok(snapshots)
+}
+
+pub(crate) fn latency_probe_helper_parent_chunk_size(
+    concurrency: usize,
+    unique_link_count: usize,
+) -> usize {
+    let concurrency = concurrency.max(1);
+    let unique_link_count = unique_link_count.max(1);
+    let max_links_per_helper = concurrency.max(
+        concurrency
+            .saturating_mul(LATENCY_PROBE_HELPER_PARENT_MAX_INTERNAL_BATCHES)
+            .min(LATENCY_PROBE_HELPER_PARENT_CONSERVATIVE_LINK_CAP),
+    );
+    unique_link_count.min(max_links_per_helper.max(1))
 }
 
 pub(crate) fn latency_probe_helper_response_from_request(input: &[u8]) -> Result<Value, String> {
@@ -466,7 +482,9 @@ fn run_node_latency_job_inner(
     let mut completed = 0usize;
     let mut succeeded = 0usize;
 
-    if let Some(chunk_size) = runtime.node_latency_probe_concurrency() {
+    if let Some(chunk_size) =
+        runtime.node_latency_probe_batch_size(latency_probe_unique_link_count(nodes))
+    {
         let chunk_size = chunk_size.max(1);
         for link_chunk in latency_probe_link_chunks(nodes, chunk_size) {
             let chunk_nodes = latency_probe_nodes_for_links(nodes, &link_chunk);
@@ -521,6 +539,17 @@ pub(crate) fn latency_probe_link_chunks(
     nodes: &[(i64, String, String)],
     chunk_size: usize,
 ) -> Vec<Vec<String>> {
+    latency_probe_unique_links(nodes)
+        .chunks(chunk_size.max(1))
+        .map(|chunk| chunk.to_vec())
+        .collect()
+}
+
+pub(crate) fn latency_probe_unique_link_count(nodes: &[(i64, String, String)]) -> usize {
+    latency_probe_unique_links(nodes).len()
+}
+
+fn latency_probe_unique_links(nodes: &[(i64, String, String)]) -> Vec<String> {
     let mut seen = HashSet::with_capacity(nodes.len());
     let mut links = Vec::with_capacity(nodes.len());
     for (_, link, _) in nodes {
@@ -529,9 +558,6 @@ pub(crate) fn latency_probe_link_chunks(
         }
     }
     links
-        .chunks(chunk_size.max(1))
-        .map(|chunk| chunk.to_vec())
-        .collect()
 }
 
 pub(crate) fn latency_probe_nodes_for_links(
