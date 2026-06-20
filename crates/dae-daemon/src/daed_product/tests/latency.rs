@@ -152,6 +152,28 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
 }
 
 #[test]
+pub(crate) fn latency_probe_helper_accepts_runtime_config_request() {
+    let content = test_config_with_node("one", "socks://127.0.0.1:1080#one", "egress");
+    let request = json!({
+        "schemaVersion": 1,
+        "scope": "manual-latency-probe",
+        "reloadGeneration": 7,
+        "requestedLinks": [],
+        "config": {
+            "source": "current-runtime-config",
+            "content": content,
+        },
+        "concurrency": 8,
+    });
+    let response =
+        latency_probe_helper_response_from_request(request.to_string().as_bytes()).unwrap();
+    assert_eq!(response["schemaVersion"].as_u64(), Some(1));
+    assert_eq!(response["scope"].as_str(), Some("manual-latency-probe"));
+    assert_eq!(response["reloadGeneration"].as_u64(), Some(7));
+    assert_eq!(response["snapshots"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
 pub(crate) fn latency_probe_link_chunks_preserve_unique_order_and_node_mapping() {
     let nodes = vec![
         (
