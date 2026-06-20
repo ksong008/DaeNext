@@ -8,6 +8,7 @@ pub(super) struct ProductRuntimeManager {
 pub(super) struct ProductRuntimeState {
     pub(super) runtime: Option<ProductRuntimeInstance>,
     pub(super) config: Option<Config>,
+    pub(super) config_content: Option<String>,
     pub(super) last_error: Option<String>,
     pub(super) last_transition_at: Option<String>,
     pub(super) runtime_started_at: Option<String>,
@@ -34,21 +35,59 @@ pub(super) struct FakeProductRuntime {
 }
 
 pub(super) enum ProductRuntimeProbeHandle {
-    Resident(Box<ResidentManualProbeHandle>),
+    Resident {
+        handle: Box<ResidentManualProbeHandle>,
+        config_content: Option<String>,
+    },
     Fake,
 }
 
 impl ProductRuntimeProbeHandle {
-    pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+    pub(super) fn probe_node_latencies_without_group_update(&self, links: &[String]) -> Vec<Value> {
         match self {
-            Self::Resident(handle) => handle.probe_node_latencies(links),
+            Self::Resident {
+                handle,
+                config_content,
+            } => {
+                if let Some(config_content) = config_content.as_deref() {
+                    match run_latency_probe_helper(
+                        config_content,
+                        handle.reload_generation(),
+                        handle.probe_concurrency(),
+                        links,
+                    ) {
+                        Ok(snapshots) => snapshots,
+                        Err(err) => latency_probe_failure_snapshots(
+                            links,
+                            handle.reload_generation(),
+                            "manual latency probe helper failed",
+                            &err,
+                        ),
+                    }
+                } else {
+                    handle.probe_node_latencies_without_group_update(links)
+                }
+            }
             Self::Fake => fake_runtime_probe_node_latencies(links),
+        }
+    }
+
+    pub(super) fn apply_latency_probe_snapshots_to_groups(&self, snapshots: &[Value]) {
+        if let Self::Resident { handle, .. } = self {
+            handle.apply_latency_probe_snapshots_to_groups(snapshots);
+        }
+    }
+
+    pub(super) fn probe_generation(&self) -> Option<u64> {
+        match self {
+            Self::Resident { handle, .. } => Some(handle.reload_generation()),
+            Self::Fake => None,
         }
     }
 
     pub(super) fn probe_concurrency(&self) -> usize {
         match self {
-            Self::Resident(handle) => handle.probe_concurrency(),
+            Self::Resident { handle, .. } => handle.probe_concurrency(),
             Self::Fake => 8,
         }
     }
@@ -141,14 +180,16 @@ impl ProductRuntimeManager {
         }
     }
 
-    pub(super) fn reload(
+    pub(super) fn reload_with_config_content(
         &self,
         config: Config,
+        config_content: Option<String>,
         source: &str,
     ) -> Result<RuntimeStartOutcome, String> {
         let (
             previous_runtime,
             previous_config,
+            previous_config_content,
             previous_runtime_started_at,
             previous_runtime_was_running,
             lifecycle_epoch,
@@ -160,6 +201,7 @@ impl ProductRuntimeManager {
             inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
             let previous_runtime = inner.runtime.take();
             let previous_config = inner.config.clone();
+            let previous_config_content = inner.config_content.clone();
             let previous_runtime_started_at = inner.runtime_started_at.clone();
             let previous_runtime_was_running = previous_runtime.is_some();
             if let Some(runtime) = previous_runtime.as_ref() {
@@ -168,6 +210,7 @@ impl ProductRuntimeManager {
             (
                 previous_runtime,
                 previous_config,
+                previous_config_content,
                 previous_runtime_started_at,
                 previous_runtime_was_running,
                 inner.lifecycle_epoch,
@@ -192,6 +235,7 @@ impl ProductRuntimeManager {
                 let transition_at = now_text();
                 inner.runtime = Some(runtime);
                 inner.config = Some(config);
+                inner.config_content = config_content;
                 inner.reload_count += 1;
                 inner.last_error = None;
                 inner.last_transition_at = Some(transition_at.clone());
@@ -233,6 +277,7 @@ impl ProductRuntimeManager {
                     Ok((runtime, report)) => {
                         inner.runtime = Some(runtime);
                         inner.config = previous_config.clone();
+                        inner.config_content = previous_config_content.clone();
                         inner.runtime_started_at = previous_runtime_started_at.clone();
                         inner.last_report = Some(report);
                         true
@@ -240,6 +285,7 @@ impl ProductRuntimeManager {
                     Err(restore_err) => {
                         inner.runtime = None;
                         inner.config = None;
+                        inner.config_content = None;
                         inner.runtime_started_at = None;
                         inner.last_error = Some(format!(
                             "{start_err}\nrestore failed while restoring previous product runtime: {restore_err}"
@@ -277,6 +323,7 @@ impl ProductRuntimeManager {
             let was_running = inner.runtime.is_some();
             let stopped_runtime = inner.runtime.take();
             inner.config = None;
+            inner.config_content = None;
             inner.traffic_carry = RuntimeTrafficCarry::default();
             inner.runtime_started_at = None;
             inner.stop_count += 1;
@@ -412,12 +459,52 @@ impl ProductRuntimeManager {
             return None;
         };
         match inner.runtime.as_ref() {
-            Some(ProductRuntimeInstance::Resident(runtime)) => runtime
-                .manual_probe_handle()
-                .map(|handle| ProductRuntimeProbeHandle::Resident(Box::new(handle))),
+            Some(ProductRuntimeInstance::Resident(runtime)) => {
+                runtime
+                    .manual_probe_handle()
+                    .map(|handle| ProductRuntimeProbeHandle::Resident {
+                        handle: Box::new(handle),
+                        config_content: inner.config_content.clone(),
+                    })
+            }
             Some(ProductRuntimeInstance::Fake(_)) => Some(ProductRuntimeProbeHandle::Fake),
             None if product_runtime_fake_start_enabled() => Some(ProductRuntimeProbeHandle::Fake),
             None => None,
+        }
+    }
+
+    pub(super) fn node_latency_probe_concurrency(&self) -> Option<usize> {
+        self.node_latency_probe_handle()
+            .map(|handle| handle.probe_concurrency())
+    }
+
+    pub(super) fn probe_node_latencies(&self, links: &[String]) -> Option<Vec<Value>> {
+        let handle = self.node_latency_probe_handle()?;
+        let generation = handle.probe_generation();
+        let snapshots = handle.probe_node_latencies_without_group_update(links);
+        if let Some(generation) = generation
+            && self.current_probe_generation() != Some(generation)
+        {
+            return Some(latency_probe_failure_snapshots(
+                links,
+                generation,
+                "manual latency probe result discarded",
+                "resident runtime generation changed while latency probe was running",
+            ));
+        }
+        handle.apply_latency_probe_snapshots_to_groups(&snapshots);
+        Some(snapshots)
+    }
+
+    pub(super) fn current_probe_generation(&self) -> Option<u64> {
+        let Ok(inner) = self.inner.lock() else {
+            return None;
+        };
+        match inner.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => runtime
+                .manual_probe_handle()
+                .map(|handle| handle.reload_generation()),
+            Some(ProductRuntimeInstance::Fake(_)) | None => None,
         }
     }
 

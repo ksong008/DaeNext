@@ -156,18 +156,12 @@ pub(crate) fn run_resident_group_health_checks(
 }
 
 pub(crate) async fn probe_resident_candidate_tcp_latency_snapshot(
-    groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     candidate: plan::ResidentProxyProbePlan,
     reload_generation: u64,
 ) -> Value {
     let checked_at = unix_now_secs();
     let probe = probe_resident_candidate_tcp_endpoint_async(&candidate).await;
     let latency_ms = probe.as_ref().ok().copied();
-    let link = candidate.link.clone();
-    for group in groups {
-        let _ =
-            group.record_check_result_for_link(&link, NetworkType::TCP4, latency_ms, checked_at);
-    }
     let display_name = candidate.node_tag.as_str();
     let graph_id = candidate.proxy.graph_id.as_str();
     let link_hash = candidate.link_hash.as_str();

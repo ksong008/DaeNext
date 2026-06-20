@@ -1,4 +1,202 @@
 use super::*;
+use serde::{Deserialize, Serialize};
+
+pub(crate) const LATENCY_PROBE_HELPER_MAX_IO_BYTES: usize = 64 * 1024 * 1024;
+const LATENCY_PROBE_HELPER_TIMEOUT: Duration = Duration::from_secs(20);
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct LatencyProbeHelperConfig {
+    pub(crate) source: String,
+    pub(crate) content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct LatencyProbeHelperRequest {
+    #[serde(rename = "schemaVersion")]
+    pub(crate) schema_version: u64,
+    pub(crate) scope: String,
+    #[serde(rename = "reloadGeneration")]
+    pub(crate) reload_generation: u64,
+    #[serde(rename = "requestedLinks")]
+    pub(crate) requested_links: Vec<String>,
+    pub(crate) config: LatencyProbeHelperConfig,
+    pub(crate) concurrency: usize,
+}
+
+pub(crate) fn run_latency_probe_helper(
+    config_content: &str,
+    reload_generation: u64,
+    concurrency: usize,
+    links: &[String],
+) -> Result<Vec<Value>, String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|err| format!("resolve latency probe helper executable: {err}"))?;
+    let request = LatencyProbeHelperRequest {
+        schema_version: 1,
+        scope: "manual-latency-probe".to_owned(),
+        reload_generation,
+        requested_links: links.to_vec(),
+        config: LatencyProbeHelperConfig {
+            source: "current-runtime-config".to_owned(),
+            content: config_content.to_owned(),
+        },
+        concurrency: concurrency.max(1),
+    };
+    let request_json = serde_json::to_vec(&request)
+        .map_err(|err| format!("encode latency probe helper request: {err}"))?;
+    if request_json.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
+        return Err(format!(
+            "latency probe helper request exceeds {} bytes",
+            LATENCY_PROBE_HELPER_MAX_IO_BYTES
+        ));
+    }
+    let mut child = Command::new(current_exe)
+        .args(["latency-probe-helper", "--stdin-json"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("spawn latency probe helper: {err}"))?;
+    {
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            return Err("open latency probe helper stdin: unavailable".to_owned());
+        };
+        stdin
+            .write_all(&request_json)
+            .map_err(|err| format!("write latency probe helper request: {err}"))?;
+    }
+    let started = Instant::now();
+    loop {
+        match child
+            .try_wait()
+            .map_err(|err| format!("wait latency probe helper: {err}"))?
+        {
+            Some(_) => break,
+            None if started.elapsed() >= LATENCY_PROBE_HELPER_TIMEOUT => {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .map_err(|err| format!("collect timed-out latency probe helper: {err}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!(
+                    "latency probe helper timed out after {:?}: {}",
+                    LATENCY_PROBE_HELPER_TIMEOUT,
+                    stderr.trim()
+                ));
+            }
+            None => thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|err| format!("collect latency probe helper output: {err}"))?;
+    if output.stdout.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
+        return Err(format!(
+            "latency probe helper stdout exceeds {} bytes",
+            LATENCY_PROBE_HELPER_MAX_IO_BYTES
+        ));
+    }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "latency probe helper exited with status {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    let response: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|err| format!("parse latency probe helper response: {err}"))?;
+    if response.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+        return Err("latency probe helper response has unsupported schemaVersion".to_owned());
+    }
+    if response.get("scope").and_then(Value::as_str) != Some("manual-latency-probe") {
+        return Err("latency probe helper response has unsupported scope".to_owned());
+    }
+    if response.get("reloadGeneration").and_then(Value::as_u64) != Some(reload_generation) {
+        return Err("latency probe helper response reloadGeneration mismatch".to_owned());
+    }
+    let snapshots = response
+        .get("snapshots")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "latency probe helper response missing snapshots".to_owned())?
+        .clone();
+    Ok(snapshots)
+}
+
+pub(crate) fn latency_probe_helper_response_from_request(input: &[u8]) -> Result<Value, String> {
+    if input.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
+        return Err(format!(
+            "latency probe helper stdin exceeds {} bytes",
+            LATENCY_PROBE_HELPER_MAX_IO_BYTES
+        ));
+    }
+    let request: LatencyProbeHelperRequest = serde_json::from_slice(input)
+        .map_err(|err| format!("parse latency probe helper request: {err}"))?;
+    if request.schema_version != 1 {
+        return Err("unsupported latency probe helper request schemaVersion".to_owned());
+    }
+    if request.scope != "manual-latency-probe" {
+        return Err("unsupported latency probe helper request scope".to_owned());
+    }
+    if request.config.source != "current-runtime-config" {
+        return Err("unsupported latency probe helper config source".to_owned());
+    }
+    let config = build_runtime_config_from_content(&request.config.content)?;
+    let snapshots = crate::production_runtime_owner::run_resident_manual_latency_probe_helper(
+        &config,
+        &request.requested_links,
+        request.reload_generation,
+        request.concurrency.max(1),
+    );
+    Ok(json!({
+        "schemaVersion": 1,
+        "scope": "manual-latency-probe",
+        "reloadGeneration": request.reload_generation,
+        "snapshots": snapshots,
+        "errors": [],
+    }))
+}
+
+pub(crate) fn latency_probe_failure_snapshots(
+    links: &[String],
+    reload_generation: u64,
+    reason: &str,
+    detail: &str,
+) -> Vec<Value> {
+    let checked_at = unix_now() as i64;
+    links
+        .iter()
+        .filter(|link| !link.is_empty())
+        .map(|link| {
+            let display_name = node_name_from_link(link);
+            let link_hash = runtime_link_hash(link);
+            let redacted_source = runtime_redacted_link_source(link);
+            json!({
+                "name": display_name.as_str(),
+                "displayName": display_name.as_str(),
+                "graphId": graph_id_from_runtime_link_hash(&link_hash),
+                "reloadGeneration": reload_generation,
+                "linkHash": link_hash.as_str(),
+                "linkIdentity": runtime_link_identity_value(&display_name, &link_hash, &redacted_source),
+                "admission": {
+                    "status": "fail-closed",
+                    "unsupportedReason": detail,
+                },
+                "latencyMs": Value::Null,
+                "alive": false,
+                "checkedAtUnix": checked_at,
+                "message": format!("{reason}: {detail}"),
+                "scope": "proxy-tcp-check",
+            })
+        })
+        .collect()
+}
+
+fn graph_id_from_runtime_link_hash(link_hash: &str) -> String {
+    let graph_hash = link_hash.trim_start_matches("sha256:");
+    format!("resident-graph:{}", &graph_hash[..16.min(graph_hash.len())])
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct LatencyJobManager {
@@ -268,11 +466,21 @@ fn run_node_latency_job_inner(
     let mut completed = 0usize;
     let mut succeeded = 0usize;
 
-    if let Some(handle) = runtime.node_latency_probe_handle() {
-        let chunk_size = handle.probe_concurrency().max(1);
+    if let Some(chunk_size) = runtime.node_latency_probe_concurrency() {
+        let chunk_size = chunk_size.max(1);
         for link_chunk in latency_probe_link_chunks(nodes, chunk_size) {
             let chunk_nodes = latency_probe_nodes_for_links(nodes, &link_chunk);
-            let runtime_snapshots = handle.probe_node_latencies(&link_chunk);
+            let runtime_snapshots =
+                runtime
+                    .probe_node_latencies(&link_chunk)
+                    .unwrap_or_else(|| {
+                        latency_probe_failure_snapshots(
+                            &link_chunk,
+                            0,
+                            "native outbound probe unavailable",
+                            "materialize/reload Rust runtime before testing this node",
+                        )
+                    });
             let results =
                 node_latency_results_for_runtime_snapshots(&chunk_nodes, &runtime_snapshots);
             write_node_latency_results(&mut conn, &results)?;
