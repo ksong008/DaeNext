@@ -3,7 +3,11 @@
 <img src="https://github.com/daeuniverse/dae/blob/main/logo.png" border="0" width="25%">
 
 <p align="left">
-    <img src="https://img.shields.io/badge/license-AGPL--3.0--only-orange" alt="License"/>
+    <img src="https://github.com/ksong008/DaeNext/actions/workflows/ci.yml/badge.svg" alt="Rust CI"/>
+    <img src="https://custom-icon-badges.herokuapp.com/github/license/ksong008/DaeNext?logo=law&color=orange" alt="License"/>
+    <img src="https://custom-icon-badges.herokuapp.com/github/v/release/ksong008/DaeNext?logo=rocket" alt="version">
+    <img src="https://custom-icon-badges.herokuapp.com/github/issues-pr-closed/ksong008/DaeNext?color=purple&logo=git-pull-request&logoColor=white"/>
+    <img src="https://custom-icon-badges.herokuapp.com/github/last-commit/ksong008/DaeNext?logo=history&logoColor=white" alt="lastcommit"/>
 </p>
 
 **_DaeNext_** is the Rust-native dae core workspace.
