@@ -60,6 +60,21 @@ pub(crate) fn state_schema_open_repairs_existing_wide_permissions() {
 }
 
 #[test]
+pub(crate) fn state_connections_wait_briefly_for_sqlite_busy_locks() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+
+    let conn = open_state_connection(&state).unwrap();
+    let busy_timeout_ms: i64 = conn
+        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(busy_timeout_ms, STATE_DB_BUSY_TIMEOUT.as_millis() as i64);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn section_summary_lists_keep_only_lightweight_fields() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

@@ -17,6 +17,8 @@ pub(super) fn open_state_connection(path: &Path) -> io::Result<Connection> {
         set_private_state_dir_permissions(parent)?;
     }
     let conn = Connection::open(path).map_err(sqlite_io_error)?;
+    conn.busy_timeout(STATE_DB_BUSY_TIMEOUT)
+        .map_err(sqlite_io_error)?;
     set_private_db_permissions(path)?;
     conn.execute_batch("PRAGMA foreign_keys = OFF;")
         .map_err(sqlite_io_error)?;
