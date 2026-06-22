@@ -6,8 +6,9 @@ pub mod wire;
 pub use error::GeoDataError;
 pub use hex::decode_hex;
 pub use model::{
-    Domain, DomainType, GeoIp, GeoSite, LoadResult, load_geoip_bytes, load_geoip_entry_bytes,
-    load_geosite_bytes, load_geosite_entry_bytes,
+    Domain, DomainType, GeoDataSummary, GeoIp, GeoSite, LoadResult, load_geoip_bytes,
+    load_geoip_entry_bytes, load_geosite_bytes, load_geosite_entry_bytes, summarize_geoip_bytes,
+    summarize_geosite_bytes,
 };
 pub use wire::{
     country_code_eq_ignore_ascii_case, country_code_view, decode_entry_bytes, decode_entry_range,

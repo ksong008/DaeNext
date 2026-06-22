@@ -52,6 +52,20 @@ pub struct LoadResult<T> {
     pub value: T,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GeoDataSummary {
+    pub category_count: usize,
+    pub item_count: usize,
+}
+
+pub fn summarize_geoip_bytes(data: &[u8]) -> Result<GeoDataSummary, GeoDataError> {
+    summarize_list(data, count_geoip_cidrs)
+}
+
+pub fn summarize_geosite_bytes(data: &[u8]) -> Result<GeoDataSummary, GeoDataError> {
+    summarize_list(data, count_geosite_rules)
+}
+
 pub fn load_geoip_bytes(data: &[u8], code: &str) -> Result<LoadResult<GeoIp>, GeoDataError> {
     match decode_entry_bytes(data, code) {
         Ok(entry) => load_geoip_entry_bytes(&entry),
@@ -102,6 +116,59 @@ pub fn load_geosite_entry_bytes(entry: &[u8]) -> Result<LoadResult<GeoSite>, Geo
         decoded_entry_bytes: entry.len(),
         value: parse_geosite_entry(entry)?,
     })
+}
+
+fn summarize_list(
+    data: &[u8],
+    count_entry_items: fn(&[u8]) -> Result<usize, GeoDataError>,
+) -> Result<GeoDataSummary, GeoDataError> {
+    let mut input = data;
+    let mut summary = GeoDataSummary::default();
+    while !input.is_empty() {
+        let tag = read_varint(&mut input)?;
+        match (tag >> 3, tag & 0x07) {
+            (1, 2) => {
+                let entry = read_length_delimited(&mut input)?;
+                summary.category_count += 1;
+                summary.item_count += count_entry_items(entry)?;
+            }
+            (_, wire_type) => skip_field(wire_type, &mut input)?,
+        }
+    }
+    Ok(summary)
+}
+
+fn count_geoip_cidrs(entry: &[u8]) -> Result<usize, GeoDataError> {
+    count_repeated_message_field(entry, 2)
+}
+
+fn count_geosite_rules(entry: &[u8]) -> Result<usize, GeoDataError> {
+    count_repeated_message_field(entry, 2)
+}
+
+fn count_repeated_message_field(entry: &[u8], target_field: u64) -> Result<usize, GeoDataError> {
+    let mut input = entry;
+    let mut count = 0;
+    while !input.is_empty() {
+        let tag = read_varint(&mut input)?;
+        match (tag >> 3, tag & 0x07) {
+            (field, 2) if field == target_field => {
+                validate_nested_message(read_length_delimited(&mut input)?)?;
+                count += 1;
+            }
+            (_, wire_type) => skip_field(wire_type, &mut input)?,
+        }
+    }
+    Ok(count)
+}
+
+fn validate_nested_message(data: &[u8]) -> Result<(), GeoDataError> {
+    let mut input = data;
+    while !input.is_empty() {
+        let tag = read_varint(&mut input)?;
+        skip_field(tag & 0x07, &mut input)?;
+    }
+    Ok(())
 }
 
 fn find_geoip_from_list(data: &[u8], code: &str) -> Result<(GeoIp, usize), GeoDataError> {
@@ -385,5 +452,114 @@ mod tests {
             .iter()
             .map(|value| value.as_str().unwrap().to_owned())
             .collect()
+    }
+
+    #[test]
+    fn summarizes_geosite_categories_and_rules_from_entries() {
+        let entry_a = message([
+            field_string(1, "geosite:alpha"),
+            field_message(
+                2,
+                message([field_varint(1, 2), field_string(2, "example.com")]),
+            ),
+            field_message(
+                2,
+                message([field_varint(1, 3), field_string(2, "example.org")]),
+            ),
+        ]);
+        let entry_b = message([
+            field_string(1, "geosite:beta"),
+            field_message(
+                2,
+                message([field_varint(1, 2), field_string(2, "example.net")]),
+            ),
+        ]);
+        let data = message([field_message(1, entry_a), field_message(1, entry_b)]);
+
+        assert_eq!(
+            summarize_geosite_bytes(&data).unwrap(),
+            GeoDataSummary {
+                category_count: 2,
+                item_count: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn summarizes_geoip_categories_and_cidrs_from_entries() {
+        let entry_a = message([
+            field_string(1, "geoip:alpha"),
+            field_message(
+                2,
+                message([field_bytes(1, &[10, 0, 0, 0]), field_varint(2, 8)]),
+            ),
+            field_message(
+                2,
+                message([field_bytes(1, &[192, 168, 0, 0]), field_varint(2, 16)]),
+            ),
+        ]);
+        let entry_b = message([
+            field_string(1, "geoip:beta"),
+            field_message(
+                2,
+                message([
+                    field_bytes(
+                        1,
+                        &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    ),
+                    field_varint(2, 32),
+                ]),
+            ),
+        ]);
+        let data = message([field_message(1, entry_a), field_message(1, entry_b)]);
+
+        assert_eq!(
+            summarize_geoip_bytes(&data).unwrap(),
+            GeoDataSummary {
+                category_count: 2,
+                item_count: 3,
+            }
+        );
+    }
+
+    fn message(fields: impl IntoIterator<Item = Vec<u8>>) -> Vec<u8> {
+        fields.into_iter().flatten().collect()
+    }
+
+    fn field_string(field: u64, value: &str) -> Vec<u8> {
+        field_bytes(field, value.as_bytes())
+    }
+
+    fn field_message(field: u64, value: Vec<u8>) -> Vec<u8> {
+        field_bytes(field, &value)
+    }
+
+    fn field_bytes(field: u64, value: &[u8]) -> Vec<u8> {
+        let mut out = encode_varint((field << 3) | 2);
+        out.extend(encode_varint(value.len() as u64));
+        out.extend_from_slice(value);
+        out
+    }
+
+    fn field_varint(field: u64, value: u64) -> Vec<u8> {
+        let mut out = encode_varint(field << 3);
+        out.extend(encode_varint(value));
+        out
+    }
+
+    fn encode_varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+        out
     }
 }
