@@ -124,6 +124,91 @@ pub(crate) fn subscription_file_and_http_file_fallback_follow_config_dir_scope()
 }
 
 #[test]
+pub(crate) fn subscription_schema_adds_use_proxy_to_existing_tables() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    if let Some(parent) = state.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let conn = Connection::open(&state).unwrap();
+    conn.execute_batch(
+        r#"
+        CREATE TABLE subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            updated_at TEXT NOT NULL DEFAULT '',
+            link TEXT NOT NULL,
+            cron_exp TEXT DEFAULT '10 */6 * * *',
+            cron_enable INTEGER DEFAULT 1,
+            status TEXT NOT NULL DEFAULT '',
+            info TEXT NOT NULL DEFAULT '',
+            tag TEXT UNIQUE
+        );
+        INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+        VALUES(7, 'now', 'https://subscription.invalid/list', 'imported', '', 'legacy');
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    let has_use_proxy = {
+        let mut stmt = conn.prepare("PRAGMA table_info(subscriptions)").unwrap();
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1)).unwrap();
+        rows.map(|row| row.unwrap())
+            .any(|column| column == "use_proxy")
+    };
+    assert!(has_use_proxy);
+    let use_proxy: i64 = conn
+        .query_row(
+            "SELECT use_proxy FROM subscriptions WHERE id = 7",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(use_proxy, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn create_subscription_persists_use_proxy_flag() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let subscription_dir = dir.join("sub");
+    fs::create_dir_all(&subscription_dir).unwrap();
+    let file_path = subscription_dir.join("test.sub");
+    fs::write(&file_path, b"vless://uuid@example.com:443#proxied\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/subscriptions".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"link":"file://sub/test.sub","tag":"proxied","useProxy":true}"#.to_vec(),
+    };
+
+    let response = create_subscription(&state, &dir, &request);
+    assert_eq!(response.status, 201);
+    let subscriptions = list_subscriptions_value(&state, false).unwrap();
+    assert_eq!(subscriptions["items"][0]["useProxy"], json!(true));
+    let conn = open_state_connection(&state).unwrap();
+    let use_proxy: i64 = conn
+        .query_row(
+            "SELECT use_proxy FROM subscriptions WHERE tag = 'proxied'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(use_proxy, 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn subscription_vmess_metadata_uses_protocol_parser() {
     let payload = STANDARD.encode(
         r#"{"v":"2","ps":"vmess-name","add":"vmess.example.com","port":"443","id":"11111111-1111-1111-1111-111111111111","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":"tls"}"#,

@@ -131,7 +131,7 @@ pub(super) fn bundle_sections(conn: &Connection, kind: SectionKind) -> io::Resul
 pub(super) fn bundle_subscriptions(conn: &Connection) -> io::Result<Vec<Value>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag FROM subscriptions ORDER BY id",
+            "SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy FROM subscriptions ORDER BY id",
         )
         .map_err(sqlite_io_error)?;
     let rows = stmt
@@ -271,8 +271,8 @@ pub(super) fn import_bundle_subscriptions(
                 .map(str::to_owned)
                 .unwrap_or_else(now_text);
             conn.execute(
-                "INSERT INTO subscriptions(id, updated_at, link, cron_exp, cron_enable, status, info, tag)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO subscriptions(id, updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     id,
                     updated_at,
@@ -286,6 +286,9 @@ pub(super) fn import_bundle_subscriptions(
                     item.get("status").and_then(Value::as_str).unwrap_or("imported"),
                     item.get("info").and_then(Value::as_str).unwrap_or(""),
                     item.get("tag").and_then(Value::as_str),
+                    item.get("useProxy")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false) as i64,
                 ],
             )
             .map_err(sqlite_io_error)?;

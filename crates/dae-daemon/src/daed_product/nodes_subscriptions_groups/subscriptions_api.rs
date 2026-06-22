@@ -14,7 +14,7 @@ pub(crate) fn list_subscriptions(state: &Path, request: &HttpRequest) -> HttpRes
 pub(crate) fn list_subscriptions_value(state: &Path, expand_nodes: bool) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let mut stmt = conn
-        .prepare("SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag FROM subscriptions ORDER BY id")
+        .prepare("SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy FROM subscriptions ORDER BY id")
         .map_err(sqlite_io_error)?;
     let rows = stmt
         .query_map([], subscription_row_value)
@@ -54,14 +54,18 @@ pub(crate) fn create_subscription(
         return HttpResponse::json(400, json!({"error": err}));
     }
     let tag = body.get("tag").and_then(Value::as_str);
+    let use_proxy = body
+        .get("useProxy")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
     let now = now_text();
     if let Err(err) = conn.execute(
-        "INSERT INTO subscriptions(updated_at, link, cron_exp, cron_enable, status, info, tag) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![now, link, body.get("cronExp").and_then(Value::as_str).unwrap_or("10 */6 * * *"), body.get("cronEnable").and_then(Value::as_bool).unwrap_or(true) as i64, "imported", "", tag],
+        "INSERT INTO subscriptions(updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![now, link, body.get("cronExp").and_then(Value::as_str).unwrap_or("10 */6 * * *"), body.get("cronEnable").and_then(Value::as_bool).unwrap_or(true) as i64, "imported", "", tag, use_proxy as i64],
     ) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
@@ -104,7 +108,7 @@ pub(crate) fn get_subscription(state: &Path, id: i64) -> HttpResponse {
 pub(crate) fn get_subscription_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
     let conn = open_state_connection(state)?;
     conn.query_row(
-        "SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag FROM subscriptions WHERE id = ?1",
+        "SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy FROM subscriptions WHERE id = ?1",
         params![id],
         subscription_row_value,
     )
@@ -134,20 +138,26 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
         .get("cronEnable")
         .and_then(Value::as_bool)
         .map(|value| value as i64);
+    let use_proxy = body
+        .get("useProxy")
+        .and_then(Value::as_bool)
+        .map(|value| value as i64);
     if let Err(err) = conn.execute(
         "UPDATE subscriptions
          SET link = COALESCE(?1, link),
              tag = CASE WHEN ?2 THEN ?3 ELSE tag END,
              cron_exp = COALESCE(?4, cron_exp),
              cron_enable = COALESCE(?5, cron_enable),
-             updated_at = ?6
-         WHERE id = ?7",
+             use_proxy = COALESCE(?6, use_proxy),
+             updated_at = ?7
+         WHERE id = ?8",
         params![
             link,
             tag_present,
             tag,
             cron_exp,
             cron_enable,
+            use_proxy,
             now_text(),
             id
         ],
@@ -302,6 +312,7 @@ pub(crate) fn subscription_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Resul
         "status": row.get::<_, String>(5)?,
         "info": row.get::<_, String>(6)?,
         "tag": row.get::<_, Option<String>>(7)?,
+        "useProxy": row.get::<_, i64>(8)? != 0,
     }))
 }
 

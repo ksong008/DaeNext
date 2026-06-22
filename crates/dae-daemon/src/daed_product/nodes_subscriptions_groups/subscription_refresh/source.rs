@@ -1,25 +1,35 @@
-use super::http::fetch_http_url;
+use super::http::fetch_http_url_with_proxy_config;
 use super::*;
 
 const SUBSCRIPTION_PERSIST_DIR: &str = "persist.d";
 
+#[cfg(test)]
 pub(crate) fn fetch_subscription_content(
     config_dir: &Path,
     tag: Option<&str>,
     link: &str,
 ) -> io::Result<String> {
+    fetch_subscription_content_with_proxy_config(config_dir, tag, link, None)
+}
+
+pub(super) fn fetch_subscription_content_with_proxy_config(
+    config_dir: &Path,
+    tag: Option<&str>,
+    link: &str,
+    proxy_config: Option<&Config>,
+) -> io::Result<String> {
     let url = url::Url::parse(link)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     match url.scheme() {
-        "http" => fetch_http_url(&url, false),
-        "https" => fetch_http_url(&url, true),
+        "http" => fetch_http_url_with_proxy_config(&url, false, proxy_config),
+        "https" => fetch_http_url_with_proxy_config(&url, true, proxy_config),
         "file" => read_subscription_file(&subscription_file_path(config_dir, &url)?),
         "http-file" | "https-file" => {
             let persist_path = persist_subscription_path(config_dir, tag)?;
             let fetch_url = url_with_scheme(&url, url.scheme().trim_end_matches("-file"))?;
             let fetched = match fetch_url.scheme() {
-                "http" => fetch_http_url(&fetch_url, false),
-                "https" => fetch_http_url(&fetch_url, true),
+                "http" => fetch_http_url_with_proxy_config(&fetch_url, false, proxy_config),
+                "https" => fetch_http_url_with_proxy_config(&fetch_url, true, proxy_config),
                 scheme => Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("unsupported subscription scheme: {scheme}"),

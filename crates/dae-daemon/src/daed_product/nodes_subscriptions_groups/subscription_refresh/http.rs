@@ -1,24 +1,33 @@
 use super::*;
 
-pub(super) fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
+pub(super) fn fetch_http_url_with_proxy_config(
+    url: &url::Url,
+    tls: bool,
+    proxy_config: Option<&Config>,
+) -> io::Result<String> {
+    if let Some(config) = proxy_config {
+        let request = subscription_http_request(url)?;
+        let response = crate::production_runtime_owner::fetch_http_url_via_default_proxy(
+            config,
+            url,
+            tls,
+            request.as_bytes(),
+            subscription_http_response_limit(subscription_http_body_limit())?,
+        )
+        .map_err(|err| io::Error::other(format!("subscription proxy fetch: {err}")))?;
+        return http_response_body(&response);
+    }
+    fetch_http_url(url, tls)
+}
+
+fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
     let host = url
         .host_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing host"))?;
     let port = url.port_or_known_default().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "missing port for subscription")
     })?;
-    let mut path = url.path().to_owned();
-    if path.is_empty() {
-        path = "/".to_owned();
-    }
-    if let Some(query) = url.query() {
-        path.push('?');
-        path.push_str(query);
-    }
-    let user_agent = subscription_user_agent();
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {user_agent}\r\nAccept: text/plain, application/octet-stream, */*\r\nConnection: close\r\n\r\n"
-    );
+    let request = subscription_http_request(url)?;
     let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10))?;
     stream.set_read_timeout(Some(Duration::from_secs(20)))?;
     stream.set_write_timeout(Some(Duration::from_secs(20)))?;
@@ -49,6 +58,24 @@ pub(super) fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
         read_subscription_http_response(&mut stream)?
     };
     http_response_body(&response)
+}
+
+fn subscription_http_request(url: &url::Url) -> io::Result<String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing host"))?;
+    let mut path = url.path().to_owned();
+    if path.is_empty() {
+        path = "/".to_owned();
+    }
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    let user_agent = subscription_user_agent();
+    Ok(format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {user_agent}\r\nAccept: text/plain, application/octet-stream, */*\r\nConnection: close\r\n\r\n"
+    ))
 }
 
 fn subscription_user_agent() -> String {
