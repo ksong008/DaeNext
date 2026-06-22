@@ -366,7 +366,33 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         defaults["allocator"]["jemallocPolicy"]["default"]
             .as_str()
             .unwrap()
-            .contains("narenas:4")
+            .contains("narenas:8")
+    );
+    assert!(
+        defaults["allocator"]["jemallocPolicy"]["default"]
+            .as_str()
+            .unwrap()
+            .contains("dirty_decay_ms:30000")
+    );
+    assert!(
+        defaults["allocator"]["jemallocPolicy"]["default"]
+            .as_str()
+            .unwrap()
+            .contains("muzzy_decay_ms:30000")
+    );
+    assert_eq!(
+        defaults["allocator"]["jemallocPolicy"]["env"]
+            .as_str()
+            .unwrap(),
+        PRODUCT_JEMALLOC_CONF_ENV
+    );
+    assert_eq!(
+        defaults["allocator"]["jemallocPolicy"]["runtimeOverride"],
+        json!(true)
+    );
+    assert_eq!(
+        defaults["allocator"]["jemallocPolicy"]["serviceUnitSetsEnv"],
+        json!(false)
     );
     assert_eq!(
         defaults["allocator"]["jemallocPolicy"]["buildEnv"]
