@@ -335,7 +335,13 @@ fn read_geodata_http_response<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
     let mut response = Vec::new();
     let mut buffer = [0_u8; 8192];
     loop {
-        let read = reader.read(&mut buffer)?;
+        let read = match reader.read(&mut buffer) {
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof && !response.is_empty() => {
+                break;
+            }
+            Err(err) => return Err(err),
+        };
         if read == 0 {
             break;
         }
@@ -590,6 +596,44 @@ mod tests {
         assert_eq!(status["geoip"]["categoryCount"], json!(0));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn geodata_http_reader_accepts_unexpected_eof_after_response_bytes() {
+        let mut reader = UnexpectedEofAfterData {
+            data: b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntest".as_slice(),
+            eof_sent: false,
+        };
+
+        let response = read_geodata_http_response(&mut reader).unwrap();
+        assert_eq!(
+            response,
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntest"
+        );
+    }
+
+    struct UnexpectedEofAfterData<'a> {
+        data: &'a [u8],
+        eof_sent: bool,
+    }
+
+    impl Read for UnexpectedEofAfterData<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.data.is_empty() {
+                if self.eof_sent {
+                    return Ok(0);
+                }
+                self.eof_sent = true;
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "missing close_notify",
+                ));
+            }
+            let len = self.data.len().min(buf.len());
+            buf[..len].copy_from_slice(&self.data[..len]);
+            self.data = &self.data[len..];
+            Ok(len)
+        }
     }
 
     fn message(fields: impl IntoIterator<Item = Vec<u8>>) -> Vec<u8> {
