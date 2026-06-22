@@ -2,7 +2,7 @@
 # Build jemalloc with the product allocator policy by default. Keep this as a
 # build fallback instead of a systemd Environment= entry so operators can
 # explicitly override runtime behavior with MALLOC_CONF.
-JEMALLOC_SYS_WITH_MALLOC_CONF = { value = "background_thread:true,dirty_decay_ms:30000,muzzy_decay_ms:30000,narenas:8", force = false }
+JEMALLOC_SYS_WITH_MALLOC_CONF = { value = "background_thread:true,dirty_decay_ms:30000,muzzy_decay_ms:30000,percpu_arena:percpu", force = false }
 
 [target.bpfel-unknown-none]
 linker = "bpf-linker"

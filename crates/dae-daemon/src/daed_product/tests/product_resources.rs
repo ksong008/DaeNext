@@ -366,7 +366,7 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         defaults["allocator"]["jemallocPolicy"]["default"]
             .as_str()
             .unwrap()
-            .contains("narenas:8")
+            .contains("percpu_arena:percpu")
     );
     assert!(
         defaults["allocator"]["jemallocPolicy"]["default"]
