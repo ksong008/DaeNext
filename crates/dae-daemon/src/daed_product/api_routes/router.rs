@@ -55,6 +55,11 @@ pub(super) fn handle_api_request(
                 ("GET", "/general/state") => api_general_state(app),
                 ("GET", "/general/cache-stats") => api_general_cache_stats(app),
                 ("GET", "/general/interfaces") => api_general_interfaces(request),
+                ("GET", "/geodata") => api_geodata_status(app),
+                ("POST", "/geodata/geosite/update") => {
+                    api_update_geodata(app, GeodataKind::Geosite)
+                }
+                ("POST", "/geodata/geoip/update") => api_update_geodata(app, GeodataKind::Geoip),
                 ("GET", "/runtime/overview") => api_runtime_overview(app, request),
                 ("POST", "/runtime/reload") => api_runtime_reload(app, request),
                 ("POST", "/runtime/stop") => api_runtime_stop(app),

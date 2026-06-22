@@ -637,6 +637,8 @@ mod logs;
 use self::logs::*;
 mod latency;
 use self::latency::*;
+mod geodata;
+use self::geodata::*;
 mod bundle;
 use self::bundle::*;
 mod package;
