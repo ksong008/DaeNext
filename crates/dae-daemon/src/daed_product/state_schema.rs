@@ -82,7 +82,8 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             cron_enable INTEGER DEFAULT 1,
             status TEXT NOT NULL DEFAULT '',
             info TEXT NOT NULL DEFAULT '',
-            tag TEXT UNIQUE
+            tag TEXT UNIQUE,
+            use_proxy INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS nodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,7 +164,39 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             VALUES('runtime_log_level', 'info');
         "#,
     )
-    .map_err(sqlite_io_error)
+    .map_err(sqlite_io_error)?;
+    ensure_table_column(
+        conn,
+        "subscriptions",
+        "use_proxy",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    Ok(())
+}
+
+fn ensure_table_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> io::Result<()> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(sqlite_io_error)?;
+    for row in rows {
+        if row.map_err(sqlite_io_error)? == column {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )
+    .map_err(sqlite_io_error)?;
+    Ok(())
 }
 
 pub(super) fn state_check_report(state: &Path) -> io::Result<Value> {

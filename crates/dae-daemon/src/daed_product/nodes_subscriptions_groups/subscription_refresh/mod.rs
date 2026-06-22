@@ -12,7 +12,9 @@ pub(crate) use self::http::{
     read_subscription_http_response_with_limit,
 };
 pub(crate) use self::node_sync::replace_subscription_nodes;
+#[cfg(test)]
 pub(crate) use self::source::fetch_subscription_content;
+use self::source::fetch_subscription_content_with_proxy_config;
 
 const SUBSCRIPTION_HTTP_HEADER_LIMIT: usize = 128 * 1024;
 const SUBSCRIPTION_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -21,6 +23,7 @@ const SUBSCRIPTION_MAX_BYTES: usize = 8 * 1024 * 1024;
 struct SubscriptionSource {
     link: String,
     tag: Option<String>,
+    use_proxy: bool,
 }
 
 pub(crate) fn refresh_subscription_from_remote(
@@ -32,12 +35,13 @@ pub(crate) fn refresh_subscription_from_remote(
     let conn = open_state_connection(state)?;
     let Some(source) = conn
         .query_row(
-            "SELECT link, tag FROM subscriptions WHERE id = ?1",
+            "SELECT link, tag, use_proxy FROM subscriptions WHERE id = ?1",
             params![id],
             |row| {
                 Ok(SubscriptionSource {
                     link: row.get(0)?,
                     tag: row.get(1)?,
+                    use_proxy: row.get::<_, i64>(2)? != 0,
                 })
             },
         )
@@ -50,7 +54,17 @@ pub(crate) fn refresh_subscription_from_remote(
         ));
     };
     let fetched_at = now_text();
-    match fetch_subscription_content(config_dir, source.tag.as_deref(), &source.link) {
+    let proxy_config = if source.use_proxy && subscription_link_uses_http_transport(&source.link) {
+        Some(subscription_proxy_config(state)?)
+    } else {
+        None
+    };
+    match fetch_subscription_content_with_proxy_config(
+        config_dir,
+        source.tag.as_deref(),
+        &source.link,
+        proxy_config.as_ref(),
+    ) {
         Ok(content) => {
             let links = subscription_links_from_content(&content);
             let node_import_result = replace_subscription_nodes(&conn, id, &links)?;
@@ -93,4 +107,20 @@ pub(crate) fn refresh_subscription_from_remote(
 
 fn subscription_http_body_limit() -> usize {
     SUBSCRIPTION_MAX_BYTES
+}
+
+fn subscription_proxy_config(state: &Path) -> io::Result<Config> {
+    let preview = materialize_runtime(state, None, true)?;
+    let content = preview
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| io::Error::other("runtime materializer did not return content"))?;
+    build_runtime_config_from_content(content)
+        .map_err(|err| io::Error::other(format!("build subscription proxy config: {err}")))
+}
+
+fn subscription_link_uses_http_transport(link: &str) -> bool {
+    url::Url::parse(link)
+        .map(|url| matches!(url.scheme(), "http" | "https" | "http-file" | "https-file"))
+        .unwrap_or(false)
 }

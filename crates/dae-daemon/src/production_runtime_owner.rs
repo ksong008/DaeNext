@@ -62,11 +62,12 @@ pub use resident::{
 };
 pub(crate) use resident_dataplane::{
     ResidentEventLogDecision, ResidentEventLogPolicy, ResidentEventLogSink,
-    ResidentManualProbeHandle, resident_live_adapter_config_assessment,
-    resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
-    resident_live_adapter_matrix_contract, resident_live_adapter_udp_probe,
-    resident_live_matrix_evidence_from_env, resident_runtime_defaults_contract,
-    run_resident_manual_latency_probe_helper, run_resident_manual_latency_probe_helper_streaming,
+    ResidentManualProbeHandle, fetch_http_url_via_default_proxy,
+    resident_live_adapter_config_assessment, resident_live_adapter_entry_missing,
+    resident_live_adapter_entry_remote_live_matrix_ready, resident_live_adapter_matrix_contract,
+    resident_live_adapter_udp_probe, resident_live_matrix_evidence_from_env,
+    resident_runtime_defaults_contract, run_resident_manual_latency_probe_helper,
+    run_resident_manual_latency_probe_helper_streaming,
 };
 pub use resident_dataplane::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,

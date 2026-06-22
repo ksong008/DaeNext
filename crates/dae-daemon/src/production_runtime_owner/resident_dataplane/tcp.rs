@@ -121,6 +121,8 @@ mod router;
 pub(super) use self::router::*;
 mod probe;
 pub(super) use self::probe::*;
+mod proxy_fetch;
+pub(super) use self::proxy_fetch::*;
 mod accept_loop;
 pub(super) use self::accept_loop::*;
 mod vless_handlers;
