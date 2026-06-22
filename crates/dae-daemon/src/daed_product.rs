@@ -57,6 +57,7 @@ const PRIMARY_STATE_STORE: &str = crate::service_contract::DAED_PRIMARY_STATE_ST
 const LEGACY_IMPORT_STATE_STORE: &str = crate::service_contract::DAED_LEGACY_IMPORT_STATE_STORE;
 const MAX_BODY_BYTES: usize = 1 << 20;
 const TOKEN_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
+const STATE_DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_LOG_MAX_ENTRIES: i64 = 10_000;
 const DEFAULT_LOG_MAX_BYTES: i64 = 50 * 1024 * 1024;
 const MIN_LOG_MAX_ENTRIES: i64 = 500;
