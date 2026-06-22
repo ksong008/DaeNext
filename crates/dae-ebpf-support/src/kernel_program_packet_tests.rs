@@ -39,6 +39,28 @@ fn packet_level_golden_parses_l2_and_l3_ipv4_tcp_udp() {
 }
 
 #[test]
+fn packet_level_golden_parses_dscp_four_with_ecn_bits_ignored() {
+    let tcp = tcp_header(12_345, 443, 0x02);
+    let udp = udp_header(53_000, 53);
+
+    let report = parse_kernel_program_packet(
+        ETH_HLEN,
+        0,
+        &ethernet(ipv4(IPPROTO_TCP, &tcp, (0x04 << 2) | 0x03)),
+    );
+    assert_ipv4_transport(&report, IPPROTO_TCP, 12_345, 443);
+    assert_eq!(report.parsed.dscp, 0x04);
+
+    let report = parse_kernel_program_packet(
+        ETH_HLEN,
+        0,
+        &ethernet_ipv6(ipv6(IPPROTO_UDP, &udp, (0x04 << 2) | 0x02)),
+    );
+    assert_ipv6_transport(&report, IPPROTO_UDP, 53_000, 53);
+    assert_eq!(report.parsed.dscp, 0x04);
+}
+
+#[test]
 fn packet_level_golden_parses_ipv6_tcp_udp_extensions_and_ndp_redirect() {
     let tcp = tcp_header(12_345, 443, 0x10);
     let udp = udp_header(53_000, 53);

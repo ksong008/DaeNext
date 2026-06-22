@@ -8,6 +8,7 @@ pub(super) struct ManagedUdpPacket {
     pub(super) original_dst: SocketAddr,
     pub(super) proxy: Arc<ResidentProxyPlan>,
     pub(super) force_proxy_packet: bool,
+    pub(super) dscp: u8,
 }
 
 pub(super) struct UdpSessionEntry {
@@ -109,6 +110,7 @@ async fn run_udp_session_actor(
                     &managed.proxy,
                     managed.packet,
                     managed.original_dst,
+                    managed.dscp,
                     context.event_file.clone(),
                     Arc::clone(&context.event_lock),
                     Arc::clone(&context.metrics),

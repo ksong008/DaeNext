@@ -92,6 +92,7 @@ pub(super) fn record_udp_exchange_result(
     proxy: &ResidentProxyPlan,
     packet: UdpOriginalDstPacket,
     original_dst: SocketAddr,
+    dscp: u8,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -103,6 +104,7 @@ pub(super) fn record_udp_exchange_result(
         original_dst,
         packet.payload.len(),
         true,
+        Some(dscp),
         event_file,
         event_lock,
         metrics,
@@ -125,6 +127,7 @@ pub(super) fn record_udp_session_response_result(
         original_dst,
         0,
         false,
+        None,
         event_file,
         event_lock,
         metrics,
@@ -138,6 +141,7 @@ fn record_udp_session_exchange_result(
     original_dst: SocketAddr,
     request_len: usize,
     count_upload: bool,
+    dscp: Option<u8>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -182,6 +186,9 @@ fn record_udp_session_exchange_result(
                     "reply_forwarded".to_owned(),
                     Value::from(response.reply_forwarded),
                 );
+                if let Some(dscp) = dscp {
+                    map.insert("dscp".to_owned(), Value::from(dscp));
+                }
             }
             response.append_execution_fields(&mut event_json, handler, &proxy.graph_id);
             if let Some(tls_underlay) = response.tls_underlay {
@@ -209,6 +216,9 @@ fn record_udp_session_exchange_result(
             );
             if let Some(map) = event_json.as_object_mut() {
                 map.insert("error".to_owned(), Value::String(err));
+                if let Some(dscp) = dscp {
+                    map.insert("dscp".to_owned(), Value::from(dscp));
+                }
             }
             append_event(&event_file, &event_lock, event_json)
         }

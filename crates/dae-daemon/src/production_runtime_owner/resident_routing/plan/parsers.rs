@@ -102,3 +102,42 @@ pub(super) fn parse_u32_auto(value: &str) -> Result<u32, std::num::ParseIntError
         value.parse::<u32>()
     }
 }
+
+pub(super) fn parse_dscp(value: &str) -> Result<u8, String> {
+    let parsed = parse_u64_base0(value).map_err(|err| format!("invalid dscp {value}: {err}"))?;
+    if parsed > 63 {
+        return Err(format!("invalid dscp {value}: value {parsed} exceeds 63"));
+    }
+    Ok(parsed as u8)
+}
+
+fn parse_u64_base0(value: &str) -> Result<u64, std::num::ParseIntError> {
+    if let Some(rest) = value.strip_prefix('+') {
+        return parse_u64_base0(rest);
+    }
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        return u64::from_str_radix(hex, 16);
+    }
+    if let Some(octal) = value
+        .strip_prefix("0o")
+        .or_else(|| value.strip_prefix("0O"))
+    {
+        return u64::from_str_radix(octal, 8);
+    }
+    if let Some(binary) = value
+        .strip_prefix("0b")
+        .or_else(|| value.strip_prefix("0B"))
+    {
+        return u64::from_str_radix(binary, 2);
+    }
+    if value.len() > 1
+        && value.starts_with('0')
+        && value.as_bytes().get(1).is_some_and(u8::is_ascii_digit)
+    {
+        return u64::from_str_radix(value, 8);
+    }
+    value.parse::<u64>()
+}

@@ -261,7 +261,7 @@ routing {
     ipversion(4, 6) -> proxy
     mac('aa:bb:cc:dd:ee:ff') -> proxy
     pname(curl) -> proxy
-    dscp(46) -> must_rules
+    dscp(0x4) -> must_rules
     domain(suffix: fixture.invalid) -> proxy(mark: 7)
     fallback: block
 }
@@ -291,11 +291,12 @@ routing {
         );
     }
     assert!(plan.lpm_sets.len() >= 3);
-    assert!(
-        plan.matches
-            .iter()
-            .any(|set| set.kind == "Dscp" && set.outbound == OutboundIndex::MUST_RULES.value())
-    );
+    let dscp = plan
+        .matches
+        .iter()
+        .find(|set| set.kind == "Dscp" && set.outbound == OutboundIndex::MUST_RULES.value())
+        .expect("missing resident routing DSCP match");
+    assert_eq!(dscp.bytes[0], 4);
     assert!(
         plan.matches
             .iter()
@@ -305,4 +306,29 @@ routing {
         plan.matches.last().unwrap().outbound,
         OutboundIndex::BLOCK.value()
     );
+}
+
+#[test]
+pub(super) fn resident_routing_plan_rejects_invalid_dscp_value() {
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    dscp(0x40) -> proxy
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let err = build_routing_plan(&config).unwrap_err();
+
+    assert!(err.contains("invalid dscp 0x40"));
+    assert!(err.contains("exceeds 63"));
 }
