@@ -2,29 +2,6 @@ name: Rust CI
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - ".cargo/**"
-      - ".github/workflows/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**"
-      - "example.dae"
-      - "scripts/**"
-      - "testdata/**"
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - ".cargo/**"
-      - ".github/workflows/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**"
-      - "example.dae"
-      - "scripts/**"
-      - "testdata/**"
 
 permissions:
   contents: read
