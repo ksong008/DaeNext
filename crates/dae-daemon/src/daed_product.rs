@@ -105,7 +105,7 @@ const PRODUCT_JEMALLOC_CONF_ENV: &str = "MALLOC_CONF";
 const PRODUCT_JEMALLOC_BUILD_CONF_ENV: &str = "JEMALLOC_SYS_WITH_MALLOC_CONF";
 const PRODUCT_JEMALLOC_BUILD_CONF_SOURCE: &str = ".cargo/config.toml";
 const PRODUCT_JEMALLOC_CONF_DEFAULT: &str =
-    "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4";
+    "background_thread:true,dirty_decay_ms:30000,muzzy_decay_ms:30000,narenas:8";
 const ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV: &str = "ALLOCATOR_IDLE_RECLAIM_ENABLED";
 const ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT: bool = true;
 const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV: &str =
@@ -443,7 +443,9 @@ fn product_runtime_defaults() -> Value {
                 "buildEnv": PRODUCT_JEMALLOC_BUILD_CONF_ENV,
                 "defaultSource": PRODUCT_JEMALLOC_BUILD_CONF_SOURCE,
                 "default": PRODUCT_JEMALLOC_CONF_DEFAULT,
-                "scope": "jemalloc builds; built in by default from the workspace Cargo config to balance throughput and RSS with background purging and bounded arenas",
+                "runtimeOverride": true,
+                "serviceUnitSetsEnv": false,
+                "scope": "jemalloc builds; built in by default from the workspace Cargo config as a fallback; operators may set MALLOC_CONF in the service environment to override runtime allocator behavior",
             },
             "reclaim": {
                 "startupControlBuilt": true,
