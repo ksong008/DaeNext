@@ -184,6 +184,13 @@ struct AppState {
     runtime: Arc<ProductRuntimeManager>,
     latency_jobs: Arc<LatencyJobManager>,
     http_metrics: Arc<ProductHttpMetrics>,
+    geodata_status_cache: Arc<Mutex<GeodataStatusCache>>,
+}
+
+#[derive(Debug, Default)]
+struct GeodataStatusCache {
+    geosite: Option<Value>,
+    geoip: Option<Value>,
 }
 
 #[derive(Debug, Default)]

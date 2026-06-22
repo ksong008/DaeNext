@@ -304,6 +304,7 @@ fn product_test_app(dir: &Path, state: &Path) -> AppState {
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     }
 }
 

@@ -72,9 +72,14 @@ pub(in crate::daed_product) fn api_update_geodata(
 }
 
 pub(in crate::daed_product) fn geodata_status(app: &AppState) -> io::Result<Value> {
-    geodata_status_for_dir(&geodata_dir(app))
+    let dir = geodata_dir(app);
+    Ok(json!({
+        "geosite": geodata_resource_status_cached(app, &dir, GeodataKind::Geosite),
+        "geoip": geodata_resource_status_cached(app, &dir, GeodataKind::Geoip),
+    }))
 }
 
+#[cfg(test)]
 fn geodata_status_for_dir(dir: &Path) -> io::Result<Value> {
     Ok(json!({
         "geosite": geodata_resource_status(dir, GeodataKind::Geosite),
@@ -119,6 +124,7 @@ fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
         err
     })?;
     let status = geodata_resource_status_from_data(&dir, kind, &data, summary)?;
+    update_geodata_resource_status_cache(app, kind, status.clone());
     let reload = reload_runtime_after_geodata_update(app).map_err(io::Error::other)?;
     let mut response_object = serde_json::Map::new();
     response_object.insert(kind.response_key().to_owned(), status);
@@ -160,29 +166,48 @@ fn geodata_dir(app: &AppState) -> PathBuf {
 fn geodata_resource_status(dir: &Path, kind: GeodataKind) -> Value {
     match geodata_resource_status_result(dir, kind) {
         Ok(value) => value,
-        Err(err) => {
-            let mut value = json!({
-            "available": false,
-            "version": "",
-            "categoryCount": 0,
-            "fileSize": 0,
-            "sha256": null,
-            "updatedAt": null,
-            "lastError": err.to_string(),
-            });
-            if let Some(object) = value.as_object_mut() {
-                match kind {
-                    GeodataKind::Geosite => {
-                        object.insert("ruleCount".to_owned(), json!(0));
-                    }
-                    GeodataKind::Geoip => {
-                        object.insert("cidrCount".to_owned(), json!(0));
-                    }
-                }
+        Err(err) => geodata_resource_unavailable_status(kind, err),
+    }
+}
+
+fn geodata_resource_status_cached(app: &AppState, dir: &Path, kind: GeodataKind) -> Value {
+    let Ok(mut cache) = app.geodata_status_cache.lock() else {
+        return geodata_resource_status(dir, kind);
+    };
+    let slot = match kind {
+        GeodataKind::Geosite => &mut cache.geosite,
+        GeodataKind::Geoip => &mut cache.geoip,
+    };
+    if let Some(value) = slot.as_ref() {
+        return value.clone();
+    }
+
+    let value = geodata_resource_status(dir, kind);
+    *slot = Some(value.clone());
+    value
+}
+
+fn geodata_resource_unavailable_status(kind: GeodataKind, err: io::Error) -> Value {
+    let mut value = json!({
+    "available": false,
+    "version": "",
+    "categoryCount": 0,
+    "fileSize": 0,
+    "sha256": null,
+    "updatedAt": null,
+    "lastError": err.to_string(),
+    });
+    if let Some(object) = value.as_object_mut() {
+        match kind {
+            GeodataKind::Geosite => {
+                object.insert("ruleCount".to_owned(), json!(0));
             }
-            value
+            GeodataKind::Geoip => {
+                object.insert("cidrCount".to_owned(), json!(0));
+            }
         }
     }
+    value
 }
 
 fn geodata_resource_status_result(dir: &Path, kind: GeodataKind) -> io::Result<Value> {
@@ -244,6 +269,20 @@ fn geodata_resource_status_value(
         }
     }
     value
+}
+
+fn set_geodata_resource_status_cache(app: &AppState, kind: GeodataKind, value: Value) {
+    let Ok(mut cache) = app.geodata_status_cache.lock() else {
+        return;
+    };
+    match kind {
+        GeodataKind::Geosite => cache.geosite = Some(value),
+        GeodataKind::Geoip => cache.geoip = Some(value),
+    }
+}
+
+fn update_geodata_resource_status_cache(app: &AppState, kind: GeodataKind, value: Value) {
+    set_geodata_resource_status_cache(app, kind, value);
 }
 
 fn fetch_geodata_url(url: &url::Url) -> io::Result<Vec<u8>> {
@@ -626,6 +665,63 @@ mod tests {
         assert_eq!(status["geosite"]["ruleCount"], json!(3));
         assert_eq!(status["geoip"]["categoryCount"], json!(2));
         assert_eq!(status["geoip"]["cidrCount"], json!(3));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn geodata_status_reuses_cached_values_after_first_read() {
+        let dir =
+            std::env::temp_dir().join(format!("daed-product-geodata-cache-{}", fastrand::u64(..)));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(GEOSITE_FILE),
+            message([field_message(
+                1,
+                message([
+                    field_string(1, "geosite:cached"),
+                    field_message(2, message([field_string(2, "cached.example")])),
+                ]),
+            )]),
+        )
+        .unwrap();
+        fs::write(
+            dir.join(GEOIP_FILE),
+            message([field_message(
+                1,
+                message([
+                    field_string(1, "geoip:cached"),
+                    field_message(
+                        2,
+                        message([field_bytes(1, &[10, 0, 0, 0]), field_varint(2, 8)]),
+                    ),
+                ]),
+            )]),
+        )
+        .unwrap();
+        let app = AppState {
+            config_dir: dir.clone(),
+            state: dir.join("daed.db"),
+            web_root: dir.join("web"),
+            api_only: true,
+            runtime: Arc::new(ProductRuntimeManager::new()),
+            latency_jobs: Arc::new(LatencyJobManager::default()),
+            http_metrics: Arc::new(ProductHttpMetrics::default()),
+            geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        };
+
+        let first = geodata_status(&app).unwrap();
+        assert_eq!(first["geosite"]["ruleCount"], json!(1));
+        assert_eq!(first["geoip"]["cidrCount"], json!(1));
+
+        fs::remove_file(dir.join(GEOSITE_FILE)).unwrap();
+        fs::remove_file(dir.join(GEOIP_FILE)).unwrap();
+
+        let cached = geodata_status(&app).unwrap();
+        assert_eq!(cached["geosite"]["available"], json!(true));
+        assert_eq!(cached["geosite"]["ruleCount"], json!(1));
+        assert_eq!(cached["geoip"]["available"], json!(true));
+        assert_eq!(cached["geoip"]["cidrCount"], json!(1));
 
         let _ = fs::remove_dir_all(&dir);
     }
