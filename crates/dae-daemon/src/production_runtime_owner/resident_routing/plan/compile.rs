@@ -156,9 +156,7 @@ pub(super) fn add_function_match_sets(
                     logical_outbound(OutboundIndex::LOGICAL_OR)
                 };
                 let mut raw = [0_u8; 16];
-                raw[0] = value
-                    .parse::<u8>()
-                    .map_err(|err| format!("invalid dscp {value}: {err}"))?;
+                raw[0] = parse_dscp(value)?;
                 plan.matches.push(match_set(
                     raw,
                     function.not,

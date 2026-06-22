@@ -78,6 +78,45 @@ pub(super) fn routing_native_plan_builds_kernel_lpm_abi_without_helper_boundary(
 }
 
 #[test]
+pub(super) fn routing_native_plan_emits_dscp_match_and_mismatch_map_entries() {
+    let rules = vec![
+        RoutingNativeRule::new(RoutingNativeMatch::Dscp(vec![0x04, 46]), OutboundIndex(7)),
+        RoutingNativeRule::new(RoutingNativeMatch::Dscp(vec![5]), OutboundIndex::BLOCK)
+            .with_flags(true, 0, false),
+    ];
+    let plan = build_routing_native_plan(
+        &rules,
+        RoutingNativeFallback::new(OutboundIndex::DIRECT),
+        LpmMapTemplate::default(),
+    )
+    .unwrap();
+
+    assert_eq!(plan.routing_entries.len(), 4);
+    let dscp_four = &plan.routing_entries[0].value;
+    assert_eq!(dscp_four.kind, 9);
+    assert_eq!(dscp_four.value[0], 0x04);
+    assert_eq!(dscp_four.outbound, OutboundIndex::LOGICAL_OR.value());
+    assert_eq!(dscp_four.not, 0);
+
+    let dscp_ef = &plan.routing_entries[1].value;
+    assert_eq!(dscp_ef.kind, 9);
+    assert_eq!(dscp_ef.value[0], 46);
+    assert_eq!(dscp_ef.outbound, 7);
+    assert_eq!(dscp_ef.not, 0);
+
+    let dscp_not_five = &plan.routing_entries[2].value;
+    assert_eq!(dscp_not_five.kind, 9);
+    assert_eq!(dscp_not_five.value[0], 5);
+    assert_eq!(dscp_not_five.outbound, OutboundIndex::BLOCK.value());
+    assert_eq!(dscp_not_five.not, 1);
+
+    let fallback = plan.routing_entries.last().unwrap();
+    assert_eq!(fallback.value.kind, 10);
+    assert_eq!(fallback.value.outbound, OutboundIndex::DIRECT.value());
+    plan.validate().unwrap();
+}
+
+#[test]
 pub(super) fn routing_native_plan_rejects_invalid_fallback_and_lpm_template() {
     let invalid = RoutingNativeBuildPlan {
         routing_entries: vec![RoutingMapEntry {

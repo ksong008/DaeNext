@@ -256,6 +256,7 @@ fn handle_manager_packet(
                 event_lock,
                 packet.peer,
                 original_dst,
+                None,
                 err,
             );
             return;
@@ -303,7 +304,7 @@ fn forward_manager_packet(
         append_event(
             event_file,
             event_lock,
-            json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer)}),
+            json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer), "dscp": initial.dscp}),
         );
         return;
     };
@@ -320,6 +321,7 @@ fn forward_manager_packet(
                 event_lock,
                 packet.peer,
                 original_dst,
+                Some(initial.dscp),
                 err,
             );
             return;
@@ -339,6 +341,7 @@ fn forward_manager_packet(
                     "initial_outbound": selection.initial_outbound,
                     "final_outbound": selection.final_outbound,
                     "network": resident_udp_network_name(original_dst),
+                    "dscp": initial.dscp,
                 }),
             );
             return;
@@ -359,6 +362,7 @@ fn forward_manager_packet(
                     "active_sessions": sessions.len(),
                     "session_limit": session_limit,
                     "packetSession": key.to_value(),
+                    "dscp": initial.dscp,
                 }),
             );
             return;
@@ -381,6 +385,7 @@ fn forward_manager_packet(
         original_dst,
         proxy,
         force_proxy_packet: proxy_selection.force_proxy_packet,
+        dscp: initial.dscp,
     };
     let Some(entry) = sessions.get(&key) else {
         return;
@@ -396,6 +401,7 @@ fn forward_manager_packet(
                 "session_limit": session_limit,
                 "session_queue_depth": session_queue_depth,
                 "packetSession": key.to_value(),
+                "dscp": initial.dscp,
             }),
         );
     }
@@ -435,19 +441,20 @@ fn append_udp_route_selection_failed(
     event_lock: &Arc<Mutex<()>>,
     peer: SocketAddr,
     original_dst: SocketAddr,
+    dscp: Option<u8>,
     err: String,
 ) {
-    append_event(
-        event_file,
-        event_lock,
-        json!({
-            "event": "udp_exchange_failed",
-            "peer": resident_socket_addr_display(peer),
-            "original_dst": resident_socket_addr_display(original_dst),
-            "error": err,
-            "network": resident_udp_network_name(original_dst),
-        }),
-    );
+    let mut event = json!({
+        "event": "udp_exchange_failed",
+        "peer": resident_socket_addr_display(peer),
+        "original_dst": resident_socket_addr_display(original_dst),
+        "error": err,
+        "network": resident_udp_network_name(original_dst),
+    });
+    if let Some(dscp) = dscp {
+        event["dscp"] = json!(dscp);
+    }
+    append_event(event_file, event_lock, event);
 }
 
 #[cfg(test)]
