@@ -1,6 +1,7 @@
 use super::*;
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
+    lifecycle: Mutex<()>,
     pub(super) inner: Mutex<ProductRuntimeState>,
 }
 
@@ -206,6 +207,7 @@ pub(super) const PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV: &str = "DAED_PRODUCT_RUN
 impl ProductRuntimeManager {
     pub(super) fn new() -> Self {
         Self {
+            lifecycle: Mutex::new(()),
             inner: Mutex::new(ProductRuntimeState::default()),
         }
     }
@@ -216,6 +218,10 @@ impl ProductRuntimeManager {
         config_content: Option<String>,
         source: &str,
     ) -> Result<RuntimeStartOutcome, String> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
         let (
             previous_runtime,
             previous_config,
@@ -344,6 +350,10 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn stop(&self) -> Result<Value, String> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
         let was_running = {
             let mut inner = self
                 .inner
