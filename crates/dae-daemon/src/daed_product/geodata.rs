@@ -118,20 +118,36 @@ fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
         let _ = fs::remove_file(&tmp_path);
         err
     })?;
-    let mut status = geodata_status_for_dir(&dir)?;
+    let status = geodata_resource_status_from_data(&dir, kind, &data, summary)?;
     let reload = reload_runtime_after_geodata_update(app).map_err(io::Error::other)?;
-    if let Some(object) = status.as_object_mut() {
-        object.insert("updated".to_owned(), json!(kind.response_key()));
+    let mut response_object = serde_json::Map::new();
+    response_object.insert(kind.response_key().to_owned(), status);
+    response_object.insert("updated".to_owned(), json!(kind.response_key()));
+    let mut response = Value::Object(response_object);
+    if let Some(object) = response.as_object_mut() {
         match reload {
             Some(report) => {
                 object.insert("runtimeReloadRequired".to_owned(), json!(true));
                 object.insert("runtimeReloaded".to_owned(), json!(true));
-                object.insert("runtimeReload".to_owned(), report);
+                if let Some(report) = report.as_object() {
+                    if let Some(source) = report.get("source") {
+                        object.insert("runtimeReloadSource".to_owned(), source.clone());
+                    }
+                    if let Some(elapsed) = report.get("elapsed") {
+                        object.insert("runtimeReloadElapsed".to_owned(), elapsed.clone());
+                    }
+                    if let Some(status) = report.get("status") {
+                        object.insert("runtimeReloadStatus".to_owned(), status.clone());
+                    }
+                    if let Some(message) = report.get("message") {
+                        object.insert("runtimeReloadMessage".to_owned(), message.clone());
+                    }
+                }
             }
             None => {}
         }
     }
-    Ok(status)
+    Ok(response)
 }
 
 fn geodata_dir(app: &AppState) -> PathBuf {
@@ -176,10 +192,37 @@ fn geodata_resource_status_result(dir: &Path, kind: GeodataKind) -> io::Result<V
     let summary = kind
         .summarize(&data)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    let sha256 = hex_encode(&Sha256::digest(&data));
+
+    Ok(geodata_resource_status_value(
+        kind, &metadata, summary, sha256,
+    ))
+}
+
+fn geodata_resource_status_from_data(
+    dir: &Path,
+    kind: GeodataKind,
+    data: &[u8],
+    summary: dae_geodata::GeoDataSummary,
+) -> io::Result<Value> {
+    let path = dir.join(kind.file_name());
+    let metadata = fs::metadata(&path)?;
+    let sha256 = hex_encode(&Sha256::digest(data));
+
+    Ok(geodata_resource_status_value(
+        kind, &metadata, summary, sha256,
+    ))
+}
+
+fn geodata_resource_status_value(
+    kind: GeodataKind,
+    metadata: &fs::Metadata,
+    summary: dae_geodata::GeoDataSummary,
+    sha256: String,
+) -> Value {
     let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let updated_at = system_time_iso8601(modified);
     let version = system_time_date(modified);
-    let sha256 = hex_encode(&Sha256::digest(&data));
 
     let mut value = json!({
         "available": true,
@@ -200,7 +243,7 @@ fn geodata_resource_status_result(dir: &Path, kind: GeodataKind) -> io::Result<V
             }
         }
     }
-    Ok(value)
+    value
 }
 
 fn fetch_geodata_url(url: &url::Url) -> io::Result<Vec<u8>> {
@@ -233,13 +276,17 @@ fn reload_runtime_after_geodata_update(app: &AppState) -> Result<Option<Value>, 
     let outcome =
         app.runtime
             .reload_with_config_content(config, config_content, "geodata-update")?;
-    let mut report = outcome.report;
-    if let Value::Object(map) = &mut report {
-        map.insert("source".to_owned(), json!("geodata-update"));
-        map.insert(
-            "elapsed".to_owned(),
-            json!(format!("{:?}", started_at.elapsed())),
-        );
+    let mut report = json!({
+        "source": "geodata-update",
+        "elapsed": format!("{:?}", started_at.elapsed()),
+    });
+    if let Some(object) = report.as_object_mut() {
+        if let Some(status) = outcome.report.get("status") {
+            object.insert("status".to_owned(), status.clone());
+        }
+        if let Some(message) = outcome.report.get("message") {
+            object.insert("message".to_owned(), message.clone());
+        }
     }
     Ok(Some(report))
 }
@@ -298,7 +345,7 @@ fn fetch_geodata_url_once(url: &url::Url) -> io::Result<GeodataHttpResult> {
         read_geodata_http_response(&mut stream)?
     };
 
-    geodata_http_body(url, &response)
+    geodata_http_body(url, response)
 }
 
 fn geodata_http_request(url: &url::Url) -> io::Result<String> {
@@ -359,9 +406,9 @@ fn read_geodata_http_response<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
     Ok(response)
 }
 
-fn geodata_http_body(base_url: &url::Url, response: &[u8]) -> io::Result<GeodataHttpResult> {
-    let split = find_subsequence(response, b"\r\n\r\n")
-        .or_else(|| find_subsequence(response, b"\n\n"))
+fn geodata_http_body(base_url: &url::Url, mut response: Vec<u8>) -> io::Result<GeodataHttpResult> {
+    let split = find_subsequence(&response, b"\r\n\r\n")
+        .or_else(|| find_subsequence(&response, b"\n\n"))
         .ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "missing geodata http headers")
         })?;
@@ -376,7 +423,7 @@ fn geodata_http_body(base_url: &url::Url, response: &[u8]) -> io::Result<Geodata
     } else {
         split + 2
     };
-    let headers = String::from_utf8_lossy(&response[..split]);
+    let headers = String::from_utf8_lossy(&response[..split]).into_owned();
     let status = headers
         .lines()
         .next()
@@ -404,13 +451,15 @@ fn geodata_http_body(base_url: &url::Url, response: &[u8]) -> io::Result<Geodata
         )));
     }
 
-    let mut body = response[header_end..].to_vec();
-    if body.len() > GEODATA_HTTP_BODY_LIMIT {
+    let body_len = response.len().saturating_sub(header_end);
+    if body_len > GEODATA_HTTP_BODY_LIMIT {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("geodata response body exceeds {GEODATA_HTTP_BODY_LIMIT} bytes"),
         ));
     }
+    response.drain(..header_end);
+    let mut body = response;
     if header_values(&headers, "transfer-encoding")
         .iter()
         .any(|value| {
