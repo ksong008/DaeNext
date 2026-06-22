@@ -107,7 +107,7 @@ pub(crate) fn refresh_due_subscriptions_for_scheduler(
     let mut refreshed = 0_usize;
     let mut fetch_errors = 0_usize;
     for subscription in &scan.due {
-        match refresh_subscription_from_remote(state, subscription.id) {
+        match refresh_subscription_from_remote(state, config_dir, subscription.id) {
             Ok(report) => {
                 refreshed += 1;
                 if !report["fetched"].as_bool().unwrap_or(false) {
