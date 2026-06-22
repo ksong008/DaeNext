@@ -101,16 +101,17 @@ jobs:
           git tag -a "${TAG}" -m "${TAG}" "${source_sha}"
           git push origin "refs/tags/${TAG}"
 
-  build:
-    name: linux x86_64
+  release-gate:
+    name: release gate
     needs: [prepare-tag]
     runs-on: ubuntu-22.04
-    timeout-minutes: 75
+    timeout-minutes: 60
     steps:
       - name: Checkout release source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: ${{ needs.prepare-tag.outputs.source_sha }}
 
       - name: Install Rust
@@ -157,6 +158,291 @@ jobs:
           DAENEXT_RELEASE_GATE_AUDIT: "1"
         run: scripts/release_gate.sh
 
+  shared-artifacts:
+    name: shared release artifacts
+    needs: [prepare-tag, release-gate]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.prepare-tag.outputs.source_sha }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
+          for attempt in 1 2 3; do
+            if sudo apt-get update \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            libelf-dev \
+            llvm \
+            pkg-config
+
+      - name: Resolve release identity
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="${{ needs.prepare-tag.outputs.source_short_sha }}"
+          echo "dae_version=dae rust-native ${{ inputs.tag }} core=${commit}" >>"${GITHUB_OUTPUT}"
+
+      - name: Build outline producer
+        env:
+          DAE_VERSION: ${{ steps.release.outputs.dae_version }}
+        run: cargo build --release -p dae-cli --bin dae
+
+      - name: Create shared artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p shared
+          ./target/release/dae export outline >shared/dae-config-outline.json
+          test -s shared/dae-config-outline.json
+          git archive --format=tar.gz \
+            --prefix="DaeNext-${{ inputs.tag }}-source/" \
+            -o "shared/DaeNext-${{ inputs.tag }}-source.tar.gz" \
+            HEAD
+
+      - name: Upload shared artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-shared
+          path: shared/*
+
+  build:
+    name: build ${{ matrix.release_name }}
+    needs: [prepare-tag, release-gate, shared-artifacts]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_key: linux-x86_32
+            release_name: linux-x86_32
+            rust_target: i686-unknown-linux-gnu
+            install_rust_target: "true"
+            build_std: "false"
+            cargo_target_env: I686_UNKNOWN_LINUX_GNU
+            cross_packages: gcc-i686-linux-gnu g++-i686-linux-gnu
+            linker: i686-linux-gnu-gcc
+            cc: i686-linux-gnu-gcc
+            cxx: i686-linux-gnu-g++
+            ar: i686-linux-gnu-ar
+            rustflags: ""
+          - target_key: linux-riscv64
+            release_name: linux-riscv64
+            rust_target: riscv64gc-unknown-linux-gnu
+            install_rust_target: "true"
+            build_std: "false"
+            cargo_target_env: RISCV64GC_UNKNOWN_LINUX_GNU
+            cross_packages: gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
+            linker: riscv64-linux-gnu-gcc
+            cc: riscv64-linux-gnu-gcc
+            cxx: riscv64-linux-gnu-g++
+            ar: riscv64-linux-gnu-ar
+            rustflags: ""
+          - target_key: linux-aarch64
+            release_name: linux-arm64
+            rust_target: aarch64-unknown-linux-gnu
+            install_rust_target: "true"
+            build_std: "false"
+            cargo_target_env: AARCH64_UNKNOWN_LINUX_GNU
+            cross_packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+            cc: aarch64-linux-gnu-gcc
+            cxx: aarch64-linux-gnu-g++
+            ar: aarch64-linux-gnu-ar
+            rustflags: ""
+          - target_key: linux-x86_64-v1
+            release_name: linux-x86_64
+            rust_target: ""
+            install_rust_target: "false"
+            build_std: "false"
+            cargo_target_env: ""
+            cross_packages: ""
+            linker: ""
+            cc: ""
+            cxx: ""
+            ar: ""
+            rustflags: -C target-cpu=x86-64
+          - target_key: linux-x86_64-v2
+            release_name: linux-x86_64_v2_sse
+            rust_target: ""
+            install_rust_target: "false"
+            build_std: "false"
+            cargo_target_env: ""
+            cross_packages: ""
+            linker: ""
+            cc: ""
+            cxx: ""
+            ar: ""
+            rustflags: -C target-cpu=x86-64-v2
+          - target_key: linux-x86_64-v3
+            release_name: linux-x86_64_v3_avx2
+            rust_target: ""
+            install_rust_target: "false"
+            build_std: "false"
+            cargo_target_env: ""
+            cross_packages: ""
+            linker: ""
+            cc: ""
+            cxx: ""
+            ar: ""
+            rustflags: -C target-cpu=x86-64-v3
+          - target_key: linux-mips64
+            release_name: linux-mips64
+            rust_target: mips64-unknown-linux-gnuabi64
+            install_rust_target: "false"
+            build_std: "true"
+            cargo_target_env: MIPS64_UNKNOWN_LINUX_GNUABI64
+            cross_packages: gcc-mips64-linux-gnuabi64 g++-mips64-linux-gnuabi64
+            linker: mips64-linux-gnuabi64-gcc
+            cc: mips64-linux-gnuabi64-gcc
+            cxx: mips64-linux-gnuabi64-g++
+            ar: mips64-linux-gnuabi64-ar
+            rustflags: ""
+          - target_key: linux-mips64le
+            release_name: linux-mips64le
+            rust_target: mips64el-unknown-linux-gnuabi64
+            install_rust_target: "false"
+            build_std: "true"
+            cargo_target_env: MIPS64EL_UNKNOWN_LINUX_GNUABI64
+            cross_packages: gcc-mips64el-linux-gnuabi64 g++-mips64el-linux-gnuabi64
+            linker: mips64el-linux-gnuabi64-gcc
+            cc: mips64el-linux-gnuabi64-gcc
+            cxx: mips64el-linux-gnuabi64-g++
+            ar: mips64el-linux-gnuabi64-ar
+            rustflags: ""
+          - target_key: linux-mipsle
+            release_name: linux-mips32le
+            rust_target: mipsel-unknown-linux-gnu
+            install_rust_target: "false"
+            build_std: "true"
+            cargo_target_env: MIPSEL_UNKNOWN_LINUX_GNU
+            cross_packages: gcc-mipsel-linux-gnu g++-mipsel-linux-gnu
+            linker: mipsel-linux-gnu-gcc
+            cc: mipsel-linux-gnu-gcc
+            cxx: mipsel-linux-gnu-g++
+            ar: mipsel-linux-gnu-ar
+            rustflags: ""
+          - target_key: linux-mips
+            release_name: linux-mips32
+            rust_target: mips-unknown-linux-gnu
+            install_rust_target: "false"
+            build_std: "true"
+            cargo_target_env: MIPS_UNKNOWN_LINUX_GNU
+            cross_packages: gcc-mips-linux-gnu g++-mips-linux-gnu
+            linker: mips-linux-gnu-gcc
+            cc: mips-linux-gnu-gcc
+            cxx: mips-linux-gnu-g++
+            ar: mips-linux-gnu-ar
+            rustflags: ""
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.prepare-tag.outputs.source_sha }}
+
+      - name: Download shared artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-shared
+          path: shared
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust cross support
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly --profile minimal --component rust-src
+          if [ "${{ matrix.install_rust_target }}" = "true" ]; then
+            rustup target add "${{ matrix.rust_target }}"
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: |
+          set -euo pipefail
+          cross_packages="${{ matrix.cross_packages }}"
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
+          for attempt in 1 2 3; do
+            if sudo apt-get update \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            cmake \
+            libarchive-tools \
+            libelf-dev \
+            llvm \
+            perl \
+            pkg-config \
+            rpm \
+            ruby \
+            ruby-dev \
+            $cross_packages
+
+      - name: Install package builder
+        run: sudo gem install fpm -v 1.15.1 --no-document
+
+      - name: Configure Rust cross target
+        run: |
+          set -euo pipefail
+          rust_target="${{ matrix.rust_target }}"
+          cargo_target_env="${{ matrix.cargo_target_env }}"
+          linker="${{ matrix.linker }}"
+          cc="${{ matrix.cc }}"
+          cxx="${{ matrix.cxx }}"
+          ar="${{ matrix.ar }}"
+          if [ -z "$rust_target" ]; then
+            exit 0
+          fi
+          rust_target_env="${rust_target//-/_}"
+          echo "RUST_TARGET=${rust_target}" >>"${GITHUB_ENV}"
+          echo "CARGO_TARGET_${cargo_target_env}_LINKER=${linker}" >>"${GITHUB_ENV}"
+          echo "CC_${rust_target_env}=${cc}" >>"${GITHUB_ENV}"
+          echo "CXX_${rust_target_env}=${cxx}" >>"${GITHUB_ENV}"
+          echo "AR_${rust_target_env}=${ar}" >>"${GITHUB_ENV}"
+
       - name: Resolve release identity
         id: release
         shell: bash
@@ -167,21 +453,36 @@ jobs:
           echo "dae_version=dae rust-native ${{ inputs.tag }} core=${commit}" >>"${GITHUB_OUTPUT}"
 
       - name: Build release binary
+        id: build
         env:
+          BUILD_STD: ${{ matrix.build_std }}
           DAE_VERSION: ${{ steps.release.outputs.dae_version }}
+        shell: bash
         run: |
-          cargo build --release -p dae-cli --bin dae
-          ./target/release/dae export outline >dae-config-outline.json
+          set -euo pipefail
+          build_args=(build --release -p dae-cli --bin dae)
+          binary_dir="target/release"
+          if [ -n "${RUST_TARGET:-}" ]; then
+            build_args+=(--target "${RUST_TARGET}")
+            binary_dir="target/${RUST_TARGET}/release"
+          fi
+          if [ "$BUILD_STD" = "true" ]; then
+            cargo +nightly -Z build-std=std,panic_abort "${build_args[@]}"
+          else
+            cargo "${build_args[@]}"
+          fi
+          test -x "${binary_dir}/dae"
+          echo "binary_path=${binary_dir}/dae" >>"${GITHUB_OUTPUT}"
 
       - name: Package release artifacts
         shell: bash
         run: |
           set -euo pipefail
-          artifact_root="DaeNext-${{ inputs.tag }}-x86_64-unknown-linux-gnu"
+          artifact_root="DaeNext-${{ inputs.tag }}-${{ matrix.release_name }}"
           rm -rf dist
           mkdir -p "dist/${artifact_root}"
-          cp target/release/dae "dist/${artifact_root}/dae"
-          cp dae-config-outline.json "dist/${artifact_root}/dae-config-outline.json"
+          cp "${{ steps.build.outputs.binary_path }}" "dist/${artifact_root}/dae"
+          cp shared/dae-config-outline.json "dist/${artifact_root}/dae-config-outline.json"
           dae_sha256="$(sha256sum "dist/${artifact_root}/dae" | awk '{print $1}')"
           outline_sha256="$(sha256sum "dist/${artifact_root}/dae-config-outline.json" | awk '{print $1}')"
           {
@@ -189,7 +490,9 @@ jobs:
             echo "formal_release_source=github-actions-release-workflow"
             echo "tag=${{ inputs.tag }}"
             echo "commit=${{ steps.release.outputs.commit }}"
-            echo "target=x86_64-unknown-linux-gnu"
+            echo "target_key=${{ matrix.target_key }}"
+            echo "release_name=${{ matrix.release_name }}"
+            echo "rust_target=${{ matrix.rust_target || 'host' }}"
             echo "source_repo=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
             echo "rustc=$(rustc --version)"
             echo "cargo=$(cargo --version)"
@@ -203,21 +506,197 @@ jobs:
             echo "formal_release_source=github-actions-release-workflow"
             echo "tag=${{ inputs.tag }}"
             echo "commit=${{ steps.release.outputs.commit }}"
-            echo "target=x86_64-unknown-linux-gnu"
+            echo "target_key=${{ matrix.target_key }}"
+            echo "release_name=${{ matrix.release_name }}"
+            echo "rust_target=${{ matrix.rust_target || 'host' }}"
             echo "dae=dist/${artifact_root}/dae"
             echo "dae_sha256=${dae_sha256}"
             echo "outline=dist/${artifact_root}/dae-config-outline.json"
             echo "outline_sha256=${outline_sha256}"
-          } >"DaeNext-${{ inputs.tag }}-manifest.txt"
+          } >"DaeNext-${{ inputs.tag }}-${{ matrix.release_name }}-manifest.txt"
           tar -C dist -czf "${artifact_root}.tar.gz" "${artifact_root}"
-          git archive --format=tar.gz \
-            --prefix="DaeNext-${{ inputs.tag }}-source/" \
-            -o "DaeNext-${{ inputs.tag }}-source.tar.gz" \
-            HEAD
-          sha256sum "${artifact_root}.tar.gz" \
-            "DaeNext-${{ inputs.tag }}-source.tar.gz" \
-            "DaeNext-${{ inputs.tag }}-manifest.txt" \
-            >"DaeNext-${{ inputs.tag }}-checksums.txt"
+
+      - name: Build Linux installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_name="${{ matrix.release_name }}"
+          package_version="${{ inputs.tag }}"
+          package_version="${package_version#v}"
+          package_root="package-root"
+          package_file_base="dae-${{ matrix.target_key }}"
+          output_dir="${PWD}/output_packages"
+
+          rm -rf "${package_root}" output_packages
+          mkdir -p \
+            "${package_root}/usr/bin" \
+            "${package_root}/usr/share/dae" \
+            "${package_root}/usr/share/doc/dae" \
+            output_packages
+          install -m 0755 "${{ steps.build.outputs.binary_path }}" "${package_root}/usr/bin/dae"
+          install -m 0644 shared/dae-config-outline.json "${package_root}/usr/share/dae/dae-config-outline.json"
+          install -m 0644 "dist/DaeNext-${{ inputs.tag }}-${release_name}/BUILDINFO" "${package_root}/usr/share/doc/dae/BUILDINFO"
+
+          case "$release_name" in
+            linux-x86_32)
+              deb_arch="i386"
+              rpm_arch="i386"
+              pacman_arch="i686"
+              ;;
+            linux-arm64)
+              deb_arch="arm64"
+              rpm_arch="aarch64"
+              pacman_arch="aarch64"
+              ;;
+            linux-x86_64*)
+              deb_arch="amd64"
+              rpm_arch="x86_64"
+              pacman_arch="x86_64"
+              ;;
+            linux-mips64le)
+              deb_arch="mips64el"
+              rpm_arch="mips64el"
+              pacman_arch=""
+              ;;
+            linux-mips32le)
+              deb_arch="mipsel"
+              rpm_arch="mipsel"
+              pacman_arch=""
+              ;;
+            linux-mips*)
+              deb_arch="${release_name#linux-}"
+              rpm_arch="${release_name#linux-}"
+              pacman_arch=""
+              ;;
+            *)
+              deb_arch="${release_name#linux-}"
+              rpm_arch="${release_name#linux-}"
+              pacman_arch="${release_name#linux-}"
+              ;;
+          esac
+
+          fpm -s dir -t deb -a "$deb_arch" --version "$package_version" \
+            --url "https://github.com/ksong008/DaeNext" \
+            --description "DaeNext Rust-native dae binary." \
+            --maintainer "DaeNext Maintainers <noreply@github.com>" \
+            --name dae \
+            --license "AGPL-3.0" \
+            --package "${package_file_base}.deb" \
+            -C "$package_root" \
+            .
+          fpm -s dir -t rpm -a "$rpm_arch" --version "$package_version" \
+            --url "https://github.com/ksong008/DaeNext" \
+            --description "DaeNext Rust-native dae binary." \
+            --maintainer "DaeNext Maintainers <noreply@github.com>" \
+            --name dae \
+            --license "AGPL-3.0" \
+            --package "${package_file_base}.rpm" \
+            -C "$package_root" \
+            .
+          cp "${package_file_base}.deb" "${output_dir}/installer-dae-${release_name}.deb"
+          cp "${package_file_base}.rpm" "${output_dir}/installer-dae-${release_name}.rpm"
+
+          if [ -n "$pacman_arch" ]; then
+            fpm -s dir -t pacman -a "$pacman_arch" --version "$package_version" \
+              --url "https://github.com/ksong008/DaeNext" \
+              --description "DaeNext Rust-native dae binary." \
+              --maintainer "DaeNext Maintainers <noreply@github.com>" \
+              --name dae \
+              --license "AGPL-3.0" \
+              --package "${package_file_base}.pacman" \
+              -C "$package_root" \
+              .
+            cp "${package_file_base}.pacman" "${output_dir}/installer-dae-${release_name}.pkg.tar.zst"
+          fi
+
+          dpkg-deb -c "${output_dir}/installer-dae-${release_name}.deb" | grep -F './usr/bin/dae'
+          rpm -qpl "${output_dir}/installer-dae-${release_name}.rpm" | grep -F '/usr/bin/dae'
+          if [ -n "$pacman_arch" ]; then
+            bsdtar -tf "${output_dir}/installer-dae-${release_name}.pkg.tar.zst" | grep -F 'usr/bin/dae'
+          fi
+
+      - name: Upload target artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.release_name }}
+          path: |
+            DaeNext-${{ inputs.tag }}-${{ matrix.release_name }}.tar.gz
+            DaeNext-${{ inputs.tag }}-${{ matrix.release_name }}-manifest.txt
+            output_packages/*
+
+  publish:
+    name: publish release
+    needs: [prepare-tag, shared-artifacts, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          find release -type f \( \
+              -name "*.tar.gz" \
+              -o -name "*-manifest.txt" \
+              -o -name "*.deb" \
+              -o -name "*.rpm" \
+              -o -name "*.pkg.tar.zst" \
+            \) -print0 \
+            | xargs -0 -I {} cp {} upload/
+
+          expected_release_names=(
+            linux-x86_32
+            linux-riscv64
+            linux-arm64
+            linux-x86_64
+            linux-x86_64_v2_sse
+            linux-x86_64_v3_avx2
+            linux-mips64
+            linux-mips64le
+            linux-mips32le
+            linux-mips32
+          )
+          for release_name in "${expected_release_names[@]}"; do
+            test -f "upload/DaeNext-${{ inputs.tag }}-${release_name}.tar.gz" || {
+              echo "Missing target tarball: ${release_name}" >&2
+              exit 1
+            }
+            test -f "upload/DaeNext-${{ inputs.tag }}-${release_name}-manifest.txt" || {
+              echo "Missing target manifest: ${release_name}" >&2
+              exit 1
+            }
+            test -f "upload/installer-dae-${release_name}.deb" || {
+              echo "Missing target deb installer: ${release_name}" >&2
+              exit 1
+            }
+            test -f "upload/installer-dae-${release_name}.rpm" || {
+              echo "Missing target rpm installer: ${release_name}" >&2
+              exit 1
+            }
+            case "$release_name" in
+              linux-mips*) ;;
+              *)
+                test -f "upload/installer-dae-${release_name}.pkg.tar.zst" || {
+                  echo "Missing target pacman installer: ${release_name}" >&2
+                  exit 1
+                }
+                ;;
+            esac
+          done
+          test -f "upload/DaeNext-${{ inputs.tag }}-source.tar.gz"
+          (
+            cd upload
+            sha256sum \
+              DaeNext-${{ inputs.tag }}-*.tar.gz \
+              DaeNext-${{ inputs.tag }}-*-manifest.txt \
+              installer-dae-linux-* \
+              >"DaeNext-${{ inputs.tag }}-checksums.txt"
+          )
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -227,8 +706,4 @@ jobs:
           name: DaeNext ${{ inputs.tag }}
           make_latest: ${{ inputs.make_latest }}
           generate_release_notes: true
-          files: |
-            DaeNext-${{ inputs.tag }}-x86_64-unknown-linux-gnu.tar.gz
-            DaeNext-${{ inputs.tag }}-source.tar.gz
-            DaeNext-${{ inputs.tag }}-manifest.txt
-            DaeNext-${{ inputs.tag }}-checksums.txt
+          files: upload/*
