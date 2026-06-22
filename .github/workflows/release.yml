@@ -2,22 +2,6 @@ name: Release DaeNext
 run-name: Release DaeNext ${{ inputs.tag }} from ${{ inputs.ref }} by @${{ github.actor }}
 
 on:
-  workflow_call:
-    inputs:
-      tag:
-        type: string
-        required: true
-      ref:
-        type: string
-        required: true
-      update_tag:
-        type: boolean
-        required: false
-        default: false
-      make_latest:
-        type: boolean
-        required: false
-        default: false
   workflow_dispatch:
     inputs:
       tag:
