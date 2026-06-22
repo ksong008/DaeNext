@@ -2,38 +2,89 @@ name: Rust CI
 
 on:
   workflow_dispatch:
-
-env:
-  CARGO_TERM_COLOR: always
+  push:
+    branches:
+      - main
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "example.dae"
+      - "scripts/**"
+      - "testdata/**"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "example.dae"
+      - "scripts/**"
+      - "testdata/**"
 
 permissions:
   contents: read
 
+concurrency:
+  group: rust-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  BPF_LINKER_VERSION: "0.10.3"
+  CARGO_TERM_COLOR: always
+
 jobs:
-  ci:
-    name: workspace
-    runs-on: ubuntu-latest
+  release-gate:
+    name: release gate
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Install native eBPF toolchain
+      - name: Install native eBPF Rust toolchain
         run: |
           rustup toolchain install nightly --profile minimal --component rust-src
-          cargo install bpf-linker --version 0.10.3 --locked
+          cargo install bpf-linker --version "${BPF_LINKER_VERSION}" --locked
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Install native dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev pkg-config
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
+          for attempt in 1 2 3; do
+            if sudo apt-get update \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            libelf-dev \
+            llvm \
+            pkg-config
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
@@ -43,8 +94,62 @@ jobs:
           DAENEXT_RELEASE_GATE_AUDIT: "1"
         run: scripts/release_gate.sh
 
-      - name: Build dae
+  release-build-smoke:
+    name: release build smoke
+    needs: [release-gate]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
         run: |
-          DAE_VERSION="dae rust-native ci ${GITHUB_SHA::12}" \
-            cargo build --release -p dae-cli --bin dae
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
+          for attempt in 1 2 3; do
+            if sudo apt-get update \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            libelf-dev \
+            llvm \
+            pkg-config
+
+      - name: Resolve build identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --short=12 HEAD)"
+          echo "dae_version=dae rust-native ci core=${commit}" >>"${GITHUB_OUTPUT}"
+
+      - name: Build release binary
+        env:
+          DAE_VERSION: ${{ steps.identity.outputs.dae_version }}
+        run: |
+          cargo build --release -p dae-cli --bin dae
+
+      - name: Smoke release binary
+        run: |
           ./target/release/dae export outline >/tmp/dae-config-outline.json
+          test -s /tmp/dae-config-outline.json

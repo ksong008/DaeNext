@@ -1,60 +1,153 @@
 name: Release DaeNext
+run-name: Release DaeNext ${{ inputs.tag }} from ${{ inputs.ref }} by @${{ github.actor }}
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      ref:
+        type: string
+        required: true
+      update_tag:
+        type: boolean
+        required: false
+        default: false
+      make_latest:
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to use when the workflow is started manually"
+        description: "Release tag to publish"
         required: true
         type: string
+      ref:
+        description: "Git ref to build from"
+        required: false
+        default: main
+        type: string
+      update_tag:
+        description: "Move an existing tag to the selected ref"
+        required: false
+        default: false
+        type: boolean
+      make_latest:
+        description: "Mark the published release as latest"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-daenext-${{ inputs.tag }}
+  cancel-in-progress: false
 
 env:
+  BPF_LINKER_VERSION: "0.10.3"
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    name: dae linux x86_64
+  prepare-tag:
+    name: prepare tag
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      source_short_sha: ${{ steps.prepare.outputs.source_short_sha }}
     steps:
-      - name: Checkout
+      - name: Checkout source ref
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.ref }}
 
-      - name: Resolve release identity
-        id: release
-        shell: bash
+      - name: Ensure release tag points at source ref
+        id: prepare
+        env:
+          SOURCE_REF: ${{ inputs.ref }}
+          TAG: ${{ inputs.tag }}
+          UPDATE_TAG: ${{ inputs.update_tag }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag="${GITHUB_REF_NAME}"
+          source_sha="$(git rev-parse HEAD)"
+          source_short_sha="$(git rev-parse --short=12 HEAD)"
+          echo "source_sha=${source_sha}" >>"${GITHUB_OUTPUT}"
+          echo "source_short_sha=${source_short_sha}" >>"${GITHUB_OUTPUT}"
+
+          git fetch --tags --force origin
+          if git rev-parse -q --verify "refs/tags/${TAG}^{}" >/dev/null; then
+            tag_sha="$(git rev-parse "refs/tags/${TAG}^{}")"
+            if [ "${tag_sha}" = "${source_sha}" ]; then
+              echo "Tag ${TAG} already points to ${source_sha}"
+              exit 0
+            fi
+            if [ "${UPDATE_TAG}" != "true" ]; then
+              echo "Tag ${TAG} points to ${tag_sha}, but ${SOURCE_REF} resolves to ${source_sha}" >&2
+              exit 1
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -fa "${TAG}" -m "${TAG}" "${source_sha}"
+            git push origin "refs/tags/${TAG}" --force
+            exit 0
           fi
-          commit="$(git rev-parse --short=12 HEAD)"
-          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
-          echo "commit=${commit}" >>"${GITHUB_OUTPUT}"
-          echo "version=dae rust-native ${tag} core=${commit}" >>"${GITHUB_OUTPUT}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "${TAG}" "${source_sha}"
+          git push origin "refs/tags/${TAG}"
+
+  build:
+    name: linux x86_64
+    needs: [prepare-tag]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare-tag.outputs.source_sha }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Install native eBPF toolchain
+      - name: Install native eBPF Rust toolchain
         run: |
           rustup toolchain install nightly --profile minimal --component rust-src
-          cargo install bpf-linker --version 0.10.3 --locked
+          cargo install bpf-linker --version "${BPF_LINKER_VERSION}" --locked
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Install native dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev pkg-config
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
+          for attempt in 1 2 3; do
+            if sudo apt-get update \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            libelf-dev \
+            llvm \
+            pkg-config
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
@@ -64,67 +157,78 @@ jobs:
           DAENEXT_RELEASE_GATE_AUDIT: "1"
         run: scripts/release_gate.sh
 
-      - name: Build dae release binary
+      - name: Resolve release identity
+        id: release
+        shell: bash
         run: |
-          DAE_VERSION="${{ steps.release.outputs.version }}" \
-            cargo build --release -p dae-cli --bin dae
+          set -euo pipefail
+          commit="${{ needs.prepare-tag.outputs.source_short_sha }}"
+          echo "commit=${commit}" >>"${GITHUB_OUTPUT}"
+          echo "dae_version=dae rust-native ${{ inputs.tag }} core=${commit}" >>"${GITHUB_OUTPUT}"
+
+      - name: Build release binary
+        env:
+          DAE_VERSION: ${{ steps.release.outputs.dae_version }}
+        run: |
+          cargo build --release -p dae-cli --bin dae
           ./target/release/dae export outline >dae-config-outline.json
 
       - name: Package release artifacts
         shell: bash
         run: |
           set -euo pipefail
-          artifact_root="DaeNext-${{ steps.release.outputs.tag }}-x86_64-unknown-linux-gnu"
+          artifact_root="DaeNext-${{ inputs.tag }}-x86_64-unknown-linux-gnu"
           rm -rf dist
           mkdir -p "dist/${artifact_root}"
           cp target/release/dae "dist/${artifact_root}/dae"
           cp dae-config-outline.json "dist/${artifact_root}/dae-config-outline.json"
-          binary_sha256="$(sha256sum "dist/${artifact_root}/dae" | awk '{print $1}')"
+          dae_sha256="$(sha256sum "dist/${artifact_root}/dae" | awk '{print $1}')"
           outline_sha256="$(sha256sum "dist/${artifact_root}/dae-config-outline.json" | awk '{print $1}')"
           {
             echo "name=DaeNext"
-            echo "artifact=dae"
             echo "formal_release_source=github-actions-release-workflow"
-            echo "tag=${{ steps.release.outputs.tag }}"
+            echo "tag=${{ inputs.tag }}"
             echo "commit=${{ steps.release.outputs.commit }}"
             echo "target=x86_64-unknown-linux-gnu"
             echo "source_repo=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
             echo "rustc=$(rustc --version)"
             echo "cargo=$(cargo --version)"
-            echo "binary_sha256=${binary_sha256}"
+            echo "dae_version=${{ steps.release.outputs.dae_version }}"
+            echo "dae_sha256=${dae_sha256}"
             echo "outline_sha256=${outline_sha256}"
           } >"dist/${artifact_root}/BUILDINFO"
           {
             echo "schema_version=1"
             echo "name=DaeNext"
-            echo "artifact=dae"
             echo "formal_release_source=github-actions-release-workflow"
-            echo "tag=${{ steps.release.outputs.tag }}"
+            echo "tag=${{ inputs.tag }}"
             echo "commit=${{ steps.release.outputs.commit }}"
             echo "target=x86_64-unknown-linux-gnu"
-            echo "binary=dist/${artifact_root}/dae"
-            echo "binary_sha256=${binary_sha256}"
+            echo "dae=dist/${artifact_root}/dae"
+            echo "dae_sha256=${dae_sha256}"
             echo "outline=dist/${artifact_root}/dae-config-outline.json"
             echo "outline_sha256=${outline_sha256}"
-          } >"DaeNext-${{ steps.release.outputs.tag }}-manifest.txt"
+          } >"DaeNext-${{ inputs.tag }}-manifest.txt"
           tar -C dist -czf "${artifact_root}.tar.gz" "${artifact_root}"
           git archive --format=tar.gz \
-            --prefix="DaeNext-${{ steps.release.outputs.tag }}-source/" \
-            -o "DaeNext-${{ steps.release.outputs.tag }}-source.tar.gz" \
+            --prefix="DaeNext-${{ inputs.tag }}-source/" \
+            -o "DaeNext-${{ inputs.tag }}-source.tar.gz" \
             HEAD
           sha256sum "${artifact_root}.tar.gz" \
-            "DaeNext-${{ steps.release.outputs.tag }}-source.tar.gz" \
-            "DaeNext-${{ steps.release.outputs.tag }}-manifest.txt" \
-            >"DaeNext-${{ steps.release.outputs.tag }}-checksums.txt"
+            "DaeNext-${{ inputs.tag }}-source.tar.gz" \
+            "DaeNext-${{ inputs.tag }}-manifest.txt" \
+            >"DaeNext-${{ inputs.tag }}-checksums.txt"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release.outputs.tag }}
-          name: DaeNext ${{ steps.release.outputs.tag }}
+          tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ needs.prepare-tag.outputs.source_sha }}
+          name: DaeNext ${{ inputs.tag }}
+          make_latest: ${{ inputs.make_latest }}
           generate_release_notes: true
           files: |
-            DaeNext-${{ steps.release.outputs.tag }}-x86_64-unknown-linux-gnu.tar.gz
-            DaeNext-${{ steps.release.outputs.tag }}-source.tar.gz
-            DaeNext-${{ steps.release.outputs.tag }}-manifest.txt
-            DaeNext-${{ steps.release.outputs.tag }}-checksums.txt
+            DaeNext-${{ inputs.tag }}-x86_64-unknown-linux-gnu.tar.gz
+            DaeNext-${{ inputs.tag }}-source.tar.gz
+            DaeNext-${{ inputs.tag }}-manifest.txt
+            DaeNext-${{ inputs.tag }}-checksums.txt
