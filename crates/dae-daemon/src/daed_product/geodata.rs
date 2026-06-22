@@ -3,8 +3,8 @@ use super::*;
 const GEOSITE_FILE: &str = "geosite.dat";
 const GEOIP_FILE: &str = "geoip.dat";
 const GEOSITE_URL: &str =
-    "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat";
-const GEOIP_URL: &str = "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat";
+    "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat";
+const GEOIP_URL: &str = "https://fastly.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip.dat";
 const GEODATA_HTTP_HEADER_LIMIT: usize = 64 * 1024;
 const GEODATA_HTTP_BODY_LIMIT: usize = 64 * 1024 * 1024;
 const GEODATA_REDIRECT_LIMIT: usize = 5;
