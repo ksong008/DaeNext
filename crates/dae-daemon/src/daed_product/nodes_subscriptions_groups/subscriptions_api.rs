@@ -72,16 +72,17 @@ pub(crate) fn create_subscription(
         "info",
         &format!("subscription {id} imported"),
     );
-    let import_report = refresh_subscription_from_remote(state, id).unwrap_or_else(|err| {
-        json!({
-            "link": link,
-            "nodeImportResult": [{
+    let import_report =
+        refresh_subscription_from_remote(state, config_dir, id).unwrap_or_else(|err| {
+            json!({
                 "link": link,
-                "error": err.to_string(),
-                "node": Value::Null
-            }]
-        })
-    });
+                "nodeImportResult": [{
+                    "link": link,
+                    "error": err.to_string(),
+                    "node": Value::Null
+                }]
+            })
+        });
     HttpResponse::json(
         201,
         json!({
@@ -162,7 +163,7 @@ pub(crate) fn refresh_subscription(
     runtime: &ProductRuntimeManager,
     id: i64,
 ) -> HttpResponse {
-    match refresh_subscription_from_remote(state, id) {
+    match refresh_subscription_from_remote(state, config_dir, id) {
         Ok(mut report) => {
             let _ = append_log_for_config(
                 config_dir,

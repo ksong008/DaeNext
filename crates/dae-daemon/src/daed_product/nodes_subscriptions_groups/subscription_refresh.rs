@@ -1,15 +1,32 @@
 use super::*;
 
 const SUBSCRIPTION_HTTP_HEADER_LIMIT: usize = 128 * 1024;
-const SUBSCRIPTION_HTTP_DEFAULT_BODY_LIMIT: usize = 64 * 1024 * 1024;
-pub(crate) fn refresh_subscription_from_remote(state: &Path, id: i64) -> io::Result<Value> {
+const SUBSCRIPTION_MAX_BYTES: usize = 8 * 1024 * 1024;
+const SUBSCRIPTION_PERSIST_DIR: &str = "persist.d";
+
+#[derive(Clone, Debug)]
+struct SubscriptionSource {
+    link: String,
+    tag: Option<String>,
+}
+
+pub(crate) fn refresh_subscription_from_remote(
+    state: &Path,
+    config_dir: &Path,
+    id: i64,
+) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
-    let Some(link) = conn
+    let Some(source) = conn
         .query_row(
-            "SELECT link FROM subscriptions WHERE id = ?1",
+            "SELECT link, tag FROM subscriptions WHERE id = ?1",
             params![id],
-            |row| row.get::<_, String>(0),
+            |row| {
+                Ok(SubscriptionSource {
+                    link: row.get(0)?,
+                    tag: row.get(1)?,
+                })
+            },
         )
         .optional()
         .map_err(sqlite_io_error)?
@@ -20,7 +37,7 @@ pub(crate) fn refresh_subscription_from_remote(state: &Path, id: i64) -> io::Res
         ));
     };
     let fetched_at = now_text();
-    match fetch_subscription_content(&link) {
+    match fetch_subscription_content(config_dir, source.tag.as_deref(), &source.link) {
         Ok(content) => {
             let links = subscription_links_from_content(&content);
             let node_import_result = replace_subscription_nodes(&conn, id, &links)?;
@@ -35,7 +52,7 @@ pub(crate) fn refresh_subscription_from_remote(state: &Path, id: i64) -> io::Res
             )
             .map_err(sqlite_io_error)?;
             Ok(json!({
-                "link": link,
+                "link": source.link,
                 "fetched": true,
                 "fetchedAt": fetched_at,
                 "nodeImportResult": node_import_result,
@@ -48,11 +65,11 @@ pub(crate) fn refresh_subscription_from_remote(state: &Path, id: i64) -> io::Res
             )
             .map_err(sqlite_io_error)?;
             Ok(json!({
-                "link": link,
+                "link": source.link,
                 "fetched": false,
                 "fetchedAt": fetched_at,
                 "nodeImportResult": [{
-                    "link": link,
+                    "link": source.link,
                     "error": err.to_string(),
                     "node": Value::Null
                 }],
@@ -332,6 +349,9 @@ pub(crate) fn bump_group_versions_for_subscription(
 }
 
 pub(crate) fn subscription_links_from_content(content: &str) -> Vec<String> {
+    if let Some(links) = sip008_links_from_content(content) {
+        return links;
+    }
     let direct = node_links_from_text(content);
     if !direct.is_empty() {
         return direct;
@@ -339,10 +359,22 @@ pub(crate) fn subscription_links_from_content(content: &str) -> Vec<String> {
     let compact = content.split_whitespace().collect::<String>();
     for candidate in [
         compact.clone(),
-        compact.replace('-', "+").replace('_', "/"),
         format!("{compact}{}", "=".repeat((4 - compact.len() % 4) % 4)),
     ] {
         if let Ok(decoded) = STANDARD.decode(candidate.as_bytes()) {
+            let decoded = String::from_utf8_lossy(&decoded);
+            let links = node_links_from_text(&decoded);
+            if !links.is_empty() {
+                return links;
+            }
+        }
+    }
+    for candidate in [
+        compact.clone(),
+        compact.trim_end_matches('=').to_owned(),
+        compact.replace('+', "-").replace('/', "_"),
+    ] {
+        if let Ok(decoded) = URL_SAFE_NO_PAD.decode(candidate.as_bytes()) {
             let decoded = String::from_utf8_lossy(&decoded);
             let links = node_links_from_text(&decoded);
             if !links.is_empty() {
@@ -362,17 +394,271 @@ pub(crate) fn node_links_from_text(text: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn fetch_subscription_content(link: &str) -> io::Result<String> {
+pub(crate) fn sip008_links_from_content(content: &str) -> Option<Vec<String>> {
+    let value: Value = serde_json::from_str(content).ok()?;
+    if value.get("version").and_then(Value::as_i64) != Some(1) {
+        return None;
+    }
+    let servers = value.get("servers")?.as_array()?;
+    let mut links = Vec::with_capacity(servers.len());
+    for server in servers {
+        if let Some(link) = sip008_server_to_ss_link(server) {
+            links.push(link);
+        }
+    }
+    Some(links)
+}
+
+fn sip008_server_to_ss_link(server: &Value) -> Option<String> {
+    let host = server.get("server")?.as_str()?.trim();
+    let port = server.get("server_port")?.as_u64()?;
+    let method = server.get("method")?.as_str()?;
+    let password = server.get("password")?.as_str()?;
+    if host.is_empty() || port > u16::MAX as u64 || method.is_empty() {
+        return None;
+    }
+    let mut url = url::Url::parse(&format!("ss://{}", format_host_port(host, port as u16))).ok()?;
+    url.set_username(method).ok()?;
+    url.set_password(Some(password)).ok()?;
+    let plugin = server.get("plugin").and_then(Value::as_str).unwrap_or("");
+    let plugin_opts = server
+        .get("plugin_opts")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !plugin.is_empty() || !plugin_opts.is_empty() {
+        let plugin_value = if plugin.is_empty() {
+            plugin_opts.to_owned()
+        } else if plugin_opts.is_empty() {
+            plugin.to_owned()
+        } else {
+            format!("{plugin};{plugin_opts}")
+        };
+        url.query_pairs_mut().append_pair("plugin", &plugin_value);
+    }
+    if let Some(remarks) = server.get("remarks").and_then(Value::as_str)
+        && !remarks.is_empty()
+    {
+        url.set_fragment(Some(remarks));
+    }
+    Some(url.to_string())
+}
+
+fn format_host_port(host: &str, port: u16) -> String {
+    if host.starts_with('[') || !host.contains(':') {
+        format!("{host}:{port}")
+    } else {
+        format!("[{host}]:{port}")
+    }
+}
+
+pub(crate) fn fetch_subscription_content(
+    config_dir: &Path,
+    tag: Option<&str>,
+    link: &str,
+) -> io::Result<String> {
     let url = url::Url::parse(link)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     match url.scheme() {
         "http" => fetch_http_url(&url, false),
         "https" => fetch_http_url(&url, true),
+        "file" => read_subscription_file(&subscription_file_path(config_dir, &url)?),
+        "http-file" | "https-file" => {
+            let persist_path = persist_subscription_path(config_dir, tag)?;
+            let fetch_url = url_with_scheme(&url, url.scheme().trim_end_matches("-file"))?;
+            let fetched = match fetch_url.scheme() {
+                "http" => fetch_http_url(&fetch_url, false),
+                "https" => fetch_http_url(&fetch_url, true),
+                scheme => Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unsupported subscription scheme: {scheme}"),
+                )),
+            };
+            match fetched {
+                Ok(content) => {
+                    write_persisted_subscription(&persist_path, content.as_bytes())?;
+                    Ok(content)
+                }
+                Err(fetch_err) => read_subscription_file(&persist_path).map_err(|read_err| {
+                    io::Error::new(
+                        read_err.kind(),
+                        format!(
+                            "fetch failed: {}; persisted subscription fallback failed: {}",
+                            fetch_err, read_err
+                        ),
+                    )
+                }),
+            }
+        }
         scheme => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("unsupported subscription scheme: {scheme}"),
         )),
     }
+}
+
+fn url_with_scheme(url: &url::Url, scheme: &str) -> io::Result<url::Url> {
+    let prefix = format!("{}:", url.scheme());
+    let rest = url.as_str().strip_prefix(&prefix).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid subscription scheme prefix",
+        )
+    })?;
+    url::Url::parse(&format!("{scheme}:{rest}"))
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
+}
+
+pub(crate) fn subscription_file_path(config_dir: &Path, url: &url::Url) -> io::Result<PathBuf> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not support absolute path"))?;
+    let mut path = confined_config_path(config_dir, host)?;
+    push_confined_relative(&mut path, url.path().trim_start_matches('/'))?;
+    Ok(path)
+}
+
+fn persist_subscription_path(config_dir: &Path, tag: Option<&str>) -> io::Result<PathBuf> {
+    let tag = tag
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "subscription tag is required for http-file/https-file subscription",
+            )
+        })?;
+    if tag == "." || tag == ".." || tag.contains('/') || tag.contains('\\') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("subscription tag {tag:?} cannot be used as a persist filename"),
+        ));
+    }
+    let mut path = confined_config_path(config_dir, SUBSCRIPTION_PERSIST_DIR)?;
+    push_confined_relative(&mut path, &format!("{tag}.sub"))?;
+    Ok(path)
+}
+
+fn confined_config_path(config_dir: &Path, first: &str) -> io::Result<PathBuf> {
+    let mut path = config_dir.to_path_buf();
+    push_confined_relative(&mut path, first)?;
+    Ok(path)
+}
+
+fn push_confined_relative(path: &mut PathBuf, relative: &str) -> io::Result<()> {
+    for component in Path::new(relative).components() {
+        match component {
+            Component::Normal(part) => path.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "subscription path escapes config directory",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_subscription_file(path: &Path) -> io::Result<String> {
+    let file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "subscription file cannot be a directory: {}",
+                path.display()
+            ),
+        ));
+    }
+    reject_open_subscription_file_permissions(path, &metadata)?;
+    let mut reader = io::BufReader::new(file);
+    let buffer = reader.fill_buf()?;
+    if buffer.first() == Some(&b'@') {
+        let mut instruction = String::new();
+        reader.read_line(&mut instruction)?;
+    }
+    let bytes = read_all_limited(&mut reader, subscription_http_body_limit())?;
+    Ok(String::from_utf8_lossy(bytes.trim_ascii()).into_owned())
+}
+
+#[cfg(unix)]
+fn reject_open_subscription_file_permissions(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o037 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "permissions {mode:04o} for '{}' are too open; requires the file is not group-writable and not accessible by others; suggest 0640 or 0600",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn reject_open_subscription_file_permissions(
+    _path: &Path,
+    _metadata: &fs::Metadata,
+) -> io::Result<()> {
+    Ok(())
+}
+
+fn write_persisted_subscription(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "persisted subscription path has no parent",
+        ));
+    };
+    fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+fn read_all_limited<R: Read>(reader: &mut R, limit: usize) -> io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        let next_len = out.len().checked_add(read).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "subscription size overflow")
+        })?;
+        if next_len > limit {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("subscription exceeds {limit} bytes"),
+            ));
+        }
+        out.extend_from_slice(&buf[..read]);
+    }
+    Ok(out)
 }
 
 pub(crate) fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
@@ -390,8 +676,9 @@ pub(crate) fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
         path.push('?');
         path.push_str(query);
     }
+    let user_agent = subscription_user_agent();
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: daed-rust-native/0.1\r\nAccept: text/plain, application/octet-stream, */*\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {user_agent}\r\nAccept: text/plain, application/octet-stream, */*\r\nConnection: close\r\n\r\n"
     );
     let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10))?;
     stream.set_read_timeout(Some(Duration::from_secs(20)))?;
@@ -423,6 +710,13 @@ pub(crate) fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
         read_subscription_http_response(&mut stream)?
     };
     http_response_body(&response)
+}
+
+fn subscription_user_agent() -> String {
+    format!(
+        "dae/{} (like v2rayA/1.0 WebRequestHelper) (like v2rayN/1.0 WebRequestHelper)",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 fn read_subscription_http_response<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
@@ -573,7 +867,7 @@ pub(crate) fn decode_chunked_body_with_limit(
 }
 
 fn subscription_http_body_limit() -> usize {
-    SUBSCRIPTION_HTTP_DEFAULT_BODY_LIMIT
+    SUBSCRIPTION_MAX_BYTES
 }
 
 fn subscription_http_response_limit(body_limit: usize) -> io::Result<usize> {

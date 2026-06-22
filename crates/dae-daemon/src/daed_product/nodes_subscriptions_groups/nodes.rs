@@ -273,6 +273,9 @@ pub(crate) struct ParsedNodeLink {
 }
 
 pub(crate) fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
+    if let Some(parsed) = parse_node_link_with_outbound_parser(link, tag) {
+        return parsed;
+    }
     let protocol = link
         .split_once("://")
         .map(|(value, _)| value)
@@ -304,6 +307,62 @@ pub(crate) fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
         address,
         protocol: protocol.to_owned(),
     }
+}
+
+fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option<ParsedNodeLink> {
+    let tag = tag.map(decode_node_label);
+    if let Ok(parsed) = dae_outbound::VMessLink::parse(link) {
+        let address = parsed.address();
+        return Some(ParsedNodeLink {
+            name: tag
+                .clone()
+                .or_else(|| non_empty(decoded_node_label(&parsed.ps)))
+                .unwrap_or_else(|| format!("vmess-{address}")),
+            address,
+            protocol: parsed.protocol,
+        });
+    }
+    if let Ok(parsed) = dae_outbound::VLESSLink::parse(link) {
+        let address = parsed.add.clone();
+        return Some(ParsedNodeLink {
+            name: tag
+                .clone()
+                .or_else(|| non_empty(decoded_node_label(&parsed.ps)))
+                .unwrap_or_else(|| format!("vless-{address}")),
+            address,
+            protocol: parsed.protocol,
+        });
+    }
+    if let Ok(parsed) = dae_outbound::ShadowsocksLink::parse(link) {
+        let address = parsed.address();
+        return Some(ParsedNodeLink {
+            name: tag
+                .clone()
+                .or_else(|| non_empty(decoded_node_label(&parsed.name)))
+                .unwrap_or_else(|| format!("{}-{address}", parsed.protocol)),
+            address: parsed.server,
+            protocol: parsed.protocol,
+        });
+    }
+    if let Ok(parsed) = dae_outbound::Hysteria2Link::parse(link) {
+        let address = parsed.property_address();
+        return Some(ParsedNodeLink {
+            name: tag
+                .or_else(|| non_empty(parsed.name))
+                .unwrap_or_else(|| format!("hysteria2-{address}")),
+            address,
+            protocol: "hysteria2".to_owned(),
+        });
+    }
+    None
+}
+
+fn decoded_node_label(value: &str) -> String {
+    decode_node_label(value)
+}
+
+fn non_empty(value: String) -> Option<String> {
+    if value.is_empty() { None } else { Some(value) }
 }
 
 pub(crate) fn decode_node_label(value: &str) -> String {

@@ -50,6 +50,92 @@ pub(crate) fn subscription_response_reader_stops_after_configured_limit() {
 }
 
 #[test]
+pub(crate) fn subscription_content_supports_sip008_plain_and_base64_lists() {
+    let sip008 = r#"{
+        "version": 1,
+        "servers": [{
+            "remarks": "sip-node",
+            "server": "example.com",
+            "server_port": 8388,
+            "method": "aes-128-gcm",
+            "password": "secret",
+            "plugin": "v2ray-plugin",
+            "plugin_opts": "tls;host=front.example.com"
+        }]
+    }"#;
+    let sip008_links = subscription_links_from_content(sip008);
+    assert_eq!(sip008_links.len(), 1);
+    assert!(sip008_links[0].starts_with("ss://"));
+    assert!(sip008_links[0].contains("example.com:8388"));
+    assert!(sip008_links[0].contains("sip-node"));
+    assert!(sip008_links[0].contains("plugin="));
+
+    let plain = "vless://uuid@example.com:443#plain\n# comment\n";
+    assert_eq!(
+        subscription_links_from_content(plain),
+        vec!["vless://uuid@example.com:443#plain".to_owned()]
+    );
+
+    let encoded = STANDARD.encode("vmess://eyJwcyI6ImJhc2U2NCIsImFkZCI6ImV4YW1wbGUuY29tIn0=\n");
+    assert_eq!(
+        subscription_links_from_content(&encoded),
+        vec!["vmess://eyJwcyI6ImJhc2U2NCIsImFkZCI6ImV4YW1wbGUuY29tIn0=".to_owned()]
+    );
+}
+
+#[test]
+pub(crate) fn subscription_file_and_http_file_fallback_follow_config_dir_scope() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let relative_dir = dir.join("relative").join("path");
+    fs::create_dir_all(&relative_dir).unwrap();
+    let file_path = relative_dir.join("mysub.sub");
+    fs::write(
+        &file_path,
+        b"@ignored instruction\nvless://uuid@example.com:443#file\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let content = fetch_subscription_content(&dir, None, "file://relative/path/mysub.sub").unwrap();
+    assert_eq!(content, "vless://uuid@example.com:443#file");
+    let escaped = fetch_subscription_content(&dir, None, "file:///tmp/mysub.sub")
+        .unwrap_err()
+        .to_string();
+    assert!(escaped.contains("not support absolute path"), "{escaped}");
+
+    let persist_dir = dir.join("persist.d");
+    fs::create_dir_all(&persist_dir).unwrap();
+    let cached = persist_dir.join("cached.sub");
+    fs::write(&cached, b"vless://uuid@example.com:443#cached\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&cached, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let content =
+        fetch_subscription_content(&dir, Some("cached"), "http-file://127.0.0.1:9/sub").unwrap();
+    assert_eq!(content, "vless://uuid@example.com:443#cached");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn subscription_vmess_metadata_uses_protocol_parser() {
+    let payload = STANDARD.encode(
+        r#"{"v":"2","ps":"vmess-name","add":"vmess.example.com","port":"443","id":"11111111-1111-1111-1111-111111111111","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":"tls"}"#,
+    );
+    let link = format!("vmess://{payload}");
+    let parsed = parse_node_link(&link, None);
+    assert_eq!(parsed.protocol, "vmess");
+    assert_eq!(parsed.name, "vmess-name");
+    assert_eq!(parsed.address, "vmess.example.com:443");
+}
+
+#[test]
 pub(crate) fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
     let content = test_config_with_node(
         "resource_node",
