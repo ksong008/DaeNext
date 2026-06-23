@@ -166,21 +166,30 @@ impl ResidentRuntimeOwner {
 
         for task in self.tasks.drain(..) {
             let ResidentRuntimeTask { name, kind, handle } = task;
+            let join_started = Instant::now();
             match handle.join() {
                 Ok(()) => {
                     task_count_joined += 1;
+                    let join_elapsed_ns =
+                        join_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
                     task_results.push(json!({
                         "name": name,
                         "kind": kind,
                         "status": "joined",
+                        "join_elapsed_ns": join_elapsed_ns,
+                        "join_elapsed_ms": join_elapsed_ns / 1_000_000,
                     }));
                 }
                 Err(_) => {
                     task_count_panicked += 1;
+                    let join_elapsed_ns =
+                        join_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
                     task_results.push(json!({
                         "name": name,
                         "kind": kind,
                         "status": "panicked",
+                        "join_elapsed_ns": join_elapsed_ns,
+                        "join_elapsed_ms": join_elapsed_ns / 1_000_000,
                     }));
                 }
             }
@@ -214,6 +223,7 @@ impl ResidentRuntimeOwner {
             "manual_probe_runtime_stopped": true,
             "event_writer": event_writer,
             "shutdown_elapsed_ns": shutdown_elapsed_ns,
+            "shutdown_elapsed_ms": shutdown_elapsed_ns / 1_000_000,
             "event_file": Value::Null,
             "event_file_status": "disabled",
             "event_log": "product-log-sink",

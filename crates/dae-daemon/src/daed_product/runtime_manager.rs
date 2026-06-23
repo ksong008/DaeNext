@@ -350,6 +350,7 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn stop(&self) -> Result<Value, String> {
+        let stop_started = Instant::now();
         let _lifecycle = self
             .lifecycle
             .lock()
@@ -374,12 +375,15 @@ impl ProductRuntimeManager {
             was_running
         };
         let reclaim = was_running.then(|| allocator_reclaim(AllocatorReclaimReason::StopRuntime));
+        let stop_elapsed_ns = stop_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         Ok(json!({
             "stopped": true,
             "wasRunning": was_running,
             "runtimeControl": "resident-production-runtime-manager",
             "fakeRuntime": product_runtime_fake_start_enabled(),
             "allocatorReclaim": reclaim,
+            "stopElapsedNs": stop_elapsed_ns,
+            "stopElapsedMs": stop_elapsed_ns / 1_000_000,
         }))
     }
 

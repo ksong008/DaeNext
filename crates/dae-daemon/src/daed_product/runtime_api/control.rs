@@ -188,11 +188,20 @@ pub(in crate::daed_product) fn api_runtime_stop(app: &AppState) -> HttpResponse 
             if let Err(err) = mark_system_stopped(&app.state) {
                 return HttpResponse::json(500, json!({"error": err.to_string()}));
             }
-            let _ = append_lifecycle_log_for_config(
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "was_running".to_owned(),
+                report["wasRunning"].as_bool().unwrap_or(false).to_string(),
+            );
+            if let Some(elapsed_ms) = report["stopElapsedMs"].as_u64() {
+                fields.insert("stop_elapsed_ms".to_owned(), elapsed_ms.to_string());
+            }
+            let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
                 "info",
                 "[Stop] runtime stopped by Rust daed",
+                fields,
             );
             if let Value::Object(map) = &mut report {
                 map.insert("runtime".to_owned(), app.runtime.summary());
