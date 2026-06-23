@@ -8,14 +8,20 @@ pub(super) fn summarize_geodata_file(
 ) -> io::Result<dae_geodata::GeoDataSummary> {
     validate_geodata_file_size(path)?;
     match MappedGeodataFile::open(path) {
-        Ok(mapped) => kind.summarize(mapped.as_slice()).map_err(|err| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("parse geodata: {err}"))
-        }),
+        Ok(mapped) => {
+            let summary = kind.summarize(mapped.as_slice()).map_err(|err| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("parse geodata: {err}"))
+            });
+            let _ = mapped.advise_dontneed();
+            summary
+        }
         Err(_) => {
             let data = fs::read(path)?;
-            kind.summarize(&data).map_err(|err| {
+            let summary = kind.summarize(&data).map_err(|err| {
                 io::Error::new(io::ErrorKind::InvalidData, format!("parse geodata: {err}"))
-            })
+            });
+            let _ = advise_file_dontneed(path);
+            summary
         }
     }
 }
@@ -32,6 +38,7 @@ pub(super) fn sha256_file(path: &Path) -> io::Result<String> {
         }
         sha2::Digest::update(&mut hasher, &buffer[..read]);
     }
+    let _ = advise_open_file_dontneed(&file);
     Ok(hex_encode(&hasher.finalize()))
 }
 
@@ -54,6 +61,10 @@ fn validate_geodata_file_size(path: &Path) -> io::Result<()> {
 
 pub(super) fn advise_file_dontneed(path: &Path) -> io::Result<()> {
     let file = fs::File::open(path)?;
+    advise_open_file_dontneed(&file)
+}
+
+fn advise_open_file_dontneed(file: &fs::File) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         let rc = unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
@@ -71,6 +82,7 @@ pub(super) fn advise_file_dontneed(path: &Path) -> io::Result<()> {
 struct MappedGeodataFile {
     ptr: std::ptr::NonNull<u8>,
     len: usize,
+    file: fs::File,
 }
 
 impl MappedGeodataFile {
@@ -110,16 +122,25 @@ impl MappedGeodataFile {
         }
         let ptr = std::ptr::NonNull::new(mapped.cast::<u8>())
             .ok_or_else(|| io::Error::other("mmap returned a null pointer"))?;
-        Ok(Self { ptr, len })
+        Ok(Self { ptr, len, file })
     }
 
     fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
+
+    fn advise_dontneed(&self) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            let _ = libc::madvise(self.ptr.as_ptr().cast(), self.len, libc::MADV_DONTNEED);
+        }
+        advise_open_file_dontneed(&self.file)
+    }
 }
 
 impl Drop for MappedGeodataFile {
     fn drop(&mut self) {
+        let _ = self.advise_dontneed();
         unsafe {
             libc::munmap(self.ptr.as_ptr().cast(), self.len);
         }

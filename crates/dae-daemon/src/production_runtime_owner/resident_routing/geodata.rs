@@ -84,6 +84,7 @@ enum GeodataBytes {
 struct MmapGeodataBytes {
     ptr: NonNull<u8>,
     len: usize,
+    file: fs::File,
 }
 
 // The mapping is read-only for the process lifetime covered by this value.
@@ -96,11 +97,14 @@ impl SharedGeodataBytes {
             Ok(mapped) => Ok(Self {
                 inner: Arc::new(GeodataBytes::Mmap(mapped)),
             }),
-            Err(_) => fs::read(path)
-                .map(|data| Self {
+            Err(_) => {
+                let data = fs::read(path)
+                    .map_err(|err| format!("read geodata asset {}: {err}", path.display()))?;
+                let _ = advise_file_dontneed(path);
+                Ok(Self {
                     inner: Arc::new(GeodataBytes::Owned(data.into_boxed_slice())),
                 })
-                .map_err(|err| format!("read geodata asset {}: {err}", path.display())),
+            }
         }
     }
 
@@ -157,7 +161,7 @@ impl MmapGeodataBytes {
         }
         let ptr = NonNull::new(mapped.cast::<u8>())
             .ok_or_else(|| io::Error::other("mmap returned a null pointer"))?;
-        Ok(Self { ptr, len })
+        Ok(Self { ptr, len, file })
     }
 
     fn as_slice(&self) -> &[u8] {
@@ -167,16 +171,47 @@ impl MmapGeodataBytes {
             slice::from_raw_parts(self.ptr.as_ptr(), self.len)
         }
     }
+
+    fn advise_dontneed(&self) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            // SAFETY: this advisory call covers the still-live immutable mapping
+            // owned by this value. Failure is non-fatal and ignored by callers.
+            let _ = libc::madvise(self.ptr.as_ptr().cast(), self.len, libc::MADV_DONTNEED);
+        }
+        advise_open_file_dontneed(&self.file)
+    }
 }
 
 impl Drop for MmapGeodataBytes {
     fn drop(&mut self) {
+        let _ = self.advise_dontneed();
         unsafe {
             // SAFETY: this value owns the mmap range and `Drop` runs once, so the
             // exact pointer/length returned by mmap are unmapped exactly once.
             libc::munmap(self.ptr.as_ptr().cast(), self.len);
         }
     }
+}
+
+fn advise_file_dontneed(path: &Path) -> io::Result<()> {
+    let file = fs::File::open(path)?;
+    advise_open_file_dontneed(&file)
+}
+
+fn advise_open_file_dontneed(file: &fs::File) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let rc = unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
+        if rc != 0 {
+            return Err(io::Error::from_raw_os_error(rc));
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = file;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
