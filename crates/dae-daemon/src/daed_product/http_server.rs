@@ -118,13 +118,23 @@ pub(super) fn product_http_worker_loop(
             Ok(job) => {
                 metrics.dequeued();
                 metrics.opened();
-                let _ = handle_stream(job.stream, &app);
+                if matches!(
+                    handle_stream(job.stream, Arc::clone(&app), Arc::clone(&metrics)),
+                    Ok(ProductHttpConnectionResult::Detached)
+                ) {
+                    continue;
+                }
                 metrics.closed();
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
+}
+
+pub(super) enum ProductHttpConnectionResult {
+    Closed,
+    Detached,
 }
 
 pub(super) fn write_http_rejected(mut stream: TcpStream) -> io::Result<()> {
@@ -135,7 +145,11 @@ pub(super) fn write_http_rejected(mut stream: TcpStream) -> io::Result<()> {
     write_http_response(&mut stream, &response, false)
 }
 
-pub(super) fn handle_stream(mut stream: TcpStream, app: &AppState) -> io::Result<()> {
+pub(super) fn handle_stream(
+    mut stream: TcpStream,
+    app: Arc<AppState>,
+    metrics: Arc<ProductHttpMetrics>,
+) -> io::Result<ProductHttpConnectionResult> {
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
@@ -146,22 +160,50 @@ pub(super) fn handle_stream(mut stream: TcpStream, app: &AppState) -> io::Result
                     "error": format!("bad request: {err}")
                 }),
             );
-            return write_http_response(&mut stream, &response, false);
+            write_http_response(&mut stream, &response, false)?;
+            return Ok(ProductHttpConnectionResult::Closed);
         }
     };
     let head_only = request.method == "HEAD";
     if request.method == "GET"
         && (request.path == "/api/events/logs" || request.path == "/api/events/runtime")
     {
-        let Some(_user) = authenticate_request(app, &request) else {
+        let Some(_user) = authenticate_request(&app, &request) else {
             let response = HttpResponse::json(401, json!({"error": "authentication required"}));
-            return write_http_response_for_request(&mut stream, &request, &response, head_only);
+            write_http_response_for_request(&mut stream, &request, &response, head_only)?;
+            return Ok(ProductHttpConnectionResult::Closed);
         };
-        if request.path == "/api/events/logs" {
-            return stream_log_events(&mut stream, app, &request);
-        }
-        return stream_runtime_events(&mut stream, app, &request);
+        return detach_sse_stream(stream, app, metrics, request);
     }
-    let response = route_request(app, &request);
-    write_http_response_for_request(&mut stream, &request, &response, head_only)
+    let response = route_request(&app, &request);
+    write_http_response_for_request(&mut stream, &request, &response, head_only)?;
+    Ok(ProductHttpConnectionResult::Closed)
+}
+
+fn detach_sse_stream(
+    mut stream: TcpStream,
+    app: Arc<AppState>,
+    metrics: Arc<ProductHttpMetrics>,
+    request: HttpRequest,
+) -> io::Result<ProductHttpConnectionResult> {
+    let stream_kind = if request.path == "/api/events/logs" {
+        "logs"
+    } else {
+        "runtime"
+    };
+    let thread_name = format!("daed-sse-{stream_kind}");
+    match thread::Builder::new()
+        .name(thread_name)
+        .stack_size(PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT)
+        .spawn(move || {
+            if request.path == "/api/events/logs" {
+                let _ = stream_log_events(&mut stream, &app, &request);
+            } else {
+                let _ = stream_runtime_events(&mut stream, &app, &request);
+            }
+            metrics.closed();
+        }) {
+        Ok(_) => Ok(ProductHttpConnectionResult::Detached),
+        Err(err) => Err(err),
+    }
 }
