@@ -73,13 +73,8 @@ pub(crate) fn build_hysteria2_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed = Hysteria2Link::parse(&link)
         .map_err(|err| format!("parse Hysteria2 node {node_tag}: {err}"))?;
-    if parsed.insecure || config.global.allow_insecure {
-        return Err(
-            "resident dataplane generic QUIC handler does not admit Hysteria2 insecure mode; resident shape remains fail-closed for this config"
-                .to_owned(),
-        );
-    }
-    if parsed.pin_sha256.is_empty() {
+    let allow_insecure = parsed.insecure || config.global.allow_insecure;
+    if !allow_insecure && parsed.pin_sha256.is_empty() {
         return Err(format!(
             "resident dataplane generic QUIC handler requires Hysteria2 pinSHA256 for node {node_tag}; resident shape remains fail-closed for this config"
         ));
@@ -142,12 +137,13 @@ pub(crate) fn build_hysteria2_proxy_plan(
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
         xhttp_xmux: None,
         tls: "quic".to_owned(),
-        allow_insecure: false,
+        allow_insecure,
         tls_fragment: None,
         utls_fingerprint: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
+            allow_insecure,
             pin_sha256: parsed.pin_sha256,
             max_rx: parsed.max_rx,
             obfs,

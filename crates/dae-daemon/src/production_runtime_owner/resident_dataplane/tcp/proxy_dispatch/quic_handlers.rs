@@ -12,12 +12,14 @@ pub(crate) async fn handle_quic_tcp_connection_async(
     match &selection.proxy.handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
+            allow_insecure,
             pin_sha256,
             max_rx,
             obfs,
             port_hop_ports,
         } => {
             let auth = auth.clone();
+            let allow_insecure = *allow_insecure;
             let pin_sha256 = pin_sha256.clone();
             let max_rx = *max_rx;
             let obfs = obfs.clone();
@@ -31,6 +33,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 sniff,
                 metrics,
                 &auth,
+                allow_insecure,
                 &pin_sha256,
                 max_rx,
                 &obfs,
@@ -102,6 +105,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     auth: &str,
+    allow_insecure: bool,
     pin_sha256: &str,
     max_rx: u64,
     obfs: &ResidentHysteria2ObfsPlan,
@@ -109,7 +113,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
 ) -> Result<Value, String> {
     let mut endpoint = open_marked_hysteria2_quic_endpoint(selection.mark, obfs)?;
     endpoint.set_default_client_config(
-        build_hysteria2_pinned_client_config(pin_sha256.to_owned())
+        build_hysteria2_runtime_client_config(allow_insecure, pin_sha256.to_owned())
             .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
     );
     let remote = resolve_hysteria2_quic_remote_async(&selection.proxy, port_hop_ports).await?;

@@ -20,6 +20,23 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
     ));
 
+    let hysteria2_insecure = build_resident_proxy_plan_for_node(
+        config,
+        "proxy".to_owned(),
+        "hy2_insecure_live".to_owned(),
+        hysteria2_insecure_fixture_url(&format!("{}:{}", primary_host, fixture_port(1))),
+    )
+    .unwrap();
+    assert!(hysteria2_insecure.allow_insecure);
+    assert!(matches!(
+        hysteria2_insecure.handler,
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            allow_insecure: true,
+            ref pin_sha256,
+            ..
+        } if pin_sha256.is_empty()
+    ));
+
     let hysteria2_obfs = build_resident_proxy_plan_for_node(
         config,
         "proxy".to_owned(),

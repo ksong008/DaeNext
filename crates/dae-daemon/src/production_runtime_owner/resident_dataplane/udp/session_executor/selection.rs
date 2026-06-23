@@ -96,12 +96,14 @@ impl UdpSessionExecutor {
             }
             ResidentProxyProtocolPlan::Hysteria2QuicTcp {
                 auth,
+                allow_insecure,
                 pin_sha256,
                 max_rx,
                 obfs,
                 port_hop_ports,
             } => Self::Hysteria2(Hysteria2QuicDatagramSession::new(
                 auth.clone(),
+                *allow_insecure,
                 pin_sha256.clone(),
                 *max_rx,
                 obfs.clone(),

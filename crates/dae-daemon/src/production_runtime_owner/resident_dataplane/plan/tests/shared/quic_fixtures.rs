@@ -4,12 +4,20 @@ pub(crate) fn hysteria2_fixture_url(_ps: &str, add: &str, port: u16) -> String {
 }
 
 pub(crate) fn hysteria2_fixture_url_with_pin(_ps: &str, server: &str, pin_sha256: &str) -> String {
+    hysteria2_fixture_url_with_tls_mode(server, false, pin_sha256)
+}
+
+pub(crate) fn hysteria2_insecure_fixture_url(server: &str) -> String {
+    hysteria2_fixture_url_with_tls_mode(server, true, "")
+}
+
+fn hysteria2_fixture_url_with_tls_mode(server: &str, insecure: bool, pin_sha256: &str) -> String {
     Hysteria2Link {
         name: String::new(),
         user: fixture_user(),
         password: String::new(),
         server: server.to_owned(),
-        insecure: false,
+        insecure,
         sni: fixture_host(FixtureEndpoint::Authority),
         pin_sha256: pin_sha256.to_owned(),
         obfs: String::new(),
