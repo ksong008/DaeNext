@@ -106,9 +106,9 @@ pub(super) fn production_resource_leftovers() -> Vec<String> {
 }
 
 pub(super) fn cleanup_stale_production_owner_after_crash(lan_ifaces: &[String]) -> bool {
-    let has_leftovers = !production_resource_leftovers().is_empty();
+    let leftovers = production_resource_leftovers();
     let pin_dirs = native_runtime_pin_dirs();
-    if !should_cleanup_stale_production_owner(has_leftovers, &pin_dirs) {
+    if !should_cleanup_stale_production_owner(&leftovers, &pin_dirs) {
         return false;
     }
     for iface in lan_ifaces {
@@ -145,10 +145,16 @@ pub(super) fn cleanup_stale_production_owner_after_crash(lan_ifaces: &[String]) 
 }
 
 fn should_cleanup_stale_production_owner(
-    has_leftovers: bool,
+    leftovers: &[String],
     pin_dirs: &[NativeRuntimePinDir],
 ) -> bool {
-    has_leftovers && !pin_dirs.is_empty() && pin_dirs.iter().all(|pin_dir| pin_dir.stale)
+    if leftovers.is_empty() || pin_dirs.iter().any(|pin_dir| !pin_dir.stale) {
+        return false;
+    }
+    if !pin_dirs.is_empty() {
+        return true;
+    }
+    leftovers.len() == 1 && leftovers[0] == format!("netns:{PRODUCTION_NETNS}")
 }
 
 struct NativeRuntimePinDir {
@@ -323,11 +329,21 @@ mod tests {
             stale: false,
         };
 
-        assert!(!should_cleanup_stale_production_owner(false, &[stale]));
-        assert!(!should_cleanup_stale_production_owner(true, &[]));
-        assert!(!should_cleanup_stale_production_owner(true, &[active]));
+        assert!(!should_cleanup_stale_production_owner(&[], &[stale]));
+        assert!(!should_cleanup_stale_production_owner(
+            &[format!("iface:{PRODUCTION_HOST_IFACE}")],
+            &[]
+        ));
         assert!(should_cleanup_stale_production_owner(
-            true,
+            &[format!("netns:{PRODUCTION_NETNS}")],
+            &[]
+        ));
+        assert!(!should_cleanup_stale_production_owner(
+            &[format!("netns:{PRODUCTION_NETNS}")],
+            &[active]
+        ));
+        assert!(should_cleanup_stale_production_owner(
+            &[format!("iface:{PRODUCTION_HOST_IFACE}")],
             &[NativeRuntimePinDir {
                 path: PathBuf::from("/tmp/dae-native-runtime-3-0"),
                 stale: true,
