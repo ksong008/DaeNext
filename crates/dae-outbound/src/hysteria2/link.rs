@@ -2,6 +2,8 @@ use std::borrow::Cow;
 
 use crate::error::OutboundError;
 
+use super::port_hopping::parse_port_union;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hysteria2Link {
     pub name: String,
@@ -53,11 +55,12 @@ impl Hysteria2Link {
             max_tx = parse_u64(query_value(&query, "maxTx").as_deref().unwrap_or(""))?;
             max_rx = parse_u64(query_value(&query, "maxRx").as_deref().unwrap_or(""))?;
         }
+        let server = normalize_server_with_mport(server, query_value(&query, "mport").as_deref())?;
         Ok(Self {
             name: percent_decode(name)?,
             user,
             password,
-            server: server.to_owned(),
+            server,
             insecure,
             sni: query_value(&query, "sni").unwrap_or_default(),
             pin_sha256: query_value(&query, "pinSHA256").unwrap_or_default(),
@@ -163,6 +166,25 @@ fn split_host_port_index(server: &str) -> Option<usize> {
         return None;
     }
     server.rfind(':')
+}
+
+fn normalize_server_with_mport(server: &str, mport: Option<&str>) -> Result<String, OutboundError> {
+    let Some(mport) = mport else {
+        return Ok(server.to_owned());
+    };
+    let port_expr = mport.trim();
+    if port_expr.is_empty() {
+        return Err(OutboundError::BadHysteria2(
+            "invalid Hysteria2 mport: empty port expression".to_owned(),
+        ));
+    }
+    parse_port_union(port_expr).map_err(|err| {
+        OutboundError::BadHysteria2(format!("invalid Hysteria2 mport {port_expr}: {err}"))
+    })?;
+    let host = split_host_port_index(server)
+        .map(|index| &server[..index])
+        .unwrap_or(server);
+    Ok(format!("{host}:{port_expr}"))
 }
 
 fn split_once(input: &str, delimiter: char) -> (&str, &str) {

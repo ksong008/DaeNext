@@ -86,3 +86,69 @@ pub(super) fn hysteria2_rust_native_matches_nativelden_fixture() {
             .unwrap() as u16
     );
 }
+
+#[test]
+pub(super) fn hysteria2_mport_query_normalizes_to_official_port_hopping_authority() {
+    let parsed = crate::hysteria2::Hysteria2Link::parse(
+        "hysteria2://auth@pq.us1.globals-download.com:35000/?insecure=1&sni=www.apple.com&mport=35000-39000#pq",
+    )
+    .unwrap();
+
+    assert_eq!(parsed.server, "pq.us1.globals-download.com:35000-39000");
+    assert_eq!(
+        parsed.export_url(),
+        "hysteria2://auth@pq.us1.globals-download.com:35000-39000?insecure=1&sni=www.apple.com#pq"
+    );
+
+    let schedule = crate::hysteria2::build_port_hop_schedule(&parsed.server, 30_000, 3).unwrap();
+    assert!(schedule.port_hopping);
+    assert_eq!(schedule.selected_ports, vec![35000, 35001, 35002]);
+}
+
+#[test]
+pub(super) fn hysteria2_mport_query_accepts_comma_range_union() {
+    let parsed = crate::hysteria2::Hysteria2Link::parse(
+        "hy2://auth@example.com:60000/?mport=60000,61000-61002&sni=example.com#union",
+    )
+    .unwrap();
+
+    assert_eq!(parsed.server, "example.com:60000,61000-61002");
+    assert_eq!(
+        parsed.export_url(),
+        "hysteria2://auth@example.com:60000,61000-61002?sni=example.com#union"
+    );
+    assert_eq!(
+        crate::hysteria2::parse_port_union(&crate::hysteria2::server_contract(&parsed.server).port)
+            .unwrap(),
+        vec![60000, 61000, 61001, 61002]
+    );
+}
+
+#[test]
+pub(super) fn hysteria2_mport_query_normalizes_ipv6_authority() {
+    let parsed = crate::hysteria2::Hysteria2Link::parse(
+        "hysteria2://auth@[2001:db8::1]:443/?mport=20000-20002&sni=v6.example#v6",
+    )
+    .unwrap();
+
+    assert_eq!(parsed.server, "[2001:db8::1]:20000-20002");
+    assert_eq!(
+        parsed.export_url(),
+        "hysteria2://auth@[2001:db8::1]:20000-20002?sni=v6.example#v6"
+    );
+}
+
+#[test]
+pub(super) fn hysteria2_mport_query_rejects_invalid_values() {
+    for link in [
+        "hysteria2://auth@example.com:443/?mport=#empty",
+        "hysteria2://auth@example.com:443/?mport=abc#bad",
+        "hysteria2://auth@example.com:443/?mport=60000,#bad-segment",
+    ] {
+        let err = crate::hysteria2::Hysteria2Link::parse(link).unwrap_err();
+        assert!(
+            err.to_string().contains("mport"),
+            "unexpected error for {link}: {err}"
+        );
+    }
+}
