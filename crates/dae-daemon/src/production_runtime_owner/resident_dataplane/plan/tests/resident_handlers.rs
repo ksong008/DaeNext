@@ -279,6 +279,7 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
         },
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth: fixture_secret(),
+            allow_insecure: false,
             pin_sha256: "sha256:fixture".to_owned(),
             max_rx: 0,
             obfs: ResidentHysteria2ObfsPlan::none(),

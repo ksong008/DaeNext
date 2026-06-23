@@ -344,6 +344,7 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     assert!(matches!(
         hy2_hopping.handler,
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            allow_insecure: false,
             ref port_hop_ports,
             ..
         } if port_hop_ports == &vec![

@@ -33,12 +33,25 @@ struct RecordingRawCertVerifier {
     state: Arc<Mutex<RawCertVerifierState>>,
 }
 
+#[derive(Debug)]
+struct InsecureHysteria2CertVerifier {
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
 impl RecordingRawCertVerifier {
     fn new(configured_pin_sha256: String, state: Arc<Mutex<RawCertVerifierState>>) -> Arc<Self> {
         Arc::new(Self {
             provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
             configured_pin_sha256,
             state,
+        })
+    }
+}
+
+impl InsecureHysteria2CertVerifier {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
         })
     }
 }
@@ -66,6 +79,53 @@ impl ServerCertVerifier for RecordingRawCertVerifier {
                 "hysteria2 pinSHA256 raw cert verification failed".to_owned(),
             ));
         }
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+impl ServerCertVerifier for InsecureHysteria2CertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
     }
 
@@ -154,6 +214,27 @@ pub fn build_hysteria2_pinned_client_config(
         configured_pin_sha256,
         Arc::new(Mutex::new(RawCertVerifierState::default())),
     )
+}
+
+pub fn build_hysteria2_runtime_client_config(
+    allow_insecure: bool,
+    configured_pin_sha256: String,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    if !allow_insecure {
+        return build_hysteria2_pinned_client_config(configured_pin_sha256);
+    }
+    let mut crypto =
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .dangerous()
+            .with_custom_certificate_verifier(InsecureHysteria2CertVerifier::new())
+            .with_no_client_auth();
+    crypto.alpn_protocols = vec![DEFAULT_HYSTERIA2_ALPN.as_bytes().to_vec()];
+    let mut config = quinn::ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(crypto)
+            .map_err(|err| bad_tls(format!("Hysteria2 client QUIC TLS: {err}")))?,
+    ));
+    config.transport_config(Arc::new(hysteria2_transport_config()?));
+    Ok(config)
 }
 
 pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {

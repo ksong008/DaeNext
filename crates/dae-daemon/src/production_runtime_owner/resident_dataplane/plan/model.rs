@@ -578,6 +578,7 @@ pub(crate) enum ResidentProxyProtocolPlan {
     },
     Hysteria2QuicTcp {
         auth: String,
+        allow_insecure: bool,
         pin_sha256: String,
         max_rx: u64,
         obfs: ResidentHysteria2ObfsPlan,
@@ -1069,6 +1070,7 @@ impl ResidentProxyProtocolPlan {
             }
             Self::Hysteria2QuicTcp {
                 auth,
+                allow_insecure: _,
                 pin_sha256,
                 obfs,
                 port_hop_ports,

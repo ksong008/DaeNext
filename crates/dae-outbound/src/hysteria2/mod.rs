@@ -27,7 +27,7 @@ pub use runtime::{
     Hysteria2AuthReport, Hysteria2TcpResponseHead, authenticate_hysteria2_connection,
     read_hysteria2_tcp_response, write_hysteria2_tcp_request,
 };
-pub use tls::build_hysteria2_pinned_client_config;
+pub use tls::{build_hysteria2_pinned_client_config, build_hysteria2_runtime_client_config};
 pub use underlay::{
     Hysteria2PinSha256Check, Hysteria2UnderlayContract, pin_sha256_matches_raw_cert,
     raw_cert_sha256_hex, underlay_contract,

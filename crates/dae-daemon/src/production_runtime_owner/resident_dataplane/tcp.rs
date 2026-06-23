@@ -27,7 +27,7 @@ use dae_outbound::{
     anytls::{AnyTlsFrame, contract as anytls_contract, link as anytls_link},
     http_proxy::{HttpConnectOptions, request as http_request},
     hysteria2::{
-        authenticate_hysteria2_connection, build_hysteria2_pinned_client_config,
+        authenticate_hysteria2_connection, build_hysteria2_runtime_client_config,
         read_hysteria2_tcp_response, write_hysteria2_tcp_request,
     },
     juicity::{

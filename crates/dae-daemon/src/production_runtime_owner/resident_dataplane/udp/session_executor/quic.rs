@@ -6,6 +6,7 @@ use std::task::Poll;
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria2QuicDatagramSession
 {
     auth: String,
+    allow_insecure: bool,
     pin_sha256: String,
     max_rx: u64,
     obfs: ResidentHysteria2ObfsPlan,
@@ -97,6 +98,7 @@ impl QuicUdpFragmentBuffer {
 impl Hysteria2QuicDatagramSession {
     pub(super) fn new(
         auth: String,
+        allow_insecure: bool,
         pin_sha256: String,
         max_rx: u64,
         obfs: ResidentHysteria2ObfsPlan,
@@ -104,6 +106,7 @@ impl Hysteria2QuicDatagramSession {
     ) -> Self {
         Self {
             auth,
+            allow_insecure,
             pin_sha256,
             max_rx,
             obfs,
@@ -190,7 +193,7 @@ impl Hysteria2QuicDatagramSession {
         }
         let mut endpoint = open_marked_hysteria2_quic_endpoint(proxy.mark, &self.obfs)?;
         endpoint.set_default_client_config(
-            build_hysteria2_pinned_client_config(self.pin_sha256.clone())
+            build_hysteria2_runtime_client_config(self.allow_insecure, self.pin_sha256.clone())
                 .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
         );
         let remote = resolve_hysteria2_quic_remote_async(proxy, &self.port_hop_ports).await?;
@@ -490,6 +493,7 @@ mod tests {
     fn quic_datagram_pending_results_do_not_forward_empty_reply() {
         let hysteria2 = Hysteria2QuicDatagramSession::new(
             "auth".to_owned(),
+            false,
             String::new(),
             0,
             ResidentHysteria2ObfsPlan::none(),

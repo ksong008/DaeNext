@@ -250,6 +250,7 @@ mod tests {
             (
                 ResidentProxyProtocolPlan::Hysteria2QuicTcp {
                     auth: String::new(),
+                    allow_insecure: false,
                     pin_sha256: String::new(),
                     max_rx: 0,
                     obfs: ResidentHysteria2ObfsPlan::none(),
