@@ -320,11 +320,14 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
     let before = allocator_reclaim_snapshot_json();
     let before_total = before["total"].as_u64().unwrap_or(0);
     let before_reload_completed = before["reasons"]["reload_completed"].as_u64().unwrap_or(0);
+    let before_geodata_update = before["reasons"]["geodata_update"].as_u64().unwrap_or(0);
 
     let reclaim = allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);
+    let geodata_reclaim = allocator_reclaim(AllocatorReclaimReason::GeodataUpdate);
     let after = allocator_reclaim_snapshot_json();
 
     assert_eq!(reclaim["reason"], json!("reload_completed"));
+    assert_eq!(geodata_reclaim["reason"], json!("geodata_update"));
     assert_eq!(reclaim["profile"], json!(allocator_profile()));
     #[cfg(feature = "allocator-jemalloc")]
     {
@@ -333,6 +336,7 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
     }
     assert!(after["total"].as_u64().unwrap_or(0) > before_total);
     assert!(after["reasons"]["reload_completed"].as_u64().unwrap_or(0) > before_reload_completed);
+    assert!(after["reasons"]["geodata_update"].as_u64().unwrap_or(0) > before_geodata_update);
 }
 
 #[test]
