@@ -1,5 +1,7 @@
 use super::*;
 
+const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
+
 pub(crate) struct ResidentRuntimeOwner {
     stop: Arc<AtomicBool>,
     tasks: Vec<ResidentRuntimeTask>,
@@ -162,6 +164,7 @@ impl ResidentRuntimeOwner {
         let task_count_started = self.tasks.len();
         let mut task_count_joined = 0_usize;
         let mut task_count_panicked = 0_usize;
+        let mut task_count_join_exceeded_grace = 0_usize;
         let mut task_results = Vec::with_capacity(task_count_started);
 
         for task in self.tasks.drain(..) {
@@ -172,24 +175,38 @@ impl ResidentRuntimeOwner {
                     task_count_joined += 1;
                     let join_elapsed_ns =
                         join_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+                    let join_exceeded_grace =
+                        join_elapsed_ns > duration_nanos(RESIDENT_RUNTIME_TASK_JOIN_GRACE);
+                    if join_exceeded_grace {
+                        task_count_join_exceeded_grace += 1;
+                    }
                     task_results.push(json!({
                         "name": name,
                         "kind": kind,
                         "status": "joined",
                         "join_elapsed_ns": join_elapsed_ns,
                         "join_elapsed_ms": join_elapsed_ns / 1_000_000,
+                        "join_grace_ms": duration_millis(RESIDENT_RUNTIME_TASK_JOIN_GRACE),
+                        "join_exceeded_grace": join_exceeded_grace,
                     }));
                 }
                 Err(_) => {
                     task_count_panicked += 1;
                     let join_elapsed_ns =
                         join_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+                    let join_exceeded_grace =
+                        join_elapsed_ns > duration_nanos(RESIDENT_RUNTIME_TASK_JOIN_GRACE);
+                    if join_exceeded_grace {
+                        task_count_join_exceeded_grace += 1;
+                    }
                     task_results.push(json!({
                         "name": name,
                         "kind": kind,
                         "status": "panicked",
                         "join_elapsed_ns": join_elapsed_ns,
                         "join_elapsed_ms": join_elapsed_ns / 1_000_000,
+                        "join_grace_ms": duration_millis(RESIDENT_RUNTIME_TASK_JOIN_GRACE),
+                        "join_exceeded_grace": join_exceeded_grace,
                     }));
                 }
             }
@@ -212,6 +229,8 @@ impl ResidentRuntimeOwner {
             "task_count_timed_out": 0,
             "task_count_aborted": 0,
             "task_count_panicked": task_count_panicked,
+            "task_count_join_exceeded_grace": task_count_join_exceeded_grace,
+            "join_grace_ms": duration_millis(RESIDENT_RUNTIME_TASK_JOIN_GRACE),
             "joined_worker_threads": task_count_joined,
             "panicked_worker_threads": task_count_panicked,
             "active_tcp_connections_at_shutdown": active_tcp,
@@ -256,6 +275,14 @@ impl ResidentRuntimeOwner {
             "error": Value::Null,
         })
     }
+}
+
+fn duration_nanos(duration: Duration) -> u64 {
+    duration.as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 impl ResidentManualProbeHandle {

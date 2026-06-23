@@ -796,9 +796,13 @@ fn cleanup_report_error(report: Option<&Value>) -> Option<String> {
         return None;
     }
     Some(format!(
-        "runtime cleanup failed: loaded_map_cleaned={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
+        "runtime cleanup failed: loaded_map_cleaned={}, cleanup_command_timed_out={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
         report
             .get("loaded_map_cleaned")
+            .map(Value::to_string)
+            .unwrap_or_else(|| "null".to_owned()),
+        report
+            .get("cleanup_command_timed_out")
             .map(Value::to_string)
             .unwrap_or_else(|| "null".to_owned()),
         report
