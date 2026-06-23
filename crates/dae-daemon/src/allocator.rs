@@ -24,6 +24,7 @@ pub enum AllocatorReclaimReason {
     IdleMemoryPressure,
     ManualLatencyProbe,
     GroupHealthProbe,
+    GeodataUpdate,
 }
 
 impl AllocatorReclaimReason {
@@ -35,6 +36,7 @@ impl AllocatorReclaimReason {
             Self::IdleMemoryPressure => "idle_memory_pressure",
             Self::ManualLatencyProbe => "manual_latency_probe",
             Self::GroupHealthProbe => "group_health_probe",
+            Self::GeodataUpdate => "geodata_update",
         }
     }
 }
@@ -106,6 +108,7 @@ static STOP_RUNTIME_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static IDLE_MEMORY_PRESSURE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static MANUAL_LATENCY_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static GROUP_HEALTH_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static GEODATA_UPDATE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static LAST_RECLAIM: OnceLock<Mutex<Option<LastAllocatorReclaim>>> = OnceLock::new();
 
@@ -195,6 +198,7 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
             "idle_memory_pressure": IDLE_MEMORY_PRESSURE_RECLAIMS.load(Ordering::Relaxed),
             "manual_latency_probe": MANUAL_LATENCY_PROBE_RECLAIMS.load(Ordering::Relaxed),
             "group_health_probe": GROUP_HEALTH_PROBE_RECLAIMS.load(Ordering::Relaxed),
+            "geodata_update": GEODATA_UPDATE_RECLAIMS.load(Ordering::Relaxed),
         },
         "last": last.as_ref().map(last_allocator_reclaim_json),
     })
@@ -219,6 +223,9 @@ fn increment_reason_counter(reason: AllocatorReclaimReason) {
         }
         AllocatorReclaimReason::GroupHealthProbe => {
             GROUP_HEALTH_PROBE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
+        AllocatorReclaimReason::GeodataUpdate => {
+            GEODATA_UPDATE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
     };
 }

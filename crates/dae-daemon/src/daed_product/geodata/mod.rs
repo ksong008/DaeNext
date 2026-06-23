@@ -24,7 +24,7 @@ pub(in crate::daed_product) fn api_update_geodata(
     app: &AppState,
     kind: GeodataKind,
 ) -> HttpResponse {
-    match update_geodata(app, kind) {
+    let response = match update_geodata(app, kind) {
         Ok(status) => HttpResponse::json(200, status),
         Err(err) => HttpResponse::json(
             500,
@@ -33,5 +33,7 @@ pub(in crate::daed_product) fn api_update_geodata(
                 "kind": kind.response_key(),
             }),
         ),
-    }
+    };
+    let _ = allocator_reclaim(AllocatorReclaimReason::GeodataUpdate);
+    response
 }
