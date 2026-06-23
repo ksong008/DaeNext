@@ -100,6 +100,31 @@ pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
 }
 
 #[test]
+pub(crate) fn runtime_stop_records_cleanup_lifecycle_for_fake_runtime() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
+            started_at: "2026-06-23T01:00:00.000Z".to_owned(),
+            tproxy_port: 12345,
+        }));
+        inner.runtime_started_at = Some("2026-06-23T01:00:00.000Z".to_owned());
+    }
+
+    let report = manager.stop().unwrap();
+    assert_eq!(report["wasRunning"], json!(true));
+    assert_eq!(report["cleanupStarted"], json!(true));
+    assert_eq!(report["cleanupMode"], json!("synchronous-stop"));
+    assert_eq!(report["cleanupReport"]["status"], json!("pass"));
+
+    let summary = manager.summary();
+    assert_eq!(summary["state"], json!("stopped"));
+    assert_eq!(summary["cleanup"]["state"], json!("done"));
+    assert_eq!(summary["cleanup"]["running"], json!(false));
+    assert_eq!(summary["cleanup"]["lastReport"]["status"], json!("pass"));
+}
+
+#[test]
 pub(crate) fn runtime_started_at_survives_reload_but_resets_for_new_start() {
     let initial_started_at = "2026-06-15T01:00:00.000Z".to_owned();
     let reload_transition_at = "2026-06-15T02:00:00.000Z".to_owned();
