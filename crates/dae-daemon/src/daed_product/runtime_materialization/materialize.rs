@@ -58,6 +58,7 @@ pub(in crate::daed_product) fn materialize_runtime(
         )
         .map_err(sqlite_io_error)?;
         set_metadata(state, "runtime_running", "true")?;
+        clear_geodata_reload_pending(state)?;
     }
     let content_len = content.len();
     let mut report = Map::new();
