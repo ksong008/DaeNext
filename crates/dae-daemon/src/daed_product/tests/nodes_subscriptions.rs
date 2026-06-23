@@ -84,6 +84,23 @@ pub(crate) fn subscription_content_supports_sip008_plain_and_base64_lists() {
 }
 
 #[test]
+pub(crate) fn hysteria2_mport_node_link_is_stored_as_official_port_hopping_link() {
+    let parsed = parse_node_link(
+        "hysteria2://auth@pq.us1.globals-download.com:35000/?insecure=1&sni=www.apple.com&mport=35000-39000#pq",
+        None,
+    );
+
+    assert_eq!(parsed.protocol, "hysteria2");
+    assert_eq!(parsed.address, "pq.us1.globals-download.com:35000-39000");
+    assert_eq!(
+        parsed.normalized_link.as_deref(),
+        Some(
+            "hysteria2://auth@pq.us1.globals-download.com:35000-39000?insecure=1&sni=www.apple.com#pq"
+        )
+    );
+}
+
+#[test]
 pub(crate) fn subscription_file_and_http_file_fallback_follow_config_dir_scope() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let relative_dir = dir.join("relative").join("path");
