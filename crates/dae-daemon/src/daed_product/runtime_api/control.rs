@@ -119,27 +119,23 @@ pub(in crate::daed_product) fn api_runtime_reload(
     ) {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
-    let runtime = match app.runtime.reload_with_config_content(
-        config,
-        Some(config_content),
-        "api-runtime-reload",
-    ) {
-        Ok(outcome) => outcome.report,
-        Err(err) => {
-            let mut fields = BTreeMap::new();
-            fields.insert("source".to_owned(), "api".to_owned());
-            fields.insert("dry".to_owned(), "false".to_owned());
-            fields.insert("error".to_owned(), err.clone());
-            let _ = append_lifecycle_log_fields_for_config(
-                &app.config_dir,
-                &app.state,
-                "error",
-                "[Reload] Failed to reload",
-                fields,
-            );
-            return HttpResponse::json(500, json!({"error": err}));
-        }
-    };
+    if let Err(err) =
+        app.runtime
+            .reload_with_config_content(config, Some(config_content), "api-runtime-reload")
+    {
+        let mut fields = BTreeMap::new();
+        fields.insert("source".to_owned(), "api".to_owned());
+        fields.insert("dry".to_owned(), "false".to_owned());
+        fields.insert("error".to_owned(), err.clone());
+        let _ = append_lifecycle_log_fields_for_config(
+            &app.config_dir,
+            &app.state,
+            "error",
+            "[Reload] Failed to reload",
+            fields,
+        );
+        return HttpResponse::json(500, json!({"error": err}));
+    }
     let mut fields = BTreeMap::new();
     fields.insert("source".to_owned(), "api".to_owned());
     fields.insert("dry".to_owned(), "false".to_owned());
@@ -162,7 +158,6 @@ pub(in crate::daed_product) fn api_runtime_reload(
             response.insert("applied".to_owned(), json!(1));
             response.insert("dry".to_owned(), json!(false));
             response.insert("runtimeStarted".to_owned(), json!(true));
-            response.insert("runtime".to_owned(), runtime);
             response.insert("allocatorReclaim".to_owned(), reload_reclaim);
             let response = HttpResponse::json(200, Value::Object(response));
             let _ = allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);

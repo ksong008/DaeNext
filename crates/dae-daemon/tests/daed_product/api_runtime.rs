@@ -359,11 +359,16 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
         Some(r#"{"dry":false}"#),
         Some(&token),
     );
-    assert!(reload.contains("\"applied\":1"), "{reload}");
-    assert!(reload.contains("\"runtimeStarted\":true"), "{reload}");
+    let reload = json_body(&reload);
+    assert_eq!(reload["applied"].as_i64(), Some(1), "{reload}");
+    assert_eq!(reload["runtimeStarted"].as_bool(), Some(true), "{reload}");
     assert!(
-        reload.contains("\"runtimeControl\":\"fake-resident-runtime-test-only\""),
-        "{reload}"
+        reload.get("runtime").is_none(),
+        "reload response should not inline the full runtime report: {reload}"
+    );
+    assert!(
+        reload.get("runtimeControl").is_none(),
+        "runtime state is served by /api/general/state, not the reload response: {reload}"
     );
     assert!(temp.join("runtime/generated.dae").is_file());
     let generated = fs::read_to_string(temp.join("runtime/generated.dae")).unwrap();
