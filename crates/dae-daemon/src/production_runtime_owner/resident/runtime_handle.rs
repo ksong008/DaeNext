@@ -231,8 +231,12 @@ impl ResidentProductionRuntime {
             .elapsed()
             .as_nanos()
             .min(u128::from(u64::MAX)) as u64;
+        let cleanup_command_timed_out = self
+            .cleanup_steps
+            .iter()
+            .any(|step| step["timed_out"].as_bool().unwrap_or(false));
         let mut cleanup_report = json!({
-            "status": if loaded_map_cleaned && leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated {
+            "status": if loaded_map_cleaned && leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated && !cleanup_command_timed_out {
                 "pass"
             } else {
                 "fail"
@@ -241,6 +245,7 @@ impl ResidentProductionRuntime {
             "cleanup_phase_timings": cleanup_phase_timings.clone(),
             "cleanup_elapsed_ns": cleanup_elapsed_ns,
             "cleanup_elapsed_ms": cleanup_elapsed_ns / 1_000_000,
+            "cleanup_command_timed_out": cleanup_command_timed_out,
             "after_map_ids": after_map_ids,
             "loaded_map_cleaned": loaded_map_cleaned,
             "leftovers_after_cleanup": leftovers_after_cleanup,

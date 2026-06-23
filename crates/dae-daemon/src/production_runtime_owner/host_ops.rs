@@ -1,5 +1,6 @@
-use std::io;
-use std::process::{Command, Output};
+use std::io::{self, Read};
+use std::process::{Command, ExitStatus, Output, Stdio};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -35,6 +36,16 @@ impl HostOpKind {
             "sysctl" => Self::Sysctl,
             "cat" => Self::Filesystem,
             _ => Self::Generic,
+        }
+    }
+
+    fn timeout(self) -> Duration {
+        match self {
+            Self::Filesystem => Duration::from_secs(2),
+            Self::Sysctl => Duration::from_secs(3),
+            Self::Ip | Self::Netns | Self::Tc | Self::Ebpf | Self::Generic => {
+                Duration::from_secs(10)
+            }
         }
     }
 }
@@ -101,6 +112,8 @@ pub(super) struct HostOpResult {
     started_at_unix_ms: u64,
     finished_at_unix_ms: u64,
     elapsed_ms: u64,
+    timeout_ms: u64,
+    timed_out: bool,
 }
 
 impl HostOpResult {
@@ -111,8 +124,16 @@ impl HostOpResult {
         started_at_unix_ms: u64,
         finished_at_unix_ms: u64,
         elapsed_ms: u64,
+        timeout_ms: u64,
+        timed_out: bool,
     ) -> Self {
         let (status, exit_code, stdout, stderr) = match output {
+            Ok(output) if timed_out => (
+                HostOpStatus::Fail,
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+                timeout_stderr(String::from_utf8_lossy(&output.stderr).trim(), timeout_ms),
+            ),
             Ok(output) => (
                 if output.status.success() {
                     HostOpStatus::Pass
@@ -123,6 +144,7 @@ impl HostOpResult {
                 String::from_utf8_lossy(&output.stdout).trim().to_owned(),
                 String::from_utf8_lossy(&output.stderr).trim().to_owned(),
             ),
+            Err(err) if timed_out => (HostOpStatus::Fail, None, String::new(), err.to_string()),
             Err(err) => (HostOpStatus::Fail, None, String::new(), err.to_string()),
         };
         Self {
@@ -136,6 +158,8 @@ impl HostOpResult {
             started_at_unix_ms,
             finished_at_unix_ms,
             elapsed_ms,
+            timeout_ms,
+            timed_out,
         }
     }
 
@@ -155,8 +179,15 @@ impl HostOpResult {
             "started_at_unix_ms": self.started_at_unix_ms,
             "finished_at_unix_ms": self.finished_at_unix_ms,
             "elapsed_ms": self.elapsed_ms,
+            "timeout_ms": self.timeout_ms,
+            "timed_out": self.timed_out,
         })
     }
+}
+
+struct HostCommandOutput {
+    output: io::Result<Output>,
+    timed_out: bool,
 }
 
 pub(super) struct HostOps;
@@ -175,27 +206,111 @@ impl HostOps {
     }
 
     fn run_command_backend(name: Option<String>, spec: HostOpSpec) -> HostOpResult {
+        let timeout = spec.kind().timeout();
+        Self::run_command_backend_with_timeout(name, spec, timeout)
+    }
+
+    fn run_command_backend_with_timeout(
+        name: Option<String>,
+        spec: HostOpSpec,
+        timeout: Duration,
+    ) -> HostOpResult {
         let started_at_unix_ms = unix_time_millis();
         let started = Instant::now();
-        let output = match spec.kind() {
+        let command_output = match spec.kind() {
             HostOpKind::Ip
             | HostOpKind::Netns
             | HostOpKind::Tc
             | HostOpKind::Ebpf
             | HostOpKind::Sysctl
             | HostOpKind::Filesystem
-            | HostOpKind::Generic => Command::new(spec.program()).args(spec.args()).output(),
+            | HostOpKind::Generic => run_output_with_timeout(&spec, timeout),
         };
         let elapsed_ms = duration_millis(started.elapsed());
         let finished_at_unix_ms = unix_time_millis();
         HostOpResult::from_output(
             name,
             spec,
-            output,
+            command_output.output,
             started_at_unix_ms,
             finished_at_unix_ms,
             elapsed_ms,
+            duration_millis(timeout),
+            command_output.timed_out,
         )
+    }
+}
+
+fn run_output_with_timeout(spec: &HostOpSpec, timeout: Duration) -> HostCommandOutput {
+    let mut child = match Command::new(spec.program())
+        .args(spec.args())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            return HostCommandOutput {
+                output: Err(err),
+                timed_out: false,
+            };
+        }
+    };
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return HostCommandOutput {
+                    output: collect_child_output(child, status),
+                    timed_out: false,
+                };
+            }
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return HostCommandOutput {
+                    output: Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("command timed out after {} ms", duration_millis(timeout)),
+                    )),
+                    timed_out: true,
+                };
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(err) => {
+                return HostCommandOutput {
+                    output: Err(err),
+                    timed_out: false,
+                };
+            }
+        }
+    }
+}
+
+fn collect_child_output(mut child: std::process::Child, status: ExitStatus) -> io::Result<Output> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)?;
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr)?;
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn timeout_stderr(stderr: &str, timeout_ms: u64) -> String {
+    let message = format!("command timed out after {timeout_ms} ms");
+    if stderr.trim().is_empty() {
+        message
+    } else {
+        format!("{message}; {}", stderr.trim())
     }
 }
 
@@ -254,14 +369,35 @@ mod tests {
         ] {
             assert!(object.contains_key(key), "missing legacy key {key}");
         }
-        for key in ["started_at_unix_ms", "finished_at_unix_ms", "elapsed_ms"] {
+        for key in [
+            "started_at_unix_ms",
+            "finished_at_unix_ms",
+            "elapsed_ms",
+            "timeout_ms",
+        ] {
             assert!(object.get(key).and_then(|value| value.as_u64()).is_some());
         }
+        assert_eq!(value["timed_out"], false);
         assert!(value["name"].is_null());
         assert_eq!(value["status"], "fail");
         assert_eq!(
             value["program"],
             "__dae_missing_host_op_command_for_json_shape_test__"
         );
+    }
+
+    #[test]
+    fn command_timeout_marks_step_failed_without_waiting_for_process_exit() {
+        let value = HostOps::run_command_backend_with_timeout(
+            None,
+            HostOpSpec::new("sh", ["-c", "sleep 1"]),
+            std::time::Duration::from_millis(20),
+        )
+        .to_step_json();
+
+        assert_eq!(value["status"], "fail");
+        assert_eq!(value["timed_out"], true);
+        assert_eq!(value["timeout_ms"], 20);
+        assert!(value["stderr"].as_str().unwrap().contains("timed out"));
     }
 }
