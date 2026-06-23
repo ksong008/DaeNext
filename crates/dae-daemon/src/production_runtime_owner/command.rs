@@ -105,6 +105,84 @@ pub(super) fn production_resource_leftovers() -> Vec<String> {
     leftovers
 }
 
+pub(super) fn cleanup_stale_production_owner_after_crash(lan_ifaces: &[String]) -> bool {
+    let has_leftovers = !production_resource_leftovers().is_empty();
+    let pin_dirs = native_runtime_pin_dirs();
+    if !should_cleanup_stale_production_owner(has_leftovers, &pin_dirs) {
+        return false;
+    }
+    for iface in lan_ifaces {
+        run_cleanup_command(
+            "tc",
+            ["filter", "del", "dev", iface, "ingress", "pref", "1"],
+        );
+        run_cleanup_command("tc", ["filter", "del", "dev", iface, "egress", "pref", "1"]);
+    }
+    run_cleanup_command(
+        "tc",
+        ["qdisc", "del", "dev", PRODUCTION_HOST_IFACE, "clsact"],
+    );
+    run_cleanup_command(
+        "ip",
+        [
+            "netns",
+            "exec",
+            PRODUCTION_NETNS,
+            "tc",
+            "qdisc",
+            "del",
+            "dev",
+            PRODUCTION_PEER_IFACE,
+            "clsact",
+        ],
+    );
+    run_cleanup_command("ip", ["link", "del", PRODUCTION_HOST_IFACE]);
+    run_cleanup_command("ip", ["netns", "del", PRODUCTION_NETNS]);
+    for pin_dir in pin_dirs {
+        let _ = fs::remove_dir_all(pin_dir.path);
+    }
+    true
+}
+
+fn should_cleanup_stale_production_owner(
+    has_leftovers: bool,
+    pin_dirs: &[NativeRuntimePinDir],
+) -> bool {
+    has_leftovers && !pin_dirs.is_empty() && pin_dirs.iter().all(|pin_dir| pin_dir.stale)
+}
+
+struct NativeRuntimePinDir {
+    path: PathBuf,
+    stale: bool,
+}
+
+fn native_runtime_pin_dirs() -> Vec<NativeRuntimePinDir> {
+    let Ok(entries) = fs::read_dir("/sys/fs/bpf") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let pid = native_runtime_pin_pid(&name)?;
+            Some(NativeRuntimePinDir {
+                path: entry.path(),
+                stale: !PathBuf::from(format!("/proc/{pid}")).exists(),
+            })
+        })
+        .collect()
+}
+
+fn native_runtime_pin_pid(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix("dae-native-runtime-")?;
+    let (pid, _) = rest.split_once('-')?;
+    pid.parse().ok()
+}
+
+fn run_cleanup_command<const N: usize>(program: &str, args: [&str; N]) {
+    let _ = Command::new(program).args(args).output();
+}
+
 pub(super) fn runtime_resource_leftovers(include_active_tcp: bool) -> Vec<String> {
     let mut leftovers = production_resource_leftovers();
     if include_active_tcp {
@@ -212,4 +290,48 @@ pub(super) fn ensure_safe_run_root(root: &Path) -> Result<(), String> {
 
 pub(super) fn path_string(path: &Path) -> String {
     path.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_runtime_pin_pid_accepts_runtime_pin_names_only() {
+        assert_eq!(
+            native_runtime_pin_pid("dae-native-runtime-1234-0"),
+            Some(1234)
+        );
+        assert_eq!(
+            native_runtime_pin_pid("dae-native-runtime-98765-worker"),
+            Some(98765)
+        );
+        assert_eq!(native_runtime_pin_pid("dae-native-runtime--0"), None);
+        assert_eq!(native_runtime_pin_pid("dae-native-runtime-abcd-0"), None);
+        assert_eq!(native_runtime_pin_pid("dae-native-runtime-1234"), None);
+        assert_eq!(native_runtime_pin_pid("other-runtime-1234-0"), None);
+    }
+
+    #[test]
+    fn stale_owner_cleanup_requires_leftovers_and_only_dead_native_pins() {
+        let stale = NativeRuntimePinDir {
+            path: PathBuf::from("/tmp/dae-native-runtime-1-0"),
+            stale: true,
+        };
+        let active = NativeRuntimePinDir {
+            path: PathBuf::from("/tmp/dae-native-runtime-2-0"),
+            stale: false,
+        };
+
+        assert!(!should_cleanup_stale_production_owner(false, &[stale]));
+        assert!(!should_cleanup_stale_production_owner(true, &[]));
+        assert!(!should_cleanup_stale_production_owner(true, &[active]));
+        assert!(should_cleanup_stale_production_owner(
+            true,
+            &[NativeRuntimePinDir {
+                path: PathBuf::from("/tmp/dae-native-runtime-3-0"),
+                stale: true,
+            }]
+        ));
+    }
 }

@@ -11,7 +11,8 @@ use dae_ebpf_support::{
 use serde_json::{Value, json};
 
 use super::command::{
-    bpf_dae_snapshot, path_string, runtime_resource_leftovers, wait_for_loaded_map_cleanup,
+    bpf_dae_snapshot, cleanup_stale_production_owner_after_crash, path_string,
+    runtime_resource_leftovers, wait_for_loaded_map_cleanup,
 };
 #[cfg(feature = "native-ebpf")]
 use super::native_ebpf::EMBEDDED_NATIVE_OBJECT_IDENTITY;

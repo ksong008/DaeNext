@@ -8,6 +8,9 @@ pub(super) fn start_with_options(
     lan_ifaces: Vec<String>,
     wan_ifaces: Vec<String>,
 ) -> Result<ResidentProductionRuntime, String> {
+    if options.execute {
+        cleanup_stale_production_owner_after_crash(&lan_ifaces);
+    }
     let mut checks = preflight_checks(&options);
     checks.extend(resident_interface_validation_checks(
         &lan_ifaces,
