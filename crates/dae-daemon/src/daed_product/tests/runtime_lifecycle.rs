@@ -126,6 +126,25 @@ pub(crate) fn runtime_stop_records_cleanup_lifecycle_for_fake_runtime() {
 }
 
 #[test]
+pub(crate) fn runtime_cleanup_interlock_blocks_failed_cleanup() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.cleanup.begin(7, "background-stop");
+        inner.cleanup.finish(Some(json!({
+            "status": "fail",
+            "loaded_map_cleaned": false,
+            "leftovers_after_cleanup": ["iface:dae0"],
+            "sys_fs_bpf_dae_mutated": false,
+        })));
+    }
+
+    let err = manager.ensure_cleanup_allows_start().unwrap_err();
+    assert!(err.contains("previous product runtime cleanup failed"));
+    assert!(err.contains("iface:dae0"));
+}
+
+#[test]
 pub(crate) fn runtime_started_at_survives_reload_but_resets_for_new_start() {
     let initial_started_at = "2026-06-15T01:00:00.000Z".to_owned();
     let reload_transition_at = "2026-06-15T02:00:00.000Z".to_owned();

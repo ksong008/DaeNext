@@ -33,7 +33,7 @@ pub(super) struct RuntimeCleanupState {
 }
 
 impl RuntimeCleanupState {
-    fn begin(&mut self, epoch: u64, mode: &str) {
+    pub(super) fn begin(&mut self, epoch: u64, mode: &str) {
         self.running = true;
         self.epoch = epoch;
         self.mode = Some(mode.to_owned());
@@ -43,7 +43,7 @@ impl RuntimeCleanupState {
         self.last_error = None;
     }
 
-    fn finish(&mut self, report: Option<Value>) {
+    pub(super) fn finish(&mut self, report: Option<Value>) {
         self.running = false;
         self.finished_at = Some(now_text());
         self.last_error = cleanup_report_error(report.as_ref());
@@ -255,6 +255,7 @@ impl ProductRuntimeLifecycleLogMode {
 
 pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "PRODUCT_RUNTIME_FAKE_START";
 pub(super) const PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
+const PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT: Duration = Duration::from_secs(5);
 
 impl ProductRuntimeManager {
     pub(super) fn new() -> Self {
@@ -274,6 +275,7 @@ impl ProductRuntimeManager {
             .lifecycle
             .lock()
             .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
+        self.ensure_cleanup_allows_start()?;
         let (
             previous_runtime,
             previous_config,
@@ -314,7 +316,15 @@ impl ProductRuntimeManager {
             && let Ok(mut inner) = self.inner.lock()
             && inner.lifecycle_epoch == lifecycle_epoch
         {
-            inner.cleanup.finish(previous_cleanup_report);
+            inner.cleanup.finish(previous_cleanup_report.clone());
+        }
+        if previous_runtime_was_running
+            && let Some(blocker) =
+                cleanup_start_blocker_from_report(previous_cleanup_report.as_ref())
+        {
+            return Err(format!(
+                "previous product runtime cleanup failed before reload: {blocker}"
+            ));
         }
         match start_product_runtime_instance(&config, source) {
             Ok((runtime, report)) => {
@@ -476,6 +486,25 @@ impl ProductRuntimeManager {
             }
             thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    pub(super) fn ensure_cleanup_allows_start(&self) -> Result<(), String> {
+        if !self.wait_for_cleanup_idle(PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT) {
+            return Err(self.cleanup_start_blocker().unwrap_or_else(|| {
+                "product runtime cleanup is still running; retry after cleanup finishes".to_owned()
+            }));
+        }
+        if let Some(blocker) = self.cleanup_start_blocker() {
+            return Err(blocker);
+        }
+        Ok(())
+    }
+
+    fn cleanup_start_blocker(&self) -> Option<String> {
+        let Ok(inner) = self.inner.lock() else {
+            return Some("product runtime manager lock poisoned while checking cleanup".to_owned());
+        };
+        cleanup_start_blocker(&inner.cleanup)
     }
 
     pub(super) fn summary(&self) -> Value {
@@ -738,6 +767,27 @@ fn spawn_background_cleanup(
             inner.cleanup.finish(cleanup_report);
         }
     });
+}
+
+fn cleanup_start_blocker(cleanup: &RuntimeCleanupState) -> Option<String> {
+    if cleanup.running {
+        return Some(format!(
+            "product runtime cleanup is still running: epoch={}, mode={}",
+            cleanup.epoch,
+            cleanup.mode.as_deref().unwrap_or("unknown")
+        ));
+    }
+    cleanup.last_error.as_ref().map(|err| {
+        format!(
+            "previous product runtime cleanup failed: epoch={}, mode={}, error={err}",
+            cleanup.epoch,
+            cleanup.mode.as_deref().unwrap_or("unknown")
+        )
+    })
+}
+
+fn cleanup_start_blocker_from_report(report: Option<&Value>) -> Option<String> {
+    cleanup_report_error(report)
 }
 
 fn cleanup_report_error(report: Option<&Value>) -> Option<String> {
