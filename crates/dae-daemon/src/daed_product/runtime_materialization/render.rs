@@ -97,6 +97,15 @@ pub(in crate::daed_product) fn render_group_section(groups: &Value) -> io::Resul
                 format!("group {name} has no matched nodes"),
             ));
         }
+        if group_policy_is_fixed(group) && node_tags.len() > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "fixed group {name} can match only one node; got {}",
+                    node_tags.len()
+                ),
+            ));
+        }
         let names = node_tags
             .iter()
             .map(|tag| dae_string_literal(tag))
@@ -153,6 +162,15 @@ pub(in crate::daed_product) fn render_group_policy(group: &Value) -> String {
         params,
     }
     .to_config_string(true, true, false)
+}
+
+fn group_policy_is_fixed(group: &Value) -> bool {
+    group
+        .get("policy")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("fixed")
+        == "fixed"
 }
 
 pub(in crate::daed_product) fn runtime_group_node_tags(group: &Value) -> Vec<String> {

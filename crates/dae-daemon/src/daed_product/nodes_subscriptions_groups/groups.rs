@@ -174,31 +174,34 @@ pub(crate) fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse 
         Ok(policy) => policy,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let conn = match open_state_connection(state) {
+    let node_ids = integer_array(&body, "nodeIds");
+    let subscription_ids = integer_array(&body, "subscriptionIds");
+    let mut conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
-    if let Err(err) = conn.execute(
+    let tx = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(tx) => tx,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    if let Err(err) = tx.execute(
         "INSERT INTO groups(name, policy, version) VALUES(?1, ?2, 0)",
         params![name, policy],
     ) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
-    let id = conn.last_insert_rowid();
-    if let Err(err) = replace_group_policy_params(&conn, id, body.get("policyParams")) {
+    let id = tx.last_insert_rowid();
+    if let Err(err) = replace_group_policy_params(&tx, id, body.get("policyParams")) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
-    if let Err(err) = apply_group_node_ids(&conn, id, &integer_array(&body, "nodeIds"), true) {
+    if let Err(err) = apply_group_node_ids(&tx, id, &node_ids, true) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
-    if let Err(err) = apply_group_subscription_ids(
-        &conn,
-        id,
-        &integer_array(&body, "subscriptionIds"),
-        None,
-        true,
-    ) {
+    if let Err(err) = apply_group_subscription_ids(&tx, id, &subscription_ids, None, true) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
+    }
+    if let Err(err) = tx.commit() {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
     get_group(state, id).with_status(201)
 }
@@ -258,20 +261,37 @@ pub(crate) fn update_group(state: &Path, request: &HttpRequest, id: i64) -> Http
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
+    let policy = match body.get("policy").and_then(Value::as_str) {
+        Some(policy) => match validate_group_policy(policy) {
+            Ok(policy) => Some(policy),
+            Err(err) => return HttpResponse::json(400, json!({"error": err})),
+        },
+        None => None,
+    };
+    let mut conn = conn;
+    let tx = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(tx) => tx,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
     if let Some(name) = body.get("name").and_then(Value::as_str)
-        && let Err(err) = conn.execute(
+        && let Err(err) = tx.execute(
             "UPDATE groups SET name = ?1, version = version + 1 WHERE id = ?2",
             params![name, id],
         )
     {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
-    if let Some(policy) = body.get("policy").and_then(Value::as_str) {
-        let policy = match validate_group_policy(policy) {
-            Ok(policy) => policy,
-            Err(err) => return HttpResponse::json(400, json!({"error": err})),
-        };
-        if let Err(err) = conn.execute(
+    if let Some(policy) = policy {
+        if group_policy_is_fixed(policy) {
+            let tags = match fixed_group_runtime_node_tags(&tx, id) {
+                Ok(tags) => tags,
+                Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
+            };
+            if let Err(err) = validate_fixed_group_runtime_node_tags(&tags) {
+                return HttpResponse::json(400, json!({"error": err.to_string()}));
+            }
+        }
+        if let Err(err) = tx.execute(
             "UPDATE groups SET policy = ?1, version = version + 1 WHERE id = ?2",
             params![policy, id],
         ) {
@@ -279,9 +299,12 @@ pub(crate) fn update_group(state: &Path, request: &HttpRequest, id: i64) -> Http
         }
     }
     if body.get("policyParams").is_some()
-        && let Err(err) = replace_group_policy_params(&conn, id, body.get("policyParams"))
+        && let Err(err) = replace_group_policy_params(&tx, id, body.get("policyParams"))
     {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
+    }
+    if let Err(err) = tx.commit() {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
     get_group(state, id)
 }
@@ -324,6 +347,9 @@ pub(crate) fn update_group_nodes(
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
+    if add && let Err(err) = ensure_fixed_group_runtime_node_limit(&conn, id, &ids, &[], None) {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
+    }
     if let Err(err) = apply_group_node_ids(&conn, id, &ids, add) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
@@ -347,6 +373,12 @@ pub(crate) fn update_group_subscriptions(
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
+    if add
+        && let Err(err) =
+            ensure_fixed_group_runtime_node_limit(&conn, id, &[], &ids, name_filter_regex)
+    {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
+    }
     if let Err(err) = apply_group_subscription_ids(&conn, id, &ids, name_filter_regex, add) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
@@ -388,6 +420,97 @@ fn validate_group_policy(policy: &str) -> Result<&str, String> {
     Err(format!(
         "unsupported group policy {policy:?}; allowed values: random, fixed, min, min_avg10, min_moving_avg"
     ))
+}
+
+fn group_policy_is_fixed(policy: &str) -> bool {
+    policy.trim() == "fixed"
+}
+
+fn group_has_fixed_policy(conn: &Connection, group_id: i64) -> io::Result<bool> {
+    let policy = conn
+        .query_row(
+            "SELECT policy FROM groups WHERE id = ?1",
+            params![group_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sqlite_io_error)?;
+    Ok(policy
+        .as_deref()
+        .map(group_policy_is_fixed)
+        .unwrap_or(false))
+}
+
+fn ensure_fixed_group_runtime_node_limit(
+    conn: &Connection,
+    group_id: i64,
+    extra_node_ids: &[i64],
+    extra_subscription_ids: &[i64],
+    name_filter_regex: Option<&str>,
+) -> io::Result<()> {
+    if !group_has_fixed_policy(conn, group_id)? {
+        return Ok(());
+    }
+    let mut tags = fixed_group_runtime_node_tags(conn, group_id)?;
+    for node in nodes_by_ids_value(conn, extra_node_ids)? {
+        push_unique(&mut tags, runtime_node_tag(&node));
+    }
+    for subscription_id in extra_subscription_ids {
+        for node in
+            nodes_for_subscription_filtered_value(conn, *subscription_id, name_filter_regex)?
+        {
+            push_unique(&mut tags, runtime_node_tag(&node));
+        }
+    }
+    validate_fixed_group_runtime_node_tags(&tags)
+}
+
+fn validate_fixed_group_runtime_node_tags(tags: &[String]) -> io::Result<()> {
+    if tags.len() <= 1 {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "fixed group can match only one node; current selection would match {} nodes",
+            tags.len()
+        ),
+    ))
+}
+
+fn fixed_group_runtime_node_tags(conn: &Connection, group_id: i64) -> io::Result<Vec<String>> {
+    let mut tags = Vec::new();
+    for node in group_nodes_value(conn, group_id)? {
+        push_unique(&mut tags, runtime_node_tag(&node));
+    }
+    for subscription in group_subscriptions_value(conn, group_id)? {
+        for node in subscription["matchedNodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            push_unique(&mut tags, runtime_node_tag(node));
+        }
+    }
+    Ok(tags)
+}
+
+fn nodes_by_ids_value(conn: &Connection, ids: &[i64]) -> io::Result<Vec<Value>> {
+    let mut items = Vec::new();
+    for id in ids {
+        if let Some(node) = conn
+            .query_row(
+                "SELECT id, link, name, address, protocol, tag, subscription_id FROM nodes WHERE id = ?1",
+                params![id],
+                node_row_value,
+            )
+            .optional()
+            .map_err(sqlite_io_error)?
+        {
+            items.push(node);
+        }
+    }
+    Ok(items)
 }
 
 pub(crate) fn group_subscriptions_value(
@@ -604,6 +727,9 @@ pub(crate) fn apply_group_node_ids(
     ids: &[i64],
     add: bool,
 ) -> io::Result<()> {
+    if add {
+        ensure_fixed_group_runtime_node_limit(conn, group_id, ids, &[], None)?;
+    }
     for id in ids {
         if add {
             conn.execute(
@@ -633,6 +759,7 @@ pub(crate) fn apply_group_subscription_ids(
         .filter(|value| !value.is_empty());
     if add {
         let _ = compile_name_filter(name_filter_regex)?;
+        ensure_fixed_group_runtime_node_limit(conn, group_id, &[], ids, name_filter_regex)?;
     }
     for id in ids {
         if add {
