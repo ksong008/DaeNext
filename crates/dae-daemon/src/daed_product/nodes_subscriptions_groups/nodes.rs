@@ -172,15 +172,23 @@ pub(crate) fn import_nodes(
             continue;
         }
         let parsed = parse_node_link(link, tag);
+        let stored_link = parsed.normalized_link.as_deref().unwrap_or(link);
         let result = conn.execute(
             "INSERT INTO nodes(link, name, address, protocol, tag, subscription_id) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![link, parsed.name, parsed.address, parsed.protocol, tag, subscription_id],
+            params![
+                stored_link,
+                parsed.name,
+                parsed.address,
+                parsed.protocol,
+                tag,
+                subscription_id
+            ],
         );
         match result {
             Ok(_) => {
                 let id = conn.last_insert_rowid();
                 let node = get_node_value(state, id).unwrap_or(None);
-                items.push(json!({"link": link, "error": Value::Null, "node": node}));
+                items.push(json!({"link": stored_link, "error": Value::Null, "node": node}));
             }
             Err(err) => {
                 items.push(json!({"link": link, "error": err.to_string(), "node": Value::Null}))
@@ -203,6 +211,7 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
     let tag = body.get("tag").and_then(Value::as_str);
     let updated = if let Some(link) = body.get("link").and_then(Value::as_str) {
         let parsed = parse_node_link(link, tag);
+        let stored_link = parsed.normalized_link.as_deref().unwrap_or(link);
         conn.execute(
             "UPDATE nodes
              SET link = ?1,
@@ -212,7 +221,7 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
                  tag = CASE WHEN ?5 THEN ?6 ELSE tag END
              WHERE id = ?7",
             params![
-                link,
+                stored_link,
                 parsed.name,
                 parsed.address,
                 parsed.protocol,
@@ -270,6 +279,7 @@ pub(crate) struct ParsedNodeLink {
     pub(in crate::daed_product) name: String,
     pub(in crate::daed_product) address: String,
     pub(in crate::daed_product) protocol: String,
+    pub(in crate::daed_product) normalized_link: Option<String>,
 }
 
 pub(crate) fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
@@ -306,6 +316,7 @@ pub(crate) fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
         name,
         address,
         protocol: protocol.to_owned(),
+        normalized_link: None,
     }
 }
 
@@ -320,6 +331,7 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
                 .unwrap_or_else(|| format!("vmess-{address}")),
             address,
             protocol: parsed.protocol,
+            normalized_link: None,
         });
     }
     if let Ok(parsed) = dae_outbound::VLESSLink::parse(link) {
@@ -331,6 +343,7 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
                 .unwrap_or_else(|| format!("vless-{address}")),
             address,
             protocol: parsed.protocol,
+            normalized_link: None,
         });
     }
     if let Ok(parsed) = dae_outbound::ShadowsocksLink::parse(link) {
@@ -342,19 +355,30 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
                 .unwrap_or_else(|| format!("{}-{address}", parsed.protocol)),
             address: parsed.server,
             protocol: parsed.protocol,
+            normalized_link: None,
         });
     }
     if let Ok(parsed) = dae_outbound::Hysteria2Link::parse(link) {
         let address = parsed.property_address();
+        let normalized_link = hysteria2_mport_query_present(link).then(|| parsed.export_url());
         return Some(ParsedNodeLink {
             name: tag
                 .or_else(|| non_empty(parsed.name))
                 .unwrap_or_else(|| format!("hysteria2-{address}")),
             address,
             protocol: "hysteria2".to_owned(),
+            normalized_link,
         });
     }
     None
+}
+
+fn hysteria2_mport_query_present(link: &str) -> bool {
+    let Some((_, rest)) = link.split_once('?') else {
+        return false;
+    };
+    let query = rest.split('#').next().unwrap_or(rest);
+    url::form_urlencoded::parse(query.as_bytes()).any(|(key, _)| key.as_ref() == "mport")
 }
 
 fn decoded_node_label(value: &str) -> String {

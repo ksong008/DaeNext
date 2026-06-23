@@ -27,8 +27,12 @@ pub(crate) fn replace_subscription_nodes(
     let mut incoming_name_counts = HashMap::<String, usize>::new();
     for link in links {
         let parsed = parse_node_link(link.as_str(), None);
+        let stored_link = parsed
+            .normalized_link
+            .clone()
+            .unwrap_or_else(|| link.clone());
         *incoming_name_counts.entry(parsed.name.clone()).or_default() += 1;
-        candidates.push((link.clone(), parsed));
+        candidates.push((stored_link, parsed));
     }
 
     let mut reusable_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
