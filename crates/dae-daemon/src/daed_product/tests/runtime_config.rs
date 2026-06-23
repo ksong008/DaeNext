@@ -334,3 +334,41 @@ fn generated_runtime_config_rejects_empty_group_filters() {
             .contains("group egress has no matched nodes")
     );
 }
+
+#[test]
+fn generated_runtime_config_rejects_fixed_group_with_multiple_matched_nodes() {
+    let node_a = config_node_value(1, "node_a", "http://127.0.0.1:9/node-a#node-a");
+    let node_b = config_node_value(2, "node_b", "http://127.0.0.2:9/node-b#node-b");
+    let groups = json!({
+        "items": [
+            {
+                "name": "proxy",
+                "policy": "fixed",
+                "nodes": [node_a.clone(), node_b.clone()],
+                "subscriptions": []
+            }
+        ]
+    });
+    let nodes = json!({"items": [node_a, node_b]});
+
+    let err = render_generated_config(
+        "test",
+        Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+        Some(&(1, "dns".to_owned(), "dns {}\n".to_owned(), 1)),
+        Some(&(
+            1,
+            "routing".to_owned(),
+            "routing { fallback: proxy }\n".to_owned(),
+            1,
+        )),
+        &groups,
+        &nodes,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("fixed group proxy can match only one node"),
+        "{err}"
+    );
+}

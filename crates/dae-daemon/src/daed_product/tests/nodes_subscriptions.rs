@@ -334,6 +334,222 @@ pub(crate) fn update_group_rejects_unsupported_policy_without_mutating_existing_
 }
 
 #[test]
+pub(crate) fn create_group_rejects_fixed_group_with_multiple_nodes_without_persisting() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 1, "node-a", "http://127.0.0.1:9/node-a#node-a", None);
+    insert_config_node(&conn, 2, "node-b", "http://127.0.0.2:9/node-b#node-b", None);
+    drop(conn);
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/groups".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"name":"proxy","policy":"fixed","nodeIds":[1,2],"policyParams":[]}"#.to_vec(),
+    };
+
+    let response = create_group(&state, &request);
+    assert_eq!(response.status, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("fixed group can match only one node"),
+        "{body}"
+    );
+    let conn = open_state_connection(&state).unwrap();
+    let group_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM groups WHERE name = 'proxy'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let binding_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM group_nodes", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(group_count, 0);
+    assert_eq!(binding_count, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn update_group_nodes_rejects_second_node_for_fixed_group_without_mutating() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 1, "node-a", "http://127.0.0.1:9/node-a#node-a", None);
+    insert_config_node(&conn, 2, "node-b", "http://127.0.0.2:9/node-b#node-b", None);
+    conn.execute_batch(
+        r#"
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(9, 'proxy', 'fixed', 3);
+            INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1);
+            "#,
+    )
+    .unwrap();
+    drop(conn);
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/groups/9/nodes".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"nodeIds":[2]}"#.to_vec(),
+    };
+
+    let response = update_group_nodes(&state, &request, 9, true);
+    assert_eq!(response.status, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("fixed group can match only one node"),
+        "{body}"
+    );
+    let conn = open_state_connection(&state).unwrap();
+    let node_ids = conn
+        .prepare("SELECT node_id FROM group_nodes WHERE group_id = 9 ORDER BY node_id")
+        .unwrap()
+        .query_map([], |row| row.get::<_, i64>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let version: i64 = conn
+        .query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(node_ids, vec![1]);
+    assert_eq!(version, 3);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn update_group_subscriptions_rejects_multi_match_for_fixed_group_without_mutating() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(9, 'proxy', 'fixed', 3);
+            "#,
+    )
+    .unwrap();
+    replace_subscription_nodes(
+        &conn,
+        7,
+        &[
+            "http://127.0.0.1:9/candidate-a#candidate-a".to_owned(),
+            "http://127.0.0.2:9/candidate-b#candidate-b".to_owned(),
+        ],
+    )
+    .unwrap();
+    drop(conn);
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/groups/9/subscriptions".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"subscriptionIds":[7]}"#.to_vec(),
+    };
+
+    let response = update_group_subscriptions(&state, &request, 9, true);
+    assert_eq!(response.status, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("fixed group can match only one node"),
+        "{body}"
+    );
+    let conn = open_state_connection(&state).unwrap();
+    let binding_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM group_subscriptions WHERE group_id = 9",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let version: i64 = conn
+        .query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(binding_count, 0);
+    assert_eq!(version, 3);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn update_group_rejects_fixed_policy_for_multi_node_group_without_partial_update() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 1, "node-a", "http://127.0.0.1:9/node-a#node-a", None);
+    insert_config_node(&conn, 2, "node-b", "http://127.0.0.2:9/node-b#node-b", None);
+    conn.execute_batch(
+        r#"
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(9, 'proxy', 'random', 2);
+            INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1);
+            INSERT INTO group_nodes(group_id, node_id) VALUES(9, 2);
+            "#,
+    )
+    .unwrap();
+    drop(conn);
+    let request = HttpRequest {
+        method: "PUT".to_owned(),
+        path: "/api/groups/9".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"name":"renamed","policy":"fixed","policyParams":[{"key":"","val":"1"}]}"#
+            .to_vec(),
+    };
+
+    let response = update_group(&state, &request, 9);
+    assert_eq!(response.status, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("fixed group can match only one node"),
+        "{body}"
+    );
+    let conn = open_state_connection(&state).unwrap();
+    let (name, policy, version): (String, String, i64) = conn
+        .query_row(
+            "SELECT name, policy, version FROM groups WHERE id = 9",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    let policy_param_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM group_policy_params WHERE group_id = 9",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(name, "proxy");
+    assert_eq!(policy, "random");
+    assert_eq!(version, 2);
+    assert_eq!(policy_param_count, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn node_lists_keep_manual_subscription_and_runtime_scopes_separate() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
