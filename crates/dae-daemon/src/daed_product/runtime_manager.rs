@@ -2,7 +2,7 @@ use super::*;
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
     lifecycle: Mutex<()>,
-    pub(super) inner: Mutex<ProductRuntimeState>,
+    pub(super) inner: Arc<Mutex<ProductRuntimeState>>,
 }
 
 #[derive(Debug, Default)]
@@ -260,7 +260,7 @@ impl ProductRuntimeManager {
     pub(super) fn new() -> Self {
         Self {
             lifecycle: Mutex::new(()),
-            inner: Mutex::new(ProductRuntimeState::default()),
+            inner: Arc::new(Mutex::new(ProductRuntimeState::default())),
         }
     }
 
@@ -427,7 +427,7 @@ impl ProductRuntimeManager {
             let stopped_runtime = inner.runtime.take();
             if was_running {
                 let cleanup_epoch = inner.lifecycle_epoch;
-                inner.cleanup.begin(cleanup_epoch, "synchronous-stop");
+                inner.cleanup.begin(cleanup_epoch, "background-stop");
             }
             inner.config = None;
             inner.config_content = None;
@@ -439,31 +439,43 @@ impl ProductRuntimeManager {
             inner.last_error = None;
             (stopped_runtime, was_running, inner.lifecycle_epoch)
         };
-        let cleanup_report = cleanup_runtime_instance(stopped_runtime);
         if was_running {
-            let mut inner = self
-                .inner
-                .lock()
-                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-            if inner.lifecycle_epoch == cleanup_epoch {
-                inner.cleanup.finish(cleanup_report.clone());
-            }
+            spawn_background_cleanup(Arc::clone(&self.inner), cleanup_epoch, stopped_runtime);
+        } else {
+            drop(stopped_runtime);
         }
-        let reclaim = was_running.then(|| allocator_reclaim(AllocatorReclaimReason::StopRuntime));
         let stop_elapsed_ns = stop_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         Ok(json!({
             "stopped": true,
             "wasRunning": was_running,
             "runtimeControl": "resident-production-runtime-manager",
             "fakeRuntime": product_runtime_fake_start_enabled(),
-            "allocatorReclaim": reclaim,
+            "allocatorReclaim": Value::Null,
             "stopElapsedNs": stop_elapsed_ns,
             "stopElapsedMs": stop_elapsed_ns / 1_000_000,
             "cleanupStarted": was_running,
             "cleanupEpoch": if was_running { json!(cleanup_epoch) } else { Value::Null },
-            "cleanupMode": if was_running { json!("synchronous-stop") } else { Value::Null },
-            "cleanupReport": cleanup_report,
+            "cleanupMode": if was_running { json!("background-stop") } else { Value::Null },
+            "cleanupReport": Value::Null,
         }))
+    }
+
+    pub(super) fn wait_for_cleanup_idle(&self, timeout: Duration) -> bool {
+        let started = Instant::now();
+        loop {
+            let cleanup_running = self
+                .inner
+                .lock()
+                .map(|inner| inner.cleanup.running)
+                .unwrap_or(false);
+            if !cleanup_running {
+                return true;
+            }
+            if started.elapsed() >= timeout {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     pub(super) fn summary(&self) -> Value {
@@ -698,6 +710,34 @@ fn cleanup_runtime_instance(runtime: Option<ProductRuntimeInstance>) -> Option<V
             "tproxyPort": fake.tproxy_port,
         })),
     }
+}
+
+fn spawn_background_cleanup(
+    inner: Arc<Mutex<ProductRuntimeState>>,
+    cleanup_epoch: u64,
+    runtime: Option<ProductRuntimeInstance>,
+) {
+    let _ = thread::spawn(move || {
+        let mut cleanup_report = cleanup_runtime_instance(runtime);
+        let reclaim = allocator_reclaim(AllocatorReclaimReason::StopRuntime);
+        match cleanup_report.as_mut() {
+            Some(Value::Object(map)) => {
+                map.insert("allocatorReclaim".to_owned(), reclaim);
+            }
+            Some(_) | None => {
+                cleanup_report = Some(json!({
+                    "status": "pass",
+                    "cleanupRuntime": "background-stop",
+                    "allocatorReclaim": reclaim,
+                }));
+            }
+        }
+        if let Ok(mut inner) = inner.lock()
+            && inner.cleanup.epoch == cleanup_epoch
+        {
+            inner.cleanup.finish(cleanup_report);
+        }
+    });
 }
 
 fn cleanup_report_error(report: Option<&Value>) -> Option<String> {

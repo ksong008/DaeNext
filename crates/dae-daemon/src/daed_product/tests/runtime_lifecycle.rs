@@ -114,8 +114,9 @@ pub(crate) fn runtime_stop_records_cleanup_lifecycle_for_fake_runtime() {
     let report = manager.stop().unwrap();
     assert_eq!(report["wasRunning"], json!(true));
     assert_eq!(report["cleanupStarted"], json!(true));
-    assert_eq!(report["cleanupMode"], json!("synchronous-stop"));
-    assert_eq!(report["cleanupReport"]["status"], json!("pass"));
+    assert_eq!(report["cleanupMode"], json!("background-stop"));
+    assert!(report["cleanupReport"].is_null());
+    assert!(manager.wait_for_cleanup_idle(std::time::Duration::from_secs(1)));
 
     let summary = manager.summary();
     assert_eq!(summary["state"], json!("stopped"));
