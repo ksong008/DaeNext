@@ -1,5 +1,8 @@
 use super::*;
 
+pub(in crate::daed_product) const GEODATA_RELOAD_PENDING_METADATA_KEY: &str =
+    "geodata_reload_pending";
+
 pub(in crate::daed_product) fn general_state_report(
     state: &Path,
     config_dir: &Path,
@@ -63,6 +66,9 @@ pub(in crate::daed_product) fn runtime_modified(
 ) -> io::Result<bool> {
     if !running {
         return Ok(false);
+    }
+    if geodata_reload_pending(conn)? {
+        return Ok(true);
     }
     let Some(config) = selected_section_state(conn, SectionKind::Config)? else {
         return Ok(true);
@@ -132,6 +138,25 @@ pub(in crate::daed_product) fn running_runtime_state(
         },
     )
     .optional()
+    .map_err(sqlite_io_error)
+}
+
+pub(in crate::daed_product) fn mark_geodata_reload_pending(state: &Path) -> io::Result<()> {
+    set_metadata(state, GEODATA_RELOAD_PENDING_METADATA_KEY, "true")
+}
+
+pub(in crate::daed_product) fn clear_geodata_reload_pending(state: &Path) -> io::Result<()> {
+    set_metadata(state, GEODATA_RELOAD_PENDING_METADATA_KEY, "false")
+}
+
+fn geodata_reload_pending(conn: &Connection) -> io::Result<bool> {
+    conn.query_row(
+        "SELECT value FROM daed_product_metadata WHERE key = ?1",
+        params![GEODATA_RELOAD_PENDING_METADATA_KEY],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|value| matches!(value.as_deref(), Some("true") | Some("1")))
     .map_err(sqlite_io_error)
 }
 
