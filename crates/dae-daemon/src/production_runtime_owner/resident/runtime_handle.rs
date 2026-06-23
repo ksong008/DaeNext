@@ -109,9 +109,9 @@ impl ResidentProductionRuntime {
         }
     }
 
-    pub fn cleanup(&mut self) {
+    pub fn cleanup(&mut self) -> Option<Value> {
         if self.cleaned {
-            return;
+            return None;
         }
         let cleanup_started = Instant::now();
         let mut cleanup_phase_timings = Vec::new();
@@ -273,9 +273,10 @@ impl ResidentProductionRuntime {
         let _ = write_json_file(
             &self.cleanup_file,
             "resident-production-runtime-cleanup",
-            cleanup_report,
+            cleanup_report.clone(),
         );
         self.cleaned = true;
+        Some(cleanup_report)
     }
 }
 
@@ -296,6 +297,6 @@ fn push_cleanup_phase_timing(
 
 impl Drop for ResidentProductionRuntime {
     fn drop(&mut self) {
-        self.cleanup();
+        let _ = self.cleanup();
     }
 }

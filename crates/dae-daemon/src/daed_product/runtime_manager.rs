@@ -18,6 +18,58 @@ pub(super) struct ProductRuntimeState {
     pub(super) stop_count: u64,
     pub(super) lifecycle_epoch: u64,
     pub(super) traffic_carry: RuntimeTrafficCarry,
+    pub(super) cleanup: RuntimeCleanupState,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct RuntimeCleanupState {
+    pub(super) running: bool,
+    pub(super) epoch: u64,
+    pub(super) mode: Option<String>,
+    pub(super) started_at: Option<String>,
+    pub(super) finished_at: Option<String>,
+    pub(super) last_report: Option<Value>,
+    pub(super) last_error: Option<String>,
+}
+
+impl RuntimeCleanupState {
+    fn begin(&mut self, epoch: u64, mode: &str) {
+        self.running = true;
+        self.epoch = epoch;
+        self.mode = Some(mode.to_owned());
+        self.started_at = Some(now_text());
+        self.finished_at = None;
+        self.last_report = None;
+        self.last_error = None;
+    }
+
+    fn finish(&mut self, report: Option<Value>) {
+        self.running = false;
+        self.finished_at = Some(now_text());
+        self.last_error = cleanup_report_error(report.as_ref());
+        self.last_report = report;
+    }
+
+    fn summary(&self) -> Value {
+        json!({
+            "running": self.running,
+            "state": if self.running {
+                "running"
+            } else if self.last_error.is_some() {
+                "failed"
+            } else if self.finished_at.is_some() {
+                "done"
+            } else {
+                "idle"
+            },
+            "epoch": self.epoch,
+            "mode": self.mode,
+            "startedAt": self.started_at,
+            "finishedAt": self.finished_at,
+            "lastError": self.last_error,
+            "lastReport": self.last_report,
+        })
+    }
 }
 
 // Runtime ownership keeps the resident instance inline under the manager mutex;
@@ -243,6 +295,10 @@ impl ProductRuntimeManager {
             if let Some(runtime) = previous_runtime.as_ref() {
                 inner.traffic_carry = inner.traffic_carry.absorb_runtime(runtime);
             }
+            if previous_runtime_was_running {
+                let cleanup_epoch = inner.lifecycle_epoch;
+                inner.cleanup.begin(cleanup_epoch, "reload-replace");
+            }
             (
                 previous_runtime,
                 previous_config,
@@ -253,7 +309,13 @@ impl ProductRuntimeManager {
             )
         };
 
-        drop(previous_runtime);
+        let previous_cleanup_report = cleanup_runtime_instance(previous_runtime);
+        if previous_runtime_was_running
+            && let Ok(mut inner) = self.inner.lock()
+            && inner.lifecycle_epoch == lifecycle_epoch
+        {
+            inner.cleanup.finish(previous_cleanup_report);
+        }
         match start_product_runtime_instance(&config, source) {
             Ok((runtime, report)) => {
                 let mut inner = self
@@ -355,7 +417,7 @@ impl ProductRuntimeManager {
             .lifecycle
             .lock()
             .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
-        let was_running = {
+        let (stopped_runtime, was_running, cleanup_epoch) = {
             let mut inner = self
                 .inner
                 .lock()
@@ -363,6 +425,10 @@ impl ProductRuntimeManager {
             inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
             let was_running = inner.runtime.is_some();
             let stopped_runtime = inner.runtime.take();
+            if was_running {
+                let cleanup_epoch = inner.lifecycle_epoch;
+                inner.cleanup.begin(cleanup_epoch, "synchronous-stop");
+            }
             inner.config = None;
             inner.config_content = None;
             inner.traffic_carry = RuntimeTrafficCarry::default();
@@ -371,9 +437,18 @@ impl ProductRuntimeManager {
             inner.last_transition_at = Some(now_text());
             inner.last_report = None;
             inner.last_error = None;
-            drop(stopped_runtime);
-            was_running
+            (stopped_runtime, was_running, inner.lifecycle_epoch)
         };
+        let cleanup_report = cleanup_runtime_instance(stopped_runtime);
+        if was_running {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+            if inner.lifecycle_epoch == cleanup_epoch {
+                inner.cleanup.finish(cleanup_report.clone());
+            }
+        }
         let reclaim = was_running.then(|| allocator_reclaim(AllocatorReclaimReason::StopRuntime));
         let stop_elapsed_ns = stop_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         Ok(json!({
@@ -384,6 +459,10 @@ impl ProductRuntimeManager {
             "allocatorReclaim": reclaim,
             "stopElapsedNs": stop_elapsed_ns,
             "stopElapsedMs": stop_elapsed_ns / 1_000_000,
+            "cleanupStarted": was_running,
+            "cleanupEpoch": if was_running { json!(cleanup_epoch) } else { Value::Null },
+            "cleanupMode": if was_running { json!("synchronous-stop") } else { Value::Null },
+            "cleanupReport": cleanup_report,
         }))
     }
 
@@ -414,6 +493,7 @@ impl ProductRuntimeManager {
                     map.insert("reloadCount".to_owned(), json!(inner.reload_count));
                     map.insert("stopCount".to_owned(), json!(inner.stop_count));
                     map.insert("lastReport".to_owned(), json!(inner.last_report.clone()));
+                    map.insert("cleanup".to_owned(), inner.cleanup.summary());
                 }
                 summary
             }
@@ -430,10 +510,17 @@ impl ProductRuntimeManager {
                 "reloadCount": inner.reload_count,
                 "stopCount": inner.stop_count,
                 "lastReport": inner.last_report,
+                "cleanup": inner.cleanup.summary(),
             }),
             None => json!({
                 "running": false,
-                "state": if inner.last_error.is_some() { "error" } else { "stopped" },
+                "state": if inner.cleanup.running {
+                    "stopping"
+                } else if inner.last_error.is_some() {
+                    "error"
+                } else {
+                    "stopped"
+                },
                 "attachBackend": Value::Null,
                 "netnsLinkMode": Value::Null,
                 "fakeRuntime": product_runtime_fake_start_enabled(),
@@ -443,6 +530,7 @@ impl ProductRuntimeManager {
                 "reloadCount": inner.reload_count,
                 "stopCount": inner.stop_count,
                 "lastReport": inner.last_report,
+                "cleanup": inner.cleanup.summary(),
             }),
         }
     }
@@ -599,6 +687,41 @@ impl ProductRuntimeManager {
     }
 }
 
+fn cleanup_runtime_instance(runtime: Option<ProductRuntimeInstance>) -> Option<Value> {
+    match runtime? {
+        ProductRuntimeInstance::Resident(mut runtime) => runtime.cleanup(),
+        ProductRuntimeInstance::Fake(fake) => Some(json!({
+            "status": "pass",
+            "cleanupRuntime": "fake-resident-runtime-test-only",
+            "fakeRuntime": true,
+            "startedAt": fake.started_at,
+            "tproxyPort": fake.tproxy_port,
+        })),
+    }
+}
+
+fn cleanup_report_error(report: Option<&Value>) -> Option<String> {
+    let report = report?;
+    if report.get("status").and_then(Value::as_str) == Some("pass") {
+        return None;
+    }
+    Some(format!(
+        "runtime cleanup failed: loaded_map_cleaned={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
+        report
+            .get("loaded_map_cleaned")
+            .map(Value::to_string)
+            .unwrap_or_else(|| "null".to_owned()),
+        report
+            .get("sys_fs_bpf_dae_mutated")
+            .map(Value::to_string)
+            .unwrap_or_else(|| "null".to_owned()),
+        report
+            .get("leftovers_after_cleanup")
+            .map(Value::to_string)
+            .unwrap_or_else(|| "null".to_owned())
+    ))
+}
+
 fn runtime_traffic_metrics_snapshot(runtime: &ProductRuntimeInstance) -> Option<Value> {
     match runtime {
         ProductRuntimeInstance::Resident(runtime) => runtime.resident_dataplane_metrics_snapshot(),
@@ -669,7 +792,7 @@ pub(super) fn start_product_runtime_instance(
     let dataplane_status = state["residentDataplane"]["status"].as_str().unwrap_or("");
     if !dataplane_enabled || dataplane_status != "pass" {
         let dataplane_detail = resident_dataplane_admission_detail(&state);
-        runtime.cleanup();
+        let _ = runtime.cleanup();
         return Err(format!(
             "resident production runtime started without admitted userspace dataplane: {dataplane_detail}; set {}=1 and require resident_dataplane.status=pass before Rust daed can be the production product path",
             crate::service_contract::RESIDENT_DATAPLANE_ENV
