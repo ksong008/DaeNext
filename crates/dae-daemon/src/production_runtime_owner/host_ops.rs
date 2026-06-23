@@ -1,5 +1,6 @@
 use std::io;
 use std::process::{Command, Output};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -97,10 +98,20 @@ pub(super) struct HostOpResult {
     exit_code: Option<i32>,
     stdout: String,
     stderr: String,
+    started_at_unix_ms: u64,
+    finished_at_unix_ms: u64,
+    elapsed_ms: u64,
 }
 
 impl HostOpResult {
-    fn from_output(name: Option<String>, spec: HostOpSpec, output: io::Result<Output>) -> Self {
+    fn from_output(
+        name: Option<String>,
+        spec: HostOpSpec,
+        output: io::Result<Output>,
+        started_at_unix_ms: u64,
+        finished_at_unix_ms: u64,
+        elapsed_ms: u64,
+    ) -> Self {
         let (status, exit_code, stdout, stderr) = match output {
             Ok(output) => (
                 if output.status.success() {
@@ -122,6 +133,9 @@ impl HostOpResult {
             exit_code,
             stdout,
             stderr,
+            started_at_unix_ms,
+            finished_at_unix_ms,
+            elapsed_ms,
         }
     }
 
@@ -138,6 +152,9 @@ impl HostOpResult {
             "exit_code": self.exit_code,
             "stdout": self.stdout.clone(),
             "stderr": self.stderr.clone(),
+            "started_at_unix_ms": self.started_at_unix_ms,
+            "finished_at_unix_ms": self.finished_at_unix_ms,
+            "elapsed_ms": self.elapsed_ms,
         })
     }
 }
@@ -158,6 +175,8 @@ impl HostOps {
     }
 
     fn run_command_backend(name: Option<String>, spec: HostOpSpec) -> HostOpResult {
+        let started_at_unix_ms = unix_time_millis();
+        let started = Instant::now();
         let output = match spec.kind() {
             HostOpKind::Ip
             | HostOpKind::Netns
@@ -167,8 +186,29 @@ impl HostOps {
             | HostOpKind::Filesystem
             | HostOpKind::Generic => Command::new(spec.program()).args(spec.args()).output(),
         };
-        HostOpResult::from_output(name, spec, output)
+        let elapsed_ms = duration_millis(started.elapsed());
+        let finished_at_unix_ms = unix_time_millis();
+        HostOpResult::from_output(
+            name,
+            spec,
+            output,
+            started_at_unix_ms,
+            finished_at_unix_ms,
+            elapsed_ms,
+        )
     }
+}
+
+fn unix_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]
@@ -196,28 +236,27 @@ mod tests {
     }
 
     #[test]
-    fn legacy_step_json_shape_is_preserved() {
+    fn step_json_preserves_legacy_fields_and_adds_timing() {
         let value = HostOps::observe(HostOpSpec::new(
             "__dae_missing_host_op_command_for_json_shape_test__",
             ["--noop"],
         ))
         .to_step_json();
         let object = value.as_object().expect("legacy step json must be object");
-        let mut keys = object.keys().cloned().collect::<Vec<_>>();
-        keys.sort();
-
-        assert_eq!(
-            keys,
-            [
-                "args",
-                "exit_code",
-                "name",
-                "program",
-                "status",
-                "stderr",
-                "stdout",
-            ]
-        );
+        for key in [
+            "args",
+            "exit_code",
+            "name",
+            "program",
+            "status",
+            "stderr",
+            "stdout",
+        ] {
+            assert!(object.contains_key(key), "missing legacy key {key}");
+        }
+        for key in ["started_at_unix_ms", "finished_at_unix_ms", "elapsed_ms"] {
+            assert!(object.get(key).and_then(|value| value.as_u64()).is_some());
+        }
         assert!(value["name"].is_null());
         assert_eq!(value["status"], "fail");
         assert_eq!(
