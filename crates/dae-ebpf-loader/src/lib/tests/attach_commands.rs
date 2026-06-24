@@ -15,17 +15,22 @@ pub(super) fn cgroup_monitor_contract_declares_pinned_link_lifetime() {
             .as_bool()
             .unwrap()
     );
+    assert_eq!(json["pname_source"].as_str().unwrap(), "runtime_selected");
     assert_eq!(
-        json["pname_source"].as_str().unwrap(),
-        "bpf_get_current_comm"
+        json["preferred_pname_source"].as_str().unwrap(),
+        "current_task_argv0_basename"
     );
     assert_eq!(
         json["pname_semantics"].as_str().unwrap(),
-        "non_core_task_comm"
+        "argv0_basename_when_enhanced_else_non_core_task_comm"
     );
     assert!(!json["core_enabled"].as_bool().unwrap());
+    assert_eq!(
+        json["core_enabled_source"].as_str().unwrap(),
+        "daemon enhanced object load result"
+    );
     assert!(
-        !json["official_argv_semantics_implemented"]
+        json["official_argv_semantics_implemented"]
             .as_bool()
             .unwrap()
     );
