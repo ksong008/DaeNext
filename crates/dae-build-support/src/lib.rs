@@ -4,8 +4,11 @@ pub mod native_ebpf_build {
     use std::process::Command;
 
     const RUST_NATIVE_BPF_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
+    const RUST_NATIVE_BPF_PNAME_CORE_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_PNAME_CORE_OBJECT";
     const RUST_NATIVE_BPF_PACKAGE: &str = "dae-ebpf-program";
     const RUST_NATIVE_BPF_OUTPUT: &str = "libdae_ebpf_program.so";
+    const DEFAULT_NATIVE_BPF_OBJECT: &str = "dae-native-bpf_bpfel.o";
+    const PNAME_CORE_NATIVE_BPF_OBJECT: &str = "dae-native-bpf-pname-core_bpfel.o";
     const REQUIRED_BTF_SECTIONS: [&[u8]; 2] = [b".BTF\0", b".BTF.ext\0"];
 
     pub fn build_for_crate(crate_name: &str) {
@@ -16,6 +19,7 @@ pub mod native_ebpf_build {
         println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_CARGO");
         println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_TOOLCHAIN");
         println!("cargo:rerun-if-env-changed={RUST_NATIVE_BPF_OBJECT_ENV}");
+        println!("cargo:rerun-if-env-changed={RUST_NATIVE_BPF_PNAME_CORE_OBJECT_ENV}");
 
         if env::var_os("CARGO_FEATURE_NATIVE_EBPF").is_none() {
             return;
@@ -24,13 +28,21 @@ pub mod native_ebpf_build {
         let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
         let repo_root = repo_root_from_manifest(&manifest_dir, crate_name);
         let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-        let output = out_dir.join("dae-native-bpf_bpfel.o");
+        let output = out_dir.join(DEFAULT_NATIVE_BPF_OBJECT);
         if let Some(source) = rust_native_bpf_object_override() {
             copy_native_aya_object(&source, &output);
         } else {
-            build_rust_native_aya_object(repo_root, &out_dir, &output);
+            build_rust_native_aya_object(repo_root, &out_dir, &output, &[]);
         }
         validate_native_aya_object(&output);
+
+        let pname_core_output = out_dir.join(PNAME_CORE_NATIVE_BPF_OBJECT);
+        if let Some(source) = rust_native_bpf_pname_core_object_override() {
+            copy_native_aya_object(&source, &pname_core_output);
+        } else {
+            build_rust_native_aya_object(repo_root, &out_dir, &pname_core_output, &["pname-core"]);
+        }
+        validate_native_aya_object(&pname_core_output);
     }
 
     fn repo_root_from_manifest<'a>(manifest_dir: &'a Path, crate_name: &str) -> &'a Path {
@@ -51,6 +63,10 @@ pub mod native_ebpf_build {
         env::var_os(RUST_NATIVE_BPF_OBJECT_ENV).map(PathBuf::from)
     }
 
+    fn rust_native_bpf_pname_core_object_override() -> Option<PathBuf> {
+        env::var_os(RUST_NATIVE_BPF_PNAME_CORE_OBJECT_ENV).map(PathBuf::from)
+    }
+
     fn copy_native_aya_object(source: &Path, output: &Path) {
         println!("cargo:rerun-if-changed={}", source.display());
         if !source.is_file() {
@@ -68,7 +84,12 @@ pub mod native_ebpf_build {
         });
     }
 
-    fn build_rust_native_aya_object(repo_root: &Path, out_dir: &Path, output: &Path) {
+    fn build_rust_native_aya_object(
+        repo_root: &Path,
+        out_dir: &Path,
+        output: &Path,
+        features: &[&str],
+    ) {
         let cargo = env::var("DAE_RUST_NATIVE_BPF_CARGO").ok();
         let toolchain =
             env::var("DAE_RUST_NATIVE_BPF_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned());
@@ -81,7 +102,7 @@ pub mod native_ebpf_build {
                 command
             }
         };
-        let status = command
+        command
             .current_dir(repo_root)
             .env("CARGO_TARGET_DIR", &target_dir)
             .env_remove("CARGO")
@@ -100,7 +121,11 @@ pub mod native_ebpf_build {
             .arg(RUST_NATIVE_BPF_PACKAGE)
             .arg("--target")
             .arg("bpfel-unknown-none")
-            .arg("--release")
+            .arg("--release");
+        if !features.is_empty() {
+            command.arg("--features").arg(features.join(","));
+        }
+        let status = command
             .output()
             .unwrap_or_else(|err| panic!("failed to run cargo for Rust native eBPF object: {err}"));
         if !status.status.success() {

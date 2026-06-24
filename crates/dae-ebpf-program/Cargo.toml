@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [features]
 default = ["tproxy-program"]
 tproxy-program = []
+pname-core = []
 trace-program = []
 
 [dependencies]
