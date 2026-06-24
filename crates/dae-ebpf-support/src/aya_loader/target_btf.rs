@@ -56,11 +56,21 @@ pub struct AyaPnameBtfOffsets {
 }
 
 pub fn discover_aya_target_btf(required: bool) -> AyaTargetBtfSelection {
-    let candidates = target_btf_candidates();
+    let candidates = if required {
+        kernel_target_btf_candidates()
+    } else {
+        target_btf_candidates()
+    };
     let candidate_paths = candidates
         .iter()
         .map(|(_, path)| path.clone())
         .collect::<Vec<_>>();
+    if !required {
+        return AyaTargetBtfSelection {
+            btf: None,
+            report: AyaTargetBtfReport::none(required, candidate_paths),
+        };
+    }
     let Some((source, path)) = candidates.into_iter().find(|(_, path)| path.is_file()) else {
         return AyaTargetBtfSelection {
             btf: None,
@@ -123,11 +133,15 @@ pub fn resolve_pname_btf_offsets_from_path(path: &Path) -> Result<AyaPnameBtfOff
     })
 }
 
-fn target_btf_candidates() -> Vec<(AyaTargetBtfSource, PathBuf)> {
-    let mut candidates = vec![(
+fn kernel_target_btf_candidates() -> Vec<(AyaTargetBtfSource, PathBuf)> {
+    vec![(
         AyaTargetBtfSource::Sysfs,
         PathBuf::from("/sys/kernel/btf/vmlinux"),
-    )];
+    )]
+}
+
+fn target_btf_candidates() -> Vec<(AyaTargetBtfSource, PathBuf)> {
+    let mut candidates = kernel_target_btf_candidates();
     if let Some(release) = kernel_release() {
         candidates.push((
             AyaTargetBtfSource::OpenwrtDebugBootVersioned,
