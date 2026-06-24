@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use aya::maps::{Map, MapData, MapType, RingBuf};
 use aya::programs::{
-    CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, Program, SchedClassifier,
-    TcAttachType,
+    CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, Program, ProgramError,
+    SchedClassifier, TcAttachType,
     links::FdLink,
     tc::{self, NlOptions, SchedClassifierLinkId, TcAttachOptions},
 };

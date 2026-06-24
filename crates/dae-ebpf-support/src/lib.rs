@@ -71,7 +71,8 @@ pub use aya_loader::{
     attach_ringbuf_smoke_aya_trace_object, aya_userspace_load_report, discover_aya_target_btf,
     load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
     load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
-    load_aya_userspace_object, load_aya_userspace_object_bytes, load_pin_aya_trace_object,
+    load_aya_cgroup_program_for_admission, load_aya_userspace_object,
+    load_aya_userspace_object_bytes, load_pin_aya_trace_object,
     pin_aya_loaded_object_for_native_runtime, resolve_pname_btf_offsets,
     resolve_pname_btf_offsets_from_path,
 };
