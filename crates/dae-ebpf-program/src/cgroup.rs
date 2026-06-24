@@ -11,6 +11,12 @@ const BPF_ANY: u64 = 0;
 #[cfg(feature = "pname-core")]
 const MAX_ARG_LEN: usize = 128;
 
+#[cfg(feature = "pname-core")]
+struct PnameArgScanCtx {
+    arg_buf: *mut u8,
+    offset: u8,
+}
+
 pub fn allow() -> i32 {
     1
 }
@@ -118,23 +124,23 @@ unsafe fn fill_current_task_argv0_basename(val: &mut BpfPidPname) -> bool {
         return false;
     }
 
-    let mut offset = 0usize;
-    let mut index = 0usize;
-    while index < MAX_ARG_LEN {
-        let byte = arg_buf[index];
-        if byte == b'/' {
-            offset = index + 1;
-        }
-        if byte == 0 {
-            break;
-        }
-        index += 1;
-    }
-
-    if offset >= MAX_ARG_LEN || arg_buf[offset] == 0 {
+    let mut ctx = PnameArgScanCtx {
+        arg_buf: arg_buf.as_mut_ptr(),
+        offset: 0,
+    };
+    let ret = unsafe {
+        helpers::bpf_loop(
+            MAX_ARG_LEN as u32,
+            pname_arg_scan_loop_cb as *const c_void,
+            ptr::addr_of_mut!(ctx).cast::<c_void>(),
+            0,
+        )
+    };
+    if ret < 0 {
         return false;
     }
 
+    let offset = ctx.offset as usize;
     let mut out = 0usize;
     while out < TASK_COMM_LEN {
         let src = offset + out;
@@ -146,7 +152,28 @@ unsafe fn fill_current_task_argv0_basename(val: &mut BpfPidPname) -> bool {
         }
         out += 1;
     }
-    true
+    out != 0
+}
+
+#[cfg(feature = "pname-core")]
+#[inline(never)]
+extern "C" fn pname_arg_scan_loop_cb(index: u32, data: *mut c_void) -> i64 {
+    if index >= MAX_ARG_LEN as u32 {
+        return 1;
+    }
+    unsafe {
+        let ctx = data.cast::<PnameArgScanCtx>();
+        let arg_buf = (*ctx).arg_buf;
+        let byte = arg_buf.add(index as usize).read();
+        if byte == b'/' {
+            (*ctx).offset = (index + 1) as u8;
+        }
+        if byte == b' ' || byte == 0 {
+            arg_buf.add(index as usize).write(0);
+            return 1;
+        }
+    }
+    0
 }
 
 #[inline(always)]
