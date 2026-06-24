@@ -35,6 +35,15 @@ pub(super) fn aya_userspace_load_report_records_catalog_and_command_boundaries()
         ],
         &[],
         Vec::new(),
+        AyaTargetBtfReport {
+            required: false,
+            source: AyaTargetBtfSource::None,
+            path: None,
+            canonical_path: None,
+            parse_ok: false,
+            parse_error: None,
+            candidate_paths: Vec::new(),
+        },
     );
 
     assert_eq!(report.object, object);
@@ -62,6 +71,23 @@ pub(super) fn aya_userspace_load_report_records_catalog_and_command_boundaries()
 
 #[cfg(feature = "aya-loader")]
 #[test]
+pub(super) fn target_btf_pname_offsets_resolve_when_host_btf_exists() {
+    let path = PathBuf::from("/sys/kernel/btf/vmlinux");
+    if !path.is_file() {
+        eprintln!(
+            "skip target BTF offset test: {} is not present",
+            path.display()
+        );
+        return;
+    }
+
+    let offsets = resolve_pname_btf_offsets_from_path(&path).unwrap();
+    assert!(offsets.task_struct_mm_offset > 0);
+    assert!(offsets.mm_struct_arg_start_offset > 0);
+}
+
+#[cfg(feature = "aya-loader")]
+#[test]
 pub(super) fn aya_userspace_real_object_load_smoke_is_env_gated() {
     if std::env::var_os("DAE_RUN_AYA_LOAD_SMOKE").is_none() {
         return;
@@ -85,6 +111,8 @@ pub(super) fn aya_userspace_real_object_load_smoke_is_env_gated() {
         dae_netns_id: 49,
         dae0peer_mac: [1, 2, 3, 4, 5, 6],
         has_bpf_get_current_task: true,
+        task_struct_mm_offset: 0,
+        mm_struct_arg_start_offset: 0,
     });
     let loaded = load_aya_userspace_object(AyaUserspaceLoaderOptions {
         object: &aya_object,
@@ -94,6 +122,7 @@ pub(super) fn aya_userspace_real_object_load_smoke_is_env_gated() {
         allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
         max_entries_overrides: &[],
         prepin_lpm_array_map: true,
+        target_btf_required: false,
     });
     let _ = std::fs::remove_dir_all(&pin_root);
     let _ = std::fs::remove_file(&aya_object);
@@ -218,6 +247,8 @@ pub(super) fn aya_tc_netns_attach_detach_smoke_is_env_gated() {
         dae_netns_id: 49,
         dae0peer_mac: [1, 2, 3, 4, 5, 6],
         has_bpf_get_current_task: true,
+        task_struct_mm_offset: 0,
+        mm_struct_arg_start_offset: 0,
     });
     let mut loaded = load_aya_userspace_object(AyaUserspaceLoaderOptions {
         object: &aya_object,
@@ -227,6 +258,7 @@ pub(super) fn aya_tc_netns_attach_detach_smoke_is_env_gated() {
         allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
         max_entries_overrides: &[],
         prepin_lpm_array_map: true,
+        target_btf_required: false,
     })
     .unwrap();
 
@@ -306,6 +338,8 @@ pub(super) fn run_aya_host_veth_attach_detach_smoke(
             dae_netns_id: 49,
             dae0peer_mac: [1, 2, 3, 4, 5, 6],
             has_bpf_get_current_task: true,
+            task_struct_mm_offset: 0,
+            mm_struct_arg_start_offset: 0,
         });
         let mut loaded = load_aya_userspace_object(AyaUserspaceLoaderOptions {
             object: &aya_object,
@@ -315,6 +349,7 @@ pub(super) fn run_aya_host_veth_attach_detach_smoke(
             allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
             max_entries_overrides: &[],
             prepin_lpm_array_map: true,
+            target_btf_required: false,
         })?;
 
         let host_attach = TcBpfAttachSpec::new(

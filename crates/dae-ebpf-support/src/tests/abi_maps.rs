@@ -12,7 +12,7 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     );
     assert_eq!(TPROXY_MARK, fixture["tproxy_mark"].as_u64().unwrap() as u32);
 
-    assert_layout::<BpfDaeParam>(&fixture, "bpfDaeParam", 24, 4);
+    assert_layout::<BpfDaeParam>(&fixture, "bpfDaeParam", 32, 4);
     assert_offset(
         &fixture,
         "bpfDaeParam",
@@ -30,6 +30,18 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
         "bpfDaeParam",
         "has_bpf_get_current_task",
         offset_of!(BpfDaeParam, has_bpf_get_current_task),
+    );
+    assert_offset(
+        &fixture,
+        "bpfDaeParam",
+        "task_struct_mm_offset",
+        offset_of!(BpfDaeParam, task_struct_mm_offset),
+    );
+    assert_offset(
+        &fixture,
+        "bpfDaeParam",
+        "mm_struct_arg_start_offset",
+        offset_of!(BpfDaeParam, mm_struct_arg_start_offset),
     );
 
     assert_layout::<BpfDomainRouting>(&fixture, "bpfDomainRouting", 128, 4);

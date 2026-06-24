@@ -8,11 +8,15 @@ pub(super) fn dae_param_packs_big_endian_tproxy_port() {
         dae_netns_id: 9,
         dae0peer_mac: [1, 2, 3, 4, 5, 6],
         has_bpf_get_current_task: true,
+        task_struct_mm_offset: 2640,
+        mm_struct_arg_start_offset: 696,
     });
     assert_eq!(param.tproxy_port, u32::from(12345u16.to_be()));
     assert_eq!(param.control_plane_pid, 77);
     assert_eq!(param.dae0peer_mac, [1, 2, 3, 4, 5, 6]);
     assert_eq!(param.has_bpf_get_current_task, 1);
+    assert_eq!(param.task_struct_mm_offset, 2640);
+    assert_eq!(param.mm_struct_arg_start_offset, 696);
 }
 
 #[test]
@@ -24,6 +28,8 @@ pub(super) fn param_aware_loader_gate_requires_real_loader_and_runtime_values() 
         dae_netns_id: 9,
         dae0peer_mac: [1, 2, 3, 4, 5, 6],
         has_bpf_get_current_task: true,
+        task_struct_mm_offset: 2640,
+        mm_struct_arg_start_offset: 696,
     };
     let payload = build_dae_param_payload(input);
     assert_eq!(payload.symbol, DAE_PARAM_SYMBOL);
@@ -66,6 +72,8 @@ pub(super) fn dae_param_requirements_match_memo_fields() {
             "dae_netns_id",
             "dae0peer_mac",
             "has_bpf_get_current_task",
+            "task_struct_mm_offset",
+            "mm_struct_arg_start_offset",
         ]
     );
 }
@@ -89,6 +97,8 @@ pub(super) fn param_object_rewriter_updates_real_dae_object_param_symbol() {
         dae_netns_id: 9,
         dae0peer_mac: [1, 2, 3, 4, 5, 6],
         has_bpf_get_current_task: true,
+        task_struct_mm_offset: 2640,
+        mm_struct_arg_start_offset: 696,
     });
 
     let location = locate_param_symbol_in_object(&source).unwrap();
@@ -118,10 +128,14 @@ pub(super) fn param_object_bytes_roundtrip_layout() {
         dae_netns_id: 9,
         dae0peer_mac: [1, 2, 3, 4, 5, 6],
         has_bpf_get_current_task: true,
+        task_struct_mm_offset: 2640,
+        mm_struct_arg_start_offset: 696,
     });
     let bytes = param_to_object_bytes(param);
     assert_eq!(&bytes[0..4], &u32::from(12345u16.to_be()).to_le_bytes());
     assert_eq!(&bytes[16..22], &[1, 2, 3, 4, 5, 6]);
     assert_eq!(bytes[22], 1);
+    assert_eq!(&bytes[24..28], &2640u32.to_le_bytes());
+    assert_eq!(&bytes[28..32], &696u32.to_le_bytes());
     assert_eq!(param_from_object_bytes(&bytes).unwrap(), param);
 }

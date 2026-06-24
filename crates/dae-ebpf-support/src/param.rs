@@ -8,6 +8,8 @@ pub struct DaeParamInput {
     pub dae_netns_id: u32,
     pub dae0peer_mac: [u8; 6],
     pub has_bpf_get_current_task: bool,
+    pub task_struct_mm_offset: u32,
+    pub mm_struct_arg_start_offset: u32,
 }
 
 pub fn htons(value: u16) -> u16 {
@@ -23,5 +25,7 @@ pub fn build_dae_param(input: DaeParamInput) -> BpfDaeParam {
         dae0peer_mac: input.dae0peer_mac,
         has_bpf_get_current_task: u8::from(input.has_bpf_get_current_task),
         padding: 0,
+        task_struct_mm_offset: input.task_struct_mm_offset,
+        mm_struct_arg_start_offset: input.mm_struct_arg_start_offset,
     }
 }

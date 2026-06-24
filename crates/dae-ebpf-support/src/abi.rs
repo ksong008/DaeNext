@@ -8,6 +8,8 @@ pub struct BpfDaeParam {
     pub dae0peer_mac: [u8; 6],
     pub has_bpf_get_current_task: u8,
     pub padding: u8,
+    pub task_struct_mm_offset: u32,
+    pub mm_struct_arg_start_offset: u32,
 }
 
 #[repr(C)]

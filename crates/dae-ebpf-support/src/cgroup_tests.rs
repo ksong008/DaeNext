@@ -184,6 +184,8 @@ fn run_aya_cgroup_attach_detach_smoke(
         dae_netns_id: 49,
         dae0peer_mac: [1, 2, 3, 4, 5, 6],
         has_bpf_get_current_task: true,
+        task_struct_mm_offset: 0,
+        mm_struct_arg_start_offset: 0,
     });
     let mut loaded = load_aya_userspace_object(AyaUserspaceLoaderOptions {
         object: aya_object,
@@ -193,6 +195,7 @@ fn run_aya_cgroup_attach_detach_smoke(
         allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
         max_entries_overrides: &[],
         prepin_lpm_array_map: true,
+        target_btf_required: false,
     })?;
     dae_cgroup_attach_matrix()
         .iter()

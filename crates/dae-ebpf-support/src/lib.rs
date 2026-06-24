@@ -61,17 +61,19 @@ pub use attach::{
 #[cfg(feature = "aya-loader")]
 pub use aya_loader::{
     AyaCgroupAttachDetachReport, AyaLoadedMapSpec, AyaMapSpecMismatch, AyaNativeRuntimePinReport,
-    AyaPinnedObject, AyaTcAttachDetachReport, AyaTcxProgramOrderEntry,
+    AyaPinnedObject, AyaPnameBtfOffsets, AyaTargetBtfReport, AyaTargetBtfSelection,
+    AyaTargetBtfSource, AyaTcAttachDetachReport, AyaTcxProgramOrderEntry,
     AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachRingbufSmokeReport,
     AyaTraceAttachSmokeTrigger, AyaTraceConfig, AyaTraceLoadPinReport, AyaTraceLoaderOptions,
     AyaUserspaceBytesLoaderOptions, AyaUserspaceLoadReport, AyaUserspaceLoadedObject,
     AyaUserspaceLoaderOptions, DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES, PinnedTcAttachOptions,
     PinnedTcAttachReport, TRACE_CORE_SIDELOAD_ENABLED, attach_pin_aya_sched_classifier,
-    attach_ringbuf_smoke_aya_trace_object, aya_userspace_load_report,
+    attach_ringbuf_smoke_aya_trace_object, aya_userspace_load_report, discover_aya_target_btf,
     load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
     load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
     load_aya_userspace_object, load_aya_userspace_object_bytes, load_pin_aya_trace_object,
-    pin_aya_loaded_object_for_native_runtime,
+    pin_aya_loaded_object_for_native_runtime, resolve_pname_btf_offsets,
+    resolve_pname_btf_offsets_from_path,
 };
 pub use bpf_error::{BpfErrorClass, classify_bpf_io_error, format_bpf_io_error};
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};

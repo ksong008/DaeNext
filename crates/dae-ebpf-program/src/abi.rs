@@ -8,6 +8,8 @@ pub struct BpfDaeParam {
     pub dae0peer_mac: [u8; 6],
     pub has_bpf_get_current_task: u8,
     pub padding: u8,
+    pub task_struct_mm_offset: u32,
+    pub mm_struct_arg_start_offset: u32,
 }
 
 impl BpfDaeParam {
@@ -20,6 +22,8 @@ impl BpfDaeParam {
             dae0peer_mac: [0; 6],
             has_bpf_get_current_task: 0,
             padding: 0,
+            task_struct_mm_offset: 0,
+            mm_struct_arg_start_offset: 0,
         }
     }
 }
@@ -229,4 +233,14 @@ pub fn param_dae0peer_mac() -> [u8; 6] {
 #[inline(always)]
 pub fn param_has_bpf_get_current_task() -> u8 {
     unsafe { core::ptr::addr_of!(PARAM.has_bpf_get_current_task).read_volatile() }
+}
+
+#[inline(always)]
+pub fn param_task_struct_mm_offset() -> u32 {
+    unsafe { core::ptr::addr_of!(PARAM.task_struct_mm_offset).read_volatile() }
+}
+
+#[inline(always)]
+pub fn param_mm_struct_arg_start_offset() -> u32 {
+    unsafe { core::ptr::addr_of!(PARAM.mm_struct_arg_start_offset).read_volatile() }
 }

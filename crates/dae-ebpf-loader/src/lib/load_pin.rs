@@ -15,6 +15,8 @@ pub(super) fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
         dae_netns_id: options.dae_netns_id,
         dae0peer_mac: options.dae0peer_mac,
         has_bpf_get_current_task: options.has_bpf_get_current_task,
+        task_struct_mm_offset: 0,
+        mm_struct_arg_start_offset: 0,
     });
     let map_pin_root = options.pin_root.join("maps");
     let mut loaded = match load_aya_userspace_object_bytes(AyaUserspaceBytesLoaderOptions {
@@ -26,6 +28,7 @@ pub(super) fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
         allowed_unsupported_map_names: dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
         max_entries_overrides: &[],
         prepin_lpm_array_map: true,
+        target_btf_required: false,
     }) {
         Ok(loaded) => loaded,
         Err(err) => return LoaderOutput::error(err),
@@ -63,6 +66,8 @@ pub(super) fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
                 "dae_netns_id": param.dae_netns_id,
                 "dae0peer_mac": mac_string(param.dae0peer_mac),
                 "has_bpf_get_current_task": param.has_bpf_get_current_task,
+                "task_struct_mm_offset": param.task_struct_mm_offset,
+                "mm_struct_arg_start_offset": param.mm_struct_arg_start_offset,
             },
             "native_runtime_pinning_ready": true,
         })

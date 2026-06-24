@@ -11,6 +11,7 @@ pub fn aya_userspace_load_report(
     mut loaded_program_names: Vec<String>,
     max_entries_overrides: &[(&str, u32)],
     map_in_map_pins: Vec<AyaMapInMapPinReport>,
+    target_btf: AyaTargetBtfReport,
 ) -> AyaUserspaceLoadReport {
     loaded_map_names.sort();
     loaded_map_specs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -69,6 +70,7 @@ pub fn aya_userspace_load_report(
         default_attach_backend: AttachBackend::Auto,
         external_ebpf_object_required: false,
         command_attach_backend_required: false,
+        target_btf,
     }
 }
 

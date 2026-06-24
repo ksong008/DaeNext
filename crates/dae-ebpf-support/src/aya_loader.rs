@@ -35,6 +35,8 @@ mod netns;
 use self::netns::*;
 mod lpm_pinning;
 pub use self::lpm_pinning::*;
+mod target_btf;
+pub use self::target_btf::*;
 mod report;
 pub use self::report::*;
 mod common_helpers;
