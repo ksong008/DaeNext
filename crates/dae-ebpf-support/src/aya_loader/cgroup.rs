@@ -15,6 +15,35 @@ pub fn load_attach_aya_cgroup_program(
     load_attach_aya_cgroup_program_with_mode(loaded, line, cgroup_path, false)
 }
 
+pub fn load_aya_cgroup_program_for_admission(
+    loaded: &mut AyaUserspaceLoadedObject,
+    line: &DaeCgroupAttachLine,
+) -> Result<(), String> {
+    match line.aya_program_kind {
+        DaeCgroupProgramKind::Sock => {
+            let program = loaded.ebpf.program_mut(line.program_name).ok_or_else(|| {
+                format!("aya cgroup sock program not found: {}", line.program_name)
+            })?;
+            let program: &mut CgroupSock = program
+                .try_into()
+                .map_err(|err| format!("aya program is not a cgroup sock program: {err:?}"))?;
+            load_cgroup_sock_program(program, line.program_name)
+        }
+        DaeCgroupProgramKind::SockAddr => {
+            let program = loaded.ebpf.program_mut(line.program_name).ok_or_else(|| {
+                format!(
+                    "aya cgroup sock_addr program not found: {}",
+                    line.program_name
+                )
+            })?;
+            let program: &mut CgroupSockAddr = program
+                .try_into()
+                .map_err(|err| format!("aya program is not a cgroup sock_addr program: {err:?}"))?;
+            load_cgroup_sock_addr_program(program, line.program_name)
+        }
+    }
+}
+
 pub(super) fn load_attach_aya_cgroup_program_with_mode(
     loaded: &mut AyaUserspaceLoadedObject,
     line: &DaeCgroupAttachLine,
@@ -31,9 +60,7 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
             let program: &mut CgroupSock = program
                 .try_into()
                 .map_err(|err| format!("aya program is not a cgroup sock program: {err:?}"))?;
-            program
-                .load()
-                .map_err(|err| format!("aya cgroup sock load failed: {err:?}"))?;
+            load_cgroup_sock_program(program, line.program_name)?;
             let link_id = program
                 .attach(&cgroup, CgroupAttachMode::Single)
                 .map_err(|err| format!("aya cgroup sock attach failed: {err:?}"))?;
@@ -53,9 +80,7 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
             let program: &mut CgroupSockAddr = program
                 .try_into()
                 .map_err(|err| format!("aya program is not a cgroup sock_addr program: {err:?}"))?;
-            program
-                .load()
-                .map_err(|err| format!("aya cgroup sock_addr load failed: {err:?}"))?;
+            load_cgroup_sock_addr_program(program, line.program_name)?;
             let link_id = program
                 .attach(&cgroup, CgroupAttachMode::Single)
                 .map_err(|err| format!("aya cgroup sock_addr attach failed: {err:?}"))?;
@@ -78,4 +103,18 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
         detached: detach_after_attach,
         link_lifetime_owned_by_backend: line.link_lifetime_owned_by_backend,
     })
+}
+
+fn load_cgroup_sock_program(program: &mut CgroupSock, name: &str) -> Result<(), String> {
+    match program.load() {
+        Ok(()) | Err(ProgramError::AlreadyLoaded) => Ok(()),
+        Err(err) => Err(format!("aya cgroup sock load {name} failed: {err:?}")),
+    }
+}
+
+fn load_cgroup_sock_addr_program(program: &mut CgroupSockAddr, name: &str) -> Result<(), String> {
+    match program.load() {
+        Ok(()) | Err(ProgramError::AlreadyLoaded) => Ok(()),
+        Err(err) => Err(format!("aya cgroup sock_addr load {name} failed: {err:?}")),
+    }
 }

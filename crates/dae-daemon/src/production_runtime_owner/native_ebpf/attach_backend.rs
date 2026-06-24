@@ -262,7 +262,7 @@ fn try_load_pname_core_object(
     param.has_bpf_get_current_task = 1;
     param.task_struct_mm_offset = offsets.task_struct_mm_offset;
     param.mm_struct_arg_start_offset = offsets.mm_struct_arg_start_offset;
-    let loaded = load_embedded_native_object(
+    let mut loaded = load_embedded_native_object(
         EMBEDDED_NATIVE_OBJECT_PNAME_CORE_IDENTITY,
         dae_ebpf_loader::embedded_native_aya_object_pname_core(),
         param,
@@ -270,6 +270,8 @@ fn try_load_pname_core_object(
         true,
     )
     .map_err(|err| format!("pname core enhanced object load failed: {err}"))?;
+    preload_pname_core_cgroup_programs(&mut loaded)
+        .map_err(|err| format!("pname core cgroup admission failed: {err}"))?;
     Ok((
         loaded,
         json!({
@@ -290,6 +292,16 @@ fn try_load_pname_core_object(
             },
         }),
     ))
+}
+
+#[cfg(feature = "native-ebpf")]
+fn preload_pname_core_cgroup_programs(
+    loaded: &mut dae_ebpf_support::AyaUserspaceLoadedObject,
+) -> Result<(), String> {
+    for line in dae_ebpf_support::dae_cgroup_attach_matrix() {
+        dae_ebpf_support::load_aya_cgroup_program_for_admission(loaded, &line)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "native-ebpf")]
