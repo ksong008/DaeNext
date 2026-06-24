@@ -13,6 +13,8 @@ pub(crate) fn write_param_image(
         dae_netns_id,
         dae0peer_mac,
         has_bpf_get_current_task: false,
+        task_struct_mm_offset: 0,
+        mm_struct_arg_start_offset: 0,
     });
     match write_param_aware_object(&options.source_object, param_object, param) {
         Ok(report) => json!({
@@ -29,6 +31,8 @@ pub(crate) fn write_param_image(
                 "dae_netns_id": param.dae_netns_id,
                 "dae0peer_mac": mac_string(param.dae0peer_mac),
                 "has_bpf_get_current_task": param.has_bpf_get_current_task,
+                "task_struct_mm_offset": param.task_struct_mm_offset,
+                "mm_struct_arg_start_offset": param.mm_struct_arg_start_offset,
             },
             "location": {
                 "symbol": report.location.symbol,

@@ -11,6 +11,7 @@ pub fn load_aya_userspace_object(
             allowed_unsupported_map_names: options.allowed_unsupported_map_names,
             max_entries_overrides: options.max_entries_overrides,
             prepin_lpm_array_map: options.prepin_lpm_array_map,
+            target_btf_required: options.target_btf_required,
         },
     )
 }
@@ -30,6 +31,7 @@ pub fn load_aya_userspace_object_bytes(
             allowed_unsupported_map_names: options.allowed_unsupported_map_names,
             max_entries_overrides: options.max_entries_overrides,
             prepin_lpm_array_map: options.prepin_lpm_array_map,
+            target_btf_required: options.target_btf_required,
         },
     )
 }
@@ -56,6 +58,7 @@ struct LoadCommonOptions<'a> {
     allowed_unsupported_map_names: &'a [&'a str],
     max_entries_overrides: &'a [(&'a str, u32)],
     prepin_lpm_array_map: bool,
+    target_btf_required: bool,
 }
 
 fn load_aya_userspace_object_from_source(
@@ -74,7 +77,29 @@ fn load_aya_userspace_object_from_source(
         Vec::new()
     };
 
+    let target_btf = discover_aya_target_btf(options.target_btf_required);
+    if options.target_btf_required && target_btf.btf.is_none() {
+        let detail = match (
+            target_btf.report.path.as_ref(),
+            target_btf.report.parse_error.as_ref(),
+        ) {
+            (Some(path), Some(err)) => {
+                format!(
+                    "target_btf_mismatch_or_parse_failed path={} error={err}",
+                    path.display()
+                )
+            }
+            _ => "missing_target_btf".to_owned(),
+        };
+        return Err(format!(
+            "aya userspace object target BTF required: {detail}"
+        ));
+    }
+
     let mut loader = aya::EbpfLoader::new();
+    if let Some(btf) = target_btf.btf.as_ref() {
+        loader.btf(Some(btf));
+    }
     if options.allow_unsupported_maps {
         loader.allow_unsupported_maps();
     }
@@ -114,6 +139,7 @@ fn load_aya_userspace_object_from_source(
         loaded_program_names,
         options.max_entries_overrides,
         map_in_map_pins,
+        target_btf.report,
     );
     if !report.unexpected_unsupported_map_names.is_empty() {
         return Err(format!(

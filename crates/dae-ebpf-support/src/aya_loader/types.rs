@@ -22,6 +22,7 @@ pub struct AyaUserspaceLoaderOptions<'a> {
     pub allowed_unsupported_map_names: &'a [&'a str],
     pub max_entries_overrides: &'a [(&'a str, u32)],
     pub prepin_lpm_array_map: bool,
+    pub target_btf_required: bool,
 }
 
 impl<'a> AyaUserspaceLoaderOptions<'a> {
@@ -34,6 +35,7 @@ impl<'a> AyaUserspaceLoaderOptions<'a> {
             allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
             max_entries_overrides: &[],
             prepin_lpm_array_map: false,
+            target_btf_required: false,
         }
     }
 }
@@ -48,6 +50,7 @@ pub struct AyaUserspaceBytesLoaderOptions<'a> {
     pub allowed_unsupported_map_names: &'a [&'a str],
     pub max_entries_overrides: &'a [(&'a str, u32)],
     pub prepin_lpm_array_map: bool,
+    pub target_btf_required: bool,
 }
 
 impl<'a> AyaUserspaceBytesLoaderOptions<'a> {
@@ -61,6 +64,7 @@ impl<'a> AyaUserspaceBytesLoaderOptions<'a> {
             allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
             max_entries_overrides: &[],
             prepin_lpm_array_map: false,
+            target_btf_required: false,
         }
     }
 }
@@ -96,6 +100,7 @@ pub struct AyaUserspaceLoadReport {
     pub default_attach_backend: AttachBackend,
     pub external_ebpf_object_required: bool,
     pub command_attach_backend_required: bool,
+    pub target_btf: AyaTargetBtfReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

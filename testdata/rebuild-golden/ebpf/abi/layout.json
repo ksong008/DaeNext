@@ -97,15 +97,23 @@
           "offset": 22
         },
         {
+          "field": "mm_struct_arg_start_offset",
+          "offset": 28
+        },
+        {
           "field": "padding",
           "offset": 23
+        },
+        {
+          "field": "task_struct_mm_offset",
+          "offset": 24
         },
         {
           "field": "tproxy_port",
           "offset": 0
         }
       ],
-      "size": 24
+      "size": 32
     },
     {
       "align": 4,

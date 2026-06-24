@@ -24,9 +24,11 @@ pub struct DaeParamPayload {
     pub dae0peer_mac: [u8; 6],
     pub has_bpf_get_current_task: bool,
     pub padding: u8,
+    pub task_struct_mm_offset: u32,
+    pub mm_struct_arg_start_offset: u32,
 }
 
-pub fn dae_param_requirements() -> [DaeParamRequirement; 6] {
+pub fn dae_param_requirements() -> [DaeParamRequirement; 8] {
     [
         DaeParamRequirement {
             field: "tproxy_port",
@@ -58,6 +60,16 @@ pub fn dae_param_requirements() -> [DaeParamRequirement; 6] {
             source: "features.HaveProgramHelper(..., bpf_get_current_task)",
             requirement: "must reflect both cgroup helper probes before BPF load",
         },
+        DaeParamRequirement {
+            field: "task_struct_mm_offset",
+            source: "target BTF task_struct.mm",
+            requirement: "must be non-zero only when current_task argv[0] pname mode is enabled",
+        },
+        DaeParamRequirement {
+            field: "mm_struct_arg_start_offset",
+            source: "target BTF mm_struct.arg_start",
+            requirement: "must be non-zero only when current_task argv[0] pname mode is enabled",
+        },
     ]
 }
 
@@ -74,6 +86,8 @@ pub fn build_dae_param_payload(input: DaeParamInput) -> DaeParamPayload {
         dae0peer_mac: packed.dae0peer_mac,
         has_bpf_get_current_task: packed.has_bpf_get_current_task == 1,
         padding: packed.padding,
+        task_struct_mm_offset: packed.task_struct_mm_offset,
+        mm_struct_arg_start_offset: packed.mm_struct_arg_start_offset,
     }
 }
 
