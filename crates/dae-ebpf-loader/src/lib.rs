@@ -17,8 +17,27 @@ static EMBEDDED_NATIVE_AYA_OBJECT: AlignedNativeAyaObject<
 )));
 
 #[cfg(feature = "native-ebpf")]
+static EMBEDDED_NATIVE_AYA_OBJECT_PNAME_CORE: AlignedNativeAyaObject<
+    {
+        include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/dae-native-bpf-pname-core_bpfel.o"
+        ))
+        .len()
+    },
+> = AlignedNativeAyaObject(*include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/dae-native-bpf-pname-core_bpfel.o"
+)));
+
+#[cfg(feature = "native-ebpf")]
 pub fn embedded_native_aya_object() -> &'static [u8] {
     &EMBEDDED_NATIVE_AYA_OBJECT.0
+}
+
+#[cfg(feature = "native-ebpf")]
+pub fn embedded_native_aya_object_pname_core() -> &'static [u8] {
+    &EMBEDDED_NATIVE_AYA_OBJECT_PNAME_CORE.0
 }
 
 #[path = "lib/options.rs"]

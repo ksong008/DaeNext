@@ -13,6 +13,8 @@ const BPF_FUNC_GET_CURRENT_PID_TGID: usize = 14;
 #[cfg(target_arch = "bpf")]
 const BPF_FUNC_GET_CURRENT_COMM: usize = 16;
 #[cfg(target_arch = "bpf")]
+const BPF_FUNC_GET_CURRENT_TASK: usize = 35;
+#[cfg(target_arch = "bpf")]
 const BPF_FUNC_REDIRECT: usize = 23;
 #[cfg(target_arch = "bpf")]
 const BPF_FUNC_SKB_LOAD_BYTES: usize = 26;
@@ -28,6 +30,10 @@ const BPF_FUNC_SK_LOOKUP_UDP: usize = 85;
 const BPF_FUNC_SK_RELEASE: usize = 86;
 #[cfg(target_arch = "bpf")]
 const BPF_FUNC_SKC_LOOKUP_TCP: usize = 99;
+#[cfg(target_arch = "bpf")]
+const BPF_FUNC_PROBE_READ_KERNEL: usize = 113;
+#[cfg(target_arch = "bpf")]
+const BPF_FUNC_PROBE_READ_USER_STR: usize = 114;
 #[cfg(target_arch = "bpf")]
 const BPF_FUNC_SK_ASSIGN: usize = 124;
 #[cfg(target_arch = "bpf")]
@@ -145,6 +151,20 @@ pub unsafe fn bpf_get_current_comm(buf: *mut c_void, size: u32) -> i64 {
 #[inline(always)]
 pub unsafe fn bpf_get_current_comm(_buf: *mut c_void, _size: u32) -> i64 {
     0
+}
+
+#[cfg(target_arch = "bpf")]
+#[inline(always)]
+pub unsafe fn bpf_get_current_task() -> *mut c_void {
+    let helper: unsafe extern "C" fn() -> *mut c_void =
+        unsafe { core::mem::transmute(BPF_FUNC_GET_CURRENT_TASK) };
+    unsafe { helper() }
+}
+
+#[cfg(not(target_arch = "bpf"))]
+#[inline(always)]
+pub unsafe fn bpf_get_current_task() -> *mut c_void {
+    core::ptr::null_mut()
 }
 
 #[cfg(target_arch = "bpf")]
@@ -300,6 +320,42 @@ pub unsafe fn bpf_skc_lookup_tcp(
     _flags: u64,
 ) -> *mut c_void {
     core::ptr::null_mut()
+}
+
+#[cfg(target_arch = "bpf")]
+#[inline(always)]
+pub unsafe fn bpf_probe_read_kernel(dst: *mut c_void, size: u32, kernel_ptr: *const c_void) -> i64 {
+    let helper: unsafe extern "C" fn(*mut c_void, u32, *const c_void) -> i64 =
+        unsafe { core::mem::transmute(BPF_FUNC_PROBE_READ_KERNEL) };
+    unsafe { helper(dst, size, kernel_ptr) }
+}
+
+#[cfg(not(target_arch = "bpf"))]
+#[inline(always)]
+pub unsafe fn bpf_probe_read_kernel(
+    _dst: *mut c_void,
+    _size: u32,
+    _kernel_ptr: *const c_void,
+) -> i64 {
+    -1
+}
+
+#[cfg(target_arch = "bpf")]
+#[inline(always)]
+pub unsafe fn bpf_probe_read_user_str(dst: *mut c_void, size: u32, user_ptr: *const c_void) -> i64 {
+    let helper: unsafe extern "C" fn(*mut c_void, u32, *const c_void) -> i64 =
+        unsafe { core::mem::transmute(BPF_FUNC_PROBE_READ_USER_STR) };
+    unsafe { helper(dst, size, user_ptr) }
+}
+
+#[cfg(not(target_arch = "bpf"))]
+#[inline(always)]
+pub unsafe fn bpf_probe_read_user_str(
+    _dst: *mut c_void,
+    _size: u32,
+    _user_ptr: *const c_void,
+) -> i64 {
+    -1
 }
 
 #[cfg(target_arch = "bpf")]
