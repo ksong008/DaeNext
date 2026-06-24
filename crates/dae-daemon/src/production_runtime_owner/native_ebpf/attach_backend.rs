@@ -186,14 +186,14 @@ impl NativeEbpfRuntimeState {
         _param_object: &Path,
     ) -> Result<&mut dae_ebpf_support::AyaUserspaceLoadedObject, String> {
         if self.loaded.is_none() {
-            let pin_root = dae_ebpf_support::default_bpffs_mount()
+            let runtime_pin_root = dae_ebpf_support::default_bpffs_mount()
                 .map_err(|err| format!("native eBPF bpffs mount detection failed: {err}"))?
                 .join(format!(
                     "dae-native-runtime-{}-{}",
                     std::process::id(),
                     self.pin_root.is_some() as u8
                 ));
-            std::fs::create_dir_all(&pin_root)
+            std::fs::create_dir_all(&runtime_pin_root)
                 .map_err(|err| format!("native eBPF pin root create failed: {err}"))?;
             let before_map_ids = dae_ebpf_support::map_ids()
                 .map_err(|err| format!("native eBPF before-load map snapshot failed: {err}"))?;
@@ -203,25 +203,163 @@ impl NativeEbpfRuntimeState {
                     EMBEDDED_NATIVE_OBJECT_IDENTITY
                 )
             })?;
-            let loaded = dae_ebpf_support::load_aya_userspace_object_bytes(
-                dae_ebpf_support::AyaUserspaceBytesLoaderOptions {
-                    object_label: EMBEDDED_NATIVE_OBJECT_IDENTITY,
-                    object_data: dae_ebpf_loader::embedded_native_aya_object(),
-                    param: Some(input.param),
-                    map_pin_path: Some(&pin_root),
-                    allow_unsupported_maps: true,
-                    allowed_unsupported_map_names:
-                        dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
-                    max_entries_overrides: &[],
-                    prepin_lpm_array_map: true,
-                },
-            )?;
+            let (loaded, pname_report) =
+                load_native_object_with_pname_fallback(&input, &runtime_pin_root)?;
             self.loaded_map_ids = collect_loaded_map_ids(&before_map_ids)?;
-            self.pin_root = Some(pin_root);
+            self.pin_root = Some(runtime_pin_root);
+            self.pname_report = Some(pname_report);
             self.loaded = Some(loaded);
         }
         self.loaded
             .as_mut()
             .ok_or_else(|| "native eBPF loader state was not initialized".to_owned())
     }
+}
+
+#[cfg(feature = "native-ebpf")]
+fn load_native_object_with_pname_fallback(
+    input: &NativeEbpfLoadInput,
+    runtime_pin_root: &Path,
+) -> Result<(dae_ebpf_support::AyaUserspaceLoadedObject, Value), String> {
+    let default_pin_root = runtime_pin_root.join("default");
+    let pname_core_pin_root = runtime_pin_root.join("pname-core");
+
+    match try_load_pname_core_object(input, &pname_core_pin_root) {
+        Ok((loaded, report)) => Ok((loaded, report)),
+        Err(reason) => {
+            let _ = std::fs::remove_dir_all(&pname_core_pin_root);
+            let loaded = load_embedded_native_object(
+                EMBEDDED_NATIVE_OBJECT_IDENTITY,
+                dae_ebpf_loader::embedded_native_aya_object(),
+                default_pname_param(input.param),
+                &default_pin_root,
+                false,
+            )?;
+            Ok((
+                loaded,
+                current_comm_pname_report_with_fallback("fallback_to_current_comm", reason),
+            ))
+        }
+    }
+}
+
+#[cfg(feature = "native-ebpf")]
+fn try_load_pname_core_object(
+    input: &NativeEbpfLoadInput,
+    pin_root: &Path,
+) -> Result<(dae_ebpf_support::AyaUserspaceLoadedObject, Value), String> {
+    let target_btf = dae_ebpf_support::discover_aya_target_btf(true);
+    let btf_report = target_btf_report_json(&target_btf.report);
+    if target_btf.btf.is_none() {
+        return Err(format!(
+            "pname core target BTF unavailable: {}",
+            target_btf_unavailable_reason(&target_btf.report)
+        ));
+    }
+    let offsets = dae_ebpf_support::resolve_pname_btf_offsets(&target_btf.report)
+        .map_err(|err| format!("pname core target BTF offset resolution failed: {err}"))?;
+    let mut param = input.param;
+    param.has_bpf_get_current_task = 1;
+    param.task_struct_mm_offset = offsets.task_struct_mm_offset;
+    param.mm_struct_arg_start_offset = offsets.mm_struct_arg_start_offset;
+    let loaded = load_embedded_native_object(
+        EMBEDDED_NATIVE_OBJECT_PNAME_CORE_IDENTITY,
+        dae_ebpf_loader::embedded_native_aya_object_pname_core(),
+        param,
+        pin_root,
+        true,
+    )
+    .map_err(|err| format!("pname core enhanced object load failed: {err}"))?;
+    Ok((
+        loaded,
+        json!({
+            "source": "current_task_argv0_basename",
+            "fallbackSource": "bpf_get_current_comm",
+            "semantics": "argv0_basename",
+            "coreEnabled": true,
+            "nonCoreTaskCommEnabled": true,
+            "currentTaskArgvEnabled": true,
+            "officialArgvSemanticsImplemented": true,
+            "coreStatus": "enhanced_load_succeeded",
+            "pnameCoreTypeSource": "target_btf_offsets",
+            "selectedObject": EMBEDDED_NATIVE_OBJECT_PNAME_CORE_IDENTITY,
+            "targetBtf": btf_report,
+            "offsets": {
+                "task_struct_mm_offset": offsets.task_struct_mm_offset,
+                "mm_struct_arg_start_offset": offsets.mm_struct_arg_start_offset,
+            },
+        }),
+    ))
+}
+
+#[cfg(feature = "native-ebpf")]
+fn load_embedded_native_object(
+    object_label: &'static str,
+    object_data: &'static [u8],
+    param: BpfDaeParam,
+    pin_root: &Path,
+    target_btf_required: bool,
+) -> Result<dae_ebpf_support::AyaUserspaceLoadedObject, String> {
+    std::fs::create_dir_all(pin_root)
+        .map_err(|err| format!("native eBPF pin root create failed: {err}"))?;
+    dae_ebpf_support::load_aya_userspace_object_bytes(
+        dae_ebpf_support::AyaUserspaceBytesLoaderOptions {
+            object_label,
+            object_data,
+            param: Some(param),
+            map_pin_path: Some(pin_root),
+            allow_unsupported_maps: true,
+            allowed_unsupported_map_names: dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
+            max_entries_overrides: &[],
+            prepin_lpm_array_map: true,
+            target_btf_required,
+        },
+    )
+}
+
+#[cfg(feature = "native-ebpf")]
+fn default_pname_param(mut param: BpfDaeParam) -> BpfDaeParam {
+    param.has_bpf_get_current_task = 0;
+    param.task_struct_mm_offset = 0;
+    param.mm_struct_arg_start_offset = 0;
+    param
+}
+
+#[cfg(feature = "native-ebpf")]
+fn current_comm_pname_report_with_fallback(status: &'static str, fallback_reason: String) -> Value {
+    let mut value = current_comm_pname_report(status);
+    if let Value::Object(map) = &mut value {
+        map.insert("fallbackReason".to_owned(), json!(fallback_reason));
+        map.insert(
+            "selectedObject".to_owned(),
+            json!(EMBEDDED_NATIVE_OBJECT_IDENTITY),
+        );
+    }
+    value
+}
+
+#[cfg(feature = "native-ebpf")]
+fn target_btf_unavailable_reason(report: &dae_ebpf_support::AyaTargetBtfReport) -> String {
+    match (report.path.as_ref(), report.parse_error.as_ref()) {
+        (Some(path), Some(err)) => format!("parse_failed path={} error={err}", path.display()),
+        (Some(path), None) => format!("parse_failed path={}", path.display()),
+        (None, _) => "missing_target_btf".to_owned(),
+    }
+}
+
+#[cfg(feature = "native-ebpf")]
+fn target_btf_report_json(report: &dae_ebpf_support::AyaTargetBtfReport) -> Value {
+    json!({
+        "required": report.required,
+        "source": report.source.as_str(),
+        "path": report.path.as_ref().map(|path| path_string(path)),
+        "canonicalPath": report.canonical_path.as_ref().map(|path| path_string(path)),
+        "parseOk": report.parse_ok,
+        "parseError": report.parse_error,
+        "candidatePaths": report
+            .candidate_paths
+            .iter()
+            .map(|path| path_string(path))
+            .collect::<Vec<_>>(),
+    })
 }

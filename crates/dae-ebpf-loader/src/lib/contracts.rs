@@ -39,7 +39,9 @@ pub(super) fn run_contract() -> LoaderOutput {
                 "dae0_ifindex": "initialized dae0 ifindex",
                 "dae_netns_id": "initialized dae netns id",
                 "dae0peer_mac": "initialized dae0peer mac",
-                "has_bpf_get_current_task": "native feature probe result"
+                "has_bpf_get_current_task": "native feature probe result",
+                "task_struct_mm_offset": "target BTF task_struct.mm byte offset for current_task argv[0] pname mode",
+                "mm_struct_arg_start_offset": "target BTF mm_struct.arg_start byte offset for current_task argv[0] pname mode"
             },
             "maps": dae_ebpf_support::map_catalog().iter().map(|spec| json!({
                 "name": spec.name,
@@ -81,10 +83,14 @@ pub(super) fn run_cgroup_monitor_contract() -> LoaderOutput {
             "binary": "dae-ebpf-loader",
             "scope": "Rust attaches pinned cgroup pname monitor programs and pins bpf_link objects for native control-plane lifetime ownership",
             "native_pname_routing_semantics_ready": true,
-            "pname_source": "bpf_get_current_comm",
-            "pname_semantics": "non_core_task_comm",
+            "pname_source": "runtime_selected",
+            "preferred_pname_source": "current_task_argv0_basename",
+            "pname_semantics": "argv0_basename_when_enhanced_else_non_core_task_comm",
             "core_enabled": false,
-            "official_argv_semantics_implemented": false,
+            "core_enabled_source": "daemon enhanced object load result",
+            "official_argv_semantics_implemented": true,
+            "fallback_source": "bpf_get_current_comm",
+            "target_btf_offsets_required_for_argv0": true,
             "kernel_ebpf_program_rewrite": false,
             "link_lifetime": "pinned under --link-root; native control-plane removes the pin root on close/reload cleanup",
             "program_source": "--program-root/<program_name> from Rust/Aya-loaded pinned programs",

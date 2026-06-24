@@ -63,12 +63,38 @@ impl NativeEbpfRuntimeState {
         }
     }
 
+    pub(in crate::production_runtime_owner) fn pname_evidence(
+        &self,
+        pname_rules_required: bool,
+        native_param_image: &Value,
+    ) -> Value {
+        #[cfg(feature = "native-ebpf")]
+        let mut value = self
+            .pname_report
+            .clone()
+            .unwrap_or_else(|| current_comm_pname_report("not_loaded"));
+        #[cfg(not(feature = "native-ebpf"))]
+        let mut value = current_comm_pname_report("native_ebpf_not_compiled");
+        if let Value::Object(map) = &mut value {
+            map.insert("pnameRulesRequired".to_owned(), json!(pname_rules_required));
+            map.insert(
+                "paramHasBpfGetCurrentTask".to_owned(),
+                native_param_image
+                    .pointer("/param/has_bpf_get_current_task")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+        }
+        value
+    }
+
     pub(in crate::production_runtime_owner) fn reset(&mut self) {
         #[cfg(feature = "native-ebpf")]
         {
             self.loaded.take();
             self.loaded_map_ids.clear();
             self.load_input.take();
+            self.pname_report.take();
             if let Some(pin_root) = self.pin_root.take() {
                 let _ = std::fs::remove_dir_all(pin_root);
             }
@@ -78,4 +104,17 @@ impl NativeEbpfRuntimeState {
         self.host_attached = false;
         self.cgroup_attached = false;
     }
+}
+
+pub(super) fn current_comm_pname_report(reason: &'static str) -> Value {
+    json!({
+        "source": "current_comm",
+        "fallbackSource": "bpf_get_current_comm",
+        "semantics": "non_core_task_comm",
+        "coreEnabled": false,
+        "nonCoreTaskCommEnabled": true,
+        "currentTaskArgvEnabled": false,
+        "officialArgvSemanticsImplemented": false,
+        "coreStatus": reason,
+    })
 }

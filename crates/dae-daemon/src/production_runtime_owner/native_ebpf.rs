@@ -26,6 +26,8 @@ use super::command::{mac_string, path_string};
 use super::{FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE};
 
 pub(super) const EMBEDDED_NATIVE_OBJECT_IDENTITY: &str = "memory:native-ebpf-object";
+pub(super) const EMBEDDED_NATIVE_OBJECT_PNAME_CORE_IDENTITY: &str =
+    "memory:native-ebpf-object-pname-core";
 pub(super) const NATIVE_PARAM_OBJECT_IDENTITY: &str = "memory:native-ebpf-param";
 
 mod types;
@@ -36,6 +38,8 @@ mod map_cleanup;
 mod state;
 #[cfg(any(feature = "native-ebpf", test))]
 use self::map_cleanup::*;
+#[cfg(feature = "native-ebpf")]
+use self::state::current_comm_pname_report;
 mod param_backend;
 pub(super) use self::param_backend::*;
 mod attach_specs;

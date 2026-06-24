@@ -109,6 +109,8 @@ pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeState {
     pub(super) pin_root: Option<PathBuf>,
     #[cfg(feature = "native-ebpf")]
     pub(super) load_input: Option<NativeEbpfLoadInput>,
+    #[cfg(feature = "native-ebpf")]
+    pub(super) pname_report: Option<Value>,
 }
 
 impl std::fmt::Debug for NativeEbpfRuntimeState {
@@ -124,7 +126,8 @@ impl std::fmt::Debug for NativeEbpfRuntimeState {
             .field("loaded", &self.loaded.is_some())
             .field("loaded_map_ids", &self.loaded_map_ids)
             .field("pin_root", &self.pin_root)
-            .field("load_input", &self.load_input);
+            .field("load_input", &self.load_input)
+            .field("pname_report", &self.pname_report);
         debug.finish()
     }
 }

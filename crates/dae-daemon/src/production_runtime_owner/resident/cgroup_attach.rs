@@ -12,21 +12,8 @@ pub(super) fn resident_cgroup_attach_evidence(
     native_param_image: &Value,
     pname_rules_required: bool,
 ) -> (bool, Value) {
-    let cgroup_pname_evidence = json!({
-        "source": "current_comm",
-        "fallbackSource": "bpf_get_current_comm",
-        "semantics": "non_core_task_comm",
-        "coreEnabled": false,
-        "nonCoreTaskCommEnabled": true,
-        "currentTaskArgvEnabled": false,
-        "officialArgvSemanticsImplemented": false,
-        "coreStatus": "not_implemented",
-        "pnameRulesRequired": pname_rules_required,
-        "paramHasBpfGetCurrentTask": native_param_image
-            .pointer("/param/has_bpf_get_current_task")
-            .cloned()
-            .unwrap_or(Value::Null),
-    });
+    let cgroup_pname_evidence =
+        native_runtime.pname_evidence(pname_rules_required, native_param_image);
     let cgroup_link_lifecycle = json!({
         "status": "owned-by-aya-runtime",
         "attachMode": "single",
@@ -83,7 +70,7 @@ pub(super) fn resident_cgroup_attach_evidence(
                 "backend": "aya",
                 "wan_interfaces": wan_ifaces,
                 "native_attached": true,
-                "pname": cgroup_pname_evidence,
+                "pname": native_runtime.pname_evidence(pname_rules_required, native_param_image),
                 "linkLifecycle": cgroup_link_lifecycle,
             }),
         ),
@@ -93,7 +80,7 @@ pub(super) fn resident_cgroup_attach_evidence(
                 "aya",
                 wan_ifaces,
                 "native Aya cgroup attach failed; non-native cgroup backend is not used by Rust resident",
-                cgroup_pname_evidence,
+                native_runtime.pname_evidence(pname_rules_required, native_param_image),
                 cgroup_link_lifecycle,
                 pname_rules_required,
             ),
