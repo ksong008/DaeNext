@@ -48,6 +48,14 @@ pub(in crate::daed_product) fn selected_id(
         "SELECT id FROM {} WHERE selected = 1 ORDER BY id LIMIT 1",
         kind.table()
     );
+    let selected = conn
+        .query_row(&sql, [], |row| row.get::<_, i64>(0))
+        .optional()
+        .map_err(sqlite_io_error)?;
+    if selected.is_some() {
+        return Ok(selected);
+    }
+    let sql = format!("SELECT id FROM {} ORDER BY id LIMIT 1", kind.table());
     conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
         .optional()
         .map_err(sqlite_io_error)

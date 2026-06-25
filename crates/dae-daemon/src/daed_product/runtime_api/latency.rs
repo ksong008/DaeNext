@@ -1,11 +1,7 @@
 use super::*;
 
 pub(in crate::daed_product) fn api_get_node_latencies(app: &AppState) -> HttpResponse {
-    let result = if app.latency_jobs.is_active() {
-        list_stored_node_latencies_value(&app.state)
-    } else {
-        list_node_latencies_value(&app.state, &app.runtime)
-    };
+    let result = list_stored_node_latencies_value(&app.state);
     match result {
         Ok(mut value) => {
             add_node_latency_job_value(&mut value, &app.latency_jobs);

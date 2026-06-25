@@ -9,6 +9,9 @@ pub(crate) fn append_resident_event_product_log(
     let Some(event_name) = event.get("event").and_then(Value::as_str) else {
         return Ok(());
     };
+    if resident_event_hidden_from_product_log(event_name) {
+        return Ok(());
+    }
     let level = resident_event_product_log_level(event_name, event);
     let fields = resident_event_product_log_fields(event_name, event);
     append_log_fields_for_config(
@@ -17,6 +20,17 @@ pub(crate) fn append_resident_event_product_log(
         level,
         &resident_event_product_log_message(event_name, event),
         fields,
+    )
+}
+
+pub(crate) fn resident_event_hidden_from_product_log(event_name: &str) -> bool {
+    matches!(
+        event_name,
+        "tcp_worker_started"
+            | "tcp_worker_stopped"
+            | "udp_session_manager_started"
+            | "udp_session_manager_stopped"
+            | "resident_health_checker_started"
     )
 }
 

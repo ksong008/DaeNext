@@ -168,7 +168,10 @@ pub(super) fn issue_token(state: &Path, username: &str, password: &str) -> io::R
     signed_token(&user)
 }
 
-pub(super) fn authenticate_request(app: &AppState, request: &HttpRequest) -> Option<UserRecord> {
+pub(super) fn authenticate_request(
+    app: &AppState,
+    request: &HttpRequest,
+) -> io::Result<Option<UserRecord>> {
     let token = request
         .headers
         .get("authorization")
@@ -187,6 +190,9 @@ pub(super) fn authenticate_request(app: &AppState, request: &HttpRequest) -> Opt
             } else {
                 None
             }
-        })?;
-    verify_token(&app.state, token).ok().flatten()
+        });
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    verify_token(&app.state, token)
 }

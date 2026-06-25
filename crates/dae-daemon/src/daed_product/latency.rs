@@ -438,14 +438,6 @@ impl LatencyJobManager {
             .unwrap_or(Value::Null)
     }
 
-    pub(crate) fn is_active(&self) -> bool {
-        self.current
-            .lock()
-            .ok()
-            .and_then(|current| current.as_ref().map(|job| job.is_active()))
-            .unwrap_or(false)
-    }
-
     fn mark_running(&self, id: u64) {
         self.update_job(id, |job| {
             job.status = "running";
@@ -518,16 +510,6 @@ impl LatencyJobRecord {
             "message": self.message,
         })
     }
-}
-
-pub(crate) fn list_node_latencies_value(
-    state: &Path,
-    runtime: &ProductRuntimeManager,
-) -> io::Result<Value> {
-    ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    sync_runtime_node_latency_results(&conn, runtime)?;
-    list_stored_node_latencies_from_conn(&conn)
 }
 
 pub(crate) fn list_stored_node_latencies_value(state: &Path) -> io::Result<Value> {
@@ -943,19 +925,6 @@ pub(crate) struct NodeLatencyWrite {
     pub(super) message: Option<String>,
 }
 
-pub(crate) fn sync_runtime_node_latency_results(
-    conn: &Connection,
-    runtime: &ProductRuntimeManager,
-) -> io::Result<()> {
-    let snapshots = runtime.snapshot_node_latencies();
-    let nodes = all_latency_probe_nodes(conn)?;
-    let (results, _) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
-    for result in &results {
-        store_node_latency_result(conn, result)?;
-    }
-    Ok(())
-}
-
 pub(crate) fn stored_successful_node_latency_seed_snapshots(
     state: &Path,
 ) -> io::Result<Vec<Value>> {
@@ -1125,26 +1094,6 @@ pub(crate) fn native_probe_unavailable_results(
             ),
         })
         .collect()
-}
-
-pub(crate) fn all_latency_probe_nodes(conn: &Connection) -> io::Result<Vec<(i64, String, String)>> {
-    let mut stmt = conn
-        .prepare("SELECT id, link, address FROM nodes ORDER BY id")
-        .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
-        .map_err(sqlite_io_error)?;
-    let mut nodes = Vec::new();
-    for row in rows {
-        nodes.push(row.map_err(sqlite_io_error)?);
-    }
-    Ok(nodes)
 }
 
 pub(crate) fn all_node_ids(conn: &Connection) -> io::Result<Vec<i64>> {
