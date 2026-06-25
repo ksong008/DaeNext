@@ -202,6 +202,55 @@ pub(super) fn proxy_tcp_base_event(
     event
 }
 
+pub(super) fn tcp_route_chosen_event(
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: &TcpSelection,
+    sniff: &TcpSniffReport,
+    dial_mode: &str,
+) -> Value {
+    let (route, outbound_kind, outbound, policy, dialer, mptcp) = match selection {
+        TcpSelection::Direct(selection) => (
+            &selection.route,
+            "direct",
+            "direct",
+            "fixed",
+            "direct",
+            selection.mptcp,
+        ),
+        TcpSelection::Block(selection) => {
+            (&selection.route, "block", "block", "fixed", "block", false)
+        }
+        TcpSelection::Proxy(selection) => (
+            &selection.route,
+            "proxy",
+            selection.proxy.group_name.as_str(),
+            selection.proxy.group_policy.as_str(),
+            selection.proxy.node_tag.as_str(),
+            selection.mptcp,
+        ),
+    };
+    let mut event = json!({
+        "event": "tcp_route_chosen",
+        "outbound_kind": outbound_kind,
+        "peer": resident_socket_addr_display(peer),
+        "original_dst": resident_socket_addr_display(original_dst),
+        "dial_target": &route.dial_target,
+        "dial_ip": route.dial_ip,
+        "dial_mode": dial_mode,
+        "initial_outbound": route.initial_outbound,
+        "final_outbound": route.final_outbound,
+        "final_mark": route.final_mark,
+        "userspace_route_executed": route.userspace_route_executed,
+        "userspace_route_must": route.userspace_route_must,
+        "sniffed_domain": &sniff.domain,
+        "sniff_error": &sniff.error,
+        "mptcp": mptcp,
+    });
+    append_tcp_route_log_fields(&mut event, route, outbound, policy, dialer);
+    event
+}
+
 pub(super) fn append_proxy_relay_stats(event: &mut Value, stats: &RelayStats) {
     if let Some(map) = event.as_object_mut() {
         map.insert(

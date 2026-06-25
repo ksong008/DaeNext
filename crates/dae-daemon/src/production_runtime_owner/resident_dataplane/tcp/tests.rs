@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 const FLOW_DIAL_TARGET: &str = "flow-dial-target";
 const FLOW_OUTBOUND: &str = "flow-outbound";
@@ -77,6 +77,57 @@ fn resident_tcp_probe_status_matches_compatible_http_check_rules() {
     assert!(resident_tcp_probe_status_ok("/", 204));
     assert!(resident_tcp_probe_status_ok("/", 404));
     assert!(!resident_tcp_probe_status_ok("/", 500));
+}
+
+#[test]
+fn tcp_route_chosen_event_exposes_route_decision_fields() {
+    let route = TcpRouteSelection {
+        initial_outbound: 7,
+        final_outbound: 9,
+        final_mark: 0x55,
+        userspace_route_executed: true,
+        userspace_route_must: false,
+        dial_target: FLOW_DIAL_TARGET.to_owned(),
+        dial_ip: false,
+        log_metadata: TcpRoutingLogMetadata {
+            pid: 1,
+            dscp: 2,
+            pname: FLOW_PROCESS.to_owned(),
+            mac: FLOW_MAC.to_owned(),
+        },
+    };
+    let selection = TcpSelection::Direct(TcpDirectSelection { route, mptcp: true });
+    let sniff = TcpSniffReport {
+        payload: Vec::new(),
+        domain: FLOW_SNIFFED_DOMAIN.to_owned(),
+        error: None,
+    };
+
+    let event = tcp_route_chosen_event(
+        SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100).into(),
+        SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443).into(),
+        &selection,
+        &sniff,
+        "domain",
+    );
+
+    assert_eq!(event["event"], "tcp_route_chosen");
+    assert_eq!(event["dial_mode"], "domain");
+    assert_eq!(event["outbound_kind"], "direct");
+    assert_eq!(event["mptcp"], true);
+    assert_eq!(event["initial_outbound"], 7);
+    assert_eq!(event["final_outbound"], 9);
+    assert_eq!(event["final_mark"], 0x55);
+    assert_eq!(event["dial_target"], FLOW_DIAL_TARGET);
+    assert_eq!(event["network"], "tcp4");
+    assert_eq!(event["outbound"], "direct");
+    assert_eq!(event["policy"], "fixed");
+    assert_eq!(event["dialer"], "direct");
+    assert_eq!(event["sniffed"], FLOW_SNIFFED_DOMAIN);
+    assert_eq!(event["pid"], 1);
+    assert_eq!(event["dscp"], 2);
+    assert_eq!(event["pname"], FLOW_PROCESS);
+    assert_eq!(event["mac"], FLOW_MAC);
 }
 
 #[tokio::test(flavor = "current_thread")]
