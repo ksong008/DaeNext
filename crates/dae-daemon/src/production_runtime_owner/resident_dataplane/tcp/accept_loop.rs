@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 pub(crate) fn resident_tcp_accept_loop(
     listener: TcpListener,
     router: Arc<ResidentTcpRouter>,
@@ -119,6 +120,8 @@ pub(crate) fn spawn_async_tcp_flow(
             router,
             stop,
             Arc::clone(&metrics),
+            &event_file,
+            &event_lock,
         )
         .await
         {
@@ -140,6 +143,8 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     router: Arc<ResidentTcpRouter>,
     stop: Arc<AtomicBool>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    event_file: &Path,
+    event_lock: &Arc<Mutex<()>>,
 ) -> Result<Option<Value>, String> {
     let original_dst = match inbound
         .local_addr()
@@ -152,6 +157,17 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
         .map_err(|err| format!("set inbound TCP_NODELAY: {err}"))?;
     let sniff = sniff_initial_tcp_payload_async(&mut inbound, router.sniffing_timeout).await?;
     let selection = router.select(peer, original_dst, &sniff.domain).await?;
+    append_event(
+        event_file,
+        event_lock,
+        tcp_route_chosen_event(
+            peer,
+            original_dst,
+            &selection,
+            &sniff,
+            router.dial_mode_name(),
+        ),
+    );
     match selection {
         TcpSelection::Direct(selection) => {
             let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
