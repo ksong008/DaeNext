@@ -57,7 +57,7 @@ routing {
     )
     .unwrap();
     let config = build_config(&sections).unwrap();
-    let err = start_product_runtime_instance(&config, "test").unwrap_err();
+    let err = start_product_runtime_instance(&config, "test", &[]).unwrap_err();
 
     assert!(err.contains("rejected before current runtime swap"));
     assert!(err.contains("global.lan_interface"));

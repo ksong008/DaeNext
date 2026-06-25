@@ -87,8 +87,10 @@ pub(crate) fn restore_runtime_from_state(
     set_runtime_log_level_from_config(state, &config).map_err(|err| err.to_string())?;
     refresh_log_policy_and_reset_runtime_cycle_logs(log_config_dir, state, Some(runtime))
         .map_err(|err| err.to_string())?;
+    let latency_seed = stored_successful_node_latency_seed_snapshots(state).unwrap_or_default();
     let control_plane_started_at = Instant::now();
-    let outcome = runtime.reload_with_config_content(config, Some(config_content), source)?;
+    let outcome =
+        runtime.reload_with_config_content(config, Some(config_content), source, &latency_seed)?;
     if log_mode.is_startup() {
         let _ =
             append_startup_runtime_evidence_logs_for_config(log_config_dir, state, &outcome.report);

@@ -6,6 +6,7 @@ pub(crate) fn start_resident_dataplane_workers(
     routing_tuple_map_id: Option<u32>,
     domain_routing_map_id: Option<u32>,
     geodata: &ResidentGeodataStore,
+    latency_seed: &[Value],
 ) -> (Value, Option<ResidentDataplaneRuntime>) {
     let event_file = artifact_dir.join("resident-production-dataplane-events.jsonl");
     let plan = match build_resident_dataplane_plan_with_geodata(config, geodata) {
@@ -76,6 +77,7 @@ pub(crate) fn start_resident_dataplane_workers(
             None,
         );
     };
+    plan::apply_successful_latency_seed_snapshots(&plan.proxies, latency_seed);
     let routing_matcher =
         match build_resident_userspace_routing_matcher_with_geodata(config, geodata) {
             Ok(matcher) => matcher,

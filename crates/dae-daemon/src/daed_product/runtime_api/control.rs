@@ -119,10 +119,14 @@ pub(in crate::daed_product) fn api_runtime_reload(
     ) {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
-    if let Err(err) =
-        app.runtime
-            .reload_with_config_content(config, Some(config_content), "api-runtime-reload")
-    {
+    let latency_seed =
+        stored_successful_node_latency_seed_snapshots(&app.state).unwrap_or_default();
+    if let Err(err) = app.runtime.reload_with_config_content(
+        config,
+        Some(config_content),
+        "api-runtime-reload",
+        &latency_seed,
+    ) {
         let mut fields = BTreeMap::new();
         fields.insert("source".to_owned(), "api".to_owned());
         fields.insert("dry".to_owned(), "false".to_owned());

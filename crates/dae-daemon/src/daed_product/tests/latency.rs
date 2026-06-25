@@ -81,6 +81,55 @@ pub(crate) fn insert_config_node(
 }
 
 #[test]
+pub(crate) fn stored_successful_latency_seed_snapshots_skip_failures_and_redact_links() {
+    let dir = std::env::temp_dir().join(format!("daed-product-latency-seed-{}", fastrand::u64(..)));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("state.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 11, "one", "socks://127.0.0.1:1080#one", None);
+    insert_config_node(&conn, 12, "two", "socks://127.0.0.1:1081#two", None);
+    store_node_latency_result(
+        &conn,
+        &NodeLatencyWrite {
+            node_id: 11,
+            latency_ms: Some(37),
+            alive: true,
+            tested_at: iso8601_utc(42),
+            message: None,
+        },
+    )
+    .unwrap();
+    store_node_latency_result(
+        &conn,
+        &NodeLatencyWrite {
+            node_id: 12,
+            latency_ms: Some(10000),
+            alive: false,
+            tested_at: iso8601_utc(43),
+            message: Some("timeout".to_owned()),
+        },
+    )
+    .unwrap();
+
+    let snapshots = stored_successful_node_latency_seed_snapshots(&state).unwrap();
+
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0]["displayName"], json!("one"));
+    assert_eq!(
+        snapshots[0]["linkHash"],
+        json!(runtime_link_hash("socks://127.0.0.1:1080#one"))
+    );
+    assert_eq!(snapshots[0]["latencyMs"], json!(37));
+    assert_eq!(snapshots[0]["alive"], json!(true));
+    assert_eq!(snapshots[0]["checkedAtUnix"], json!(42));
+    assert!(snapshots[0].get("link").is_none(), "{:?}", snapshots[0]);
+    assert!(!snapshots[0].to_string().contains("127.0.0.1:1080"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn empty_latency_probe_ids_select_all_nodes() {
     let dir = std::env::temp_dir().join(format!("daed-product-latency-{}", fastrand::u64(..)));
     fs::create_dir_all(&dir).unwrap();

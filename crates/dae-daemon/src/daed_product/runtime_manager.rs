@@ -270,6 +270,7 @@ impl ProductRuntimeManager {
         config: Config,
         config_content: Option<String>,
         source: &str,
+        latency_seed: &[Value],
     ) -> Result<RuntimeStartOutcome, String> {
         let _lifecycle = self
             .lifecycle
@@ -311,6 +312,13 @@ impl ProductRuntimeManager {
             )
         };
 
+        let live_latency_seed = previous_runtime
+            .as_ref()
+            .map(runtime_instance_node_latencies)
+            .unwrap_or_default();
+        let latency_seed = successful_latency_seed_snapshots(
+            latency_seed.iter().cloned().chain(live_latency_seed),
+        );
         let previous_cleanup_report = cleanup_runtime_instance(previous_runtime);
         if previous_runtime_was_running
             && let Ok(mut inner) = self.inner.lock()
@@ -326,7 +334,7 @@ impl ProductRuntimeManager {
                 "previous product runtime cleanup failed before reload: {blocker}"
             ));
         }
-        match start_product_runtime_instance(&config, source) {
+        match start_product_runtime_instance(&config, source, &latency_seed) {
             Ok((runtime, report)) => {
                 let mut inner = self
                     .inner
@@ -362,9 +370,9 @@ impl ProductRuntimeManager {
                     .map(|inner| inner.lifecycle_epoch == lifecycle_epoch)
                     .unwrap_or(false);
                 let restore_result = if should_restore {
-                    previous_config
-                        .as_ref()
-                        .map(|previous| start_product_runtime_instance(previous, "restore"))
+                    previous_config.as_ref().map(|previous| {
+                        start_product_runtime_instance(previous, "restore", &latency_seed)
+                    })
                 } else {
                     None
                 };
@@ -823,6 +831,38 @@ fn runtime_traffic_metrics_snapshot(runtime: &ProductRuntimeInstance) -> Option<
     }
 }
 
+fn runtime_instance_node_latencies(runtime: &ProductRuntimeInstance) -> Vec<Value> {
+    match runtime {
+        ProductRuntimeInstance::Resident(runtime) => runtime.snapshot_node_latencies(),
+        ProductRuntimeInstance::Fake(_) => Vec::new(),
+    }
+}
+
+fn successful_latency_seed_snapshots(values: impl IntoIterator<Item = Value>) -> Vec<Value> {
+    let mut by_link_hash = BTreeMap::<String, Value>::new();
+    for value in values {
+        if !latency_seed_snapshot_is_success(&value) {
+            continue;
+        }
+        let Some(link_hash) = runtime_latency_snapshot_link_hash(&value) else {
+            continue;
+        };
+        if link_hash.is_empty() {
+            continue;
+        }
+        by_link_hash.insert(link_hash.to_owned(), value);
+    }
+    by_link_hash.into_values().collect()
+}
+
+fn latency_seed_snapshot_is_success(snapshot: &Value) -> bool {
+    snapshot.get("latencyMs").and_then(Value::as_i64).is_some()
+        && snapshot
+            .get("alive")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+}
+
 fn apply_runtime_traffic_metric_carry(metrics: &mut Value, key: &str, carry: u64) {
     if carry == 0 {
         return;
@@ -856,6 +896,7 @@ pub(super) fn runtime_started_at_after_success(
 pub(super) fn start_product_runtime_instance(
     config: &Config,
     source: &str,
+    latency_seed: &[Value],
 ) -> Result<(ProductRuntimeInstance, Value), String> {
     if product_runtime_fake_start_enabled() {
         let started_at = now_text();
@@ -878,7 +919,7 @@ pub(super) fn start_product_runtime_instance(
 
     crate::service_contract::validate_resident_runtime_reload_config(config)?;
 
-    let mut runtime = start_resident_production_runtime(config)?;
+    let mut runtime = start_resident_production_runtime_with_latency_seed(config, latency_seed)?;
     let state = runtime.product_state_summary();
     let dataplane_enabled = state["residentDataplane"]["enabled"]
         .as_bool()

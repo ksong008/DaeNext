@@ -450,6 +450,52 @@ impl ResidentProxyGroupPlan {
         Ok(indexes.len())
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_successful_latency_seed_snapshot(
+        &self,
+        snapshot: &Value,
+    ) -> Result<usize, String> {
+        if !self.group_policy.needs_alive_state() {
+            return Ok(0);
+        }
+        let Some(link_hash) = latency_seed_snapshot_link_hash(snapshot) else {
+            return Ok(0);
+        };
+        let Some(latency_ms) = latency_seed_snapshot_success_latency_ms(snapshot) else {
+            return Ok(0);
+        };
+        let indexes = self
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| (candidate.link_hash == link_hash).then_some(index))
+            .collect::<Vec<_>>();
+        if indexes.is_empty() {
+            return Ok(0);
+        }
+        let checked_at_unix = snapshot
+            .get("checkedAtUnix")
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0)
+            .unwrap_or(0);
+        let mut selector = self.selector.lock().map_err(|_| {
+            format!(
+                "resident dataplane group {} selector lock is poisoned",
+                self.group_name
+            )
+        })?;
+        for index in &indexes {
+            for network_type in [NetworkType::TCP4, NetworkType::DNS_UDP4] {
+                selector.record_check_result(
+                    *index,
+                    network_type,
+                    Some(latency_ms),
+                    checked_at_unix,
+                );
+            }
+        }
+        Ok(indexes.len())
+    }
+
     #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn fixed_single_for_test(
         proxy: ResidentProxyPlan,
@@ -503,4 +549,38 @@ pub(crate) fn resident_latency_message(ok: bool, alive: bool, latency_ms: i64) -
     } else {
         "unavailable".to_owned()
     }
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) fn apply_successful_latency_seed_snapshots(
+    groups: &BTreeMap<u8, ResidentProxyGroupPlan>,
+    snapshots: &[Value],
+) {
+    if groups.is_empty() || snapshots.is_empty() {
+        return;
+    }
+    for snapshot in snapshots {
+        for group in groups.values() {
+            let _ = group.apply_successful_latency_seed_snapshot(snapshot);
+        }
+    }
+}
+
+fn latency_seed_snapshot_link_hash(snapshot: &Value) -> Option<&str> {
+    snapshot
+        .get("linkHash")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            snapshot
+                .pointer("/linkIdentity/linkHash")
+                .and_then(Value::as_str)
+        })
+}
+
+fn latency_seed_snapshot_success_latency_ms(snapshot: &Value) -> Option<i64> {
+    let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64)?;
+    let alive = snapshot
+        .get("alive")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    alive.then_some(latency_ms)
 }
