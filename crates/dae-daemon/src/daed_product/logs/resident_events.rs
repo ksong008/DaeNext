@@ -35,18 +35,49 @@ pub(crate) fn resident_event_hidden_from_product_log(event_name: &str) -> bool {
 }
 
 pub(crate) fn resident_event_product_log_level(event_name: &str, event: &Value) -> &'static str {
+    if event_name.contains("panic") {
+        return "panic";
+    }
+    if event_name.contains("fatal") {
+        return "fatal";
+    }
+    match event_name {
+        "tcp_listener_nonblocking_failed"
+        | "tcp_async_runtime_build_failed"
+        | "tcp_async_listener_adopt_failed"
+        | "udp_socket_nonblocking_failed"
+        | "udp_session_manager_start_failed"
+        | "udp_session_manager_async_fd_failed" => return "error",
+        "tcp_accept_failed"
+        | "tcp_connection_failed"
+        | "udp_receive_failed"
+        | "udp_packet_skipped"
+        | "udp_packet_dropped"
+        | "udp_reply_failed"
+        | "udp_exchange_failed"
+        | "dns_bind_listener_start_failed"
+        | "dns_bind_receive_failed"
+        | "dns_bind_response_send_failed"
+        | "dns_bind_query_failed"
+        | "dns_bind_accept_failed"
+        | "resident_health_checker_runtime_failed" => return "warn",
+        "dns_bind_listener_started" | "dns_bind_listener_stopped" => return "info",
+        "tcp_connection_finished" | "tcp_connection_blocked"
+            if resident_event_has_route_log_context(event) =>
+        {
+            return "info";
+        }
+        "tcp_connection_finished"
+        | "tcp_connection_blocked"
+        | "udp_packet_finished"
+        | "udp_dns_packet_finished"
+        | "dns_bind_query_finished"
+        | "udp_session_started"
+        | "udp_session_stopped" => return "debug",
+        _ => {}
+    }
     if event_name.contains("failed") || event_name.contains("error") {
         return "warn";
-    }
-    if matches!(
-        event_name,
-        "tcp_connection_finished" | "tcp_connection_blocked"
-    ) && resident_event_has_route_log_context(event)
-    {
-        return "info";
-    }
-    if event_name.ends_with("_started") || event_name.ends_with("_stopped") {
-        return "info";
     }
     "debug"
 }

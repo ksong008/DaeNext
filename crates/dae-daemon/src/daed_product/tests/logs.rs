@@ -247,6 +247,129 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
 }
 
 #[test]
+pub(crate) fn product_log_level_contract_matches_logrus_compatibility() {
+    for (input, expected) in [
+        ("panic", Some("panic")),
+        ("fatal", Some("fatal")),
+        ("error", Some("error")),
+        ("warn", Some("warn")),
+        ("warning", Some("warn")),
+        ("info", Some("info")),
+        ("debug", Some("debug")),
+        ("trace", Some("trace")),
+        ("TRACE", Some("trace")),
+        ("err", None),
+    ] {
+        assert_eq!(
+            normalize_log_level_name(input).as_deref(),
+            expected,
+            "{input}"
+        );
+    }
+
+    assert!(log_level_enabled("panic", "error"));
+    assert!(log_level_enabled("fatal", "error"));
+    assert!(log_level_enabled("error", "error"));
+    assert!(!log_level_enabled("warn", "error"));
+    assert!(log_level_enabled("debug", "debug"));
+    assert!(!log_level_enabled("trace", "debug"));
+    assert!(log_level_enabled("trace", "trace"));
+}
+
+#[test]
+pub(crate) fn resident_product_log_level_policy_is_explicit_by_event_class() {
+    assert!(resident_event_hidden_from_product_log("tcp_worker_started"));
+    assert!(resident_event_hidden_from_product_log("tcp_worker_stopped"));
+    assert!(resident_event_hidden_from_product_log(
+        "udp_session_manager_started"
+    ));
+    assert!(resident_event_hidden_from_product_log(
+        "udp_session_manager_stopped"
+    ));
+    assert!(resident_event_hidden_from_product_log(
+        "resident_health_checker_started"
+    ));
+
+    for event_name in [
+        "tcp_async_runtime_build_failed",
+        "udp_socket_nonblocking_failed",
+        "udp_session_manager_async_fd_failed",
+    ] {
+        assert_eq!(
+            resident_event_product_log_level(event_name, &json!({"event": event_name})),
+            "error",
+            "{event_name}"
+        );
+    }
+
+    for event_name in [
+        "tcp_connection_failed",
+        "tcp_accept_failed",
+        "udp_packet_skipped",
+        "udp_packet_dropped",
+        "udp_exchange_failed",
+        "dns_bind_query_failed",
+        "resident_health_checker_runtime_failed",
+    ] {
+        assert_eq!(
+            resident_event_product_log_level(event_name, &json!({"event": event_name})),
+            "warn",
+            "{event_name}"
+        );
+    }
+
+    assert_eq!(
+        resident_event_product_log_level(
+            "tcp_connection_finished",
+            &json!({"event": "tcp_connection_finished", "proxy_group": "proxy"})
+        ),
+        "info"
+    );
+    assert_eq!(
+        resident_event_product_log_level(
+            "tcp_connection_finished",
+            &json!({"event": "tcp_connection_finished"})
+        ),
+        "debug"
+    );
+    assert_eq!(
+        resident_event_product_log_level(
+            "udp_packet_finished",
+            &json!({"event": "udp_packet_finished"})
+        ),
+        "debug"
+    );
+    assert_eq!(
+        resident_event_product_log_level(
+            "udp_session_stopped",
+            &json!({"event": "udp_session_stopped"})
+        ),
+        "debug"
+    );
+    assert_eq!(
+        resident_event_product_log_level(
+            "dns_bind_listener_started",
+            &json!({"event": "dns_bind_listener_started"})
+        ),
+        "info"
+    );
+    assert_eq!(
+        resident_event_product_log_level(
+            "resident_fatal_error",
+            &json!({"event": "resident_fatal_error"})
+        ),
+        "fatal"
+    );
+    assert_eq!(
+        resident_event_product_log_level(
+            "resident_panic_error",
+            &json!({"event": "resident_panic_error"})
+        ),
+        "panic"
+    );
+}
+
+#[test]
 pub(crate) fn log_store_initialization_repairs_existing_jsonl_permissions() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
