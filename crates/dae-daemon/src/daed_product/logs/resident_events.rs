@@ -34,7 +34,17 @@ pub(crate) fn resident_event_hidden_from_product_log(event_name: &str) -> bool {
     )
 }
 
+pub(crate) fn resident_event_trace_product_log(event_name: &str) -> bool {
+    matches!(
+        event_name,
+        "tcp_route_chosen" | "udp_route_chosen" | "dns_path_chosen" | "routing_native_match"
+    )
+}
+
 pub(crate) fn resident_event_product_log_level(event_name: &str, event: &Value) -> &'static str {
+    if resident_event_trace_product_log(event_name) {
+        return "trace";
+    }
     if event_name.contains("panic") {
         return "panic";
     }

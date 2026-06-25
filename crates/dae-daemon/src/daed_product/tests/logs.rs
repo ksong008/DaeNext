@@ -370,6 +370,74 @@ pub(crate) fn resident_product_log_level_policy_is_explicit_by_event_class() {
 }
 
 #[test]
+pub(crate) fn resident_trace_events_respect_runtime_trace_threshold() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    initialize_log_store(&dir, &state).unwrap();
+
+    for event_name in [
+        "tcp_route_chosen",
+        "udp_route_chosen",
+        "dns_path_chosen",
+        "routing_native_match",
+    ] {
+        assert!(resident_event_trace_product_log(event_name));
+        assert_eq!(
+            resident_event_product_log_level(event_name, &json!({"event": event_name})),
+            "trace",
+            "{event_name}"
+        );
+    }
+
+    set_metadata(&state, "runtime_log_level", "debug").unwrap();
+    append_resident_event_product_log(
+        &dir,
+        &state,
+        &json!({
+            "event": "tcp_route_chosen",
+            "network": "tcp4",
+            "outbound": "proxy",
+            "dial_target": "example.com:443"
+        }),
+    )
+    .unwrap();
+    let debug_all = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+    assert_eq!(debug_all["items"].as_array().unwrap().len(), 0);
+
+    set_metadata(&state, "runtime_log_level", "trace").unwrap();
+    append_resident_event_product_log(
+        &dir,
+        &state,
+        &json!({
+            "event": "tcp_route_chosen",
+            "network": "tcp4",
+            "outbound": "proxy",
+            "dial_target": "example.com:443"
+        }),
+    )
+    .unwrap();
+    let trace = list_logs_value(&dir, &state, Some("trace"), None, 500).unwrap();
+    let trace_items = trace["items"].as_array().unwrap();
+    assert_eq!(trace_items.len(), 1, "{trace}");
+    assert_eq!(trace_items[0]["level"], json!("trace"));
+    assert_eq!(
+        trace_items[0]["message"],
+        json!("resident dataplane tcp route chosen")
+    );
+    assert_eq!(trace_items[0]["fields"]["event"], json!("tcp_route_chosen"));
+    assert_eq!(trace_items[0]["fields"]["network"], json!("tcp4"));
+    assert_eq!(trace_items[0]["fields"]["outbound"], json!("proxy"));
+
+    for level in ["debug", "info", "error"] {
+        let filtered = list_logs_value(&dir, &state, Some(level), None, 500).unwrap();
+        assert_eq!(filtered["items"].as_array().unwrap().len(), 0, "{level}");
+    }
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn log_store_initialization_repairs_existing_jsonl_permissions() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
