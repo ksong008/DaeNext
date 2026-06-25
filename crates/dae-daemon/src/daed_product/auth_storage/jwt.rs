@@ -34,11 +34,19 @@ pub(crate) fn verify_token(state: &Path, token: &str) -> io::Result<Option<UserR
     if parts.next().is_some() {
         return Ok(None);
     }
-    let header_value = decode_jwt_part(header)?;
+    let header_value = match decode_jwt_part(header) {
+        Ok(value) => value,
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => return Ok(None),
+        Err(err) => return Err(err),
+    };
     if header_value.get("alg").and_then(Value::as_str) != Some("HS256") {
         return Ok(None);
     }
-    let payload_value = decode_jwt_part(payload)?;
+    let payload_value = match decode_jwt_part(payload) {
+        Ok(value) => value,
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => return Ok(None),
+        Err(err) => return Err(err),
+    };
     let Some(username) = payload_value.get("sub").and_then(Value::as_str) else {
         return Ok(None);
     };

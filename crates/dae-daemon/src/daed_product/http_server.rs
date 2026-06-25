@@ -168,10 +168,18 @@ pub(super) fn handle_stream(
     if request.method == "GET"
         && (request.path == "/api/events/logs" || request.path == "/api/events/runtime")
     {
-        let Some(_user) = authenticate_request(&app, &request) else {
-            let response = HttpResponse::json(401, json!({"error": "authentication required"}));
-            write_http_response_for_request(&mut stream, &request, &response, head_only)?;
-            return Ok(ProductHttpConnectionResult::Closed);
+        match authenticate_request(&app, &request) {
+            Ok(Some(_user)) => {}
+            Ok(None) => {
+                let response = HttpResponse::json(401, json!({"error": "authentication required"}));
+                write_http_response_for_request(&mut stream, &request, &response, head_only)?;
+                return Ok(ProductHttpConnectionResult::Closed);
+            }
+            Err(err) => {
+                let response = HttpResponse::json(500, json!({"error": err.to_string()}));
+                write_http_response_for_request(&mut stream, &request, &response, head_only)?;
+                return Ok(ProductHttpConnectionResult::Closed);
+            }
         };
         return detach_sse_stream(stream, app, metrics, request);
     }

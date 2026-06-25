@@ -179,7 +179,7 @@ pub(crate) fn token_auth_prefers_bearer_header_over_event_query_token() {
         Some("not-a-token"),
     );
 
-    let user = authenticate_request(&app, &request).unwrap();
+    let user = authenticate_request(&app, &request).unwrap().unwrap();
     assert_eq!(user.username, "admin");
     fs::remove_dir_all(dir).unwrap();
 }
@@ -194,13 +194,13 @@ pub(crate) fn token_query_auth_is_limited_to_event_streams() {
     for path in ["/api/events/runtime", "/api/events/logs"] {
         let request = token_request("GET", path, None, Some(&token));
         assert!(
-            authenticate_request(&app, &request).is_some(),
+            authenticate_request(&app, &request).unwrap().is_some(),
             "query token should authenticate {path}"
         );
     }
 
     let request = token_request("GET", "/api/runtime/overview", None, Some(&token));
-    assert!(authenticate_request(&app, &request).is_none());
+    assert!(authenticate_request(&app, &request).unwrap().is_none());
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -227,6 +227,12 @@ pub(crate) fn token_verifier_rejects_expired_wrong_alg_and_bad_signature() {
 
     let bad_signature = format!("{token}x");
     assert!(verify_token(&state, &bad_signature).unwrap().is_none());
+
+    assert!(
+        verify_token(&state, "definitely.bad.token")
+            .unwrap()
+            .is_none()
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 

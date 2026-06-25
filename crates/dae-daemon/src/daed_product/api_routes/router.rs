@@ -34,8 +34,14 @@ pub(super) fn handle_api_request(
         ("POST", "/auth/users") => api_create_user(app, request),
         ("POST", "/auth/token") => api_issue_token(app, request),
         _ => {
-            let Some(user) = authenticate_request(app, request) else {
-                return HttpResponse::json(401, json!({"error": "authentication required"}));
+            let user = match authenticate_request(app, request) {
+                Ok(Some(user)) => user,
+                Ok(None) => {
+                    return HttpResponse::json(401, json!({"error": "authentication required"}));
+                }
+                Err(err) => {
+                    return HttpResponse::json(500, json!({"error": err.to_string()}));
+                }
             };
             match (request.method.as_str(), api_path) {
                 ("GET", "/user/me") => HttpResponse::json(200, user_resource(&user)),

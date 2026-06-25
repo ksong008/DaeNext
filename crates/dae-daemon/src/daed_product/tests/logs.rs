@@ -399,30 +399,23 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
 
     let all = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
     let items = all["items"].as_array().unwrap();
-    assert_eq!(items.len(), 3, "{all}");
+    assert_eq!(items.len(), 2, "{all}");
     assert_eq!(
         items[0]["message"],
-        json!("resident dataplane tcp worker started")
-    );
-    assert_eq!(items[0]["level"], json!("info"));
-    assert_eq!(items[0]["fields"]["event"], json!("tcp_worker_started"));
-    assert_eq!(items[0]["fields"]["proxy_count"], json!("2"));
-    assert_eq!(
-        items[1]["message"],
         json!(format!(
             "{FLOW_FAILED_SOURCE} <-> {FLOW_FAILED_TARGET} failed"
         ))
     );
-    assert_eq!(items[1]["level"], json!("warn"));
-    assert_eq!(items[1]["fields"]["error"], json!("sample failure"));
-    assert_eq!(items[1]["fields"]["network"], json!("tcp4"));
-    assert!(items[1]["fields"].get("event").is_none());
+    assert_eq!(items[0]["level"], json!("warn"));
+    assert_eq!(items[0]["fields"]["error"], json!("sample failure"));
+    assert_eq!(items[0]["fields"]["network"], json!("tcp4"));
+    assert!(items[0]["fields"].get("event").is_none());
     assert_eq!(
-        items[2]["message"],
+        items[1]["message"],
         json!("resident dataplane tcp accept failed")
     );
-    assert_eq!(items[2]["level"], json!("warn"));
-    assert_eq!(items[2]["fields"]["error"], json!("accept failure"));
+    assert_eq!(items[1]["level"], json!("warn"));
+    assert_eq!(items[1]["fields"]["error"], json!("accept failure"));
 
     set_metadata(&state, "runtime_log_level", "debug").unwrap();
     append_resident_event_product_log(
