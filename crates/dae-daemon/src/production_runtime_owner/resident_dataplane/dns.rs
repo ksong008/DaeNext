@@ -73,6 +73,28 @@ const DNS_DOH3_ALPN: &str = "h3";
 const DNS_DOQ_ALPN: &str = "doq";
 const TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS: i64 = 600;
 const DNS_FORWARDER_CACHE_MAX_ENTRIES: usize = 128;
+const DNS_TRACE_CACHE_UNRESOLVED: &str = "unresolved";
+const DNS_TRACE_CACHE_BYPASS: &str = "bypass";
+const DNS_TRACE_CACHE_HIT: &str = "hit";
+const DNS_TRACE_CACHE_LOCKED_HIT: &str = "locked-hit";
+const DNS_TRACE_CACHE_MISS: &str = "miss";
+const DNS_TRACE_CACHE_UNKNOWN: &str = "unknown";
+const DNS_TRACE_ROUTING_UNRESOLVED: &str = "unresolved";
+const DNS_TRACE_ROUTING_ASIS: &str = "asis";
+const DNS_TRACE_ROUTING_UPSTREAM: &str = "upstream";
+const DNS_TRACE_ROUTING_IPVERSION_PREFERENCE: &str = "ipversion_preference";
+const DNS_TRACE_ROUTING_RESOLVED: &str = "resolved";
+const DNS_TRACE_ROUTING_CACHE: &str = "cache";
+const DNS_TRACE_ROUTING_ACCEPT: &str = "accept";
+const DNS_TRACE_ROUTING_REJECT: &str = "reject";
+const DNS_TRACE_REASON_REQUEST_REJECTED: &str = "dns.routing.request rejected query";
+const DNS_TRACE_REASON_CACHE_HIT: &str = "resident DNS cache hit";
+const DNS_TRACE_REASON_CACHE_LOCKED_HIT: &str = "resident DNS cache hit after inflight wait";
+const DNS_TRACE_REASON_ASIS_ACCEPTED: &str = "resident DNS asis response accepted";
+const DNS_TRACE_REASON_ASIS_REJECTED: &str = "resident DNS asis response rejected";
+const DNS_TRACE_REASON_UPSTREAM_ACCEPTED: &str = "resident DNS upstream response accepted";
+const DNS_TRACE_REASON_UPSTREAM_REJECTED: &str = "resident DNS upstream response rejected";
+const DNS_TRACE_REASON_IPVERSION: &str = "ipversion preference resolved DNS path";
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsPlan {
@@ -88,6 +110,95 @@ pub(super) struct ResidentDnsPlan {
     fixed_domain_ttl: Arc<BTreeMap<String, i64>>,
     ipversion_prefer: Option<u16>,
     mark: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ResidentDnsQueryResult {
+    pub(super) response: Vec<u8>,
+    pub(super) trace: ResidentDnsTraceSummary,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ResidentDnsTraceSummary {
+    pub(super) qname: String,
+    pub(super) qtype: u16,
+    pub(super) qclass: u16,
+    pub(super) cache: String,
+    pub(super) request_routing: String,
+    pub(super) response_routing: String,
+    pub(super) upstream: Option<String>,
+    pub(super) upstream_scheme: Option<&'static str>,
+    pub(super) upstream_chain: Vec<String>,
+    pub(super) reroutes: usize,
+    pub(super) fallback: bool,
+    pub(super) rcode: Option<u16>,
+    pub(super) reason: String,
+}
+
+impl ResidentDnsTraceSummary {
+    fn from_request(plan: &ResidentDnsPlan, request: &DnsPacketView<'_>) -> Result<Self, String> {
+        let question = request
+            .questions()
+            .next()
+            .ok_or_else(|| "DNS request has no question".to_owned())?;
+        let qname = question
+            .qname_to_canonical_string()
+            .map_err(|err| format!("read DNS request qname for trace: {err}"))?;
+        Ok(Self {
+            qname,
+            qtype: question.qtype(),
+            qclass: question.qclass(),
+            cache: DNS_TRACE_CACHE_UNRESOLVED.to_owned(),
+            request_routing: DNS_TRACE_ROUTING_UNRESOLVED.to_owned(),
+            response_routing: DNS_TRACE_ROUTING_UNRESOLVED.to_owned(),
+            upstream: None,
+            upstream_scheme: None,
+            upstream_chain: Vec::new(),
+            reroutes: 0,
+            fallback: plan.request_matcher.is_none(),
+            rcode: None,
+            reason: String::new(),
+        })
+    }
+
+    fn set_request_action(&mut self, action: &ResidentDnsRequestAction) {
+        self.request_routing = dns_request_action_name(action).to_owned();
+        if let ResidentDnsRequestAction::Upstream(upstream) = action {
+            self.set_upstream(upstream);
+        }
+    }
+
+    fn set_response_action(&mut self, action: &ResidentDnsResponseAction) {
+        self.response_routing = dns_response_action_name(action).to_owned();
+        if let ResidentDnsResponseAction::Upstream(upstream) = action {
+            self.set_upstream(upstream);
+        }
+    }
+
+    fn set_upstream(&mut self, upstream: &ResidentDnsUpstream) {
+        self.upstream = Some(upstream.tag.clone());
+        self.upstream_scheme = Some(upstream.scheme.as_str());
+    }
+
+    fn push_upstream_attempt(&mut self, upstream: &ResidentDnsUpstream) {
+        self.set_upstream(upstream);
+        self.upstream_chain.push(upstream.tag.clone());
+    }
+
+    fn push_asis_attempt(&mut self) {
+        self.upstream = Some("asis".to_owned());
+        self.upstream_scheme = Some("udp");
+        self.upstream_chain.push("asis".to_owned());
+    }
+
+    fn finish(mut self, response: Vec<u8>, reason: &str) -> ResidentDnsQueryResult {
+        self.rcode = dns_response_rcode(&response);
+        self.reason = reason.to_owned();
+        ResidentDnsQueryResult {
+            response,
+            trace: self,
+        }
+    }
 }
 
 impl ResidentDnsPlan {
@@ -318,6 +429,18 @@ enum ResidentDnsUpstreamScheme {
 }
 
 impl ResidentDnsUpstreamScheme {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::Tcp => "tcp",
+            Self::TcpUdp => "tcp+udp",
+            Self::Tls => "tls",
+            Self::Https => "https",
+            Self::Quic => "quic",
+            Self::Http3 => "http3",
+        }
+    }
+
     const fn requires_dns_response_id_match(self) -> bool {
         matches!(self, Self::Udp | Self::Tcp | Self::TcpUdp | Self::Tls)
     }
@@ -462,6 +585,26 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+fn dns_request_action_name(action: &ResidentDnsRequestAction) -> &'static str {
+    match action {
+        ResidentDnsRequestAction::AsIs => DNS_TRACE_ROUTING_ASIS,
+        ResidentDnsRequestAction::Reject => DNS_TRACE_ROUTING_REJECT,
+        ResidentDnsRequestAction::Upstream(_) => DNS_TRACE_ROUTING_UPSTREAM,
+    }
+}
+
+fn dns_response_action_name(action: &ResidentDnsResponseAction) -> &'static str {
+    match action {
+        ResidentDnsResponseAction::Accept => DNS_TRACE_ROUTING_ACCEPT,
+        ResidentDnsResponseAction::Reject => DNS_TRACE_ROUTING_REJECT,
+        ResidentDnsResponseAction::Upstream(_) => DNS_TRACE_ROUTING_UPSTREAM,
+    }
+}
+
+fn dns_response_rcode(response: &[u8]) -> Option<u16> {
+    (response.len() >= 4).then(|| u16::from_be_bytes([response[2], response[3]]) & 0x000f)
+}
+
 pub(super) async fn handle_resident_dns_udp_async(
     plan: &ResidentDnsPlan,
     original_dst: SocketAddr,
@@ -470,12 +613,37 @@ pub(super) async fn handle_resident_dns_udp_async(
     handle_resident_dns_request_async(plan, original_dst, payload, true).await
 }
 
-pub(super) async fn handle_resident_dns_local_async(
+pub(super) async fn handle_resident_dns_local_trace_async(
     plan: &ResidentDnsPlan,
     original_dst: SocketAddr,
     payload: &[u8],
-) -> Result<Vec<u8>, String> {
-    handle_resident_dns_request_async(plan, original_dst, payload, false).await
+) -> Result<ResidentDnsQueryResult, String> {
+    let request =
+        DnsPacketView::parse(payload).map_err(|err| format!("parse DNS request: {err}"))?;
+    if request.response() {
+        return Err("DNS request expected but DNS response received".to_owned());
+    }
+    if request.question_count() == 0 {
+        return Err("DNS request has no question".to_owned());
+    }
+    let mut trace = ResidentDnsTraceSummary::from_request(plan, &request)?;
+    if dns_ipversion_preference_applies(plan, &request) {
+        let response =
+            handle_resident_dns_request_async(plan, original_dst, payload, false).await?;
+        trace.cache = DNS_TRACE_CACHE_UNKNOWN.to_owned();
+        trace.request_routing = DNS_TRACE_ROUTING_IPVERSION_PREFERENCE.to_owned();
+        trace.response_routing = DNS_TRACE_ROUTING_RESOLVED.to_owned();
+        return Ok(trace.finish(response, DNS_TRACE_REASON_IPVERSION));
+    }
+    handle_resident_dns_request_without_preference_trace(
+        plan,
+        original_dst,
+        payload,
+        &request,
+        false,
+        trace,
+    )
+    .await
 }
 
 async fn handle_resident_dns_request_async(
@@ -505,6 +673,20 @@ async fn handle_resident_dns_request_async(
         allow_asis,
     )
     .await
+}
+
+fn dns_ipversion_preference_applies(plan: &ResidentDnsPlan, request: &DnsPacketView<'_>) -> bool {
+    let Some(preferred_qtype) = plan.ipversion_prefer else {
+        return false;
+    };
+    if request.question_count() != 1 {
+        return false;
+    }
+    let Some(question) = request.questions().next() else {
+        return false;
+    };
+    let requested_qtype = question.qtype();
+    matches!(requested_qtype, DNS_QTYPE_A | DNS_QTYPE_AAAA) && requested_qtype != preferred_qtype
 }
 
 async fn handle_ipversion_preference(
@@ -644,6 +826,91 @@ async fn handle_resident_dns_request_without_preference(
     }
 }
 
+async fn handle_resident_dns_request_without_preference_trace(
+    plan: &ResidentDnsPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+    request: &DnsPacketView<'_>,
+    allow_asis: bool,
+    mut trace: ResidentDnsTraceSummary,
+) -> Result<ResidentDnsQueryResult, String> {
+    let action = select_request_action(plan, request)?;
+    trace.set_request_action(&action);
+    if matches!(action, ResidentDnsRequestAction::Reject) {
+        remove_dns_response_cache_for_request(plan, request)?;
+        trace.cache = DNS_TRACE_CACHE_BYPASS.to_owned();
+        trace.response_routing = DNS_TRACE_ROUTING_REJECT.to_owned();
+        let response = build_reject_response(payload, request)?;
+        return Ok(trace.finish(response, DNS_TRACE_REASON_REQUEST_REJECTED));
+    }
+    if let ResidentDnsRequestAction::AsIs = action
+        && !allow_asis
+    {
+        return Err(
+                "dns request routing cannot use \"asis\" for locally bound dns listener; configure an explicit upstream instead"
+                    .to_owned(),
+            );
+    }
+    let mut cached_response = Vec::new();
+    if plan
+        .cache
+        .lookup_response_into(request, false, &mut cached_response)?
+    {
+        trace.cache = DNS_TRACE_CACHE_HIT.to_owned();
+        trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
+        return Ok(trace.finish(cached_response, DNS_TRACE_REASON_CACHE_HIT));
+    }
+    let key = dns_cache_key_for_request(request)?;
+    let _inflight = plan.cache.lock_key(key).await?;
+    if plan
+        .cache
+        .lookup_response_into(request, false, &mut cached_response)?
+    {
+        trace.cache = DNS_TRACE_CACHE_LOCKED_HIT.to_owned();
+        trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
+        return Ok(trace.finish(cached_response, DNS_TRACE_REASON_CACHE_LOCKED_HIT));
+    }
+    trace.cache = DNS_TRACE_CACHE_MISS.to_owned();
+    match action {
+        ResidentDnsRequestAction::AsIs => {
+            trace.push_asis_attempt();
+            let response = forward_dns_udp_async(original_dst, payload, plan.mark)
+                .await
+                .map_err(|err| format!("forward DNS asis to {original_dst}: {err}"))?;
+            validate_dns_response_for_request(request, &response, true)?;
+            let response_action = select_response_action_for_upstream(
+                plan,
+                request,
+                &response,
+                DnsRequestOutboundIndex::ASIS,
+            )?;
+            trace.set_response_action(&response_action);
+            match response_action {
+                ResidentDnsResponseAction::Accept => {
+                    record_accepted_dns_response(plan, &response)?;
+                    trace.response_routing = DNS_TRACE_ROUTING_ACCEPT.to_owned();
+                    Ok(trace.finish(response, DNS_TRACE_REASON_ASIS_ACCEPTED))
+                }
+                ResidentDnsResponseAction::Reject => {
+                    let response = build_reject_response(payload, request)?;
+                    trace.response_routing = DNS_TRACE_ROUTING_REJECT.to_owned();
+                    Ok(trace.finish(response, DNS_TRACE_REASON_ASIS_REJECTED))
+                }
+                ResidentDnsResponseAction::Upstream(upstream) => {
+                    trace.reroutes += 1;
+                    resolve_dns_response_routing_trace(plan, payload, request, upstream, trace)
+                        .await
+                }
+            }
+        }
+        ResidentDnsRequestAction::Reject => unreachable!("reject handled before cache lookup"),
+        ResidentDnsRequestAction::Upstream(ref upstream) => {
+            resolve_dns_response_routing_trace(plan, payload, request, upstream.clone(), trace)
+                .await
+        }
+    }
+}
+
 fn dns_cache_key_for_request(request: &DnsPacketView<'_>) -> Result<DnsCacheKey, String> {
     let question = request
         .questions()
@@ -739,6 +1006,47 @@ async fn resolve_dns_response_routing(
                 return build_reject_response(request_payload, request);
             }
             ResidentDnsResponseAction::Upstream(next) => upstream = next,
+        }
+    }
+    Err(format!(
+        "dns.routing.response exceeded reroute limit of {DNS_RESPONSE_REROUTE_LIMIT}"
+    ))
+}
+
+async fn resolve_dns_response_routing_trace(
+    plan: &ResidentDnsPlan,
+    request_payload: &[u8],
+    request: &DnsPacketView<'_>,
+    mut upstream: ResidentDnsUpstream,
+    mut trace: ResidentDnsTraceSummary,
+) -> Result<ResidentDnsQueryResult, String> {
+    for _ in 0..DNS_RESPONSE_REROUTE_LIMIT {
+        trace.push_upstream_attempt(&upstream);
+        let response =
+            forward_dns_to_upstream_async(&upstream, request_payload, plan.mark, &plan.forwarders)
+                .await?;
+        validate_dns_response_for_request(
+            request,
+            &response,
+            upstream.scheme.requires_dns_response_id_match(),
+        )?;
+        let response_action = select_response_action(plan, request, &response, &upstream)?;
+        trace.set_response_action(&response_action);
+        match response_action {
+            ResidentDnsResponseAction::Accept => {
+                record_accepted_dns_response(plan, &response)?;
+                trace.response_routing = DNS_TRACE_ROUTING_ACCEPT.to_owned();
+                return Ok(trace.finish(response, DNS_TRACE_REASON_UPSTREAM_ACCEPTED));
+            }
+            ResidentDnsResponseAction::Reject => {
+                let response = build_reject_response(request_payload, request)?;
+                trace.response_routing = DNS_TRACE_ROUTING_REJECT.to_owned();
+                return Ok(trace.finish(response, DNS_TRACE_REASON_UPSTREAM_REJECTED));
+            }
+            ResidentDnsResponseAction::Upstream(next) => {
+                trace.reroutes += 1;
+                upstream = next;
+            }
         }
     }
     Err(format!(
@@ -1639,10 +1947,55 @@ mod tests {
     #[tokio::test]
     async fn resident_dns_local_listener_rejects_asis() {
         let plan = ResidentDnsPlan::asis(0);
-        let err = handle_resident_dns_local_async(&plan, "127.0.0.1:8053".parse().unwrap(), QUERY)
-            .await
-            .unwrap_err();
+        let err =
+            handle_resident_dns_local_trace_async(&plan, "127.0.0.1:8053".parse().unwrap(), QUERY)
+                .await
+                .unwrap_err();
         assert!(err.contains("cannot use \"asis\" for locally bound dns listener"));
+    }
+
+    #[tokio::test]
+    async fn resident_dns_local_trace_records_request_reject_path() {
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          routing {
+            request {
+              fallback: reject
+            }
+          }
+        }
+        "#;
+        let config = parse_config(input);
+        let geodata = test_geodata();
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+        let result =
+            handle_resident_dns_local_trace_async(&plan, "127.0.0.1:8053".parse().unwrap(), QUERY)
+                .await
+                .unwrap();
+        let request = DnsPacketView::parse(QUERY).unwrap();
+        let question = request.questions().next().unwrap();
+        let request_action = select_request_action(&plan, &request).unwrap();
+
+        assert_eq!(
+            result.trace.qname,
+            question.qname_to_canonical_string().unwrap()
+        );
+        assert_eq!(result.trace.qtype, question.qtype());
+        assert_eq!(result.trace.qclass, question.qclass());
+        assert_eq!(result.trace.cache, DNS_TRACE_CACHE_BYPASS);
+        assert_eq!(
+            result.trace.request_routing,
+            dns_request_action_name(&request_action)
+        );
+        assert_eq!(result.trace.response_routing, DNS_TRACE_ROUTING_REJECT);
+        assert_eq!(result.trace.upstream, None);
+        assert!(result.trace.upstream_chain.is_empty());
+        assert_eq!(result.trace.fallback, plan.request_matcher.is_none());
+        assert_eq!(result.trace.rcode, dns_response_rcode(&result.response));
+        assert_eq!(result.trace.reason, DNS_TRACE_REASON_REQUEST_REJECTED);
+        assert_eq!(&result.response[0..2], &request.id().to_be_bytes());
     }
 
     fn geosite_list(entries: &[Vec<u8>]) -> Vec<u8> {

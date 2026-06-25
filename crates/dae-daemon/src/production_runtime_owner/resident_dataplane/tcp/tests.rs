@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 
 const FLOW_DIAL_TARGET: &str = "flow-dial-target";
 const FLOW_OUTBOUND: &str = "flow-outbound";
@@ -9,6 +9,11 @@ const FLOW_DIALER: &str = "flow-dialer";
 const FLOW_PROCESS: &str = "flow-process";
 const FLOW_MAC: &str = "flow-mac";
 const FLOW_SNIFFED_DOMAIN: &str = "flow-sniffed-domain";
+const FLOW_INITIAL_OUTBOUND: u8 = 7;
+const FLOW_FINAL_OUTBOUND: u8 = 9;
+const FLOW_FINAL_MARK: u32 = 0x55;
+const FLOW_PID: u32 = 1;
+const FLOW_DSCP: u8 = 2;
 
 struct TestAsyncRead {
     bytes: Vec<u8>,
@@ -82,16 +87,16 @@ fn resident_tcp_probe_status_matches_compatible_http_check_rules() {
 #[test]
 fn tcp_route_chosen_event_exposes_route_decision_fields() {
     let route = TcpRouteSelection {
-        initial_outbound: 7,
-        final_outbound: 9,
-        final_mark: 0x55,
+        initial_outbound: FLOW_INITIAL_OUTBOUND,
+        final_outbound: FLOW_FINAL_OUTBOUND,
+        final_mark: FLOW_FINAL_MARK,
         userspace_route_executed: true,
         userspace_route_must: false,
         dial_target: FLOW_DIAL_TARGET.to_owned(),
         dial_ip: false,
         log_metadata: TcpRoutingLogMetadata {
-            pid: 1,
-            dscp: 2,
+            pid: FLOW_PID,
+            dscp: FLOW_DSCP,
             pname: FLOW_PROCESS.to_owned(),
             mac: FLOW_MAC.to_owned(),
         },
@@ -102,32 +107,43 @@ fn tcp_route_chosen_event_exposes_route_decision_fields() {
         domain: FLOW_SNIFFED_DOMAIN.to_owned(),
         error: None,
     };
+    let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100).into();
+    let original_dst = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443).into();
 
-    let event = tcp_route_chosen_event(
-        SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100).into(),
-        SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443).into(),
+    let event = tcp_route_chosen_event(peer, original_dst, &selection, &sniff, "domain");
+
+    assert_eq!(event["event"], TCP_ROUTE_CHOSEN_EVENT);
+    assert_eq!(event["dial_mode"], "domain");
+    assert_eq!(event["outbound_kind"], TCP_OUTBOUND_KIND_DIRECT);
+    assert_eq!(event["mptcp"], true);
+    assert_eq!(event["initial_outbound"], FLOW_INITIAL_OUTBOUND);
+    assert_eq!(event["final_outbound"], FLOW_FINAL_OUTBOUND);
+    assert_eq!(event["final_mark"], FLOW_FINAL_MARK);
+    assert_eq!(event["dial_target"], FLOW_DIAL_TARGET);
+    assert_eq!(event["network"], resident_tcp_network_name(original_dst));
+    assert_eq!(event["outbound"], TCP_OUTBOUND_KIND_DIRECT);
+    assert_eq!(event["policy"], TCP_FIXED_POLICY);
+    assert_eq!(event["dialer"], TCP_DIRECT_DIALER);
+    assert_eq!(event["sniffed"], FLOW_SNIFFED_DOMAIN);
+    assert_eq!(event["pid"], FLOW_PID);
+    assert_eq!(event["dscp"], FLOW_DSCP);
+    assert_eq!(event["pname"], FLOW_PROCESS);
+    assert_eq!(event["mac"], FLOW_MAC);
+
+    let v6_original_dst =
+        SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 20), 443, 0, 0).into();
+    let v6_event = tcp_route_chosen_event(
+        SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10), 43100, 0, 0).into(),
+        v6_original_dst,
         &selection,
         &sniff,
         "domain",
     );
-
-    assert_eq!(event["event"], "tcp_route_chosen");
-    assert_eq!(event["dial_mode"], "domain");
-    assert_eq!(event["outbound_kind"], "direct");
-    assert_eq!(event["mptcp"], true);
-    assert_eq!(event["initial_outbound"], 7);
-    assert_eq!(event["final_outbound"], 9);
-    assert_eq!(event["final_mark"], 0x55);
-    assert_eq!(event["dial_target"], FLOW_DIAL_TARGET);
-    assert_eq!(event["network"], "tcp4");
-    assert_eq!(event["outbound"], "direct");
-    assert_eq!(event["policy"], "fixed");
-    assert_eq!(event["dialer"], "direct");
-    assert_eq!(event["sniffed"], FLOW_SNIFFED_DOMAIN);
-    assert_eq!(event["pid"], 1);
-    assert_eq!(event["dscp"], 2);
-    assert_eq!(event["pname"], FLOW_PROCESS);
-    assert_eq!(event["mac"], FLOW_MAC);
+    assert_eq!(
+        v6_event["network"],
+        resident_tcp_network_name(v6_original_dst)
+    );
+    assert_ne!(event["network"], v6_event["network"]);
 }
 
 #[tokio::test(flavor = "current_thread")]
