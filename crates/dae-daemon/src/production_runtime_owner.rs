@@ -56,10 +56,8 @@ use native_ebpf::NativeEbpfRuntimeState;
 pub use netns_link::{NetnsLinkMode, parse_netns_link_mode};
 use reload_runtime::{ReloadRuntimeEvidence, run_reload_runtime_parity_probe};
 use report::{live_handoff_json, report_value, socket_options_verified};
-pub use resident::{
-    ResidentProductionRuntime, start_resident_production_runtime,
-    start_resident_production_runtime_with_asset_dirs,
-};
+pub(crate) use resident::start_resident_production_runtime_with_latency_seed;
+pub use resident::{ResidentProductionRuntime, start_resident_production_runtime_with_asset_dirs};
 pub(crate) use resident_dataplane::{
     ResidentEventLogDecision, ResidentEventLogPolicy, ResidentEventLogSink,
     ResidentManualProbeHandle, fetch_http_url_via_default_proxy,

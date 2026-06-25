@@ -187,3 +187,68 @@ pub(super) fn resident_dataplane_latency_policies_ignore_failed_manual_probe_lat
         );
     }
 }
+
+#[test]
+pub(super) fn resident_dataplane_latency_seed_selects_dynamic_group_candidate() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
+
+    let node_b_hash = group
+        .probe_candidates()
+        .into_iter()
+        .find(|candidate| candidate.node_tag == "node_b")
+        .unwrap()
+        .link_hash;
+    group
+        .apply_successful_latency_seed_snapshot(&serde_json::json!({
+            "linkHash": node_b_hash,
+            "latencyMs": 25,
+            "alive": true,
+            "checkedAtUnix": 42,
+        }))
+        .unwrap();
+
+    assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    assert_eq!(group.select_proxy_for_udp().unwrap().node_tag, "node_b");
+}
+
+#[test]
+pub(super) fn resident_dataplane_latency_seed_does_not_change_fixed_group_selection() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: fixed(1)
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+
+    let node_b_hash = group
+        .probe_candidates()
+        .into_iter()
+        .find(|candidate| candidate.node_tag == "node_b")
+        .unwrap()
+        .link_hash;
+    let applied = group
+        .apply_successful_latency_seed_snapshot(&serde_json::json!({
+            "linkHash": node_b_hash,
+            "latencyMs": 1,
+            "alive": true,
+            "checkedAtUnix": 42,
+        }))
+        .unwrap();
+
+    assert_eq!(applied, 0);
+    assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    assert_eq!(group.select_proxy_for_udp().unwrap().node_tag, "node_b");
+}

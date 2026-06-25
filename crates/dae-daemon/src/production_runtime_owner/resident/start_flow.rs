@@ -7,6 +7,7 @@ pub(super) fn start_with_options(
     config: &Config,
     lan_ifaces: Vec<String>,
     wan_ifaces: Vec<String>,
+    latency_seed: &[Value],
 ) -> Result<ResidentProductionRuntime, String> {
     if options.execute {
         cleanup_stale_production_owner_after_crash(&lan_ifaces);
@@ -363,6 +364,7 @@ pub(super) fn start_with_options(
                                         discovery.id,
                                         domain_routing_discovery.id,
                                         &geodata,
+                                        latency_seed,
                                     );
                                     if let Value::Object(map) = &mut value {
                                         map.insert(

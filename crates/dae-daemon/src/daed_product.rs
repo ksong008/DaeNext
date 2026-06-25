@@ -43,7 +43,7 @@ use crate::production_runtime_owner::{
     ResidentEventLogDecision, ResidentManualProbeHandle, ResidentProductionRuntime,
     resident_live_adapter_config_assessment, resident_live_adapter_udp_probe,
     resident_runtime_defaults_contract, set_resident_event_log_policy, set_resident_event_log_sink,
-    start_resident_production_runtime,
+    start_resident_production_runtime_with_latency_seed,
 };
 
 const DEFAULT_CONFIG_DIR: &str = "/etc/daed";

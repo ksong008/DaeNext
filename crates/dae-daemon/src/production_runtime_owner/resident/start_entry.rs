@@ -1,13 +1,30 @@
 use super::*;
-pub fn start_resident_production_runtime(
+pub(crate) fn start_resident_production_runtime_with_latency_seed(
     config: &Config,
+    latency_seed: &[Value],
 ) -> Result<ResidentProductionRuntime, String> {
-    start_resident_production_runtime_with_asset_dirs(config, Vec::<PathBuf>::new())
+    start_resident_production_runtime_with_asset_dirs_and_latency_seed(
+        config,
+        Vec::<PathBuf>::new(),
+        latency_seed,
+    )
 }
 
 pub fn start_resident_production_runtime_with_asset_dirs(
     config: &Config,
     geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+) -> Result<ResidentProductionRuntime, String> {
+    start_resident_production_runtime_with_asset_dirs_and_latency_seed(
+        config,
+        geodata_asset_dirs,
+        &[],
+    )
+}
+
+fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
+    config: &Config,
+    geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+    latency_seed: &[Value],
 ) -> Result<ResidentProductionRuntime, String> {
     let artifact_dir = resident_runtime_artifact_dir(std::process::id());
     cleanup_stale_resident_runtime_artifacts(&artifact_dir);
@@ -71,6 +88,7 @@ pub fn start_resident_production_runtime_with_asset_dirs(
         config,
         lan_ifaces,
         wan_ifaces,
+        latency_seed,
     )
 }
 

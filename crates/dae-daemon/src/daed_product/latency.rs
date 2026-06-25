@@ -956,6 +956,62 @@ pub(crate) fn sync_runtime_node_latency_results(
     Ok(())
 }
 
+pub(crate) fn stored_successful_node_latency_seed_snapshots(
+    state: &Path,
+) -> io::Result<Vec<Value>> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    stored_successful_node_latency_seed_snapshots_from_conn(&conn)
+}
+
+pub(crate) fn stored_successful_node_latency_seed_snapshots_from_conn(
+    conn: &Connection,
+) -> io::Result<Vec<Value>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT n.name, n.link, l.latency_ms, l.tested_at
+             FROM nodes n
+             JOIN node_latency_results l ON l.node_id = n.id
+             WHERE COALESCE(l.alive, 0) != 0 AND l.latency_ms IS NOT NULL
+             ORDER BY n.id",
+        )
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map([], |row| {
+            let display_name = row.get::<_, String>(0)?;
+            let link = row.get::<_, String>(1)?;
+            let latency_ms = row.get::<_, i64>(2)?;
+            let tested_at = row.get::<_, String>(3)?;
+            let link_hash = runtime_link_hash(&link);
+            let display_name = if display_name.is_empty() {
+                node_name_from_link(&link)
+            } else {
+                display_name
+            };
+            Ok(json!({
+                "name": display_name,
+                "displayName": display_name,
+                "linkHash": link_hash,
+                "linkIdentity": runtime_link_identity_value(
+                    &display_name,
+                    &link_hash,
+                    &runtime_redacted_link_source(&link),
+                ),
+                "latencyMs": latency_ms,
+                "alive": true,
+                "checkedAtUnix": parse_runtime_latency_seed_time(&tested_at).unwrap_or(0),
+                "message": format!("{latency_ms}ms"),
+                "scope": "proxy-tcp-check",
+            }))
+        })
+        .map_err(sqlite_io_error)?;
+    let mut snapshots = Vec::new();
+    for row in rows {
+        snapshots.push(row.map_err(sqlite_io_error)?);
+    }
+    Ok(snapshots)
+}
+
 pub(crate) fn runtime_node_latency_results_for_nodes(
     nodes: &[(i64, String, String)],
     snapshots: &[Value],
@@ -1103,4 +1159,45 @@ pub(crate) fn all_node_ids(conn: &Connection) -> io::Result<Vec<i64>> {
         ids.push(row.map_err(sqlite_io_error)?);
     }
     Ok(ids)
+}
+
+fn parse_runtime_latency_seed_time(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    if raw.len() != 20 || !raw.ends_with('Z') {
+        return None;
+    }
+    let year = raw.get(0..4)?.parse::<i64>().ok()?;
+    let month = raw.get(5..7)?.parse::<i64>().ok()?;
+    let day = raw.get(8..10)?.parse::<i64>().ok()?;
+    let hour = raw.get(11..13)?.parse::<i64>().ok()?;
+    let minute = raw.get(14..16)?.parse::<i64>().ok()?;
+    let second = raw.get(17..19)?.parse::<i64>().ok()?;
+    if raw.as_bytes().get(4) != Some(&b'-')
+        || raw.as_bytes().get(7) != Some(&b'-')
+        || raw.as_bytes().get(10) != Some(&b'T')
+        || raw.as_bytes().get(13) != Some(&b':')
+        || raw.as_bytes().get(16) != Some(&b':')
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=59).contains(&second)
+    {
+        return None;
+    }
+    let days = runtime_latency_seed_days_from_civil(year, month, day)?;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+fn runtime_latency_seed_days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let month_prime = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * month_prime + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
 }
