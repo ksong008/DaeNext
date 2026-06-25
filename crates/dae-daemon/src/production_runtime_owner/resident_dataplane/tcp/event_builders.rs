@@ -1,4 +1,12 @@
 use super::*;
+pub(super) const TCP_ROUTE_CHOSEN_EVENT: &str = "tcp_route_chosen";
+pub(super) const TCP_OUTBOUND_KIND_DIRECT: &str = "direct";
+pub(super) const TCP_OUTBOUND_KIND_BLOCK: &str = "block";
+pub(super) const TCP_OUTBOUND_KIND_PROXY: &str = "proxy";
+pub(super) const TCP_FIXED_POLICY: &str = "fixed";
+pub(super) const TCP_DIRECT_DIALER: &str = "direct";
+pub(super) const TCP_BLOCK_DIALER: &str = "block";
+
 pub(super) fn append_tcp_execution_fields(event: &mut Value, execution: &str) {
     append_runtime_execution_descriptor(event, tcp_execution_descriptor(execution));
 }
@@ -212,18 +220,23 @@ pub(super) fn tcp_route_chosen_event(
     let (route, outbound_kind, outbound, policy, dialer, mptcp) = match selection {
         TcpSelection::Direct(selection) => (
             &selection.route,
-            "direct",
-            "direct",
-            "fixed",
-            "direct",
+            TCP_OUTBOUND_KIND_DIRECT,
+            TCP_OUTBOUND_KIND_DIRECT,
+            TCP_FIXED_POLICY,
+            TCP_DIRECT_DIALER,
             selection.mptcp,
         ),
-        TcpSelection::Block(selection) => {
-            (&selection.route, "block", "block", "fixed", "block", false)
-        }
+        TcpSelection::Block(selection) => (
+            &selection.route,
+            TCP_OUTBOUND_KIND_BLOCK,
+            TCP_OUTBOUND_KIND_BLOCK,
+            TCP_FIXED_POLICY,
+            TCP_BLOCK_DIALER,
+            false,
+        ),
         TcpSelection::Proxy(selection) => (
             &selection.route,
-            "proxy",
+            TCP_OUTBOUND_KIND_PROXY,
             selection.proxy.group_name.as_str(),
             selection.proxy.group_policy.as_str(),
             selection.proxy.node_tag.as_str(),
@@ -231,7 +244,7 @@ pub(super) fn tcp_route_chosen_event(
         ),
     };
     let mut event = json!({
-        "event": "tcp_route_chosen",
+        "event": TCP_ROUTE_CHOSEN_EVENT,
         "outbound_kind": outbound_kind,
         "peer": resident_socket_addr_display(peer),
         "original_dst": resident_socket_addr_display(original_dst),

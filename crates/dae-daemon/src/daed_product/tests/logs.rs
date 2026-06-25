@@ -1,4 +1,29 @@
 use super::*;
+
+fn socket_addr(socket: &str) -> std::net::SocketAddr {
+    socket.parse().unwrap()
+}
+
+fn expected_transport_network(transport: &str, socket: &str) -> String {
+    resident_socket_network_name(transport, socket_addr(socket))
+}
+
+fn expected_default_transport_network(transport: &str) -> String {
+    resident_socket_network_name(transport, std::net::SocketAddr::from(([0, 0, 0, 0], 0)))
+}
+
+fn mapped_ipv4_socket_addr(octets: [u8; 4], port: u16) -> std::net::SocketAddr {
+    let mut mapped = [0_u8; 16];
+    mapped[10] = 0xff;
+    mapped[11] = 0xff;
+    mapped[12..16].copy_from_slice(&octets);
+    std::net::SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::from(mapped)), port)
+}
+
+fn assert_log_field_from_json(fields: &Value, key: &str, value: &Value) {
+    assert_eq!(fields[key], json!(product_log_field_value(value)), "{key}");
+}
+
 #[test]
 pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
@@ -371,6 +396,11 @@ pub(crate) fn resident_product_log_level_policy_is_explicit_by_event_class() {
 
 #[test]
 pub(crate) fn resident_trace_events_respect_runtime_trace_threshold() {
+    const TCP_ROUTE_CHOSEN: &str = "tcp_route_chosen";
+    const TCP_ROUTE_OUTBOUND: &str = "proxy";
+    const TCP_ROUTE_DIAL_TARGET: &str = "example.com:443";
+    const TCP_ROUTE_ORIGINAL_DST: &str = "198.51.100.7:443";
+
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
@@ -390,33 +420,22 @@ pub(crate) fn resident_trace_events_respect_runtime_trace_threshold() {
         );
     }
 
+    let tcp_route_network = expected_transport_network("tcp", TCP_ROUTE_ORIGINAL_DST);
+    let tcp_route_event = json!({
+        "event": TCP_ROUTE_CHOSEN,
+        "network": tcp_route_network,
+        "outbound": TCP_ROUTE_OUTBOUND,
+        "dial_target": TCP_ROUTE_DIAL_TARGET,
+        "original_dst": TCP_ROUTE_ORIGINAL_DST
+    });
+
     set_metadata(&state, "runtime_log_level", "debug").unwrap();
-    append_resident_event_product_log(
-        &dir,
-        &state,
-        &json!({
-            "event": "tcp_route_chosen",
-            "network": "tcp4",
-            "outbound": "proxy",
-            "dial_target": "example.com:443"
-        }),
-    )
-    .unwrap();
+    append_resident_event_product_log(&dir, &state, &tcp_route_event).unwrap();
     let debug_all = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
     assert_eq!(debug_all["items"].as_array().unwrap().len(), 0);
 
     set_metadata(&state, "runtime_log_level", "trace").unwrap();
-    append_resident_event_product_log(
-        &dir,
-        &state,
-        &json!({
-            "event": "tcp_route_chosen",
-            "network": "tcp4",
-            "outbound": "proxy",
-            "dial_target": "example.com:443"
-        }),
-    )
-    .unwrap();
+    append_resident_event_product_log(&dir, &state, &tcp_route_event).unwrap();
     let trace = list_logs_value(&dir, &state, Some("trace"), None, 500).unwrap();
     let trace_items = trace["items"].as_array().unwrap();
     assert_eq!(trace_items.len(), 1, "{trace}");
@@ -425,9 +444,21 @@ pub(crate) fn resident_trace_events_respect_runtime_trace_threshold() {
         trace_items[0]["message"],
         json!("resident dataplane tcp route chosen")
     );
-    assert_eq!(trace_items[0]["fields"]["event"], json!("tcp_route_chosen"));
-    assert_eq!(trace_items[0]["fields"]["network"], json!("tcp4"));
-    assert_eq!(trace_items[0]["fields"]["outbound"], json!("proxy"));
+    assert_log_field_from_json(
+        &trace_items[0]["fields"],
+        "event",
+        &tcp_route_event["event"],
+    );
+    assert_log_field_from_json(
+        &trace_items[0]["fields"],
+        "network",
+        &tcp_route_event["network"],
+    );
+    assert_log_field_from_json(
+        &trace_items[0]["fields"],
+        "outbound",
+        &tcp_route_event["outbound"],
+    );
 
     for level in ["debug", "info", "error"] {
         let filtered = list_logs_value(&dir, &state, Some(level), None, 500).unwrap();
@@ -525,6 +556,8 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
     const FLOW_DIAL_TARGET: &str = "flow-dial-target";
     const FLOW_FAILED_SOURCE: &str = "flow-failed-source";
     const FLOW_FAILED_TARGET: &str = "flow-failed-target";
+    const FLOW_FAILED_ERROR: &str = "sample failure";
+    const FLOW_ACCEPT_ERROR: &str = "accept failure";
     const FLOW_OUTBOUND: &str = "flow-outbound";
     const FLOW_POLICY: &str = "fixed";
     const FLOW_DIALER: &str = "flow-dialer";
@@ -532,26 +565,41 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
     const FLOW_DSCP: u8 = 2;
     const FLOW_PROCESS: &str = "flow-process";
     const FLOW_MAC: &str = "flow-mac";
-    let mapped_socket = |octets: [u8; 4], port: u16| {
-        let mut mapped = [0_u8; 16];
-        mapped[10] = 0xff;
-        mapped[11] = 0xff;
-        mapped[12..16].copy_from_slice(&octets);
-        std::net::SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::from(mapped)), port)
-            .to_string()
-    };
-    let ipv4_socket = |octets: [u8; 4], port: u16| {
-        std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::from(octets)), port)
-            .to_string()
-    };
-    let flow_source = mapped_socket([192, 0, 2, 10], 49480);
-    let flow_source_display = ipv4_socket([192, 0, 2, 10], 49480);
-    let flow_destination = mapped_socket([198, 51, 100, 50], 5222);
-    let flow_destination_display = ipv4_socket([198, 51, 100, 50], 5222);
-    let udp_flow_source = mapped_socket([192, 0, 2, 20], 61306);
-    let udp_flow_source_display = ipv4_socket([192, 0, 2, 20], 61306);
-    let udp_flow_destination = mapped_socket([203, 0, 113, 209], 443);
-    let udp_flow_destination_display = ipv4_socket([203, 0, 113, 209], 443);
+    let flow_source_addr = mapped_ipv4_socket_addr([192, 0, 2, 10], 49480);
+    let flow_source = flow_source_addr.to_string();
+    let flow_source_display = resident_socket_addr_display(flow_source_addr);
+    let flow_destination_addr = mapped_ipv4_socket_addr([198, 51, 100, 50], 5222);
+    let flow_destination = flow_destination_addr.to_string();
+    let flow_destination_display = resident_socket_addr_display(flow_destination_addr);
+    let udp_flow_source_addr = mapped_ipv4_socket_addr([192, 0, 2, 20], 61306);
+    let udp_flow_source = udp_flow_source_addr.to_string();
+    let udp_flow_source_display = resident_socket_addr_display(udp_flow_source_addr);
+    let udp_flow_destination_addr = mapped_ipv4_socket_addr([203, 0, 113, 209], 443);
+    let udp_flow_destination = udp_flow_destination_addr.to_string();
+    let udp_flow_destination_display = resident_socket_addr_display(udp_flow_destination_addr);
+    let tcp_event_network = expected_transport_network("tcp", "[2001:db8::1]:443");
+    let udp_event_network = expected_transport_network("udp", "[2001:db8::2]:443");
+    let tcp_execution_descriptor = json!({
+        "schemaVersion": 1,
+        "executor": "tcp-relay",
+        "capability": "stream-transport",
+        "network": "tcp",
+        "securityUnderlay": "boringssl",
+        "protocolFraming": "vless",
+        "transportUnderlay": "tcp",
+        "graphId": "resident-graph:tcp-sample"
+    });
+    let udp_execution_descriptor = json!({
+        "schemaVersion": 1,
+        "executor": "packet-relay",
+        "capability": "packet-transport",
+        "network": "udp",
+        "packetSemantics": "xudp",
+        "securityUnderlay": "boringssl",
+        "protocolFraming": "vless",
+        "transportUnderlay": "tcp",
+        "graphId": "resident-graph:udp-sample"
+    });
 
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
@@ -577,14 +625,14 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
             "event": "tcp_connection_failed",
             "peer": FLOW_FAILED_SOURCE,
             "dial_target": FLOW_FAILED_TARGET,
-            "error": "sample failure"
+            "error": FLOW_FAILED_ERROR
         }),
     )
     .unwrap();
     append_resident_event_product_log(
         &dir,
         &state,
-        &json!({"event": "tcp_accept_failed", "error": "accept failure"}),
+        &json!({"event": "tcp_accept_failed", "error": FLOW_ACCEPT_ERROR}),
     )
     .unwrap();
 
@@ -598,15 +646,18 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
         ))
     );
     assert_eq!(items[0]["level"], json!("warn"));
-    assert_eq!(items[0]["fields"]["error"], json!("sample failure"));
-    assert_eq!(items[0]["fields"]["network"], json!("tcp4"));
+    assert_eq!(items[0]["fields"]["error"], json!(FLOW_FAILED_ERROR));
+    assert_eq!(
+        items[0]["fields"]["network"],
+        json!(expected_default_transport_network("tcp"))
+    );
     assert!(items[0]["fields"].get("event").is_none());
     assert_eq!(
         items[1]["message"],
         json!("resident dataplane tcp accept failed")
     );
     assert_eq!(items[1]["level"], json!("warn"));
-    assert_eq!(items[1]["fields"]["error"], json!("accept failure"));
+    assert_eq!(items[1]["fields"]["error"], json!(FLOW_ACCEPT_ERROR));
 
     set_metadata(&state, "runtime_log_level", "debug").unwrap();
     append_resident_event_product_log(
@@ -618,7 +669,7 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
             "original_dst": &flow_destination,
             "dial_target": FLOW_DIAL_TARGET,
             "sniffed_domain": "",
-            "network": "tcp6",
+            "network": tcp_event_network,
             "bytes_client_to_proxy": 256,
             "node_tag": FLOW_DIALER,
             "proxy_group": FLOW_OUTBOUND,
@@ -627,16 +678,7 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
             "dscp": FLOW_DSCP,
             "pname": FLOW_PROCESS,
             "mac": FLOW_MAC,
-            "executionDescriptor": {
-                "schemaVersion": 1,
-                "executor": "tcp-relay",
-                "capability": "stream-transport",
-                "network": "tcp",
-                "securityUnderlay": "boringssl",
-                "protocolFraming": "vless",
-                "transportUnderlay": "tcp",
-                "graphId": "resident-graph:tcp-sample"
-            },
+            "executionDescriptor": tcp_execution_descriptor.clone(),
             "legacyExecution": "async-proxy-tls"
         }),
     )
@@ -648,20 +690,10 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
             "event": "udp_packet_finished",
             "peer": &udp_flow_source,
             "original_dst": &udp_flow_destination,
-            "network": "udp6",
+            "network": udp_event_network,
             "request_len": 64,
             "response_len": 128,
-            "executionDescriptor": {
-                "schemaVersion": 1,
-                "executor": "packet-relay",
-                "capability": "packet-transport",
-                "network": "udp",
-                "packetSemantics": "xudp",
-                "securityUnderlay": "boringssl",
-                "protocolFraming": "vless",
-                "transportUnderlay": "tcp",
-                "graphId": "resident-graph:udp-sample"
-            },
+            "executionDescriptor": udp_execution_descriptor.clone(),
             "legacyExecution": "vless-xudp"
         }),
     )
@@ -674,7 +706,10 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
         json!(format!("{flow_source_display} <-> {FLOW_DIAL_TARGET}"))
     );
     assert!(tcp["fields"].get("event").is_none());
-    assert_eq!(tcp["fields"]["network"], json!("tcp4"));
+    assert_eq!(
+        tcp["fields"]["network"],
+        json!(expected_transport_network("tcp", &flow_destination))
+    );
     assert_eq!(tcp["fields"]["outbound"], json!(FLOW_OUTBOUND));
     assert_eq!(tcp["fields"]["policy"], json!(FLOW_POLICY));
     assert_eq!(tcp["fields"]["dialer"], json!(FLOW_DIALER));
@@ -684,11 +719,15 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
     assert_eq!(tcp["fields"]["dscp"], json!(FLOW_DSCP.to_string()));
     assert_eq!(tcp["fields"]["pname"], json!(FLOW_PROCESS));
     assert_eq!(tcp["fields"]["mac"], json!(FLOW_MAC));
-    assert_eq!(tcp["fields"]["executor"], json!("tcp-relay"));
-    assert_eq!(tcp["fields"]["capability"], json!("stream-transport"));
-    assert_eq!(tcp["fields"]["securityUnderlay"], json!("boringssl"));
-    assert_eq!(tcp["fields"]["protocolFraming"], json!("vless"));
-    assert_eq!(tcp["fields"]["transportUnderlay"], json!("tcp"));
+    for key in [
+        "executor",
+        "capability",
+        "securityUnderlay",
+        "protocolFraming",
+        "transportUnderlay",
+    ] {
+        assert_log_field_from_json(&tcp["fields"], key, &tcp_execution_descriptor[key]);
+    }
     assert!(tcp["fields"].get("graphId").is_none());
     assert!(tcp["fields"].get("legacyExecution").is_none());
 
@@ -712,14 +751,17 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
             "{udp_flow_source_display} <-> {udp_flow_destination_display}"
         ))
     );
-    assert_eq!(items[0]["fields"]["network"], json!("udp4"));
+    assert_eq!(
+        items[0]["fields"]["network"],
+        json!(expected_transport_network("udp", &udp_flow_destination))
+    );
     assert_eq!(
         items[0]["fields"]["ip"],
         json!(udp_flow_destination_display)
     );
-    assert_eq!(items[0]["fields"]["executor"], json!("packet-relay"));
-    assert_eq!(items[0]["fields"]["capability"], json!("packet-transport"));
-    assert_eq!(items[0]["fields"]["packetSemantics"], json!("xudp"));
+    for key in ["executor", "capability", "packetSemantics"] {
+        assert_log_field_from_json(&items[0]["fields"], key, &udp_execution_descriptor[key]);
+    }
     assert!(items[0]["fields"].get("graphId").is_none());
     assert!(items[0]["fields"].get("request_len").is_none());
     assert_eq!(
@@ -733,52 +775,45 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
 
 #[test]
 pub(crate) fn resident_product_log_fields_hide_internal_graph_ids() {
-    let mut mapped = [0_u8; 16];
     let source_octets = [192, 0, 2, 30];
-    mapped[10] = 0xff;
-    mapped[11] = 0xff;
-    mapped[12..16].copy_from_slice(&source_octets);
-    let source_display = std::net::SocketAddr::new(
-        std::net::IpAddr::V6(std::net::Ipv6Addr::from(mapped)),
-        61306,
-    )
-    .to_string();
-    let normalized_source_display = std::net::SocketAddr::new(
-        std::net::IpAddr::V4(std::net::Ipv4Addr::from(source_octets)),
-        61306,
-    )
-    .to_string();
+    let source_addr = mapped_ipv4_socket_addr(source_octets, 61306);
+    let source_display = source_addr.to_string();
+    let normalized_source_display = resident_socket_addr_display(source_addr);
+    let packet_session = json!({
+        "schemaVersion": 1,
+        "manager": "resident-udp-session-manager",
+        "graphId": "resident-graph:internal",
+        "graphIdentityHash": "sha256:internal",
+        "graphLinkHash": "sha256:internal-link",
+        "outbound": "proxy",
+        "packetSemantics": "xudp",
+        "sourceDisplay": &source_display
+    });
     let fields = resident_event_product_log_fields(
         "udp_session_stopped",
         &json!({
             "event": "udp_session_stopped",
             "graphId": "resident-graph:internal",
-            "packetSession": {
-                "schemaVersion": 1,
-                "manager": "resident-udp-session-manager",
-                "graphId": "resident-graph:internal",
-                "graphIdentityHash": "sha256:internal",
-                "graphLinkHash": "sha256:internal-link",
-                "outbound": "proxy",
-                "packetSemantics": "xudp",
-                "sourceDisplay": &source_display
-            }
+            "packetSession": packet_session
         }),
     );
 
     assert!(!fields.contains_key("graphId"));
-    let packet_session = fields["packetSession"].as_str();
-    assert!(!packet_session.contains("graphId"), "{packet_session}");
-    assert!(
-        !packet_session.contains("graphIdentityHash"),
-        "{packet_session}"
+    let sanitized_packet_session: Value = serde_json::from_str(fields["packetSession"].as_str())
+        .unwrap_or_else(|err| panic!("packetSession should be serialized JSON: {err}"));
+    assert!(sanitized_packet_session.get("graphId").is_none());
+    assert!(sanitized_packet_session.get("graphIdentityHash").is_none());
+    assert!(sanitized_packet_session.get("graphLinkHash").is_none());
+    assert_eq!(
+        sanitized_packet_session["outbound"],
+        json!(product_log_field_value(&packet_session["outbound"]))
     );
-    assert!(
-        !packet_session.contains("graphLinkHash"),
-        "{packet_session}"
+    assert_eq!(
+        sanitized_packet_session["packetSemantics"],
+        json!(product_log_field_value(&packet_session["packetSemantics"]))
     );
-    assert!(packet_session.contains("\"outbound\":\"proxy\""));
-    assert!(packet_session.contains("\"packetSemantics\":\"xudp\""));
-    assert!(packet_session.contains(&normalized_source_display));
-    assert!(!packet_session.contains("ffff"), "{packet_session}");
+    assert_eq!(
+        sanitized_packet_session["sourceDisplay"],
+        json!(normalized_source_display)
+    );
 }

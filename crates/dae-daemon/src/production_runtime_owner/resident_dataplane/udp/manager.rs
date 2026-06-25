@@ -21,6 +21,16 @@ mod sniff;
 use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
 use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
 
+const UDP_ROUTE_CHOSEN_EVENT: &str = "udp_route_chosen";
+const UDP_ROUTE_KIND_PROXY: &str = "proxy";
+const UDP_ROUTE_KIND_BLOCK: &str = "block";
+const UDP_ROUTE_POLICY_FIXED: &str = "fixed";
+const UDP_ROUTE_DIALER_BLOCK: &str = "block";
+const UDP_ROUTE_REASON_BLOCK: &str = "selected block outbound";
+const UDP_ROUTE_REASON_LIMIT: &str = "session limit reached";
+const UDP_ROUTE_REASON_QUEUE_FULL: &str = "session queue full";
+const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
+
 pub(super) fn run_resident_udp_session_manager(
     socket: UdpSocket,
     proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
@@ -341,7 +351,7 @@ fn forward_manager_packet(
                     sniffed_domain,
                     initial.dscp,
                     false,
-                    "selected block outbound",
+                    UDP_ROUTE_REASON_BLOCK,
                 ),
             );
             append_event(
@@ -376,7 +386,7 @@ fn forward_manager_packet(
                     sniffed_domain,
                     initial.dscp,
                     false,
-                    "session limit reached",
+                    UDP_ROUTE_REASON_LIMIT,
                 ),
             );
             append_event(
@@ -431,7 +441,7 @@ fn forward_manager_packet(
                 sniffed_domain,
                 initial.dscp,
                 false,
-                "session queue full",
+                UDP_ROUTE_REASON_QUEUE_FULL,
             ),
         );
         append_event(
@@ -459,7 +469,7 @@ fn forward_manager_packet(
                 sniffed_domain,
                 initial.dscp,
                 true,
-                "queued packet for resident UDP session",
+                UDP_ROUTE_REASON_QUEUED,
             ),
         );
     }
@@ -525,18 +535,22 @@ fn udp_route_chosen_event(
     task_queued: bool,
     reason: &str,
 ) -> serde_json::Value {
-    let outbound_kind = if proxy.is_some() { "proxy" } else { "block" };
+    let outbound_kind = if proxy.is_some() {
+        UDP_ROUTE_KIND_PROXY
+    } else {
+        UDP_ROUTE_KIND_BLOCK
+    };
     let outbound = proxy
         .map(|proxy| proxy.group_name.as_str())
-        .unwrap_or("block");
+        .unwrap_or(UDP_ROUTE_KIND_BLOCK);
     let policy = proxy
         .map(|proxy| proxy.group_policy.as_str())
-        .unwrap_or("fixed");
+        .unwrap_or(UDP_ROUTE_POLICY_FIXED);
     let dialer = proxy
         .map(|proxy| proxy.node_tag.as_str())
-        .unwrap_or("block");
+        .unwrap_or(UDP_ROUTE_DIALER_BLOCK);
     let mut event = json!({
-        "event": "udp_route_chosen",
+        "event": UDP_ROUTE_CHOSEN_EVENT,
         "outbound_kind": outbound_kind,
         "peer": resident_socket_addr_display(peer),
         "original_dst": resident_socket_addr_display(original_dst),
@@ -854,31 +868,34 @@ mod tests {
         );
 
         assert_eq!(event["event"], "udp_route_chosen");
-        assert_eq!(event["outbound_kind"], "proxy");
+        assert_eq!(event["outbound_kind"], UDP_ROUTE_KIND_PROXY);
         assert_eq!(event["peer"], peer.to_string());
         assert_eq!(event["original_dst"], original_dst.to_string());
         assert_eq!(event["direct_target"], original_dst.to_string());
         assert_eq!(event["initial_outbound"], 2);
         assert_eq!(event["final_outbound"], 3);
-        assert_eq!(event["final_mark"], 0x1234);
+        assert_eq!(event["final_mark"], proxy.mark);
         assert_eq!(event["userspace_route_executed"], true);
         assert_eq!(event["userspace_route_must"], true);
         assert_eq!(event["sniffed_domain"], "video.example.com");
-        assert_eq!(event["network"], "udp4");
-        assert_eq!(event["outbound"], "sg");
-        assert_eq!(event["proxy_group"], "sg");
-        assert_eq!(event["group_policy"], "fixed");
-        assert_eq!(event["node_tag"], "sg");
-        assert_eq!(event["handler"], "socks5-tcp");
+        assert_eq!(event["network"], resident_udp_network_name(original_dst));
+        assert_eq!(event["outbound"], proxy.group_name);
+        assert_eq!(event["proxy_group"], proxy.group_name);
+        assert_eq!(event["group_policy"], proxy.group_policy);
+        assert_eq!(event["node_tag"], proxy.node_tag);
+        assert_eq!(event["handler"], resident_udp_handler_name(&proxy.handler));
         assert_eq!(event["task_queued"], true);
-        assert_eq!(event["reason"], "queued packet for resident UDP session");
+        assert_eq!(event["reason"], UDP_ROUTE_REASON_QUEUED);
         assert_eq!(event["dscp"], 46);
         assert_eq!(
             event["packetSession"]["manager"],
             "resident-udp-session-manager"
         );
-        assert_eq!(event["packetSession"]["outbound"], "sg");
-        assert_eq!(event["packetSession"]["packetSemantics"], "udp-associate");
+        assert_eq!(event["packetSession"]["outbound"], proxy.group_name);
+        assert_eq!(
+            event["packetSession"]["packetSemantics"],
+            UdpPacketSemantics::UdpAssociate.as_str()
+        );
 
         let block = ResidentUdpRouteSelection {
             initial_outbound: OUTBOUND_BLOCK,
@@ -895,12 +912,27 @@ mod tests {
             "",
             0,
             false,
-            "selected block outbound",
+            UDP_ROUTE_REASON_BLOCK,
         );
-        assert_eq!(event["outbound_kind"], "block");
-        assert_eq!(event["outbound"], "block");
+        assert_eq!(event["outbound_kind"], UDP_ROUTE_KIND_BLOCK);
+        assert_eq!(event["outbound"], UDP_ROUTE_KIND_BLOCK);
         assert_eq!(event["task_queued"], false);
         assert!(event.get("packetSession").is_none());
+
+        let v6_peer = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 53100);
+        let v6_original_dst = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 443);
+        let event = udp_route_chosen_event(
+            v6_peer,
+            v6_original_dst,
+            &route,
+            Some(&proxy),
+            "video.example.com",
+            46,
+            true,
+            UDP_ROUTE_REASON_QUEUED,
+        );
+        assert_eq!(event["network"], resident_udp_network_name(v6_original_dst));
+        assert_ne!(event["network"], resident_udp_network_name(original_dst));
     }
 
     fn ipv4_mapped_socket_addr(addr: Ipv4Addr, port: u16) -> SocketAddr {

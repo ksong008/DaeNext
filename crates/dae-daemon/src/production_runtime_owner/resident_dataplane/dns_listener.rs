@@ -11,7 +11,7 @@ use tokio::net::{
 use tokio::sync::Semaphore;
 use tokio::time;
 
-use super::dns::{ResidentDnsPlan, handle_resident_dns_local_async};
+use super::dns::{ResidentDnsPlan, ResidentDnsTraceSummary, handle_resident_dns_local_trace_async};
 use super::*;
 
 const DNS_BIND_READ_LIMIT: usize = 4096;
@@ -326,13 +326,29 @@ async fn handle_resident_dns_udp_bind_packet_async(
 ) {
     metrics.udp_opened();
     metrics.add_upload(request.len());
-    let response = handle_resident_dns_local_async(&dns, local_addr, &request).await;
-    match response {
-        Ok(response) => {
+    let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
+    match result {
+        Ok(result) => {
+            let response = result.response;
             let response_len = response.len();
             match socket.send_to(&response, peer).await {
                 Ok(sent) => {
                     metrics.add_download(sent);
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        dns_path_chosen_event(DnsPathChosenEventInput {
+                            local_addr,
+                            peer,
+                            network: "udp",
+                            handler: "resident-dns-udp",
+                            request_bytes: request.len(),
+                            response_bytes: response_len,
+                            sent_bytes: Some(sent),
+                            send_error: None,
+                            trace: &result.trace,
+                        }),
+                    );
                     append_event(
                         &event_file,
                         &event_lock,
@@ -348,19 +364,37 @@ async fn handle_resident_dns_udp_bind_packet_async(
                         }),
                     );
                 }
-                Err(err) => append_event(
-                    &event_file,
-                    &event_lock,
-                    json!({
-                        "event": "dns_bind_response_send_failed",
-                        "local_addr": local_addr.to_string(),
-                        "peer": peer.to_string(),
-                        "network": "udp",
-                        "request_bytes": request.len(),
-                        "response_bytes": response_len,
-                        "error": err.to_string(),
-                    }),
-                ),
+                Err(err) => {
+                    let err = err.to_string();
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        dns_path_chosen_event(DnsPathChosenEventInput {
+                            local_addr,
+                            peer,
+                            network: "udp",
+                            handler: "resident-dns-udp",
+                            request_bytes: request.len(),
+                            response_bytes: response_len,
+                            sent_bytes: None,
+                            send_error: Some(&err),
+                            trace: &result.trace,
+                        }),
+                    );
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({
+                            "event": "dns_bind_response_send_failed",
+                            "local_addr": local_addr.to_string(),
+                            "peer": peer.to_string(),
+                            "network": "udp",
+                            "request_bytes": request.len(),
+                            "response_bytes": response_len,
+                            "error": err,
+                        }),
+                    );
+                }
             }
         }
         Err(err) => append_event(
@@ -481,11 +515,28 @@ async fn handle_resident_dns_tcp_bind_connection_async(
             }
         };
         metrics.add_upload(request.len());
-        let response = handle_resident_dns_local_async(&dns, local_addr, &request).await;
-        match response {
-            Ok(response) => {
+        let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
+        match result {
+            Ok(result) => {
+                let response = result.response;
                 let response_len = response.len();
                 if let Err(err) = write_dns_tcp_payload_async(&mut stream, &response).await {
+                    let err = err.to_string();
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        dns_path_chosen_event(DnsPathChosenEventInput {
+                            local_addr,
+                            peer,
+                            network: "tcp",
+                            handler: "resident-dns-tcp",
+                            request_bytes: request.len(),
+                            response_bytes: response_len,
+                            sent_bytes: None,
+                            send_error: Some(&err),
+                            trace: &result.trace,
+                        }),
+                    );
                     append_event(
                         &event_file,
                         &event_lock,
@@ -502,6 +553,21 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                     return;
                 }
                 metrics.add_download(response_len);
+                append_event(
+                    &event_file,
+                    &event_lock,
+                    dns_path_chosen_event(DnsPathChosenEventInput {
+                        local_addr,
+                        peer,
+                        network: "tcp",
+                        handler: "resident-dns-tcp",
+                        request_bytes: request.len(),
+                        response_bytes: response_len,
+                        sent_bytes: Some(response_len + 2),
+                        send_error: None,
+                        trace: &result.trace,
+                    }),
+                );
                 append_event(
                     &event_file,
                     &event_lock,
@@ -531,6 +597,54 @@ async fn handle_resident_dns_tcp_bind_connection_async(
             ),
         }
     }
+}
+
+struct DnsPathChosenEventInput<'a> {
+    local_addr: SocketAddr,
+    peer: SocketAddr,
+    network: &'a str,
+    handler: &'a str,
+    request_bytes: usize,
+    response_bytes: usize,
+    sent_bytes: Option<usize>,
+    send_error: Option<&'a str>,
+    trace: &'a ResidentDnsTraceSummary,
+}
+
+fn dns_path_chosen_event(input: DnsPathChosenEventInput<'_>) -> Value {
+    let mut event = json!({
+        "event": "dns_path_chosen",
+        "local_addr": input.local_addr.to_string(),
+        "peer": input.peer.to_string(),
+        "network": input.network,
+        "handler": input.handler,
+        "request_bytes": input.request_bytes,
+        "response_bytes": input.response_bytes,
+        "sent_bytes": input.sent_bytes,
+        "qname": &input.trace.qname,
+        "qtype": input.trace.qtype,
+        "qclass": input.trace.qclass,
+        "cache": &input.trace.cache,
+        "routing": &input.trace.request_routing,
+        "request_routing": &input.trace.request_routing,
+        "response_routing": &input.trace.response_routing,
+        "upstream": &input.trace.upstream,
+        "upstream_scheme": input.trace.upstream_scheme,
+        "upstream_chain": &input.trace.upstream_chain,
+        "reroutes": input.trace.reroutes,
+        "fallback": input.trace.fallback,
+        "rcode": input.trace.rcode,
+        "reason": &input.trace.reason,
+    });
+    if let Some(send_error) = input.send_error
+        && let Some(map) = event.as_object_mut()
+    {
+        map.insert(
+            "send_error".to_owned(),
+            Value::String(send_error.to_owned()),
+        );
+    }
+    event
 }
 
 async fn read_dns_tcp_payload_async(
@@ -660,5 +774,74 @@ mod tests {
     fn resident_dns_bind_endpoint_rejects_invalid_values() {
         assert!(parse_resident_dns_bind_endpoint("127.0.0.1").is_err());
         assert!(parse_resident_dns_bind_endpoint("http://127.0.0.1:8053").is_err());
+    }
+
+    #[test]
+    fn dns_path_chosen_event_exposes_trace_summary_fields() {
+        let local_addr = "127.0.0.1:53".parse().unwrap();
+        let peer = "127.0.0.1:53000".parse().unwrap();
+        let handler = "resident-dns-udp";
+        let network = handler.strip_prefix("resident-dns-").unwrap();
+        let qname = "example.com.".to_owned();
+        let qtype = 1_u16;
+        let qclass = 1_u16;
+        let cache = "miss".to_owned();
+        let request_routing = "upstream".to_owned();
+        let response_routing = "accept".to_owned();
+        let upstream = Some("primary".to_owned());
+        let upstream_scheme = Some("udp");
+        let upstream_chain = vec!["primary".to_owned()];
+        let reroutes = 0_usize;
+        let fallback = false;
+        let rcode = Some(0_u16);
+        let reason = "resident DNS upstream response accepted".to_owned();
+        let request_bytes = 29_usize;
+        let response_bytes = 45_usize;
+        let sent_bytes = Some(45_usize);
+        let trace = ResidentDnsTraceSummary {
+            qname: qname.clone(),
+            qtype,
+            qclass,
+            cache: cache.clone(),
+            request_routing: request_routing.clone(),
+            response_routing: response_routing.clone(),
+            upstream: upstream.clone(),
+            upstream_scheme,
+            upstream_chain: upstream_chain.clone(),
+            reroutes,
+            fallback,
+            rcode,
+            reason: reason.clone(),
+        };
+        let event = dns_path_chosen_event(DnsPathChosenEventInput {
+            local_addr,
+            peer,
+            network,
+            handler,
+            request_bytes,
+            response_bytes,
+            sent_bytes,
+            send_error: None,
+            trace: &trace,
+        });
+
+        assert_eq!(event["event"], "dns_path_chosen");
+        assert_eq!(event["network"], network);
+        assert_eq!(event["handler"], handler);
+        assert_eq!(event["qname"], qname);
+        assert_eq!(event["qtype"], qtype);
+        assert_eq!(event["qclass"], qclass);
+        assert_eq!(event["cache"], cache);
+        assert_eq!(event["routing"], request_routing);
+        assert_eq!(event["request_routing"], request_routing);
+        assert_eq!(event["response_routing"], response_routing);
+        assert_eq!(event["upstream"], json!(upstream));
+        assert_eq!(event["upstream_scheme"], json!(upstream_scheme));
+        assert_eq!(event["upstream_chain"][0], upstream_chain[0]);
+        assert_eq!(event["reroutes"], reroutes);
+        assert_eq!(event["fallback"], fallback);
+        assert_eq!(event["rcode"], json!(rcode));
+        assert_eq!(event["sent_bytes"], json!(sent_bytes));
+        assert_eq!(event["reason"], reason);
     }
 }
