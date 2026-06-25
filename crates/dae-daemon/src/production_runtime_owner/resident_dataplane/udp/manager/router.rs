@@ -153,22 +153,36 @@ impl ResidentUdpRouter {
             return self
                 .select_proxy_from_group(self.default_outbound, initial.mark)
                 .map(|proxy| {
+                    let route = ResidentUdpRouteSelection {
+                        initial_outbound: initial.outbound,
+                        final_outbound: self.default_outbound,
+                        final_mark: proxy.mark,
+                        userspace_route_executed: false,
+                        userspace_route_must: false,
+                    };
                     ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
                         proxy,
                         force_proxy_packet,
+                        route,
                     })
                 });
         }
-        let final_result = if self.should_userspace_reroute(initial.outbound, sniffed_domain) {
+        let userspace_route_executed =
+            self.should_userspace_reroute(initial.outbound, sniffed_domain);
+        let final_result = if userspace_route_executed {
             self.userspace_reroute(peer, original_dst, initial, sniffed_domain)?
         } else {
             initial
         };
+        let route = ResidentUdpRouteSelection {
+            initial_outbound: initial.outbound,
+            final_outbound: final_result.outbound,
+            final_mark: final_result.mark,
+            userspace_route_executed,
+            userspace_route_must: userspace_route_executed && final_result.must > 0,
+        };
         match final_result.outbound {
-            OUTBOUND_BLOCK => Ok(ResidentUdpSelection::Block(ResidentUdpRouteSelection {
-                initial_outbound: initial.outbound,
-                final_outbound: OUTBOUND_BLOCK,
-            })),
+            OUTBOUND_BLOCK => Ok(ResidentUdpSelection::Block(route)),
             OUTBOUND_DIRECT => Err(
                 "resident UDP selected direct outbound but direct UDP execution is not implemented; keeping fail-closed"
                     .to_owned(),
@@ -180,9 +194,14 @@ impl ResidentUdpRouter {
             outbound => self
                 .select_proxy_from_group(outbound, final_result.mark)
                 .map(|proxy| {
+                    let route = ResidentUdpRouteSelection {
+                        final_mark: proxy.mark,
+                        ..route
+                    };
                     ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
                         proxy,
                         force_proxy_packet,
+                        route,
                     })
                 }),
         }
@@ -288,11 +307,15 @@ impl ResidentUdpRouter {
 pub(super) struct ResidentUdpProxySelection {
     pub(super) proxy: Arc<ResidentProxyPlan>,
     pub(super) force_proxy_packet: bool,
+    pub(super) route: ResidentUdpRouteSelection,
 }
 
 pub(super) struct ResidentUdpRouteSelection {
     pub(super) initial_outbound: u8,
     pub(super) final_outbound: u8,
+    pub(super) final_mark: u32,
+    pub(super) userspace_route_executed: bool,
+    pub(super) userspace_route_must: bool,
 }
 
 pub(super) enum ResidentUdpSelection {

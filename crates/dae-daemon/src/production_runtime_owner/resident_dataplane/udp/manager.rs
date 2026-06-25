@@ -18,7 +18,7 @@ use super::*;
 
 mod router;
 mod sniff;
-use self::router::{ResidentUdpRouter, ResidentUdpSelection};
+use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
 use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
 
 pub(super) fn run_resident_udp_session_manager(
@@ -333,6 +333,20 @@ fn forward_manager_packet(
             append_event(
                 event_file,
                 event_lock,
+                udp_route_chosen_event(
+                    packet.peer,
+                    original_dst,
+                    &selection,
+                    None,
+                    sniffed_domain,
+                    initial.dscp,
+                    false,
+                    "selected block outbound",
+                ),
+            );
+            append_event(
+                event_file,
+                event_lock,
                 json!({
                     "event": "udp_packet_dropped",
                     "reason": "resident UDP selected block outbound",
@@ -351,6 +365,20 @@ fn forward_manager_packet(
     let key = UdpSessionKey::new(&proxy, packet.peer, original_dst);
     if !sessions.contains_key(&key) {
         if sessions.len() >= session_limit {
+            append_event(
+                event_file,
+                event_lock,
+                udp_route_chosen_event(
+                    packet.peer,
+                    original_dst,
+                    &proxy_selection.route,
+                    Some(&proxy),
+                    sniffed_domain,
+                    initial.dscp,
+                    false,
+                    "session limit reached",
+                ),
+            );
             append_event(
                 event_file,
                 event_lock,
@@ -380,6 +408,7 @@ fn forward_manager_packet(
         let handle = spawn_udp_session_actor(actor_key, context, receiver, actor_cleanup_tx);
         sessions.insert(key.clone(), UdpSessionEntry { sender, handle });
     }
+    let peer = packet.peer;
     let managed = ManagedUdpPacket {
         packet,
         original_dst,
@@ -394,6 +423,20 @@ fn forward_manager_packet(
         append_event(
             event_file,
             event_lock,
+            udp_route_chosen_event(
+                peer,
+                original_dst,
+                &proxy_selection.route,
+                Some(&proxy_selection.proxy),
+                sniffed_domain,
+                initial.dscp,
+                false,
+                "session queue full",
+            ),
+        );
+        append_event(
+            event_file,
+            event_lock,
             json!({
                 "event": "udp_packet_dropped",
                 "reason": "resident UDP session queue full",
@@ -403,6 +446,21 @@ fn forward_manager_packet(
                 "packetSession": key.to_value(),
                 "dscp": initial.dscp,
             }),
+        );
+    } else {
+        append_event(
+            event_file,
+            event_lock,
+            udp_route_chosen_event(
+                peer,
+                original_dst,
+                &proxy_selection.route,
+                Some(&proxy_selection.proxy),
+                sniffed_domain,
+                initial.dscp,
+                true,
+                "queued packet for resident UDP session",
+            ),
         );
     }
 }
@@ -455,6 +513,82 @@ fn append_udp_route_selection_failed(
         event["dscp"] = json!(dscp);
     }
     append_event(event_file, event_lock, event);
+}
+
+fn udp_route_chosen_event(
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    route: &ResidentUdpRouteSelection,
+    proxy: Option<&ResidentProxyPlan>,
+    sniffed_domain: &str,
+    dscp: u8,
+    task_queued: bool,
+    reason: &str,
+) -> serde_json::Value {
+    let outbound_kind = if proxy.is_some() { "proxy" } else { "block" };
+    let outbound = proxy
+        .map(|proxy| proxy.group_name.as_str())
+        .unwrap_or("block");
+    let policy = proxy
+        .map(|proxy| proxy.group_policy.as_str())
+        .unwrap_or("fixed");
+    let dialer = proxy
+        .map(|proxy| proxy.node_tag.as_str())
+        .unwrap_or("block");
+    let mut event = json!({
+        "event": "udp_route_chosen",
+        "outbound_kind": outbound_kind,
+        "peer": resident_socket_addr_display(peer),
+        "original_dst": resident_socket_addr_display(original_dst),
+        "direct_target": resident_socket_addr_display(original_dst),
+        "initial_outbound": route.initial_outbound,
+        "final_outbound": route.final_outbound,
+        "final_mark": route.final_mark,
+        "userspace_route_executed": route.userspace_route_executed,
+        "userspace_route_must": route.userspace_route_must,
+        "sniffed_domain": sniffed_domain,
+        "network": resident_udp_network_name(original_dst),
+        "outbound": outbound,
+        "policy": policy,
+        "dialer": dialer,
+        "ip": resident_socket_addr_display(original_dst),
+        "task_queued": task_queued,
+        "reason": reason,
+        "dscp": dscp,
+    });
+    if let Some(proxy) = proxy
+        && let Some(map) = event.as_object_mut()
+    {
+        map.insert(
+            "proxy_group".to_owned(),
+            serde_json::Value::String(proxy.group_name.clone()),
+        );
+        map.insert(
+            "group_policy".to_owned(),
+            serde_json::Value::String(proxy.group_policy.clone()),
+        );
+        map.insert(
+            "node_tag".to_owned(),
+            serde_json::Value::String(proxy.node_tag.clone()),
+        );
+        map.insert(
+            "protocol".to_owned(),
+            serde_json::Value::String(proxy.protocol.clone()),
+        );
+        map.insert(
+            "handler".to_owned(),
+            serde_json::Value::String(resident_udp_handler_name(&proxy.handler).to_owned()),
+        );
+        map.insert(
+            "graphId".to_owned(),
+            serde_json::Value::String(proxy.graph_id.clone()),
+        );
+        map.insert(
+            "packetSession".to_owned(),
+            UdpSessionKey::new(proxy, peer, original_dst).to_value(),
+        );
+    }
+    event
 }
 
 #[cfg(test)]
@@ -693,6 +827,80 @@ mod tests {
             }
             ResidentUdpSelection::Block(_) => panic!("user outbound DNS must select proxy"),
         }
+    }
+
+    #[test]
+    fn udp_route_chosen_event_exposes_route_and_session_fields() {
+        let peer = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 10).into(), 53100);
+        let original_dst = SocketAddr::new(Ipv4Addr::new(203, 0, 113, 10).into(), 443);
+        let proxy = test_udp_proxy_with_group("sg", 0x1234);
+        let route = ResidentUdpRouteSelection {
+            initial_outbound: 2,
+            final_outbound: 3,
+            final_mark: proxy.mark,
+            userspace_route_executed: true,
+            userspace_route_must: true,
+        };
+
+        let event = udp_route_chosen_event(
+            peer,
+            original_dst,
+            &route,
+            Some(&proxy),
+            "video.example.com",
+            46,
+            true,
+            "queued packet for resident UDP session",
+        );
+
+        assert_eq!(event["event"], "udp_route_chosen");
+        assert_eq!(event["outbound_kind"], "proxy");
+        assert_eq!(event["peer"], peer.to_string());
+        assert_eq!(event["original_dst"], original_dst.to_string());
+        assert_eq!(event["direct_target"], original_dst.to_string());
+        assert_eq!(event["initial_outbound"], 2);
+        assert_eq!(event["final_outbound"], 3);
+        assert_eq!(event["final_mark"], 0x1234);
+        assert_eq!(event["userspace_route_executed"], true);
+        assert_eq!(event["userspace_route_must"], true);
+        assert_eq!(event["sniffed_domain"], "video.example.com");
+        assert_eq!(event["network"], "udp4");
+        assert_eq!(event["outbound"], "sg");
+        assert_eq!(event["proxy_group"], "sg");
+        assert_eq!(event["group_policy"], "fixed");
+        assert_eq!(event["node_tag"], "sg");
+        assert_eq!(event["handler"], "socks5-tcp");
+        assert_eq!(event["task_queued"], true);
+        assert_eq!(event["reason"], "queued packet for resident UDP session");
+        assert_eq!(event["dscp"], 46);
+        assert_eq!(
+            event["packetSession"]["manager"],
+            "resident-udp-session-manager"
+        );
+        assert_eq!(event["packetSession"]["outbound"], "sg");
+        assert_eq!(event["packetSession"]["packetSemantics"], "udp-associate");
+
+        let block = ResidentUdpRouteSelection {
+            initial_outbound: OUTBOUND_BLOCK,
+            final_outbound: OUTBOUND_BLOCK,
+            final_mark: 0,
+            userspace_route_executed: false,
+            userspace_route_must: false,
+        };
+        let event = udp_route_chosen_event(
+            peer,
+            original_dst,
+            &block,
+            None,
+            "",
+            0,
+            false,
+            "selected block outbound",
+        );
+        assert_eq!(event["outbound_kind"], "block");
+        assert_eq!(event["outbound"], "block");
+        assert_eq!(event["task_queued"], false);
+        assert!(event.get("packetSession").is_none());
     }
 
     fn ipv4_mapped_socket_addr(addr: Ipv4Addr, port: u16) -> SocketAddr {
