@@ -28,12 +28,17 @@ pub(crate) fn resident_group_health_check_loop(
             "udp_check_target": group.udp_check.target.authority().to_owned(),
         }),
     );
-    run_resident_group_health_check_round(
+    if run_resident_group_health_check_round(
         Arc::clone(&group),
+        Arc::clone(&stop),
         &event_file,
         &event_lock,
         concurrency,
-    );
+    )
+    .is_cancelled()
+    {
+        return;
+    }
     loop {
         if interval.is_zero() || sleep_until_stopped(&stop, interval) {
             return;
@@ -41,24 +46,45 @@ pub(crate) fn resident_group_health_check_loop(
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        run_resident_group_health_check_round(
+        if run_resident_group_health_check_round(
             Arc::clone(&group),
+            Arc::clone(&stop),
             &event_file,
             &event_lock,
             concurrency,
-        );
+        )
+        .is_cancelled()
+        {
+            return;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HealthCheckRoundStatus {
+    Completed,
+    Cancelled,
+}
+
+impl HealthCheckRoundStatus {
+    fn is_cancelled(self) -> bool {
+        matches!(self, Self::Cancelled)
     }
 }
 
 fn run_resident_group_health_check_round(
     group: Arc<plan::ResidentProxyGroupPlan>,
+    stop: Arc<AtomicBool>,
     event_file: &Path,
     event_lock: &Mutex<()>,
     concurrency: usize,
-) {
+) -> HealthCheckRoundStatus {
+    if stop.load(Ordering::Relaxed) {
+        return HealthCheckRoundStatus::Cancelled;
+    }
     let candidates = group.probe_candidates();
     if candidates.is_empty() {
-        return;
+        return HealthCheckRoundStatus::Completed;
     }
     let runtime = match build_transient_probe_runtime("resident group health probe") {
         Ok(runtime) => runtime,
@@ -68,76 +94,133 @@ fn run_resident_group_health_check_round(
                 event_lock,
                 json!({"event": "resident_health_checker_runtime_failed", "error": err}),
             );
-            return;
+            return HealthCheckRoundStatus::Completed;
         }
     };
-    runtime.block_on(run_resident_group_health_checks_concurrent_async(
+    let status = runtime.block_on(run_resident_group_health_checks_concurrent_async(
         group,
         &candidates,
         concurrency,
+        stop,
     ));
     drop(runtime);
     drop(candidates);
     let _ = allocator_reclaim(AllocatorReclaimReason::GroupHealthProbe);
+    status
 }
 
 async fn run_resident_group_health_checks_concurrent_async(
     group: Arc<plan::ResidentProxyGroupPlan>,
     candidates: &[plan::ResidentProxyProbePlan],
     concurrency: usize,
-) {
+    stop: Arc<AtomicBool>,
+) -> HealthCheckRoundStatus {
+    if stop.load(Ordering::Relaxed) {
+        return HealthCheckRoundStatus::Cancelled;
+    }
     if concurrency <= 1 {
-        run_resident_group_health_checks_async(&group, candidates).await;
-        return;
+        return run_resident_group_health_checks_until_stopped(&group, candidates, stop).await;
     }
     for chunk in candidates.chunks(concurrency.max(1)) {
+        if stop.load(Ordering::Relaxed) {
+            return HealthCheckRoundStatus::Cancelled;
+        }
         let mut handles = Vec::new();
         for candidate in chunk {
             let candidate = candidate.clone();
             let group = Arc::clone(&group);
+            let stop = Arc::clone(&stop);
             handles.push(tokio::spawn(async move {
-                run_resident_candidate_health_check_async(&group, &candidate).await;
+                run_resident_candidate_health_check_until_stopped(&group, &candidate, stop).await
             }));
         }
         for handle in handles {
-            let _ = handle.await;
+            if matches!(handle.await, Ok(HealthCheckRoundStatus::Cancelled)) {
+                return HealthCheckRoundStatus::Cancelled;
+            }
         }
     }
+    HealthCheckRoundStatus::Completed
 }
 
+#[cfg(test)]
 pub(crate) async fn run_resident_group_health_checks_async(
     group: &plan::ResidentProxyGroupPlan,
     candidates: &[plan::ResidentProxyProbePlan],
 ) {
-    for candidate in candidates {
-        run_resident_candidate_health_check_async(group, candidate).await;
-    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let _ = run_resident_group_health_checks_until_stopped(group, candidates, stop).await;
 }
 
-async fn run_resident_candidate_health_check_async(
+async fn run_resident_group_health_checks_until_stopped(
+    group: &plan::ResidentProxyGroupPlan,
+    candidates: &[plan::ResidentProxyProbePlan],
+    stop: Arc<AtomicBool>,
+) -> HealthCheckRoundStatus {
+    for candidate in candidates {
+        if stop.load(Ordering::Relaxed) {
+            return HealthCheckRoundStatus::Cancelled;
+        }
+        if run_resident_candidate_health_check_until_stopped(group, candidate, Arc::clone(&stop))
+            .await
+            == HealthCheckRoundStatus::Cancelled
+        {
+            return HealthCheckRoundStatus::Cancelled;
+        }
+    }
+    HealthCheckRoundStatus::Completed
+}
+
+async fn run_resident_candidate_health_check_until_stopped(
     group: &plan::ResidentProxyGroupPlan,
     candidate: &plan::ResidentProxyProbePlan,
-) {
+    stop: Arc<AtomicBool>,
+) -> HealthCheckRoundStatus {
+    if stop.load(Ordering::Relaxed) {
+        return HealthCheckRoundStatus::Cancelled;
+    }
     let checked_at = unix_now_secs();
-    let latency_ms = probe_resident_candidate_tcp_endpoint_async(candidate)
-        .await
-        .ok();
+    let latency_ms = tokio::select! {
+        _ = wait_until_stopped_async(Arc::clone(&stop)) => {
+            return HealthCheckRoundStatus::Cancelled;
+        }
+        result = probe_resident_candidate_tcp_endpoint_async(candidate) => result.ok(),
+    };
+    if stop.load(Ordering::Relaxed) {
+        return HealthCheckRoundStatus::Cancelled;
+    }
     let _ = group.record_check_result(
         &candidate.node_tag,
         NetworkType::TCP4,
         latency_ms,
         checked_at,
     );
+    if stop.load(Ordering::Relaxed) {
+        return HealthCheckRoundStatus::Cancelled;
+    }
     let udp_checked_at = unix_now_secs();
-    let udp_latency_ms = probe_resident_candidate_udp_endpoint_async(candidate)
-        .await
-        .ok();
+    let udp_latency_ms = tokio::select! {
+        _ = wait_until_stopped_async(Arc::clone(&stop)) => {
+            return HealthCheckRoundStatus::Cancelled;
+        }
+        result = probe_resident_candidate_udp_endpoint_async(candidate) => result.ok(),
+    };
+    if stop.load(Ordering::Relaxed) {
+        return HealthCheckRoundStatus::Cancelled;
+    }
     let _ = group.record_check_result(
         &candidate.node_tag,
         NetworkType::DNS_UDP4,
         udp_latency_ms,
         udp_checked_at,
     );
+    HealthCheckRoundStatus::Completed
+}
+
+async fn wait_until_stopped_async(stop: Arc<AtomicBool>) {
+    while !stop.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[cfg(test)]
@@ -421,6 +504,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resident_health_check_round_cancelled_before_probe_does_not_seed_latency_state() {
+        let config = parse_test_config(
+            r#"
+            global {
+                lan_interface: daerust0
+            }
+            node {
+                node_a: 'socks5://127.0.0.1:1080#node_a'
+                node_b: 'socks5://127.0.0.1:1081#node_b'
+            }
+            group {
+                proxy {
+                    filter: name(node_a, node_b)
+                    policy: min
+                }
+            }
+            routing {
+                l4proto(tcp) -> proxy
+                fallback: direct
+            }
+            "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = Arc::new(plan.default_proxy_group().unwrap().clone());
+        let candidates = group.probe_candidates();
+        assert!(!candidates.is_empty());
+
+        let stop = Arc::new(AtomicBool::new(true));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let status = runtime.block_on(run_resident_group_health_checks_concurrent_async(
+            Arc::clone(&group),
+            &candidates,
+            2,
+            stop,
+        ));
+
+        assert_eq!(status, HealthCheckRoundStatus::Cancelled);
+        assert!(
+            group
+                .latency_snapshots()
+                .iter()
+                .all(|snapshot| !snapshot.alive
+                    && snapshot.latency_ms.is_none()
+                    && snapshot.checked_at_unix == 0)
+        );
+    }
+
+    #[test]
     fn preferred_latency_snapshots_prefers_newer_failed_error_over_old_placeholder_latency() {
         let values = preferred_latency_snapshots([
             json!({
@@ -467,5 +601,10 @@ mod tests {
         assert_eq!(values.len(), 1);
         assert_eq!(values[0]["latencyMs"], json!(120));
         assert_eq!(values[0]["alive"], json!(true));
+    }
+
+    fn parse_test_config(input: &str) -> Config {
+        let sections = dae_config::parser::parse_config(input).unwrap();
+        dae_config::schema::build_config(&sections).unwrap()
     }
 }
