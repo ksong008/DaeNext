@@ -11,14 +11,7 @@ impl UdpSessionExecutor {
         match self {
             Self::Dns => handle_resident_dns_udp_async(dns, original_dst, payload)
                 .await
-                .map(|response| {
-                    (
-                        "udp_dns_packet_finished",
-                        UdpExchangeResult::new(response, "resident-dns-udp")
-                            .with_session_executor("tokio-dns-datagram")
-                            .with_underlay_reuse("not-required-independent-datagram"),
-                    )
-                }),
+                .map(resident_dns_udp_exchange_result),
             Self::ShadowsocksAead(session) => session
                 .exchange(proxy, original_dst, payload)
                 .await
