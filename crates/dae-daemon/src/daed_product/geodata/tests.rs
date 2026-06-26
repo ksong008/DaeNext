@@ -1,6 +1,9 @@
 use super::http::{
     GeodataHttpFileResult, read_geodata_http_response, read_geodata_http_response_to_file,
 };
+use super::source::{
+    geodata_source_status, geodata_source_url, reset_geodata_source_url, set_geodata_source_url,
+};
 use super::status::geodata_status_for_dir;
 use super::types::{GEOIP_FILE, GEOSITE_FILE};
 use super::*;
@@ -152,6 +155,92 @@ fn geodata_status_keeps_missing_resources_unavailable() {
     assert_eq!(status["geosite"]["categoryCount"], json!(0));
     assert_eq!(status["geoip"]["available"], json!(false));
     assert_eq!(status["geoip"]["categoryCount"], json!(0));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geodata_source_settings_default_custom_and_reset_urls() {
+    let dir =
+        std::env::temp_dir().join(format!("daed-product-geodata-source-{}", fastrand::u64(..)));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("daed.db");
+
+    let geosite = geodata_source_status(&state, GeodataKind::Geosite).unwrap();
+    assert_eq!(geosite["kind"], json!("geosite"));
+    assert_eq!(geosite["usingDefault"], json!(true));
+    assert_eq!(
+        geosite["url"],
+        json!(GeodataKind::Geosite.release_api_url())
+    );
+
+    let custom_url = "https://mirror.example.test/geosite/releases/latest";
+    let geosite = set_geodata_source_url(&state, GeodataKind::Geosite, custom_url).unwrap();
+    assert_eq!(geosite["url"], json!(custom_url));
+    assert_eq!(geosite["usingDefault"], json!(false));
+    assert_eq!(
+        geodata_source_url(&state, GeodataKind::Geosite)
+            .unwrap()
+            .as_str(),
+        custom_url
+    );
+
+    let geosite = reset_geodata_source_url(&state, GeodataKind::Geosite).unwrap();
+    assert_eq!(geosite["usingDefault"], json!(true));
+    assert_eq!(
+        geosite["url"],
+        json!(GeodataKind::Geosite.release_api_url())
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geodata_source_settings_rejects_swapped_default_urls() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-geodata-source-guard-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("daed.db");
+
+    let err = set_geodata_source_url(
+        &state,
+        GeodataKind::Geosite,
+        GeodataKind::Geoip.release_api_url(),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("geosite source cannot use geoip default update url")
+    );
+    let err = set_geodata_source_url(
+        &state,
+        GeodataKind::Geoip,
+        GeodataKind::Geosite.release_api_url(),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("geoip source cannot use geosite default update url")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geodata_source_settings_rejects_invalid_urls() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-geodata-source-invalid-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("daed.db");
+
+    for raw_url in ["", "   ", "ftp://example.test/geosite/releases/latest"] {
+        let err = set_geodata_source_url(&state, GeodataKind::Geosite, raw_url).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
 
     let _ = fs::remove_dir_all(&dir);
 }
