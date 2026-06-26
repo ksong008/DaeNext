@@ -1,4 +1,36 @@
 use super::*;
+use std::net::IpAddr;
+
+fn interface_address_entry(addr: &Value, only_global_scope: bool) -> Option<(String, Value)> {
+    let scope = addr["scope"].as_str();
+    if only_global_scope && scope.is_some_and(|value| value != "global") {
+        return None;
+    }
+    let local = addr["local"].as_str()?.to_owned();
+    let prefixlen = addr["prefixlen"].as_u64().unwrap_or(0);
+    let family = addr["family"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| inferred_address_family(&local).to_owned());
+    let display = format!("{local}/{prefixlen}");
+    let mut detail = Map::new();
+    detail.insert("family".to_owned(), json!(family));
+    detail.insert("local".to_owned(), json!(local));
+    detail.insert("prefixlen".to_owned(), json!(prefixlen));
+    if let Some(scope) = scope.filter(|value| !value.is_empty()) {
+        detail.insert("scope".to_owned(), json!(scope));
+    }
+    Some((display, Value::Object(detail)))
+}
+
+fn inferred_address_family(local: &str) -> &'static str {
+    match local.parse::<IpAddr>() {
+        Ok(addr) if addr.is_ipv6() => "inet6",
+        _ => "inet",
+    }
+}
+
 pub(crate) fn list_system_interfaces(
     up: Option<bool>,
     only_global_scope: bool,
@@ -38,25 +70,20 @@ pub(crate) fn ip_address_interfaces(
             continue;
         }
         let mut addresses = Vec::new();
+        let mut address_details = Vec::new();
         for addr in iface["addr_info"].as_array().into_iter().flatten() {
-            if only_global_scope
-                && addr["scope"]
-                    .as_str()
-                    .is_some_and(|scope| scope != "global")
-            {
-                continue;
-            }
-            let Some(local) = addr["local"].as_str() else {
+            let Some((display, detail)) = interface_address_entry(addr, only_global_scope) else {
                 continue;
             };
-            let prefix = addr["prefixlen"].as_u64().unwrap_or(0);
-            addresses.push(format!("{local}/{prefix}"));
+            addresses.push(display);
+            address_details.push(detail);
         }
         let mut item = Map::new();
         item.insert("name".to_owned(), json!(name));
         item.insert("index".to_owned(), iface["ifindex"].clone());
         item.insert("up".to_owned(), json!(iface_up));
         item.insert("addresses".to_owned(), json!(addresses));
+        item.insert("addressDetails".to_owned(), json!(address_details));
         if let Some(routes) = routes_by_iface
             .get(name)
             .filter(|routes| !routes.is_empty())
@@ -131,6 +158,7 @@ pub(crate) fn sysfs_interfaces(
         item.insert("index".to_owned(), json!(index));
         item.insert("up".to_owned(), json!(iface_up));
         item.insert("addresses".to_owned(), json!([]));
+        item.insert("addressDetails".to_owned(), json!([]));
         if let Some(routes) = routes_by_iface
             .get(&name)
             .filter(|routes| !routes.is_empty())
@@ -146,4 +174,72 @@ pub(crate) fn sysfs_interfaces(
             .cmp(&right["index"].as_i64().unwrap_or(i64::MAX))
     });
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interface_address_entry_preserves_ipv6_details() {
+        let (display, detail) = interface_address_entry(
+            &json!({
+                "family": "inet6",
+                "local": "2001:db8::1",
+                "prefixlen": 64,
+                "scope": "global",
+            }),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(display, "2001:db8::1/64");
+        assert_eq!(
+            detail,
+            json!({
+                "family": "inet6",
+                "local": "2001:db8::1",
+                "prefixlen": 64,
+                "scope": "global",
+            })
+        );
+    }
+
+    #[test]
+    fn interface_address_entry_filters_non_global_scope_when_requested() {
+        assert!(
+            interface_address_entry(
+                &json!({
+                    "family": "inet6",
+                    "local": "fe80::1",
+                    "prefixlen": 64,
+                    "scope": "link",
+                }),
+                true,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn interface_address_entry_keeps_missing_scope_for_legacy_ip_output() {
+        let (display, detail) = interface_address_entry(
+            &json!({
+                "local": "192.0.2.10",
+                "prefixlen": 24,
+            }),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(display, "192.0.2.10/24");
+        assert_eq!(
+            detail,
+            json!({
+                "family": "inet",
+                "local": "192.0.2.10",
+                "prefixlen": 24,
+            })
+        );
+    }
 }
