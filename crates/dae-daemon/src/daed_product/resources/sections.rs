@@ -289,6 +289,18 @@ pub(crate) fn delete_section(state: &Path, kind: SectionKind, id: i64) -> HttpRe
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
+    let selected_sql = format!("SELECT selected FROM {} WHERE id = ?1", kind.table());
+    let selected = match conn
+        .query_row(&selected_sql, params![id], |row| row.get::<_, i64>(0))
+        .optional()
+    {
+        Ok(Some(value)) => value != 0,
+        Ok(None) => return HttpResponse::json(404, json!({"error": "resource not found"})),
+        Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
+    };
+    if selected {
+        return HttpResponse::json(400, json!({"error": "selected resource cannot be deleted"}));
+    }
     let sql = format!("DELETE FROM {} WHERE id = ?1", kind.table());
     match conn.execute(&sql, params![id]) {
         Ok(removed) => HttpResponse::json(200, json!({"removed": removed})),

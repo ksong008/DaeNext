@@ -101,6 +101,41 @@ pub(crate) fn section_summary_lists_keep_only_lightweight_fields() {
 }
 
 #[test]
+pub(crate) fn section_delete_rejects_selected_resources_and_allows_unselected_resources() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "INSERT INTO configs(id, name, global, selected, version)
+         VALUES(1, 'running', 'global { tproxy_port: 12345 }', 1, 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO configs(id, name, global, selected, version)
+         VALUES(2, 'draft', 'global { tproxy_port: 12346 }', 0, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let selected = delete_section(&state, SectionKind::Config, 1);
+    assert_eq!(selected.status, 400);
+    let unselected = delete_section(&state, SectionKind::Config, 2);
+    assert_eq!(unselected.status, 200);
+
+    let conn = open_state_connection(&state).unwrap();
+    let remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM configs WHERE id = 2", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(remaining, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn jwt_roundtrip_uses_user_secret() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
