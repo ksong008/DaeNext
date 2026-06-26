@@ -84,9 +84,9 @@ async fn open_xhttp_h3_connection(
     endpoint: &ResidentXhttpEndpointPlan,
     mark: u32,
 ) -> Result<XhttpH3Connection, String> {
-    let mut quic_endpoint = open_marked_quic_endpoint(mark)?;
-    quic_endpoint.set_default_client_config(build_xhttp_h3_client_config(endpoint)?);
     let remote = resolve_xhttp_endpoint_udp_addr_async(endpoint).await?;
+    let mut quic_endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
+    quic_endpoint.set_default_client_config(build_xhttp_h3_client_config(endpoint)?);
     let connection = quic_endpoint
         .connect(remote, &endpoint.server_name)
         .map_err(|err| format!("connect xHTTP H3 QUIC endpoint: {err}"))?

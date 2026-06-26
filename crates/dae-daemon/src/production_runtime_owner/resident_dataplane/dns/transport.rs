@@ -139,8 +139,9 @@ impl ResidentDnsQuicForwarder {
         if let Some(connection) = self.connection.as_ref() {
             return Ok(connection.clone());
         }
+        let remote = self.upstream.target.resolve().await?;
         if self.endpoint.is_none() {
-            let mut endpoint = open_marked_quic_endpoint(self.mark)?;
+            let mut endpoint = open_marked_quic_endpoint_for_remote(self.mark, remote)?;
             endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOQ_ALPN)?);
             self.endpoint = Some(endpoint);
         }
@@ -148,7 +149,6 @@ impl ResidentDnsQuicForwarder {
             .endpoint
             .as_ref()
             .expect("DNS QUIC endpoint is initialized");
-        let remote = self.upstream.target.resolve().await?;
         let connection = time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
             endpoint
@@ -391,9 +391,9 @@ async fn forward_dns_h3_async(
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
-    let mut endpoint = open_marked_quic_endpoint(mark)?;
-    endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOH3_ALPN)?);
     let remote = upstream.target.resolve().await?;
+    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
+    endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOH3_ALPN)?);
     let connection = time::timeout(
         RESIDENT_UDP_RESPONSE_TIMEOUT,
         endpoint

@@ -191,12 +191,13 @@ impl Hysteria2QuicDatagramSession {
         if self.connection.is_some() {
             return Ok(());
         }
-        let mut endpoint = open_marked_hysteria2_quic_endpoint(proxy.mark, &self.obfs)?;
+        let remote = resolve_hysteria2_quic_remote_async(proxy, &self.port_hop_ports).await?;
+        let mut endpoint =
+            open_marked_hysteria2_quic_endpoint_for_remote(proxy.mark, &self.obfs, remote)?;
         endpoint.set_default_client_config(
             build_hysteria2_runtime_client_config(self.allow_insecure, self.pin_sha256.clone())
                 .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
         );
-        let remote = resolve_hysteria2_quic_remote_async(proxy, &self.port_hop_ports).await?;
         let connecting = endpoint
             .connect(remote, &proxy.server_name)
             .map_err(|err| format!("connect Hysteria2 QUIC endpoint: {err}"))?;
@@ -334,12 +335,12 @@ impl TuicQuicDatagramSession {
         if self.connection.is_some() {
             return Ok(());
         }
-        let mut endpoint = open_marked_quic_endpoint(proxy.mark)?;
+        let remote = resolve_proxy_udp_addr_async(proxy).await?;
+        let mut endpoint = open_marked_quic_endpoint_for_remote(proxy.mark, remote)?;
         endpoint.set_default_client_config(
             build_tuic_runtime_client_config(&self.alpn, self.allow_insecure)
                 .map_err(|err| format!("build TUIC QUIC client config: {err}"))?,
         );
-        let remote = resolve_proxy_udp_addr_async(proxy).await?;
         let connecting = endpoint
             .connect(remote, &proxy.server_name)
             .map_err(|err| format!("connect TUIC QUIC endpoint: {err}"))?;
@@ -445,12 +446,12 @@ impl JuicityQuicStreamPacketSession {
         if self.connection.is_some() && self.auth_stream.is_some() {
             return Ok(());
         }
-        let mut endpoint = open_marked_quic_endpoint(proxy.mark)?;
+        let remote = resolve_proxy_udp_addr_async(proxy).await?;
+        let mut endpoint = open_marked_quic_endpoint_for_remote(proxy.mark, remote)?;
         endpoint.set_default_client_config(
             build_juicity_runtime_client_config(self.allow_insecure, &self.pinned_certchain_sha256)
                 .map_err(|err| format!("build Juicity QUIC client config: {err}"))?,
         );
-        let remote = resolve_proxy_udp_addr_async(proxy).await?;
         let connecting = endpoint
             .connect(remote, &proxy.server_name)
             .map_err(|err| format!("connect Juicity QUIC endpoint: {err}"))?;
