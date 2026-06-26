@@ -21,13 +21,18 @@ pub(crate) fn default_resources_bind_supplied_node_ids_to_group() {
         .parse::<i64>()
         .unwrap();
     let conn = open_state_connection(&state).unwrap();
-    let bound_count = conn
+    let (group_name, bound_count): (String, i64) = conn
         .query_row(
-            "SELECT COUNT(*) FROM group_nodes WHERE group_id = ?1 AND node_id = ?2",
+            "SELECT g.name, COUNT(gn.node_id)
+             FROM groups g
+             LEFT JOIN group_nodes gn ON gn.group_id = g.id AND gn.node_id = ?2
+             WHERE g.id = ?1
+             GROUP BY g.id, g.name",
             params![group_id, 1_i64],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
+    assert_eq!(group_name, DEFAULT_PRODUCT_GROUP_NAME);
     assert_eq!(bound_count, 1);
     fs::remove_dir_all(dir).unwrap();
 }
@@ -37,17 +42,18 @@ pub(crate) fn default_resources_are_idempotent_for_empty_policy_params() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
+    let group_name = "egress";
     let body = json!({
-        "configName": "global",
-        "global": "global {}",
-        "dnsName": "default",
+        "configName": DEFAULT_PRODUCT_CONFIG_NAME,
+        "global": DEFAULT_GLOBAL_RESOURCE_TEXT,
+        "dnsName": DEFAULT_PRODUCT_DNS_NAME,
         "dns": "dns {}",
-        "routingName": "default",
-        "routing": "routing { fallback: proxy }",
-        "groupName": "proxy",
-        "policy": "random",
+        "routingName": DEFAULT_PRODUCT_ROUTING_NAME,
+        "routing": format!("routing {{ fallback: {group_name} }}"),
+        "groupName": group_name,
+        "policy": DEFAULT_PRODUCT_GROUP_POLICY,
         "policyParams": [],
-        "mode": "rule"
+        "mode": DEFAULT_PRODUCT_MODE
     });
 
     let first = ensure_default_resources(&state, &body).unwrap();
@@ -85,9 +91,10 @@ pub(crate) fn default_resources_do_not_overwrite_existing_group_policy() {
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
+    let group_name = "existing_egress";
     conn.execute(
-        "INSERT INTO groups(id, name, policy, version) VALUES(1, 'proxy', 'fixed', 7)",
-        [],
+        "INSERT INTO groups(id, name, policy, version) VALUES(1, ?1, ?2, 7)",
+        params![group_name, GROUP_POLICY_FIXED],
     )
     .unwrap();
     conn.execute(
@@ -100,8 +107,8 @@ pub(crate) fn default_resources_do_not_overwrite_existing_group_policy() {
     let response = ensure_default_resources(
         &state,
         &json!({
-            "groupName": "proxy",
-            "policy": "min_moving_avg",
+            "groupName": group_name,
+            "policy": GROUP_POLICY_MIN_MOVING_AVG,
             "policyParams": [],
         }),
     )
@@ -123,7 +130,7 @@ pub(crate) fn default_resources_do_not_overwrite_existing_group_policy() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(group, ("fixed".to_owned(), 7));
+    assert_eq!(group, (GROUP_POLICY_FIXED.to_owned(), 7));
     assert_eq!(param, ("".to_owned(), "1".to_owned()));
     fs::remove_dir_all(dir).unwrap();
 }

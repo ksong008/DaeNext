@@ -3,6 +3,8 @@ use super::*;
 
 pub type KeyableString = String;
 
+pub const DEFAULT_LOG_LEVEL: &str = "error";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     pub global: Global,
@@ -68,7 +70,7 @@ impl Default for Global {
             tproxy_port: 12345,
             tproxy_port_protect: true,
             so_mark_from_dae: 0,
-            log_level: "info".to_owned(),
+            log_level: DEFAULT_LOG_LEVEL.to_owned(),
             tcp_check_url: split_csv("http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"),
             tcp_check_http_method: "HEAD".to_owned(),
             udp_check_dns: split_csv("dns.google:53"),

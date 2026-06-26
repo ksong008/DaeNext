@@ -64,6 +64,7 @@ const MIN_LOG_MAX_ENTRIES: i64 = 500;
 const MAX_LOG_MAX_ENTRIES: i64 = 50_000;
 const MIN_LOG_MAX_BYTES: i64 = 5 * 1024 * 1024;
 const MAX_LOG_MAX_BYTES: i64 = 200 * 1024 * 1024;
+const DEFAULT_RUNTIME_LOG_LEVEL: &str = dae_config::DEFAULT_LOG_LEVEL;
 const DEFAULT_LOG_QUERY_LIMIT: usize = 500;
 const MAX_LOG_QUERY_LIMIT: usize = 2_000;
 const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
@@ -75,6 +76,33 @@ const LOG_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const LOG_STREAM_RETRY_MS: u64 = 3_000;
 const PRODUCT_LOG_DIR: &str = "logs";
 const PRODUCT_LOG_FILE: &str = "current.jsonl";
+const DEFAULT_PRODUCT_CONFIG_NAME: &str = "global";
+const DEFAULT_PRODUCT_DNS_NAME: &str = "default";
+const DEFAULT_PRODUCT_ROUTING_NAME: &str = "default";
+const DEFAULT_PRODUCT_GROUP_NAME: &str = "default";
+const GROUP_POLICY_RANDOM: &str = "random";
+const GROUP_POLICY_FIXED: &str = "fixed";
+const GROUP_POLICY_MIN: &str = "min";
+const GROUP_POLICY_MIN_AVG10: &str = "min_avg10";
+const GROUP_POLICY_MIN_MOVING_AVG: &str = "min_moving_avg";
+const DEFAULT_PRODUCT_GROUP_POLICY: &str = GROUP_POLICY_RANDOM;
+const SUPPORTED_GROUP_POLICIES: &[&str] = &[
+    GROUP_POLICY_RANDOM,
+    GROUP_POLICY_FIXED,
+    GROUP_POLICY_MIN,
+    GROUP_POLICY_MIN_AVG10,
+    GROUP_POLICY_MIN_MOVING_AVG,
+];
+const DEFAULT_PRODUCT_MODE: &str = "rule";
+const DEFAULT_GLOBAL_RESOURCE_TEXT: &str = "global {}";
+const DEFAULT_SUBSCRIPTION_CRON_EXP: &str = "10 */6 * * *";
+const DEFAULT_SUBSCRIPTION_CRON_ENABLE: bool = true;
+const DEFAULT_SUBSCRIPTION_STATUS: &str = "imported";
+const DEFAULT_IMPORTED_CONFIG_NAME_PREFIX: &str = "imported";
+const IMPORTED_CONFIG_NAME_SUFFIX: &str = "global";
+const IMPORTED_DNS_NAME_SUFFIX: &str = "dns";
+const IMPORTED_ROUTING_NAME_SUFFIX: &str = "routing";
+const IMPORTED_GROUP_NAME_SUFFIX: &str = "group";
 const PRODUCT_HTTP_WORKERS_ENV: &str = "HTTP_WORKERS";
 const PRODUCT_HTTP_WORKERS_LEGACY_ENV: &str = "DAED_HTTP_WORKERS";
 const PRODUCT_HTTP_QUEUE_ENV: &str = "HTTP_QUEUE";
