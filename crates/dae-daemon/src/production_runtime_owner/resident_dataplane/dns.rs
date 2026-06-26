@@ -36,7 +36,7 @@ use super::super::resident_routing::{
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::direct::open_direct_tcp_connection_async;
 use super::resolve_host_with_configured_fallback_dns;
-use super::tcp::{open_marked_quic_endpoint, set_socket_mark};
+use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
 
 mod cache;
 mod domain_routing;

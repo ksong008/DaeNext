@@ -91,13 +91,29 @@ pub(crate) async fn relay_tcp_over_quic_stream_async(
     Ok(stats)
 }
 
-pub(crate) fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, String> {
-    open_marked_quic_endpoint_with_runtime(mark, quinn::default_runtime())
+pub(crate) fn open_marked_quic_endpoint_for_remote(
+    mark: u32,
+    remote: SocketAddr,
+) -> Result<quinn::Endpoint, String> {
+    open_marked_quic_endpoint_with_runtime(
+        mark,
+        quinn::default_runtime(),
+        quic_bind_addr_for_remote(remote),
+    )
 }
 
-pub(crate) fn open_marked_hysteria2_quic_endpoint(
+pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
     mark: u32,
     obfs: &ResidentHysteria2ObfsPlan,
+    remote: SocketAddr,
+) -> Result<quinn::Endpoint, String> {
+    open_marked_hysteria2_quic_endpoint_with_bind(mark, obfs, quic_bind_addr_for_remote(remote))
+}
+
+fn open_marked_hysteria2_quic_endpoint_with_bind(
+    mark: u32,
+    obfs: &ResidentHysteria2ObfsPlan,
+    bind: SocketAddr,
 ) -> Result<quinn::Endpoint, String> {
     let runtime = quinn::default_runtime();
     let runtime = if obfs.is_salamander() {
@@ -109,15 +125,22 @@ pub(crate) fn open_marked_hysteria2_quic_endpoint(
     } else {
         runtime
     };
-    open_marked_quic_endpoint_with_runtime(mark, runtime)
+    open_marked_quic_endpoint_with_runtime(mark, runtime, bind)
+}
+
+fn quic_bind_addr_for_remote(remote: SocketAddr) -> SocketAddr {
+    match remote {
+        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0),
+    }
 }
 
 fn open_marked_quic_endpoint_with_runtime(
     mark: u32,
     runtime: Option<Arc<dyn quinn::Runtime>>,
+    bind: SocketAddr,
 ) -> Result<quinn::Endpoint, String> {
-    let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
-        .map_err(|err| format!("bind QUIC UDP socket: {err}"))?;
+    let socket = UdpSocket::bind(bind).map_err(|err| format!("bind QUIC UDP socket: {err}"))?;
     if mark != 0 {
         set_socket_mark(socket.as_raw_fd(), mark)
             .map_err(|err| format!("set QUIC UDP SO_MARK {mark}: {err}"))?;
@@ -351,6 +374,15 @@ pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quic_bind_addr_follows_remote_ip_family() {
+        let v4_remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 443);
+        let v6_remote = SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), 443);
+
+        assert!(quic_bind_addr_for_remote(v4_remote).is_ipv4());
+        assert!(quic_bind_addr_for_remote(v6_remote).is_ipv6());
+    }
 
     #[test]
     fn hysteria2_salamander_packet_wrapper_roundtrips_payload() {
