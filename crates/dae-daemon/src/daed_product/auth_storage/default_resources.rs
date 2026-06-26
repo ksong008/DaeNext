@@ -17,7 +17,8 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
     let group_name = body
         .get("groupName")
         .and_then(Value::as_str)
-        .unwrap_or(DEFAULT_PRODUCT_GROUP_NAME);
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let policy = body
         .get("policy")
         .and_then(Value::as_str)
@@ -69,10 +70,13 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         "selected, version",
         "0, 0",
     )?;
-    let group = ensure_default_group(&conn, group_name, policy, body)?;
-    let group_id = group.id;
+    let group = ensure_default_group(&conn, group_name, policy)?;
+    let group_id = group.as_ref().map(|group| group.id);
     let mut group_changed = false;
-    if group.created {
+    if let Some(group) = group.as_ref()
+        && group.created
+    {
+        let group_id = group.id;
         if let Some(params_value) = body.get("policyParams").and_then(Value::as_array) {
             let desired = desired_policy_params(params_value);
             if group_policy_param_pairs(&conn, group_id)? != desired {
@@ -146,7 +150,7 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         "defaultConfigID": config.id.to_string(),
         "defaultRoutingID": routing.id.to_string(),
         "defaultDNSID": dns.id.to_string(),
-        "defaultGroupID": group_id.to_string(),
+        "defaultGroupID": group_id.map(|id| id.to_string()).unwrap_or_default(),
         "mode": mode,
     }))
 }
@@ -237,29 +241,28 @@ pub(crate) struct EnsuredResource {
 
 pub(crate) fn ensure_default_group(
     conn: &Connection,
-    name: &str,
+    name: Option<&str>,
     policy: &str,
-    body: &Value,
-) -> io::Result<EnsuredResource> {
-    if let Some(id) = group_id_by_name(conn, name)? {
-        return Ok(EnsuredResource { id, created: false });
-    }
-    if name == DEFAULT_PRODUCT_GROUP_NAME
-        && !body_requests_group_membership(body)
-        && existing_group_count(conn)? > 0
-    {
+) -> io::Result<Option<EnsuredResource>> {
+    let historical_group = || -> io::Result<Option<EnsuredResource>> {
         if let Some(id) = existing_group_referenced_by_selected_routing(conn)? {
-            return Ok(EnsuredResource { id, created: false });
+            return Ok(Some(EnsuredResource { id, created: false }));
         }
         if let Some(id) = first_existing_group_id(conn)? {
-            return Ok(EnsuredResource { id, created: false });
+            return Ok(Some(EnsuredResource { id, created: false }));
         }
+        Ok(None)
+    };
+    let Some(name) = name else {
+        return historical_group();
+    };
+    if name == DEFAULT_PRODUCT_GROUP_NAME {
+        return historical_group();
     }
-    insert_group(conn, name, policy)
-}
-
-pub(crate) fn body_requests_group_membership(body: &Value) -> bool {
-    body.get("nodeIds").is_some() || body.get("subscriptionIds").is_some()
+    if let Some(id) = group_id_by_name(conn, name)? {
+        return Ok(Some(EnsuredResource { id, created: false }));
+    }
+    insert_group(conn, name, policy).map(Some)
 }
 
 pub(crate) fn existing_group_referenced_by_selected_routing(
@@ -277,11 +280,6 @@ pub(crate) fn existing_group_referenced_by_selected_routing(
         }
     }
     Ok(None)
-}
-
-pub(crate) fn existing_group_count(conn: &Connection) -> io::Result<i64> {
-    conn.query_row("SELECT COUNT(*) FROM groups", [], |row| row.get(0))
-        .map_err(sqlite_io_error)
 }
 
 pub(crate) fn first_existing_group_id(conn: &Connection) -> io::Result<Option<i64>> {
