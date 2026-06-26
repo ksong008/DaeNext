@@ -41,6 +41,7 @@ pub struct BpfOutboundConnectivityQuery {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BpfPidPname {
     pub pid: u32,
+    pub comm: [i8; 16],
     pub pname: [i8; 16],
 }
 

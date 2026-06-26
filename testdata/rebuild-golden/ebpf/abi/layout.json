@@ -185,11 +185,15 @@
           "offset": 0
         },
         {
-          "field": "pname",
+          "field": "comm",
           "offset": 4
+        },
+        {
+          "field": "pname",
+          "offset": 20
         }
       ],
-      "size": 20
+      "size": 36
     },
     {
       "align": 4,
