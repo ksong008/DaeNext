@@ -48,6 +48,86 @@ pub(super) fn resident_dataplane_min_policy_selects_checked_lowest_last_latency(
 }
 
 #[test]
+pub(super) fn resident_dataplane_tcp_selection_uses_requested_ip_family_latency() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(20), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP4, Some(200), 2)
+        .unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP6, Some(300), 3)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP6, Some(50), 4)
+        .unwrap();
+
+    assert_eq!(
+        group
+            .select_proxy_for_tcp_network(NetworkType::TCP4)
+            .unwrap()
+            .node_tag,
+        "node_a"
+    );
+    assert_eq!(
+        group
+            .select_proxy_for_tcp_network(NetworkType::TCP6)
+            .unwrap()
+            .node_tag,
+        "node_b"
+    );
+}
+
+#[test]
+pub(super) fn resident_dataplane_udp_selection_uses_requested_ip_family_latency() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, Some(20), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::DNS_UDP4, Some(200), 2)
+        .unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP6, Some(300), 3)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 4)
+        .unwrap();
+
+    assert_eq!(
+        group
+            .select_proxy_for_udp_network(NetworkType::DNS_UDP4)
+            .unwrap()
+            .node_tag,
+        "node_a"
+    );
+    assert_eq!(
+        group
+            .select_proxy_for_udp_network(NetworkType::DNS_UDP6)
+            .unwrap()
+            .node_tag,
+        "node_b"
+    );
+}
+
+#[test]
 pub(super) fn resident_dataplane_min_avg10_policy_uses_latency_history() {
     let config = two_node_latency_config(
         "",
