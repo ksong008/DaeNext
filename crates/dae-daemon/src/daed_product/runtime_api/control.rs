@@ -218,9 +218,10 @@ pub(in crate::daed_product) fn api_runtime_stop(app: &AppState) -> HttpResponse 
 
 pub(in crate::daed_product) fn api_get_runtime_log_level(app: &AppState) -> HttpResponse {
     let level = get_metadata(&app.state, "runtime_log_level")
-        .unwrap_or_else(|_| Some("info".to_owned()))
-        .unwrap_or_else(|| "info".to_owned());
-    let level = normalize_runtime_log_level(&level).unwrap_or_else(|| "info".to_owned());
+        .unwrap_or_else(|_| Some(DEFAULT_RUNTIME_LOG_LEVEL.to_owned()))
+        .unwrap_or_else(|| DEFAULT_RUNTIME_LOG_LEVEL.to_owned());
+    let level =
+        normalize_runtime_log_level(&level).unwrap_or_else(|| DEFAULT_RUNTIME_LOG_LEVEL.to_owned());
     HttpResponse::json(200, json!({"level": level}))
 }
 
@@ -232,9 +233,11 @@ pub(in crate::daed_product) fn api_set_runtime_log_level(
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let Some(level) =
-        normalize_runtime_log_level(body.get("level").and_then(Value::as_str).unwrap_or("info"))
-    else {
+    let Some(level) = normalize_runtime_log_level(
+        body.get("level")
+            .and_then(Value::as_str)
+            .unwrap_or(DEFAULT_RUNTIME_LOG_LEVEL),
+    ) else {
         return HttpResponse::json(400, json!({"error": "invalid log level"}));
     };
     if let Err(err) = set_metadata(&app.state, "runtime_log_level", &level) {

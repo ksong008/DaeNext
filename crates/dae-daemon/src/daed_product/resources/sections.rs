@@ -69,7 +69,7 @@ pub(crate) fn api_section_preview(request: &HttpRequest, api_path: &str) -> Http
             body.get("global")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .unwrap_or_else(|| "global {}".to_owned())
+                .unwrap_or_else(|| DEFAULT_GLOBAL_RESOURCE_TEXT.to_owned())
         };
         return HttpResponse::json(
             200,

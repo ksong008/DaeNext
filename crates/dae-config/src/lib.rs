@@ -12,4 +12,4 @@ pub use ast::{Function, Item, ItemKind, Param, RoutingRule, Section};
 pub use dynamic::DynamicFunctionValue;
 pub use error::ConfigError;
 pub use outline::{export_flat_desc, export_outline, export_outline_json};
-pub use schema::{Config, Dns, Global, Group, KeyableString, Routing};
+pub use schema::{Config, DEFAULT_LOG_LEVEL, Dns, Global, Group, KeyableString, Routing};

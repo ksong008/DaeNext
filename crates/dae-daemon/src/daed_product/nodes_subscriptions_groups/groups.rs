@@ -165,11 +165,14 @@ pub(crate) fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse 
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let name = body.get("name").and_then(Value::as_str).unwrap_or("proxy");
+    let name = body
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(DEFAULT_PRODUCT_GROUP_NAME);
     let policy = body
         .get("policy")
         .and_then(Value::as_str)
-        .unwrap_or("random");
+        .unwrap_or(DEFAULT_PRODUCT_GROUP_POLICY);
     let policy = match validate_group_policy(policy) {
         Ok(policy) => policy,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -411,19 +414,17 @@ pub(crate) fn group_nodes_value(conn: &Connection, group_id: i64) -> io::Result<
 
 fn validate_group_policy(policy: &str) -> Result<&str, String> {
     let policy = policy.trim();
-    if matches!(
-        policy,
-        "random" | "fixed" | "min" | "min_avg10" | "min_moving_avg"
-    ) {
+    if SUPPORTED_GROUP_POLICIES.contains(&policy) {
         return Ok(policy);
     }
     Err(format!(
-        "unsupported group policy {policy:?}; allowed values: random, fixed, min, min_avg10, min_moving_avg"
+        "unsupported group policy {policy:?}; allowed values: {}",
+        SUPPORTED_GROUP_POLICIES.join(", ")
     ))
 }
 
 fn group_policy_is_fixed(policy: &str) -> bool {
-    policy.trim() == "fixed"
+    policy.trim() == GROUP_POLICY_FIXED
 }
 
 fn group_has_fixed_policy(conn: &Connection, group_id: i64) -> io::Result<bool> {
@@ -533,7 +534,7 @@ pub(crate) fn group_subscriptions_value(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?
-                    .unwrap_or_else(|| "10 */6 * * *".to_owned()),
+                    .unwrap_or_else(|| DEFAULT_SUBSCRIPTION_CRON_EXP.to_owned()),
                 row.get::<_, i64>(4)? != 0,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,

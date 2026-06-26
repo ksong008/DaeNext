@@ -15,7 +15,7 @@ pub(in crate::daed_product) fn render_generated_config(
     out.push_str("# selected config\n");
     let config_text = config
         .map(|(_, _, raw, _)| display_global_config_text(raw))
-        .unwrap_or_else(|| "global {}\n".to_owned());
+        .unwrap_or_else(default_global_resource_text_with_newline);
     out.push_str(&config_text);
     out.push_str("\n\n# selected dns\n");
     let dns_text = render_dns_section(
@@ -172,7 +172,7 @@ pub(in crate::daed_product) fn render_group_policy(group: &Value) -> String {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|policy| !policy.is_empty())
-        .unwrap_or("fixed");
+        .unwrap_or(GROUP_POLICY_FIXED);
     let params = group
         .get("policyParams")
         .and_then(Value::as_array)
@@ -215,8 +215,12 @@ fn group_policy_is_fixed(group: &Value) -> bool {
         .get("policy")
         .and_then(Value::as_str)
         .map(str::trim)
-        .unwrap_or("fixed")
-        == "fixed"
+        .unwrap_or(GROUP_POLICY_FIXED)
+        == GROUP_POLICY_FIXED
+}
+
+fn default_global_resource_text_with_newline() -> String {
+    format!("{DEFAULT_GLOBAL_RESOURCE_TEXT}\n")
 }
 
 pub(in crate::daed_product) fn runtime_group_node_tags(group: &Value) -> Vec<String> {

@@ -196,7 +196,10 @@ fn prepare_config(config: &Path, root: &Path) -> Result<(), String> {
     }
     fs::write(
         config,
-        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+        format!(
+            "global {{\n  log_level: {}\n}}\n\nrouting {{\n  pname(NetworkManager) -> direct\n}}\n",
+            dae_config::DEFAULT_LOG_LEVEL
+        ),
     )
     .map_err(|err| format!("failed to write product-run-identity default config: {err}"))
 }

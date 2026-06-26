@@ -6,7 +6,10 @@ pub(super) fn export_bundle(state: &Path, user: &UserRecord) -> io::Result<Value
     Ok(json!({
         "schemaVersion": 1,
         "exportedAt": now_text(),
-        "mode": storage.get("mode").and_then(Value::as_str).unwrap_or("rule"),
+        "mode": storage
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or(DEFAULT_PRODUCT_MODE),
         "defaults": {
             "configId": numeric_storage_value(&storage, "defaultConfigID"),
             "dnsId": numeric_storage_value(&storage, "defaultDNSID"),
@@ -279,11 +282,13 @@ pub(super) fn import_bundle_subscriptions(
                     item.get("link").and_then(Value::as_str).unwrap_or(""),
                     item.get("cronExp")
                         .and_then(Value::as_str)
-                        .unwrap_or("10 */6 * * *"),
+                        .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_EXP),
                     item.get("cronEnable")
                         .and_then(Value::as_bool)
-                        .unwrap_or(true) as i64,
-                    item.get("status").and_then(Value::as_str).unwrap_or("imported"),
+                        .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_ENABLE) as i64,
+                    item.get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or(DEFAULT_SUBSCRIPTION_STATUS),
                     item.get("info").and_then(Value::as_str).unwrap_or(""),
                     item.get("tag").and_then(Value::as_str),
                     item.get("useProxy")
@@ -340,10 +345,12 @@ pub(super) fn import_bundle_groups(conn: &Connection, groups: Option<&Value>) ->
                 "INSERT INTO groups(id, name, policy, version) VALUES(?1, ?2, ?3, 0)",
                 params![
                     id,
-                    item.get("name").and_then(Value::as_str).unwrap_or("proxy"),
+                    item.get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or(DEFAULT_PRODUCT_GROUP_NAME),
                     item.get("policy")
                         .and_then(Value::as_str)
-                        .unwrap_or("random"),
+                        .unwrap_or(DEFAULT_PRODUCT_GROUP_POLICY),
                 ],
             )
             .map_err(sqlite_io_error)?;

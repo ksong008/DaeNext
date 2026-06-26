@@ -5,30 +5,33 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
     let config_name = body
         .get("configName")
         .and_then(Value::as_str)
-        .unwrap_or("global");
+        .unwrap_or(DEFAULT_PRODUCT_CONFIG_NAME);
     let dns_name = body
         .get("dnsName")
         .and_then(Value::as_str)
-        .unwrap_or("default");
+        .unwrap_or(DEFAULT_PRODUCT_DNS_NAME);
     let routing_name = body
         .get("routingName")
         .and_then(Value::as_str)
-        .unwrap_or("default");
+        .unwrap_or(DEFAULT_PRODUCT_ROUTING_NAME);
     let group_name = body
         .get("groupName")
         .and_then(Value::as_str)
-        .unwrap_or("proxy");
+        .unwrap_or(DEFAULT_PRODUCT_GROUP_NAME);
     let policy = body
         .get("policy")
         .and_then(Value::as_str)
-        .unwrap_or("random");
-    let mode = body.get("mode").and_then(Value::as_str).unwrap_or("rule");
+        .unwrap_or(DEFAULT_PRODUCT_GROUP_POLICY);
+    let mode = body
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or(DEFAULT_PRODUCT_MODE);
     let global = body
         .get("global")
         .and_then(Value::as_str)
         .map(str::to_owned)
         .or_else(|| body.get("global").map(Value::to_string))
-        .unwrap_or_else(|| "global {}".to_owned());
+        .unwrap_or_else(|| DEFAULT_GLOBAL_RESOURCE_TEXT.to_owned());
     let dns = body
         .get("dns")
         .and_then(Value::as_str)

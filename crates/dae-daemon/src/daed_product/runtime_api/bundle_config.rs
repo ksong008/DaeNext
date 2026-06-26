@@ -49,18 +49,18 @@ pub(in crate::daed_product) fn api_put_dae_config_file(
     let name_prefix = body
         .get("namePrefix")
         .and_then(Value::as_str)
-        .unwrap_or("imported");
+        .unwrap_or(DEFAULT_IMPORTED_CONFIG_NAME_PREFIX);
     let import_body = json!({
-        "configName": format!("{name_prefix}-global"),
+        "configName": format!("{name_prefix}-{IMPORTED_CONFIG_NAME_SUFFIX}"),
         "global": content,
-        "dnsName": format!("{name_prefix}-dns"),
+        "dnsName": format!("{name_prefix}-{IMPORTED_DNS_NAME_SUFFIX}"),
         "dns": "",
-        "routingName": format!("{name_prefix}-routing"),
+        "routingName": format!("{name_prefix}-{IMPORTED_ROUTING_NAME_SUFFIX}"),
         "routing": "",
-        "groupName": format!("{name_prefix}-group"),
-        "policy": "random",
+        "groupName": format!("{name_prefix}-{IMPORTED_GROUP_NAME_SUFFIX}"),
+        "policy": DEFAULT_PRODUCT_GROUP_POLICY,
         "policyParams": [],
-        "mode": "rule"
+        "mode": DEFAULT_PRODUCT_MODE
     });
     match ensure_default_resources(&app.state, &import_body) {
         Ok(response) => {

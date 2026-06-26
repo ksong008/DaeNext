@@ -107,13 +107,64 @@ fn generated_runtime_config_skips_empty_groups_not_referenced_by_selected_routin
 }
 
 #[test]
-fn generated_runtime_config_preserves_group_policy_params() {
-    let node = config_node_value(1, "node_a", "http://127.0.0.1:9/node-under-test#node-a");
+fn generated_runtime_config_ignores_group_names_inside_routing_comments() {
+    let node = config_node_value(
+        1,
+        "active_node",
+        "http://127.0.0.1:9/node-under-test#active-node",
+    );
+    let active_group = "active_group";
+    let commented_group = "commented_group";
     let groups = json!({
         "items": [
             {
-                "name": "proxy",
-                "policy": "fixed",
+                "name": active_group,
+                "policy": DEFAULT_PRODUCT_GROUP_POLICY,
+                "nodes": [node.clone()],
+                "subscriptions": []
+            },
+            {
+                "name": commented_group,
+                "policy": DEFAULT_PRODUCT_GROUP_POLICY,
+                "nodes": [],
+                "subscriptions": []
+            }
+        ]
+    });
+    let nodes = json!({"items": [node]});
+    let content = render_generated_config(
+        "test",
+        Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+        Some(&(1, "dns".to_owned(), "dns {}\n".to_owned(), 1)),
+        Some(&(
+            1,
+            "routing".to_owned(),
+            format!(
+                "routing {{\n    # domain(suffix:example.test) -> {commented_group}\n    fallback: {active_group}\n}}\n"
+            ),
+            1,
+        )),
+        &groups,
+        &nodes,
+    )
+    .unwrap();
+
+    assert!(content.contains(&format!("    {active_group} {{")));
+    assert!(!content.contains(&format!("    {commented_group} {{")));
+    let config = build_runtime_config_from_content(&content).unwrap();
+    assert_eq!(config.group.len(), 1);
+    assert_eq!(config.group[0].name, active_group);
+}
+
+#[test]
+fn generated_runtime_config_preserves_group_policy_params() {
+    let node = config_node_value(1, "node_a", "http://127.0.0.1:9/node-under-test#node-a");
+    let group_name = "policy_group";
+    let groups = json!({
+        "items": [
+            {
+                "name": group_name,
+                "policy": GROUP_POLICY_FIXED,
                 "policyParams": [{"key": "", "val": "1"}],
                 "nodes": [node.clone()],
                 "subscriptions": []
@@ -128,7 +179,7 @@ fn generated_runtime_config_preserves_group_policy_params() {
         Some(&(
             1,
             "routing".to_owned(),
-            "routing {\n    fallback: proxy\n}\n".to_owned(),
+            format!("routing {{\n    fallback: {group_name}\n}}\n"),
             1,
         )),
         &groups,
@@ -136,15 +187,15 @@ fn generated_runtime_config_preserves_group_policy_params() {
     )
     .unwrap();
 
-    assert!(content.contains("policy: fixed("));
+    assert!(content.contains(&format!("policy: {GROUP_POLICY_FIXED}(")));
     let config = build_runtime_config_from_content(&content).unwrap();
     match &config.group[0].policy {
         DynamicFunctionValue::Function(function) => {
-            assert_eq!(function.name, "fixed");
+            assert_eq!(function.name, GROUP_POLICY_FIXED);
             assert_eq!(function.params[0].val, "1");
         }
         DynamicFunctionValue::FunctionList(functions) if functions.len() == 1 => {
-            assert_eq!(functions[0].name, "fixed");
+            assert_eq!(functions[0].name, GROUP_POLICY_FIXED);
             assert_eq!(functions[0].params[0].val, "1");
         }
         other => panic!("unexpected group policy: {other:?}"),
@@ -336,8 +387,9 @@ fn generated_runtime_config_accepts_routing_body_resources() {
 
 #[test]
 fn generated_runtime_config_preserves_complete_routing_sections() {
-    let raw = "routing {\n    fallback: proxy\n}\n";
-    assert_eq!(render_routing_section(Some(raw)), raw);
+    let group_name = "route_group";
+    let raw = format!("routing {{\n    fallback: {group_name}\n}}\n");
+    assert_eq!(render_routing_section(Some(&raw)), raw);
     assert_eq!(render_routing_section(None), "routing {}\n");
 }
 
@@ -419,11 +471,12 @@ fn generated_runtime_config_rejects_empty_must_group_reference() {
 fn generated_runtime_config_rejects_fixed_group_with_multiple_matched_nodes() {
     let node_a = config_node_value(1, "node_a", "http://127.0.0.1:9/node-a#node-a");
     let node_b = config_node_value(2, "node_b", "http://127.0.0.2:9/node-b#node-b");
+    let group_name = "exclusive_group";
     let groups = json!({
         "items": [
             {
-                "name": "proxy",
-                "policy": "fixed",
+                "name": group_name,
+                "policy": GROUP_POLICY_FIXED,
                 "nodes": [node_a.clone(), node_b.clone()],
                 "subscriptions": []
             }
@@ -438,7 +491,7 @@ fn generated_runtime_config_rejects_fixed_group_with_multiple_matched_nodes() {
         Some(&(
             1,
             "routing".to_owned(),
-            "routing { fallback: proxy }\n".to_owned(),
+            format!("routing {{ fallback: {group_name} }}\n"),
             1,
         )),
         &groups,
@@ -448,7 +501,7 @@ fn generated_runtime_config_rejects_fixed_group_with_multiple_matched_nodes() {
 
     assert!(
         err.to_string()
-            .contains("fixed group proxy can match only one node"),
+            .contains(&format!("fixed group {group_name} can match only one node")),
         "{err}"
     );
 }

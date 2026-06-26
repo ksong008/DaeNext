@@ -6,7 +6,7 @@
           "tproxy_port": 12345,
           "tproxy_port_protect": true,
           "so_mark_from_dae": 0,
-          "log_level": "info",
+          "log_level": "error",
           "tcp_check_url": [
             "http://cp.cloudflare.com",
             "1.1.1.1",
@@ -83,7 +83,7 @@
           "tproxy_port": 12345,
           "tproxy_port_protect": true,
           "so_mark_from_dae": 0,
-          "log_level": "info",
+          "log_level": "error",
           "tcp_check_url": [
             "http://cp.cloudflare.com",
             "1.1.1.1",
@@ -160,7 +160,7 @@
           "tproxy_port": 12345,
           "tproxy_port_protect": true,
           "so_mark_from_dae": 0,
-          "log_level": "info",
+          "log_level": "error",
           "tcp_check_url": [
             "https://one.example/check",
             "1.1.1.1",
@@ -295,7 +295,7 @@
           "tproxy_port": 12345,
           "tproxy_port_protect": true,
           "so_mark_from_dae": 0,
-          "log_level": "info",
+          "log_level": "error",
           "tcp_check_url": [
             "http://cp.cloudflare.com",
             "1.1.1.1",
@@ -420,7 +420,7 @@
           "tproxy_port": 12345,
           "tproxy_port_protect": true,
           "so_mark_from_dae": 0,
-          "log_level": "info",
+          "log_level": "error",
           "tcp_check_url": [
             "http://cp.cloudflare.com",
             "1.1.1.1",

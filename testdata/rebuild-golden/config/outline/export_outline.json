@@ -41,7 +41,7 @@
             "type": "uint32"
           },
           {
-            "defaultValue": "info",
+            "defaultValue": "error",
             "desc": "Log level: error, warn, info, debug, trace.",
             "mapping": "log_level",
             "name": "LogLevel",

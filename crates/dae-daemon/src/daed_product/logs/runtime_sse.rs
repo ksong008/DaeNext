@@ -2,13 +2,13 @@ use super::*;
 pub(crate) fn current_runtime_log_level(state: &Path) -> io::Result<String> {
     let level = get_metadata(state, "runtime_log_level")?
         .and_then(|level| normalize_runtime_log_level(&level))
-        .unwrap_or_else(|| "info".to_owned());
+        .unwrap_or_else(|| DEFAULT_RUNTIME_LOG_LEVEL.to_owned());
     Ok(level)
 }
 
 pub(crate) fn set_runtime_log_level_from_config(state: &Path, config: &Config) -> io::Result<()> {
-    let level =
-        normalize_runtime_log_level(&config.global.log_level).unwrap_or_else(|| "info".to_owned());
+    let level = normalize_runtime_log_level(&config.global.log_level)
+        .unwrap_or_else(|| DEFAULT_RUNTIME_LOG_LEVEL.to_owned());
     set_metadata(state, "runtime_log_level", &level)
 }
 

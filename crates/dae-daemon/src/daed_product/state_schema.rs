@@ -160,9 +160,13 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             VALUES('production-local-product-surface', datetime('now'));
         INSERT OR IGNORE INTO log_settings(id, max_entries, max_bytes)
             VALUES(1, 10000, 52428800);
-        INSERT OR IGNORE INTO daed_product_metadata(key, value)
-            VALUES('runtime_log_level', 'info');
         "#,
+    )
+    .map_err(sqlite_io_error)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO daed_product_metadata(key, value)
+            VALUES('runtime_log_level', ?1)",
+        params![DEFAULT_RUNTIME_LOG_LEVEL],
     )
     .map_err(sqlite_io_error)?;
     ensure_table_column(
