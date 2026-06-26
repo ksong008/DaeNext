@@ -52,6 +52,10 @@ unsafe fn update_map_elem_by_cookie(ctx: *mut c_void) {
 unsafe fn get_pid_pname() -> BpfPidPname {
     let mut val = BpfPidPname::zeroed();
     val.pid = (unsafe { helpers::bpf_get_current_pid_tgid() } >> 32) as u32;
+    let _ = unsafe {
+        helpers::bpf_get_current_comm(val.comm.as_mut_ptr().cast::<c_void>(), TASK_COMM_LEN as u32)
+    };
+    val.pname = val.comm;
     #[cfg(feature = "pname-core")]
     {
         if abi::param_has_bpf_get_current_task() != 0
@@ -60,12 +64,6 @@ unsafe fn get_pid_pname() -> BpfPidPname {
             return val;
         }
     }
-    let _ = unsafe {
-        helpers::bpf_get_current_comm(
-            val.pname.as_mut_ptr().cast::<c_void>(),
-            TASK_COMM_LEN as u32,
-        )
-    };
     val
 }
 

@@ -93,7 +93,7 @@ const MAP_CATALOG: [MapSpec; 13] = [
         name: "cookie_pid_map",
         map_type: "LRUHash",
         key_size: 8,
-        value_size: 20,
+        value_size: 36,
         max_entries: 65536,
         flags: 0,
         pinning: "PinByName",

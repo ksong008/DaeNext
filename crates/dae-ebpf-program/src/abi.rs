@@ -88,6 +88,7 @@ pub struct BpfOutboundConnectivityQuery {
 #[derive(Clone, Copy)]
 pub struct BpfPidPname {
     pub pid: u32,
+    pub comm: [i8; TASK_COMM_LEN],
     pub pname: [i8; TASK_COMM_LEN],
 }
 
@@ -95,6 +96,7 @@ impl BpfPidPname {
     pub const fn zeroed() -> Self {
         Self {
             pid: 0,
+            comm: [0; TASK_COMM_LEN],
             pname: [0; TASK_COMM_LEN],
         }
     }
