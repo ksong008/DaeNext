@@ -1,32 +1,30 @@
 use super::*;
 #[test]
-pub(crate) fn default_resources_create_default_group_for_empty_state() {
+pub(crate) fn default_resources_do_not_create_default_group_for_empty_state() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
 
-    let response = ensure_default_resources(&state, &json!({})).unwrap();
-    let group_id = response["defaultGroupID"]
-        .as_str()
-        .unwrap()
-        .parse::<i64>()
-        .unwrap();
+    let response = ensure_default_resources(
+        &state,
+        &json!({
+            "groupName": DEFAULT_PRODUCT_GROUP_NAME,
+            "policy": DEFAULT_PRODUCT_GROUP_POLICY,
+        }),
+    )
+    .unwrap();
+    assert_eq!(response["defaultGroupID"], json!(""));
 
     let conn = open_state_connection(&state).unwrap();
-    let (group_name, group_count): (String, i64) = conn
-        .query_row(
-            "SELECT g.name, (SELECT COUNT(*) FROM groups) FROM groups g WHERE g.id = ?1",
-            params![group_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
+    let group_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM groups", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(group_name, DEFAULT_PRODUCT_GROUP_NAME);
-    assert_eq!(group_count, 1);
+    assert_eq!(group_count, 0);
     fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-pub(crate) fn default_resources_reuse_historical_group_when_default_is_absent() {
+pub(crate) fn default_resources_prefer_selected_routing_group_over_default_group() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
@@ -44,6 +42,11 @@ pub(crate) fn default_resources_reuse_historical_group_when_default_is_absent() 
     .unwrap();
     conn.execute(
         "INSERT INTO groups(id, name, policy, version) VALUES(8, 'media', ?1, 5)",
+        params![DEFAULT_PRODUCT_GROUP_POLICY],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, 'default', ?1, 0)",
         params![DEFAULT_PRODUCT_GROUP_POLICY],
     )
     .unwrap();
@@ -72,8 +75,8 @@ pub(crate) fn default_resources_reuse_historical_group_when_default_is_absent() 
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(group_count, 2);
-    assert_eq!(default_group_count, 0);
+    assert_eq!(group_count, 3);
+    assert_eq!(default_group_count, 1);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -92,7 +95,15 @@ pub(crate) fn default_resources_bind_supplied_node_ids_to_group() {
     );
     drop(conn);
 
-    let response = ensure_default_resources(&state, &json!({"nodeIds": [1]})).unwrap();
+    let group_name = "resource_group";
+    let response = ensure_default_resources(
+        &state,
+        &json!({
+            "groupName": group_name,
+            "nodeIds": [1],
+        }),
+    )
+    .unwrap();
     let group_id = response["defaultGroupID"]
         .as_str()
         .unwrap()
@@ -110,7 +121,7 @@ pub(crate) fn default_resources_bind_supplied_node_ids_to_group() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(group_name, DEFAULT_PRODUCT_GROUP_NAME);
+    assert_eq!(group_name, "resource_group");
     assert_eq!(bound_count, 1);
     fs::remove_dir_all(dir).unwrap();
 }
