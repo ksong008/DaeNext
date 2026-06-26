@@ -1,5 +1,7 @@
 use super::*;
 
+const DNS_UDP_FORWARD_ATTEMPTS: usize = 3;
+
 pub(super) async fn forward_dns_to_upstream_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
@@ -204,6 +206,24 @@ pub(super) async fn forward_dns_udp_async(
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
+    forward_dns_udp_with_attempts_async(
+        target,
+        payload,
+        mark,
+        DNS_UDP_FORWARD_ATTEMPTS,
+        dns_udp_forward_attempt_timeout(),
+    )
+    .await
+}
+
+async fn forward_dns_udp_with_attempts_async(
+    target: SocketAddr,
+    payload: &[u8],
+    mark: u32,
+    attempts: usize,
+    attempt_timeout: std::time::Duration,
+) -> Result<Vec<u8>, String> {
+    let attempts = attempts.max(1);
     let bind = match target {
         SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
         SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
@@ -219,20 +239,36 @@ pub(super) async fn forward_dns_udp_async(
         .map_err(|err| format!("set DNS UDP nonblocking: {err}"))?;
     let socket = tokio::net::UdpSocket::from_std(socket)
         .map_err(|err| format!("adopt async DNS UDP socket: {err}"))?;
-    socket
-        .send_to(payload, target)
-        .await
-        .map_err(|err| format!("send DNS UDP packet: {err}"))?;
-    let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
-    let (read, _) = time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        socket.recv_from(&mut response),
-    )
-    .await
-    .map_err(|_| "receive DNS UDP response timeout".to_owned())?
-    .map_err(|err| format!("receive DNS UDP response: {err}"))?;
-    response.truncate(read);
-    Ok(response)
+    for attempt in 0..attempts {
+        socket
+            .send_to(payload, target)
+            .await
+            .map_err(|err| format!("send DNS UDP packet: {err}"))?;
+        let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+        match time::timeout(attempt_timeout, socket.recv_from(&mut response)).await {
+            Ok(Ok((read, _))) => {
+                response.truncate(read);
+                return Ok(response);
+            }
+            Ok(Err(err)) => return Err(format!("receive DNS UDP response: {err}")),
+            Err(_) if attempt + 1 < attempts => continue,
+            Err(_) => {
+                return Err(format!(
+                    "receive DNS UDP response timeout after {attempts} attempts"
+                ));
+            }
+        }
+    }
+    Err("receive DNS UDP response timeout".to_owned())
+}
+
+fn dns_udp_forward_attempt_timeout() -> std::time::Duration {
+    let divisor = (DNS_UDP_FORWARD_ATTEMPTS as u128).saturating_add(1);
+    let millis = RESIDENT_UDP_RESPONSE_TIMEOUT
+        .as_millis()
+        .saturating_div(divisor)
+        .max(1);
+    std::time::Duration::from_millis(millis.min(u64::MAX as u128) as u64)
 }
 
 async fn forward_dns_tcp_async(
@@ -713,4 +749,60 @@ fn dns_response_truncated(response: &[u8]) -> bool {
         .get(2..4)
         .map(|flags| u16::from_be_bytes([flags[0], flags[1]]) & 0x0200 != 0)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn forward_dns_udp_retries_after_timeout() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut buf = [0_u8; 64];
+            let _ = upstream.recv_from(&mut buf).await.unwrap();
+            let (read, peer) = upstream.recv_from(&mut buf).await.unwrap();
+            upstream.send_to(&buf[..read], peer).await.unwrap();
+        });
+
+        let response = forward_dns_udp_with_attempts_async(
+            target,
+            b"fixture-query",
+            0,
+            2,
+            std::time::Duration::from_millis(20),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response, b"fixture-query");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn forward_dns_udp_reports_attempt_count_after_timeouts() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let _server = tokio::spawn(async move {
+            let mut buf = [0_u8; 64];
+            while upstream.recv_from(&mut buf).await.is_ok() {}
+        });
+
+        let err = forward_dns_udp_with_attempts_async(
+            target,
+            b"fixture-query",
+            0,
+            2,
+            std::time::Duration::from_millis(5),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("after 2 attempts"));
+    }
 }
