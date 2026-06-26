@@ -34,14 +34,42 @@ impl ResidentProxyProbePlan {
 pub(crate) struct ResidentTcpCheckPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) scheme: String,
     pub(in crate::production_runtime_owner::resident_dataplane) target: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) targets:
+        Vec<ResidentTcpCheckTarget>,
     pub(in crate::production_runtime_owner::resident_dataplane) host: String,
     pub(in crate::production_runtime_owner::resident_dataplane) path: String,
     pub(in crate::production_runtime_owner::resident_dataplane) method: String,
 }
 
+impl ResidentTcpCheckPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn primary_target(
+        &self,
+    ) -> &ResidentTcpCheckTarget {
+        self.targets
+            .first()
+            .expect("resident TCP check plan always has at least one target")
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentTcpCheckTarget {
+    pub(in crate::production_runtime_owner::resident_dataplane) target: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) network_type: Option<NetworkType>,
+}
+
+impl ResidentTcpCheckTarget {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn network_type_for_record(
+        &self,
+    ) -> NetworkType {
+        self.network_type.unwrap_or(NetworkType::TCP4)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentUdpCheckPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) target: ResidentUdpCheckTarget,
+    pub(in crate::production_runtime_owner::resident_dataplane) targets:
+        Vec<ResidentUdpCheckTarget>,
     pub(in crate::production_runtime_owner::resident_dataplane) host: String,
     pub(in crate::production_runtime_owner::resident_dataplane) lookup_host: String,
 }
@@ -94,7 +122,12 @@ impl ResidentUdpCheckTarget {
         &self.authority
     }
 
-    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane) fn network_type_hint(
+        &self,
+    ) -> Option<NetworkType> {
+        self.literal_addr.map(resident_udp_check_network_type)
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn literal_addr(
         &self,
     ) -> Option<SocketAddr> {
@@ -120,6 +153,26 @@ impl ResidentUdpCheckTarget {
             })
             .await
             .copied()
+    }
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) fn resident_tcp_check_network_type(
+    addr: IpAddr,
+) -> NetworkType {
+    if addr.is_ipv6() {
+        NetworkType::TCP6
+    } else {
+        NetworkType::TCP4
+    }
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_check_network_type(
+    addr: SocketAddr,
+) -> NetworkType {
+    if addr.is_ipv6() {
+        NetworkType::DNS_UDP6
+    } else {
+        NetworkType::DNS_UDP4
     }
 }
 
@@ -545,6 +598,11 @@ impl ResidentProxyGroupPlan {
             IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT,
         );
+        let tcp_check_target = ResidentTcpCheckTarget {
+            target: "cp.cloudflare.com:80".to_owned(),
+            network_type: None,
+        };
+        let udp_check_target = ResidentUdpCheckTarget::literal(udp_check_addr);
         Self {
             group_name: proxy.group_name.clone(),
             group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },
@@ -568,13 +626,15 @@ impl ResidentProxyGroupPlan {
             check_interval: Duration::from_secs(30),
             tcp_check: ResidentTcpCheckPlan {
                 scheme: "http".to_owned(),
-                target: "cp.cloudflare.com:80".to_owned(),
+                target: tcp_check_target.target.clone(),
+                targets: vec![tcp_check_target],
                 host: "cp.cloudflare.com".to_owned(),
                 path: "/".to_owned(),
                 method: "HEAD".to_owned(),
             },
             udp_check: ResidentUdpCheckPlan {
-                target: ResidentUdpCheckTarget::literal(udp_check_addr),
+                target: udp_check_target.clone(),
+                targets: vec![udp_check_target],
                 host: "localhost".to_owned(),
                 lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
             },

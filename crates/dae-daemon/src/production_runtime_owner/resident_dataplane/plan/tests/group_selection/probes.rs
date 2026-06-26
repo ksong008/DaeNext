@@ -98,6 +98,61 @@ pub(super) fn resident_dataplane_group_tcp_check_accepts_https() {
 }
 
 #[test]
+pub(super) fn resident_dataplane_group_tcp_check_keeps_ipv4_and_ipv6_targets() {
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let check_url = tcp_check_fixture_url(
+        HttpScheme::Http,
+        FixtureEndpoint::Authority,
+        "/generate_204",
+        None,
+    );
+    let check_ipv4 = Ipv4Addr::LOCALHOST;
+    let check_ipv6 = Ipv6Addr::LOCALHOST;
+    let check = format!("{check_url},{check_ipv4},{check_ipv6}");
+    let config_source = r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: '__NODE_A__'
+        }
+        group {
+        proxy {
+            filter: name(node_a)
+            policy: min
+            tcp_check_url: '__CHECK__'
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#
+    .replace("__NODE_A__", &node_a)
+    .replace("__CHECK__", &check);
+    let config = parse_config(&config_source);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let probes = plan.default_proxy_group().unwrap().probe_candidates();
+    assert_eq!(probes[0].tcp_check.targets.len(), 2);
+    assert_eq!(
+        probes[0].tcp_check.targets[0].target,
+        SocketAddr::new(IpAddr::V4(check_ipv4), 80).to_string()
+    );
+    assert_eq!(
+        probes[0].tcp_check.targets[0].network_type,
+        Some(NetworkType::TCP4)
+    );
+    assert_eq!(
+        probes[0].tcp_check.targets[1].target,
+        SocketAddr::new(IpAddr::V6(check_ipv6), 80).to_string()
+    );
+    assert_eq!(
+        probes[0].tcp_check.targets[1].network_type,
+        Some(NetworkType::TCP6)
+    );
+}
+
+#[test]
 pub(super) fn resident_manual_probe_plans_cover_all_admitted_config_nodes() {
     let grouped = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
     let orphan_source = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
@@ -291,6 +346,57 @@ pub(super) fn resident_dataplane_group_udp_check_uses_group_override_ipv4() {
     assert_eq!(
         probes[0].udp_check.lookup_host,
         "connectivitycheck.gstatic.com."
+    );
+}
+
+#[test]
+pub(super) fn resident_dataplane_group_udp_check_keeps_ipv4_and_ipv6_targets() {
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let group_dns_host = fixture_host(FixtureEndpoint::Authority);
+    let group_dns_port = fixture_endpoint_port(FixtureEndpoint::Authority);
+    let check_ipv4 = Ipv4Addr::LOCALHOST;
+    let check_ipv6 = Ipv6Addr::LOCALHOST;
+    let group_dns = format!("{group_dns_host}:{group_dns_port},{check_ipv4},{check_ipv6}");
+    let config_text = r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: '__NODE_A__'
+        }
+        group {
+        proxy {
+            filter: name(node_a)
+            policy: min
+            udp_check_dns: '__GROUP_DNS__'
+        }
+        }
+        routing {
+        l4proto(udp) -> proxy
+        fallback: direct
+        }
+        "#
+    .replace("__GROUP_DNS__", &group_dns)
+    .replace("__NODE_A__", &node_a);
+    let config = parse_config(&config_text);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let probes = plan.default_proxy_group().unwrap().probe_candidates();
+    assert_eq!(probes[0].udp_check.targets.len(), 2);
+    assert_eq!(
+        probes[0].udp_check.targets[0].literal_addr(),
+        Some(SocketAddr::new(IpAddr::V4(check_ipv4), group_dns_port))
+    );
+    assert_eq!(
+        probes[0].udp_check.targets[0].network_type_hint(),
+        Some(NetworkType::DNS_UDP4)
+    );
+    assert_eq!(
+        probes[0].udp_check.targets[1].literal_addr(),
+        Some(SocketAddr::new(IpAddr::V6(check_ipv6), group_dns_port))
+    );
+    assert_eq!(
+        probes[0].udp_check.targets[1].network_type_hint(),
+        Some(NetworkType::DNS_UDP6)
     );
 }
 
