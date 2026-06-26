@@ -69,7 +69,7 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         "selected, version",
         "0, 0",
     )?;
-    let group = upsert_group(&conn, group_name, policy)?;
+    let group = ensure_default_group(&conn, group_name, policy, body)?;
     let group_id = group.id;
     let mut group_changed = false;
     if group.created {
@@ -235,6 +235,73 @@ pub(crate) struct EnsuredResource {
     pub(super) created: bool,
 }
 
+pub(crate) fn ensure_default_group(
+    conn: &Connection,
+    name: &str,
+    policy: &str,
+    body: &Value,
+) -> io::Result<EnsuredResource> {
+    if let Some(id) = group_id_by_name(conn, name)? {
+        return Ok(EnsuredResource { id, created: false });
+    }
+    if name == DEFAULT_PRODUCT_GROUP_NAME
+        && !body_requests_group_membership(body)
+        && existing_group_count(conn)? > 0
+    {
+        if let Some(id) = existing_group_referenced_by_selected_routing(conn)? {
+            return Ok(EnsuredResource { id, created: false });
+        }
+        if let Some(id) = first_existing_group_id(conn)? {
+            return Ok(EnsuredResource { id, created: false });
+        }
+    }
+    insert_group(conn, name, policy)
+}
+
+pub(crate) fn body_requests_group_membership(body: &Value) -> bool {
+    body.get("nodeIds").is_some() || body.get("subscriptionIds").is_some()
+}
+
+pub(crate) fn existing_group_referenced_by_selected_routing(
+    conn: &Connection,
+) -> io::Result<Option<i64>> {
+    let Some((_, _, routing, _)) = selected_section_raw(conn, SectionKind::Routing)? else {
+        return Ok(None);
+    };
+    let Some(names) = preferred_group_names_from_routing(&routing) else {
+        return Ok(None);
+    };
+    for name in names {
+        if let Some(id) = group_id_by_name(conn, &name)? {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+pub(crate) fn existing_group_count(conn: &Connection) -> io::Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM groups", [], |row| row.get(0))
+        .map_err(sqlite_io_error)
+}
+
+pub(crate) fn first_existing_group_id(conn: &Connection) -> io::Result<Option<i64>> {
+    conn.query_row("SELECT id FROM groups ORDER BY id LIMIT 1", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .optional()
+    .map_err(sqlite_io_error)
+}
+
+pub(crate) fn group_id_by_name(conn: &Connection, name: &str) -> io::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT id FROM groups WHERE name = ?1 LIMIT 1",
+        params![name],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(sqlite_io_error)
+}
+
 pub(crate) fn upsert_named_resource(
     conn: &Connection,
     table: &str,
@@ -263,22 +330,11 @@ pub(crate) fn upsert_named_resource(
     })
 }
 
-pub(crate) fn upsert_group(
+pub(crate) fn insert_group(
     conn: &Connection,
     name: &str,
     policy: &str,
 ) -> io::Result<EnsuredResource> {
-    if let Some(id) = conn
-        .query_row(
-            "SELECT id FROM groups WHERE name = ?1 LIMIT 1",
-            params![name],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(sqlite_io_error)?
-    {
-        return Ok(EnsuredResource { id, created: false });
-    }
     conn.execute(
         "INSERT INTO groups(name, policy, version) VALUES(?1, ?2, 0)",
         params![name, policy],

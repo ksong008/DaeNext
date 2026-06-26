@@ -130,26 +130,43 @@ pub(in crate::daed_product) fn render_group_section(
     Ok(out)
 }
 
-fn referenced_group_names_from_routing(routing_text: &str) -> Option<BTreeSet<String>> {
+pub(in crate::daed_product) fn referenced_group_names_from_routing(
+    routing_text: &str,
+) -> Option<BTreeSet<String>> {
+    preferred_group_names_from_routing(routing_text)
+        .map(|names| names.into_iter().collect::<BTreeSet<_>>())
+}
+
+pub(in crate::daed_product) fn preferred_group_names_from_routing(
+    routing_text: &str,
+) -> Option<Vec<String>> {
     let sections = parse_config(routing_text).ok()?;
-    let mut groups = BTreeSet::new();
-    for section in sections {
+    let mut groups = Vec::new();
+    let mut seen = BTreeSet::new();
+    for section in &sections {
         if section.name != "routing" {
             continue;
         }
-        for item in section.items {
-            match item {
-                Item::Param(param) if param.key == "fallback" => {
-                    if let Some(name) = routing_group_name_from_outbound(&param.val) {
-                        groups.insert(name.to_owned());
-                    }
-                }
-                Item::RoutingRule(rule) => {
-                    if let Some(name) = routing_group_name_from_outbound(&rule.outbound.name) {
-                        groups.insert(name.to_owned());
-                    }
-                }
-                _ => {}
+        for item in &section.items {
+            if let Item::Param(param) = item
+                && param.key == "fallback"
+                && let Some(name) = routing_group_name_from_outbound(&param.val)
+                && seen.insert(name.to_owned())
+            {
+                groups.push(name.to_owned());
+            }
+        }
+    }
+    for section in &sections {
+        if section.name != "routing" {
+            continue;
+        }
+        for item in &section.items {
+            if let Item::RoutingRule(rule) = item
+                && let Some(name) = routing_group_name_from_outbound(&rule.outbound.name)
+                && seen.insert(name.to_owned())
+            {
+                groups.push(name.to_owned());
             }
         }
     }
