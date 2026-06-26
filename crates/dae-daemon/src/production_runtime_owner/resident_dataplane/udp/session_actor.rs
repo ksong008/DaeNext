@@ -59,7 +59,8 @@ async fn run_udp_session_actor(
     let mut stop_reason = "queue-closed".to_owned();
     let mut executor: Option<UdpSessionExecutor> = None;
     let mut session_proxy: Option<Arc<ResidentProxyPlan>> = None;
-    let idle_timer = time::sleep(RESIDENT_UDP_SESSION_IDLE_TIMEOUT);
+    let idle_timeout = key.idle_timeout();
+    let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
     loop {
         tokio::select! {
@@ -70,7 +71,7 @@ async fn run_udp_session_actor(
                 };
                 idle_timer
                     .as_mut()
-                    .reset(time::Instant::now() + RESIDENT_UDP_SESSION_IDLE_TIMEOUT);
+                    .reset(time::Instant::now() + idle_timeout);
                 packets += 1;
                 if executor.is_none() {
                     executor = Some(if managed.force_proxy_packet {

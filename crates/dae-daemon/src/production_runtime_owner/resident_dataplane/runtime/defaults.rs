@@ -4,6 +4,8 @@ pub(crate) const RESIDENT_TCP_ACCEPT_SLEEP: Duration = Duration::from_millis(20)
 pub(crate) const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
 pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
+    Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
 pub(crate) const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "RESIDENT_TCP_FLOW_STACK_BYTES";
@@ -71,6 +73,7 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "max": RESIDENT_UDP_SESSION_QUEUE_DEPTH_MAX,
             },
             "idleTimeoutSeconds": RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_secs(),
+            "dnsIdleTimeoutSeconds": RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT.as_secs(),
             "model": "resident UDP session manager keyed by graph id, outbound, peer, original destination, and packet semantics",
         },
         "eventWriter": {
