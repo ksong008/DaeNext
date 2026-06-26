@@ -65,7 +65,20 @@ pub(crate) fn create_subscription(
     let now = now_text();
     if let Err(err) = conn.execute(
         "INSERT INTO subscriptions(updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![now, link, body.get("cronExp").and_then(Value::as_str).unwrap_or("10 */6 * * *"), body.get("cronEnable").and_then(Value::as_bool).unwrap_or(true) as i64, "imported", "", tag, use_proxy as i64],
+        params![
+            now,
+            link,
+            body.get("cronExp")
+                .and_then(Value::as_str)
+                .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_EXP),
+            body.get("cronEnable")
+                .and_then(Value::as_bool)
+                .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_ENABLE) as i64,
+            DEFAULT_SUBSCRIPTION_STATUS,
+            "",
+            tag,
+            use_proxy as i64
+        ],
     ) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
@@ -290,16 +303,36 @@ pub(crate) fn delete_subscription_by_id(state: &Path, id: i64) -> HttpResponse {
 }
 
 pub(crate) fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
-    let conn = open_state_connection(state)?;
-    conn.execute(
+    let mut conn = open_state_connection(state)?;
+    let tx = conn.transaction().map_err(sqlite_io_error)?;
+    tx.execute(
+        "DELETE FROM group_nodes
+         WHERE node_id IN (
+             SELECT id FROM nodes WHERE subscription_id = ?1
+         )",
+        params![id],
+    )
+    .map_err(sqlite_io_error)?;
+    tx.execute(
+        "DELETE FROM node_latency_results
+         WHERE node_id IN (
+             SELECT id FROM nodes WHERE subscription_id = ?1
+         )",
+        params![id],
+    )
+    .map_err(sqlite_io_error)?;
+    tx.execute(
         "DELETE FROM group_subscriptions WHERE subscription_id = ?1",
         params![id],
     )
     .map_err(sqlite_io_error)?;
-    conn.execute("DELETE FROM nodes WHERE subscription_id = ?1", params![id])
+    tx.execute("DELETE FROM nodes WHERE subscription_id = ?1", params![id])
         .map_err(sqlite_io_error)?;
-    conn.execute("DELETE FROM subscriptions WHERE id = ?1", params![id])
-        .map_err(sqlite_io_error)
+    let removed = tx
+        .execute("DELETE FROM subscriptions WHERE id = ?1", params![id])
+        .map_err(sqlite_io_error)?;
+    tx.commit().map_err(sqlite_io_error)?;
+    Ok(removed)
 }
 
 pub(crate) fn subscription_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
@@ -307,7 +340,7 @@ pub(crate) fn subscription_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Resul
         "id": row.get::<_, i64>(0)?,
         "updatedAt": row.get::<_, String>(1)?,
         "link": row.get::<_, String>(2)?,
-        "cronExp": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "10 */6 * * *".to_owned()),
+        "cronExp": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| DEFAULT_SUBSCRIPTION_CRON_EXP.to_owned()),
         "cronEnable": row.get::<_, i64>(4)? != 0,
         "status": row.get::<_, String>(5)?,
         "info": row.get::<_, String>(6)?,

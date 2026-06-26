@@ -203,16 +203,31 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let conn = match open_state_connection(state) {
+    let mut conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
     let tag_present = body.get("tag").is_some();
     let tag = body.get("tag").and_then(Value::as_str);
-    let updated = if let Some(link) = body.get("link").and_then(Value::as_str) {
+    if let Some(link) = body.get("link").and_then(Value::as_str) {
         let parsed = parse_node_link(link, tag);
-        let stored_link = parsed.normalized_link.as_deref().unwrap_or(link);
-        conn.execute(
+        let stored_link = parsed
+            .normalized_link
+            .clone()
+            .unwrap_or_else(|| link.to_owned());
+        let tx = match conn.transaction() {
+            Ok(tx) => tx,
+            Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+        };
+        let previous_identity = match node_latency_identity(&tx, id) {
+            Ok(value) => value,
+            Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+        };
+        let latency_identity_changed = previous_identity
+            .as_ref()
+            .map(|current| node_latency_identity_changed(current, &stored_link, &parsed))
+            .unwrap_or(false);
+        let updated = tx.execute(
             "UPDATE nodes
              SET link = ?1,
                  name = ?2,
@@ -229,17 +244,68 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
                 tag,
                 id
             ],
-        )
+        );
+        match updated {
+            Ok(0) => HttpResponse::json(404, json!({"error": "node not found"})),
+            Ok(_) => {
+                if latency_identity_changed
+                    && let Err(err) = tx.execute(
+                        "DELETE FROM node_latency_results WHERE node_id = ?1",
+                        params![id],
+                    )
+                {
+                    return HttpResponse::json(500, json!({"error": err.to_string()}));
+                }
+                if let Err(err) = tx.commit() {
+                    return HttpResponse::json(500, json!({"error": err.to_string()}));
+                }
+                get_node(state, id)
+            }
+            Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
+        }
     } else if tag_present {
-        conn.execute("UPDATE nodes SET tag = ?1 WHERE id = ?2", params![tag, id])
+        let updated = conn.execute("UPDATE nodes SET tag = ?1 WHERE id = ?2", params![tag, id]);
+        match updated {
+            Ok(0) => HttpResponse::json(404, json!({"error": "node not found"})),
+            Ok(_) => get_node(state, id),
+            Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
+        }
     } else {
-        return HttpResponse::json(400, json!({"error": "link or tag is required"}));
-    };
-    match updated {
-        Ok(0) => HttpResponse::json(404, json!({"error": "node not found"})),
-        Ok(_) => get_node(state, id),
-        Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
+        HttpResponse::json(400, json!({"error": "link or tag is required"}))
     }
+}
+
+#[derive(Clone, Debug)]
+struct NodeLatencyIdentity {
+    link: String,
+    address: String,
+    protocol: String,
+}
+
+fn node_latency_identity(conn: &Connection, id: i64) -> io::Result<Option<NodeLatencyIdentity>> {
+    conn.query_row(
+        "SELECT link, address, protocol FROM nodes WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(NodeLatencyIdentity {
+                link: row.get(0)?,
+                address: row.get(1)?,
+                protocol: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(sqlite_io_error)
+}
+
+fn node_latency_identity_changed(
+    current: &NodeLatencyIdentity,
+    next_link: &str,
+    next: &ParsedNodeLink,
+) -> bool {
+    current.link != next_link
+        || current.address != next.address
+        || current.protocol != next.protocol
 }
 
 pub(crate) fn delete_nodes(state: &Path, request: &HttpRequest) -> HttpResponse {
