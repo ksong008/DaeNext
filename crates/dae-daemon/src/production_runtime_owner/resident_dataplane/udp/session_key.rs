@@ -104,6 +104,13 @@ impl UdpSessionKey {
     pub(super) fn original_destination(&self) -> SocketAddr {
         self.original_destination
     }
+
+    pub(super) fn idle_timeout(&self) -> Duration {
+        match self.packet_semantics {
+            UdpPacketSemantics::Dns => RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT,
+            _ => RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+        }
+    }
 }
 
 impl PartialEq for UdpSessionKey {

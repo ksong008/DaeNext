@@ -723,6 +723,7 @@ mod tests {
 
         assert_eq!(value["packetSemantics"], UdpPacketSemantics::Dns.as_str());
         assert_eq!(value["originalDestination"], dns_dst.to_string());
+        assert_eq!(key.idle_timeout(), RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT);
     }
 
     #[test]
@@ -737,6 +738,10 @@ mod tests {
         assert_ne!(
             UdpSessionKey::new(&vless, peer, original_dst),
             UdpSessionKey::new(&socks, peer, original_dst)
+        );
+        assert_eq!(
+            UdpSessionKey::new(&vless, peer, original_dst).idle_timeout(),
+            RESIDENT_UDP_SESSION_IDLE_TIMEOUT
         );
     }
 
