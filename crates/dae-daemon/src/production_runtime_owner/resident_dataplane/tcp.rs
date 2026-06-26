@@ -93,7 +93,7 @@ use super::vision::{
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_TCP_ACCEPT_SLEEP,
     RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION,
-    resident_socket_addr_display, resident_tcp_network_name,
+    resident_socket_addr_display, resident_tcp_network_name, resident_tcp_selector_network_type,
 };
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};

@@ -1,4 +1,5 @@
 use super::plan::{ResidentProxyGroupPlan, build_resident_dataplane_plan};
+use dae_outbound::NetworkType;
 
 pub struct ResidentTcpSelectionBenchmarkFixture {
     group: ResidentProxyGroupPlan,
@@ -10,7 +11,7 @@ impl ResidentTcpSelectionBenchmarkFixture {
     pub fn run_once(&self) -> u64 {
         let proxy = self
             .group
-            .select_proxy_for_tcp()
+            .select_proxy_for_tcp_network(NetworkType::TCP4)
             .expect("resident TCP benchmark proxy selection");
         let chain_checksum = proxy
             .chain_parent

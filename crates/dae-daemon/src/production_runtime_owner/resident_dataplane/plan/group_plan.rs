@@ -299,17 +299,33 @@ impl ResidentProxyGroupPlan {
             .collect()
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_tcp(
         &self,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
-        self.select_candidate("tcp4")
+        self.select_proxy_for_tcp_network(NetworkType::TCP4)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_tcp_network(
+        &self,
+        network_type: NetworkType,
+    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        self.select_candidate(network_type)
             .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp(
         &self,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
-        self.select_candidate("udp4")
+        self.select_proxy_for_udp_network(NetworkType::DNS_UDP4)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp_network(
+        &self,
+        network_type: NetworkType,
+    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        self.select_candidate(network_type)
             .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
@@ -330,8 +346,9 @@ impl ResidentProxyGroupPlan {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_candidate(
         &self,
-        network: &str,
+        network_type: NetworkType,
     ) -> Result<&ResidentProxyCandidatePlan, String> {
+        let network = network_type.string_without_dns();
         if self.candidates.is_empty() {
             return Err(format!(
                 "resident dataplane group {} has no admitted candidate for {network}",
@@ -353,7 +370,6 @@ impl ResidentProxyGroupPlan {
             | ResidentGroupPolicyPlan::MinAverage10
             | ResidentGroupPolicyPlan::MinMovingAverage
             | ResidentGroupPolicyPlan::Random => {
-                let network_type = resident_selector_network_type(network)?;
                 let selected = self
                     .selector
                     .lock()
