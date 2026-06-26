@@ -70,6 +70,10 @@ impl UdpExchangeResult {
         self
     }
 
+    pub(super) fn into_independent_datagram(self) -> Self {
+        self.with_session_ownership(UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM)
+    }
+
     pub(super) fn append_execution_fields(
         &self,
         value: &mut serde_json::Value,

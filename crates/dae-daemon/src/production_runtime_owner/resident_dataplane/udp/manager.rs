@@ -18,9 +18,7 @@ use super::*;
 
 mod router;
 mod sniff;
-use self::router::{
-    ResidentUdpProxySelection, ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection,
-};
+use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
 use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
 
 const UDP_ROUTE_CHOSEN_EVENT: &str = "udp_route_chosen";
@@ -33,6 +31,8 @@ const UDP_ROUTE_REASON_LIMIT: &str = "session limit reached";
 const UDP_ROUTE_REASON_QUEUE_FULL: &str = "session queue full";
 const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
 const UDP_ROUTE_REASON_DNS_FAST_PATH: &str = "handled resident DNS packet without UDP session";
+const UDP_ROUTE_REASON_FORCED_DNS_FAST_PATH: &str =
+    "handled forced resident DNS packet without UDP session";
 
 pub(super) fn run_resident_udp_session_manager(
     socket: UdpSocket,
@@ -375,7 +375,12 @@ fn forward_manager_packet(
         }
     };
     let proxy = Arc::clone(&proxy_selection.proxy);
-    if resident_udp_dns_fast_path_applies(original_dst, &proxy_selection) {
+    if resident_udp_dns_fast_path_applies(original_dst) {
+        let reason = if proxy_selection.force_proxy_packet {
+            UDP_ROUTE_REASON_FORCED_DNS_FAST_PATH
+        } else {
+            UDP_ROUTE_REASON_DNS_FAST_PATH
+        };
         append_event(
             event_file,
             event_lock,
@@ -386,19 +391,32 @@ fn forward_manager_packet(
                 &proxy,
                 sniffed_domain,
                 initial.dscp,
-                UDP_ROUTE_REASON_DNS_FAST_PATH,
+                reason,
             ),
         );
-        spawn_resident_dns_datagram_handler(
-            packet,
-            proxy,
-            original_dst,
-            initial.dscp,
-            Arc::clone(dns),
-            event_file.to_path_buf(),
-            Arc::clone(event_lock),
-            Arc::clone(metrics),
-        );
+        if proxy_selection.force_proxy_packet {
+            spawn_forced_resident_dns_proxy_datagram_handler(
+                packet,
+                proxy,
+                original_dst,
+                initial.dscp,
+                Arc::clone(dns),
+                event_file.to_path_buf(),
+                Arc::clone(event_lock),
+                Arc::clone(metrics),
+            );
+        } else {
+            spawn_resident_dns_datagram_handler(
+                packet,
+                proxy,
+                original_dst,
+                initial.dscp,
+                Arc::clone(dns),
+                event_file.to_path_buf(),
+                Arc::clone(event_lock),
+                Arc::clone(metrics),
+            );
+        }
         return;
     }
     let key = UdpSessionKey::new(&proxy, packet.peer, original_dst);
@@ -504,11 +522,8 @@ fn forward_manager_packet(
     }
 }
 
-fn resident_udp_dns_fast_path_applies(
-    original_dst: SocketAddr,
-    proxy_selection: &ResidentUdpProxySelection,
-) -> bool {
-    original_dst.port() == 53 && !proxy_selection.force_proxy_packet
+fn resident_udp_dns_fast_path_applies(original_dst: SocketAddr) -> bool {
+    original_dst.port() == 53
 }
 
 fn spawn_resident_dns_datagram_handler(
@@ -545,6 +560,69 @@ fn spawn_resident_dns_datagram_handler(
             exchange,
         );
     });
+}
+
+fn spawn_forced_resident_dns_proxy_datagram_handler(
+    packet: UdpOriginalDstPacket,
+    proxy: Arc<ResidentProxyPlan>,
+    original_dst: SocketAddr,
+    dscp: u8,
+    dns: Arc<ResidentDnsPlan>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+) {
+    tokio::spawn(async move {
+        let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
+        let exchange = match time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            execute_forced_dns_proxy_datagram(
+                &mut executor,
+                &dns,
+                &proxy,
+                original_dst,
+                &packet.payload,
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "forced resident DNS proxy datagram timed out after {}ms",
+                RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
+            )),
+        };
+        executor.shutdown().await;
+        record_udp_dns_datagram_exchange_result(
+            &proxy,
+            packet,
+            original_dst,
+            dscp,
+            event_file,
+            event_lock,
+            metrics,
+            exchange,
+        );
+    });
+}
+
+async fn execute_forced_dns_proxy_datagram(
+    executor: &mut UdpSessionExecutor,
+    dns: &ResidentDnsPlan,
+    proxy: &ResidentProxyPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+) -> Result<(&'static str, UdpExchangeResult), String> {
+    let (event, response) = executor.execute(dns, proxy, original_dst, payload).await?;
+    if response.reply_forwarded {
+        return Ok((event, response.into_independent_datagram()));
+    }
+    loop {
+        match executor.poll_response().await? {
+            Some((event, response)) => return Ok((event, response.into_independent_datagram())),
+            None => time::sleep(RESIDENT_IDLE_SLEEP).await,
+        }
+    }
 }
 
 async fn recv_udp_with_original_dst_async(
@@ -939,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn udp_dns_fast_path_applies_only_to_non_must_dns() {
+    fn udp_dns_fast_path_applies_to_all_dns() {
         let router = test_udp_router();
         let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
         let normal_dns = router
@@ -947,7 +1025,7 @@ mod tests {
             .unwrap();
         match normal_dns {
             ResidentUdpSelection::Proxy(selection) => {
-                assert!(resident_udp_dns_fast_path_applies(dns_dst, &selection));
+                assert!(resident_udp_dns_fast_path_applies(dns_dst));
                 assert!(!selection.force_proxy_packet);
             }
             ResidentUdpSelection::Block(_) => panic!("non-must DNS should use resident DNS"),
@@ -958,7 +1036,7 @@ mod tests {
             .unwrap();
         match must_dns {
             ResidentUdpSelection::Proxy(selection) => {
-                assert!(!resident_udp_dns_fast_path_applies(dns_dst, &selection));
+                assert!(resident_udp_dns_fast_path_applies(dns_dst));
                 assert!(selection.force_proxy_packet);
             }
             ResidentUdpSelection::Block(_) => panic!("must DNS proxy route should select proxy"),
@@ -970,7 +1048,7 @@ mod tests {
             .unwrap();
         match non_dns {
             ResidentUdpSelection::Proxy(selection) => {
-                assert!(!resident_udp_dns_fast_path_applies(non_dns_dst, &selection));
+                assert!(!resident_udp_dns_fast_path_applies(non_dns_dst));
                 assert!(!selection.force_proxy_packet);
             }
             ResidentUdpSelection::Block(_) => panic!("non-DNS proxy route should select proxy"),
@@ -1012,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn udp_router_respects_must_dns_as_plain_udp_route() {
+    fn udp_router_keeps_must_dns_proxy_route_for_independent_datagram() {
         let router = test_udp_router();
         let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
         let block = router
@@ -1033,6 +1111,7 @@ mod tests {
             ResidentUdpSelection::Proxy(selection) => {
                 assert_eq!(selection.proxy.group_name, "sg");
                 assert!(selection.force_proxy_packet);
+                assert!(resident_udp_dns_fast_path_applies(dns_dst));
             }
             ResidentUdpSelection::Block(_) => panic!("user outbound DNS must select proxy"),
         }
