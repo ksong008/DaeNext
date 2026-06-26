@@ -61,6 +61,52 @@ pub(crate) fn generated_runtime_config_renders_parseable_nodes_and_groups() {
 }
 
 #[test]
+fn generated_runtime_config_skips_empty_groups_not_referenced_by_selected_routing() {
+    let node = config_node_value(
+        1,
+        "primary_node",
+        "http://127.0.0.1:9/node-under-test#primary-node",
+    );
+    let groups = json!({
+        "items": [
+            {
+                "name": "primary",
+                "policy": "random",
+                "nodes": [node.clone()],
+                "subscriptions": []
+            },
+            {
+                "name": "unused",
+                "policy": "random",
+                "nodes": [],
+                "subscriptions": []
+            }
+        ]
+    });
+    let nodes = json!({"items": [node]});
+    let content = render_generated_config(
+        "test",
+        Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+        Some(&(1, "dns".to_owned(), "dns {}\n".to_owned(), 1)),
+        Some(&(
+            1,
+            "routing".to_owned(),
+            "routing {\n    fallback: primary\n}\n".to_owned(),
+            1,
+        )),
+        &groups,
+        &nodes,
+    )
+    .unwrap();
+
+    assert!(content.contains("    primary {"));
+    assert!(!content.contains("    unused {"));
+    let config = build_runtime_config_from_content(&content).unwrap();
+    assert_eq!(config.group.len(), 1);
+    assert_eq!(config.group[0].name, "primary");
+}
+
+#[test]
 fn generated_runtime_config_preserves_group_policy_params() {
     let node = config_node_value(1, "node_a", "http://127.0.0.1:9/node-under-test#node-a");
     let groups = json!({
@@ -332,6 +378,40 @@ fn generated_runtime_config_rejects_empty_group_filters() {
     assert!(
         err.to_string()
             .contains("group egress has no matched nodes")
+    );
+}
+
+#[test]
+fn generated_runtime_config_rejects_empty_must_group_reference() {
+    let groups = json!({
+        "items": [
+            {
+                "name": "backup",
+                "policy": "random",
+                "nodes": [],
+                "subscriptions": []
+            }
+        ]
+    });
+    let nodes = json!({"items": []});
+    let err = render_generated_config(
+        "test",
+        Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+        Some(&(1, "dns".to_owned(), "dns {}\n".to_owned(), 1)),
+        Some(&(
+            1,
+            "routing".to_owned(),
+            "routing {\n    dip(geoip:telegram) -> must_backup\n    fallback: direct\n}\n"
+                .to_owned(),
+            1,
+        )),
+        &groups,
+        &nodes,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("group backup has no matched nodes")
     );
 }
 

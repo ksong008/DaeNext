@@ -1,4 +1,5 @@
 use super::*;
+use dae_config::Item;
 
 pub(in crate::daed_product) fn render_generated_config(
     generated_at: &str,
@@ -17,20 +18,23 @@ pub(in crate::daed_product) fn render_generated_config(
         .unwrap_or_else(|| "global {}\n".to_owned());
     out.push_str(&config_text);
     out.push_str("\n\n# selected dns\n");
-    out.push_str(&render_dns_section(
+    let dns_text = render_dns_section(
         dns.map(|(_, _, raw, _)| raw.as_str())
             .filter(|raw| !raw.trim().is_empty()),
-    ));
+    );
+    out.push_str(&dns_text);
     out.push_str("\n\n# selected routing\n");
-    out.push_str(&render_routing_section(
+    let routing_text = render_routing_section(
         routing
             .map(|(_, _, raw, _)| raw.as_str())
             .filter(|raw| !raw.trim().is_empty()),
-    ));
+    );
+    let referenced_groups = referenced_group_names_from_routing(&routing_text);
+    out.push_str(&routing_text);
     out.push_str("\n\n# local product nodes\n");
     out.push_str(&render_node_section(nodes));
     out.push_str("\n\n# local product groups\n");
-    out.push_str(&render_group_section(groups)?);
+    out.push_str(&render_group_section(groups, referenced_groups.as_ref())?);
     out.push('\n');
     Ok(out)
 }
@@ -80,7 +84,10 @@ pub(in crate::daed_product) fn render_node_section(nodes: &Value) -> String {
     out
 }
 
-pub(in crate::daed_product) fn render_group_section(groups: &Value) -> io::Result<String> {
+pub(in crate::daed_product) fn render_group_section(
+    groups: &Value,
+    referenced_groups: Option<&BTreeSet<String>>,
+) -> io::Result<String> {
     let mut out = String::from("group {\n");
     for group in groups["items"].as_array().into_iter().flatten() {
         let Some(name) = group.get("name").and_then(Value::as_str) else {
@@ -89,14 +96,17 @@ pub(in crate::daed_product) fn render_group_section(groups: &Value) -> io::Resul
         if name.trim().is_empty() {
             continue;
         }
-        out.push_str(&format!("    {} {{\n", dae_key_literal(name)));
         let node_tags = runtime_group_node_tags(group);
         if node_tags.is_empty() {
+            if referenced_groups.is_some_and(|groups| !groups.contains(name)) {
+                continue;
+            }
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("group {name} has no matched nodes"),
             ));
         }
+        out.push_str(&format!("    {} {{\n", dae_key_literal(name)));
         if group_policy_is_fixed(group) && node_tags.len() > 1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -118,6 +128,42 @@ pub(in crate::daed_product) fn render_group_section(groups: &Value) -> io::Resul
     }
     out.push_str("}\n");
     Ok(out)
+}
+
+fn referenced_group_names_from_routing(routing_text: &str) -> Option<BTreeSet<String>> {
+    let sections = parse_config(routing_text).ok()?;
+    let mut groups = BTreeSet::new();
+    for section in sections {
+        if section.name != "routing" {
+            continue;
+        }
+        for item in section.items {
+            match item {
+                Item::Param(param) if param.key == "fallback" => {
+                    if let Some(name) = routing_group_name_from_outbound(&param.val) {
+                        groups.insert(name.to_owned());
+                    }
+                }
+                Item::RoutingRule(rule) => {
+                    if let Some(name) = routing_group_name_from_outbound(&rule.outbound.name) {
+                        groups.insert(name.to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Some(groups)
+}
+
+fn routing_group_name_from_outbound(name: &str) -> Option<&str> {
+    match name {
+        "direct" | "must_direct" | "block" | "must_rules" => None,
+        name => name
+            .strip_prefix("must_")
+            .filter(|stripped| !stripped.is_empty())
+            .or(Some(name)),
+    }
 }
 
 pub(in crate::daed_product) fn render_group_policy(group: &Value) -> String {
