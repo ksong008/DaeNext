@@ -1,5 +1,6 @@
 use super::*;
 use crate::allocator::{AllocatorReclaimReason, allocator_reclaim};
+use std::net::SocketAddr;
 
 pub(crate) fn resident_group_health_check_loop(
     group: Arc<plan::ResidentProxyGroupPlan>,
@@ -179,41 +180,62 @@ async fn run_resident_candidate_health_check_until_stopped(
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
     }
-    let checked_at = unix_now_secs();
-    let latency_ms = tokio::select! {
-        _ = wait_until_stopped_async(Arc::clone(&stop)) => {
+    for tcp_target in &candidate.tcp_check.targets {
+        if stop.load(Ordering::Relaxed) {
             return HealthCheckRoundStatus::Cancelled;
         }
-        result = probe_resident_candidate_tcp_endpoint_async(candidate) => result.ok(),
-    };
-    if stop.load(Ordering::Relaxed) {
-        return HealthCheckRoundStatus::Cancelled;
-    }
-    let _ = group.record_check_result(
-        &candidate.node_tag,
-        NetworkType::TCP4,
-        latency_ms,
-        checked_at,
-    );
-    if stop.load(Ordering::Relaxed) {
-        return HealthCheckRoundStatus::Cancelled;
-    }
-    let udp_checked_at = unix_now_secs();
-    let udp_latency_ms = tokio::select! {
-        _ = wait_until_stopped_async(Arc::clone(&stop)) => {
+        let checked_at = unix_now_secs();
+        let latency_ms = tokio::select! {
+            _ = wait_until_stopped_async(Arc::clone(&stop)) => {
+                return HealthCheckRoundStatus::Cancelled;
+            }
+            result = probe_resident_candidate_tcp_target_endpoint_async(candidate, tcp_target) => {
+                result.ok()
+            },
+        };
+        if stop.load(Ordering::Relaxed) {
             return HealthCheckRoundStatus::Cancelled;
         }
-        result = probe_resident_candidate_udp_endpoint_async(candidate) => result.ok(),
-    };
-    if stop.load(Ordering::Relaxed) {
-        return HealthCheckRoundStatus::Cancelled;
+        let _ = group.record_check_result(
+            &candidate.node_tag,
+            tcp_target.network_type_for_record(),
+            latency_ms,
+            checked_at,
+        );
     }
-    let _ = group.record_check_result(
-        &candidate.node_tag,
-        NetworkType::DNS_UDP4,
-        udp_latency_ms,
-        udp_checked_at,
-    );
+    for udp_target in &candidate.udp_check.targets {
+        if stop.load(Ordering::Relaxed) {
+            return HealthCheckRoundStatus::Cancelled;
+        }
+        let udp_checked_at = unix_now_secs();
+        let udp_probe = tokio::select! {
+            _ = wait_until_stopped_async(Arc::clone(&stop)) => {
+                return HealthCheckRoundStatus::Cancelled;
+            }
+            result = probe_resident_candidate_udp_target_endpoint_async(candidate, udp_target) => result,
+        };
+        if stop.load(Ordering::Relaxed) {
+            return HealthCheckRoundStatus::Cancelled;
+        }
+        let (network_type, udp_latency_ms) = match udp_probe {
+            Ok((latency_ms, target)) => (
+                plan::resident_udp_check_network_type(target),
+                Some(latency_ms),
+            ),
+            Err(_) => (
+                udp_target
+                    .network_type_hint()
+                    .unwrap_or(NetworkType::DNS_UDP4),
+                None,
+            ),
+        };
+        let _ = group.record_check_result(
+            &candidate.node_tag,
+            network_type,
+            udp_latency_ms,
+            udp_checked_at,
+        );
+    }
     HealthCheckRoundStatus::Completed
 }
 
@@ -449,11 +471,22 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
 ) -> Result<i64, String> {
+    probe_resident_candidate_tcp_target_endpoint_async(
+        candidate,
+        candidate.tcp_check.primary_target(),
+    )
+    .await
+}
+
+async fn probe_resident_candidate_tcp_target_endpoint_async(
+    candidate: &plan::ResidentProxyProbePlan,
+    target: &plan::ResidentTcpCheckTarget,
+) -> Result<i64, String> {
     let started = Instant::now();
     probe_resident_proxy_tcp_async(
         Arc::clone(&candidate.proxy),
         &candidate.tcp_check.scheme,
-        &candidate.tcp_check.target,
+        &target.target,
         &candidate.tcp_check.host,
         &candidate.tcp_check.path,
         &candidate.tcp_check.method,
@@ -463,14 +496,19 @@ pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
     Ok(elapsed_millis(started.elapsed()))
 }
 
-pub(crate) async fn probe_resident_candidate_udp_endpoint_async(
+async fn probe_resident_candidate_udp_target_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
-) -> Result<i64, String> {
+    target: &plan::ResidentUdpCheckTarget,
+) -> Result<(i64, SocketAddr), String> {
     let started = Instant::now();
-    let target = candidate.udp_check.target.resolve().await?;
-    probe_resident_proxy_dns_udp_async(&candidate.proxy, target, &candidate.udp_check.lookup_host)
-        .await?;
-    Ok(elapsed_millis(started.elapsed()))
+    let resolved = target.resolve().await?;
+    probe_resident_proxy_dns_udp_async(
+        &candidate.proxy,
+        resolved,
+        &candidate.udp_check.lookup_host,
+    )
+    .await?;
+    Ok((elapsed_millis(started.elapsed()), resolved))
 }
 
 pub(crate) fn elapsed_millis(elapsed: Duration) -> i64 {

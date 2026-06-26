@@ -80,9 +80,15 @@ pub(super) fn group_tcp_check_plan(
         "HEAD".to_owned()
     };
     let explicit_addresses = if urls.len() > 1 { &urls[1..] } else { &[] };
+    let targets = tcp_check_targets(host, port, explicit_addresses);
+    let target = targets
+        .first()
+        .map(|target| target.target.clone())
+        .expect("resident TCP check target list is never empty");
     Ok(ResidentTcpCheckPlan {
         scheme: url.scheme().to_owned(),
-        target: tcp_check_target(host, port, explicit_addresses),
+        target,
+        targets,
         host: host.to_owned(),
         path,
         method,
@@ -120,7 +126,7 @@ pub(super) fn group_udp_check_plan(
                 group.name, config.global.fallback_resolver
             )
         })?;
-    let target = udp_check_target(
+    let targets = udp_check_targets(
         &host,
         port,
         explicit_addresses,
@@ -133,8 +139,13 @@ pub(super) fn group_udp_check_plan(
             group.name
         )
     })?;
+    let target = targets
+        .first()
+        .cloned()
+        .expect("resident UDP check target list is never empty");
     Ok(ResidentUdpCheckPlan {
         target,
+        targets,
         host,
         lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
     })
@@ -177,44 +188,84 @@ pub(super) fn parse_check_port(raw: &str) -> Result<u16, String> {
         .map_err(|err| format!("invalid port {raw}: {err}"))
 }
 
-pub(super) fn tcp_check_target(host: &str, port: u16, explicit_addresses: &[String]) -> String {
+pub(super) fn tcp_check_targets(
+    host: &str,
+    port: u16,
+    explicit_addresses: &[String],
+) -> Vec<ResidentTcpCheckTarget> {
+    let mut targets = Vec::new();
     for raw in explicit_addresses {
         let raw = raw.trim();
         if let Ok(ip) = raw.parse::<IpAddr>() {
-            return SocketAddr::new(ip, port).to_string();
+            push_tcp_check_target(&mut targets, ip, port);
         }
     }
-    authority_from_host_port(host, port)
+    if !targets.is_empty() {
+        return targets;
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        push_tcp_check_target(&mut targets, ip, port);
+        return targets;
+    }
+    targets.push(ResidentTcpCheckTarget {
+        target: authority_from_host_port(host, port),
+        network_type: None,
+    });
+    targets
 }
 
-pub(super) fn udp_check_target(
+fn push_tcp_check_target(targets: &mut Vec<ResidentTcpCheckTarget>, ip: IpAddr, port: u16) {
+    let target = SocketAddr::new(ip, port).to_string();
+    if targets.iter().any(|seen| seen.target == target) {
+        return;
+    }
+    targets.push(ResidentTcpCheckTarget {
+        target,
+        network_type: Some(resident_tcp_check_network_type(ip)),
+    });
+}
+
+pub(super) fn udp_check_targets(
     host: &str,
     port: u16,
     explicit_addresses: &[String],
     fallback_resolver: SocketAddr,
     resolver_mark: u32,
-) -> Result<ResidentUdpCheckTarget, String> {
+) -> Result<Vec<ResidentUdpCheckTarget>, String> {
+    let mut targets = Vec::new();
     for raw in explicit_addresses {
         let raw = raw.trim();
         if raw.is_empty() {
             continue;
         }
         if let Ok(ip) = raw.parse::<IpAddr>() {
-            return Ok(ResidentUdpCheckTarget::literal(SocketAddr::new(ip, port)));
+            push_udp_check_target(&mut targets, SocketAddr::new(ip, port));
         }
     }
+    if !targets.is_empty() {
+        return Ok(targets);
+    }
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return Ok(ResidentUdpCheckTarget::literal(SocketAddr::new(ip, port)));
+        push_udp_check_target(&mut targets, SocketAddr::new(ip, port));
+        return Ok(targets);
     }
     let authority = authority_from_host_port(host, port);
-    Ok(ResidentUdpCheckTarget::new(
+    targets.push(ResidentUdpCheckTarget::new(
         authority,
         host.to_owned(),
         port,
         fallback_resolver,
         resolver_mark,
         None,
-    ))
+    ));
+    Ok(targets)
+}
+
+fn push_udp_check_target(targets: &mut Vec<ResidentUdpCheckTarget>, addr: SocketAddr) {
+    if targets.iter().any(|seen| seen.literal_addr() == Some(addr)) {
+        return;
+    }
+    targets.push(ResidentUdpCheckTarget::literal(addr));
 }
 
 fn authority_from_host_port(host: &str, port: u16) -> String {
