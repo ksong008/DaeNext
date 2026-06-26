@@ -30,17 +30,11 @@ pub(super) fn fetch_geodata_url_to_file(
     Err(io::Error::other("geodata fetch exceeded redirect limit"))
 }
 
-pub(super) fn fetch_geodata_latest_release(kind: GeodataKind) -> io::Result<GeodataRelease> {
-    let api_url = url::Url::parse(kind.release_api_url()).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "invalid geodata release api url {}: {err}",
-                kind.release_api_url()
-            ),
-        )
-    })?;
-    let body = fetch_geodata_url(&api_url)?;
+pub(super) fn fetch_geodata_latest_release(
+    kind: GeodataKind,
+    api_url: &url::Url,
+) -> io::Result<GeodataRelease> {
+    let body = fetch_geodata_url(api_url)?;
     let release: Value = serde_json::from_slice(&body).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,

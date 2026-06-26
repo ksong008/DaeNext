@@ -1,5 +1,6 @@
 use super::file::{advise_file_dontneed, summarize_geodata_file};
 use super::http::{fetch_geodata_latest_release, fetch_geodata_url_to_file};
+use super::source::geodata_source_url;
 use super::status::{
     geodata_dir, geodata_resource_status_from_parts, update_geodata_resource_status_cache,
     write_geodata_release_version,
@@ -10,7 +11,8 @@ use super::*;
 pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
     let dir = geodata_dir(app);
     fs::create_dir_all(&dir)?;
-    let release = fetch_geodata_latest_release(kind)?;
+    let source_url = geodata_source_url(&app.state, kind)?;
+    let release = fetch_geodata_latest_release(kind, &source_url)?;
     let path = dir.join(kind.file_name());
     let tmp_path = dir.join(format!(
         ".{}.tmp.{}.{}",

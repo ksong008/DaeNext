@@ -62,6 +62,13 @@ pub(super) fn handle_api_request(
                 ("GET", "/general/cache-stats") => api_general_cache_stats(app),
                 ("GET", "/general/interfaces") => api_general_interfaces(request),
                 ("GET", "/geodata") => api_geodata_status(app),
+                ("GET", "/geodata/settings") => api_geodata_source_settings(app),
+                ("PATCH", "/geodata/geosite/settings") => {
+                    api_set_geodata_source(app, request, GeodataKind::Geosite)
+                }
+                ("PATCH", "/geodata/geoip/settings") => {
+                    api_set_geodata_source(app, request, GeodataKind::Geoip)
+                }
                 ("POST", "/geodata/geosite/update") => {
                     api_update_geodata(app, GeodataKind::Geosite)
                 }
