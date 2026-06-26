@@ -35,6 +35,7 @@ use super::super::resident_routing::{
 };
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::direct::open_direct_tcp_connection_async;
+use super::resolve_host_with_configured_fallback_dns;
 use super::tcp::{open_marked_quic_endpoint, set_socket_mark};
 
 mod cache;
@@ -324,6 +325,8 @@ struct ResidentDnsUpstreamTarget {
     host: String,
     port: u16,
     literal_addr: Option<SocketAddr>,
+    fallback_resolver: SocketAddr,
+    resolver_mark: u32,
     resolved_addr: Arc<OnceCell<SocketAddr>>,
 }
 
@@ -333,7 +336,16 @@ impl ResidentDnsUpstreamTarget {
             return Ok(addr);
         }
         self.resolved_addr
-            .get_or_try_init(|| async { resolve_dns_upstream_async(&self.authority).await })
+            .get_or_try_init(|| async {
+                resolve_host_with_configured_fallback_dns(
+                    &self.host,
+                    self.port,
+                    self.fallback_resolver,
+                    self.resolver_mark,
+                    "resolve DNS upstream",
+                )
+                .await
+            })
             .await
             .copied()
     }
@@ -345,6 +357,8 @@ impl PartialEq for ResidentDnsUpstreamTarget {
             && self.host == other.host
             && self.port == other.port
             && self.literal_addr == other.literal_addr
+            && self.fallback_resolver == other.fallback_resolver
+            && self.resolver_mark == other.resolver_mark
     }
 }
 
@@ -407,14 +421,6 @@ impl Drop for ResidentDnsQuicForwarder {
             connection.close(0_u32.into(), b"dns forwarder dropped");
         }
     }
-}
-
-async fn resolve_dns_upstream_async(authority: &str) -> Result<SocketAddr, String> {
-    tokio::net::lookup_host(authority)
-        .await
-        .map_err(|err| format!("resolve DNS upstream {authority}: {err}"))?
-        .next()
-        .ok_or_else(|| format!("DNS upstream {authority} returned no IP address"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -1105,6 +1111,10 @@ mod tests {
         "localhost:53"
     }
 
+    fn test_fallback_resolver() -> SocketAddr {
+        "127.0.0.1:53".parse().unwrap()
+    }
+
     fn test_geodata() -> ResidentGeodataStore {
         ResidentGeodataStore::new(Vec::<std::path::PathBuf>::new())
     }
@@ -1575,7 +1585,7 @@ mod tests {
             ),
         ];
         for (tag, link, scheme, authority, host, port, path) in cases {
-            let upstream = parse_dns_upstream(0, tag, link).unwrap();
+            let upstream = parse_dns_upstream(0, tag, link, test_fallback_resolver(), 0).unwrap();
             assert_eq!(upstream.scheme, scheme, "{tag}");
             assert_eq!(upstream.target.authority, authority, "{tag}");
             assert_eq!(upstream.target.host, host, "{tag}");
@@ -1587,7 +1597,9 @@ mod tests {
     #[test]
     fn resident_dns_forwarder_cache_reuses_doq_by_upstream_and_mark() {
         let cache = ResidentDnsForwarderCache::default();
-        let upstream = parse_dns_upstream(0, "quic", "quic://dns.example").unwrap();
+        let upstream =
+            parse_dns_upstream(0, "quic", "quic://dns.example", test_fallback_resolver(), 0)
+                .unwrap();
         let first = cache.quic_forwarder(&upstream, 0x1234).unwrap();
         let second = cache.quic_forwarder(&upstream, 0x1234).unwrap();
         let different_mark = cache.quic_forwarder(&upstream, 0x5678).unwrap();
@@ -1600,13 +1612,22 @@ mod tests {
     #[test]
     fn resident_dns_forwarder_cache_evicts_oldest_entry() {
         let cache = ResidentDnsForwarderCache::default();
-        let first = parse_dns_upstream(0, "first", "quic://dns0.example").unwrap();
+        let first = parse_dns_upstream(
+            0,
+            "first",
+            "quic://dns0.example",
+            test_fallback_resolver(),
+            0,
+        )
+        .unwrap();
         let first_forwarder = cache.quic_forwarder(&first, 0).unwrap();
         for index in 1..=DNS_FORWARDER_CACHE_MAX_ENTRIES {
             let upstream = parse_dns_upstream(
                 index as u8,
                 &format!("dns{index}"),
                 &format!("quic://dns{index}.example"),
+                test_fallback_resolver(),
+                0,
             )
             .unwrap();
             let _ = cache.quic_forwarder(&upstream, 0).unwrap();

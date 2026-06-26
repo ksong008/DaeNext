@@ -49,18 +49,30 @@ pub(crate) struct ResidentUdpCheckPlan {
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentUdpCheckTarget {
     authority: String,
+    host: String,
+    port: u16,
     literal_addr: Option<SocketAddr>,
+    fallback_resolver: SocketAddr,
+    resolver_mark: u32,
     resolved_addr: Arc<OnceCell<SocketAddr>>,
 }
 
 impl ResidentUdpCheckTarget {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         authority: String,
+        host: String,
+        port: u16,
+        fallback_resolver: SocketAddr,
+        resolver_mark: u32,
         literal_addr: Option<SocketAddr>,
     ) -> Self {
         Self {
             authority,
+            host,
+            port,
             literal_addr,
+            fallback_resolver,
+            resolver_mark,
             resolved_addr: Arc::new(OnceCell::new()),
         }
     }
@@ -68,7 +80,14 @@ impl ResidentUdpCheckTarget {
     pub(in crate::production_runtime_owner::resident_dataplane) fn literal(
         addr: SocketAddr,
     ) -> Self {
-        Self::new(addr.to_string(), Some(addr))
+        Self::new(
+            addr.to_string(),
+            addr.ip().to_string(),
+            addr.port(),
+            addr,
+            0,
+            Some(addr),
+        )
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn authority(&self) -> &str {
@@ -90,13 +109,14 @@ impl ResidentUdpCheckTarget {
         }
         self.resolved_addr
             .get_or_try_init(|| async {
-                tokio::net::lookup_host(self.authority.as_str())
-                    .await
-                    .map_err(|err| format!("resolve UDP health check {}: {err}", self.authority))?
-                    .next()
-                    .ok_or_else(|| {
-                        format!("resolve UDP health check {}: no IP address", self.authority)
-                    })
+                resolve_host_with_configured_fallback_dns(
+                    &self.host,
+                    self.port,
+                    self.fallback_resolver,
+                    self.resolver_mark,
+                    "resolve UDP health check",
+                )
+                .await
             })
             .await
             .copied()
@@ -105,7 +125,12 @@ impl ResidentUdpCheckTarget {
 
 impl PartialEq for ResidentUdpCheckTarget {
     fn eq(&self, other: &Self) -> bool {
-        self.authority == other.authority && self.literal_addr == other.literal_addr
+        self.authority == other.authority
+            && self.host == other.host
+            && self.port == other.port
+            && self.literal_addr == other.literal_addr
+            && self.fallback_resolver == other.fallback_resolver
+            && self.resolver_mark == other.resolver_mark
     }
 }
 

@@ -110,7 +110,24 @@ pub(super) fn group_udp_check_plan(
         )
     })?;
     let explicit_addresses = if values.len() > 1 { &values[1..] } else { &[] };
-    let target = udp_check_target(&host, port, explicit_addresses).map_err(|err| {
+    let fallback_resolver = config
+        .global
+        .fallback_resolver
+        .parse::<SocketAddr>()
+        .map_err(|err| {
+            format!(
+                "resident dataplane group {} invalid global.fallback_resolver {:?}: {err}",
+                group.name, config.global.fallback_resolver
+            )
+        })?;
+    let target = udp_check_target(
+        &host,
+        port,
+        explicit_addresses,
+        fallback_resolver,
+        config.global.so_mark_from_dae,
+    )
+    .map_err(|err| {
         format!(
             "resident dataplane group {} udp_check_dns {raw}: {err}",
             group.name
@@ -174,6 +191,8 @@ pub(super) fn udp_check_target(
     host: &str,
     port: u16,
     explicit_addresses: &[String],
+    fallback_resolver: SocketAddr,
+    resolver_mark: u32,
 ) -> Result<ResidentUdpCheckTarget, String> {
     for raw in explicit_addresses {
         let raw = raw.trim();
@@ -188,7 +207,14 @@ pub(super) fn udp_check_target(
         return Ok(ResidentUdpCheckTarget::literal(SocketAddr::new(ip, port)));
     }
     let authority = authority_from_host_port(host, port);
-    Ok(ResidentUdpCheckTarget::new(authority, None))
+    Ok(ResidentUdpCheckTarget::new(
+        authority,
+        host.to_owned(),
+        port,
+        fallback_resolver,
+        resolver_mark,
+        None,
+    ))
 }
 
 fn authority_from_host_port(host: &str, port: u16) -> String {

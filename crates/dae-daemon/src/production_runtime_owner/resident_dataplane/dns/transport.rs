@@ -502,15 +502,15 @@ async fn open_dns_tcp_stream_async(
     upstream: &ResidentDnsUpstream,
     mark: u32,
 ) -> Result<TokioTcpStream, String> {
-    let connected =
-        open_direct_tcp_connection_async(upstream.target.authority.clone(), mark, false)
-            .await
-            .map_err(|err| {
-                format!(
-                    "connect DNS upstream {} {}: {err}",
-                    upstream.tag, upstream.target.authority
-                )
-            })?;
+    let target = upstream.target.resolve().await?;
+    let connected = open_direct_tcp_connection_async(target.to_string(), mark, false)
+        .await
+        .map_err(|err| {
+            format!(
+                "connect DNS upstream {} {}: {err}",
+                upstream.tag, upstream.target.authority
+            )
+        })?;
     TokioTcpStream::from_std(connected.stream).map_err(|err| format!("adopt DNS TCP stream: {err}"))
 }
 
