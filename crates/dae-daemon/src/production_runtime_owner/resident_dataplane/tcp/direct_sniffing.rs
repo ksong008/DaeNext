@@ -90,15 +90,8 @@ pub(super) fn append_tcp_route_log_fields(
 ) {
     let network = event["original_dst"]
         .as_str()
-        .map(|addr| {
-            addr.parse::<SocketAddr>()
-                .map(resident_tcp_network_name)
-                .unwrap_or(if addr.starts_with('[') {
-                    "tcp6"
-                } else {
-                    "tcp4"
-                })
-        })
+        .and_then(|addr| addr.parse::<SocketAddr>().ok())
+        .map(resident_tcp_network_name)
         .unwrap_or("tcp");
     event["network"] = json!(network);
     event["outbound"] = json!(outbound);

@@ -107,7 +107,7 @@ fn parses_ast_basic_success_case() {
     };
     assert_eq!(rule.and_functions[0].name, "domain");
     assert_eq!(rule.and_functions[0].params[0].key, "suffix");
-    assert_eq!(rule.outbound.name, "proxy");
+    assert_eq!(rule.outbound.name, "egress");
     assert_eq!(rule.outbound.params[0].key, "mark");
     assert_eq!(rule.outbound.params[0].val, "1");
 }

@@ -8,10 +8,6 @@ fn expected_transport_network(transport: &str, socket: &str) -> String {
     resident_socket_network_name(transport, socket_addr(socket))
 }
 
-fn expected_default_transport_network(transport: &str) -> String {
-    resident_socket_network_name(transport, std::net::SocketAddr::from(([0, 0, 0, 0], 0)))
-}
-
 fn mapped_ipv4_socket_addr(octets: [u8; 4], port: u16) -> std::net::SocketAddr {
     let mut mapped = [0_u8; 16];
     mapped[10] = 0xff;
@@ -25,10 +21,21 @@ fn assert_log_field_from_json(fields: &Value, key: &str, value: &Value) {
 }
 
 #[test]
+pub(crate) fn runtime_log_level_defaults_to_error() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+
+    assert_eq!(current_runtime_log_level(&state).unwrap(), "error");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
+    set_metadata(&state, "runtime_log_level", "info").unwrap();
     let conn = open_state_connection(&state).unwrap();
     let log_entries_table: Option<String> = conn
         .query_row(
@@ -346,7 +353,7 @@ pub(crate) fn resident_product_log_level_policy_is_explicit_by_event_class() {
     assert_eq!(
         resident_event_product_log_level(
             "tcp_connection_finished",
-            &json!({"event": "tcp_connection_finished", "proxy_group": "proxy"})
+            &json!({"event": "tcp_connection_finished", "proxy_group": "egress_group"})
         ),
         "info"
     );
@@ -397,7 +404,7 @@ pub(crate) fn resident_product_log_level_policy_is_explicit_by_event_class() {
 #[test]
 pub(crate) fn resident_trace_events_respect_runtime_trace_threshold() {
     const TCP_ROUTE_CHOSEN: &str = "tcp_route_chosen";
-    const TCP_ROUTE_OUTBOUND: &str = "proxy";
+    const TCP_ROUTE_OUTBOUND: &str = "trace_outbound";
     const TCP_ROUTE_DIAL_TARGET: &str = "example.com:443";
     const TCP_ROUTE_ORIGINAL_DST: &str = "198.51.100.7:443";
 
@@ -604,6 +611,7 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
+    set_metadata(&state, "runtime_log_level", "info").unwrap();
     initialize_log_store(&dir, &state).unwrap();
 
     append_resident_event_product_log(
@@ -647,10 +655,7 @@ pub(crate) fn resident_events_are_bridged_to_product_logs_with_runtime_level_fil
     );
     assert_eq!(items[0]["level"], json!("warn"));
     assert_eq!(items[0]["fields"]["error"], json!(FLOW_FAILED_ERROR));
-    assert_eq!(
-        items[0]["fields"]["network"],
-        json!(expected_default_transport_network("tcp"))
-    );
+    assert!(items[0]["fields"].get("network").is_none());
     assert!(items[0]["fields"].get("event").is_none());
     assert_eq!(
         items[1]["message"],
@@ -785,7 +790,7 @@ pub(crate) fn resident_product_log_fields_hide_internal_graph_ids() {
         "graphId": "resident-graph:internal",
         "graphIdentityHash": "sha256:internal",
         "graphLinkHash": "sha256:internal-link",
-        "outbound": "proxy",
+        "outbound": "egress_group",
         "packetSemantics": "xudp",
         "sourceDisplay": &source_display
     });

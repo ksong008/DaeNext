@@ -15,6 +15,24 @@ const FLOW_FINAL_MARK: u32 = 0x55;
 const FLOW_PID: u32 = 1;
 const FLOW_DSCP: u8 = 2;
 
+fn flow_route_selection() -> TcpRouteSelection {
+    TcpRouteSelection {
+        initial_outbound: FLOW_INITIAL_OUTBOUND,
+        final_outbound: FLOW_FINAL_OUTBOUND,
+        final_mark: FLOW_FINAL_MARK,
+        userspace_route_executed: true,
+        userspace_route_must: false,
+        dial_target: FLOW_DIAL_TARGET.to_owned(),
+        dial_ip: false,
+        log_metadata: TcpRoutingLogMetadata {
+            pid: FLOW_PID,
+            dscp: FLOW_DSCP,
+            pname: FLOW_PROCESS.to_owned(),
+            mac: FLOW_MAC.to_owned(),
+        },
+    }
+}
+
 struct TestAsyncRead {
     bytes: Vec<u8>,
     offset: usize,
@@ -86,21 +104,7 @@ fn resident_tcp_probe_status_matches_compatible_http_check_rules() {
 
 #[test]
 fn tcp_route_chosen_event_exposes_route_decision_fields() {
-    let route = TcpRouteSelection {
-        initial_outbound: FLOW_INITIAL_OUTBOUND,
-        final_outbound: FLOW_FINAL_OUTBOUND,
-        final_mark: FLOW_FINAL_MARK,
-        userspace_route_executed: true,
-        userspace_route_must: false,
-        dial_target: FLOW_DIAL_TARGET.to_owned(),
-        dial_ip: false,
-        log_metadata: TcpRoutingLogMetadata {
-            pid: FLOW_PID,
-            dscp: FLOW_DSCP,
-            pname: FLOW_PROCESS.to_owned(),
-            mac: FLOW_MAC.to_owned(),
-        },
-    };
+    let route = flow_route_selection();
     let selection = TcpSelection::Direct(TcpDirectSelection { route, mptcp: true });
     let sniff = TcpSniffReport {
         payload: Vec::new(),
@@ -144,6 +148,22 @@ fn tcp_route_chosen_event_exposes_route_decision_fields() {
         resident_tcp_network_name(v6_original_dst)
     );
     assert_ne!(event["network"], v6_event["network"]);
+}
+
+#[test]
+fn tcp_route_log_fields_use_generic_network_for_unparseable_destination() {
+    let route = flow_route_selection();
+    let mut event = json!({
+        "original_dst": "unparseable-destination",
+        "sniffed_domain": FLOW_SNIFFED_DOMAIN,
+    });
+
+    append_tcp_route_log_fields(&mut event, &route, FLOW_OUTBOUND, FLOW_POLICY, FLOW_DIALER);
+
+    assert_eq!(event["network"], "tcp");
+    assert_eq!(event["outbound"], FLOW_OUTBOUND);
+    assert_eq!(event["policy"], FLOW_POLICY);
+    assert_eq!(event["dialer"], FLOW_DIALER);
 }
 
 #[tokio::test(flavor = "current_thread")]

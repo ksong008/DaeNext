@@ -7,6 +7,14 @@ use std::time::Duration;
 
 use crate::*;
 
+fn expected_tcp_network_type(destination: SocketAddr) -> &'static str {
+    if destination.is_ipv4() {
+        "tcp4"
+    } else {
+        "tcp6"
+    }
+}
+
 #[test]
 fn magic_network_matches_golden_fixture() {
     let fixture = load("datapath/magic_network/mark_mptcp.json");
@@ -81,7 +89,7 @@ fn tcp_route_dial_domain_plus_plus_executes_userspace_reroute() {
     assert!(!plan.mark_defaulted_from_so_mark);
     assert_eq!(plan.final_dial_target, "127.0.0.1:18082");
     assert!(plan.strict_ip_version);
-    assert_eq!(plan.network_type, "tcp4");
+    assert_eq!(plan.network_type, expected_tcp_network_type(destination));
     assert!(plan.magic_network.starts_with(&[0, 3, b't']));
 }
 

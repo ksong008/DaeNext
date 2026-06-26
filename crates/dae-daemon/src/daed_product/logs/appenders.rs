@@ -151,22 +151,18 @@ pub(crate) fn append_startup_runtime_evidence_logs_for_config(
             let Some(interface) = binding.get("interface").and_then(Value::as_str) else {
                 continue;
             };
-            let backend = binding
-                .get("backend")
-                .and_then(Value::as_str)
-                .unwrap_or("aya");
+            let backend = binding.get("backend").and_then(Value::as_str);
             let mut fields = BTreeMap::new();
             insert_json_log_field(&mut fields, "role", binding.get("role"));
             insert_json_log_field(&mut fields, "direction", binding.get("direction"));
             insert_json_log_field(&mut fields, "priority", binding.get("priority"));
             insert_json_log_field(&mut fields, "handle", binding.get("handle"));
-            append_lifecycle_log_fields_for_config(
-                config_dir,
-                state,
-                "info",
-                &format!("Bind {program} via Rust/Aya {backend} on {interface}"),
-                fields,
-            )?;
+            let message = if let Some(backend) = backend {
+                format!("Bind {program} via Rust/Aya {backend} on {interface}")
+            } else {
+                format!("Bind {program} via Rust/Aya on {interface}")
+            };
+            append_lifecycle_log_fields_for_config(config_dir, state, "info", &message, fields)?;
         }
     }
 
