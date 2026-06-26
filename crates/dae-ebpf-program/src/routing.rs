@@ -159,16 +159,21 @@ pub fn pid_is_control_plane(skb: *mut __sk_buff, pid_pname: *mut BpfPidPname) ->
             return true;
         }
         if (unsafe { (*skb).mark } & CONTROL_PLANE_SO_MARK) == CONTROL_PLANE_SO_MARK {
-            return unsafe {
-                names_equal(
-                    ptr::addr_of!((*pid_pname).pname).cast::<u8>(),
-                    LATENCY_PROBE_HELPER_COMM.as_ptr(),
-                )
-            };
+            return unsafe { pid_pname_is_latency_probe_helper(pid_pname) };
         }
         return false;
     }
     (unsafe { (*skb).mark } & CONTROL_PLANE_SO_MARK) == CONTROL_PLANE_SO_MARK
+}
+
+#[inline(always)]
+unsafe fn pid_pname_is_latency_probe_helper(pid_pname: *const BpfPidPname) -> bool {
+    unsafe {
+        names_equal(
+            ptr::addr_of!((*pid_pname).comm).cast::<u8>(),
+            LATENCY_PROBE_HELPER_COMM.as_ptr(),
+        )
+    }
 }
 
 #[inline(always)]
@@ -544,4 +549,40 @@ pub fn outbound_alive(info: *const ParsedPacket, outbound: u8) -> bool {
     }
     .cast::<u32>();
     alive.is_null() || unsafe { *alive } != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use core::ptr;
+
+    use super::*;
+
+    const HELPER_PARENT_ARGV0_BASENAME: &[u8] = b"daed";
+
+    fn process_name(bytes: &[u8]) -> [i8; TASK_COMM_LEN] {
+        let mut out = [0; TASK_COMM_LEN];
+        for (dst, src) in out.iter_mut().zip(bytes.iter().copied()) {
+            *dst = src as i8;
+        }
+        out
+    }
+
+    #[test]
+    fn latency_helper_control_identity_uses_task_comm_not_enhanced_pname() {
+        let helper_comm = process_name(&LATENCY_PROBE_HELPER_COMM);
+        let enhanced_pname = process_name(HELPER_PARENT_ARGV0_BASENAME);
+        let helper_identity = BpfPidPname {
+            pid: 0,
+            comm: helper_comm,
+            pname: enhanced_pname,
+        };
+        assert!(unsafe { pid_pname_is_latency_probe_helper(ptr::addr_of!(helper_identity)) });
+
+        let reversed_identity = BpfPidPname {
+            pid: 0,
+            comm: enhanced_pname,
+            pname: helper_comm,
+        };
+        assert!(!unsafe { pid_pname_is_latency_probe_helper(ptr::addr_of!(reversed_identity)) });
+    }
 }
