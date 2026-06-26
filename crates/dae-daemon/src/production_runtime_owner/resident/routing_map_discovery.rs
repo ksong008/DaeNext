@@ -325,18 +325,20 @@ pub(super) fn startup_attach_bindings(start_report: &Value) -> Vec<Value> {
             let backend = native_attach
                 .get("backend")
                 .and_then(Value::as_str)
-                .or_else(|| step.get("backend").and_then(Value::as_str))
-                .unwrap_or("aya");
-            Some(json!({
+                .or_else(|| step.get("backend").and_then(Value::as_str));
+            let mut binding = json!({
                 "programName": program_name,
                 "interface": interface,
-                "backend": backend,
                 "role": step["role"].clone(),
                 "direction": native_attach["direction"].clone(),
                 "priority": native_attach["priority"].clone(),
                 "handle": native_attach["handle"].clone(),
                 "linkLayer": step["link_layer"].clone(),
-            }))
+            });
+            if let Some(backend) = backend {
+                binding["backend"] = json!(backend);
+            }
+            Some(binding)
         })
         .collect()
 }
@@ -363,6 +365,38 @@ pub(super) fn startup_routing_match_sets(start_report: &Value) -> Vec<Value> {
             }))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_attach_bindings_does_not_synthesize_missing_backend() {
+        let program_name = "program_ingress";
+        let interface = "if_test0";
+        let start_report = json!({
+            "executed_steps": [{
+                "status": "pass",
+                "role": "ingress",
+                "link_layer": "l3",
+                "native_attach": {
+                    "program_name": program_name,
+                    "iface": interface,
+                    "direction": "ingress",
+                    "priority": 1,
+                    "handle": 2
+                }
+            }]
+        });
+
+        let bindings = startup_attach_bindings(&start_report);
+
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0]["programName"], json!(program_name));
+        assert_eq!(bindings[0]["interface"], json!(interface));
+        assert!(bindings[0].get("backend").is_none(), "{bindings:?}");
+    }
 }
 
 pub(super) fn selected_netns_link_mode(start_report: &Value) -> Option<String> {

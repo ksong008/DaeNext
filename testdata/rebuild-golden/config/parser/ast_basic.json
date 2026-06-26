@@ -1,7 +1,7 @@
 {
   "cases": [
     {
-      "input": "\ninclude {\n    child.dae\n}\n\nglobal {\n    tcp_check_url: 'https://connectivity.example/generate_204',1.1.1.1\n    dial_mode: domain\n}\n\nnode {\n    my_node: 'socks5://127.0.0.1:1080'\n    'https://example.com/no_tag'\n}\n\ngroup {\n    test_group {\n        filter: !name(keyword:'hk', regex:'^HK') \u0026\u0026 subtag(my_sub) [add_latency: -500ms]\n        policy: fixed(0)\n    }\n}\n\nrouting {\n    domain(geosite:cn) -\u003e direct\n    domain(suffix:example.com) -\u003e proxy(mark: 1)\n    fallback: test_group\n}\n",
+      "input": "\ninclude {\n    child.dae\n}\n\nglobal {\n    tcp_check_url: 'https://connectivity.example/generate_204',1.1.1.1\n    dial_mode: domain\n}\n\nnode {\n    my_node: 'socks5://127.0.0.1:1080'\n    'https://example.com/no_tag'\n}\n\ngroup {\n    test_group {\n        filter: !name(keyword:'hk', regex:'^HK') \u0026\u0026 subtag(my_sub) [add_latency: -500ms]\n        policy: fixed(0)\n    }\n}\n\nrouting {\n    domain(geosite:cn) -\u003e direct\n    domain(suffix:example.com) -\u003e egress(mark: 1)\n    fallback: test_group\n}\n",
       "name": "mixed-sections-params-functions-routing",
       "ok": true,
       "sections": [
@@ -177,7 +177,7 @@
                   }
                 ],
                 "outbound": {
-                  "name": "proxy",
+                  "name": "egress",
                   "not": false,
                   "params": [
                     {

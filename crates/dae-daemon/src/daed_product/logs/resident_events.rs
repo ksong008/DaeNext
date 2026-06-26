@@ -267,15 +267,6 @@ pub(crate) fn append_resident_flow_network_field(
     }
     if let Some(network) = resident_event_field_value(event, "network") {
         fields.insert("network".to_owned(), network);
-        return;
-    }
-    let Some(event_name) = resident_event_field_str(event, "event") else {
-        return;
-    };
-    if event_name.starts_with("tcp_") {
-        fields.insert("network".to_owned(), "tcp4".to_owned());
-    } else if event_name.starts_with("udp_") {
-        fields.insert("network".to_owned(), "udp4".to_owned());
     }
 }
 

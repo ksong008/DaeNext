@@ -171,6 +171,10 @@ pub(crate) fn startup_runtime_evidence_logs_report_interfaces_generically() {
     ensure_state_schema(&state).unwrap();
     initialize_log_store(&dir, &state).unwrap();
     set_metadata(&state, "runtime_log_level", "info").unwrap();
+    let program_with_backend = "program_ingress";
+    let interface_with_backend = "if_test0";
+    let program_without_backend = "program_no_backend";
+    let interface_without_backend = "if_missing0";
     let report = json!({
         "residentStartupEvidence": {
             "bpfLoader": {
@@ -183,13 +187,20 @@ pub(crate) fn startup_runtime_evidence_logs_report_interfaces_generically() {
                 "mapCount": 2
             },
             "bindings": [{
-                "programName": "program_ingress",
-                "interface": "if_test0",
+                "programName": program_with_backend,
+                "interface": interface_with_backend,
                 "backend": "tcx",
                 "role": "ingress",
                 "direction": "ingress",
                 "priority": 1,
                 "handle": 2
+            }, {
+                "programName": program_without_backend,
+                "interface": interface_without_backend,
+                "role": "egress",
+                "direction": "egress",
+                "priority": 3,
+                "handle": 4
             }],
             "routingMatchSets": [{
                 "interface": "if_test0",
@@ -205,7 +216,7 @@ pub(crate) fn startup_runtime_evidence_logs_report_interfaces_generically() {
 
     let logs = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
     let items = logs["items"].as_array().unwrap();
-    assert_eq!(items.len(), 5, "{logs}");
+    assert_eq!(items.len(), 6, "{logs}");
     assert_eq!(
         items[0]["message"],
         json!(
@@ -225,11 +236,20 @@ pub(crate) fn startup_runtime_evidence_logs_report_interfaces_generically() {
     assert_eq!(items[2]["fields"]["program_count"], json!("1"));
     assert_eq!(
         items[3]["message"],
-        json!("Bind program_ingress via Rust/Aya tcx on if_test0")
+        json!(format!(
+            "Bind {program_with_backend} via Rust/Aya tcx on {interface_with_backend}"
+        ))
     );
     assert_eq!(items[3]["fields"]["role"], json!("ingress"));
-    assert_eq!(items[4]["message"], json!("Routing match set len: 3/1024"));
-    assert_eq!(items[4]["fields"]["interface"], json!("if_test0"));
+    assert_eq!(
+        items[4]["message"],
+        json!(format!(
+            "Bind {program_without_backend} via Rust/Aya on {interface_without_backend}"
+        ))
+    );
+    assert_eq!(items[4]["fields"]["role"], json!("egress"));
+    assert_eq!(items[5]["message"], json!("Routing match set len: 3/1024"));
+    assert_eq!(items[5]["fields"]["interface"], json!("if_test0"));
 
     fs::remove_dir_all(dir).unwrap();
 }
