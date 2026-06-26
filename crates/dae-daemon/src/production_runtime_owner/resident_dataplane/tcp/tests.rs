@@ -1,4 +1,5 @@
 use super::*;
+use dae_outbound::NetworkType;
 use serde_json::json;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 
@@ -574,6 +575,95 @@ fn resident_tcp_selection_domain_mode_requires_real_domain() {
     assert!(!selection.route.dial_ip);
     assert!(!selection.route.userspace_route_executed);
     assert_eq!(selection.route.final_mark, 0x55);
+}
+
+#[test]
+fn resident_tcp_selection_uses_destination_ip_family_for_proxy_group() {
+    let sections = dae_config::parser::parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks5://127.0.0.1:1080'
+        node_b: 'socks5://127.0.0.2:1080'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: min
+        }
+        }
+        routing {
+        fallback: proxy
+        }
+        "#,
+    )
+    .unwrap();
+    let config = dae_config::schema::build_config(&sections).unwrap();
+    let plan = super::super::plan::build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(20), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP4, Some(200), 2)
+        .unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP6, Some(300), 3)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP6, Some(50), 4)
+        .unwrap();
+    let router = ResidentTcpRouter::new_for_test(
+        plan.proxies.clone(),
+        fallback_matcher("direct", 0),
+        TcpDialMode::Ip,
+        Duration::from_millis(100),
+        0x1234,
+        true,
+    )
+    .unwrap();
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let v4_dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443));
+    let v6_dst = SocketAddr::V6(SocketAddrV6::new(
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 20),
+        443,
+        0,
+        0,
+    ));
+
+    let v4_selection = router
+        .select_from_routing_result(
+            peer,
+            v4_dst,
+            "",
+            BpfRoutingResult {
+                outbound: OutboundIndex::USER_DEFINED_MIN.value(),
+                ..BpfRoutingResult::default()
+            },
+        )
+        .unwrap();
+    let TcpSelection::Proxy(v4_selection) = v4_selection else {
+        panic!("expected IPv4 proxy selection");
+    };
+    assert_eq!(v4_selection.proxy.node_tag, "node_a");
+
+    let v6_selection = router
+        .select_from_routing_result(
+            peer,
+            v6_dst,
+            "",
+            BpfRoutingResult {
+                outbound: OutboundIndex::USER_DEFINED_MIN.value(),
+                ..BpfRoutingResult::default()
+            },
+        )
+        .unwrap();
+    let TcpSelection::Proxy(v6_selection) = v6_selection else {
+        panic!("expected IPv6 proxy selection");
+    };
+    assert_eq!(v6_selection.proxy.node_tag, "node_b");
 }
 
 fn tcp_router_for_test(

@@ -707,6 +707,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+    use dae_outbound::NetworkType;
+
     use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpSettingsPlan;
 
     use super::*;
@@ -911,6 +913,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(selected_proxy_group_name(selection), "proxy");
+    }
+
+    #[test]
+    fn udp_router_uses_destination_ip_family_for_proxy_group() {
+        let router = test_udp_router_with_udp_family_latency_group();
+        let v4_dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
+        let v6_dns_dst =
+            SocketAddr::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 53).into(), 53);
+
+        let v4_selection = router
+            .select_from_routing_result(v4_dns_dst, route_result(OUTBOUND_BLOCK, 0))
+            .unwrap();
+        assert_eq!(selected_proxy_node_tag(v4_selection), "node_a");
+
+        let v6_selection = router
+            .select_from_routing_result(v6_dns_dst, route_result(OUTBOUND_BLOCK, 0))
+            .unwrap();
+        assert_eq!(selected_proxy_node_tag(v6_selection), "node_b");
     }
 
     #[test]
@@ -1138,6 +1158,54 @@ mod tests {
             .unwrap()
     }
 
+    fn test_udp_router_with_udp_family_latency_group() -> ResidentUdpRouter {
+        let sections = dae_config::parser::parse_config(
+            r#"
+            global {
+            lan_interface: daerust0
+            }
+            node {
+            node_a: 'socks5://127.0.0.1:1080'
+            node_b: 'socks5://127.0.0.2:1080'
+            }
+            group {
+            proxy {
+                filter: name(node_a, node_b)
+                policy: min
+            }
+            }
+            routing {
+            fallback: proxy
+            }
+            "#,
+        )
+        .unwrap();
+        let config = dae_config::schema::build_config(&sections).unwrap();
+        let plan = super::super::super::plan::build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        group
+            .record_check_result("node_a", NetworkType::DNS_UDP4, Some(20), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::DNS_UDP4, Some(200), 2)
+            .unwrap();
+        group
+            .record_check_result("node_a", NetworkType::DNS_UDP6, Some(300), 3)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 4)
+            .unwrap();
+        ResidentUdpRouter::from_parts(
+            Arc::new(plan.proxies.clone()),
+            plan.default_outbound.unwrap(),
+            1,
+            None,
+            fallback_matcher("direct", 0),
+            TcpDialMode::Ip,
+        )
+        .unwrap()
+    }
+
     fn fallback_matcher(outbound: &str, mark: u32) -> RoutingMatcher {
         RoutingMatcher::from_fixture_value(&json!({
             "matches": [
@@ -1195,6 +1263,13 @@ mod tests {
     fn selected_proxy_group_name(selection: ResidentUdpSelection) -> String {
         match selection {
             ResidentUdpSelection::Proxy(selection) => selection.proxy.group_name.clone(),
+            ResidentUdpSelection::Block(_) => panic!("expected proxy route"),
+        }
+    }
+
+    fn selected_proxy_node_tag(selection: ResidentUdpSelection) -> String {
+        match selection {
+            ResidentUdpSelection::Proxy(selection) => selection.proxy.node_tag.clone(),
             ResidentUdpSelection::Block(_) => panic!("expected proxy route"),
         }
     }
