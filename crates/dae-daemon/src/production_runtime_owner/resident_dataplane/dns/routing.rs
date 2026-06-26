@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstreams, String> {
+    let fallback_resolver = parse_dns_fallback_resolver(config)?;
     let mut by_tag = BTreeMap::new();
     let mut tag_to_index = BTreeMap::new();
     let mut request_actions = Vec::new();
@@ -16,7 +17,13 @@ pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstream
         if by_tag.contains_key(&tag) {
             return Err(format!("duplicated DNS upstream tag {tag:?}"));
         }
-        let upstream = parse_dns_upstream(index as u8, &tag, &link)?;
+        let upstream = parse_dns_upstream(
+            index as u8,
+            &tag,
+            &link,
+            fallback_resolver,
+            config.global.so_mark_from_dae,
+        )?;
         tag_to_index.insert(tag.clone(), index as u8);
         request_actions.push(ResidentDnsRequestAction::Upstream(upstream.clone()));
         response_actions.push(ResidentDnsResponseAction::Upstream(upstream.clone()));
@@ -807,10 +814,25 @@ fn dns_qtype_name(value: &str) -> Option<u16> {
     })
 }
 
+pub(super) fn parse_dns_fallback_resolver(config: &Config) -> Result<SocketAddr, String> {
+    config
+        .global
+        .fallback_resolver
+        .parse::<SocketAddr>()
+        .map_err(|err| {
+            format!(
+                "invalid global.fallback_resolver {:?}: {err}",
+                config.global.fallback_resolver
+            )
+        })
+}
+
 pub(super) fn parse_dns_upstream(
     index: u8,
     tag: &str,
     link: &str,
+    fallback_resolver: SocketAddr,
+    resolver_mark: u32,
 ) -> Result<ResidentDnsUpstream, String> {
     let (scheme, rest) = link
         .split_once("://")
@@ -830,7 +852,12 @@ pub(super) fn parse_dns_upstream(
         }
     };
     let (authority, path) = split_dns_upstream_authority_and_path(rest, scheme);
-    let target = parse_dns_upstream_authority(authority, scheme.default_port())?;
+    let target = parse_dns_upstream_authority(
+        authority,
+        scheme.default_port(),
+        fallback_resolver,
+        resolver_mark,
+    )?;
     Ok(ResidentDnsUpstream {
         index,
         tag: tag.to_owned(),
@@ -870,6 +897,8 @@ fn split_dns_upstream_authority_and_path(
 fn parse_dns_upstream_authority(
     authority: &str,
     default_port: u16,
+    fallback_resolver: SocketAddr,
+    resolver_mark: u32,
 ) -> Result<ResidentDnsUpstreamTarget, String> {
     let authority = authority.trim();
     if authority.is_empty() {
@@ -882,6 +911,8 @@ fn parse_dns_upstream_authority(
         host,
         port,
         literal_addr,
+        fallback_resolver,
+        resolver_mark,
         resolved_addr: Arc::new(OnceCell::new()),
     })
 }

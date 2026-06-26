@@ -46,6 +46,7 @@ mod execution;
 mod execution_types;
 mod memory_bench;
 mod plan;
+mod resolver;
 mod runtime_owner;
 mod subscription_fetch;
 mod tcp;
@@ -54,6 +55,7 @@ mod vision;
 pub use self::memory_bench::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
 };
+pub(in crate::production_runtime_owner::resident_dataplane) use self::resolver::resolve_host_with_configured_fallback_dns;
 
 #[path = "runtime/defaults.rs"]
 mod defaults;

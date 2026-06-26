@@ -36,7 +36,7 @@ use url::Url;
 use super::super::resident_routing::ResidentGeodataStore;
 use super::{
     dns::{ResidentDnsPlan, build_resident_dns_plan},
-    link_hash, redacted_link_source,
+    link_hash, redacted_link_source, resolve_host_with_configured_fallback_dns,
 };
 
 mod executable_graph;
