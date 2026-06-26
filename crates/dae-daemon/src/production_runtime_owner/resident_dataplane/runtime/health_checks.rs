@@ -271,6 +271,11 @@ pub(crate) async fn probe_resident_candidate_tcp_latency_snapshot(
     let graph_id = candidate.proxy.graph_id.as_str();
     let link_hash = candidate.link_hash.as_str();
     let redacted_source = candidate.redacted_link_source.as_str();
+    let network_type = candidate
+        .tcp_check
+        .primary_target()
+        .network_type_for_record()
+        .string_without_dns();
     json!({
         "name": display_name,
         "displayName": display_name,
@@ -286,6 +291,7 @@ pub(crate) async fn probe_resident_candidate_tcp_latency_snapshot(
         "alive": latency_ms.is_some(),
         "checkedAtUnix": checked_at,
         "message": probe.err(),
+        "networkType": network_type,
         "scope": "proxy-tcp-check",
     })
 }
@@ -337,6 +343,7 @@ pub(crate) fn resident_latency_snapshot_json(
         "linkHash": link_hash,
         "linkIdentity": latency_link_identity_value(display_name, link_hash, redacted_source),
         "probeExecutor": resident_probe_executor_value(graph_id, reload_generation),
+        "networkType": snapshot.network_type.string_without_dns(),
         "latencyMs": snapshot.latency_ms,
         "alive": snapshot.alive,
         "checkedAtUnix": snapshot.checked_at_unix,

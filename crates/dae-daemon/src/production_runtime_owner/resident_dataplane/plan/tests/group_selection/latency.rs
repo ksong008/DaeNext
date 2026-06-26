@@ -301,6 +301,125 @@ pub(super) fn resident_dataplane_latency_seed_selects_dynamic_group_candidate() 
 }
 
 #[test]
+pub(super) fn resident_dataplane_latency_snapshots_follow_configured_tcp_ip_family() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        tcp_check_url: 'http://cp.cloudflare.com,::1'
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP6, Some(33), 7)
+        .unwrap();
+
+    let snapshot = group
+        .latency_snapshots()
+        .into_iter()
+        .find(|snapshot| snapshot.node_tag == "node_a")
+        .unwrap();
+    assert_eq!(snapshot.network_type, NetworkType::TCP6);
+    assert_eq!(snapshot.latency_ms, Some(33));
+    assert!(snapshot.alive);
+    assert_eq!(snapshot.checked_at_unix, 7);
+}
+
+#[test]
+pub(super) fn resident_dataplane_latency_seed_uses_snapshot_ip_family_when_present() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        tcp_check_url: 'http://cp.cloudflare.com,::1'
+        udp_check_dns: 'dns.google:53,::1'
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    assert_eq!(
+        group
+            .select_proxy_for_tcp_network(NetworkType::TCP6)
+            .unwrap()
+            .node_tag,
+        "node_a"
+    );
+
+    let node_b_hash = group
+        .probe_candidates()
+        .into_iter()
+        .find(|candidate| candidate.node_tag == "node_b")
+        .unwrap()
+        .link_hash;
+    let applied = group
+        .apply_successful_latency_seed_snapshot(&serde_json::json!({
+            "linkHash": node_b_hash,
+            "latencyMs": 25,
+            "alive": true,
+            "checkedAtUnix": 42,
+            "networkType": NetworkType::TCP6.string_without_dns(),
+        }))
+        .unwrap();
+
+    assert_eq!(applied, 1);
+    assert_eq!(
+        group
+            .select_proxy_for_tcp_network(NetworkType::TCP6)
+            .unwrap()
+            .node_tag,
+        "node_b"
+    );
+    assert_eq!(
+        group
+            .select_proxy_for_udp_network(NetworkType::DNS_UDP6)
+            .unwrap()
+            .node_tag,
+        "node_b"
+    );
+}
+
+#[test]
+pub(super) fn resident_dataplane_legacy_latency_seed_does_not_invent_ipv6_state() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        tcp_check_url: 'http://cp.cloudflare.com,::1'
+        udp_check_dns: 'dns.google:53,::1'
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    let node_b_hash = group
+        .probe_candidates()
+        .into_iter()
+        .find(|candidate| candidate.node_tag == "node_b")
+        .unwrap()
+        .link_hash;
+    let applied = group
+        .apply_successful_latency_seed_snapshot(&serde_json::json!({
+            "linkHash": node_b_hash,
+            "latencyMs": 25,
+            "alive": true,
+            "checkedAtUnix": 42,
+        }))
+        .unwrap();
+
+    assert_eq!(applied, 0);
+    assert_eq!(
+        group
+            .select_proxy_for_tcp_network(NetworkType::TCP6)
+            .unwrap()
+            .node_tag,
+        "node_a"
+    );
+}
+
+#[test]
 pub(super) fn resident_dataplane_latency_seed_does_not_change_fixed_group_selection() {
     let config = two_node_latency_config(
         "",
