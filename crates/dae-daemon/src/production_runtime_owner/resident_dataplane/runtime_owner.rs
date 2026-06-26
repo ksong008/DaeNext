@@ -335,11 +335,12 @@ impl ResidentManualProbeHandle {
                 .and_then(Value::as_i64)
                 .unwrap_or_else(unix_now_secs);
             let latency_ms = latency_snapshot_group_latency_ms(snapshot);
+            let network_type = latency_snapshot_group_network_type(snapshot);
             for link in links {
                 for group in &self.groups {
                     let _ = group.record_manual_latency_result_for_link(
                         link,
-                        NetworkType::TCP4,
+                        network_type,
                         latency_ms,
                         checked_at,
                     );
@@ -356,6 +357,16 @@ fn latency_snapshot_group_latency_ms(snapshot: &Value) -> Option<i64> {
         .and_then(Value::as_bool)
         .unwrap_or_else(|| latency_ms.is_some());
     if alive { latency_ms } else { None }
+}
+
+fn latency_snapshot_group_network_type(snapshot: &Value) -> NetworkType {
+    let Some(raw) = snapshot.get("networkType").and_then(Value::as_str) else {
+        return NetworkType::TCP4;
+    };
+    [NetworkType::TCP4, NetworkType::TCP6]
+        .into_iter()
+        .find(|network_type| network_type.string_without_dns() == raw)
+        .unwrap_or(NetworkType::TCP4)
 }
 
 pub(crate) fn run_resident_manual_latency_probe_helper(
@@ -642,5 +653,25 @@ mod tests {
             "message": null,
         });
         assert_eq!(latency_snapshot_group_latency_ms(&snapshot), Some(37));
+    }
+
+    #[test]
+    fn latency_snapshot_group_network_type_reads_snapshot_value() {
+        let snapshot = json!({
+            "networkType": NetworkType::TCP6.string_without_dns(),
+        });
+        assert_eq!(
+            latency_snapshot_group_network_type(&snapshot),
+            NetworkType::TCP6
+        );
+    }
+
+    #[test]
+    fn latency_snapshot_group_network_type_keeps_legacy_tcp4_default() {
+        let snapshot = json!({});
+        assert_eq!(
+            latency_snapshot_group_network_type(&snapshot),
+            NetworkType::TCP4
+        );
     }
 }
