@@ -916,10 +916,14 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
         r#"
             INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
                 VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(8, 'now', 'https://subscription.invalid/selected', 'fetched', '', 'sub-b');
             INSERT INTO groups(id, name, policy, version)
                 VALUES(9, 'resource_group', 'random', 2);
             INSERT INTO group_subscriptions(group_id, subscription_id, name_filter_regex)
                 VALUES(9, 7, 'candidate');
+            INSERT INTO group_subscriptions(group_id, subscription_id, name_filter_regex)
+                VALUES(9, 8, 'selected');
             INSERT INTO group_policy_params(group_id, key, value)
                 VALUES(9, 'filter', 'candidate');
             "#,
@@ -937,6 +941,16 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
             "http://127.0.0.1:9/candidate-zeta#candidate-zeta".to_owned(),
             "http://127.0.0.1:9/candidate-eta#candidate-eta".to_owned(),
             "http://127.0.0.1:9/ignored#ignored".to_owned(),
+        ],
+    )
+    .unwrap();
+    replace_subscription_nodes(
+        &conn,
+        8,
+        &[
+            "http://127.0.0.1:9/selected-alpha#selected-alpha".to_owned(),
+            "http://127.0.0.1:9/ignored-alpha#ignored-alpha".to_owned(),
+            "http://127.0.0.1:9/selected-beta#selected-beta".to_owned(),
         ],
     )
     .unwrap();
@@ -958,23 +972,29 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
     let group = &summary["items"][0];
     assert_eq!(group["id"], json!(9));
     assert_eq!(group["nodeCount"], json!(1));
-    assert_eq!(group["subscriptionCount"], json!(1));
+    assert_eq!(group["subscriptionCount"], json!(2));
     assert_eq!(group["firstNode"]["name"], json!("manual"));
-    assert_eq!(group["firstSubscription"]["matchedCount"], json!(7));
+    assert_eq!(group["subscriptions"].as_array().map(Vec::len), Some(2));
+    assert_eq!(group["subscriptions"][0]["matchedCount"], json!(7));
     assert_eq!(
-        group["firstSubscription"]["sampleMatchedNodes"]
+        group["subscriptions"][0]["sampleMatchedNodes"]
             .as_array()
             .map(Vec::len),
         Some(5)
     );
+    assert_eq!(group["subscriptions"][1]["matchedCount"], json!(2));
     assert_eq!(
-        group["firstSubscription"]["sampleMatchedNodes"][0]["name"],
-        json!("candidate-alpha")
+        group["subscriptions"][1]["sampleMatchedNodes"][0]["name"],
+        json!("selected-alpha")
+    );
+    assert_eq!(
+        group["subscriptions"][1]["sampleMatchedNodes"][1]["name"],
+        json!("selected-beta")
     );
     assert!(group.get("nodes").is_none(), "{group}");
-    assert!(group.get("subscriptions").is_none(), "{group}");
+    assert!(group.get("firstSubscription").is_none(), "{group}");
     assert!(
-        group["firstSubscription"].get("matchedNodes").is_none(),
+        group["subscriptions"][0].get("matchedNodes").is_none(),
         "{group}"
     );
 
