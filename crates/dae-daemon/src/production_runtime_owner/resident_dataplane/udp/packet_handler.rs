@@ -11,8 +11,12 @@ pub(super) struct UdpExchangeResult {
     pub(super) quic_underlay: Option<&'static str>,
     pub(super) session_executor: Option<&'static str>,
     pub(super) underlay_reuse: Option<&'static str>,
+    pub(super) session_ownership: &'static str,
     pub(super) reply_forwarded: bool,
 }
+
+const UDP_SESSION_OWNERSHIP_MANAGER_OWNED: &str = "manager-owned";
+const UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM: &str = "independent-datagram";
 
 impl UdpExchangeResult {
     pub(super) fn new(payload: Vec<u8>, execution_label: &'static str) -> Self {
@@ -23,6 +27,7 @@ impl UdpExchangeResult {
             quic_underlay: None,
             session_executor: None,
             underlay_reuse: None,
+            session_ownership: UDP_SESSION_OWNERSHIP_MANAGER_OWNED,
             reply_forwarded: true,
         }
     }
@@ -35,6 +40,7 @@ impl UdpExchangeResult {
             quic_underlay: None,
             session_executor: None,
             underlay_reuse: None,
+            session_ownership: UDP_SESSION_OWNERSHIP_MANAGER_OWNED,
             reply_forwarded: false,
         }
     }
@@ -59,6 +65,11 @@ impl UdpExchangeResult {
         self
     }
 
+    pub(super) fn with_session_ownership(mut self, session_ownership: &'static str) -> Self {
+        self.session_ownership = session_ownership;
+        self
+    }
+
     pub(super) fn append_execution_fields(
         &self,
         value: &mut serde_json::Value,
@@ -67,7 +78,7 @@ impl UdpExchangeResult {
     ) {
         let mut descriptor = udp_execution_descriptor(self.execution_label)
             .with_protocol_framing(protocol_framing)
-            .with_session_ownership("manager-owned")
+            .with_session_ownership(self.session_ownership)
             .with_graph_id(graph_id);
         if let Some(tls_underlay) = self.tls_underlay {
             descriptor = descriptor.with_security_underlay(tls_underlay);
@@ -86,6 +97,40 @@ impl UdpExchangeResult {
             value["underlayReuse"] = json!(underlay_reuse);
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum UdpExchangeSessionScope {
+    ManagedSession,
+    IndependentDatagram,
+}
+
+impl UdpExchangeSessionScope {
+    const fn include_packet_session(self) -> bool {
+        matches!(self, Self::ManagedSession)
+    }
+}
+
+pub(super) fn resident_dns_udp_exchange_result(
+    response: Vec<u8>,
+) -> (&'static str, UdpExchangeResult) {
+    ("udp_dns_packet_finished", resident_dns_udp_result(response))
+}
+
+pub(super) fn resident_dns_udp_independent_exchange_result(
+    response: Vec<u8>,
+) -> (&'static str, UdpExchangeResult) {
+    (
+        "udp_dns_packet_finished",
+        resident_dns_udp_result(response)
+            .with_session_ownership(UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM),
+    )
+}
+
+fn resident_dns_udp_result(response: Vec<u8>) -> UdpExchangeResult {
+    UdpExchangeResult::new(response, "resident-dns-udp")
+        .with_session_executor("tokio-dns-datagram")
+        .with_underlay_reuse("not-required-independent-datagram")
 }
 
 pub(super) fn record_udp_exchange_result(
@@ -109,6 +154,32 @@ pub(super) fn record_udp_exchange_result(
         event_lock,
         metrics,
         exchange,
+        UdpExchangeSessionScope::ManagedSession,
+    );
+}
+
+pub(super) fn record_udp_dns_datagram_exchange_result(
+    proxy: &ResidentProxyPlan,
+    packet: UdpOriginalDstPacket,
+    original_dst: SocketAddr,
+    dscp: u8,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    exchange: Result<(&'static str, UdpExchangeResult), String>,
+) {
+    record_udp_session_exchange_result(
+        proxy,
+        packet.peer,
+        original_dst,
+        packet.payload.len(),
+        true,
+        Some(dscp),
+        event_file,
+        event_lock,
+        metrics,
+        exchange,
+        UdpExchangeSessionScope::IndependentDatagram,
     );
 }
 
@@ -132,6 +203,7 @@ pub(super) fn record_udp_session_response_result(
         event_lock,
         metrics,
         exchange,
+        UdpExchangeSessionScope::ManagedSession,
     );
 }
 
@@ -146,6 +218,7 @@ fn record_udp_session_exchange_result(
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
     exchange: Result<(&'static str, UdpExchangeResult), String>,
+    session_scope: UdpExchangeSessionScope,
 ) {
     if count_upload {
         metrics.add_upload(request_len);
@@ -175,6 +248,7 @@ fn record_udp_session_exchange_result(
                 packet_semantics,
                 network,
                 true,
+                session_scope,
             );
             if let Some(map) = event_json.as_object_mut() {
                 map.insert("request_len".to_owned(), Value::from(request_len));
@@ -213,6 +287,7 @@ fn record_udp_session_exchange_result(
                 packet_semantics,
                 network,
                 false,
+                session_scope,
             );
             if let Some(map) = event_json.as_object_mut() {
                 map.insert("error".to_owned(), Value::String(err));
@@ -238,6 +313,7 @@ fn udp_exchange_base_event(
     packet_semantics: UdpPacketSemantics,
     network: &'static str,
     include_sniffed: bool,
+    session_scope: UdpExchangeSessionScope,
 ) -> Value {
     let mut map = serde_json::Map::with_capacity(18);
     map.insert("event".to_owned(), Value::String(event.to_owned()));
@@ -278,10 +354,12 @@ fn udp_exchange_base_event(
     map.insert("protocol".to_owned(), Value::String(proxy.protocol.clone()));
     map.insert("handler".to_owned(), Value::String(handler.to_owned()));
     map.insert("graphId".to_owned(), Value::String(proxy.graph_id.clone()));
-    map.insert(
-        "packetSession".to_owned(),
-        udp_packet_session_value(proxy, peer, original_dst, handler, packet_semantics),
-    );
+    if session_scope.include_packet_session() {
+        map.insert(
+            "packetSession".to_owned(),
+            udp_packet_session_value(proxy, peer, original_dst, handler, packet_semantics),
+        );
+    }
     Value::Object(map)
 }
 
@@ -325,7 +403,7 @@ mod tests {
         assert_eq!(event["executionDescriptor"]["packetSemantics"], "dns");
         assert_eq!(
             event["executionDescriptor"]["sessionOwnership"],
-            "manager-owned"
+            UDP_SESSION_OWNERSHIP_MANAGER_OWNED
         );
         assert_eq!(
             event["executionDescriptor"]["protocolFraming"],
@@ -337,5 +415,18 @@ mod tests {
         );
         assert_eq!(event["sessionExecutor"], "tokio-dns-datagram");
         assert_eq!(event["underlayReuse"], "not-required-independent-datagram");
+    }
+
+    #[test]
+    fn udp_exchange_result_can_report_independent_datagram_ownership() {
+        let mut event = json!({});
+        let result = UdpExchangeResult::new(Vec::new(), "resident-dns-udp")
+            .with_session_ownership(UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM);
+        result.append_execution_fields(&mut event, "resident-dns", "resident-graph:test");
+
+        assert_eq!(
+            event["executionDescriptor"]["sessionOwnership"],
+            UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM
+        );
     }
 }

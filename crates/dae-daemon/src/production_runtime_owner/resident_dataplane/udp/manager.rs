@@ -18,7 +18,9 @@ use super::*;
 
 mod router;
 mod sniff;
-use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
+use self::router::{
+    ResidentUdpProxySelection, ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection,
+};
 use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
 
 const UDP_ROUTE_CHOSEN_EVENT: &str = "udp_route_chosen";
@@ -30,6 +32,7 @@ const UDP_ROUTE_REASON_BLOCK: &str = "selected block outbound";
 const UDP_ROUTE_REASON_LIMIT: &str = "session limit reached";
 const UDP_ROUTE_REASON_QUEUE_FULL: &str = "session queue full";
 const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
+const UDP_ROUTE_REASON_DNS_FAST_PATH: &str = "handled resident DNS packet without UDP session";
 
 pub(super) fn run_resident_udp_session_manager(
     socket: UdpSocket,
@@ -372,6 +375,32 @@ fn forward_manager_packet(
         }
     };
     let proxy = Arc::clone(&proxy_selection.proxy);
+    if resident_udp_dns_fast_path_applies(original_dst, &proxy_selection) {
+        append_event(
+            event_file,
+            event_lock,
+            udp_route_chosen_event_without_packet_session(
+                packet.peer,
+                original_dst,
+                &proxy_selection.route,
+                &proxy,
+                sniffed_domain,
+                initial.dscp,
+                UDP_ROUTE_REASON_DNS_FAST_PATH,
+            ),
+        );
+        spawn_resident_dns_datagram_handler(
+            packet,
+            proxy,
+            original_dst,
+            initial.dscp,
+            Arc::clone(dns),
+            event_file.to_path_buf(),
+            Arc::clone(event_lock),
+            Arc::clone(metrics),
+        );
+        return;
+    }
     let key = UdpSessionKey::new(&proxy, packet.peer, original_dst);
     if !sessions.contains_key(&key) {
         if sessions.len() >= session_limit {
@@ -473,6 +502,49 @@ fn forward_manager_packet(
             ),
         );
     }
+}
+
+fn resident_udp_dns_fast_path_applies(
+    original_dst: SocketAddr,
+    proxy_selection: &ResidentUdpProxySelection,
+) -> bool {
+    original_dst.port() == 53 && !proxy_selection.force_proxy_packet
+}
+
+fn spawn_resident_dns_datagram_handler(
+    packet: UdpOriginalDstPacket,
+    proxy: Arc<ResidentProxyPlan>,
+    original_dst: SocketAddr,
+    dscp: u8,
+    dns: Arc<ResidentDnsPlan>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+) {
+    tokio::spawn(async move {
+        let exchange = match time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            handle_resident_dns_udp_async(&dns, original_dst, &packet.payload),
+        )
+        .await
+        {
+            Ok(result) => result.map(resident_dns_udp_independent_exchange_result),
+            Err(_) => Err(format!(
+                "resident DNS UDP datagram timed out after {}ms",
+                RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
+            )),
+        };
+        record_udp_dns_datagram_exchange_result(
+            &proxy,
+            packet,
+            original_dst,
+            dscp,
+            event_file,
+            event_lock,
+            metrics,
+            exchange,
+        );
+    });
 }
 
 async fn recv_udp_with_original_dst_async(
@@ -601,6 +673,31 @@ fn udp_route_chosen_event(
             "packetSession".to_owned(),
             UdpSessionKey::new(proxy, peer, original_dst).to_value(),
         );
+    }
+    event
+}
+
+fn udp_route_chosen_event_without_packet_session(
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    route: &ResidentUdpRouteSelection,
+    proxy: &ResidentProxyPlan,
+    sniffed_domain: &str,
+    dscp: u8,
+    reason: &str,
+) -> serde_json::Value {
+    let mut event = udp_route_chosen_event(
+        peer,
+        original_dst,
+        route,
+        Some(proxy),
+        sniffed_domain,
+        dscp,
+        false,
+        reason,
+    );
+    if let Some(map) = event.as_object_mut() {
+        map.remove("packetSession");
     }
     event
 }
@@ -814,6 +911,79 @@ mod tests {
             .unwrap();
 
         assert_eq!(selected_proxy_group_name(selection), "proxy");
+    }
+
+    #[test]
+    fn udp_dns_fast_path_applies_only_to_non_must_dns() {
+        let router = test_udp_router();
+        let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
+        let normal_dns = router
+            .select_from_routing_result(dns_dst, route_result(OUTBOUND_BLOCK, 0))
+            .unwrap();
+        match normal_dns {
+            ResidentUdpSelection::Proxy(selection) => {
+                assert!(resident_udp_dns_fast_path_applies(dns_dst, &selection));
+                assert!(!selection.force_proxy_packet);
+            }
+            ResidentUdpSelection::Block(_) => panic!("non-must DNS should use resident DNS"),
+        }
+
+        let must_dns = router
+            .select_from_routing_result(dns_dst, route_result_must(3, 0, 1))
+            .unwrap();
+        match must_dns {
+            ResidentUdpSelection::Proxy(selection) => {
+                assert!(!resident_udp_dns_fast_path_applies(dns_dst, &selection));
+                assert!(selection.force_proxy_packet);
+            }
+            ResidentUdpSelection::Block(_) => panic!("must DNS proxy route should select proxy"),
+        }
+
+        let non_dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 443);
+        let non_dns = router
+            .select_from_routing_result(non_dns_dst, route_result(3, 0))
+            .unwrap();
+        match non_dns {
+            ResidentUdpSelection::Proxy(selection) => {
+                assert!(!resident_udp_dns_fast_path_applies(non_dns_dst, &selection));
+                assert!(!selection.force_proxy_packet);
+            }
+            ResidentUdpSelection::Block(_) => panic!("non-DNS proxy route should select proxy"),
+        }
+    }
+
+    #[test]
+    fn udp_dns_fast_path_route_event_keeps_proxy_fields_without_packet_session() {
+        let peer = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 53100);
+        let original_dst = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 53);
+        let proxy = test_udp_proxy_with_group("sg", 0x1234);
+        let route = ResidentUdpRouteSelection {
+            initial_outbound: 2,
+            final_outbound: 3,
+            final_mark: proxy.mark,
+            userspace_route_executed: false,
+            userspace_route_must: false,
+        };
+
+        let event = udp_route_chosen_event_without_packet_session(
+            peer,
+            original_dst,
+            &route,
+            &proxy,
+            "",
+            0,
+            UDP_ROUTE_REASON_DNS_FAST_PATH,
+        );
+
+        assert_eq!(event["event"], UDP_ROUTE_CHOSEN_EVENT);
+        assert_eq!(event["outbound_kind"], UDP_ROUTE_KIND_PROXY);
+        assert_eq!(event["network"], resident_udp_network_name(original_dst));
+        assert_eq!(event["proxy_group"], proxy.group_name);
+        assert_eq!(event["group_policy"], proxy.group_policy);
+        assert_eq!(event["node_tag"], proxy.node_tag);
+        assert_eq!(event["task_queued"], false);
+        assert_eq!(event["reason"], UDP_ROUTE_REASON_DNS_FAST_PATH);
+        assert!(event.get("packetSession").is_none());
     }
 
     #[test]
