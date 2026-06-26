@@ -226,6 +226,142 @@ pub(crate) fn create_subscription_persists_use_proxy_flag() {
 }
 
 #[test]
+pub(crate) fn delete_subscription_removes_dependent_node_state() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    let subscription_id = 7_i64;
+    let group_id = 9_i64;
+    let subscription_tag = "subscription-under-test";
+    let group_name = "resource_group";
+    let removed_node_id = 51_i64;
+    let retained_node_id = 52_i64;
+    let removed_node_name = "subscription-node";
+    let retained_node_name = "manual-node";
+    conn.execute(
+        "INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            subscription_id,
+            "2026-06-26T00:00:00Z",
+            "https://subscription.invalid/list",
+            "fetched",
+            "",
+            subscription_tag
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(?1, ?2, ?3, 1)",
+        params![group_id, group_name, "random"],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO group_subscriptions(group_id, subscription_id) VALUES(?1, ?2)",
+        params![group_id, subscription_id],
+    )
+    .unwrap();
+    insert_config_node(
+        &conn,
+        removed_node_id,
+        removed_node_name,
+        "http://127.0.0.4:9/subscription#subscription-node",
+        Some(subscription_id),
+    );
+    insert_config_node(
+        &conn,
+        retained_node_id,
+        retained_node_name,
+        "http://127.0.0.5:9/manual#manual-node",
+        None,
+    );
+    for node_id in [removed_node_id, retained_node_id] {
+        conn.execute(
+            "INSERT INTO group_nodes(group_id, node_id) VALUES(?1, ?2)",
+            params![group_id, node_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
+                 VALUES(?1, 17, 1, ?2, NULL, ?2)",
+            params![node_id, "2026-06-26T00:00:00Z"],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let removed = delete_subscription(&state, subscription_id).unwrap();
+    assert_eq!(removed, 1);
+    let conn = open_state_connection(&state).unwrap();
+    let subscription_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM subscriptions WHERE id = ?1",
+            params![subscription_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(subscription_rows, 0);
+    let removed_node_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM nodes WHERE id = ?1",
+            params![removed_node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(removed_node_rows, 0);
+    let removed_group_nodes: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM group_nodes WHERE node_id = ?1",
+            params![removed_node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(removed_group_nodes, 0);
+    let removed_latency_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![removed_node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(removed_latency_rows, 0);
+    let group_subscription_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM group_subscriptions WHERE subscription_id = ?1",
+            params![subscription_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(group_subscription_rows, 0);
+    let retained_node_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM nodes WHERE id = ?1",
+            params![retained_node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_node_rows, 1);
+    let retained_group_nodes: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM group_nodes WHERE node_id = ?1",
+            params![retained_node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_group_nodes, 1);
+    let retained_latency_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![retained_node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_latency_rows, 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn subscription_vmess_metadata_uses_protocol_parser() {
     let payload = STANDARD.encode(
         r#"{"v":"2","ps":"vmess-name","add":"vmess.example.com","port":"443","id":"11111111-1111-1111-1111-111111111111","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":"tls"}"#,
@@ -259,6 +395,123 @@ pub(crate) fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
         "link": link
     });
     assert_eq!(runtime_node_tag(&node), "[label]resource-node");
+}
+
+#[test]
+pub(crate) fn update_node_clears_latency_when_link_identity_changes() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    let node_id = 41_i64;
+    let node_name = "editable-node";
+    let initial_link = "http://127.0.0.1:9/initial#editable-node";
+    let next_link = "http://127.0.0.2:9/next#editable-node";
+    insert_config_node(&conn, node_id, node_name, initial_link, None);
+    conn.execute(
+        "INSERT INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
+             VALUES(?1, 23, 1, ?2, NULL, ?2)",
+        params![node_id, "2026-06-26T00:00:00Z"],
+    )
+    .unwrap();
+    drop(conn);
+
+    let request = HttpRequest {
+        method: "PUT".to_owned(),
+        path: format!("/api/nodes/{node_id}"),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({ "link": next_link })).unwrap(),
+    };
+    let response = update_node(&state, &request, node_id);
+    assert_eq!(response.status, 200);
+
+    let conn = open_state_connection(&state).unwrap();
+    let stored_link: String = conn
+        .query_row(
+            "SELECT link FROM nodes WHERE id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_link, next_link);
+    let latency_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(latency_rows, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn update_node_preserves_latency_for_label_only_changes() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    let node_id = 42_i64;
+    let node_name = "label-node";
+    let link = "http://127.0.0.3:9/resource#label-node";
+    let next_tag = "renamed-label-node";
+    insert_config_node(&conn, node_id, node_name, link, None);
+    conn.execute(
+        "INSERT INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
+             VALUES(?1, 31, 1, ?2, NULL, ?2)",
+        params![node_id, "2026-06-26T00:00:00Z"],
+    )
+    .unwrap();
+    drop(conn);
+
+    let tag_only_request = HttpRequest {
+        method: "PUT".to_owned(),
+        path: format!("/api/nodes/{node_id}"),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({ "tag": next_tag })).unwrap(),
+    };
+    let response = update_node(&state, &tag_only_request, node_id);
+    assert_eq!(response.status, 200);
+    let conn = open_state_connection(&state).unwrap();
+    let latency_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(latency_rows, 1);
+    let stored_tag: String = conn
+        .query_row(
+            "SELECT tag FROM nodes WHERE id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_tag, next_tag);
+    drop(conn);
+
+    let link_and_tag_request = HttpRequest {
+        method: "PUT".to_owned(),
+        path: format!("/api/nodes/{node_id}"),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({ "link": link, "tag": node_name })).unwrap(),
+    };
+    let response = update_node(&state, &link_and_tag_request, node_id);
+    assert_eq!(response.status, 200);
+    let conn = open_state_connection(&state).unwrap();
+    let latency_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(latency_rows, 1);
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -298,9 +551,10 @@ pub(crate) fn update_group_rejects_unsupported_policy_without_mutating_existing_
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
+    let group_name = "policy_guard_group";
     conn.execute(
-        "INSERT INTO groups(id, name, policy, version) VALUES(9, 'proxy', 'fixed', 3)",
-        [],
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, ?1, ?2, 3)",
+        params![group_name, GROUP_POLICY_FIXED],
     )
     .unwrap();
     let request = HttpRequest {
@@ -328,7 +582,7 @@ pub(crate) fn update_group_rejects_unsupported_policy_without_mutating_existing_
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(policy, "fixed");
+    assert_eq!(policy, GROUP_POLICY_FIXED);
     assert_eq!(version, 3);
     fs::remove_dir_all(dir).unwrap();
 }
@@ -339,6 +593,7 @@ pub(crate) fn create_group_rejects_fixed_group_with_multiple_nodes_without_persi
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
+    let group_name = "single_node_group";
     insert_config_node(&conn, 1, "node-a", "http://127.0.0.1:9/node-a#node-a", None);
     insert_config_node(&conn, 2, "node-b", "http://127.0.0.2:9/node-b#node-b", None);
     drop(conn);
@@ -347,7 +602,13 @@ pub(crate) fn create_group_rejects_fixed_group_with_multiple_nodes_without_persi
         path: "/api/groups".to_owned(),
         query: HashMap::new(),
         headers: HashMap::new(),
-        body: br#"{"name":"proxy","policy":"fixed","nodeIds":[1,2],"policyParams":[]}"#.to_vec(),
+        body: serde_json::to_vec(&json!({
+            "name": group_name,
+            "policy": GROUP_POLICY_FIXED,
+            "nodeIds": [1, 2],
+            "policyParams": []
+        }))
+        .unwrap(),
     };
 
     let response = create_group(&state, &request);
@@ -363,8 +624,8 @@ pub(crate) fn create_group_rejects_fixed_group_with_multiple_nodes_without_persi
     let conn = open_state_connection(&state).unwrap();
     let group_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM groups WHERE name = 'proxy'",
-            [],
+            "SELECT COUNT(*) FROM groups WHERE name = ?1",
+            params![group_name],
             |row| row.get(0),
         )
         .unwrap();
@@ -382,14 +643,17 @@ pub(crate) fn update_group_nodes_rejects_second_node_for_fixed_group_without_mut
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
+    let group_name = "node_binding_group";
     insert_config_node(&conn, 1, "node-a", "http://127.0.0.1:9/node-a#node-a", None);
     insert_config_node(&conn, 2, "node-b", "http://127.0.0.2:9/node-b#node-b", None);
-    conn.execute_batch(
-        r#"
-            INSERT INTO groups(id, name, policy, version)
-                VALUES(9, 'proxy', 'fixed', 3);
-            INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1);
-            "#,
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, ?1, ?2, 3)",
+        params![group_name, GROUP_POLICY_FIXED],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1)",
+        [],
     )
     .unwrap();
     drop(conn);
@@ -435,13 +699,16 @@ pub(crate) fn update_group_subscriptions_rejects_multi_match_for_fixed_group_wit
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
-    conn.execute_batch(
-        r#"
-            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
-                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
-            INSERT INTO groups(id, name, policy, version)
-                VALUES(9, 'proxy', 'fixed', 3);
-            "#,
+    let group_name = "subscription_binding_group";
+    conn.execute(
+        "INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, ?1, ?2, 3)",
+        params![group_name, GROUP_POLICY_FIXED],
     )
     .unwrap();
     replace_subscription_nodes(
@@ -496,15 +763,22 @@ pub(crate) fn update_group_rejects_fixed_policy_for_multi_node_group_without_par
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
+    let group_name = "policy_update_group";
     insert_config_node(&conn, 1, "node-a", "http://127.0.0.1:9/node-a#node-a", None);
     insert_config_node(&conn, 2, "node-b", "http://127.0.0.2:9/node-b#node-b", None);
-    conn.execute_batch(
-        r#"
-            INSERT INTO groups(id, name, policy, version)
-                VALUES(9, 'proxy', 'random', 2);
-            INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1);
-            INSERT INTO group_nodes(group_id, node_id) VALUES(9, 2);
-            "#,
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, ?1, ?2, 2)",
+        params![group_name, DEFAULT_PRODUCT_GROUP_POLICY],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, 2)",
+        [],
     )
     .unwrap();
     drop(conn);
@@ -513,8 +787,12 @@ pub(crate) fn update_group_rejects_fixed_policy_for_multi_node_group_without_par
         path: "/api/groups/9".to_owned(),
         query: HashMap::new(),
         headers: HashMap::new(),
-        body: br#"{"name":"renamed","policy":"fixed","policyParams":[{"key":"","val":"1"}]}"#
-            .to_vec(),
+        body: serde_json::to_vec(&json!({
+            "name": "renamed",
+            "policy": GROUP_POLICY_FIXED,
+            "policyParams": [{"key": "", "val": "1"}]
+        }))
+        .unwrap(),
     };
 
     let response = update_group(&state, &request, 9);
@@ -542,8 +820,8 @@ pub(crate) fn update_group_rejects_fixed_policy_for_multi_node_group_without_par
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(name, "proxy");
-    assert_eq!(policy, "random");
+    assert_eq!(name, group_name);
+    assert_eq!(policy, DEFAULT_PRODUCT_GROUP_POLICY);
     assert_eq!(version, 2);
     assert_eq!(policy_param_count, 0);
     fs::remove_dir_all(dir).unwrap();
