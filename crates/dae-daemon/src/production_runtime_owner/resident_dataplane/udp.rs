@@ -67,7 +67,7 @@ use super::{
     RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
     ResidentDataplaneMetrics, VISION_COMMAND_CONTINUE, VLESS_RESPONSE_VERSION, XUDP_COMMAND_KEEP,
     XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
-    resident_socket_addr_display, resident_udp_network_name,
+    resident_socket_addr_display, resident_udp_network_name, resident_udp_selector_network_type,
 };
 
 mod worker;

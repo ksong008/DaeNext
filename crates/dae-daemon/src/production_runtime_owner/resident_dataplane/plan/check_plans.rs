@@ -205,13 +205,3 @@ pub(super) fn duration_nanos_to_millis(nanos: i64) -> i64 {
     }
     (nanos + 999_999) / 1_000_000
 }
-
-pub(super) fn resident_selector_network_type(network: &str) -> Result<NetworkType, String> {
-    match network {
-        "tcp4" => Ok(NetworkType::TCP4),
-        "tcp6" => Ok(NetworkType::TCP6),
-        "udp4" => Ok(NetworkType::DNS_UDP4),
-        "udp6" => Ok(NetworkType::DNS_UDP6),
-        other => Err(format!("unsupported resident selector network: {other}")),
-    }
-}

@@ -247,7 +247,9 @@ impl ResidentTcpRouter {
                         OutboundIndex(final_outbound)
                     ));
                 };
-                let proxy = proxy_group.select_proxy_for_tcp()?;
+                let proxy = proxy_group.select_proxy_for_tcp_network(
+                    resident_tcp_selector_network_type(original_dst),
+                )?;
                 Ok(TcpSelection::Proxy(TcpProxySelection {
                     mark: route.final_mark,
                     mptcp: self.mptcp,
