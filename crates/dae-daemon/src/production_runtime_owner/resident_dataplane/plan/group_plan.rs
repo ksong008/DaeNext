@@ -176,6 +176,34 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_chec
     }
 }
 
+fn push_unique_network_type(network_types: &mut Vec<NetworkType>, network_type: NetworkType) {
+    if !network_types.contains(&network_type) {
+        network_types.push(network_type);
+    }
+}
+
+fn latency_snapshot_tcp_network_types() -> [NetworkType; 2] {
+    [NetworkType::TCP4, NetworkType::TCP6]
+}
+
+fn latency_seed_snapshot_network_type(snapshot: &Value) -> Option<NetworkType> {
+    let raw = snapshot.get("networkType").and_then(Value::as_str)?;
+    latency_snapshot_tcp_network_types()
+        .into_iter()
+        .find(|network_type| network_type.string_without_dns() == raw)
+}
+
+fn latency_seed_network_types_for_snapshot_network(network_type: NetworkType) -> Vec<NetworkType> {
+    vec![
+        NetworkType::TCP4.with_ipversion(network_type.ipversion),
+        NetworkType::DNS_UDP4.with_ipversion(network_type.ipversion),
+    ]
+}
+
+fn legacy_latency_seed_network_types() -> Vec<NetworkType> {
+    latency_seed_network_types_for_snapshot_network(NetworkType::TCP4)
+}
+
 impl PartialEq for ResidentUdpCheckTarget {
     fn eq(&self, other: &Self) -> bool {
         self.authority == other.authority
@@ -195,10 +223,20 @@ pub(crate) struct ResidentProxyLatencySnapshot {
     pub(in crate::production_runtime_owner::resident_dataplane) graph_id: String,
     pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) network_type: NetworkType,
     pub(in crate::production_runtime_owner::resident_dataplane) latency_ms: Option<i64>,
     pub(in crate::production_runtime_owner::resident_dataplane) alive: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) checked_at_unix: i64,
     pub(in crate::production_runtime_owner::resident_dataplane) message: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResidentDialerLatencySnapshotState {
+    network_type: NetworkType,
+    latency_ms: i64,
+    alive: bool,
+    checked_at_unix: i64,
+    ok: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -246,6 +284,60 @@ impl ResidentGroupPolicyPlan {
     }
 }
 
+impl ResidentDialerLatencySnapshotState {
+    fn from_dialer(dialer: &Dialer, network_type: NetworkType) -> Self {
+        let (latency_ms, alive, checked_at_unix, ok) = dialer.last_latency_snapshot(network_type);
+        Self {
+            network_type,
+            latency_ms,
+            alive,
+            checked_at_unix,
+            ok,
+        }
+    }
+}
+
+fn prefer_resident_latency_snapshot_state(
+    next: ResidentDialerLatencySnapshotState,
+    current: ResidentDialerLatencySnapshotState,
+) -> bool {
+    match (next.ok && next.alive, current.ok && current.alive) {
+        (true, false) => return true,
+        (false, true) => return false,
+        (true, true) => return next.latency_ms < current.latency_ms,
+        (false, false) => {}
+    }
+    match (next.ok, current.ok) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => next.checked_at_unix > current.checked_at_unix,
+    }
+}
+
+fn preferred_resident_tcp_latency_snapshot_state(
+    dialer: &Dialer,
+    network_types: &[NetworkType],
+) -> ResidentDialerLatencySnapshotState {
+    network_types
+        .iter()
+        .copied()
+        .map(|network_type| ResidentDialerLatencySnapshotState::from_dialer(dialer, network_type))
+        .reduce(|current, next| {
+            if prefer_resident_latency_snapshot_state(next, current) {
+                next
+            } else {
+                current
+            }
+        })
+        .unwrap_or(ResidentDialerLatencySnapshotState {
+            network_type: NetworkType::TCP4,
+            latency_ms: 0,
+            alive: false,
+            checked_at_unix: 0,
+            ok: false,
+        })
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) group_name: String,
@@ -286,17 +378,57 @@ impl ResidentProxyGroupPlan {
             .count()
     }
 
+    fn tcp_check_network_types(&self) -> Vec<NetworkType> {
+        let mut network_types = Vec::new();
+        for target in &self.tcp_check.targets {
+            push_unique_network_type(&mut network_types, target.network_type_for_record());
+        }
+        network_types
+    }
+
+    fn udp_check_network_types(&self) -> Vec<NetworkType> {
+        let mut network_types = Vec::new();
+        for target in &self.udp_check.targets {
+            push_unique_network_type(
+                &mut network_types,
+                target.network_type_hint().unwrap_or(NetworkType::DNS_UDP4),
+            );
+        }
+        network_types
+    }
+
+    fn latency_seed_network_types(&self, snapshot: &Value) -> Vec<NetworkType> {
+        let mut configured = self.tcp_check_network_types();
+        for network_type in self.udp_check_network_types() {
+            push_unique_network_type(&mut configured, network_type);
+        }
+        let requested = latency_seed_snapshot_network_type(snapshot)
+            .map(latency_seed_network_types_for_snapshot_network)
+            .unwrap_or_else(legacy_latency_seed_network_types);
+        requested
+            .into_iter()
+            .filter(|network_type| configured.contains(network_type))
+            .collect()
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn latency_state_wired(
         &self,
     ) -> bool {
         if !self.group_policy.needs_latency_state() {
             return true;
         }
+        let network_types = self.tcp_check_network_types();
         self.selector
             .lock()
             .ok()
-            .and_then(|selector| selector.alive_set(NetworkType::TCP4).cloned())
-            .map(|alive_set| alive_set.latency_state_allocated)
+            .map(|selector| {
+                network_types.iter().all(|network_type| {
+                    selector
+                        .alive_set(*network_type)
+                        .map(|alive_set| alive_set.latency_state_allocated)
+                        .unwrap_or(false)
+                })
+            })
             .unwrap_or(false)
     }
 
@@ -354,24 +486,38 @@ impl ResidentProxyGroupPlan {
         let Ok(selector) = self.selector.lock() else {
             return Vec::new();
         };
+        let network_types = self.tcp_check_network_types();
         self.candidates
             .iter()
             .enumerate()
             .map(|(index, candidate)| {
-                let (latency_ms, alive, checked_at_unix, ok) = selector
+                let snapshot = selector
                     .dialers
                     .get(index)
-                    .map(|dialer| dialer.last_latency_snapshot(NetworkType::TCP4))
-                    .unwrap_or((0, false, 0, false));
+                    .map(|dialer| {
+                        preferred_resident_tcp_latency_snapshot_state(dialer, &network_types)
+                    })
+                    .unwrap_or(ResidentDialerLatencySnapshotState {
+                        network_type: NetworkType::TCP4,
+                        latency_ms: 0,
+                        alive: false,
+                        checked_at_unix: 0,
+                        ok: false,
+                    });
                 ResidentProxyLatencySnapshot {
                     node_tag: candidate.proxy.node_tag.clone(),
                     graph_id: candidate.proxy.graph_id.clone(),
                     link_hash: candidate.link_hash.clone(),
                     redacted_link_source: candidate.redacted_link_source.clone(),
-                    latency_ms: ok.then_some(latency_ms),
-                    alive: ok && alive,
-                    checked_at_unix,
-                    message: resident_latency_message(ok, alive, latency_ms),
+                    network_type: snapshot.network_type,
+                    latency_ms: snapshot.ok.then_some(snapshot.latency_ms),
+                    alive: snapshot.ok && snapshot.alive,
+                    checked_at_unix: snapshot.checked_at_unix,
+                    message: resident_latency_message(
+                        snapshot.ok,
+                        snapshot.alive,
+                        snapshot.latency_ms,
+                    ),
                 }
             })
             .collect()
@@ -566,6 +712,10 @@ impl ResidentProxyGroupPlan {
         if indexes.is_empty() {
             return Ok(0);
         }
+        let network_types = self.latency_seed_network_types(snapshot);
+        if network_types.is_empty() {
+            return Ok(0);
+        }
         let checked_at_unix = snapshot
             .get("checkedAtUnix")
             .and_then(Value::as_i64)
@@ -578,10 +728,10 @@ impl ResidentProxyGroupPlan {
             )
         })?;
         for index in &indexes {
-            for network_type in [NetworkType::TCP4, NetworkType::DNS_UDP4] {
+            for network_type in &network_types {
                 selector.record_check_result(
                     *index,
-                    network_type,
+                    *network_type,
                     Some(latency_ms),
                     checked_at_unix,
                 );
