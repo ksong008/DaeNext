@@ -74,6 +74,7 @@ const LOG_PRUNE_INTERVAL: u64 = 256;
 const LOG_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const LOG_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const LOG_STREAM_RETRY_MS: u64 = 3_000;
+const PRODUCT_LOG_DIR_ENV: &str = "DAED_PRODUCT_LOG_DIR";
 const PRODUCT_LOG_DIR: &str = "logs";
 const PRODUCT_LOG_FILE: &str = "current.jsonl";
 const DEFAULT_PRODUCT_CONFIG_NAME: &str = "global";

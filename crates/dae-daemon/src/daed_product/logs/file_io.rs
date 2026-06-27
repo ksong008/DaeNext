@@ -11,7 +11,21 @@ pub(crate) struct ProductLogEntry {
 }
 
 pub(crate) fn product_log_file(config_dir: &Path) -> PathBuf {
-    config_dir.join(PRODUCT_LOG_DIR).join(PRODUCT_LOG_FILE)
+    product_log_dir(config_dir).join(PRODUCT_LOG_FILE)
+}
+
+pub(crate) fn product_log_dir(config_dir: &Path) -> PathBuf {
+    match std::env::var_os(PRODUCT_LOG_DIR_ENV).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                config_dir.join(path)
+            }
+        }
+        None => config_dir.join(PRODUCT_LOG_DIR),
+    }
 }
 
 pub(crate) fn clear_log_file(config_dir: &Path) -> io::Result<()> {
@@ -81,7 +95,7 @@ pub(crate) fn set_log_file_permissions(path: &Path) -> io::Result<()> {
 
 pub(crate) fn ensure_log_dir(config_dir: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let log_dir = config_dir.join(PRODUCT_LOG_DIR);
+    let log_dir = product_log_dir(config_dir);
     fs::create_dir_all(&log_dir)?;
     fs::set_permissions(log_dir, fs::Permissions::from_mode(0o750))
 }
