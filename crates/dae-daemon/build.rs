@@ -28,6 +28,7 @@ fn emit_product_build_identity() {
                     .is_file()
         })
         .unwrap_or_else(|| panic!("dae-daemon manifest must live under crates/dae-daemon"));
+    emit_git_identity_rerun_paths(repo_root);
     let package_version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_owned());
     let commit = git_output(repo_root, &["rev-parse", "--short=12", "HEAD"])
         .unwrap_or_else(|| "unknown".to_owned());
@@ -39,6 +40,35 @@ fn emit_product_build_identity() {
         "daed rust-native product {package_version} dae-core={commit}{dirty} profile={profile} target={target} features={features}"
     );
     println!("cargo:rustc-env=DAE_DAEMON_VERSION={version}");
+}
+
+fn emit_git_identity_rerun_paths(repo_root: &std::path::Path) {
+    let Some(git_dir) = git_output(repo_root, &["rev-parse", "--git-dir"]) else {
+        return;
+    };
+    let git_dir = std::path::PathBuf::from(git_dir);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        repo_root.join(git_dir)
+    };
+
+    let head_path = git_dir.join("HEAD");
+    println!("cargo:rerun-if-changed={}", head_path.display());
+
+    if let Ok(head) = std::fs::read_to_string(&head_path) {
+        if let Some(reference) = head.trim().strip_prefix("ref: ") {
+            println!(
+                "cargo:rerun-if-changed={}",
+                git_dir.join(reference).display()
+            );
+        }
+    }
+
+    println!(
+        "cargo:rerun-if-changed={}",
+        git_dir.join("packed-refs").display()
+    );
 }
 
 fn enabled_feature_summary() -> String {
