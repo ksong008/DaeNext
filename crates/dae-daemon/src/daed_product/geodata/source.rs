@@ -1,4 +1,4 @@
-use super::types::GeodataKind;
+use super::types::{GeodataKind, GeodataSource, GeodataSourceMode};
 use super::*;
 
 const GEODATA_SOURCE_URL_MAX_LEN: usize = 2048;
@@ -11,21 +11,33 @@ pub(super) fn geodata_sources_status(state: &Path) -> io::Result<Value> {
 }
 
 pub(super) fn geodata_source_status(state: &Path, kind: GeodataKind) -> io::Result<Value> {
-    let default_url = kind.release_api_url();
+    let default_url = kind.default_source_url();
     let custom_url = geodata_custom_source_url(state, kind)?;
     let url = custom_url.as_deref().unwrap_or(default_url);
+    let parsed_url = parse_geodata_source_url(url)?;
+    let source_type = geodata_source_mode(kind, &parsed_url)?;
+    let use_proxy = geodata_source_use_proxy(state, kind)?;
     Ok(json!({
         "kind": kind.response_key(),
         "url": url,
         "defaultUrl": default_url,
         "usingDefault": custom_url.is_none(),
+        "sourceType": source_type.response_key(),
+        "useProxy": use_proxy,
     }))
 }
 
-pub(super) fn geodata_source_url(state: &Path, kind: GeodataKind) -> io::Result<url::Url> {
+pub(super) fn geodata_source(state: &Path, kind: GeodataKind) -> io::Result<GeodataSource> {
     let raw_url = geodata_custom_source_url(state, kind)?
-        .unwrap_or_else(|| kind.release_api_url().to_owned());
-    parse_geodata_source_url(&raw_url)
+        .unwrap_or_else(|| kind.default_source_url().to_owned());
+    let url = parse_geodata_source_url(&raw_url)?;
+    let mode = geodata_source_mode(kind, &url)?;
+    let use_proxy = geodata_source_use_proxy(state, kind)?;
+    Ok(GeodataSource {
+        url,
+        mode,
+        use_proxy,
+    })
 }
 
 pub(super) fn set_geodata_source_url(
@@ -35,12 +47,25 @@ pub(super) fn set_geodata_source_url(
 ) -> io::Result<Value> {
     let url = normalize_geodata_source_url(raw_url)?;
     reject_obviously_wrong_geodata_source(kind, &url)?;
-    let value = if url == kind.release_api_url() {
+    let value = if url == kind.default_source_url() {
         ""
     } else {
         url.as_str()
     };
     set_metadata(state, &geodata_source_metadata_key(kind), value)?;
+    geodata_source_status(state, kind)
+}
+
+pub(super) fn set_geodata_source_use_proxy(
+    state: &Path,
+    kind: GeodataKind,
+    use_proxy: bool,
+) -> io::Result<Value> {
+    set_metadata(
+        state,
+        &geodata_source_use_proxy_metadata_key(kind),
+        if use_proxy { "true" } else { "false" },
+    )?;
     geodata_source_status(state, kind)
 }
 
@@ -60,6 +85,20 @@ fn geodata_custom_source_url(state: &Path, kind: GeodataKind) -> io::Result<Opti
     let url = normalize_geodata_source_url(value)?;
     reject_obviously_wrong_geodata_source(kind, &url)?;
     Ok(Some(url))
+}
+
+fn geodata_source_use_proxy(state: &Path, kind: GeodataKind) -> io::Result<bool> {
+    let Some(value) = get_metadata(state, &geodata_source_use_proxy_metadata_key(kind))? else {
+        return Ok(false);
+    };
+    match value.trim() {
+        "true" | "1" => Ok(true),
+        "false" | "0" | "" => Ok(false),
+        value => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid geodata use proxy value: {value}"),
+        )),
+    }
 }
 
 fn normalize_geodata_source_url(raw_url: &str) -> io::Result<String> {
@@ -113,7 +152,7 @@ fn parse_geodata_source_url(raw_url: &str) -> io::Result<url::Url> {
 
 fn reject_obviously_wrong_geodata_source(kind: GeodataKind, url: &str) -> io::Result<()> {
     let other = other_geodata_kind(kind);
-    if url == other.release_api_url() {
+    if url == other.default_source_url() || url == other.legacy_release_api_url() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
@@ -123,7 +162,48 @@ fn reject_obviously_wrong_geodata_source(kind: GeodataKind, url: &str) -> io::Re
             ),
         ));
     }
+    let parsed = parse_geodata_source_url(url)?;
+    let _ = geodata_source_mode(kind, &parsed)?;
     Ok(())
+}
+
+fn geodata_source_mode(kind: GeodataKind, url: &url::Url) -> io::Result<GeodataSourceMode> {
+    if url.as_str() == kind.legacy_release_api_url() {
+        return Ok(GeodataSourceMode::ReleaseApi);
+    }
+    let last_segment = url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .unwrap_or_default();
+    if last_segment.eq_ignore_ascii_case(kind.file_name()) {
+        return Ok(GeodataSourceMode::DirectFile);
+    }
+    let other = other_geodata_kind(kind);
+    if last_segment.eq_ignore_ascii_case(other.file_name()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} source cannot use {} data file url",
+                kind.response_key(),
+                other.response_key()
+            ),
+        ));
+    }
+    if looks_like_release_api_url(url) {
+        return Ok(GeodataSourceMode::ReleaseApi);
+    }
+    Ok(GeodataSourceMode::DirectFile)
+}
+
+fn looks_like_release_api_url(url: &url::Url) -> bool {
+    let Some(segments) = url.path_segments() else {
+        return false;
+    };
+    let mut segments = segments.rev();
+    matches!(
+        (segments.next(), segments.next()),
+        (Some("latest"), Some("releases"))
+    )
 }
 
 fn other_geodata_kind(kind: GeodataKind) -> GeodataKind {
@@ -135,4 +215,17 @@ fn other_geodata_kind(kind: GeodataKind) -> GeodataKind {
 
 fn geodata_source_metadata_key(kind: GeodataKind) -> String {
     format!("geodata_{}_source_url", kind.response_key())
+}
+
+fn geodata_source_use_proxy_metadata_key(kind: GeodataKind) -> String {
+    format!("geodata_{}_use_proxy", kind.response_key())
+}
+
+impl GeodataSourceMode {
+    fn response_key(self) -> &'static str {
+        match self {
+            Self::ReleaseApi => "release",
+            Self::DirectFile => "direct",
+        }
+    }
 }

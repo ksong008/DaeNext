@@ -1,5 +1,9 @@
 pub(super) const GEOSITE_FILE: &str = "geosite.dat";
 pub(super) const GEOIP_FILE: &str = "geoip.dat";
+const GEOSITE_DEFAULT_SOURCE_URL: &str =
+    "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat";
+const GEOIP_DEFAULT_SOURCE_URL: &str =
+    "https://fastly.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip.dat";
 const GEOSITE_RELEASE_API_URL: &str =
     "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest";
 const GEOIP_RELEASE_API_URL: &str =
@@ -18,6 +22,19 @@ pub(super) struct GeodataFileDownload {
     pub(super) sha256: String,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct GeodataSource {
+    pub(super) url: url::Url,
+    pub(super) mode: GeodataSourceMode,
+    pub(super) use_proxy: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GeodataSourceMode {
+    ReleaseApi,
+    DirectFile,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::daed_product) enum GeodataKind {
     Geosite,
@@ -32,7 +49,14 @@ impl GeodataKind {
         }
     }
 
-    pub(super) fn release_api_url(self) -> &'static str {
+    pub(super) fn default_source_url(self) -> &'static str {
+        match self {
+            Self::Geosite => GEOSITE_DEFAULT_SOURCE_URL,
+            Self::Geoip => GEOIP_DEFAULT_SOURCE_URL,
+        }
+    }
+
+    pub(super) fn legacy_release_api_url(self) -> &'static str {
         match self {
             Self::Geosite => GEOSITE_RELEASE_API_URL,
             Self::Geoip => GEOIP_RELEASE_API_URL,

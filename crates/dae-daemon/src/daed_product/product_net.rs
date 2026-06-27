@@ -67,3 +67,13 @@ pub(super) fn connect_tcp_endpoint(
         )
     }))
 }
+
+pub(super) fn product_default_proxy_config(state: &Path) -> io::Result<Config> {
+    let preview = materialize_runtime(state, None, true)?;
+    let content = preview
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| io::Error::other("runtime materializer did not return content"))?;
+    build_runtime_config_from_content(content)
+        .map_err(|err| io::Error::other(format!("build default proxy config: {err}")))
+}

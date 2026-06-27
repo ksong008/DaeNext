@@ -55,7 +55,7 @@ pub(crate) fn refresh_subscription_from_remote(
     };
     let fetched_at = now_text();
     let proxy_config = if source.use_proxy && subscription_link_uses_http_transport(&source.link) {
-        Some(subscription_proxy_config(state)?)
+        Some(product_default_proxy_config(state)?)
     } else {
         None
     };
@@ -107,16 +107,6 @@ pub(crate) fn refresh_subscription_from_remote(
 
 fn subscription_http_body_limit() -> usize {
     SUBSCRIPTION_MAX_BYTES
-}
-
-fn subscription_proxy_config(state: &Path) -> io::Result<Config> {
-    let preview = materialize_runtime(state, None, true)?;
-    let content = preview
-        .get("content")
-        .and_then(Value::as_str)
-        .ok_or_else(|| io::Error::other("runtime materializer did not return content"))?;
-    build_runtime_config_from_content(content)
-        .map_err(|err| io::Error::other(format!("build subscription proxy config: {err}")))
 }
 
 fn subscription_link_uses_http_transport(link: &str) -> bool {
