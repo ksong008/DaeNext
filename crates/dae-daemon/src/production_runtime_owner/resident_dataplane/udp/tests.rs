@@ -2,6 +2,8 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use super::super::super::plan::{
         ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentXhttpSettingsPlan,
@@ -120,6 +122,46 @@ mod tests {
         assert!(err.contains("without alternate execution"));
         assert!(err.contains("http-proxy-tcp"));
         assert!(err.contains("http-proxy"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resident_proxy_udp_bridge_surfaces_executor_errors() {
+        let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::HttpProxyTcp {
+            username: String::new(),
+            password: String::new(),
+            transport: false,
+            transport_host: String::new(),
+            transport_path: String::new(),
+        });
+        proxy.protocol = "http-proxy".to_owned();
+        let original_dst = SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::LOCALHOST,
+            proxy.server_port.saturating_add(1),
+        ));
+        let bridge = open_resident_proxy_udp_bridge_async(Arc::new(proxy), original_dst)
+            .await
+            .unwrap();
+        let client =
+            tokio::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .unwrap();
+        client
+            .send_to(&[0xde, 0xad], bridge.local_addr())
+            .await
+            .unwrap();
+
+        let started = Instant::now();
+        let err = loop {
+            if let Some(err) = bridge.last_error() {
+                break err;
+            }
+            assert!(started.elapsed() < Duration::from_secs(1));
+            time::sleep(RESIDENT_IDLE_SLEEP).await;
+        };
+        bridge.shutdown().await;
+
+        assert!(err.contains("unsupported_udp_handler"));
+        assert!(err.contains("no UDP relay semantics"));
     }
 
     #[test]

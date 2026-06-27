@@ -1,4 +1,158 @@
 use super::*;
+use std::net::{IpAddr, Ipv4Addr};
+
+const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
+
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxyUdpBridge {
+    local_addr: SocketAddr,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+    last_error: Arc<Mutex<Option<String>>>,
+}
+
+impl ResidentProxyUdpBridge {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn last_error(
+        &self,
+    ) -> Option<String> {
+        self.last_error.lock().ok().and_then(|error| error.clone())
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(mut task) = self.task.take() {
+            tokio::select! {
+                _ = &mut task => {}
+                _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
+                    task.abort();
+                    let _ = task.await;
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ResidentProxyUdpBridge {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) async fn open_resident_proxy_udp_bridge_async(
+    proxy: Arc<ResidentProxyPlan>,
+    original_dst: SocketAddr,
+) -> Result<ResidentProxyUdpBridge, String> {
+    let socket = tokio::net::UdpSocket::bind(resident_proxy_udp_bridge_bind_addr())
+        .await
+        .map_err(|err| format!("bind resident proxy UDP bridge socket: {err}"))?;
+    let local_addr = socket
+        .local_addr()
+        .map_err(|err| format!("read resident proxy UDP bridge local address: {err}"))?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let last_error = Arc::new(Mutex::new(None));
+    let task_error = Arc::clone(&last_error);
+    let task = tokio::spawn(async move {
+        resident_proxy_udp_bridge_loop(proxy, original_dst, socket, shutdown_rx, task_error).await;
+    });
+    Ok(ResidentProxyUdpBridge {
+        local_addr,
+        shutdown: Some(shutdown_tx),
+        task: Some(task),
+        last_error,
+    })
+}
+
+fn resident_proxy_udp_bridge_bind_addr() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+}
+
+async fn resident_proxy_udp_bridge_loop(
+    proxy: Arc<ResidentProxyPlan>,
+    original_dst: SocketAddr,
+    socket: tokio::net::UdpSocket,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    last_error: Arc<Mutex<Option<String>>>,
+) {
+    let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
+    let mut buf = vec![0_u8; RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY];
+    let mut last_peer = None;
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => break,
+            received = socket.recv_from(&mut buf) => {
+                let (read, peer) = match received {
+                    Ok(received) => received,
+                    Err(err) => {
+                        record_resident_proxy_udp_bridge_error(
+                            &last_error,
+                            format!("receive resident proxy UDP bridge packet: {err}"),
+                        );
+                        continue;
+                    }
+                };
+                last_peer = Some(peer);
+                let payload = buf[..read].to_vec();
+                match executor.execute_proxy_packet(&proxy, original_dst, &payload).await {
+                    Ok((_, response)) if response.reply_forwarded => {
+                        if let Err(err) =
+                            send_resident_proxy_udp_bridge_response(&socket, peer, response).await
+                        {
+                            record_resident_proxy_udp_bridge_error(&last_error, err);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => record_resident_proxy_udp_bridge_error(&last_error, err),
+                }
+            }
+            _ = time::sleep(RESIDENT_IDLE_SLEEP), if last_peer.is_some() => {
+                let Some(peer) = last_peer else {
+                    continue;
+                };
+                match executor.poll_response().await {
+                    Ok(Some((_, response))) => {
+                        if let Err(err) =
+                            send_resident_proxy_udp_bridge_response(&socket, peer, response).await
+                        {
+                            record_resident_proxy_udp_bridge_error(&last_error, err);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => record_resident_proxy_udp_bridge_error(&last_error, err),
+                }
+            }
+        }
+    }
+    executor.shutdown().await;
+}
+
+async fn send_resident_proxy_udp_bridge_response(
+    socket: &tokio::net::UdpSocket,
+    peer: SocketAddr,
+    response: UdpExchangeResult,
+) -> Result<(), String> {
+    socket
+        .send_to(&response.payload, peer)
+        .await
+        .map(|_| ())
+        .map_err(|err| format!("send resident proxy UDP bridge response: {err}"))
+}
+
+fn record_resident_proxy_udp_bridge_error(last_error: &Arc<Mutex<Option<String>>>, err: String) {
+    if let Ok(mut last_error) = last_error.lock() {
+        *last_error = Some(err);
+    }
+}
+
 pub(crate) async fn probe_resident_proxy_udp_async(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddr,
