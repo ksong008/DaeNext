@@ -5,7 +5,6 @@ use super::status::{
     geodata_dir, geodata_resource_status_from_parts, update_geodata_resource_status_cache,
     write_geodata_release_version,
 };
-use super::time::system_time_date;
 use super::types::{GeodataKind, GeodataRelease, GeodataSourceMode};
 use super::*;
 
@@ -22,10 +21,9 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
         GeodataSourceMode::ReleaseApi => {
             fetch_geodata_latest_release(kind, &source.url, proxy_config.as_ref())?
         }
-        GeodataSourceMode::DirectFile => GeodataRelease {
-            version: system_time_date(SystemTime::now()),
-            download_url: source.url.clone(),
-        },
+        GeodataSourceMode::DirectFile => {
+            direct_geodata_release(kind, &source.url, proxy_config.as_ref())
+        }
     };
     let path = dir.join(kind.file_name());
     let tmp_path = dir.join(format!(
@@ -67,7 +65,10 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
         let _ = fs::remove_file(&tmp_path);
         err
     })?;
-    write_geodata_release_version(&dir, kind, &release.version)?;
+    let version = release
+        .version
+        .unwrap_or_else(|| geodata_sha256_version(&download.sha256));
+    write_geodata_release_version(&dir, kind, &version)?;
     let _ = advise_file_dontneed(&path);
     let status = geodata_resource_status_from_parts(&dir, kind, summary, download.sha256)?;
     update_geodata_resource_status_cache(app, kind, status.clone());
@@ -79,6 +80,36 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
         response_object.insert("runtimeReloadRequired".to_owned(), json!(true));
     }
     Ok(Value::Object(response_object))
+}
+
+fn geodata_sha256_version(sha256: &str) -> String {
+    sha256.chars().take(10).collect()
+}
+
+fn direct_geodata_release(
+    kind: GeodataKind,
+    source_url: &url::Url,
+    proxy_config: Option<&Config>,
+) -> GeodataRelease {
+    let version = if source_url.as_str() == kind.default_source_url() {
+        default_direct_geodata_version(kind, proxy_config)
+    } else {
+        None
+    };
+    GeodataRelease {
+        version,
+        download_url: source_url.clone(),
+    }
+}
+
+fn default_direct_geodata_version(
+    kind: GeodataKind,
+    proxy_config: Option<&Config>,
+) -> Option<String> {
+    let api_url = url::Url::parse(kind.legacy_release_api_url()).ok()?;
+    fetch_geodata_latest_release(kind, &api_url, proxy_config)
+        .ok()?
+        .version
 }
 
 fn mark_geodata_reload_pending_if_running(app: &AppState) -> io::Result<bool> {

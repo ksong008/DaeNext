@@ -13,7 +13,7 @@ pub(super) const GEODATA_HTTP_BODY_LIMIT: usize = 64 * 1024 * 1024;
 pub(super) const GEODATA_REDIRECT_LIMIT: usize = 5;
 
 pub(super) struct GeodataRelease {
-    pub(super) version: String,
+    pub(super) version: Option<String>,
     pub(super) download_url: url::Url,
 }
 

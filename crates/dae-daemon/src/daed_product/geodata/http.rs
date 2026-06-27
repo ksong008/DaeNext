@@ -80,7 +80,7 @@ pub(super) fn fetch_geodata_latest_release(
         )
     })?;
     Ok(GeodataRelease {
-        version,
+        version: Some(version),
         download_url,
     })
 }
