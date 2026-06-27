@@ -48,23 +48,14 @@ async fn resolve_host_with_system_dns(authority: &str) -> Result<SocketAddr, Str
     .await
     .map_err(|_| format!("resolve {authority} timed out"))?
     .map_err(|err| format!("resolve {authority}: {err}"))?;
-    select_ipv6_preferred_socket_addr(addrs)
+    select_first_socket_addr(addrs)
         .ok_or_else(|| format!("resolve {authority}: no IP address"))
 }
 
-pub(in crate::production_runtime_owner::resident_dataplane) fn select_ipv6_preferred_socket_addr(
+pub(in crate::production_runtime_owner::resident_dataplane) fn select_first_socket_addr(
     addrs: impl IntoIterator<Item = SocketAddr>,
 ) -> Option<SocketAddr> {
-    let mut first_ipv4 = None;
-    for addr in addrs {
-        if addr.is_ipv6() {
-            return Some(addr);
-        }
-        if first_ipv4.is_none() {
-            first_ipv4 = Some(addr);
-        }
-    }
-    first_ipv4
+    addrs.into_iter().next()
 }
 
 async fn resolve_host_with_fallback_dns(
@@ -75,7 +66,7 @@ async fn resolve_host_with_fallback_dns(
     context: &str,
 ) -> Result<SocketAddr, String> {
     let mut failures = Vec::new();
-    for qtype in [DNS_QTYPE_AAAA, DNS_QTYPE_A] {
+    for qtype in [DNS_QTYPE_A, DNS_QTYPE_AAAA] {
         match resolve_host_qtype_with_fallback_dns(host, fallback_resolver, mark, qtype).await {
             Ok(Some(ip)) => return Ok(SocketAddr::new(ip, port)),
             Ok(None) => {}
@@ -188,15 +179,16 @@ mod tests {
     const TEST_UNREACHABLE_FALLBACK_RESOLVER: &str = "127.0.0.1:9";
 
     #[test]
-    fn socket_addr_selection_prefers_ipv6_before_ipv4() {
+    fn socket_addr_selection_preserves_resolver_order() {
         let ipv4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 443);
         let ipv6 = SocketAddr::new(
             IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10)),
             443,
         );
 
-        assert_eq!(select_ipv6_preferred_socket_addr([ipv4, ipv6]), Some(ipv6));
-        assert_eq!(select_ipv6_preferred_socket_addr([ipv4]), Some(ipv4));
+        assert_eq!(select_first_socket_addr([ipv4, ipv6]), Some(ipv4));
+        assert_eq!(select_first_socket_addr([ipv6, ipv4]), Some(ipv6));
+        assert_eq!(select_first_socket_addr([ipv4]), Some(ipv4));
     }
 
     #[tokio::test]
@@ -216,10 +208,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fallback_dns_resolves_aaaa_before_a_record() {
+    async fn fallback_dns_resolves_a_before_aaaa_record() {
         let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let resolver = socket.local_addr().unwrap();
-        let expected = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10);
+        let expected = Ipv4Addr::new(192, 0, 2, 10);
         let server = tokio::spawn(async move {
             let mut buf = [0_u8; 512];
             let (read, peer) = socket.recv_from(&mut buf).await.unwrap();
@@ -230,7 +222,7 @@ mod tests {
                 question.qname_to_canonical_string().unwrap(),
                 "fallback.example."
             );
-            assert_eq!(question.qtype(), DNS_QTYPE_AAAA);
+            assert_eq!(question.qtype(), DNS_QTYPE_A);
             let mut response = Vec::new();
             response.extend_from_slice(&query[0..2]);
             response.extend_from_slice(&0x8180_u16.to_be_bytes());
@@ -240,10 +232,10 @@ mod tests {
             response.extend_from_slice(&0_u16.to_be_bytes());
             response.extend_from_slice(&query[12..view.answer_offset()]);
             response.extend_from_slice(&0xc00c_u16.to_be_bytes());
-            response.extend_from_slice(&DNS_QTYPE_AAAA.to_be_bytes());
+            response.extend_from_slice(&DNS_QTYPE_A.to_be_bytes());
             response.extend_from_slice(&DNS_QCLASS_IN.to_be_bytes());
             response.extend_from_slice(&60_u32.to_be_bytes());
-            response.extend_from_slice(&16_u16.to_be_bytes());
+            response.extend_from_slice(&4_u16.to_be_bytes());
             response.extend_from_slice(&expected.octets());
             socket.send_to(&response, peer).await.unwrap();
         });
@@ -253,7 +245,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        assert_eq!(resolved, SocketAddr::new(IpAddr::V6(expected), 443));
+        assert_eq!(resolved, SocketAddr::new(IpAddr::V4(expected), 443));
         server.await.unwrap();
     }
 
