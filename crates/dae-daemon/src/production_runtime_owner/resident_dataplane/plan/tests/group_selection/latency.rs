@@ -27,12 +27,55 @@ fn two_node_latency_config(global_extra: &str, group_body: &str) -> Config {
     parse_config(&config_text)
 }
 
+fn latency_dual_stack_probe_targets() -> String {
+    format!("{},{}", Ipv6Addr::LOCALHOST, Ipv4Addr::LOCALHOST)
+}
+
+fn latency_ipv6_probe_target() -> String {
+    Ipv6Addr::LOCALHOST.to_string()
+}
+
+fn latency_tcp_check_url(targets: &str) -> String {
+    tcp_check_fixture_url(
+        HttpScheme::Http,
+        FixtureEndpoint::Authority,
+        "/",
+        Some(targets),
+    )
+}
+
+fn latency_udp_check_dns(targets: &str) -> String {
+    format!(
+        "{}:{},{}",
+        fixture_host(FixtureEndpoint::Authority),
+        fixture_endpoint_port(FixtureEndpoint::Authority),
+        targets
+    )
+}
+
+fn latency_tcp_dual_stack_check_url() -> String {
+    latency_tcp_check_url(&latency_dual_stack_probe_targets())
+}
+
+fn latency_udp_dual_stack_check_dns() -> String {
+    latency_udp_check_dns(&latency_dual_stack_probe_targets())
+}
+
+fn latency_tcp_ipv6_check_url() -> String {
+    latency_tcp_check_url(&latency_ipv6_probe_target())
+}
+
+fn latency_udp_ipv6_check_dns() -> String {
+    latency_udp_check_dns(&latency_ipv6_probe_target())
+}
+
 fn assert_runtime_tcp_min_uses_requested_family_when_alive(policy: &str) {
+    let tcp_check = latency_tcp_dual_stack_check_url();
     let group_body = format!(
         r#"
         filter: name(node_a, node_b)
         policy: {policy}
-        tcp_check_url: 'http://cp.cloudflare.com,::1,127.0.0.1'
+        tcp_check_url: '{tcp_check}'
         "#
     );
     let config = two_node_latency_config("", &group_body);
@@ -71,11 +114,12 @@ fn assert_runtime_tcp_min_uses_requested_family_when_alive(policy: &str) {
 }
 
 fn assert_runtime_udp_min_uses_requested_family_when_alive(policy: &str) {
+    let udp_check = latency_udp_dual_stack_check_dns();
     let group_body = format!(
         r#"
         filter: name(node_a, node_b)
         policy: {policy}
-        udp_check_dns: 'dns.google:53,::1,127.0.0.1'
+        udp_check_dns: '{udp_check}'
         "#
     );
     let config = two_node_latency_config("", &group_body);
@@ -183,13 +227,16 @@ pub(super) fn resident_dataplane_runtime_tcp_min_uses_requested_family_when_aliv
 #[test]
 pub(super) fn resident_dataplane_runtime_tcp_domain_falls_back_when_requested_family_has_no_alive()
 {
+    let tcp_check = latency_tcp_dual_stack_check_url();
     let config = two_node_latency_config(
         "",
-        r#"
+        &format!(
+            r#"
         filter: name(node_a, node_b)
         policy: min
-        tcp_check_url: 'http://cp.cloudflare.com,::1,127.0.0.1'
-        "#,
+        tcp_check_url: '{tcp_check}'
+        "#
+        ),
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
@@ -226,13 +273,16 @@ pub(super) fn resident_dataplane_runtime_udp_min_uses_requested_family_when_aliv
 
 #[test]
 pub(super) fn resident_dataplane_runtime_udp_strict_family_does_not_fallback() {
+    let udp_check = latency_udp_dual_stack_check_dns();
     let config = two_node_latency_config(
         "",
-        r#"
+        &format!(
+            r#"
         filter: name(node_a, node_b)
         policy: min
-        udp_check_dns: 'dns.google:53,::1,127.0.0.1'
-        "#,
+        udp_check_dns: '{udp_check}'
+        "#
+        ),
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
@@ -468,13 +518,16 @@ pub(super) fn resident_dataplane_latency_seed_selects_dynamic_group_candidate() 
 
 #[test]
 pub(super) fn resident_dataplane_latency_snapshots_follow_configured_tcp_ip_family() {
+    let tcp_check = latency_tcp_ipv6_check_url();
     let config = two_node_latency_config(
         "",
-        r#"
+        &format!(
+            r#"
         filter: name(node_a, node_b)
         policy: min
-        tcp_check_url: 'http://cp.cloudflare.com,::1'
-        "#,
+        tcp_check_url: '{tcp_check}'
+        "#
+        ),
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
@@ -495,14 +548,18 @@ pub(super) fn resident_dataplane_latency_snapshots_follow_configured_tcp_ip_fami
 
 #[test]
 pub(super) fn resident_dataplane_latency_seed_uses_snapshot_ip_family_when_present() {
+    let tcp_check = latency_tcp_ipv6_check_url();
+    let udp_check = latency_udp_ipv6_check_dns();
     let config = two_node_latency_config(
         "",
-        r#"
+        &format!(
+            r#"
         filter: name(node_a, node_b)
         policy: min
-        tcp_check_url: 'http://cp.cloudflare.com,::1'
-        udp_check_dns: 'dns.google:53,::1'
-        "#,
+        tcp_check_url: '{tcp_check}'
+        udp_check_dns: '{udp_check}'
+        "#
+        ),
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
@@ -549,14 +606,18 @@ pub(super) fn resident_dataplane_latency_seed_uses_snapshot_ip_family_when_prese
 
 #[test]
 pub(super) fn resident_dataplane_legacy_latency_seed_does_not_invent_ipv6_state() {
+    let tcp_check = latency_tcp_ipv6_check_url();
+    let udp_check = latency_udp_ipv6_check_dns();
     let config = two_node_latency_config(
         "",
-        r#"
+        &format!(
+            r#"
         filter: name(node_a, node_b)
         policy: min
-        tcp_check_url: 'http://cp.cloudflare.com,::1'
-        udp_check_dns: 'dns.google:53,::1'
-        "#,
+        tcp_check_url: '{tcp_check}'
+        udp_check_dns: '{udp_check}'
+        "#
+        ),
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
