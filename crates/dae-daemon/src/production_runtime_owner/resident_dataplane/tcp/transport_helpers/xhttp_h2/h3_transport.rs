@@ -4,6 +4,7 @@ use super::xmux::{
     select_xhttp_h3_xmux_client,
 };
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::select_ipv6_preferred_socket_addr;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -111,10 +112,10 @@ async fn resolve_xhttp_endpoint_udp_addr_async(
     endpoint: &ResidentXhttpEndpointPlan,
 ) -> Result<SocketAddr, String> {
     let target = format!("{}:{}", endpoint.server_host, endpoint.server_port);
-    tokio::net::lookup_host(target.as_str())
+    let addrs = tokio::net::lookup_host(target.as_str())
         .await
-        .map_err(|err| format!("resolve xHTTP H3 endpoint {target}: {err}"))?
-        .next()
+        .map_err(|err| format!("resolve xHTTP H3 endpoint {target}: {err}"))?;
+    select_ipv6_preferred_socket_addr(addrs)
         .ok_or_else(|| format!("resolve xHTTP H3 endpoint {target}: no address"))
 }
 

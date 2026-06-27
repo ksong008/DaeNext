@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::production_runtime_owner::resident_dataplane::select_ipv6_preferred_socket_addr;
+
 use std::fmt;
 use std::future::Future;
 use std::io::{self, IoSliceMut};
@@ -330,10 +332,10 @@ pub(crate) async fn resolve_proxy_udp_addr_async(
     proxy: &ResidentProxyPlan,
 ) -> Result<SocketAddr, String> {
     let target = format!("{}:{}", proxy.server_host, proxy.server_port);
-    tokio::net::lookup_host(target.as_str())
+    let addrs = tokio::net::lookup_host(target.as_str())
         .await
-        .map_err(|err| format!("resolve QUIC endpoint {target}: {err}"))?
-        .next()
+        .map_err(|err| format!("resolve QUIC endpoint {target}: {err}"))?;
+    select_ipv6_preferred_socket_addr(addrs)
         .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
 }
 
@@ -347,10 +349,10 @@ pub(crate) async fn resolve_hysteria2_quic_remote_async(
         port_hop_ports[fastrand::usize(..port_hop_ports.len())]
     };
     let target = format!("{}:{selected_port}", proxy.server_host);
-    tokio::net::lookup_host(target.as_str())
+    let addrs = tokio::net::lookup_host(target.as_str())
         .await
-        .map_err(|err| format!("resolve Hysteria2 QUIC endpoint {target}: {err}"))?
-        .next()
+        .map_err(|err| format!("resolve Hysteria2 QUIC endpoint {target}: {err}"))?;
+    select_ipv6_preferred_socket_addr(addrs)
         .ok_or_else(|| format!("resolve Hysteria2 QUIC endpoint {target}: no address"))
 }
 
