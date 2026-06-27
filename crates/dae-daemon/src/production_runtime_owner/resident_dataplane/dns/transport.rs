@@ -10,32 +10,11 @@ pub(super) async fn forward_dns_to_upstream_async(
 ) -> Result<Vec<u8>, String> {
     match upstream.scheme {
         ResidentDnsUpstreamScheme::Udp => {
-            let target = upstream.target.resolve().await?;
-            forward_dns_udp_async(target, payload, mark)
-                .await
-                .map_err(|err| {
-                    format!(
-                        "forward DNS to upstream {} {}: {err}",
-                        upstream.tag, upstream.target.authority
-                    )
-                })
+            forward_dns_udp_upstream_async(upstream, payload, mark).await
         }
         ResidentDnsUpstreamScheme::Tcp => forward_dns_tcp_async(upstream, payload, mark).await,
         ResidentDnsUpstreamScheme::TcpUdp => {
-            let target = upstream.target.resolve().await?;
-            let response = forward_dns_udp_async(target, payload, mark)
-                .await
-                .map_err(|err| {
-                    format!(
-                        "forward DNS to upstream {} {}: {err}",
-                        upstream.tag, upstream.target.authority
-                    )
-                })?;
-            if dns_response_truncated(&response) {
-                forward_dns_tcp_async(upstream, payload, mark).await
-            } else {
-                Ok(response)
-            }
+            forward_dns_tcp_udp_async(upstream, payload, mark).await
         }
         ResidentDnsUpstreamScheme::Tls => forward_dns_tls_async(upstream, payload, mark).await,
         ResidentDnsUpstreamScheme::Https => forward_dns_https_async(upstream, payload, mark).await,
@@ -45,6 +24,70 @@ pub(super) async fn forward_dns_to_upstream_async(
         }
         ResidentDnsUpstreamScheme::Http3 => forward_dns_h3_async(upstream, payload, mark).await,
     }
+}
+
+async fn resolved_upstream_targets(
+    upstream: &ResidentDnsUpstream,
+) -> Result<Vec<SocketAddr>, String> {
+    upstream.target.resolve_addrs().await
+}
+
+fn dns_upstream_targets_failed(
+    upstream: &ResidentDnsUpstream,
+    operation: &str,
+    failures: Vec<String>,
+) -> String {
+    let detail = if failures.is_empty() {
+        "no target attempted".to_owned()
+    } else {
+        failures.join("; ")
+    };
+    format!(
+        "{operation} upstream {} {} failed for all resolved targets: {detail}",
+        upstream.tag, upstream.target.authority
+    )
+}
+
+async fn forward_dns_udp_upstream_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let mut failures = Vec::new();
+    for target in resolved_upstream_targets(upstream).await? {
+        match forward_dns_udp_async(target, payload, mark).await {
+            Ok(response) => return Ok(response),
+            Err(err) => failures.push(format!("{target}: {err}")),
+        }
+    }
+    Err(dns_upstream_targets_failed(
+        upstream,
+        "forward DNS UDP to",
+        failures,
+    ))
+}
+
+async fn forward_dns_tcp_udp_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let mut failures = Vec::new();
+    for target in resolved_upstream_targets(upstream).await? {
+        match forward_dns_udp_async(target, payload, mark).await {
+            Ok(response) if !dns_response_truncated(&response) => return Ok(response),
+            Ok(_) => match forward_dns_tcp_to_target_async(upstream, target, payload, mark).await {
+                Ok(response) => return Ok(response),
+                Err(err) => failures.push(format!("{target} TCP after truncated UDP: {err}")),
+            },
+            Err(err) => failures.push(format!("{target} UDP: {err}")),
+        }
+    }
+    Err(dns_upstream_targets_failed(
+        upstream,
+        "forward DNS tcp+udp to",
+        failures,
+    ))
 }
 
 impl ResidentDnsForwarderCache {
@@ -139,16 +182,23 @@ impl ResidentDnsQuicForwarder {
         if let Some(connection) = self.connection.as_ref() {
             return Ok(connection.clone());
         }
-        let remote = self.upstream.target.resolve().await?;
-        if self.endpoint.is_none() {
-            let mut endpoint = open_marked_quic_endpoint_for_remote(self.mark, remote)?;
-            endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOQ_ALPN)?);
-            self.endpoint = Some(endpoint);
+        let mut failures = Vec::new();
+        for remote in resolved_upstream_targets(&self.upstream).await? {
+            match self.connect_remote(remote).await {
+                Ok(connection) => return Ok(connection),
+                Err(err) => failures.push(format!("{remote}: {err}")),
+            }
         }
-        let endpoint = self
-            .endpoint
-            .as_ref()
-            .expect("DNS QUIC endpoint is initialized");
+        Err(dns_upstream_targets_failed(
+            &self.upstream,
+            "connect DNS QUIC to",
+            failures,
+        ))
+    }
+
+    async fn connect_remote(&mut self, remote: SocketAddr) -> Result<quinn::Connection, String> {
+        let mut endpoint = open_marked_quic_endpoint_for_remote(self.mark, remote)?;
+        endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOQ_ALPN)?);
         let connection = time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
             endpoint
@@ -163,6 +213,7 @@ impl ResidentDnsQuicForwarder {
                 self.upstream.tag, self.upstream.target.authority
             )
         })?;
+        self.endpoint = Some(endpoint);
         self.connection = Some(connection.clone());
         Ok(connection)
     }
@@ -276,7 +327,27 @@ async fn forward_dns_tcp_async(
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
-    let mut stream = open_dns_tcp_stream_async(upstream, mark).await?;
+    let mut failures = Vec::new();
+    for target in resolved_upstream_targets(upstream).await? {
+        match forward_dns_tcp_to_target_async(upstream, target, payload, mark).await {
+            Ok(response) => return Ok(response),
+            Err(err) => failures.push(format!("{target}: {err}")),
+        }
+    }
+    Err(dns_upstream_targets_failed(
+        upstream,
+        "forward DNS TCP to",
+        failures,
+    ))
+}
+
+async fn forward_dns_tcp_to_target_async(
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let mut stream = open_dns_tcp_stream_async(upstream, target, mark).await?;
     time::timeout(
         RESIDENT_UDP_RESPONSE_TIMEOUT,
         forward_dns_framed_stream_async(&mut stream, payload),
@@ -296,7 +367,27 @@ async fn forward_dns_tls_async(
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
-    let stream = open_dns_tcp_stream_async(upstream, mark).await?;
+    let mut failures = Vec::new();
+    for target in resolved_upstream_targets(upstream).await? {
+        match forward_dns_tls_to_target_async(upstream, target, payload, mark).await {
+            Ok(response) => return Ok(response),
+            Err(err) => failures.push(format!("{target}: {err}")),
+        }
+    }
+    Err(dns_upstream_targets_failed(
+        upstream,
+        "forward DNS TLS to",
+        failures,
+    ))
+}
+
+async fn forward_dns_tls_to_target_async(
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let stream = open_dns_tcp_stream_async(upstream, target, mark).await?;
     let config = resident_dns_tls_client_config(&[])?;
     let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
         format!(
@@ -336,7 +427,27 @@ async fn forward_dns_https_async(
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
-    let stream = open_dns_tcp_stream_async(upstream, mark).await?;
+    let mut failures = Vec::new();
+    for target in resolved_upstream_targets(upstream).await? {
+        match forward_dns_https_to_target_async(upstream, target, payload, mark).await {
+            Ok(response) => return Ok(response),
+            Err(err) => failures.push(format!("{target}: {err}")),
+        }
+    }
+    Err(dns_upstream_targets_failed(
+        upstream,
+        "forward DNS HTTPS to",
+        failures,
+    ))
+}
+
+async fn forward_dns_https_to_target_async(
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let stream = open_dns_tcp_stream_async(upstream, target, mark).await?;
     let config = resident_dns_tls_client_config(&["http/1.1"])?;
     let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
         format!(
@@ -391,7 +502,26 @@ async fn forward_dns_h3_async(
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
-    let remote = upstream.target.resolve().await?;
+    let mut failures = Vec::new();
+    for remote in resolved_upstream_targets(upstream).await? {
+        match forward_dns_h3_to_target_async(upstream, remote, payload, mark).await {
+            Ok(response) => return Ok(response),
+            Err(err) => failures.push(format!("{remote}: {err}")),
+        }
+    }
+    Err(dns_upstream_targets_failed(
+        upstream,
+        "forward DNS H3 to",
+        failures,
+    ))
+}
+
+async fn forward_dns_h3_to_target_async(
+    upstream: &ResidentDnsUpstream,
+    remote: SocketAddr,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
     let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
     endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOH3_ALPN)?);
     let connection = time::timeout(
@@ -500,9 +630,9 @@ async fn forward_dns_h3_async(
 
 async fn open_dns_tcp_stream_async(
     upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
     mark: u32,
 ) -> Result<TokioTcpStream, String> {
-    let target = upstream.target.resolve().await?;
     let connected = open_direct_tcp_connection_async(target.to_string(), mark, false)
         .await
         .map_err(|err| {
@@ -804,5 +934,56 @@ mod tests {
         .unwrap_err();
 
         assert!(err.contains("after 2 attempts"));
+    }
+
+    #[tokio::test]
+    async fn forward_dns_tcp_tries_next_resolved_target_after_connect_failure() {
+        let closed = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let server_listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let server_addr = server_listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = server_listener.accept().await.unwrap();
+            let mut len = [0_u8; 2];
+            stream.read_exact(&mut len).await.unwrap();
+            let len = u16::from_be_bytes(len) as usize;
+            let mut payload = vec![0_u8; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            stream
+                .write_all(&(payload.len() as u16).to_be_bytes())
+                .await
+                .unwrap();
+            stream.write_all(&payload).await.unwrap();
+        });
+
+        let resolved_addrs = Arc::new(OnceCell::new());
+        resolved_addrs.set(vec![closed, server_addr]).unwrap();
+        let upstream = ResidentDnsUpstream {
+            index: 0,
+            tag: "test".to_owned(),
+            target: ResidentDnsUpstreamTarget {
+                authority: "test.example:53".to_owned(),
+                host: "test.example".to_owned(),
+                port: 53,
+                literal_addr: None,
+                fallback_resolver: "127.0.0.1:53".parse().unwrap(),
+                resolver_mark: 0,
+                resolved_addrs,
+            },
+            scheme: ResidentDnsUpstreamScheme::Tcp,
+            path: String::new(),
+        };
+
+        let response = forward_dns_tcp_async(&upstream, b"fixture-query", 0)
+            .await
+            .unwrap();
+
+        assert_eq!(response, b"fixture-query");
+        server.await.unwrap();
     }
 }

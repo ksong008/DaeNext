@@ -35,7 +35,7 @@ use super::super::resident_routing::{
 };
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::direct::open_direct_tcp_connection_async;
-use super::resolve_host_with_configured_fallback_dns;
+use super::resolve_host_addrs_with_configured_fallback_dns;
 use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
 
 mod cache;
@@ -327,17 +327,17 @@ struct ResidentDnsUpstreamTarget {
     literal_addr: Option<SocketAddr>,
     fallback_resolver: SocketAddr,
     resolver_mark: u32,
-    resolved_addr: Arc<OnceCell<SocketAddr>>,
+    resolved_addrs: Arc<OnceCell<Vec<SocketAddr>>>,
 }
 
 impl ResidentDnsUpstreamTarget {
-    async fn resolve(&self) -> Result<SocketAddr, String> {
+    async fn resolve_addrs(&self) -> Result<Vec<SocketAddr>, String> {
         if let Some(addr) = self.literal_addr {
-            return Ok(addr);
+            return Ok(vec![addr]);
         }
-        self.resolved_addr
+        self.resolved_addrs
             .get_or_try_init(|| async {
-                resolve_host_with_configured_fallback_dns(
+                resolve_host_addrs_with_configured_fallback_dns(
                     &self.host,
                     self.port,
                     self.fallback_resolver,
@@ -347,7 +347,7 @@ impl ResidentDnsUpstreamTarget {
                 .await
             })
             .await
-            .copied()
+            .cloned()
     }
 }
 

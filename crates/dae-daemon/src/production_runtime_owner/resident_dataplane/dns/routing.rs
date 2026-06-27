@@ -913,7 +913,7 @@ fn parse_dns_upstream_authority(
         literal_addr,
         fallback_resolver,
         resolver_mark,
-        resolved_addr: Arc::new(OnceCell::new()),
+        resolved_addrs: Arc::new(OnceCell::new()),
     })
 }
 
