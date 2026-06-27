@@ -51,6 +51,7 @@ use super::udp::{
 
 mod cache;
 mod domain_routing;
+mod error_response;
 mod routing;
 mod transport;
 use self::cache::ResidentDnsRuntimeCache;
@@ -59,6 +60,8 @@ pub(super) use self::domain_routing::ResidentDnsDomainRouting;
 use self::domain_routing::{
     build_resident_dns_domain_routing_update_plan, build_resident_domain_routing_ip_update_plan,
 };
+pub(super) use self::error_response::build_dns_server_failure_response;
+use self::error_response::build_reject_response;
 #[cfg(test)]
 use self::routing::parse_dns_upstream;
 use self::routing::{
@@ -70,7 +73,6 @@ use self::routing::{
 use self::transport::parse_doh_http_response;
 use self::transport::{forward_dns_to_upstream_async, forward_dns_udp_async};
 
-const DNS_RESPONSE_FLAGS_EMPTY_NOERROR: u16 = 0x8180;
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
 const DNS_RESPONSE_READ_LIMIT: usize = 4096;
@@ -1183,21 +1185,6 @@ fn validate_dns_response_for_request(
         .map_err(|err| format!("parse DNS response for request validation: {err}"))?;
     validate_dns_packet_response_for_request_fast(request, Some(&response), require_matching_id)
         .map_err(|err| format!("validate DNS response for request: {err:?}"))
-}
-
-fn build_reject_response(request: &[u8], view: &DnsPacketView<'_>) -> Result<Vec<u8>, String> {
-    if request.len() < view.answer_offset() {
-        return Err("DNS request question section is truncated".to_owned());
-    }
-    let mut response = Vec::with_capacity(view.answer_offset());
-    response.extend_from_slice(&request[0..2]);
-    response.extend_from_slice(&DNS_RESPONSE_FLAGS_EMPTY_NOERROR.to_be_bytes());
-    response.extend_from_slice(&(view.question_count() as u16).to_be_bytes());
-    response.extend_from_slice(&0_u16.to_be_bytes());
-    response.extend_from_slice(&0_u16.to_be_bytes());
-    response.extend_from_slice(&0_u16.to_be_bytes());
-    response.extend_from_slice(&request[12..view.answer_offset()]);
-    Ok(response)
 }
 
 #[cfg(test)]

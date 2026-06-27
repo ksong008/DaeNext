@@ -44,7 +44,9 @@ use super::client::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name, open_async_resident_tls_client,
     open_proxy_tcp_stream_async,
 };
-use super::dns::{ResidentDnsPlan, handle_resident_dns_udp_async};
+use super::dns::{
+    ResidentDnsPlan, build_dns_server_failure_response, handle_resident_dns_udp_async,
+};
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
 use super::plan::{
