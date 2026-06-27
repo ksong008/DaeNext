@@ -341,6 +341,15 @@ fn forward_manager_packet(
         }
     };
     let proxy_selection = match selection {
+        ResidentUdpSelection::ResidentDns => {
+            spawn_resident_dns_datagram_handler(
+                packet,
+                original_dst,
+                Arc::clone(dns),
+                Arc::clone(metrics),
+            );
+            return;
+        }
         ResidentUdpSelection::Proxy(selection) => selection,
         ResidentUdpSelection::Block(selection) => {
             append_event(
@@ -408,12 +417,8 @@ fn forward_manager_packet(
         } else {
             spawn_resident_dns_datagram_handler(
                 packet,
-                proxy,
                 original_dst,
-                initial.dscp,
                 Arc::clone(dns),
-                event_file.to_path_buf(),
-                Arc::clone(event_lock),
                 Arc::clone(metrics),
             );
         }
@@ -528,37 +533,24 @@ fn resident_udp_dns_fast_path_applies(original_dst: SocketAddr) -> bool {
 
 fn spawn_resident_dns_datagram_handler(
     packet: UdpOriginalDstPacket,
-    proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
-    dscp: u8,
     dns: Arc<ResidentDnsPlan>,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) {
     tokio::spawn(async move {
-        let exchange = match time::timeout(
+        metrics.add_upload(packet.payload.len());
+        let response = match time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
             handle_resident_dns_udp_async(&dns, original_dst, &packet.payload),
         )
         .await
         {
-            Ok(result) => result.map(resident_dns_udp_independent_exchange_result),
-            Err(_) => Err(format!(
-                "resident DNS UDP datagram timed out after {}ms",
-                RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
-            )),
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) | Err(_) => return,
         };
-        record_udp_dns_datagram_exchange_result(
-            &proxy,
-            packet,
-            original_dst,
-            dscp,
-            event_file,
-            event_lock,
-            metrics,
-            exchange,
-        );
+        if send_udp_reply(original_dst, packet.peer, &response).is_ok() {
+            metrics.add_download(response.len());
+        }
     });
 }
 
@@ -898,6 +890,9 @@ mod tests {
                 assert_eq!(route.final_outbound, OUTBOUND_BLOCK);
             }
             ResidentUdpSelection::Proxy(_) => panic!("block outbound must not select a proxy"),
+            ResidentUdpSelection::ResidentDns => {
+                panic!("block outbound must not select resident DNS")
+            }
         }
     }
 
@@ -940,6 +935,7 @@ mod tests {
                 assert_eq!(selection.proxy.mark, 0x3333);
             }
             ResidentUdpSelection::Block(_) => panic!("domain reroute must select proxy"),
+            ResidentUdpSelection::ResidentDns => panic!("domain reroute must select proxy"),
         }
     }
 
@@ -967,6 +963,7 @@ mod tests {
                 assert_eq!(key.original_destination(), original_dst);
             }
             ResidentUdpSelection::Block(_) => panic!("domain++ reroute must select proxy"),
+            ResidentUdpSelection::ResidentDns => panic!("domain++ reroute must select proxy"),
         }
     }
 
@@ -984,6 +981,9 @@ mod tests {
                 assert_eq!(selection.proxy.mark, 0x1234_5678);
             }
             ResidentUdpSelection::Block(_) => panic!("route mark override must keep proxy route"),
+            ResidentUdpSelection::ResidentDns => {
+                panic!("route mark override must keep proxy route")
+            }
         }
     }
 
@@ -995,23 +995,27 @@ mod tests {
             .select_from_routing_result(dns_dst, route_result(OUTBOUND_BLOCK, 0))
             .unwrap();
 
-        assert_eq!(selected_proxy_group_name(selection), "proxy");
+        match selection {
+            ResidentUdpSelection::ResidentDns => {}
+            ResidentUdpSelection::Proxy(_) => panic!("non-must DNS must not select proxy"),
+            ResidentUdpSelection::Block(_) => panic!("non-must DNS must use resident DNS"),
+        }
     }
 
     #[test]
     fn udp_router_uses_destination_ip_family_for_proxy_group() {
         let router = test_udp_router_with_udp_family_latency_group();
-        let v4_dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
-        let v6_dns_dst =
-            SocketAddr::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 53).into(), 53);
+        let v4_udp_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 443);
+        let v6_udp_dst =
+            SocketAddr::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 53).into(), 443);
 
         let v4_selection = router
-            .select_from_routing_result(v4_dns_dst, route_result(OUTBOUND_BLOCK, 0))
+            .select_from_routing_result(v4_udp_dst, route_result(2, 0))
             .unwrap();
         assert_eq!(selected_proxy_node_tag(v4_selection), "node_a");
 
         let v6_selection = router
-            .select_from_routing_result(v6_dns_dst, route_result(OUTBOUND_BLOCK, 0))
+            .select_from_routing_result(v6_udp_dst, route_result(2, 0))
             .unwrap();
         assert_eq!(selected_proxy_node_tag(v6_selection), "node_b");
     }
@@ -1024,11 +1028,11 @@ mod tests {
             .select_from_routing_result(dns_dst, route_result(OUTBOUND_BLOCK, 0))
             .unwrap();
         match normal_dns {
-            ResidentUdpSelection::Proxy(selection) => {
+            ResidentUdpSelection::ResidentDns => {
                 assert!(resident_udp_dns_fast_path_applies(dns_dst));
-                assert!(!selection.force_proxy_packet);
             }
             ResidentUdpSelection::Block(_) => panic!("non-must DNS should use resident DNS"),
+            ResidentUdpSelection::Proxy(_) => panic!("non-must DNS should use resident DNS"),
         }
 
         let must_dns = router
@@ -1040,6 +1044,9 @@ mod tests {
                 assert!(selection.force_proxy_packet);
             }
             ResidentUdpSelection::Block(_) => panic!("must DNS proxy route should select proxy"),
+            ResidentUdpSelection::ResidentDns => {
+                panic!("must DNS proxy route should select proxy")
+            }
         }
 
         let non_dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 443);
@@ -1052,6 +1059,9 @@ mod tests {
                 assert!(!selection.force_proxy_packet);
             }
             ResidentUdpSelection::Block(_) => panic!("non-DNS proxy route should select proxy"),
+            ResidentUdpSelection::ResidentDns => {
+                panic!("non-DNS proxy route should select proxy")
+            }
         }
     }
 
@@ -1102,6 +1112,9 @@ mod tests {
                 assert_eq!(route.final_outbound, OUTBOUND_BLOCK);
             }
             ResidentUdpSelection::Proxy(_) => panic!("must block DNS must not use resident DNS"),
+            ResidentUdpSelection::ResidentDns => {
+                panic!("must block DNS must not use resident DNS")
+            }
         }
 
         let proxy = router
@@ -1114,6 +1127,9 @@ mod tests {
                 assert!(resident_udp_dns_fast_path_applies(dns_dst));
             }
             ResidentUdpSelection::Block(_) => panic!("user outbound DNS must select proxy"),
+            ResidentUdpSelection::ResidentDns => {
+                panic!("user outbound DNS must select proxy")
+            }
         }
     }
 
@@ -1348,6 +1364,7 @@ mod tests {
         match selection {
             ResidentUdpSelection::Proxy(selection) => selection.proxy.group_name.clone(),
             ResidentUdpSelection::Block(_) => panic!("expected proxy route"),
+            ResidentUdpSelection::ResidentDns => panic!("expected proxy route"),
         }
     }
 
@@ -1355,6 +1372,7 @@ mod tests {
         match selection {
             ResidentUdpSelection::Proxy(selection) => selection.proxy.node_tag.clone(),
             ResidentUdpSelection::Block(_) => panic!("expected proxy route"),
+            ResidentUdpSelection::ResidentDns => panic!("expected proxy route"),
         }
     }
 
