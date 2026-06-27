@@ -126,6 +126,39 @@ pub(crate) fn runtime_stop_records_cleanup_lifecycle_for_fake_runtime() {
 }
 
 #[test]
+pub(crate) fn runtime_signal_stop_waits_for_cleanup_report() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
+            started_at: "2026-06-23T01:00:00.000Z".to_owned(),
+            tproxy_port: 12345,
+        }));
+        inner.runtime_started_at = Some("2026-06-23T01:00:00.000Z".to_owned());
+    }
+
+    let report = manager.stop_and_wait_for_cleanup("signal-stop").unwrap();
+    assert_eq!(report["wasRunning"], json!(true));
+    assert_eq!(report["cleanupStarted"], json!(true));
+    assert_eq!(report["cleanupMode"], json!("signal-stop"));
+    assert_eq!(report["cleanupReport"]["status"], json!("pass"));
+    assert_eq!(
+        report["cleanupReport"]["cleanupRuntime"],
+        json!("fake-resident-runtime-test-only")
+    );
+    assert_eq!(
+        report["cleanupReport"]["allocatorReclaim"]["reason"],
+        json!("stop_runtime")
+    );
+
+    let summary = manager.summary();
+    assert_eq!(summary["state"], json!("stopped"));
+    assert_eq!(summary["cleanup"]["state"], json!("done"));
+    assert_eq!(summary["cleanup"]["running"], json!(false));
+    assert_eq!(summary["cleanup"]["lastReport"], report["cleanupReport"]);
+}
+
+#[test]
 pub(crate) fn runtime_cleanup_interlock_blocks_failed_cleanup() {
     let manager = ProductRuntimeManager::new();
     {

@@ -478,6 +478,68 @@ impl ProductRuntimeManager {
         }))
     }
 
+    pub(super) fn stop_and_wait_for_cleanup(&self, cleanup_mode: &str) -> Result<Value, String> {
+        let stop_started = Instant::now();
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
+        let (stopped_runtime, was_running, cleanup_epoch) = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+            inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
+            let was_running = inner.runtime.is_some();
+            let stopped_runtime = inner.runtime.take();
+            if was_running {
+                let cleanup_epoch = inner.lifecycle_epoch;
+                inner.cleanup.begin(cleanup_epoch, cleanup_mode);
+            }
+            inner.config = None;
+            inner.config_content = None;
+            inner.traffic_carry = RuntimeTrafficCarry::default();
+            inner.runtime_started_at = None;
+            inner.stop_count += 1;
+            inner.last_transition_at = Some(now_text());
+            inner.last_report = None;
+            inner.last_error = None;
+            (stopped_runtime, was_running, inner.lifecycle_epoch)
+        };
+
+        let cleanup_report = if was_running {
+            let cleanup_report = cleanup_runtime_instance_with_reclaim(
+                stopped_runtime,
+                AllocatorReclaimReason::StopRuntime,
+            );
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| "product runtime manager lock poisoned after cleanup".to_owned())?;
+            if inner.cleanup.epoch == cleanup_epoch {
+                inner.cleanup.finish(cleanup_report.clone());
+            }
+            cleanup_report
+        } else {
+            drop(stopped_runtime);
+            None
+        };
+        let stop_elapsed_ns = stop_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        Ok(json!({
+            "stopped": true,
+            "wasRunning": was_running,
+            "runtimeControl": "resident-production-runtime-manager",
+            "fakeRuntime": product_runtime_fake_start_enabled(),
+            "allocatorReclaim": Value::Null,
+            "stopElapsedNs": stop_elapsed_ns,
+            "stopElapsedMs": stop_elapsed_ns / 1_000_000,
+            "cleanupStarted": was_running,
+            "cleanupEpoch": if was_running { json!(cleanup_epoch) } else { Value::Null },
+            "cleanupMode": if was_running { json!(cleanup_mode) } else { Value::Null },
+            "cleanupReport": cleanup_report,
+        }))
+    }
+
     pub(super) fn wait_for_cleanup_idle(&self, timeout: Duration) -> bool {
         let started = Instant::now();
         loop {
@@ -739,26 +801,35 @@ fn cleanup_runtime_instance(runtime: Option<ProductRuntimeInstance>) -> Option<V
     }
 }
 
+fn cleanup_runtime_instance_with_reclaim(
+    runtime: Option<ProductRuntimeInstance>,
+    reason: AllocatorReclaimReason,
+) -> Option<Value> {
+    let mut cleanup_report = cleanup_runtime_instance(runtime);
+    let reclaim = allocator_reclaim(reason);
+    match cleanup_report.as_mut() {
+        Some(Value::Object(map)) => {
+            map.insert("allocatorReclaim".to_owned(), reclaim);
+        }
+        Some(_) | None => {
+            cleanup_report = Some(json!({
+                "status": "pass",
+                "cleanupRuntime": "background-stop",
+                "allocatorReclaim": reclaim,
+            }));
+        }
+    }
+    cleanup_report
+}
+
 fn spawn_background_cleanup(
     inner: Arc<Mutex<ProductRuntimeState>>,
     cleanup_epoch: u64,
     runtime: Option<ProductRuntimeInstance>,
 ) {
     let _ = thread::spawn(move || {
-        let mut cleanup_report = cleanup_runtime_instance(runtime);
-        let reclaim = allocator_reclaim(AllocatorReclaimReason::StopRuntime);
-        match cleanup_report.as_mut() {
-            Some(Value::Object(map)) => {
-                map.insert("allocatorReclaim".to_owned(), reclaim);
-            }
-            Some(_) | None => {
-                cleanup_report = Some(json!({
-                    "status": "pass",
-                    "cleanupRuntime": "background-stop",
-                    "allocatorReclaim": reclaim,
-                }));
-            }
-        }
+        let cleanup_report =
+            cleanup_runtime_instance_with_reclaim(runtime, AllocatorReclaimReason::StopRuntime);
         if let Ok(mut inner) = inner.lock()
             && inner.cleanup.epoch == cleanup_epoch
         {

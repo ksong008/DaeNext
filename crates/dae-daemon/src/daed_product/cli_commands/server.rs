@@ -272,13 +272,39 @@ pub(crate) fn install_product_signal_thread(
                     }
                 }
                 libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
-                    let _ = runtime.stop();
+                    let stop = runtime.stop_and_wait_for_cleanup("signal-stop");
                     let _ = mark_runtime_process_stopped(&state);
+                    let mut fields = BTreeMap::new();
+                    fields.insert("signal".to_owned(), signal.to_string());
+                    match &stop {
+                        Ok(report) => {
+                            fields.insert(
+                                "was_running".to_owned(),
+                                report["wasRunning"].as_bool().unwrap_or(false).to_string(),
+                            );
+                            if let Some(status) = report
+                                .pointer("/cleanupReport/status")
+                                .and_then(Value::as_str)
+                            {
+                                fields.insert("cleanup_status".to_owned(), status.to_owned());
+                            }
+                        }
+                        Err(err) => {
+                            fields.insert("cleanup_error".to_owned(), err.clone());
+                        }
+                    }
                     let _ = append_lifecycle_log_for_config(
                         &config_dir,
                         &state,
                         "info",
                         "[Stop] runtime process stopped by signal",
+                    );
+                    let _ = append_lifecycle_log_fields_for_config(
+                        &config_dir,
+                        &state,
+                        if stop.is_ok() { "info" } else { "error" },
+                        "[Stop] runtime signal cleanup completed",
+                        fields,
                     );
                     std::process::exit(0);
                 }
