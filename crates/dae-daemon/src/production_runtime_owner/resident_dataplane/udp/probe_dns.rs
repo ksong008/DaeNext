@@ -108,6 +108,43 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
     dns_a_response_has_answer(id, &response.payload)
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) async fn forward_resident_proxy_dns_udp_async(
+    proxy: Arc<ResidentProxyPlan>,
+    original_dst: SocketAddr,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
+    let exchange = execute_forced_dns_proxy_payload(&mut executor, &proxy, original_dst, payload)
+        .await
+        .map(|(_, response)| response.payload);
+    executor.shutdown().await;
+    exchange
+}
+
+async fn execute_forced_dns_proxy_payload(
+    executor: &mut UdpSessionExecutor,
+    proxy: &ResidentProxyPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+) -> Result<(&'static str, UdpExchangeResult), String> {
+    let (event, response) = executor
+        .execute_proxy_packet(proxy, original_dst, payload)
+        .await?;
+    if response.reply_forwarded {
+        return Ok((event, response.into_independent_datagram()));
+    }
+    let started = Instant::now();
+    loop {
+        if started.elapsed() >= RESIDENT_UDP_RESPONSE_TIMEOUT {
+            return Err("receive proxied DNS UDP response timeout".to_owned());
+        }
+        match executor.poll_response().await? {
+            Some((event, response)) => return Ok((event, response.into_independent_datagram())),
+            None => time::sleep(RESIDENT_IDLE_SLEEP).await,
+        }
+    }
+}
+
 pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
     let mut query = Vec::with_capacity(64);
     query.extend_from_slice(&id.to_be_bytes());

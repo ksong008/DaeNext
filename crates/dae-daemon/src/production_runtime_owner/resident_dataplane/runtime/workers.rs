@@ -190,7 +190,16 @@ pub(crate) fn start_resident_dataplane_workers(
             routing_matcher.clone(),
         ))
     });
-    let dns = Arc::new(plan.dns.with_domain_routing(dns_domain_routing.clone()));
+    let dns_upstream_router = Arc::new(dns::ResidentDnsUpstreamRouter::new(
+        routing_matcher.clone(),
+        Arc::clone(&udp_proxy_groups),
+        config.global.so_mark_from_dae,
+    ));
+    let dns = Arc::new(
+        plan.dns
+            .with_domain_routing(dns_domain_routing.clone())
+            .with_upstream_routing(Some(dns_upstream_router)),
+    );
     let udp_routing_matcher = routing_matcher.clone();
     let udp_dial_mode = plan.tcp_dial_mode;
     let tcp_router = match ResidentTcpRouter::new(
