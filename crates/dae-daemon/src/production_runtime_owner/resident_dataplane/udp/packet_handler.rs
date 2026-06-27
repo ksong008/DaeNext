@@ -121,16 +121,6 @@ pub(super) fn resident_dns_udp_exchange_result(
     ("udp_dns_packet_finished", resident_dns_udp_result(response))
 }
 
-pub(super) fn resident_dns_udp_independent_exchange_result(
-    response: Vec<u8>,
-) -> (&'static str, UdpExchangeResult) {
-    (
-        "udp_dns_packet_finished",
-        resident_dns_udp_result(response)
-            .with_session_ownership(UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM),
-    )
-}
-
 fn resident_dns_udp_result(response: Vec<u8>) -> UdpExchangeResult {
     UdpExchangeResult::new(response, "resident-dns-udp")
         .with_session_executor("tokio-dns-datagram")

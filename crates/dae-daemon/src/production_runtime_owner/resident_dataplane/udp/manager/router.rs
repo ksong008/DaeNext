@@ -151,22 +151,7 @@ impl ResidentUdpRouter {
     ) -> Result<ResidentUdpSelection, String> {
         let force_proxy_packet = original_dst.port() == 53 && initial.must > 0;
         if original_dst.port() == 53 && !force_proxy_packet {
-            return self
-                .select_proxy_from_group(self.default_outbound, initial.mark, original_dst)
-                .map(|proxy| {
-                    let route = ResidentUdpRouteSelection {
-                        initial_outbound: initial.outbound,
-                        final_outbound: self.default_outbound,
-                        final_mark: proxy.mark,
-                        userspace_route_executed: false,
-                        userspace_route_must: false,
-                    };
-                    ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
-                        proxy,
-                        force_proxy_packet,
-                        route,
-                    })
-                });
+            return Ok(ResidentUdpSelection::ResidentDns);
         }
         let userspace_route_executed =
             self.should_userspace_reroute(initial.outbound, sniffed_domain);
@@ -322,6 +307,7 @@ pub(super) struct ResidentUdpRouteSelection {
 }
 
 pub(super) enum ResidentUdpSelection {
+    ResidentDns,
     Proxy(ResidentUdpProxySelection),
     Block(ResidentUdpRouteSelection),
 }
