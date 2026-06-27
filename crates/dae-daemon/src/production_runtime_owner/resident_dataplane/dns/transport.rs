@@ -206,10 +206,11 @@ async fn forward_dns_quic_async(
                     Err(err) => failures.push(format!("{remote}: {err}")),
                 }
             }
-            Ok(ResidentDnsUpstreamSelection::Proxy { .. }) => {
-                failures.push(format!(
-                    "{remote}: DNS QUIC upstream routed to proxy but proxied DNS QUIC execution is not admitted"
-                ));
+            Ok(ResidentDnsUpstreamSelection::Proxy { proxy }) => {
+                match forward_dns_quic_to_proxy_async(upstream, remote, payload, proxy).await {
+                    Ok(response) => return Ok(response),
+                    Err(err) => failures.push(format!("{remote}: {err}")),
+                }
             }
             Err(err) => failures.push(format!("{remote}: {err}")),
         }
@@ -237,6 +238,38 @@ async fn forward_dns_quic_to_target_async(
     forward_dns_over_quic_connection(upstream, &connection, payload).await
 }
 
+async fn forward_dns_quic_to_proxy_async(
+    upstream: &ResidentDnsUpstream,
+    remote: SocketAddr,
+    payload: &[u8],
+    proxy: Arc<ResidentProxyPlan>,
+) -> Result<Vec<u8>, String> {
+    let bridge = open_resident_proxy_udp_bridge_async(Arc::clone(&proxy), remote).await?;
+    let (endpoint, connection) = match connect_dns_quic_endpoint_async(
+        upstream,
+        bridge.local_addr(),
+        proxy.mark,
+        DNS_DOQ_ALPN,
+        "connect DoQ endpoint",
+        "DNS QUIC handshake timeout",
+        "connect DNS QUIC upstream",
+    )
+    .await
+    {
+        Ok(connection) => connection,
+        Err(err) => {
+            let err = append_dns_proxy_udp_bridge_error(err, &bridge);
+            bridge.shutdown().await;
+            return Err(format!("connect DNS QUIC via proxied UDP {remote}: {err}"));
+        }
+    };
+    let result = forward_dns_over_quic_connection(upstream, &connection, payload).await;
+    connection.close(0_u32.into(), b"dns-query done");
+    endpoint.wait_idle().await;
+    bridge.shutdown().await;
+    result
+}
+
 impl ResidentDnsQuicForwarder {
     async fn connection(&mut self) -> Result<quinn::Connection, String> {
         if let Some(connection) = self.connection.as_ref() {
@@ -257,22 +290,16 @@ impl ResidentDnsQuicForwarder {
     }
 
     async fn connect_remote(&mut self, remote: SocketAddr) -> Result<quinn::Connection, String> {
-        let mut endpoint = open_marked_quic_endpoint_for_remote(self.mark, remote)?;
-        endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOQ_ALPN)?);
-        let connection = time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            endpoint
-                .connect(remote, &self.upstream.target.host)
-                .map_err(|err| format!("connect DoQ endpoint: {err}"))?,
+        let (endpoint, connection) = connect_dns_quic_endpoint_async(
+            &self.upstream,
+            remote,
+            self.mark,
+            DNS_DOQ_ALPN,
+            "connect DoQ endpoint",
+            "DNS QUIC handshake timeout",
+            "connect DNS QUIC upstream",
         )
-        .await
-        .map_err(|_| "DNS QUIC handshake timeout".to_owned())?
-        .map_err(|err| {
-            format!(
-                "connect DNS QUIC upstream {} {}: {err}",
-                self.upstream.tag, self.upstream.target.authority
-            )
-        })?;
+        .await?;
         self.endpoint = Some(endpoint);
         self.connection = Some(connection.clone());
         Ok(connection)
@@ -734,10 +761,11 @@ async fn forward_dns_h3_async(
                     Err(err) => failures.push(format!("{remote}: {err}")),
                 }
             }
-            Ok(ResidentDnsUpstreamSelection::Proxy { .. }) => {
-                failures.push(format!(
-                    "{remote}: DNS H3 upstream routed to proxy but proxied DNS H3 execution is not admitted"
-                ));
+            Ok(ResidentDnsUpstreamSelection::Proxy { proxy }) => {
+                match forward_dns_h3_to_proxy_async(upstream, remote, payload, proxy).await {
+                    Ok(response) => return Ok(response),
+                    Err(err) => failures.push(format!("{remote}: {err}")),
+                }
             }
             Err(err) => failures.push(format!("{remote}: {err}")),
         }
@@ -755,22 +783,56 @@ async fn forward_dns_h3_to_target_async(
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
-    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
-    endpoint.set_default_client_config(resident_dns_quic_client_config(DNS_DOH3_ALPN)?);
-    let connection = time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        endpoint
-            .connect(remote, &upstream.target.host)
-            .map_err(|err| format!("connect DoH3 endpoint: {err}"))?,
+    let (endpoint, connection) = connect_dns_quic_endpoint_async(
+        upstream,
+        remote,
+        mark,
+        DNS_DOH3_ALPN,
+        "connect DoH3 endpoint",
+        "DNS H3 handshake timeout",
+        "connect DNS H3 upstream",
+    )
+    .await?;
+    forward_dns_h3_over_connection_async(upstream, payload, endpoint, connection).await
+}
+
+async fn forward_dns_h3_to_proxy_async(
+    upstream: &ResidentDnsUpstream,
+    remote: SocketAddr,
+    payload: &[u8],
+    proxy: Arc<ResidentProxyPlan>,
+) -> Result<Vec<u8>, String> {
+    let bridge = open_resident_proxy_udp_bridge_async(Arc::clone(&proxy), remote).await?;
+    let (endpoint, connection) = match connect_dns_quic_endpoint_async(
+        upstream,
+        bridge.local_addr(),
+        proxy.mark,
+        DNS_DOH3_ALPN,
+        "connect DoH3 endpoint",
+        "DNS H3 handshake timeout",
+        "connect DNS H3 upstream",
     )
     .await
-    .map_err(|_| "DNS H3 handshake timeout".to_owned())?
-    .map_err(|err| {
-        format!(
-            "connect DNS H3 upstream {} {}: {err}",
-            upstream.tag, upstream.target.authority
-        )
-    })?;
+    {
+        Ok(connection) => connection,
+        Err(err) => {
+            let err = append_dns_proxy_udp_bridge_error(err, &bridge);
+            bridge.shutdown().await;
+            return Err(format!("connect DNS H3 via proxied UDP {remote}: {err}"));
+        }
+    };
+    let result =
+        forward_dns_h3_over_connection_async(upstream, payload, endpoint, connection).await;
+    bridge.shutdown().await;
+    result
+}
+
+async fn forward_dns_h3_over_connection_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    endpoint: quinn::Endpoint,
+    connection: quinn::Connection,
+) -> Result<Vec<u8>, String> {
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let (mut driver, mut client) = h3::client::new(h3_connection)
         .await
@@ -859,6 +921,41 @@ async fn forward_dns_h3_to_target_async(
     endpoint.wait_idle().await;
     let _ = driver_task.await;
     Ok(response)
+}
+
+async fn connect_dns_quic_endpoint_async(
+    upstream: &ResidentDnsUpstream,
+    remote: SocketAddr,
+    mark: u32,
+    alpn: &str,
+    endpoint_context: &'static str,
+    handshake_timeout: &'static str,
+    upstream_context: &'static str,
+) -> Result<(quinn::Endpoint, quinn::Connection), String> {
+    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
+    endpoint.set_default_client_config(resident_dns_quic_client_config(alpn)?);
+    let connection = time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        endpoint
+            .connect(remote, &upstream.target.host)
+            .map_err(|err| format!("{endpoint_context}: {err}"))?,
+    )
+    .await
+    .map_err(|_| handshake_timeout.to_owned())?
+    .map_err(|err| {
+        format!(
+            "{upstream_context} {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    Ok((endpoint, connection))
+}
+
+fn append_dns_proxy_udp_bridge_error(err: String, bridge: &ResidentProxyUdpBridge) -> String {
+    match bridge.last_error() {
+        Some(bridge_err) => format!("{err}; proxy UDP bridge: {bridge_err}"),
+        None => err,
+    }
 }
 
 async fn open_dns_tcp_stream_async(
