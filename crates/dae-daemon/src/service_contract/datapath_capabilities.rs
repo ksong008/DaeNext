@@ -39,7 +39,7 @@ pub(super) fn insert_datapath_core_service_contract_capabilities(report: &mut Va
     let dns_tproxy_datapath_ready = dns_cache.qtype == dae_dns::ACTIVE_DNS_QTYPE_A
         && dns_cache.qclass == dae_dns::ACTIVE_DNS_QCLASS_IN
         && dns_cache.cache_max_entries > 0
-        && dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT == 53;
+        && dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT == dae_dns::DNS_DEFAULT_PORT;
     let dns_cache_route_integration_ready = dns_tproxy_datapath_ready
         && dns_cache.cache_key_includes_qclass
         && dns_cache.packed_response_id_rewrite_required

@@ -4,7 +4,7 @@ use dae_datapath::{
     ANYFROM_TIMEOUT_MS, DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
     DNS_NAT_TIMEOUT_MS, MAX_RETRY,
 };
-use dae_dns::DnsPacketView;
+use dae_dns::{DNS_DEFAULT_PORT, DnsPacketView};
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,7 +19,7 @@ pub(super) fn classify_udp_packet_for_contract(
     original_dst_port: u16,
     payload: &[u8],
 ) -> UdpDnsPacketClass {
-    if original_dst_port == 53 && DnsPacketView::parse(payload).is_ok() {
+    if original_dst_port == DNS_DEFAULT_PORT && DnsPacketView::parse(payload).is_ok() {
         return UdpDnsPacketClass {
             is_dns: true,
             nat_timeout: Duration::from_millis(DNS_NAT_TIMEOUT_MS as u64),
@@ -109,9 +109,9 @@ mod tests {
 
     #[test]
     fn udp_packet_classifier_uses_dns_timeout_only_for_valid_udp53_dns() {
-        let dns = classify_udp_packet_for_contract(53, &dns_query_packet());
+        let dns = classify_udp_packet_for_contract(DNS_DEFAULT_PORT, &dns_query_packet());
         let non_dns_port = classify_udp_packet_for_contract(853, &dns_query_packet());
-        let invalid_dns = classify_udp_packet_for_contract(53, b"not-dns");
+        let invalid_dns = classify_udp_packet_for_contract(DNS_DEFAULT_PORT, b"not-dns");
 
         assert!(dns.is_dns);
         assert_eq!(

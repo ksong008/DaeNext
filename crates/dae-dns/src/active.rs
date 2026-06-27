@@ -1,11 +1,12 @@
 use std::net::Ipv4Addr;
 
+use crate::DNS_DEFAULT_PORT;
 use crate::cache::DNS_CACHE_MAX_ENTRIES;
 use crate::cache_key::DnsCacheKey;
 use crate::error::DnsError;
 use crate::message::{DnsPacketQuestionView, DnsQuestion};
 
-pub const ACTIVE_DNS_DEFAULT_TARGET_PORT: u16 = 53;
+pub const ACTIVE_DNS_DEFAULT_TARGET_PORT: u16 = DNS_DEFAULT_PORT;
 pub const ACTIVE_DNS_DEFAULT_UPSTREAM_IP: &str = "127.0.0.1";
 pub const ACTIVE_DNS_DEFAULT_UPSTREAM_PORT: u16 = 10530;
 pub const ACTIVE_DNS_DEFAULT_QNAME: &str = "connectivity-check.invalid.";

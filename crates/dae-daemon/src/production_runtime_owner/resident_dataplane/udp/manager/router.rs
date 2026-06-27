@@ -9,6 +9,7 @@ use dae_datapath::{
     OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode,
     outbound_is_reserved,
 };
+use dae_dns::DNS_DEFAULT_PORT;
 use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
 };
@@ -149,8 +150,8 @@ impl ResidentUdpRouter {
         initial: BpfRoutingResult,
         sniffed_domain: &str,
     ) -> Result<ResidentUdpSelection, String> {
-        let force_proxy_packet = original_dst.port() == 53 && initial.must > 0;
-        if original_dst.port() == 53 && !force_proxy_packet {
+        let force_proxy_packet = original_dst.port() == DNS_DEFAULT_PORT && initial.must > 0;
+        if original_dst.port() == DNS_DEFAULT_PORT && !force_proxy_packet {
             return Ok(ResidentUdpSelection::ResidentDns);
         }
         let userspace_route_executed =
@@ -198,7 +199,7 @@ impl ResidentUdpRouter {
         original_dst: SocketAddr,
         initial: BpfRoutingResult,
     ) -> bool {
-        original_dst.port() != 53
+        original_dst.port() != DNS_DEFAULT_PORT
             && (initial.outbound == OUTBOUND_CONTROL_PLANE_ROUTING
                 || (self.dial_mode == TcpDialMode::DomainPlusPlus
                     && !outbound_is_reserved(initial.outbound)))

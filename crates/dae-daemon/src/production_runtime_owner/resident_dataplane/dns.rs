@@ -10,10 +10,10 @@ use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
 use dae_core_types::OutboundIndex;
 use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT};
 use dae_dns::{
-    DOH_MEDIA_TYPE, DnsCacheKey, DnsDomainSet, DnsPacketView, DnsRequestMatchKind,
-    DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind, DnsResponseMatchSpec,
-    DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher, build_doh_request,
-    build_response_cache_plan_from_packet, dns_data_with_zero_id,
+    DNS_DEFAULT_PORT, DOH_MEDIA_TYPE, DnsCacheKey, DnsDomainSet, DnsPacketView,
+    DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind,
+    DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher,
+    build_doh_request, build_response_cache_plan_from_packet, dns_data_with_zero_id,
     restore_packed_response_request_id, validate_dns_packet_response_for_request_fast,
     validate_doh_response,
 };
@@ -77,7 +77,6 @@ const DNS_RESPONSE_READ_LIMIT: usize = 4096;
 const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
 const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
 const DNS_DOH_RESPONSE_READ_LIMIT: usize = 1024 * 1024;
-const DNS_DEFAULT_PORT: u16 = 53;
 const DNS_TLS_DEFAULT_PORT: u16 = 853;
 const DNS_HTTPS_DEFAULT_PORT: u16 = 443;
 const DNS_DEFAULT_DOH_PATH: &str = "/dns-query";
