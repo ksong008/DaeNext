@@ -502,6 +502,24 @@ async fn forward_dns_tcp_to_target_async(
     })
 }
 
+pub(super) async fn forward_dns_tcp_asis_async(
+    target: SocketAddr,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let connected = open_direct_tcp_connection_async(target.to_string(), mark, false)
+        .await
+        .map_err(|err| format!("connect DNS TCP asis {target}: {err}"))?;
+    let mut stream = TokioTcpStream::from_std(connected.stream)
+        .map_err(|err| format!("adopt DNS TCP asis stream: {err}"))?;
+    time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        forward_dns_framed_stream_async(&mut stream, payload),
+    )
+    .await
+    .map_err(|_| "DNS TCP asis exchange timeout".to_owned())?
+}
+
 async fn forward_dns_tcp_to_proxy_async(
     upstream: &ResidentDnsUpstream,
     target: SocketAddr,

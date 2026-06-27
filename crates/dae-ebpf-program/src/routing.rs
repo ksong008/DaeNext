@@ -40,6 +40,7 @@ const ROUTE_BAD_RULE: u8 = 0b0001;
 const ROUTE_GOOD_SUBRULE: u8 = 0b0010;
 const ROUTE_MUST: u8 = 0b0100;
 const ROUTE_IS_DNS: u8 = 0b1000;
+const DNS_DEFAULT_PORT: u16 = 53;
 
 const EFAULT: i64 = 14;
 const EINVAL: i64 = 22;
@@ -214,7 +215,10 @@ unsafe fn init_route_ctx(ctx: *mut RouteCtx, params: *const RouteParams) {
         (*ctx).h_sport = (*params).h_sport;
         write_route_state(
             ctx,
-            if (*ctx).h_dport == 53 && (*params).l4proto_type == L4_PROTO_UDP_MATCH {
+            if (*ctx).h_dport == DNS_DEFAULT_PORT
+                && ((*params).l4proto_type == L4_PROTO_UDP_MATCH
+                    || (*params).l4proto_type == L4_PROTO_TCP_MATCH)
+            {
                 ROUTE_IS_DNS
             } else {
                 0

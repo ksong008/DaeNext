@@ -4,18 +4,19 @@
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener, UdpSocket};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{
     TcpListener as TokioTcpListener, TcpStream as TokioTcpStream, UdpSocket as TokioUdpSocket,
 };
 use tokio::sync::Semaphore;
 use tokio::time;
 
-use super::dns::{ResidentDnsPlan, ResidentDnsTraceSummary, handle_resident_dns_local_trace_async};
+use super::dns::{
+    ResidentDnsPlan, ResidentDnsTraceSummary, handle_resident_dns_local_trace_async,
+    read_dns_tcp_payload_async, write_dns_tcp_payload_async,
+};
 use super::*;
 
 const DNS_BIND_READ_LIMIT: usize = 4096;
-const DNS_BIND_TCP_READ_LIMIT: usize = u16::MAX as usize;
 const DNS_BIND_UDP_MAX_INFLIGHT: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -645,50 +646,6 @@ fn dns_path_chosen_event(input: DnsPathChosenEventInput<'_>) -> Value {
         );
     }
     event
-}
-
-async fn read_dns_tcp_payload_async(
-    stream: &mut TokioTcpStream,
-) -> Result<Option<Vec<u8>>, String> {
-    let mut len = [0_u8; 2];
-    match stream.read_exact(&mut len).await {
-        Ok(_) => {}
-        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(err) => return Err(format!("read DNS TCP request length: {err}")),
-    }
-    let len = u16::from_be_bytes(len) as usize;
-    if len == 0 {
-        return Err("DNS TCP request has empty payload".to_owned());
-    }
-    if len > DNS_BIND_TCP_READ_LIMIT {
-        return Err(format!("DNS TCP request length {len} exceeds read limit"));
-    }
-    let mut payload = vec![0_u8; len];
-    stream
-        .read_exact(&mut payload)
-        .await
-        .map_err(|err| format!("read DNS TCP request payload: {err}"))?;
-    Ok(Some(payload))
-}
-
-async fn write_dns_tcp_payload_async(
-    stream: &mut TokioTcpStream,
-    payload: &[u8],
-) -> Result<(), String> {
-    let len = u16::try_from(payload.len())
-        .map_err(|_| format!("DNS TCP response exceeds frame limit: {}", payload.len()))?;
-    stream
-        .write_all(&len.to_be_bytes())
-        .await
-        .map_err(|err| format!("write DNS TCP response length: {err}"))?;
-    stream
-        .write_all(payload)
-        .await
-        .map_err(|err| format!("write DNS TCP response payload: {err}"))?;
-    stream
-        .flush()
-        .await
-        .map_err(|err| format!("flush DNS TCP response: {err}"))
 }
 
 fn parse_resident_dns_bind_endpoint(bind: &str) -> Result<Option<ResidentDnsBindEndpoint>, String> {

@@ -119,6 +119,8 @@ use websocket::{
 
 mod router;
 pub(super) use self::router::*;
+mod dns_fast_path;
+use self::dns_fast_path::*;
 mod probe;
 pub(super) use self::probe::*;
 mod proxy_fetch;
