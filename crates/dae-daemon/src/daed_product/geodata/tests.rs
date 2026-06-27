@@ -2,10 +2,11 @@ use super::http::{
     GeodataHttpFileResult, read_geodata_http_response, read_geodata_http_response_to_file,
 };
 use super::source::{
-    geodata_source_status, geodata_source_url, reset_geodata_source_url, set_geodata_source_url,
+    geodata_source, geodata_source_status, reset_geodata_source_url, set_geodata_source_url,
+    set_geodata_source_use_proxy,
 };
 use super::status::geodata_status_for_dir;
-use super::types::{GEOIP_FILE, GEOSITE_FILE};
+use super::types::{GEOIP_FILE, GEOSITE_FILE, GeodataSourceMode};
 use super::*;
 
 #[test]
@@ -169,28 +170,74 @@ fn geodata_source_settings_default_custom_and_reset_urls() {
     let geosite = geodata_source_status(&state, GeodataKind::Geosite).unwrap();
     assert_eq!(geosite["kind"], json!("geosite"));
     assert_eq!(geosite["usingDefault"], json!(true));
+    assert_eq!(geosite["sourceType"], json!("direct"));
+    assert_eq!(geosite["useProxy"], json!(false));
     assert_eq!(
         geosite["url"],
-        json!(GeodataKind::Geosite.release_api_url())
+        json!(GeodataKind::Geosite.default_source_url())
     );
 
-    let custom_url = "https://mirror.example.test/geosite/releases/latest";
+    let custom_url = "https://mirror.example.test/download/geosite-data";
     let geosite = set_geodata_source_url(&state, GeodataKind::Geosite, custom_url).unwrap();
     assert_eq!(geosite["url"], json!(custom_url));
     assert_eq!(geosite["usingDefault"], json!(false));
+    assert_eq!(geosite["sourceType"], json!("direct"));
     assert_eq!(
-        geodata_source_url(&state, GeodataKind::Geosite)
+        geodata_source(&state, GeodataKind::Geosite)
             .unwrap()
+            .url
             .as_str(),
         custom_url
+    );
+
+    let legacy_api_url = GeodataKind::Geosite.legacy_release_api_url();
+    let geosite = set_geodata_source_url(&state, GeodataKind::Geosite, legacy_api_url).unwrap();
+    assert_eq!(geosite["url"], json!(legacy_api_url));
+    assert_eq!(geosite["usingDefault"], json!(false));
+    assert_eq!(geosite["sourceType"], json!("release"));
+    assert_eq!(
+        geodata_source(&state, GeodataKind::Geosite).unwrap().mode,
+        GeodataSourceMode::ReleaseApi
     );
 
     let geosite = reset_geodata_source_url(&state, GeodataKind::Geosite).unwrap();
     assert_eq!(geosite["usingDefault"], json!(true));
     assert_eq!(
         geosite["url"],
-        json!(GeodataKind::Geosite.release_api_url())
+        json!(GeodataKind::Geosite.default_source_url())
     );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geodata_source_settings_accept_direct_files_and_use_proxy() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-geodata-source-direct-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("daed.db");
+
+    let direct_url = "https://fastly.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip.dat";
+    let geoip = set_geodata_source_url(&state, GeodataKind::Geoip, direct_url).unwrap();
+    assert_eq!(geoip["url"], json!(direct_url));
+    assert_eq!(geoip["sourceType"], json!("direct"));
+    assert_eq!(geoip["useProxy"], json!(false));
+
+    let geoip = set_geodata_source_use_proxy(&state, GeodataKind::Geoip, true).unwrap();
+    assert_eq!(geoip["sourceType"], json!("direct"));
+    assert_eq!(geoip["useProxy"], json!(true));
+
+    let source = geodata_source(&state, GeodataKind::Geoip).unwrap();
+    assert_eq!(source.mode, GeodataSourceMode::DirectFile);
+    assert!(source.use_proxy);
+    assert_eq!(source.url.as_str(), direct_url);
+
+    let geoip = reset_geodata_source_url(&state, GeodataKind::Geoip).unwrap();
+    assert_eq!(geoip["usingDefault"], json!(true));
+    assert_eq!(geoip["sourceType"], json!("direct"));
+    assert_eq!(geoip["useProxy"], json!(true));
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -207,7 +254,7 @@ fn geodata_source_settings_rejects_swapped_default_urls() {
     let err = set_geodata_source_url(
         &state,
         GeodataKind::Geosite,
-        GeodataKind::Geoip.release_api_url(),
+        GeodataKind::Geoip.default_source_url(),
     )
     .unwrap_err();
     assert!(
@@ -217,12 +264,23 @@ fn geodata_source_settings_rejects_swapped_default_urls() {
     let err = set_geodata_source_url(
         &state,
         GeodataKind::Geoip,
-        GeodataKind::Geosite.release_api_url(),
+        GeodataKind::Geosite.default_source_url(),
     )
     .unwrap_err();
     assert!(
         err.to_string()
             .contains("geoip source cannot use geosite default update url")
+    );
+
+    let err = set_geodata_source_url(
+        &state,
+        GeodataKind::Geoip,
+        "https://mirror.example.test/data/geosite.dat",
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("geoip source cannot use geosite data file url")
     );
 
     let _ = fs::remove_dir_all(&dir);

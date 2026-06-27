@@ -19,7 +19,11 @@ pub(super) fn fetch_geodata_url(url: &url::Url) -> io::Result<Vec<u8>> {
 pub(super) fn fetch_geodata_url_to_file(
     url: &url::Url,
     output_path: &Path,
+    proxy_config: Option<&Config>,
 ) -> io::Result<GeodataFileDownload> {
+    if let Some(config) = proxy_config {
+        return fetch_geodata_url_to_file_via_default_proxy(url, output_path, config);
+    }
     let mut current = url.clone();
     for _ in 0..=GEODATA_REDIRECT_LIMIT {
         match fetch_geodata_url_to_file_once(&current, output_path)? {
@@ -33,8 +37,9 @@ pub(super) fn fetch_geodata_url_to_file(
 pub(super) fn fetch_geodata_latest_release(
     kind: GeodataKind,
     api_url: &url::Url,
+    proxy_config: Option<&Config>,
 ) -> io::Result<GeodataRelease> {
-    let body = fetch_geodata_url(api_url)?;
+    let body = fetch_geodata_url_with_proxy_config(api_url, proxy_config)?;
     let release: Value = serde_json::from_slice(&body).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -80,6 +85,42 @@ pub(super) fn fetch_geodata_latest_release(
     })
 }
 
+fn fetch_geodata_url_with_proxy_config(
+    url: &url::Url,
+    proxy_config: Option<&Config>,
+) -> io::Result<Vec<u8>> {
+    if let Some(config) = proxy_config {
+        return fetch_geodata_url_via_default_proxy(url, config);
+    }
+    fetch_geodata_url(url)
+}
+
+fn fetch_geodata_url_via_default_proxy(url: &url::Url, config: &Config) -> io::Result<Vec<u8>> {
+    let mut current = url.clone();
+    for _ in 0..=GEODATA_REDIRECT_LIMIT {
+        match fetch_geodata_url_once_via_default_proxy(&current, config)? {
+            GeodataHttpResult::Body(body) => return Ok(body),
+            GeodataHttpResult::Redirect(next) => current = next,
+        }
+    }
+    Err(io::Error::other("geodata fetch exceeded redirect limit"))
+}
+
+fn fetch_geodata_url_to_file_via_default_proxy(
+    url: &url::Url,
+    output_path: &Path,
+    config: &Config,
+) -> io::Result<GeodataFileDownload> {
+    let mut current = url.clone();
+    for _ in 0..=GEODATA_REDIRECT_LIMIT {
+        match fetch_geodata_url_to_file_once_via_default_proxy(&current, output_path, config)? {
+            GeodataHttpFileResult::Body(download) => return Ok(download),
+            GeodataHttpFileResult::Redirect(next) => current = next,
+        }
+    }
+    Err(io::Error::other("geodata fetch exceeded redirect limit"))
+}
+
 enum GeodataHttpResult {
     Body(Vec<u8>),
     Redirect(url::Url),
@@ -108,7 +149,9 @@ fn fetch_geodata_url_once(url: &url::Url) -> io::Result<GeodataHttpResult> {
         .port_or_known_default()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing geodata url port"))?;
     let request = geodata_http_request(url)?;
-    let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10))?;
+    let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10)).map_err(|err| {
+        io::Error::new(err.kind(), format!("connect geodata {host}:{port}: {err}"))
+    })?;
     stream.set_read_timeout(Some(Duration::from_secs(90)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
@@ -142,6 +185,15 @@ fn fetch_geodata_url_once(url: &url::Url) -> io::Result<GeodataHttpResult> {
     geodata_http_body(url, response)
 }
 
+fn fetch_geodata_url_once_via_default_proxy(
+    url: &url::Url,
+    config: &Config,
+) -> io::Result<GeodataHttpResult> {
+    let request = geodata_http_request(url)?;
+    let response = fetch_geodata_http_response_via_default_proxy(url, config, request.as_bytes())?;
+    geodata_http_body(url, response)
+}
+
 fn fetch_geodata_url_to_file_once(
     url: &url::Url,
     output_path: &Path,
@@ -163,7 +215,9 @@ fn fetch_geodata_url_to_file_once(
         .port_or_known_default()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing geodata url port"))?;
     let request = geodata_http_request(url)?;
-    let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10))?;
+    let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10)).map_err(|err| {
+        io::Error::new(err.kind(), format!("connect geodata {host}:{port}: {err}"))
+    })?;
     stream.set_read_timeout(Some(Duration::from_secs(90)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
@@ -195,6 +249,44 @@ fn fetch_geodata_url_to_file_once(
     }
 }
 
+fn fetch_geodata_url_to_file_once_via_default_proxy(
+    url: &url::Url,
+    output_path: &Path,
+    config: &Config,
+) -> io::Result<GeodataHttpFileResult> {
+    let request = geodata_http_request(url)?;
+    let response = fetch_geodata_http_response_via_default_proxy(url, config, request.as_bytes())?;
+    geodata_http_response_to_file_from_bytes(url, response, output_path)
+}
+
+fn fetch_geodata_http_response_via_default_proxy(
+    url: &url::Url,
+    config: &Config,
+    request: &[u8],
+) -> io::Result<Vec<u8>> {
+    let tls = match url.scheme() {
+        "https" => true,
+        "http" => false,
+        scheme => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unsupported geodata url scheme: {scheme}"),
+            ));
+        }
+    };
+    let host = url
+        .host_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing geodata url host"))?;
+    crate::production_runtime_owner::fetch_http_url_via_default_proxy(
+        config,
+        url,
+        tls,
+        request,
+        geodata_http_response_limit()?,
+    )
+    .map_err(|err| io::Error::other(format!("geodata proxy fetch {host}: {err}")))
+}
+
 fn geodata_http_request(url: &url::Url) -> io::Result<String> {
     let host = url
         .host_str()
@@ -217,15 +309,19 @@ fn geodata_http_request(url: &url::Url) -> io::Result<String> {
     ))
 }
 
-pub(super) fn read_geodata_http_response<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
-    let response_limit = GEODATA_HTTP_HEADER_LIMIT
+fn geodata_http_response_limit() -> io::Result<usize> {
+    GEODATA_HTTP_HEADER_LIMIT
         .checked_add(GEODATA_HTTP_BODY_LIMIT)
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "geodata response limit overflow",
             )
-        })?;
+        })
+}
+
+pub(super) fn read_geodata_http_response<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
+    let response_limit = geodata_http_response_limit()?;
     let mut response = Vec::new();
     let mut buffer = [0_u8; 8192];
     loop {
@@ -306,6 +402,25 @@ fn read_geodata_http_headers<R: Read>(reader: &mut R) -> io::Result<(String, Vec
         io::ErrorKind::InvalidData,
         "missing geodata http headers",
     ))
+}
+
+fn geodata_http_response_to_file_from_bytes(
+    base_url: &url::Url,
+    response: Vec<u8>,
+    output_path: &Path,
+) -> io::Result<GeodataHttpFileResult> {
+    match geodata_http_body(base_url, response)? {
+        GeodataHttpResult::Redirect(next) => Ok(GeodataHttpFileResult::Redirect(next)),
+        GeodataHttpResult::Body(body) => {
+            let mut file = fs::File::create(output_path)?;
+            file.write_all(&body)?;
+            file.sync_all()?;
+            Ok(GeodataHttpFileResult::Body(GeodataFileDownload {
+                bytes: body.len() as u64,
+                sha256: hex_encode(&Sha256::digest(&body)),
+            }))
+        }
+    }
 }
 
 fn geodata_http_body(base_url: &url::Url, mut response: Vec<u8>) -> io::Result<GeodataHttpResult> {

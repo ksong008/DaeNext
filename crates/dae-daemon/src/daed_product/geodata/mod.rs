@@ -10,7 +10,10 @@ mod time;
 mod types;
 mod update;
 
-use source::{geodata_sources_status, reset_geodata_source_url, set_geodata_source_url};
+use source::{
+    geodata_source_status, geodata_sources_status, reset_geodata_source_url,
+    set_geodata_source_url, set_geodata_source_use_proxy,
+};
 pub(in crate::daed_product) use status::geodata_status;
 pub(in crate::daed_product) use types::GeodataKind;
 use update::update_geodata;
@@ -38,18 +41,34 @@ pub(in crate::daed_product) fn api_set_geodata_source(
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let result = if body
+    let restore_default = body
         .get("restoreDefault")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        reset_geodata_source_url(&app.state, kind)
-    } else {
-        let Some(url) = body.get("url").and_then(Value::as_str) else {
-            return HttpResponse::json(400, json!({"error": "geodata source url is required"}));
-        };
-        set_geodata_source_url(&app.state, kind, url)
-    };
+        .unwrap_or(false);
+    let use_proxy = body.get("useProxy").and_then(Value::as_bool);
+    let url = body.get("url").and_then(Value::as_str);
+
+    let mut changed = false;
+    let result = (|| {
+        if restore_default {
+            reset_geodata_source_url(&app.state, kind)?;
+            changed = true;
+        } else if let Some(url) = url {
+            set_geodata_source_url(&app.state, kind, url)?;
+            changed = true;
+        }
+        if let Some(use_proxy) = use_proxy {
+            set_geodata_source_use_proxy(&app.state, kind, use_proxy)?;
+            changed = true;
+        }
+        if !changed {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "geodata source url or useProxy is required",
+            ));
+        }
+        geodata_source_status(&app.state, kind)
+    })();
     match result {
         Ok(status) => HttpResponse::json(200, status),
         Err(err) => geodata_source_error_response(err),
