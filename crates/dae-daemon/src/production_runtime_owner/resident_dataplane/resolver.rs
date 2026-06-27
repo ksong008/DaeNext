@@ -40,7 +40,42 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_hos
     }
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_host_addrs_with_configured_fallback_dns(
+    host: &str,
+    port: u16,
+    fallback_resolver: SocketAddr,
+    mark: u32,
+    context: &str,
+) -> Result<Vec<SocketAddr>, String> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+
+    let authority = authority_from_host_port(host, port);
+    match resolve_host_addrs_with_system_dns(&authority).await {
+        Ok(addrs) => Ok(addrs),
+        Err(system_err) => resolve_host_addrs_with_fallback_dns(
+            host,
+            port,
+            fallback_resolver,
+            mark,
+            context,
+        )
+        .await
+        .map_err(|fallback_err| {
+            format!(
+                "{context} {authority}: system resolver failed ({system_err}); fallback resolver failed ({fallback_err})"
+            )
+        }),
+    }
+}
+
 async fn resolve_host_with_system_dns(authority: &str) -> Result<SocketAddr, String> {
+    let addrs = resolve_host_addrs_with_system_dns(authority).await?;
+    select_first_socket_addr(addrs).ok_or_else(|| format!("resolve {authority}: no IP address"))
+}
+
+async fn resolve_host_addrs_with_system_dns(authority: &str) -> Result<Vec<SocketAddr>, String> {
     let addrs = time::timeout(
         RESIDENT_UDP_RESPONSE_TIMEOUT,
         tokio::net::lookup_host(authority),
@@ -48,14 +83,27 @@ async fn resolve_host_with_system_dns(authority: &str) -> Result<SocketAddr, Str
     .await
     .map_err(|_| format!("resolve {authority} timed out"))?
     .map_err(|err| format!("resolve {authority}: {err}"))?;
-    select_first_socket_addr(addrs)
-        .ok_or_else(|| format!("resolve {authority}: no IP address"))
+    let addrs = unique_socket_addrs(addrs);
+    if addrs.is_empty() {
+        return Err(format!("resolve {authority}: no IP address"));
+    }
+    Ok(addrs)
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) fn select_first_socket_addr(
     addrs: impl IntoIterator<Item = SocketAddr>,
 ) -> Option<SocketAddr> {
     addrs.into_iter().next()
+}
+
+fn unique_socket_addrs(addrs: impl IntoIterator<Item = SocketAddr>) -> Vec<SocketAddr> {
+    let mut unique = Vec::new();
+    for addr in addrs {
+        if !unique.contains(&addr) {
+            unique.push(addr);
+        }
+    }
+    unique
 }
 
 async fn resolve_host_with_fallback_dns(
@@ -72,6 +120,41 @@ async fn resolve_host_with_fallback_dns(
             Ok(None) => {}
             Err(err) => failures.push(err),
         }
+    }
+
+    let mut message = format!(
+        "{context} {host}:{port} using fallback resolver {fallback_resolver} returned no IP address"
+    );
+    if !failures.is_empty() {
+        message.push_str(": ");
+        message.push_str(&failures.join("; "));
+    }
+    Err(message)
+}
+
+async fn resolve_host_addrs_with_fallback_dns(
+    host: &str,
+    port: u16,
+    fallback_resolver: SocketAddr,
+    mark: u32,
+    context: &str,
+) -> Result<Vec<SocketAddr>, String> {
+    let (a_result, aaaa_result) = tokio::join!(
+        resolve_host_qtype_with_fallback_dns(host, fallback_resolver, mark, DNS_QTYPE_A),
+        resolve_host_qtype_with_fallback_dns(host, fallback_resolver, mark, DNS_QTYPE_AAAA),
+    );
+    let mut failures = Vec::new();
+    let mut addrs = Vec::new();
+    for result in [a_result, aaaa_result] {
+        match result {
+            Ok(Some(ip)) => addrs.push(SocketAddr::new(ip, port)),
+            Ok(None) => {}
+            Err(err) => failures.push(err),
+        }
+    }
+    let addrs = unique_socket_addrs(addrs);
+    if !addrs.is_empty() {
+        return Ok(addrs);
     }
 
     let mut message = format!(
@@ -288,5 +371,75 @@ mod tests {
 
         assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fallback_dns_address_list_keeps_a_before_aaaa() {
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let resolver = socket.local_addr().unwrap();
+        let expected_v4 = Ipv4Addr::new(192, 0, 2, 10);
+        let expected_v6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10);
+        let server = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            let mut buf = [0_u8; 512];
+            for _ in 0..2 {
+                let (read, peer) = socket.recv_from(&mut buf).await.unwrap();
+                let query = &buf[..read];
+                let view = DnsPacketView::parse(query).unwrap();
+                let question = view.questions().next().unwrap();
+                assert_eq!(
+                    question.qname_to_canonical_string().unwrap(),
+                    "fallback.example."
+                );
+                let qtype = question.qtype();
+                seen.push(qtype);
+                let mut response = Vec::new();
+                response.extend_from_slice(&query[0..2]);
+                response.extend_from_slice(&0x8180_u16.to_be_bytes());
+                response.extend_from_slice(&1_u16.to_be_bytes());
+                response.extend_from_slice(&1_u16.to_be_bytes());
+                response.extend_from_slice(&0_u16.to_be_bytes());
+                response.extend_from_slice(&0_u16.to_be_bytes());
+                response.extend_from_slice(&query[12..view.answer_offset()]);
+                response.extend_from_slice(&0xc00c_u16.to_be_bytes());
+                response.extend_from_slice(&qtype.to_be_bytes());
+                response.extend_from_slice(&DNS_QCLASS_IN.to_be_bytes());
+                response.extend_from_slice(&60_u32.to_be_bytes());
+                match qtype {
+                    DNS_QTYPE_A => {
+                        response.extend_from_slice(&4_u16.to_be_bytes());
+                        response.extend_from_slice(&expected_v4.octets());
+                    }
+                    DNS_QTYPE_AAAA => {
+                        response.extend_from_slice(&16_u16.to_be_bytes());
+                        response.extend_from_slice(&expected_v6.octets());
+                    }
+                    _ => panic!("unexpected qtype {qtype}"),
+                }
+                socket.send_to(&response, peer).await.unwrap();
+            }
+            seen
+        });
+
+        let resolved = resolve_host_addrs_with_fallback_dns(
+            "fallback.example",
+            443,
+            resolver,
+            0,
+            "resolve test",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![
+                SocketAddr::new(IpAddr::V4(expected_v4), 443),
+                SocketAddr::new(IpAddr::V6(expected_v6), 443),
+            ]
+        );
+        let seen = server.await.unwrap();
+        assert!(seen.contains(&DNS_QTYPE_A));
+        assert!(seen.contains(&DNS_QTYPE_AAAA));
     }
 }
