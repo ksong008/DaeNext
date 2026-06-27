@@ -60,7 +60,7 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
-            fs::metadata(dir.join(PRODUCT_LOG_DIR))
+            fs::metadata(product_log_dir(&dir))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -480,7 +480,7 @@ pub(crate) fn log_store_initialization_repairs_existing_jsonl_permissions() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
-    fs::create_dir_all(dir.join(PRODUCT_LOG_DIR)).unwrap();
+    fs::create_dir_all(product_log_dir(&dir)).unwrap();
     let log_file = product_log_file(&dir);
     fs::write(
         &log_file,
@@ -511,7 +511,7 @@ pub(crate) fn log_store_initialization_repairs_existing_jsonl_permissions() {
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
-            fs::metadata(dir.join(PRODUCT_LOG_DIR))
+            fs::metadata(product_log_dir(&dir))
                 .unwrap()
                 .permissions()
                 .mode()
