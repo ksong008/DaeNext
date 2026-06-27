@@ -1,11 +1,12 @@
 use super::*;
+use dae_dns::DNS_DEFAULT_PORT;
 
 impl UdpSessionExecutor {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new(
         proxy: &ResidentProxyPlan,
         original_dst: SocketAddr,
     ) -> Self {
-        if original_dst.port() == 53 {
+        if original_dst.port() == DNS_DEFAULT_PORT {
             return Self::Dns;
         }
         Self::new_proxy_packet(proxy)

@@ -1,4 +1,5 @@
 use super::*;
+use dae_dns::DNS_DEFAULT_PORT;
 pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_handler_name(
     handler: &ResidentProxyProtocolPlan,
 ) -> &'static str {
@@ -65,7 +66,7 @@ pub(super) fn udp_packet_semantics_for_destination(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddr,
 ) -> UdpPacketSemantics {
-    if original_dst.port() == 53 {
+    if original_dst.port() == DNS_DEFAULT_PORT {
         UdpPacketSemantics::Dns
     } else {
         udp_packet_semantics(proxy)

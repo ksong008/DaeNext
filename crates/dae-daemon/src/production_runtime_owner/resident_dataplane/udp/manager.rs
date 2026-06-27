@@ -16,8 +16,13 @@ use tokio::sync::mpsc;
 
 use super::*;
 
+mod dns_fast_path;
 mod router;
 mod sniff;
+use self::dns_fast_path::{
+    minimal_resident_dns_routing_result, resident_udp_dns_fast_path_applies,
+    resident_udp_dns_fast_path_can_bypass_missing_tuple,
+};
 use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
 use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
 
@@ -264,15 +269,19 @@ fn handle_manager_packet(
     let initial = match router.lookup_routing_result(packet.peer, original_dst) {
         Ok(initial) => initial,
         Err(err) => {
-            append_udp_route_selection_failed(
-                event_file,
-                event_lock,
-                packet.peer,
-                original_dst,
-                None,
-                err,
-            );
-            return;
+            if resident_udp_dns_fast_path_can_bypass_missing_tuple(original_dst, &packet.payload) {
+                minimal_resident_dns_routing_result()
+            } else {
+                append_udp_route_selection_failed(
+                    event_file,
+                    event_lock,
+                    packet.peer,
+                    original_dst,
+                    None,
+                    err,
+                );
+                return;
+            }
         }
     };
     let ready = match udp_sniff_reroute_decision(packet, router, original_dst, initial, sniffers) {
@@ -525,10 +534,6 @@ fn forward_manager_packet(
             ),
         );
     }
-}
-
-fn resident_udp_dns_fast_path_applies(original_dst: SocketAddr) -> bool {
-    original_dst.port() == 53
 }
 
 fn spawn_resident_dns_datagram_handler(
