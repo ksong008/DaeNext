@@ -12,6 +12,23 @@ impl UdpSessionExecutor {
             Self::Dns => handle_resident_dns_udp_async(dns, original_dst, payload)
                 .await
                 .map(resident_dns_udp_exchange_result),
+            _ => {
+                self.execute_proxy_packet(proxy, original_dst, payload)
+                    .await
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn execute_proxy_packet(
+        &mut self,
+        proxy: &ResidentProxyPlan,
+        original_dst: SocketAddr,
+        payload: &[u8],
+    ) -> Result<(&'static str, UdpExchangeResult), String> {
+        match self {
+            Self::Dns => Err(
+                "resident DNS UDP executor cannot be used as a proxy packet executor".to_owned(),
+            ),
             Self::ShadowsocksAead(session) => session
                 .exchange(proxy, original_dst, payload)
                 .await

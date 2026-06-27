@@ -5,24 +5,26 @@ const DNS_UDP_FORWARD_ATTEMPTS: usize = 3;
 pub(super) async fn forward_dns_to_upstream_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
-    mark: u32,
+    plan: &ResidentDnsPlan,
     forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     match upstream.scheme {
         ResidentDnsUpstreamScheme::Udp => {
-            forward_dns_udp_upstream_async(upstream, payload, mark).await
+            forward_dns_udp_upstream_async(upstream, payload, plan).await
         }
-        ResidentDnsUpstreamScheme::Tcp => forward_dns_tcp_async(upstream, payload, mark).await,
+        ResidentDnsUpstreamScheme::Tcp => forward_dns_tcp_async(upstream, payload, plan).await,
         ResidentDnsUpstreamScheme::TcpUdp => {
-            forward_dns_tcp_udp_async(upstream, payload, mark).await
+            forward_dns_tcp_udp_async(upstream, payload, plan).await
         }
-        ResidentDnsUpstreamScheme::Tls => forward_dns_tls_async(upstream, payload, mark).await,
-        ResidentDnsUpstreamScheme::Https => forward_dns_https_async(upstream, payload, mark).await,
+        ResidentDnsUpstreamScheme::Tls => forward_dns_tls_async(upstream, payload, plan).await,
+        ResidentDnsUpstreamScheme::Https => forward_dns_https_async(upstream, payload, plan).await,
         ResidentDnsUpstreamScheme::Quic => {
-            let forwarder = forwarders.quic_forwarder(upstream, mark)?;
+            let forwarder = forwarders.quic_forwarder(upstream, plan.mark)?;
             forward_dns_quic_cached(forwarder, payload).await
         }
-        ResidentDnsUpstreamScheme::Http3 => forward_dns_h3_async(upstream, payload, mark).await,
+        ResidentDnsUpstreamScheme::Http3 => {
+            forward_dns_h3_async(upstream, payload, plan.mark).await
+        }
     }
 }
 
@@ -51,11 +53,11 @@ fn dns_upstream_targets_failed(
 async fn forward_dns_udp_upstream_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
-    mark: u32,
+    plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
     let mut failures = Vec::new();
     for target in resolved_upstream_targets(upstream).await? {
-        match forward_dns_udp_async(target, payload, mark).await {
+        match forward_dns_udp_to_target_routed_async(plan, upstream, target, payload).await {
             Ok(response) => return Ok(response),
             Err(err) => failures.push(format!("{target}: {err}")),
         }
@@ -70,17 +72,27 @@ async fn forward_dns_udp_upstream_async(
 async fn forward_dns_tcp_udp_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
-    mark: u32,
+    plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
     let mut failures = Vec::new();
     for target in resolved_upstream_targets(upstream).await? {
-        match forward_dns_udp_async(target, payload, mark).await {
+        match forward_dns_udp_to_target_routed_async(plan, upstream, target, payload).await {
             Ok(response) if !dns_response_truncated(&response) => return Ok(response),
-            Ok(_) => match forward_dns_tcp_to_target_async(upstream, target, payload, mark).await {
+            Ok(_) => match forward_dns_tcp_to_target_routed_async(plan, upstream, target, payload)
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(err) => failures.push(format!("{target} TCP after truncated UDP: {err}")),
             },
-            Err(err) => failures.push(format!("{target} UDP: {err}")),
+            Err(udp_err) => {
+                match forward_dns_tcp_to_target_routed_async(plan, upstream, target, payload).await
+                {
+                    Ok(response) => return Ok(response),
+                    Err(tcp_err) => failures.push(format!(
+                        "{target} UDP: {udp_err}; TCP after UDP failure: {tcp_err}"
+                    )),
+                }
+            }
         }
     }
     Err(dns_upstream_targets_failed(
@@ -325,11 +337,11 @@ fn dns_udp_forward_attempt_timeout() -> std::time::Duration {
 async fn forward_dns_tcp_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
-    mark: u32,
+    plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
     let mut failures = Vec::new();
     for target in resolved_upstream_targets(upstream).await? {
-        match forward_dns_tcp_to_target_async(upstream, target, payload, mark).await {
+        match forward_dns_tcp_to_target_routed_async(plan, upstream, target, payload).await {
             Ok(response) => return Ok(response),
             Err(err) => failures.push(format!("{target}: {err}")),
         }
@@ -339,6 +351,59 @@ async fn forward_dns_tcp_async(
         "forward DNS TCP to",
         failures,
     ))
+}
+
+async fn forward_dns_udp_to_target_routed_async(
+    plan: &ResidentDnsPlan,
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    match select_dns_upstream_target(plan, upstream, target, L4Proto::Udp)? {
+        ResidentDnsUpstreamSelection::Direct { mark } => {
+            forward_dns_udp_async(target, payload, mark).await
+        }
+        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+            forward_resident_proxy_dns_udp_async(proxy, target, payload).await
+        }
+    }
+}
+
+async fn forward_dns_tcp_to_target_routed_async(
+    plan: &ResidentDnsPlan,
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    match select_dns_upstream_target(plan, upstream, target, L4Proto::Tcp)? {
+        ResidentDnsUpstreamSelection::Direct { mark } => {
+            forward_dns_tcp_to_target_async(upstream, target, payload, mark).await
+        }
+        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+            forward_dns_tcp_to_proxy_async(upstream, target, payload, proxy).await
+        }
+    }
+}
+
+fn select_dns_upstream_target(
+    plan: &ResidentDnsPlan,
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    l4proto: L4Proto,
+) -> Result<ResidentDnsUpstreamSelection, String> {
+    let Some(router) = plan.upstream_router.as_ref() else {
+        return Ok(ResidentDnsUpstreamSelection::Direct { mark: plan.mark });
+    };
+    router.select(upstream, target, dns_upstream_network_type(target, l4proto))
+}
+
+fn dns_upstream_network_type(target: SocketAddr, l4proto: L4Proto) -> NetworkType {
+    match (l4proto, target.is_ipv6()) {
+        (L4Proto::Tcp, false) => NetworkType::DNS_TCP4,
+        (L4Proto::Tcp, true) => NetworkType::DNS_TCP6,
+        (L4Proto::Udp, false) => NetworkType::DNS_UDP4,
+        (L4Proto::Udp, true) => NetworkType::DNS_UDP6,
+    }
 }
 
 async fn forward_dns_tcp_to_target_async(
@@ -362,15 +427,48 @@ async fn forward_dns_tcp_to_target_async(
     })
 }
 
+async fn forward_dns_tcp_to_proxy_async(
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    payload: &[u8],
+    proxy: Arc<ResidentProxyPlan>,
+) -> Result<Vec<u8>, String> {
+    exchange_resident_proxy_dns_tcp_async(
+        proxy,
+        &target.to_string(),
+        payload,
+        DNS_TCP_MESSAGE_READ_LIMIT,
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+    )
+    .await
+    .map_err(|err| {
+        format!(
+            "forward DNS over proxied TCP to upstream {} {} via {}: {err}",
+            upstream.tag, upstream.target.authority, target
+        )
+    })
+}
+
 async fn forward_dns_tls_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
-    mark: u32,
+    plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
     let mut failures = Vec::new();
     for target in resolved_upstream_targets(upstream).await? {
-        match forward_dns_tls_to_target_async(upstream, target, payload, mark).await {
-            Ok(response) => return Ok(response),
+        match select_dns_upstream_target(plan, upstream, target, L4Proto::Tcp) {
+            Ok(ResidentDnsUpstreamSelection::Direct { mark }) => {
+                match forward_dns_tls_to_target_async(upstream, target, payload, mark).await {
+                    Ok(response) => return Ok(response),
+                    Err(err) => failures.push(format!("{target}: {err}")),
+                }
+            }
+            Ok(ResidentDnsUpstreamSelection::Proxy { proxy }) => {
+                match forward_dns_tls_to_proxy_async(upstream, target, payload, proxy).await {
+                    Ok(response) => return Ok(response),
+                    Err(err) => failures.push(format!("{target}: {err}")),
+                }
+            }
             Err(err) => failures.push(format!("{target}: {err}")),
         }
     }
@@ -388,6 +486,39 @@ async fn forward_dns_tls_to_target_async(
     mark: u32,
 ) -> Result<Vec<u8>, String> {
     let stream = open_dns_tcp_stream_async(upstream, target, mark).await?;
+    forward_dns_tls_over_stream_async(upstream, stream, payload).await
+}
+
+async fn forward_dns_tls_to_proxy_async(
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    payload: &[u8],
+    proxy: Arc<ResidentProxyPlan>,
+) -> Result<Vec<u8>, String> {
+    let target = target.to_string();
+    exchange_resident_proxy_tcp_stream_async(
+        proxy,
+        &target,
+        true,
+        Vec::new(),
+        upstream.target.host.clone(),
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        |stream| async move { forward_dns_tls_over_stream_async(upstream, stream, payload).await },
+    )
+    .await
+    .map_err(|err| {
+        format!(
+            "forward DNS over proxied TLS to upstream {} {} via {}: {err}",
+            upstream.tag, upstream.target.authority, target
+        )
+    })
+}
+
+async fn forward_dns_tls_over_stream_async(
+    upstream: &ResidentDnsUpstream,
+    stream: TokioTcpStream,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
     let config = resident_dns_tls_client_config(&[])?;
     let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
         format!(
@@ -425,12 +556,23 @@ async fn forward_dns_tls_to_target_async(
 async fn forward_dns_https_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
-    mark: u32,
+    plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
     let mut failures = Vec::new();
     for target in resolved_upstream_targets(upstream).await? {
-        match forward_dns_https_to_target_async(upstream, target, payload, mark).await {
-            Ok(response) => return Ok(response),
+        match select_dns_upstream_target(plan, upstream, target, L4Proto::Tcp) {
+            Ok(ResidentDnsUpstreamSelection::Direct { mark }) => {
+                match forward_dns_https_to_target_async(upstream, target, payload, mark).await {
+                    Ok(response) => return Ok(response),
+                    Err(err) => failures.push(format!("{target}: {err}")),
+                }
+            }
+            Ok(ResidentDnsUpstreamSelection::Proxy { proxy }) => {
+                match forward_dns_https_to_proxy_async(upstream, target, payload, proxy).await {
+                    Ok(response) => return Ok(response),
+                    Err(err) => failures.push(format!("{target}: {err}")),
+                }
+            }
             Err(err) => failures.push(format!("{target}: {err}")),
         }
     }
@@ -448,6 +590,39 @@ async fn forward_dns_https_to_target_async(
     mark: u32,
 ) -> Result<Vec<u8>, String> {
     let stream = open_dns_tcp_stream_async(upstream, target, mark).await?;
+    forward_dns_https_over_stream_async(upstream, stream, payload).await
+}
+
+async fn forward_dns_https_to_proxy_async(
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    payload: &[u8],
+    proxy: Arc<ResidentProxyPlan>,
+) -> Result<Vec<u8>, String> {
+    let target = target.to_string();
+    exchange_resident_proxy_tcp_stream_async(
+        proxy,
+        &target,
+        true,
+        Vec::new(),
+        upstream.target.host.clone(),
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        |stream| async move { forward_dns_https_over_stream_async(upstream, stream, payload).await },
+    )
+    .await
+    .map_err(|err| {
+        format!(
+            "forward DNS over proxied HTTPS to upstream {} {} via {}: {err}",
+            upstream.tag, upstream.target.authority, target
+        )
+    })
+}
+
+async fn forward_dns_https_over_stream_async(
+    upstream: &ResidentDnsUpstream,
+    stream: TokioTcpStream,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
     let config = resident_dns_tls_client_config(&["http/1.1"])?;
     let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
         format!(
@@ -979,7 +1154,8 @@ mod tests {
             path: String::new(),
         };
 
-        let response = forward_dns_tcp_async(&upstream, b"fixture-query", 0)
+        let plan = ResidentDnsPlan::asis(0);
+        let response = forward_dns_tcp_async(&upstream, b"fixture-query", &plan)
             .await
             .unwrap();
 

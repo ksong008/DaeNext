@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
+use dae_core_types::OutboundIndex;
+use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT};
 use dae_dns::{
     DOH_MEDIA_TYPE, DnsCacheKey, DnsDomainSet, DnsPacketView, DnsRequestMatchKind,
     DnsRequestMatchSpec, DnsRequestOutboundIndex, DnsResponseMatchKind, DnsResponseMatchSpec,
@@ -15,9 +17,8 @@ use dae_dns::{
     restore_packed_response_request_id, validate_dns_packet_response_for_request_fast,
     validate_doh_response,
 };
-use dae_routing::IpPrefix;
-#[cfg(test)]
-use dae_routing::RoutingMatcher;
+use dae_outbound::{L4Proto, NetworkType};
+use dae_routing::{IpPrefix, Query, RoutingMatcher};
 #[cfg(test)]
 use dae_runtime_control::ip_to_key;
 use http::Request;
@@ -28,6 +29,8 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use tokio::time;
 
+#[cfg(test)]
+use super::super::resident_routing::build_resident_userspace_routing_matcher_with_geodata;
 use super::super::resident_routing::{
     ResidentGeodataStore, expand_resident_dns_request_qname_rules_with_resolver,
     expand_resident_dns_response_ip_params_with_resolver,
@@ -35,8 +38,13 @@ use super::super::resident_routing::{
 };
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::direct::open_direct_tcp_connection_async;
+#[cfg(test)]
+use super::plan::build_resident_dataplane_plan;
+use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan};
 use super::resolve_host_addrs_with_configured_fallback_dns;
+use super::tcp::{exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_tcp_stream_async};
 use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
+use super::udp::forward_resident_proxy_dns_udp_async;
 
 mod cache;
 mod domain_routing;
@@ -111,12 +119,106 @@ pub(super) struct ResidentDnsPlan {
     fixed_domain_ttl: Arc<BTreeMap<String, i64>>,
     ipversion_prefer: Option<u16>,
     mark: u32,
+    upstream_router: Option<Arc<ResidentDnsUpstreamRouter>>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsQueryResult {
     pub(super) response: Vec<u8>,
     pub(super) trace: ResidentDnsTraceSummary,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ResidentDnsUpstreamRouter {
+    routing_matcher: RoutingMatcher,
+    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    so_mark_from_dae: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum ResidentDnsUpstreamSelection {
+    Direct { mark: u32 },
+    Proxy { proxy: Arc<ResidentProxyPlan> },
+}
+
+impl ResidentDnsUpstreamRouter {
+    pub(super) fn new(
+        routing_matcher: RoutingMatcher,
+        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        so_mark_from_dae: u32,
+    ) -> Self {
+        Self {
+            routing_matcher,
+            proxy_groups,
+            so_mark_from_dae,
+        }
+    }
+
+    fn select(
+        &self,
+        upstream: &ResidentDnsUpstream,
+        target: SocketAddr,
+        network_type: NetworkType,
+    ) -> Result<ResidentDnsUpstreamSelection, String> {
+        let query = match network_type.l4proto {
+            L4Proto::Tcp => Query::tcp(target.ip(), target.port(), upstream.target.host.clone()),
+            L4Proto::Udp => Query::udp(target.ip(), target.port(), upstream.target.host.clone()),
+        };
+        let outcome = self
+            .routing_matcher
+            .match_query_detail(&query)
+            .map_err(|err| {
+                format!(
+                    "route DNS upstream {} {} {}: {err}",
+                    upstream.tag, upstream.target.authority, target,
+                )
+            })?;
+        let mark = if outcome.mark == 0 {
+            self.so_mark_from_dae
+        } else {
+            outcome.mark
+        };
+        match outcome.outbound.value() {
+            OUTBOUND_DIRECT => Ok(ResidentDnsUpstreamSelection::Direct { mark }),
+            OUTBOUND_BLOCK => Err(format!(
+                "DNS upstream {} {} routed to block for {}",
+                upstream.tag, upstream.target.authority, target
+            )),
+            OUTBOUND_CONTROL_PLANE_ROUTING => Err(format!(
+                "DNS upstream {} {} still requires control-plane routing for {}; no recursive DNS upstream routing is admitted",
+                upstream.tag, upstream.target.authority, target
+            )),
+            outbound => {
+                let Some(proxy_group) = self.proxy_groups.get(&outbound) else {
+                    return Err(format!(
+                        "DNS upstream {} {} selected outbound {} but no Rust proxy plan is available",
+                        upstream.tag,
+                        upstream.target.authority,
+                        OutboundIndex(outbound)
+                    ));
+                };
+                let proxy = match network_type.l4proto {
+                    L4Proto::Tcp => proxy_group.select_proxy_for_tcp_runtime(network_type, true)?,
+                    L4Proto::Udp => proxy_group.select_proxy_for_udp_runtime(network_type, true)?,
+                };
+                Ok(ResidentDnsUpstreamSelection::Proxy {
+                    proxy: proxy_with_dns_upstream_mark(proxy, mark),
+                })
+            }
+        }
+    }
+}
+
+fn proxy_with_dns_upstream_mark(
+    proxy: Arc<ResidentProxyPlan>,
+    mark: u32,
+) -> Arc<ResidentProxyPlan> {
+    if mark == 0 || proxy.mark == mark {
+        return proxy;
+    }
+    let mut overridden = proxy.as_ref().clone();
+    overridden.mark = mark;
+    Arc::new(overridden)
 }
 
 #[derive(Clone, Debug)]
@@ -217,6 +319,7 @@ impl ResidentDnsPlan {
             fixed_domain_ttl: Arc::new(BTreeMap::new()),
             ipversion_prefer: None,
             mark,
+            upstream_router: None,
         }
     }
 
@@ -225,6 +328,14 @@ impl ResidentDnsPlan {
         domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
     ) -> Self {
         self.domain_routing = domain_routing;
+        self
+    }
+
+    pub(super) fn with_upstream_routing(
+        mut self,
+        upstream_router: Option<Arc<ResidentDnsUpstreamRouter>>,
+    ) -> Self {
+        self.upstream_router = upstream_router;
         self
     }
 
@@ -478,6 +589,7 @@ pub(super) fn build_resident_dns_plan(
         fixed_domain_ttl: Arc::new(fixed_domain_ttl),
         ipversion_prefer,
         mark: config.global.so_mark_from_dae,
+        upstream_router: None,
     })
 }
 
@@ -995,7 +1107,7 @@ async fn resolve_dns_response_routing(
 ) -> Result<Vec<u8>, String> {
     for _ in 0..DNS_RESPONSE_REROUTE_LIMIT {
         let response =
-            forward_dns_to_upstream_async(&upstream, request_payload, plan.mark, &plan.forwarders)
+            forward_dns_to_upstream_async(&upstream, request_payload, plan, &plan.forwarders)
                 .await?;
         validate_dns_response_for_request(
             request,
@@ -1029,7 +1141,7 @@ async fn resolve_dns_response_routing_trace(
     for _ in 0..DNS_RESPONSE_REROUTE_LIMIT {
         trace.push_upstream_attempt(&upstream);
         let response =
-            forward_dns_to_upstream_async(&upstream, request_payload, plan.mark, &plan.forwarders)
+            forward_dns_to_upstream_async(&upstream, request_payload, plan, &plan.forwarders)
                 .await?;
         validate_dns_response_for_request(
             request,
@@ -1093,13 +1205,20 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::time::Duration;
 
     const QUERY: &[u8] = &[
         0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
         b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
     ];
+    const TEST_DNS_UPSTREAM_HOST: &str = "resolver.fixture.invalid";
+    const TEST_UNMATCHED_DNS_HOST: &str = "unmatched-resolver.fixture.invalid";
+    const TEST_DNS_UPSTREAM_IPV4: &str = "192.0.2.53";
+    const TEST_DNS_UPSTREAM_IPV6: &str = "2001:db8::53";
     static TEST_ASSET_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn parse_config(input: &str) -> Config {
@@ -1113,6 +1232,14 @@ mod tests {
 
     fn test_fallback_resolver() -> SocketAddr {
         "127.0.0.1:53".parse().unwrap()
+    }
+
+    fn test_dns_upstream_target_v4() -> SocketAddr {
+        format!("{TEST_DNS_UPSTREAM_IPV4}:53").parse().unwrap()
+    }
+
+    fn indexed_test_dns_upstream_link(index: usize) -> String {
+        format!("quic://resolver-{index}.fixture.invalid")
     }
 
     fn test_geodata() -> ResidentGeodataStore {
@@ -1162,6 +1289,126 @@ mod tests {
             _ => panic!("expected upstream default action"),
         }
         assert_eq!(plan.mark, 1234);
+    }
+
+    fn dns_upstream_routing_config(routing: &str) -> Config {
+        let input = r#"
+        global {
+          lan_interface: daerust0
+          so_mark_from_dae: 1234
+        }
+        node {
+          node_a: 'socks5://identity-1:credential-1@node-1.fixture.invalid:28001'
+        }
+        group {
+          proxy {
+            filter: name(node_a)
+            policy: fixed(0)
+          }
+        }
+        routing {
+          __ROUTING__
+        }
+        dns {
+          upstream {
+            overseas: 'tcp+udp://__DNS_UPSTREAM_HOST__:53'
+          }
+          routing {
+            request {
+              fallback: overseas
+            }
+          }
+        }
+        "#
+        .replace("__ROUTING__", routing)
+        .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST);
+        parse_config(&input)
+    }
+
+    fn dns_upstream_router_for_config(
+        config: &Config,
+    ) -> (ResidentDnsUpstreamRouter, ResidentDnsUpstream) {
+        let geodata = test_geodata();
+        let runtime_plan = build_resident_dataplane_plan(config).unwrap();
+        let dns_plan = build_resident_dns_plan(config, &geodata).unwrap();
+        let matcher =
+            build_resident_userspace_routing_matcher_with_geodata(config, &geodata).unwrap();
+        let router = ResidentDnsUpstreamRouter::new(
+            matcher,
+            Arc::new(runtime_plan.proxies.clone()),
+            config.global.so_mark_from_dae,
+        );
+        let ResidentDnsRequestAction::Upstream(upstream) = dns_plan.request_default_action else {
+            panic!("expected upstream default action");
+        };
+        (router, upstream)
+    }
+
+    #[test]
+    fn dns_upstream_router_selects_proxy_group_for_upstream_domain() {
+        let config = dns_upstream_routing_config(
+            r#"
+            domain(full: __DNS_UPSTREAM_HOST__) -> proxy(mark: 7)
+            fallback: direct
+            "#
+            .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
+            .as_str(),
+        );
+        let (router, upstream) = dns_upstream_router_for_config(&config);
+        let selection = router
+            .select(
+                &upstream,
+                test_dns_upstream_target_v4(),
+                NetworkType::DNS_UDP4,
+            )
+            .unwrap();
+        let ResidentDnsUpstreamSelection::Proxy { proxy } = selection else {
+            panic!("expected proxied DNS upstream selection");
+        };
+        assert_eq!(proxy.group_name, "proxy");
+        assert_eq!(proxy.node_tag, "node_a");
+        assert_eq!(proxy.mark, 7);
+    }
+
+    #[test]
+    fn dns_upstream_router_keeps_direct_fallback_direct() {
+        let config = dns_upstream_routing_config(&format!(
+            r#"
+            domain(full: {TEST_UNMATCHED_DNS_HOST}) -> proxy
+            fallback: direct
+            "#
+        ));
+        let (router, upstream) = dns_upstream_router_for_config(&config);
+        let selection = router
+            .select(
+                &upstream,
+                test_dns_upstream_target_v4(),
+                NetworkType::DNS_TCP4,
+            )
+            .unwrap();
+        let ResidentDnsUpstreamSelection::Direct { mark } = selection else {
+            panic!("expected direct DNS upstream selection");
+        };
+        assert_eq!(mark, 1234);
+    }
+
+    #[test]
+    fn dns_upstream_router_rejects_blocked_upstream_target() {
+        let config = dns_upstream_routing_config(&format!(
+            r#"
+            domain(full: {TEST_UNMATCHED_DNS_HOST}) -> proxy
+            fallback: block
+            "#
+        ));
+        let (router, upstream) = dns_upstream_router_for_config(&config);
+        let err = router
+            .select(
+                &upstream,
+                test_dns_upstream_target_v4(),
+                NetworkType::DNS_UDP4,
+            )
+            .unwrap_err();
+        assert!(err.contains("routed to block"));
     }
 
     fn query_with_qtype(qtype: u16) -> Vec<u8> {
@@ -1486,14 +1733,14 @@ mod tests {
         routing {}
         dns {
           upstream {
-            udpup: 'udp://1.1.1.1'
-            tcpup: 'tcp://dns.example'
-            tcpudp: 'tcp+udp://dns.google:53'
-            tlsup: 'tls://dns.google'
-            httpsup: 'https://dns.google/dns-query'
-            quicup: 'quic://dns.example'
-            h3up: 'h3://dns.example/custom'
-            http3up: 'http3://[2001:db8::1]/dns-query'
+            udpup: 'udp://__DNS_UPSTREAM_IPV4__'
+            tcpup: 'tcp://__DNS_UPSTREAM_HOST__'
+            tcpudp: 'tcp+udp://__DNS_UPSTREAM_HOST__:53'
+            tlsup: 'tls://__DNS_UPSTREAM_HOST__'
+            httpsup: 'https://__DNS_UPSTREAM_HOST__/dns-query'
+            quicup: 'quic://__DNS_UPSTREAM_HOST__'
+            h3up: 'h3://__DNS_UPSTREAM_HOST__/custom'
+            http3up: 'http3://[__DNS_UPSTREAM_IPV6__]/dns-query'
           }
           routing {
             request {
@@ -1501,8 +1748,11 @@ mod tests {
             }
           }
         }
-        "#;
-        let config = parse_config(input);
+        "#
+        .replace("__DNS_UPSTREAM_IPV4__", TEST_DNS_UPSTREAM_IPV4)
+        .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
+        .replace("__DNS_UPSTREAM_IPV6__", TEST_DNS_UPSTREAM_IPV6);
+        let config = parse_config(&input);
         let geodata = test_geodata();
         let plan = build_resident_dns_plan(&config, &geodata).unwrap();
         assert_eq!(plan.request_actions.len(), 8);
@@ -1510,7 +1760,10 @@ mod tests {
             ResidentDnsRequestAction::Upstream(upstream) => {
                 assert_eq!(upstream.tag, "h3up");
                 assert_eq!(upstream.scheme, ResidentDnsUpstreamScheme::Http3);
-                assert_eq!(upstream.target.authority, "dns.example:443");
+                assert_eq!(
+                    upstream.target.authority,
+                    format!("{TEST_DNS_UPSTREAM_HOST}:443")
+                );
                 assert_eq!(upstream.path, "/custom");
             }
             other => panic!("expected h3 upstream fallback, got {other:?}"),
@@ -1519,73 +1772,73 @@ mod tests {
 
     #[test]
     fn resident_dns_upstream_parser_applies_default_ports_and_paths() {
-        let cases = [
+        let cases = vec![
             (
                 "udp",
-                "udp://1.1.1.1",
+                format!("udp://{TEST_DNS_UPSTREAM_IPV4}"),
                 ResidentDnsUpstreamScheme::Udp,
-                "1.1.1.1:53",
-                "1.1.1.1",
+                format!("{TEST_DNS_UPSTREAM_IPV4}:53"),
+                TEST_DNS_UPSTREAM_IPV4.to_owned(),
                 53,
                 "",
             ),
             (
                 "tcp",
-                "tcp://dns.example",
+                format!("tcp://{TEST_DNS_UPSTREAM_HOST}"),
                 ResidentDnsUpstreamScheme::Tcp,
-                "dns.example:53",
-                "dns.example",
+                format!("{TEST_DNS_UPSTREAM_HOST}:53"),
+                TEST_DNS_UPSTREAM_HOST.to_owned(),
                 53,
                 "",
             ),
             (
                 "tls",
-                "tls://dns.example",
+                format!("tls://{TEST_DNS_UPSTREAM_HOST}"),
                 ResidentDnsUpstreamScheme::Tls,
-                "dns.example:853",
-                "dns.example",
+                format!("{TEST_DNS_UPSTREAM_HOST}:853"),
+                TEST_DNS_UPSTREAM_HOST.to_owned(),
                 853,
                 "",
             ),
             (
                 "https",
-                "https://dns.example",
+                format!("https://{TEST_DNS_UPSTREAM_HOST}"),
                 ResidentDnsUpstreamScheme::Https,
-                "dns.example:443",
-                "dns.example",
+                format!("{TEST_DNS_UPSTREAM_HOST}:443"),
+                TEST_DNS_UPSTREAM_HOST.to_owned(),
                 443,
                 DNS_DEFAULT_DOH_PATH,
             ),
             (
                 "quic",
-                "quic://dns.example",
+                format!("quic://{TEST_DNS_UPSTREAM_HOST}"),
                 ResidentDnsUpstreamScheme::Quic,
-                "dns.example:853",
-                "dns.example",
+                format!("{TEST_DNS_UPSTREAM_HOST}:853"),
+                TEST_DNS_UPSTREAM_HOST.to_owned(),
                 853,
                 "",
             ),
             (
                 "h3",
-                "h3://dns.example/custom",
+                format!("h3://{TEST_DNS_UPSTREAM_HOST}/custom"),
                 ResidentDnsUpstreamScheme::Http3,
-                "dns.example:443",
-                "dns.example",
+                format!("{TEST_DNS_UPSTREAM_HOST}:443"),
+                TEST_DNS_UPSTREAM_HOST.to_owned(),
                 443,
                 "/custom",
             ),
             (
                 "http3",
-                "http3://[2001:db8::1]",
+                format!("http3://[{TEST_DNS_UPSTREAM_IPV6}]"),
                 ResidentDnsUpstreamScheme::Http3,
-                "[2001:db8::1]:443",
-                "2001:db8::1",
+                format!("[{TEST_DNS_UPSTREAM_IPV6}]:443"),
+                TEST_DNS_UPSTREAM_IPV6.to_owned(),
                 443,
                 DNS_DEFAULT_DOH_PATH,
             ),
         ];
         for (tag, link, scheme, authority, host, port, path) in cases {
-            let upstream = parse_dns_upstream(0, tag, link, test_fallback_resolver(), 0).unwrap();
+            let upstream = parse_dns_upstream(0, tag, &link, test_fallback_resolver(), 0).unwrap();
             assert_eq!(upstream.scheme, scheme, "{tag}");
             assert_eq!(upstream.target.authority, authority, "{tag}");
             assert_eq!(upstream.target.host, host, "{tag}");
@@ -1597,9 +1850,14 @@ mod tests {
     #[test]
     fn resident_dns_forwarder_cache_reuses_doq_by_upstream_and_mark() {
         let cache = ResidentDnsForwarderCache::default();
-        let upstream =
-            parse_dns_upstream(0, "quic", "quic://dns.example", test_fallback_resolver(), 0)
-                .unwrap();
+        let upstream = parse_dns_upstream(
+            0,
+            "quic",
+            &format!("quic://{TEST_DNS_UPSTREAM_HOST}"),
+            test_fallback_resolver(),
+            0,
+        )
+        .unwrap();
         let first = cache.quic_forwarder(&upstream, 0x1234).unwrap();
         let second = cache.quic_forwarder(&upstream, 0x1234).unwrap();
         let different_mark = cache.quic_forwarder(&upstream, 0x5678).unwrap();
@@ -1615,7 +1873,7 @@ mod tests {
         let first = parse_dns_upstream(
             0,
             "first",
-            "quic://dns0.example",
+            &indexed_test_dns_upstream_link(0),
             test_fallback_resolver(),
             0,
         )
@@ -1625,7 +1883,7 @@ mod tests {
             let upstream = parse_dns_upstream(
                 index as u8,
                 &format!("dns{index}"),
-                &format!("quic://dns{index}.example"),
+                &indexed_test_dns_upstream_link(index),
                 test_fallback_resolver(),
                 0,
             )
