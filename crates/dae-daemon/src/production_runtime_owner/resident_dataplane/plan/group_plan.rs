@@ -397,6 +397,22 @@ impl ResidentProxyGroupPlan {
         network_types
     }
 
+    fn tcp_selection_network_types(&self) -> Vec<NetworkType> {
+        let mut network_types = self.tcp_check_network_types();
+        if network_types.is_empty() {
+            network_types.push(NetworkType::TCP4);
+        }
+        network_types
+    }
+
+    fn udp_selection_network_types(&self) -> Vec<NetworkType> {
+        let mut network_types = self.udp_check_network_types();
+        if network_types.is_empty() {
+            network_types.push(NetworkType::DNS_UDP4);
+        }
+        network_types
+    }
+
     fn latency_seed_network_types(&self, snapshot: &Value) -> Vec<NetworkType> {
         let mut configured = self.tcp_check_network_types();
         for network_type in self.udp_check_network_types() {
@@ -538,6 +554,13 @@ impl ResidentProxyGroupPlan {
             .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_tcp_runtime(
+        &self,
+    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        self.select_candidate_for_runtime_networks(&self.tcp_selection_network_types())
+            .map(|candidate| Arc::clone(&candidate.proxy))
+    }
+
     #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp(
         &self,
@@ -545,11 +568,19 @@ impl ResidentProxyGroupPlan {
         self.select_proxy_for_udp_network(NetworkType::DNS_UDP4)
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp_network(
         &self,
         network_type: NetworkType,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
         self.select_candidate(network_type)
+            .map(|candidate| Arc::clone(&candidate.proxy))
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp_runtime(
+        &self,
+    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        self.select_candidate_for_runtime_networks(&self.udp_selection_network_types())
             .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
@@ -618,6 +649,101 @@ impl ResidentProxyGroupPlan {
                 })
             }
         }
+    }
+
+    fn select_candidate_for_runtime_networks(
+        &self,
+        network_types: &[NetworkType],
+    ) -> Result<&ResidentProxyCandidatePlan, String> {
+        if self.candidates.is_empty() {
+            return Err(format!(
+                "resident dataplane group {} has no admitted candidate",
+                self.group_name
+            ));
+        }
+        if let ResidentGroupPolicyPlan::Fixed { index } = self.group_policy {
+            return self
+                .candidates
+                .iter()
+                .find(|candidate| candidate.match_index == index)
+                .ok_or_else(|| {
+                    format!(
+                        "resident dataplane group {} fixed policy index {} is not admitted",
+                        self.group_name, index
+                    )
+                });
+        }
+        let selector = self.selector.lock().map_err(|_| {
+            format!(
+                "resident dataplane group {} selector lock is poisoned",
+                self.group_name
+            )
+        })?;
+        let selected_index = match self.group_policy {
+            ResidentGroupPolicyPlan::Fixed { .. } => unreachable!("fixed policy handled above"),
+            ResidentGroupPolicyPlan::Random => {
+                let mut alive_indexes = Vec::new();
+                for network_type in network_types {
+                    if let Some(alive_set) = selector.alive_set(*network_type) {
+                        for index in alive_set.alive_indexes() {
+                            if !alive_indexes.contains(&index) {
+                                alive_indexes.push(index);
+                            }
+                        }
+                    }
+                }
+                if alive_indexes.is_empty() {
+                    if self.candidates.len() == 1 {
+                        0
+                    } else {
+                        return Err(format!(
+                            "resident dataplane group {} selector failed: no alive dialer",
+                            self.group_name
+                        ));
+                    }
+                } else {
+                    alive_indexes[fastrand::usize(..alive_indexes.len())]
+                }
+            }
+            ResidentGroupPolicyPlan::MinLastLatency
+            | ResidentGroupPolicyPlan::MinAverage10
+            | ResidentGroupPolicyPlan::MinMovingAverage => {
+                let mut best = None::<(usize, i64)>;
+                for network_type in network_types {
+                    let Some((index, latency_ms)) = selector
+                        .alive_set(*network_type)
+                        .and_then(|alive_set| alive_set.get_min_latency())
+                    else {
+                        continue;
+                    };
+                    if best
+                        .map(|(best_index, best_latency_ms)| {
+                            latency_ms < best_latency_ms
+                                || (latency_ms == best_latency_ms && index < best_index)
+                        })
+                        .unwrap_or(true)
+                    {
+                        best = Some((index, latency_ms));
+                    }
+                }
+                if let Some((index, _)) = best {
+                    index
+                } else if self.candidates.len() == 1 {
+                    0
+                } else {
+                    return Err(format!(
+                        "resident dataplane group {} selector failed: no alive dialer",
+                        self.group_name
+                    ));
+                }
+            }
+        };
+        self.candidates.get(selected_index).ok_or_else(|| {
+            format!(
+                "resident dataplane group {} selector returned missing candidate {}",
+                self.group_name, selected_index
+            )
+        })
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn record_check_result(

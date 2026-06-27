@@ -143,6 +143,14 @@ impl AliveDialerSet {
         self.alive.iter().filter(|alive| **alive).count()
     }
 
+    pub fn alive_indexes(&self) -> Vec<usize> {
+        self.alive
+            .iter()
+            .enumerate()
+            .filter_map(|(index, alive)| (*alive).then_some(index))
+            .collect()
+    }
+
     pub fn latency_offset(&self, index: usize) -> i64 {
         self.latency_offsets_ms.get(index).copied().unwrap_or(0)
     }
