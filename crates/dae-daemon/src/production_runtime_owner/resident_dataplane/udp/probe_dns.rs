@@ -257,9 +257,15 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
     let query = build_dns_a_query(id, lookup_host)?;
     let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);
     let dns = ResidentDnsPlan::asis(proxy.mark);
-    let (_, response) = executor.execute(&dns, proxy, original_dst, &query).await?;
+    let mut response = executor
+        .execute(&dns, proxy, original_dst, &query)
+        .await
+        .map(|(_, response)| response);
+    if matches!(response.as_ref(), Ok(response) if !response.reply_forwarded) {
+        response = wait_for_udp_probe_response(&mut executor).await;
+    }
     executor.shutdown().await;
-    dns_a_response_has_answer(id, &response.payload)
+    dns_a_response_has_answer(id, &response?.payload)
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn forward_resident_proxy_dns_udp_async(
