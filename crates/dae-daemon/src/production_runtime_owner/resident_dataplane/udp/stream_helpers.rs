@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::production_runtime_owner::resident_dataplane::select_ipv6_preferred_socket_addr;
+
 pub(super) fn proxy_server_authority(proxy: &ResidentProxyPlan) -> String {
     format!("{}:{}", proxy.server_host, proxy.server_port)
 }
@@ -8,10 +10,10 @@ pub(super) async fn resolve_proxy_udp_socket_addr_async(
     proxy: &ResidentProxyPlan,
 ) -> Result<SocketAddr, String> {
     let authority = proxy_server_authority(proxy);
-    tokio::net::lookup_host(authority.as_str())
+    let addrs = tokio::net::lookup_host(authority.as_str())
         .await
-        .map_err(|err| format!("resolve UDP proxy {authority}: {err}"))?
-        .next()
+        .map_err(|err| format!("resolve UDP proxy {authority}: {err}"))?;
+    select_ipv6_preferred_socket_addr(addrs)
         .ok_or_else(|| format!("resolve UDP proxy {authority}: no address"))
 }
 
@@ -31,10 +33,10 @@ pub(super) async fn socks5_udp_relay_addr_async(
     } else {
         parsed.authority()
     };
-    tokio::net::lookup_host(authority.as_str())
+    let addrs = tokio::net::lookup_host(authority.as_str())
         .await
-        .map_err(|err| format!("resolve SOCKS5 UDP relay {authority}: {err}"))?
-        .next()
+        .map_err(|err| format!("resolve SOCKS5 UDP relay {authority}: {err}"))?;
+    select_ipv6_preferred_socket_addr(addrs)
         .ok_or_else(|| format!("resolve SOCKS5 UDP relay {authority}: no address"))
 }
 
