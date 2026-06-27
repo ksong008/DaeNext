@@ -15,7 +15,7 @@ use tokio::time;
 
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT, ResidentDataplaneMetrics,
-    select_ipv6_preferred_socket_addr,
+    select_first_socket_addr,
 };
 
 #[derive(Debug)]
@@ -98,7 +98,7 @@ async fn resolve_direct_tcp_target_async(dial_target: &str) -> Result<SocketAddr
     let addrs = tokio::net::lookup_host(dial_target)
         .await
         .map_err(|err| format!("resolve direct TCP target {dial_target}: {err}"))?;
-    select_ipv6_preferred_socket_addr(addrs)
+    select_first_socket_addr(addrs)
         .ok_or_else(|| format!("resolve direct TCP target {dial_target} returned no IP address"))
 }
 

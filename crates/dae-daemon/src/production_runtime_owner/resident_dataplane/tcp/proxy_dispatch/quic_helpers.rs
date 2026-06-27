@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::production_runtime_owner::resident_dataplane::select_ipv6_preferred_socket_addr;
+use crate::production_runtime_owner::resident_dataplane::select_first_socket_addr;
 
 use std::fmt;
 use std::future::Future;
@@ -335,7 +335,7 @@ pub(crate) async fn resolve_proxy_udp_addr_async(
     let addrs = tokio::net::lookup_host(target.as_str())
         .await
         .map_err(|err| format!("resolve QUIC endpoint {target}: {err}"))?;
-    select_ipv6_preferred_socket_addr(addrs)
+    select_first_socket_addr(addrs)
         .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
 }
 
@@ -352,7 +352,7 @@ pub(crate) async fn resolve_hysteria2_quic_remote_async(
     let addrs = tokio::net::lookup_host(target.as_str())
         .await
         .map_err(|err| format!("resolve Hysteria2 QUIC endpoint {target}: {err}"))?;
-    select_ipv6_preferred_socket_addr(addrs)
+    select_first_socket_addr(addrs)
         .ok_or_else(|| format!("resolve Hysteria2 QUIC endpoint {target}: no address"))
 }
 
