@@ -19,12 +19,9 @@ pub(super) async fn forward_dns_to_upstream_async(
         ResidentDnsUpstreamScheme::Tls => forward_dns_tls_async(upstream, payload, plan).await,
         ResidentDnsUpstreamScheme::Https => forward_dns_https_async(upstream, payload, plan).await,
         ResidentDnsUpstreamScheme::Quic => {
-            let forwarder = forwarders.quic_forwarder(upstream, plan.mark)?;
-            forward_dns_quic_cached(forwarder, payload).await
+            forward_dns_quic_async(upstream, payload, plan, forwarders).await
         }
-        ResidentDnsUpstreamScheme::Http3 => {
-            forward_dns_h3_async(upstream, payload, plan.mark).await
-        }
+        ResidentDnsUpstreamScheme::Http3 => forward_dns_h3_async(upstream, payload, plan).await,
     }
 }
 
@@ -187,6 +184,57 @@ async fn forward_dns_quic_cached(
                 })
         }
     }
+}
+
+async fn forward_dns_quic_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    plan: &ResidentDnsPlan,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
+) -> Result<Vec<u8>, String> {
+    if plan.upstream_router.is_none() {
+        let forwarder = forwarders.quic_forwarder(upstream, plan.mark)?;
+        return forward_dns_quic_cached(forwarder, payload).await;
+    }
+
+    let mut failures = Vec::new();
+    for remote in resolved_upstream_targets(upstream).await? {
+        match select_dns_upstream_target(plan, upstream, remote, L4Proto::Udp) {
+            Ok(ResidentDnsUpstreamSelection::Direct { mark }) => {
+                match forward_dns_quic_to_target_async(upstream, remote, payload, mark).await {
+                    Ok(response) => return Ok(response),
+                    Err(err) => failures.push(format!("{remote}: {err}")),
+                }
+            }
+            Ok(ResidentDnsUpstreamSelection::Proxy { .. }) => {
+                failures.push(format!(
+                    "{remote}: DNS QUIC upstream routed to proxy but proxied DNS QUIC execution is not admitted"
+                ));
+            }
+            Err(err) => failures.push(format!("{remote}: {err}")),
+        }
+    }
+    Err(dns_upstream_targets_failed(
+        upstream,
+        "forward DNS QUIC to",
+        failures,
+    ))
+}
+
+async fn forward_dns_quic_to_target_async(
+    upstream: &ResidentDnsUpstream,
+    remote: SocketAddr,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let mut forwarder = ResidentDnsQuicForwarder {
+        upstream: upstream.clone(),
+        mark,
+        endpoint: None,
+        connection: None,
+    };
+    let connection = forwarder.connect_remote(remote).await?;
+    forward_dns_over_quic_connection(upstream, &connection, payload).await
 }
 
 impl ResidentDnsQuicForwarder {
@@ -675,12 +723,22 @@ async fn forward_dns_https_over_stream_async(
 async fn forward_dns_h3_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
-    mark: u32,
+    plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
     let mut failures = Vec::new();
     for remote in resolved_upstream_targets(upstream).await? {
-        match forward_dns_h3_to_target_async(upstream, remote, payload, mark).await {
-            Ok(response) => return Ok(response),
+        match select_dns_upstream_target(plan, upstream, remote, L4Proto::Udp) {
+            Ok(ResidentDnsUpstreamSelection::Direct { mark }) => {
+                match forward_dns_h3_to_target_async(upstream, remote, payload, mark).await {
+                    Ok(response) => return Ok(response),
+                    Err(err) => failures.push(format!("{remote}: {err}")),
+                }
+            }
+            Ok(ResidentDnsUpstreamSelection::Proxy { .. }) => {
+                failures.push(format!(
+                    "{remote}: DNS H3 upstream routed to proxy but proxied DNS H3 execution is not admitted"
+                ));
+            }
             Err(err) => failures.push(format!("{remote}: {err}")),
         }
     }
