@@ -154,7 +154,9 @@ pub use runtime_maps::{
     runtime_map_name_matches, truncated_bpf_name, update_map_elem_bytes,
 };
 pub use sockmap::{
-    ListenSocketMapFdSmoke, LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,
+    LISTEN_SOCKET_KEY_TCP4, LISTEN_SOCKET_KEY_TCP6, LISTEN_SOCKET_KEY_UDP4, LISTEN_SOCKET_KEY_UDP6,
+    LISTEN_SOCKET_KEYS, LISTEN_SOCKET_MAP_MAX_ENTRIES, ListenSocketMapFdSmoke,
+    LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,
     LoadedTproxyListenSocketMapFdSmoke, open_live_loaded_tproxy_listen_socket_map,
     open_live_loaded_tproxy_listen_socket_map_in_netns,
     open_tproxy_listener_set_and_update_sockmap_by_id, run_listen_socket_map_fd_smoke,

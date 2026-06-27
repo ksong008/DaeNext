@@ -39,7 +39,7 @@ use super::resident_routing::{
 };
 use super::topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
-    read_topology_values, setup_production_ipv4_datapath, show_host_program, show_peer_program,
+    read_topology_values, setup_production_ip_datapath, show_host_program, show_peer_program,
     write_param_image,
 };
 use super::{

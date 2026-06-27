@@ -18,6 +18,13 @@ const PACKET_HOST: u32 = 0;
 const PACKET_OTHERHOST: u32 = 3;
 const BPF_TCP_LISTEN: u32 = 10;
 const NOWHERE_IFINDEX: u32 = 0;
+const LISTEN_SOCKET_KEY_TCP4: u32 = 0;
+const LISTEN_SOCKET_KEY_TCP6: u32 = 1;
+const LISTEN_SOCKET_KEY_UDP4: u32 = 2;
+const LISTEN_SOCKET_KEY_UDP6: u32 = 3;
+const SKB_CB_TPROXY_MARK: usize = 0;
+const SKB_CB_TPROXY_L4PROTO: usize = 1;
+const SKB_CB_TPROXY_IS_IPV4: usize = 2;
 
 pub fn chain_next() -> i32 {
     TCX_NEXT
@@ -38,11 +45,21 @@ fn is_dns_udp(info: *const ParsedPacket) -> bool {
 }
 
 #[inline(always)]
-unsafe fn assign_listener(skb: *mut __sk_buff, l4proto: u32) {
+unsafe fn assign_listener(skb: *mut __sk_buff, l4proto: u32, is_ipv4: u32) {
     let key = if l4proto == IPPROTO_TCP as u32 {
-        0_u32
+        if is_ipv4 != 0 {
+            LISTEN_SOCKET_KEY_TCP4
+        } else {
+            LISTEN_SOCKET_KEY_TCP6
+        }
+    } else if l4proto == IPPROTO_UDP as u32 {
+        if is_ipv4 != 0 {
+            LISTEN_SOCKET_KEY_UDP4
+        } else {
+            LISTEN_SOCKET_KEY_UDP6
+        }
     } else {
-        1_u32
+        return;
     };
     let sock = unsafe {
         helpers::bpf_map_lookup_elem(
@@ -145,11 +162,18 @@ unsafe fn prep_redirect_to_control_plane(
         {
             return false;
         }
-        (*skb).cb[0] = TPROXY_MARK;
-        (*skb).cb[1] = if ((*info).l4proto == IPPROTO_TCP && packet::tcp_syn((*info).tcp_flags))
+        (*skb).cb[SKB_CB_TPROXY_MARK] = TPROXY_MARK;
+        let assign_l4proto = if ((*info).l4proto == IPPROTO_TCP
+            && packet::tcp_syn((*info).tcp_flags))
             || (*info).l4proto == IPPROTO_UDP
         {
             (*info).l4proto as u32
+        } else {
+            0
+        };
+        (*skb).cb[SKB_CB_TPROXY_L4PROTO] = assign_l4proto;
+        (*skb).cb[SKB_CB_TPROXY_IS_IPV4] = if assign_l4proto != 0 {
+            (*info).is_ipv4 as u32
         } else {
             0
         };
@@ -186,16 +210,24 @@ unsafe fn redirect_to_control_plane(
 
 #[inline(always)]
 pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {
-    if unsafe { (*skb).cb[0] } != TPROXY_MARK {
+    if unsafe { (*skb).cb[SKB_CB_TPROXY_MARK] } != TPROXY_MARK {
         return TC_ACT_SHOT;
     }
 
     unsafe {
         (*skb).mark = TPROXY_MARK;
         let _ = helpers::bpf_skb_change_type(skb.cast::<c_void>(), PACKET_HOST);
-        let l4proto = (*skb).cb[1];
-        if l4proto != 0 {
-            assign_listener(skb, l4proto);
+        let mut info = ParsedPacket::zeroed();
+        if packet::parse_transport(skb, ETH_HLEN, ptr::addr_of_mut!(info)) == 0 {
+            let info_ptr = ptr::addr_of!(info);
+            if is_new_tcp(info_ptr) || (*info_ptr).l4proto == IPPROTO_UDP {
+                assign_listener(skb, (*info_ptr).l4proto as u32, (*info_ptr).is_ipv4 as u32);
+            }
+        } else {
+            let l4proto = (*skb).cb[SKB_CB_TPROXY_L4PROTO];
+            if l4proto != 0 {
+                assign_listener(skb, l4proto, (*skb).cb[SKB_CB_TPROXY_IS_IPV4]);
+            }
         }
     }
     TC_ACT_OK

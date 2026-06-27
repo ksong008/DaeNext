@@ -135,6 +135,8 @@ pub(super) struct TproxyListenerOpenHandoffOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct TproxyListenerUpdateMapOptions {
     pub(super) map_id: u32,
-    pub(super) tcp_fd: i32,
-    pub(super) udp_fd: i32,
+    pub(super) tcp4_fd: i32,
+    pub(super) tcp6_fd: Option<i32>,
+    pub(super) udp4_fd: i32,
+    pub(super) udp6_fd: Option<i32>,
 }

@@ -104,7 +104,7 @@ static LISTEN_SOCKET_MAP: RawMap = RawMap::new(
     BPF_MAP_TYPE_SOCKMAP,
     size_of::<u32>(),
     size_of::<u64>(),
-    2,
+    4,
     0,
     PIN_NONE,
 );

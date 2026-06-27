@@ -35,10 +35,11 @@ pub(crate) fn socket_options_verified(
     tcp: &TproxySocketOptions,
     udp: &TproxySocketOptions,
 ) -> bool {
-    (tcp.ip_transparent || tcp.ipv6_transparent)
-        && tcp.so_reuseaddr
-        && tcp.original_dst_capture_ready
-        && (udp.ip_transparent || udp.ipv6_transparent)
-        && udp.so_reuseaddr
-        && udp.original_dst_capture_ready
+    socket_options_ready(tcp) && socket_options_ready(udp)
+}
+
+fn socket_options_ready(options: &TproxySocketOptions) -> bool {
+    (options.ip_transparent || options.ipv6_transparent)
+        && options.so_reuseaddr
+        && options.original_dst_capture_ready
 }

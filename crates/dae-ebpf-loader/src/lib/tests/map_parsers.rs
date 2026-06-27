@@ -105,11 +105,19 @@ pub(super) fn tproxy_listener_contract_keeps_native_handlers_ready() {
     );
     assert_eq!(
         json["listen_socket_map"]["key_0"].as_str().unwrap(),
-        "tcp listener fd"
+        "tcp listener fd for tcp4 packets"
     );
     assert_eq!(
         json["listen_socket_map"]["key_1"].as_str().unwrap(),
-        "udp socket fd"
+        "tcp listener fd for tcp6 packets"
+    );
+    assert_eq!(
+        json["listen_socket_map"]["key_2"].as_str().unwrap(),
+        "udp socket fd for udp4 packets"
+    );
+    assert_eq!(
+        json["listen_socket_map"]["key_3"].as_str().unwrap(),
+        "udp socket fd for udp6 packets"
     );
 }
 
@@ -135,19 +143,23 @@ pub(super) fn tproxy_listener_commands_require_handoff_and_socket_fds() {
 
     let output = run_with_args(["tproxy-listener", "update-map", "--map-id", "7"]);
     assert_eq!(output.exit_code, 2);
-    assert!(output.stderr.contains("--tcp-fd"));
+    assert!(output.stderr.contains("--tcp4-fd"));
     let update = parse_tproxy_listener_update_map_options(&[
         "--map-id=7".to_owned(),
-        "--tcp-fd=3".to_owned(),
-        "--udp-fd=4".to_owned(),
+        "--tcp4-fd=3".to_owned(),
+        "--tcp6-fd=4".to_owned(),
+        "--udp4-fd=5".to_owned(),
+        "--udp6-fd=6".to_owned(),
     ])
     .unwrap();
     assert_eq!(
         update,
         TproxyListenerUpdateMapOptions {
             map_id: 7,
-            tcp_fd: 3,
-            udp_fd: 4,
+            tcp4_fd: 3,
+            tcp6_fd: Some(4),
+            udp4_fd: 5,
+            udp6_fd: Some(6),
         }
     );
 }

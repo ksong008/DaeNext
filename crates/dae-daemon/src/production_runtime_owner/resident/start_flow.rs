@@ -57,7 +57,7 @@ pub(super) fn start_with_options(
         let topology_readiness = resident_topology_readiness(dae0_ifindex, dae0_mac, dae0peer_mac);
         ok &= topology_readiness["status"].as_str() == Some("pass");
         if let (true, Some(dae0_mac)) = (ok, dae0_mac) {
-            ok &= setup_production_ipv4_datapath(&mut executed_steps, dae0_mac);
+            ok &= setup_production_ip_datapath(&mut executed_steps, dae0_mac);
         }
         let param_image = if options.native_ebpf_requested {
             json!({

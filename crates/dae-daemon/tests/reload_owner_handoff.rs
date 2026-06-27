@@ -33,7 +33,7 @@ fn reload_owner_handoff_smoke_is_environment_aware() {
                 .as_array()
                 .unwrap()
                 .len(),
-            2
+            4
         );
     } else {
         assert!(report["smoke_error"].as_str().is_some());
