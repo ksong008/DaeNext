@@ -151,7 +151,7 @@ impl ResidentUdpRouter {
         let force_proxy_packet = original_dst.port() == 53 && initial.must > 0;
         if original_dst.port() == 53 && !force_proxy_packet {
             return self
-                .select_proxy_from_group(self.default_outbound, initial.mark, original_dst)
+                .select_proxy_from_group(self.default_outbound, initial.mark)
                 .map(|proxy| {
                     let route = ResidentUdpRouteSelection {
                         initial_outbound: initial.outbound,
@@ -192,7 +192,7 @@ impl ResidentUdpRouter {
                     .to_owned(),
             ),
             outbound => self
-                .select_proxy_from_group(outbound, final_result.mark, original_dst)
+                .select_proxy_from_group(outbound, final_result.mark)
                 .map(|proxy| {
                     let route = ResidentUdpRouteSelection {
                         final_mark: proxy.mark,
@@ -259,7 +259,6 @@ impl ResidentUdpRouter {
         &self,
         outbound: u8,
         mark: u32,
-        original_dst: SocketAddr,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
         let Some(proxy_group) = self.proxy_groups.get(&outbound) else {
             return Err(format!(
@@ -267,8 +266,7 @@ impl ResidentUdpRouter {
                 OutboundIndex(outbound)
             ));
         };
-        let proxy = proxy_group
-            .select_proxy_for_udp_network(resident_udp_selector_network_type(original_dst))?;
+        let proxy = proxy_group.select_proxy_for_udp_runtime()?;
         if mark == 0 || proxy.mark == mark {
             return Ok(proxy);
         }

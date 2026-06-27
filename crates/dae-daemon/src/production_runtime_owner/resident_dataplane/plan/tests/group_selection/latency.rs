@@ -27,6 +27,80 @@ fn two_node_latency_config(global_extra: &str, group_body: &str) -> Config {
     parse_config(&config_text)
 }
 
+fn assert_runtime_tcp_min_family_selects_lowest_result(policy: &str) {
+    let group_body = format!(
+        r#"
+        filter: name(node_a, node_b)
+        policy: {policy}
+        tcp_check_url: 'http://cp.cloudflare.com,::1,127.0.0.1'
+        "#
+    );
+    let config = two_node_latency_config("", &group_body);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(20), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP6, Some(50), 2)
+        .unwrap();
+    assert_eq!(
+        group.select_proxy_for_tcp_runtime().unwrap().node_tag,
+        "node_a"
+    );
+
+    let config = two_node_latency_config("", &group_body);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(300), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP6, Some(50), 2)
+        .unwrap();
+    assert_eq!(
+        group.select_proxy_for_tcp_runtime().unwrap().node_tag,
+        "node_b"
+    );
+}
+
+fn assert_runtime_udp_min_family_selects_lowest_result(policy: &str) {
+    let group_body = format!(
+        r#"
+        filter: name(node_a, node_b)
+        policy: {policy}
+        udp_check_dns: 'dns.google:53,::1,127.0.0.1'
+        "#
+    );
+    let config = two_node_latency_config("", &group_body);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, Some(20), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 2)
+        .unwrap();
+    assert_eq!(
+        group.select_proxy_for_udp_runtime().unwrap().node_tag,
+        "node_a"
+    );
+
+    let config = two_node_latency_config("", &group_body);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, Some(300), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 2)
+        .unwrap();
+    assert_eq!(
+        group.select_proxy_for_udp_runtime().unwrap().node_tag,
+        "node_b"
+    );
+}
+
 #[test]
 pub(super) fn resident_dataplane_min_policy_selects_checked_lowest_last_latency() {
     let config = two_node_latency_config(
@@ -85,6 +159,45 @@ pub(super) fn resident_dataplane_tcp_selection_uses_requested_ip_family_latency(
             .node_tag,
         "node_b"
     );
+}
+
+#[test]
+pub(super) fn resident_dataplane_runtime_tcp_min_family_compares_results_only() {
+    for policy in ["min", "min_avg10", "min_moving_avg"] {
+        assert_runtime_tcp_min_family_selects_lowest_result(policy);
+    }
+}
+
+#[test]
+pub(super) fn resident_dataplane_runtime_tcp_min_family_tie_keeps_candidate_order() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        tcp_check_url: 'http://cp.cloudflare.com,::1,127.0.0.1'
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP6, Some(50), 1)
+        .unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(50), 2)
+        .unwrap();
+
+    assert_eq!(
+        group.select_proxy_for_tcp_runtime().unwrap().node_tag,
+        "node_a"
+    );
+}
+
+#[test]
+pub(super) fn resident_dataplane_runtime_udp_min_family_compares_results_only() {
+    for policy in ["min", "min_avg10", "min_moving_avg"] {
+        assert_runtime_udp_min_family_selects_lowest_result(policy);
+    }
 }
 
 #[test]
