@@ -551,7 +551,10 @@ fn spawn_resident_dns_datagram_handler(
         .await
         {
             Ok(Ok(response)) => response,
-            Ok(Err(_)) | Err(_) => return,
+            Ok(Err(_)) | Err(_) => match build_dns_server_failure_response(&packet.payload) {
+                Ok(response) => response,
+                Err(_) => return,
+            },
         };
         if send_udp_reply(original_dst, packet.peer, &response).is_ok() {
             metrics.add_download(response.len());

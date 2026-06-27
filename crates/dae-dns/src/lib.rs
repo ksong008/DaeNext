@@ -10,7 +10,15 @@ pub mod resolve;
 pub mod routing;
 pub mod upstream;
 
+pub const DNS_HEADER_LEN: usize = 12;
 pub const DNS_DEFAULT_PORT: u16 = 53;
+pub const DNS_FLAG_RESPONSE: u16 = 0x8000;
+pub const DNS_FLAG_TRUNCATED: u16 = 0x0200;
+pub const DNS_FLAG_RECURSION_DESIRED: u16 = 0x0100;
+pub const DNS_FLAG_RECURSION_AVAILABLE: u16 = 0x0080;
+pub const DNS_RCODE_MASK: u16 = 0x000f;
+pub const DNS_RCODE_NOERROR: u16 = 0;
+pub const DNS_RCODE_SERVFAIL: u16 = 2;
 
 pub use active::{
     ACTIVE_DNS_DEFAULT_QNAME, ACTIVE_DNS_DEFAULT_TARGET_PORT, ACTIVE_DNS_DEFAULT_UPSTREAM_IP,

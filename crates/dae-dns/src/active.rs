@@ -1,10 +1,13 @@
 use std::net::Ipv4Addr;
 
-use crate::DNS_DEFAULT_PORT;
 use crate::cache::DNS_CACHE_MAX_ENTRIES;
 use crate::cache_key::DnsCacheKey;
 use crate::error::DnsError;
 use crate::message::{DnsPacketQuestionView, DnsQuestion};
+use crate::{
+    DNS_DEFAULT_PORT, DNS_FLAG_RECURSION_AVAILABLE, DNS_FLAG_RECURSION_DESIRED, DNS_FLAG_RESPONSE,
+    DNS_RCODE_NOERROR,
+};
 
 pub const ACTIVE_DNS_DEFAULT_TARGET_PORT: u16 = DNS_DEFAULT_PORT;
 pub const ACTIVE_DNS_DEFAULT_UPSTREAM_IP: &str = "127.0.0.1";
@@ -12,6 +15,10 @@ pub const ACTIVE_DNS_DEFAULT_UPSTREAM_PORT: u16 = 10530;
 pub const ACTIVE_DNS_DEFAULT_QNAME: &str = "connectivity-check.invalid.";
 pub const ACTIVE_DNS_QTYPE_A: u16 = 1;
 pub const ACTIVE_DNS_QCLASS_IN: u16 = 1;
+const ACTIVE_DNS_RESPONSE_FLAGS: u16 = DNS_FLAG_RESPONSE
+    | DNS_FLAG_RECURSION_DESIRED
+    | DNS_FLAG_RECURSION_AVAILABLE
+    | DNS_RCODE_NOERROR;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActiveDnsCacheContract {
@@ -66,7 +73,7 @@ pub fn build_active_dns_a_response(
     let question_end = dns_question_end(query)?;
     let mut response = Vec::with_capacity(question_end + 16);
     response.extend_from_slice(&query[0..2]);
-    response.extend_from_slice(&0x8180_u16.to_be_bytes());
+    response.extend_from_slice(&ACTIVE_DNS_RESPONSE_FLAGS.to_be_bytes());
     response.extend_from_slice(&1_u16.to_be_bytes());
     response.extend_from_slice(&1_u16.to_be_bytes());
     response.extend_from_slice(&0_u16.to_be_bytes());
