@@ -53,6 +53,7 @@ mod cache;
 mod domain_routing;
 mod error_response;
 mod routing;
+mod tcp_wire;
 mod transport;
 use self::cache::ResidentDnsRuntimeCache;
 pub(super) use self::domain_routing::ResidentDnsDomainRouting;
@@ -69,9 +70,12 @@ use self::routing::{
     parse_request_default_action, parse_response_default_action, select_request_action,
     select_response_action, select_response_action_for_upstream,
 };
+pub(super) use self::tcp_wire::{read_dns_tcp_payload_async, write_dns_tcp_payload_async};
 #[cfg(test)]
 use self::transport::parse_doh_http_response;
-use self::transport::{forward_dns_to_upstream_async, forward_dns_udp_async};
+use self::transport::{
+    forward_dns_tcp_asis_async, forward_dns_to_upstream_async, forward_dns_udp_async,
+};
 
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
@@ -393,7 +397,7 @@ impl ResidentDnsPlan {
             synthetic_dst,
             &query,
             &request,
-            false,
+            None,
         )
         .await
         else {
@@ -732,7 +736,27 @@ pub(super) async fn handle_resident_dns_udp_async(
     original_dst: SocketAddr,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
-    handle_resident_dns_request_async(plan, original_dst, payload, true).await
+    handle_resident_dns_request_async(
+        plan,
+        original_dst,
+        payload,
+        Some(ResidentDnsAsisTransport::Udp),
+    )
+    .await
+}
+
+pub(super) async fn handle_resident_dns_tcp_async(
+    plan: &ResidentDnsPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    handle_resident_dns_request_async(
+        plan,
+        original_dst,
+        payload,
+        Some(ResidentDnsAsisTransport::Tcp),
+    )
+    .await
 }
 
 pub(super) async fn handle_resident_dns_local_trace_async(
@@ -750,8 +774,7 @@ pub(super) async fn handle_resident_dns_local_trace_async(
     }
     let mut trace = ResidentDnsTraceSummary::from_request(plan, &request)?;
     if dns_ipversion_preference_applies(plan, &request) {
-        let response =
-            handle_resident_dns_request_async(plan, original_dst, payload, false).await?;
+        let response = handle_resident_dns_request_async(plan, original_dst, payload, None).await?;
         trace.cache = DNS_TRACE_CACHE_UNKNOWN.to_owned();
         trace.request_routing = DNS_TRACE_ROUTING_IPVERSION_PREFERENCE.to_owned();
         trace.response_routing = DNS_TRACE_ROUTING_RESOLVED.to_owned();
@@ -762,17 +785,23 @@ pub(super) async fn handle_resident_dns_local_trace_async(
         original_dst,
         payload,
         &request,
-        false,
+        None,
         trace,
     )
     .await
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResidentDnsAsisTransport {
+    Udp,
+    Tcp,
 }
 
 async fn handle_resident_dns_request_async(
     plan: &ResidentDnsPlan,
     original_dst: SocketAddr,
     payload: &[u8],
-    allow_asis: bool,
+    asis_transport: Option<ResidentDnsAsisTransport>,
 ) -> Result<Vec<u8>, String> {
     let request =
         DnsPacketView::parse(payload).map_err(|err| format!("parse DNS request: {err}"))?;
@@ -783,7 +812,7 @@ async fn handle_resident_dns_request_async(
         return Err("DNS request has no question".to_owned());
     }
     if let Some(response) =
-        handle_ipversion_preference(plan, original_dst, payload, &request, allow_asis).await?
+        handle_ipversion_preference(plan, original_dst, payload, &request, asis_transport).await?
     {
         return Ok(response);
     }
@@ -792,7 +821,7 @@ async fn handle_resident_dns_request_async(
         original_dst,
         payload,
         &request,
-        allow_asis,
+        asis_transport,
     )
     .await
 }
@@ -816,7 +845,7 @@ async fn handle_ipversion_preference(
     original_dst: SocketAddr,
     payload: &[u8],
     request: &DnsPacketView<'_>,
-    allow_asis: bool,
+    asis_transport: Option<ResidentDnsAsisTransport>,
 ) -> Result<Option<Vec<u8>>, String> {
     let Some(preferred_qtype) = plan.ipversion_prefer else {
         return Ok(None);
@@ -843,14 +872,14 @@ async fn handle_ipversion_preference(
         original_dst,
         &preferred_payload,
         &preferred_request,
-        allow_asis,
+        asis_transport,
     );
     let requested_future = handle_resident_dns_request_without_preference(
         plan,
         original_dst,
         payload,
         request,
-        allow_asis,
+        asis_transport,
     );
     tokio::pin!(preferred_future);
     tokio::pin!(requested_future);
@@ -888,7 +917,7 @@ async fn handle_resident_dns_request_without_preference(
     original_dst: SocketAddr,
     payload: &[u8],
     request: &DnsPacketView<'_>,
-    allow_asis: bool,
+    asis_transport: Option<ResidentDnsAsisTransport>,
 ) -> Result<Vec<u8>, String> {
     let action = select_request_action(plan, request)?;
     if matches!(action, ResidentDnsRequestAction::Reject) {
@@ -896,7 +925,7 @@ async fn handle_resident_dns_request_without_preference(
         return build_reject_response(payload, request);
     }
     if let ResidentDnsRequestAction::AsIs = action
-        && !allow_asis
+        && asis_transport.is_none()
     {
         return Err(
                 "dns request routing cannot use \"asis\" for locally bound dns listener; configure an explicit upstream instead"
@@ -920,9 +949,13 @@ async fn handle_resident_dns_request_without_preference(
     }
     match action {
         ResidentDnsRequestAction::AsIs => {
-            let response = forward_dns_udp_async(original_dst, payload, plan.mark)
-                .await
-                .map_err(|err| format!("forward DNS asis to {original_dst}: {err}"))?;
+            let response = forward_dns_asis_async(
+                original_dst,
+                payload,
+                plan.mark,
+                asis_transport.expect("asis transport checked before forwarding"),
+            )
+            .await?;
             validate_dns_response_for_request(request, &response, true)?;
             let response_action = select_response_action_for_upstream(
                 plan,
@@ -953,7 +986,7 @@ async fn handle_resident_dns_request_without_preference_trace(
     original_dst: SocketAddr,
     payload: &[u8],
     request: &DnsPacketView<'_>,
-    allow_asis: bool,
+    asis_transport: Option<ResidentDnsAsisTransport>,
     mut trace: ResidentDnsTraceSummary,
 ) -> Result<ResidentDnsQueryResult, String> {
     let action = select_request_action(plan, request)?;
@@ -966,7 +999,7 @@ async fn handle_resident_dns_request_without_preference_trace(
         return Ok(trace.finish(response, DNS_TRACE_REASON_REQUEST_REJECTED));
     }
     if let ResidentDnsRequestAction::AsIs = action
-        && !allow_asis
+        && asis_transport.is_none()
     {
         return Err(
                 "dns request routing cannot use \"asis\" for locally bound dns listener; configure an explicit upstream instead"
@@ -996,9 +1029,13 @@ async fn handle_resident_dns_request_without_preference_trace(
     match action {
         ResidentDnsRequestAction::AsIs => {
             trace.push_asis_attempt();
-            let response = forward_dns_udp_async(original_dst, payload, plan.mark)
-                .await
-                .map_err(|err| format!("forward DNS asis to {original_dst}: {err}"))?;
+            let response = forward_dns_asis_async(
+                original_dst,
+                payload,
+                plan.mark,
+                asis_transport.expect("asis transport checked before forwarding"),
+            )
+            .await?;
             validate_dns_response_for_request(request, &response, true)?;
             let response_action = select_response_action_for_upstream(
                 plan,
@@ -1030,6 +1067,22 @@ async fn handle_resident_dns_request_without_preference_trace(
             resolve_dns_response_routing_trace(plan, payload, request, upstream.clone(), trace)
                 .await
         }
+    }
+}
+
+async fn forward_dns_asis_async(
+    original_dst: SocketAddr,
+    payload: &[u8],
+    mark: u32,
+    transport: ResidentDnsAsisTransport,
+) -> Result<Vec<u8>, String> {
+    match transport {
+        ResidentDnsAsisTransport::Udp => forward_dns_udp_async(original_dst, payload, mark)
+            .await
+            .map_err(|err| format!("forward DNS UDP asis to {original_dst}: {err}")),
+        ResidentDnsAsisTransport::Tcp => forward_dns_tcp_asis_async(original_dst, payload, mark)
+            .await
+            .map_err(|err| format!("forward DNS TCP asis to {original_dst}: {err}")),
     }
 }
 
