@@ -40,7 +40,7 @@
     {
       "flags": 0,
       "key_size": 4,
-      "max_entries": 2,
+      "max_entries": 4,
       "name": "listen_socket_map",
       "pinning": "PinNone",
       "type": "SockMap",

@@ -1,5 +1,13 @@
 use super::*;
-pub(crate) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [u8; 6]) -> bool {
+
+const PRODUCTION_TPROXY_FWMARK_RULE: &str = "0x8000000/0x8000000";
+const PRODUCTION_TPROXY_ROUTE_TABLE: &str = "2023";
+const PRODUCTION_PEER_IPV4_ADDR: &str = "169.254.0.11/32";
+const PRODUCTION_HOST_IPV4_NEXT_HOP: &str = "169.254.0.1";
+const PRODUCTION_PEER_IPV6_ADDR: &str = "fd00:dae:2023::11/128";
+const PRODUCTION_HOST_IPV6_NEXT_HOP: &str = "fd00:dae:2023::1";
+
+pub(crate) fn setup_production_ip_datapath(steps: &mut Vec<Value>, dae0_mac: [u8; 6]) -> bool {
     let host_mac = mac_string(dae0_mac);
     let mut ok = true;
     ok &= run_step(
@@ -15,9 +23,9 @@ pub(crate) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [
                 "rule",
                 "add",
                 "fwmark",
-                "0x8000000/0x8000000",
+                PRODUCTION_TPROXY_FWMARK_RULE,
                 "table",
-                "2023",
+                PRODUCTION_TPROXY_ROUTE_TABLE,
             ],
         ),
     );
@@ -38,7 +46,49 @@ pub(crate) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [
                 "dev",
                 "lo",
                 "table",
-                "2023",
+                PRODUCTION_TPROXY_ROUTE_TABLE,
+            ],
+        ),
+    );
+    ok &= run_step(
+        steps,
+        "add-daens-ipv6-fwmark-rule",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                PRODUCTION_NETNS,
+                "ip",
+                "-6",
+                "rule",
+                "add",
+                "fwmark",
+                PRODUCTION_TPROXY_FWMARK_RULE,
+                "table",
+                PRODUCTION_TPROXY_ROUTE_TABLE,
+            ],
+        ),
+    );
+    ok &= run_step(
+        steps,
+        "add-daens-ipv6-local-route",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                PRODUCTION_NETNS,
+                "ip",
+                "-6",
+                "route",
+                "add",
+                "local",
+                "default",
+                "dev",
+                "lo",
+                "table",
+                PRODUCTION_TPROXY_ROUTE_TABLE,
             ],
         ),
     );
@@ -102,7 +152,7 @@ pub(crate) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [
                 "ip",
                 "addr",
                 "add",
-                "169.254.0.11/32",
+                PRODUCTION_PEER_IPV4_ADDR,
                 "dev",
                 PRODUCTION_PEER_IFACE,
             ],
@@ -120,7 +170,7 @@ pub(crate) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [
                 "ip",
                 "route",
                 "add",
-                "169.254.0.1",
+                PRODUCTION_HOST_IPV4_NEXT_HOP,
                 "dev",
                 PRODUCTION_PEER_IFACE,
             ],
@@ -140,7 +190,7 @@ pub(crate) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [
                 "add",
                 "default",
                 "via",
-                "169.254.0.1",
+                PRODUCTION_HOST_IPV4_NEXT_HOP,
                 "dev",
                 PRODUCTION_PEER_IFACE,
             ],
@@ -158,7 +208,89 @@ pub(crate) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [
                 "ip",
                 "neigh",
                 "replace",
-                "169.254.0.1",
+                PRODUCTION_HOST_IPV4_NEXT_HOP,
+                "dev",
+                PRODUCTION_PEER_IFACE,
+                "lladdr",
+                &host_mac,
+                "nud",
+                "permanent",
+            ],
+        ),
+    );
+    ok &= run_step(
+        steps,
+        "assign-daens-dae0peer-ipv6-link-ip",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                PRODUCTION_NETNS,
+                "ip",
+                "-6",
+                "addr",
+                "add",
+                PRODUCTION_PEER_IPV6_ADDR,
+                "dev",
+                PRODUCTION_PEER_IFACE,
+            ],
+        ),
+    );
+    ok &= run_step(
+        steps,
+        "add-daens-dae0peer-ipv6-link-route",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                PRODUCTION_NETNS,
+                "ip",
+                "-6",
+                "route",
+                "add",
+                PRODUCTION_HOST_IPV6_NEXT_HOP,
+                "dev",
+                PRODUCTION_PEER_IFACE,
+            ],
+        ),
+    );
+    ok &= run_step(
+        steps,
+        "add-daens-dae0peer-ipv6-default-route",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                PRODUCTION_NETNS,
+                "ip",
+                "-6",
+                "route",
+                "add",
+                "default",
+                "via",
+                PRODUCTION_HOST_IPV6_NEXT_HOP,
+                "dev",
+                PRODUCTION_PEER_IFACE,
+            ],
+        ),
+    );
+    ok &= run_step(
+        steps,
+        "add-daens-dae0peer-ipv6-host-neighbor",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                PRODUCTION_NETNS,
+                "ip",
+                "-6",
+                "neigh",
+                "replace",
+                PRODUCTION_HOST_IPV6_NEXT_HOP,
                 "dev",
                 PRODUCTION_PEER_IFACE,
                 "lladdr",

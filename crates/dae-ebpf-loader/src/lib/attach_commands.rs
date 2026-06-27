@@ -147,15 +147,12 @@ pub(crate) fn run_tproxy_listener_open_handoff(
         },
         "native_userspace_handlers_ready": true,
     });
+    let handoff_fds = [
+        handoff.listeners.tcp_listener.as_raw_fd(),
+        handoff.listeners.udp_socket.as_raw_fd(),
+    ];
     let payload = format!("{payload}\n");
-    if let Err(err) = send_fd_handoff(
-        options.handoff_fd,
-        payload.as_bytes(),
-        &[
-            handoff.listeners.tcp_listener.as_raw_fd(),
-            handoff.listeners.udp_socket.as_raw_fd(),
-        ],
-    ) {
+    if let Err(err) = send_fd_handoff(options.handoff_fd, payload.as_bytes(), &handoff_fds) {
         return LoaderOutput::error(format!("send tproxy listener fd handoff failed: {err}"));
     }
     LoaderOutput::ok(payload)
@@ -164,10 +161,13 @@ pub(crate) fn run_tproxy_listener_open_handoff(
 pub(crate) fn run_tproxy_listener_update_map(
     options: TproxyListenerUpdateMapOptions,
 ) -> LoaderOutput {
+    let keys_updated = dae_ebpf_support::LISTEN_SOCKET_KEYS.to_vec();
     let map = match dae_ebpf_support::update_listen_socket_map_by_id(
         options.map_id,
-        options.tcp_fd,
-        options.udp_fd,
+        options.tcp4_fd,
+        options.tcp6_fd,
+        options.udp4_fd,
+        options.udp6_fd,
     ) {
         Ok(map) => map,
         Err(err) => {
@@ -182,9 +182,11 @@ pub(crate) fn run_tproxy_listener_update_map(
             "scope": "tproxy-listener-update-map",
             "map_id": map.id,
             "map_name": map.name,
-            "keys_updated": [0, 1],
-            "tcp_fd": options.tcp_fd,
-            "udp_fd": options.udp_fd,
+            "keys_updated": keys_updated,
+            "tcp4_fd": options.tcp4_fd,
+            "tcp6_fd": options.tcp6_fd,
+            "udp4_fd": options.udp4_fd,
+            "udp6_fd": options.udp6_fd,
             "native_userspace_handlers_ready": true,
         })
     ))

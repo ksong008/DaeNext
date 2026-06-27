@@ -69,7 +69,7 @@ pub(super) fn run_contract() -> LoaderOutput {
                 "bpf_attach_type": line.role.bpf_attach_type(),
                 "aya_program_kind": line.aya_program_kind.as_str(),
             })).collect::<Vec<_>>(),
-            "listener_smoke": "listen_socket_map key 0/1 remains updated by tproxy-listener helper; Rust Aya loader only preserves map ABI",
+            "listener_smoke": "listen_socket_map TCP/UDP family keys remain updated by tproxy-listener helper; Rust Aya loader only preserves map ABI",
             "routing_smoke": "routing-map/domain-routing-map helpers remain userspace-owned; Rust Aya loader only preserves map ABI",
         })
     ))
@@ -155,15 +155,17 @@ pub(super) fn run_tproxy_listener_contract() -> LoaderOutput {
         json!({
             "name": "rust-tproxy-listener-sockmap-handoff-contract",
             "binary": "dae-ebpf-loader",
-            "scope": "Rust opens TCP/UDP tproxy listeners in the caller netns, writes listen_socket_map key 0/1, and hands listener fds back to native userspace handlers",
+            "scope": "Rust opens dual-stack TCP/UDP tproxy listeners in the caller netns, writes listen_socket_map family keys with those fds, and hands listener fds back to native userspace handlers",
             "native_userspace_tcp_udp_handlers_ready": true,
             "native_routing_dns_sniff_group_outbound_ready": true,
             "kernel_ebpf_program_rewrite": false,
             "listen_socket_map": {
-                "key_0": "tcp listener fd",
-                "key_1": "udp socket fd",
+                "key_0": "tcp listener fd for tcp4 packets",
+                "key_1": "tcp listener fd for tcp6 packets",
+                "key_2": "udp socket fd for udp4 packets",
+                "key_3": "udp socket fd for udp6 packets",
                 "map_type": "BPF_MAP_TYPE_SOCKMAP",
-                "max_entries": 2
+                "max_entries": 4
             },
             "socket_options": {
                 "ip_transparent": true,

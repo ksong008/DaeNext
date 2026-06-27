@@ -121,7 +121,7 @@ const MAP_CATALOG: [MapSpec; 13] = [
         map_type: "SockMap",
         key_size: 4,
         value_size: 8,
-        max_entries: 2,
+        max_entries: 4,
         flags: 0,
         pinning: "PinNone",
     },

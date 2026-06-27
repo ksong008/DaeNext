@@ -48,8 +48,10 @@ pub(crate) fn parse_tproxy_listener_update_map_options(
     args: &[String],
 ) -> Result<TproxyListenerUpdateMapOptions, String> {
     let mut map_id = None;
-    let mut tcp_fd = None;
-    let mut udp_fd = None;
+    let mut tcp4_fd = None;
+    let mut tcp6_fd = None;
+    let mut udp4_fd = None;
+    let mut udp6_fd = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -59,21 +61,39 @@ pub(crate) fn parse_tproxy_listener_update_map_options(
                     "tproxy-listener update-map --map-id",
                 )?)
             }
-            "--tcp-fd" => {
-                tcp_fd = Some(parse_next::<i32>(
+            "--tcp-fd" | "--tcp4-fd" => {
+                tcp4_fd = Some(parse_next::<i32>(
                     &mut iter,
-                    "tproxy-listener update-map --tcp-fd",
+                    "tproxy-listener update-map --tcp4-fd",
                 )?)
             }
-            "--udp-fd" => {
-                udp_fd = Some(parse_next::<i32>(
+            "--tcp6-fd" => {
+                tcp6_fd = Some(parse_next::<i32>(
                     &mut iter,
-                    "tproxy-listener update-map --udp-fd",
+                    "tproxy-listener update-map --tcp6-fd",
+                )?)
+            }
+            "--udp-fd" | "--udp4-fd" => {
+                udp4_fd = Some(parse_next::<i32>(
+                    &mut iter,
+                    "tproxy-listener update-map --udp4-fd",
+                )?)
+            }
+            "--udp6-fd" => {
+                udp6_fd = Some(parse_next::<i32>(
+                    &mut iter,
+                    "tproxy-listener update-map --udp6-fd",
                 )?)
             }
             _ if arg.starts_with("--map-id=") => map_id = Some(parse_value(arg)?),
-            _ if arg.starts_with("--tcp-fd=") => tcp_fd = Some(parse_value(arg)?),
-            _ if arg.starts_with("--udp-fd=") => udp_fd = Some(parse_value(arg)?),
+            _ if arg.starts_with("--tcp-fd=") || arg.starts_with("--tcp4-fd=") => {
+                tcp4_fd = Some(parse_value(arg)?)
+            }
+            _ if arg.starts_with("--tcp6-fd=") => tcp6_fd = Some(parse_value(arg)?),
+            _ if arg.starts_with("--udp-fd=") || arg.starts_with("--udp4-fd=") => {
+                udp4_fd = Some(parse_value(arg)?)
+            }
+            _ if arg.starts_with("--udp6-fd=") => udp6_fd = Some(parse_value(arg)?),
             _ => {
                 return Err(format!(
                     "unsupported tproxy-listener update-map argument: {arg}"
@@ -83,7 +103,11 @@ pub(crate) fn parse_tproxy_listener_update_map_options(
     }
     Ok(TproxyListenerUpdateMapOptions {
         map_id: map_id.ok_or_else(|| "missing tproxy-listener update-map --map-id".to_owned())?,
-        tcp_fd: tcp_fd.ok_or_else(|| "missing tproxy-listener update-map --tcp-fd".to_owned())?,
-        udp_fd: udp_fd.ok_or_else(|| "missing tproxy-listener update-map --udp-fd".to_owned())?,
+        tcp4_fd: tcp4_fd
+            .ok_or_else(|| "missing tproxy-listener update-map --tcp4-fd".to_owned())?,
+        tcp6_fd,
+        udp4_fd: udp4_fd
+            .ok_or_else(|| "missing tproxy-listener update-map --udp4-fd".to_owned())?,
+        udp6_fd,
     })
 }

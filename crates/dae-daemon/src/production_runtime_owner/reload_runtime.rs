@@ -5,7 +5,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use dae_ebpf_support::{
-    AttachBackend, LiveLoadedTproxyListenSocketMap, map_info, open_map_fd, update_map_elem_bytes,
+    AttachBackend, LISTEN_SOCKET_KEY_TCP4, LISTEN_SOCKET_KEY_TCP6, LISTEN_SOCKET_KEY_UDP4,
+    LISTEN_SOCKET_KEY_UDP6, LiveLoadedTproxyListenSocketMap, map_info, open_map_fd,
+    update_map_elem_bytes,
 };
 use dae_engine::{
     DnsObservabilityStats, RuntimeOverview, RuntimeStatsSnapshot, RuntimeTrafficSample,
@@ -93,7 +95,7 @@ pub(super) fn run_reload_runtime_parity_probe(
             && evidence.production_bpf_owner_transferred;
     evidence.listener_reuse = json!({
         "status": if evidence.production_listener_reused { "pass" } else { "fail" },
-        "strategy": "reuse existing production TCP listener and UDP socket; rewrite listen_socket_map keys 0/1 with the same fds instead of re-listening",
+        "strategy": "reuse existing production TCP/UDP listeners; rewrite listen_socket_map family keys with the same fds instead of re-listening",
         "old_owner_listener": listener_before,
         "new_owner_listener": listener_after,
         "ready_after_map_handoff": evidence.production_bpf_owner_transferred,
@@ -209,8 +211,26 @@ fn rewrite_sockmap_with_reused_listener_fds(
             });
         }
     };
-    let tcp_update = update_sockmap_fd(map_fd.as_raw_fd(), 0, handoff.tcp_listener_fd);
-    let udp_update = update_sockmap_fd(map_fd.as_raw_fd(), 1, handoff.udp_socket_fd);
+    let tcp4_update = update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_TCP4,
+        handoff.tcp_listener_fd,
+    );
+    let tcp6_update = update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_TCP6,
+        handoff.tcp_listener_fd,
+    );
+    let udp4_update = update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_UDP4,
+        handoff.udp_socket_fd,
+    );
+    let udp6_update = update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_UDP6,
+        handoff.udp_socket_fd,
+    );
     let after_info = match map_info(map_fd.as_raw_fd()) {
         Ok(info) => json!({
             "id": info.id,
@@ -239,8 +259,10 @@ fn rewrite_sockmap_with_reused_listener_fds(
     let attach_continuity = attach_continuity_value(options, tc_filters_still_attached);
     let attach_continuity_evidence_passed = attach_continuity["status"].as_str() == Some("pass");
     let same_map_id_after_reopen = after_info["id"].as_u64() == Some(u64::from(handoff.map.id));
-    let passed = tcp_update.is_ok()
-        && udp_update.is_ok()
+    let passed = tcp4_update.is_ok()
+        && tcp6_update.is_ok()
+        && udp4_update.is_ok()
+        && udp6_update.is_ok()
         && same_map_id_after_reopen
         && attach_continuity_evidence_passed;
     json!({
@@ -248,10 +270,14 @@ fn rewrite_sockmap_with_reused_listener_fds(
         "old_owner_eject_bpf_object": true,
         "new_owner_inject_bpf_object": passed,
         "same_map_id_after_reopen": same_map_id_after_reopen,
-        "listen_socket_map_key_0_rewritten_with_reused_tcp_fd": tcp_update.is_ok(),
-        "listen_socket_map_key_1_rewritten_with_reused_udp_fd": udp_update.is_ok(),
-        "tcp_update_error": tcp_update.err().map(|err| err.to_string()),
-        "udp_update_error": udp_update.err().map(|err| err.to_string()),
+        "listen_socket_map_tcp4_rewritten_with_reused_fd": tcp4_update.is_ok(),
+        "listen_socket_map_tcp6_rewritten_with_reused_fd": tcp6_update.is_ok(),
+        "listen_socket_map_udp4_rewritten_with_reused_fd": udp4_update.is_ok(),
+        "listen_socket_map_udp6_rewritten_with_reused_fd": udp6_update.is_ok(),
+        "tcp4_update_error": tcp4_update.err().map(|err| err.to_string()),
+        "tcp6_update_error": tcp6_update.err().map(|err| err.to_string()),
+        "udp4_update_error": udp4_update.err().map(|err| err.to_string()),
+        "udp6_update_error": udp6_update.err().map(|err| err.to_string()),
         "before": before_info,
         "after": after_info,
         "peer_filter": peer_filter,
@@ -302,29 +328,23 @@ fn update_sockmap_fd(map_fd: i32, key: u32, socket_fd: i32) -> std::io::Result<(
 }
 
 fn listener_identity(handoff: &LiveLoadedTproxyListenSocketMap) -> Value {
-    let tcp_fd = handoff.tcp_listener_fd;
-    let udp_fd = handoff.udp_socket_fd;
     json!({
         "listen_socket_map_id": handoff.map.id,
         "tcp": {
-            "fd": tcp_fd,
+            "fd": handoff.tcp_listener_fd,
             "local_addr": handoff.listeners.tcp_listener.local_addr().map(|addr| addr.to_string()).ok(),
-            "identity": fd_identity(tcp_fd),
+            "identity": fd_identity(handoff.tcp_listener_fd),
         },
         "udp": {
-            "fd": udp_fd,
+            "fd": handoff.udp_socket_fd,
             "local_addr": handoff.listeners.udp_socket.local_addr().map(|addr| addr.to_string()).ok(),
-            "identity": fd_identity(udp_fd),
+            "identity": fd_identity(handoff.udp_socket_fd),
         },
     })
 }
 
 fn listener_identity_reused(before: &Value, after: &Value) -> bool {
-    before["listen_socket_map_id"] == after["listen_socket_map_id"]
-        && before["tcp"]["fd"] == after["tcp"]["fd"]
-        && before["udp"]["fd"] == after["udp"]["fd"]
-        && before["tcp"]["identity"] == after["tcp"]["identity"]
-        && before["udp"]["identity"] == after["udp"]["identity"]
+    before == after
 }
 
 fn fd_identity(fd: i32) -> Value {

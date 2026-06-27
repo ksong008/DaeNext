@@ -9,6 +9,18 @@ use crate::tproxy_listener::{
     open_tproxy_listener_set_in_netns,
 };
 
+pub const LISTEN_SOCKET_KEY_TCP4: u32 = 0;
+pub const LISTEN_SOCKET_KEY_TCP6: u32 = 1;
+pub const LISTEN_SOCKET_KEY_UDP4: u32 = 2;
+pub const LISTEN_SOCKET_KEY_UDP6: u32 = 3;
+pub const LISTEN_SOCKET_KEYS: [u32; 4] = [
+    LISTEN_SOCKET_KEY_TCP4,
+    LISTEN_SOCKET_KEY_TCP6,
+    LISTEN_SOCKET_KEY_UDP4,
+    LISTEN_SOCKET_KEY_UDP6,
+];
+pub const LISTEN_SOCKET_MAP_MAX_ENTRIES: u32 = LISTEN_SOCKET_KEYS.len() as u32;
+
 const BPF_MAP_CREATE: libc::c_uint = 0;
 const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
 const BPF_MAP_TYPE_SOCKMAP: u32 = 15;
@@ -21,7 +33,7 @@ pub struct ListenSocketMapFdSmoke {
     pub key_size: u32,
     pub value_size: u32,
     pub max_entries: u32,
-    pub keys_updated: [u32; 2],
+    pub keys_updated: Vec<u32>,
     pub tcp_listener_fd: i32,
     pub udp_socket_fd: i32,
 }
@@ -30,7 +42,7 @@ pub struct ListenSocketMapFdSmoke {
 pub struct LoadedListenSocketMapFdSmoke {
     pub map: RuntimeMapInfo,
     pub new_map_ids: Vec<u32>,
-    pub keys_updated: [u32; 2],
+    pub keys_updated: Vec<u32>,
     pub tcp_listener_fd: i32,
     pub udp_socket_fd: i32,
 }
@@ -39,7 +51,7 @@ pub struct LoadedListenSocketMapFdSmoke {
 pub struct LoadedTproxyListenSocketMapFdSmoke {
     pub map: RuntimeMapInfo,
     pub new_map_ids: Vec<u32>,
-    pub keys_updated: [u32; 2],
+    pub keys_updated: Vec<u32>,
     pub tcp_listener_fd: i32,
     pub udp_socket_fd: i32,
     pub tcp_options: TproxySocketOptions,
@@ -50,7 +62,7 @@ pub struct LoadedTproxyListenSocketMapFdSmoke {
 pub struct LiveLoadedTproxyListenSocketMap {
     pub map: RuntimeMapInfo,
     pub new_map_ids: Vec<u32>,
-    pub keys_updated: [u32; 2],
+    pub keys_updated: Vec<u32>,
     pub tcp_listener_fd: i32,
     pub udp_socket_fd: i32,
     pub tcp_options: TproxySocketOptions,
@@ -63,15 +75,33 @@ pub fn run_listen_socket_map_fd_smoke() -> io::Result<ListenSocketMapFdSmoke> {
     let tcp_listener = TcpListener::bind(("127.0.0.1", 0))?;
     let udp_socket = UdpSocket::bind(("127.0.0.1", 0))?;
 
-    update_sockmap_fd(map_fd.as_raw_fd(), 0, tcp_listener.as_raw_fd())?;
-    update_sockmap_fd(map_fd.as_raw_fd(), 1, udp_socket.as_raw_fd())?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_TCP4,
+        tcp_listener.as_raw_fd(),
+    )?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_TCP6,
+        tcp_listener.as_raw_fd(),
+    )?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_UDP4,
+        udp_socket.as_raw_fd(),
+    )?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_UDP6,
+        udp_socket.as_raw_fd(),
+    )?;
 
     Ok(ListenSocketMapFdSmoke {
         map_type: "SockMap",
         key_size: 4,
         value_size: 8,
-        max_entries: 2,
-        keys_updated: [0, 1],
+        max_entries: LISTEN_SOCKET_MAP_MAX_ENTRIES,
+        keys_updated: LISTEN_SOCKET_KEYS.to_vec(),
         tcp_listener_fd: tcp_listener.as_raw_fd(),
         udp_socket_fd: udp_socket.as_raw_fd(),
     })
@@ -84,13 +114,31 @@ pub fn run_loaded_listen_socket_map_fd_smoke(
     let tcp_listener = TcpListener::bind(("127.0.0.1", 0))?;
     let udp_socket = UdpSocket::bind(("127.0.0.1", 0))?;
 
-    update_sockmap_fd(map_fd.as_raw_fd(), 0, tcp_listener.as_raw_fd())?;
-    update_sockmap_fd(map_fd.as_raw_fd(), 1, udp_socket.as_raw_fd())?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_TCP4,
+        tcp_listener.as_raw_fd(),
+    )?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_TCP6,
+        tcp_listener.as_raw_fd(),
+    )?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_UDP4,
+        udp_socket.as_raw_fd(),
+    )?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_UDP6,
+        udp_socket.as_raw_fd(),
+    )?;
 
     Ok(LoadedListenSocketMapFdSmoke {
         map,
         new_map_ids,
-        keys_updated: [0, 1],
+        keys_updated: LISTEN_SOCKET_KEYS.to_vec(),
         tcp_listener_fd: tcp_listener.as_raw_fd(),
         udp_socket_fd: udp_socket.as_raw_fd(),
     })
@@ -138,13 +186,12 @@ pub fn open_tproxy_listener_set_and_update_sockmap_by_id(
     let (map_fd, map) = open_listen_socket_map_by_id(map_id)?;
     let listeners = open_tproxy_listener_set(port)?;
 
-    update_sockmap_fd(map_fd.as_raw_fd(), 0, listeners.tcp_listener.as_raw_fd())?;
-    update_sockmap_fd(map_fd.as_raw_fd(), 1, listeners.udp_socket.as_raw_fd())?;
+    let keys_updated = update_sockmap_from_tproxy_listeners(map_fd.as_raw_fd(), &listeners)?;
 
     Ok(LiveLoadedTproxyListenSocketMap {
         map,
         new_map_ids: Vec::new(),
-        keys_updated: [0, 1],
+        keys_updated,
         tcp_listener_fd: listeners.tcp_listener.as_raw_fd(),
         udp_socket_fd: listeners.udp_socket.as_raw_fd(),
         tcp_options: listeners.tcp_options.clone(),
@@ -155,12 +202,24 @@ pub fn open_tproxy_listener_set_and_update_sockmap_by_id(
 
 pub fn update_listen_socket_map_by_id(
     map_id: u32,
-    tcp_socket_fd: i32,
-    udp_socket_fd: i32,
+    tcp4_socket_fd: i32,
+    tcp6_socket_fd: Option<i32>,
+    udp4_socket_fd: i32,
+    udp6_socket_fd: Option<i32>,
 ) -> io::Result<RuntimeMapInfo> {
     let (map_fd, map) = open_listen_socket_map_by_id(map_id)?;
-    update_sockmap_fd(map_fd.as_raw_fd(), 0, tcp_socket_fd)?;
-    update_sockmap_fd(map_fd.as_raw_fd(), 1, udp_socket_fd)?;
+    update_sockmap_fd(map_fd.as_raw_fd(), LISTEN_SOCKET_KEY_TCP4, tcp4_socket_fd)?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_TCP6,
+        tcp6_socket_fd.unwrap_or(tcp4_socket_fd),
+    )?;
+    update_sockmap_fd(map_fd.as_raw_fd(), LISTEN_SOCKET_KEY_UDP4, udp4_socket_fd)?;
+    update_sockmap_fd(
+        map_fd.as_raw_fd(),
+        LISTEN_SOCKET_KEY_UDP6,
+        udp6_socket_fd.unwrap_or(udp4_socket_fd),
+    )?;
     Ok(map)
 }
 
@@ -171,13 +230,12 @@ fn open_live_loaded_tproxy_listen_socket_map_with_listener(
     let (map_fd, map, new_map_ids) = open_new_loaded_listen_socket_map(before_map_ids)?;
     let listeners = listener_factory()?;
 
-    update_sockmap_fd(map_fd.as_raw_fd(), 0, listeners.tcp_listener.as_raw_fd())?;
-    update_sockmap_fd(map_fd.as_raw_fd(), 1, listeners.udp_socket.as_raw_fd())?;
+    let keys_updated = update_sockmap_from_tproxy_listeners(map_fd.as_raw_fd(), &listeners)?;
 
     Ok(LiveLoadedTproxyListenSocketMap {
         map,
         new_map_ids,
-        keys_updated: [0, 1],
+        keys_updated,
         tcp_listener_fd: listeners.tcp_listener.as_raw_fd(),
         udp_socket_fd: listeners.udp_socket.as_raw_fd(),
         tcp_options: listeners.tcp_options.clone(),
@@ -230,7 +288,7 @@ fn listen_socket_map_matches(info: &RuntimeMapInfo) -> bool {
         && info.map_type == BPF_MAP_TYPE_SOCKMAP
         && info.key_size == 4
         && info.value_size == 8
-        && info.max_entries == 2
+        && info.max_entries == LISTEN_SOCKET_MAP_MAX_ENTRIES
 }
 
 fn create_sockmap() -> io::Result<OwnedFd> {
@@ -238,7 +296,7 @@ fn create_sockmap() -> io::Result<OwnedFd> {
         map_type: BPF_MAP_TYPE_SOCKMAP,
         key_size: 4,
         value_size: 8,
-        max_entries: 2,
+        max_entries: LISTEN_SOCKET_MAP_MAX_ENTRIES,
         ..BpfMapCreateAttr::default()
     };
     attr.map_name[..12].copy_from_slice(b"dae36sockmap");
@@ -254,6 +312,38 @@ fn create_sockmap() -> io::Result<OwnedFd> {
         return Err(io::Error::last_os_error());
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+}
+
+fn update_sockmap_from_tproxy_listeners(
+    map_fd: i32,
+    listeners: &TproxyListenerSet,
+) -> io::Result<Vec<u32>> {
+    let mut keys_updated = Vec::new();
+    update_sockmap_fd(
+        map_fd,
+        LISTEN_SOCKET_KEY_TCP4,
+        listeners.tcp_listener.as_raw_fd(),
+    )?;
+    keys_updated.push(LISTEN_SOCKET_KEY_TCP4);
+    update_sockmap_fd(
+        map_fd,
+        LISTEN_SOCKET_KEY_TCP6,
+        listeners.tcp_listener.as_raw_fd(),
+    )?;
+    keys_updated.push(LISTEN_SOCKET_KEY_TCP6);
+    update_sockmap_fd(
+        map_fd,
+        LISTEN_SOCKET_KEY_UDP4,
+        listeners.udp_socket.as_raw_fd(),
+    )?;
+    keys_updated.push(LISTEN_SOCKET_KEY_UDP4);
+    update_sockmap_fd(
+        map_fd,
+        LISTEN_SOCKET_KEY_UDP6,
+        listeners.udp_socket.as_raw_fd(),
+    )?;
+    keys_updated.push(LISTEN_SOCKET_KEY_UDP6);
+    Ok(keys_updated)
 }
 
 fn update_sockmap_fd(map_fd: i32, key: u32, socket_fd: i32) -> io::Result<()> {
