@@ -1,6 +1,7 @@
 // Router construction keeps map, matcher, DNS, and socket policy ownership explicit.
 #![allow(clippy::too_many_arguments)]
 
+use super::super::plan::resident_tcp_check_network_type;
 use super::*;
 pub(crate) const BPF_L4_TCP: u8 = 6;
 pub(crate) const ROUTING_L4_TCP: u8 = 1;
@@ -247,7 +248,9 @@ impl ResidentTcpRouter {
                         OutboundIndex(final_outbound)
                     ));
                 };
-                let proxy = proxy_group.select_proxy_for_tcp_runtime()?;
+                let network_type = resident_tcp_check_network_type(original_dst.ip());
+                let proxy =
+                    proxy_group.select_proxy_for_tcp_runtime(network_type, final_choose.dial_ip)?;
                 Ok(TcpSelection::Proxy(TcpProxySelection {
                     mark: route.final_mark,
                     mptcp: self.mptcp,

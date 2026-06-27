@@ -27,7 +27,7 @@ fn two_node_latency_config(global_extra: &str, group_body: &str) -> Config {
     parse_config(&config_text)
 }
 
-fn assert_runtime_tcp_min_family_selects_lowest_result(policy: &str) {
+fn assert_runtime_tcp_min_uses_requested_family_when_alive(policy: &str) {
     let group_body = format!(
         r#"
         filter: name(node_a, node_b)
@@ -45,7 +45,10 @@ fn assert_runtime_tcp_min_family_selects_lowest_result(policy: &str) {
         .record_check_result("node_b", NetworkType::TCP6, Some(50), 2)
         .unwrap();
     assert_eq!(
-        group.select_proxy_for_tcp_runtime().unwrap().node_tag,
+        group
+            .select_proxy_for_tcp_runtime(NetworkType::TCP4, false)
+            .unwrap()
+            .node_tag,
         "node_a"
     );
 
@@ -59,12 +62,15 @@ fn assert_runtime_tcp_min_family_selects_lowest_result(policy: &str) {
         .record_check_result("node_b", NetworkType::TCP6, Some(50), 2)
         .unwrap();
     assert_eq!(
-        group.select_proxy_for_tcp_runtime().unwrap().node_tag,
-        "node_b"
+        group
+            .select_proxy_for_tcp_runtime(NetworkType::TCP4, false)
+            .unwrap()
+            .node_tag,
+        "node_a"
     );
 }
 
-fn assert_runtime_udp_min_family_selects_lowest_result(policy: &str) {
+fn assert_runtime_udp_min_uses_requested_family_when_alive(policy: &str) {
     let group_body = format!(
         r#"
         filter: name(node_a, node_b)
@@ -82,7 +88,10 @@ fn assert_runtime_udp_min_family_selects_lowest_result(policy: &str) {
         .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 2)
         .unwrap();
     assert_eq!(
-        group.select_proxy_for_udp_runtime().unwrap().node_tag,
+        group
+            .select_proxy_for_udp_runtime(NetworkType::DNS_UDP4, true)
+            .unwrap()
+            .node_tag,
         "node_a"
     );
 
@@ -96,8 +105,11 @@ fn assert_runtime_udp_min_family_selects_lowest_result(policy: &str) {
         .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 2)
         .unwrap();
     assert_eq!(
-        group.select_proxy_for_udp_runtime().unwrap().node_tag,
-        "node_b"
+        group
+            .select_proxy_for_udp_runtime(NetworkType::DNS_UDP4, true)
+            .unwrap()
+            .node_tag,
+        "node_a"
     );
 }
 
@@ -162,14 +174,15 @@ pub(super) fn resident_dataplane_tcp_selection_uses_requested_ip_family_latency(
 }
 
 #[test]
-pub(super) fn resident_dataplane_runtime_tcp_min_family_compares_results_only() {
+pub(super) fn resident_dataplane_runtime_tcp_min_uses_requested_family_when_alive() {
     for policy in ["min", "min_avg10", "min_moving_avg"] {
-        assert_runtime_tcp_min_family_selects_lowest_result(policy);
+        assert_runtime_tcp_min_uses_requested_family_when_alive(policy);
     }
 }
 
 #[test]
-pub(super) fn resident_dataplane_runtime_tcp_min_family_tie_keeps_candidate_order() {
+pub(super) fn resident_dataplane_runtime_tcp_domain_falls_back_when_requested_family_has_no_alive()
+{
     let config = two_node_latency_config(
         "",
         r#"
@@ -181,23 +194,63 @@ pub(super) fn resident_dataplane_runtime_tcp_min_family_tie_keeps_candidate_orde
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
     group
-        .record_check_result("node_b", NetworkType::TCP6, Some(50), 1)
+        .record_check_result("node_a", NetworkType::TCP4, None, 1)
         .unwrap();
     group
-        .record_check_result("node_a", NetworkType::TCP4, Some(50), 2)
+        .record_check_result("node_b", NetworkType::TCP4, None, 2)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP6, Some(50), 3)
         .unwrap();
 
     assert_eq!(
-        group.select_proxy_for_tcp_runtime().unwrap().node_tag,
-        "node_a"
+        group
+            .select_proxy_for_tcp_runtime(NetworkType::TCP4, false)
+            .unwrap()
+            .node_tag,
+        "node_b"
+    );
+    assert!(
+        group
+            .select_proxy_for_tcp_runtime(NetworkType::TCP4, true)
+            .is_err()
     );
 }
 
 #[test]
-pub(super) fn resident_dataplane_runtime_udp_min_family_compares_results_only() {
+pub(super) fn resident_dataplane_runtime_udp_min_uses_requested_family_when_alive() {
     for policy in ["min", "min_avg10", "min_moving_avg"] {
-        assert_runtime_udp_min_family_selects_lowest_result(policy);
+        assert_runtime_udp_min_uses_requested_family_when_alive(policy);
     }
+}
+
+#[test]
+pub(super) fn resident_dataplane_runtime_udp_strict_family_does_not_fallback() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        udp_check_dns: 'dns.google:53,::1,127.0.0.1'
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, None, 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::DNS_UDP4, None, 2)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 3)
+        .unwrap();
+
+    assert!(
+        group
+            .select_proxy_for_udp_runtime(NetworkType::DNS_UDP4, true)
+            .is_err()
+    );
 }
 
 #[test]
