@@ -14,6 +14,7 @@ const TC_ACT_OK: i32 = 0;
 const TC_ACT_SHOT: i32 = 2;
 const BPF_ANY: u64 = 0;
 const BPF_F_INGRESS: u64 = 1;
+const BPF_ADJ_ROOM_MAC: u32 = 1;
 const PACKET_HOST: u32 = 0;
 const PACKET_OTHERHOST: u32 = 3;
 const BPF_TCP_LISTEN: u32 = 10;
@@ -25,6 +26,22 @@ const LISTEN_SOCKET_KEY_UDP6: u32 = 3;
 const SKB_CB_TPROXY_MARK: usize = 0;
 const SKB_CB_TPROXY_L4PROTO: usize = 1;
 const SKB_CB_TPROXY_IS_IPV4: usize = 2;
+const REDIRECT_LINK_LAYER_L2: u8 = 2;
+const REDIRECT_LINK_LAYER_L3: u8 = 3;
+
+#[inline(always)]
+fn redirect_link_layer_for_header_len(link_h_len: u32) -> u8 {
+    if link_h_len == 0 {
+        REDIRECT_LINK_LAYER_L3
+    } else {
+        REDIRECT_LINK_LAYER_L2
+    }
+}
+
+#[inline(always)]
+fn redirect_entry_requires_l3_strip(entry: *const BpfRedirectEntry) -> bool {
+    unsafe { (*entry).link_layer == REDIRECT_LINK_LAYER_L3 }
+}
 
 pub fn chain_next() -> i32 {
     TCX_NEXT
@@ -152,7 +169,9 @@ unsafe fn prep_redirect_to_control_plane(
             (*info).eth_dst.as_ptr(),
         );
         ptr::addr_of_mut!((*redirect_entry).from_wan).write(from_wan as u8);
-        ptr::addr_of_mut!((*redirect_entry).padding).write([0; 3]);
+        ptr::addr_of_mut!((*redirect_entry).link_layer)
+            .write(redirect_link_layer_for_header_len(link_h_len));
+        ptr::addr_of_mut!((*redirect_entry).padding).write([0; 2]);
         if helpers::bpf_map_update_elem(
             maps::redirect_track_map_ptr(),
             redirect_tuple.cast::<c_void>(),
@@ -255,20 +274,32 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
     }
 
     unsafe {
-        let _ = helpers::bpf_skb_store_bytes(
-            skb.cast::<c_void>(),
-            ETH_SRC_OFFSET,
-            ptr::addr_of!((*entry).dmac).cast::<c_void>(),
-            6,
-            0,
-        );
-        let _ = helpers::bpf_skb_store_bytes(
-            skb.cast::<c_void>(),
-            packet::ETH_DST_OFFSET,
-            ptr::addr_of!((*entry).smac).cast::<c_void>(),
-            6,
-            0,
-        );
+        if redirect_entry_requires_l3_strip(entry) {
+            if helpers::bpf_skb_adjust_room(
+                skb.cast::<c_void>(),
+                -(ETH_HLEN as i32),
+                BPF_ADJ_ROOM_MAC,
+                0,
+            ) != 0
+            {
+                return TC_ACT_SHOT;
+            }
+        } else {
+            let _ = helpers::bpf_skb_store_bytes(
+                skb.cast::<c_void>(),
+                ETH_SRC_OFFSET,
+                ptr::addr_of!((*entry).dmac).cast::<c_void>(),
+                6,
+                0,
+            );
+            let _ = helpers::bpf_skb_store_bytes(
+                skb.cast::<c_void>(),
+                packet::ETH_DST_OFFSET,
+                ptr::addr_of!((*entry).smac).cast::<c_void>(),
+                6,
+                0,
+            );
+        }
         let packet_type = if (*entry).from_wan != 0 {
             PACKET_HOST
         } else {
@@ -281,6 +312,43 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
             0
         };
         helpers::bpf_redirect((*entry).ifindex, flags) as i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn redirect_entry(link_layer: u8) -> BpfRedirectEntry {
+        BpfRedirectEntry {
+            ifindex: 0,
+            smac: [0; 6],
+            dmac: [0; 6],
+            from_wan: 0,
+            link_layer,
+            padding: [0; 2],
+        }
+    }
+
+    #[test]
+    fn redirect_entry_records_original_link_layer_without_changing_layout() {
+        assert_eq!(
+            redirect_link_layer_for_header_len(ETH_HLEN),
+            REDIRECT_LINK_LAYER_L2
+        );
+        assert_eq!(
+            redirect_link_layer_for_header_len(0),
+            REDIRECT_LINK_LAYER_L3
+        );
+    }
+
+    #[test]
+    fn l3_redirect_return_requires_temporary_mac_header_strip() {
+        let l2 = redirect_entry(REDIRECT_LINK_LAYER_L2);
+        let l3 = redirect_entry(REDIRECT_LINK_LAYER_L3);
+
+        assert!(!redirect_entry_requires_l3_strip(&l2));
+        assert!(redirect_entry_requires_l3_strip(&l3));
     }
 }
 
@@ -351,7 +419,8 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
                 smac: [0; 6],
                 dmac: [0; 6],
                 from_wan: 0,
-                padding: [0; 3],
+                link_layer: 0,
+                padding: [0; 2],
             };
             return unsafe {
                 redirect_to_control_plane(
@@ -438,7 +507,8 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         smac: [0; 6],
         dmac: [0; 6],
         from_wan: 0,
-        padding: [0; 3],
+        link_layer: 0,
+        padding: [0; 2],
     };
     unsafe {
         redirect_to_control_plane(
@@ -556,7 +626,8 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         smac: [0; 6],
         dmac: [0; 6],
         from_wan: 0,
-        padding: [0; 3],
+        link_layer: 0,
+        padding: [0; 2],
     };
     unsafe {
         redirect_to_control_plane(
