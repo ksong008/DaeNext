@@ -157,6 +157,42 @@ pub(in crate::daed_product) fn running_runtime_state(
     .map_err(sqlite_io_error)
 }
 
+pub(in crate::daed_product) fn running_section_references_id(
+    conn: &Connection,
+    kind: SectionKind,
+    id: i64,
+) -> io::Result<bool> {
+    let Some(running_state) = running_runtime_state(conn)? else {
+        return Ok(false);
+    };
+    let running_id = match kind {
+        SectionKind::Config => running_state.config_id,
+        SectionKind::Dns => running_state.dns_id,
+        SectionKind::Routing => running_state.routing_id,
+    };
+    Ok(running_id == Some(id))
+}
+
+pub(in crate::daed_product) fn running_group_references_id(
+    conn: &Connection,
+    group_id: i64,
+) -> io::Result<bool> {
+    let Some(running_state) = running_runtime_state(conn)? else {
+        return Ok(false);
+    };
+    Ok(running_group_ids_contain(
+        &running_state.group_ids,
+        group_id,
+    ))
+}
+
+fn running_group_ids_contain(group_ids: &str, group_id: i64) -> bool {
+    group_ids
+        .split(',')
+        .filter_map(|value| value.trim().parse::<i64>().ok())
+        .any(|id| id == group_id)
+}
+
 pub(in crate::daed_product) fn mark_geodata_reload_pending(state: &Path) -> io::Result<()> {
     set_metadata(state, GEODATA_RELOAD_PENDING_METADATA_KEY, "true")
 }

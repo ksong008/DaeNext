@@ -101,14 +101,14 @@ pub(crate) fn section_summary_lists_keep_only_lightweight_fields() {
 }
 
 #[test]
-pub(crate) fn section_delete_rejects_selected_resources_and_allows_unselected_resources() {
+pub(crate) fn section_delete_rejects_running_resources_and_allows_selected_drafts() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
     conn.execute(
         "INSERT INTO configs(id, name, global, selected, version)
-         VALUES(1, 'running', 'global { tproxy_port: 12345 }', 1, 1)",
+         VALUES(1, 'selected-draft', 'global { tproxy_port: 12345 }', 1, 1)",
         [],
     )
     .unwrap();
@@ -118,20 +118,82 @@ pub(crate) fn section_delete_rejects_selected_resources_and_allows_unselected_re
         [],
     )
     .unwrap();
+    conn.execute(
+        "INSERT INTO configs(id, name, global, selected, version)
+         VALUES(3, 'running', 'global { tproxy_port: 12347 }', 0, 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO systems(running, running_config_id, running_config_version)
+         VALUES(1, 3, 1)",
+        [],
+    )
+    .unwrap();
     drop(conn);
 
-    let selected = delete_section(&state, SectionKind::Config, 1);
-    assert_eq!(selected.status, 400);
+    let selected_draft = delete_section(&state, SectionKind::Config, 1);
+    assert_eq!(selected_draft.status, 200);
+    let running = delete_section(&state, SectionKind::Config, 3);
+    assert_eq!(running.status, 400);
     let unselected = delete_section(&state, SectionKind::Config, 2);
     assert_eq!(unselected.status, 200);
 
     let conn = open_state_connection(&state).unwrap();
-    let remaining: i64 = conn
-        .query_row("SELECT COUNT(*) FROM configs WHERE id = 2", [], |row| {
+    let deleted: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM configs WHERE id IN (1, 2)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(deleted, 0);
+    let running_remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM configs WHERE id = 3", [], |row| {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(remaining, 0);
+    assert_eq!(running_remaining, 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn group_delete_rejects_running_groups_and_allows_others() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(1, 'running', 'random', 1);
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(2, 'draft', 'random', 1);
+            INSERT INTO systems(running, running_group_ids, running_group_version_sum)
+                VALUES(1, '1', 2);
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+
+    let running = delete_group(&state, 1);
+    assert_eq!(running.status, 400);
+    let draft = delete_group(&state, 2);
+    assert_eq!(draft.status, 200);
+
+    let conn = open_state_connection(&state).unwrap();
+    let running_remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM groups WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(running_remaining, 1);
+    let draft_remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM groups WHERE id = 2", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(draft_remaining, 0);
     fs::remove_dir_all(dir).unwrap();
 }
 

@@ -341,6 +341,13 @@ pub(crate) fn delete_group(state: &Path, id: i64) -> HttpResponse {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
+    match running_group_references_id(&conn, id) {
+        Ok(true) => {
+            return HttpResponse::json(400, json!({"error": "running group cannot be deleted"}));
+        }
+        Ok(false) => {}
+        Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
+    }
     if let Err(err) = conn.execute(
         "DELETE FROM group_policy_params WHERE group_id = ?1",
         params![id],
