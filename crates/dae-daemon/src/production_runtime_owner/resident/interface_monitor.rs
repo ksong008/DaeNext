@@ -168,6 +168,7 @@ fn interface_monitor_snapshot(sys_class_net: &Path, specs: &[InterfaceMonitorSpe
                 "exists": current.exists,
                 "state": status.state,
                 "reattachRequired": status.reattach_required,
+                "reattachReady": status.reattach_ready,
                 "reattachReasons": status.reasons,
                 "initial": interface_observation_json(&spec.initial),
                 "current": interface_observation_json(&current),
@@ -183,13 +184,18 @@ fn interface_monitor_snapshot(sys_class_net: &Path, specs: &[InterfaceMonitorSpe
     let reattach_required = interfaces
         .iter()
         .any(|iface| iface["reattachRequired"].as_bool().unwrap_or(false));
+    let reattach_ready = reattach_required
+        && interfaces
+            .iter()
+            .all(|iface| iface["reattachReady"].as_bool().unwrap_or(true));
     json!({
         "schemaVersion": 1,
         "status": if reattach_required { MONITOR_STATUS_DEGRADED } else { MONITOR_STATUS_PASS },
         "checkedAtUnix": unix_now_secs(),
         "pollIntervalMs": INTERFACE_MONITOR_POLL_MS,
-        "reattachImplemented": false,
+        "reattachImplemented": true,
         "reattachRequired": reattach_required,
+        "reattachReady": reattach_ready,
         "startupLazyBindAllowed": false,
         "interfaces": interfaces,
     })
@@ -199,6 +205,7 @@ fn interface_monitor_snapshot(sys_class_net: &Path, specs: &[InterfaceMonitorSpe
 struct InterfaceMonitorStatus {
     state: &'static str,
     reattach_required: bool,
+    reattach_ready: bool,
     reasons: Vec<&'static str>,
 }
 
@@ -212,6 +219,7 @@ fn interface_monitor_status(
         return InterfaceMonitorStatus {
             state: INTERFACE_STATE_MISSING,
             reattach_required: true,
+            reattach_ready: false,
             reasons,
         };
     }
@@ -237,9 +245,14 @@ fn interface_monitor_status(
         InterfaceMonitorStatus {
             state: INTERFACE_STATE_ATTACHED,
             reattach_required: false,
+            reattach_ready: true,
             reasons,
         }
     } else {
+        let reattach_ready = current.exists
+            && current.errors.is_empty()
+            && initial.exists
+            && initial.errors.is_empty();
         InterfaceMonitorStatus {
             state: if current.errors.is_empty() {
                 INTERFACE_STATE_STALE
@@ -247,6 +260,7 @@ fn interface_monitor_status(
                 INTERFACE_STATE_UNVERIFIED
             },
             reattach_required: true,
+            reattach_ready,
             reasons,
         }
     }
@@ -344,11 +358,13 @@ mod tests {
 
         assert_eq!(snapshot["status"], json!(MONITOR_STATUS_PASS));
         assert_eq!(snapshot["reattachRequired"], json!(false));
+        assert_eq!(snapshot["reattachReady"], json!(false));
         let interfaces = snapshot["interfaces"].as_array().unwrap();
         assert_eq!(interfaces.len(), 2);
         assert!(interfaces.iter().all(|iface| {
             iface["state"] == json!(INTERFACE_STATE_ATTACHED)
                 && iface["reattachRequired"] == json!(false)
+                && iface["reattachReady"] == json!(true)
         }));
         let wan = interfaces
             .iter()
@@ -376,8 +392,10 @@ mod tests {
 
         assert_eq!(snapshot["status"], json!(MONITOR_STATUS_DEGRADED));
         assert_eq!(snapshot["reattachRequired"], json!(true));
+        assert_eq!(snapshot["reattachReady"], json!(false));
         assert_eq!(iface["state"], json!(INTERFACE_STATE_MISSING));
         assert_eq!(iface["reattachRequired"], json!(true));
+        assert_eq!(iface["reattachReady"], json!(false));
         assert!(
             iface["reattachReasons"]
                 .as_array()
@@ -398,7 +416,9 @@ mod tests {
         let iface = &snapshot["interfaces"][0];
 
         assert_eq!(snapshot["status"], json!(MONITOR_STATUS_DEGRADED));
+        assert_eq!(snapshot["reattachReady"], json!(true));
         assert_eq!(iface["state"], json!(INTERFACE_STATE_STALE));
+        assert_eq!(iface["reattachReady"], json!(true));
         assert_eq!(iface["expectedIfindex"], json!(12));
         assert_eq!(iface["observedIfindex"], json!(21));
         assert!(
@@ -421,6 +441,8 @@ mod tests {
         let iface = &snapshot["interfaces"][0];
 
         assert_eq!(iface["state"], json!(INTERFACE_STATE_STALE));
+        assert_eq!(snapshot["reattachReady"], json!(true));
+        assert_eq!(iface["reattachReady"], json!(true));
         assert_eq!(iface["expectedLinkLayer"], json!("l2"));
         assert_eq!(iface["observedLinkLayer"], json!("l3"));
         assert!(

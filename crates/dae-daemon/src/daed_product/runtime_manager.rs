@@ -1,8 +1,17 @@
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
-    lifecycle: Mutex<()>,
+    lifecycle: Arc<Mutex<()>>,
     pub(super) inner: Arc<Mutex<ProductRuntimeState>>,
+    interface_recovery: ProductRuntimeInterfaceRecoverySupervisor,
+}
+
+#[derive(Debug)]
+struct ProductRuntimeInterfaceRecoverySupervisor {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, Default)]
@@ -256,12 +265,22 @@ impl ProductRuntimeLifecycleLogMode {
 pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "PRODUCT_RUNTIME_FAKE_START";
 pub(super) const PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
 const PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT: Duration = Duration::from_secs(5);
+const PRODUCT_RUNTIME_INTERFACE_RECOVERY_POLL: Duration = Duration::from_secs(2);
+const PRODUCT_RUNTIME_INTERFACE_RECOVERY_RETRY: Duration = Duration::from_secs(30);
+const PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE: &str = "interface-monitor";
 
 impl ProductRuntimeManager {
     pub(super) fn new() -> Self {
+        let lifecycle = Arc::new(Mutex::new(()));
+        let inner = Arc::new(Mutex::new(ProductRuntimeState::default()));
+        let interface_recovery = ProductRuntimeInterfaceRecoverySupervisor::start(
+            Arc::clone(&lifecycle),
+            Arc::clone(&inner),
+        );
         Self {
-            lifecycle: Mutex::new(()),
-            inner: Arc::new(Mutex::new(ProductRuntimeState::default())),
+            lifecycle,
+            inner,
+            interface_recovery,
         }
     }
 
@@ -272,124 +291,219 @@ impl ProductRuntimeManager {
         source: &str,
         latency_seed: &[Value],
     ) -> Result<RuntimeStartOutcome, String> {
-        let _lifecycle = self
-            .lifecycle
+        reload_product_runtime_with_config_content(
+            &self.lifecycle,
+            &self.inner,
+            config,
+            config_content,
+            source,
+            latency_seed,
+        )
+    }
+}
+
+impl Drop for ProductRuntimeManager {
+    fn drop(&mut self) {
+        self.interface_recovery.shutdown();
+    }
+}
+
+impl ProductRuntimeInterfaceRecoverySupervisor {
+    fn start(
+        lifecycle: Arc<Mutex<()>>,
+        inner: Arc<Mutex<ProductRuntimeState>>,
+    ) -> ProductRuntimeInterfaceRecoverySupervisor {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = thread::Builder::new()
+            .name("product-runtime-interface-recovery".to_owned())
+            .spawn(move || {
+                let mut last_attempt = None::<Instant>;
+                while !thread_stop.load(AtomicOrdering::Relaxed) {
+                    let retry_elapsed = last_attempt
+                        .map(|attempt| {
+                            attempt.elapsed() >= PRODUCT_RUNTIME_INTERFACE_RECOVERY_RETRY
+                        })
+                        .unwrap_or(true);
+                    if retry_elapsed
+                        && let Some(request) = resident_interface_recovery_request(&inner)
+                    {
+                        let _ = reload_product_runtime_with_config_content(
+                            &lifecycle,
+                            &inner,
+                            request.config,
+                            request.config_content,
+                            PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE,
+                            &[],
+                        );
+                        last_attempt = Some(Instant::now());
+                    }
+                    sleep_interface_recovery_poll(&thread_stop);
+                }
+            })
+            .ok();
+        ProductRuntimeInterfaceRecoverySupervisor { stop, handle }
+    }
+
+    fn shutdown(&mut self) {
+        self.stop.store(true, AtomicOrdering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+pub(super) struct ResidentInterfaceRecoveryRequest {
+    config: Config,
+    config_content: Option<String>,
+}
+
+pub(super) fn resident_interface_recovery_request(
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+) -> Option<ResidentInterfaceRecoveryRequest> {
+    let inner = inner.lock().ok()?;
+    if inner.cleanup.running {
+        return None;
+    }
+    let ProductRuntimeInstance::Resident(runtime) = inner.runtime.as_ref()? else {
+        return None;
+    };
+    runtime.resident_interface_reattach_ready_snapshot()?;
+    Some(ResidentInterfaceRecoveryRequest {
+        config: inner.config.clone()?,
+        config_content: inner.config_content.clone(),
+    })
+}
+
+fn sleep_interface_recovery_poll(stop: &AtomicBool) {
+    let sleep_step = PRODUCT_RUNTIME_INTERFACE_RECOVERY_POLL / 20;
+    for _ in 0..20 {
+        if stop.load(AtomicOrdering::Relaxed) {
+            return;
+        }
+        thread::sleep(sleep_step);
+    }
+}
+
+fn reload_product_runtime_with_config_content(
+    lifecycle: &Arc<Mutex<()>>,
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+    config: Config,
+    config_content: Option<String>,
+    source: &str,
+    latency_seed: &[Value],
+) -> Result<RuntimeStartOutcome, String> {
+    let _lifecycle = lifecycle
+        .lock()
+        .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
+    ensure_cleanup_allows_start_for_inner(inner)?;
+    let (
+        previous_runtime,
+        previous_config,
+        previous_config_content,
+        previous_runtime_started_at,
+        previous_runtime_was_running,
+        lifecycle_epoch,
+    ) = {
+        let mut inner = inner
             .lock()
-            .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
-        self.ensure_cleanup_allows_start()?;
-        let (
+            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
+        let previous_runtime = inner.runtime.take();
+        let previous_config = inner.config.clone();
+        let previous_config_content = inner.config_content.clone();
+        let previous_runtime_started_at = inner.runtime_started_at.clone();
+        let previous_runtime_was_running = previous_runtime.is_some();
+        if let Some(runtime) = previous_runtime.as_ref() {
+            inner.traffic_carry = inner.traffic_carry.absorb_runtime(runtime);
+        }
+        if previous_runtime_was_running {
+            let cleanup_epoch = inner.lifecycle_epoch;
+            inner.cleanup.begin(cleanup_epoch, "reload-replace");
+        }
+        (
             previous_runtime,
             previous_config,
             previous_config_content,
             previous_runtime_started_at,
             previous_runtime_was_running,
-            lifecycle_epoch,
-        ) = {
-            let mut inner = self
-                .inner
+            inner.lifecycle_epoch,
+        )
+    };
+
+    let live_latency_seed = previous_runtime
+        .as_ref()
+        .map(runtime_instance_node_latencies)
+        .unwrap_or_default();
+    let latency_seed =
+        successful_latency_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
+    let previous_cleanup_report = cleanup_runtime_instance(previous_runtime);
+    if previous_runtime_was_running
+        && let Ok(mut inner) = inner.lock()
+        && inner.lifecycle_epoch == lifecycle_epoch
+    {
+        inner.cleanup.finish(previous_cleanup_report.clone());
+    }
+    if previous_runtime_was_running
+        && let Some(blocker) = cleanup_start_blocker_from_report(previous_cleanup_report.as_ref())
+    {
+        return Err(format!(
+            "previous product runtime cleanup failed before reload: {blocker}"
+        ));
+    }
+    match start_product_runtime_instance(&config, source, &latency_seed) {
+        Ok((runtime, report)) => {
+            let mut inner = inner
                 .lock()
                 .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-            inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
-            let previous_runtime = inner.runtime.take();
-            let previous_config = inner.config.clone();
-            let previous_config_content = inner.config_content.clone();
-            let previous_runtime_started_at = inner.runtime_started_at.clone();
-            let previous_runtime_was_running = previous_runtime.is_some();
-            if let Some(runtime) = previous_runtime.as_ref() {
-                inner.traffic_carry = inner.traffic_carry.absorb_runtime(runtime);
+            if inner.lifecycle_epoch != lifecycle_epoch {
+                drop(inner);
+                drop(runtime);
+                return Err(
+                    "product runtime reload was superseded by a newer lifecycle operation"
+                        .to_owned(),
+                );
             }
-            if previous_runtime_was_running {
-                let cleanup_epoch = inner.lifecycle_epoch;
-                inner.cleanup.begin(cleanup_epoch, "reload-replace");
-            }
-            (
-                previous_runtime,
-                previous_config,
-                previous_config_content,
-                previous_runtime_started_at,
+            let transition_at = now_text();
+            inner.runtime = Some(runtime);
+            inner.config = Some(config);
+            inner.config_content = config_content;
+            inner.reload_count += 1;
+            inner.last_error = None;
+            inner.last_transition_at = Some(transition_at.clone());
+            inner.runtime_started_at = Some(runtime_started_at_after_success(
                 previous_runtime_was_running,
-                inner.lifecycle_epoch,
-            )
-        };
-
-        let live_latency_seed = previous_runtime
-            .as_ref()
-            .map(runtime_instance_node_latencies)
-            .unwrap_or_default();
-        let latency_seed = successful_latency_seed_snapshots(
-            latency_seed.iter().cloned().chain(live_latency_seed),
-        );
-        let previous_cleanup_report = cleanup_runtime_instance(previous_runtime);
-        if previous_runtime_was_running
-            && let Ok(mut inner) = self.inner.lock()
-            && inner.lifecycle_epoch == lifecycle_epoch
-        {
-            inner.cleanup.finish(previous_cleanup_report.clone());
-        }
-        if previous_runtime_was_running
-            && let Some(blocker) =
-                cleanup_start_blocker_from_report(previous_cleanup_report.as_ref())
-        {
-            return Err(format!(
-                "previous product runtime cleanup failed before reload: {blocker}"
+                previous_runtime_started_at,
+                transition_at,
             ));
+            inner.last_report = Some(report.clone());
+            Ok(RuntimeStartOutcome { report })
         }
-        match start_product_runtime_instance(&config, source, &latency_seed) {
-            Ok((runtime, report)) => {
-                let mut inner = self
-                    .inner
-                    .lock()
-                    .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-                if inner.lifecycle_epoch != lifecycle_epoch {
+        Err(start_err) => {
+            let should_restore = inner
+                .lock()
+                .map(|inner| inner.lifecycle_epoch == lifecycle_epoch)
+                .unwrap_or(false);
+            let restore_result = if should_restore {
+                previous_config.as_ref().map(|previous| {
+                    start_product_runtime_instance(previous, "restore", &latency_seed)
+                })
+            } else {
+                None
+            };
+            let mut inner = inner
+                .lock()
+                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+            if inner.lifecycle_epoch != lifecycle_epoch {
+                if let Some(Ok((runtime, _))) = restore_result {
                     drop(inner);
                     drop(runtime);
-                    return Err(
-                        "product runtime reload was superseded by a newer lifecycle operation"
-                            .to_owned(),
-                    );
                 }
-                let transition_at = now_text();
-                inner.runtime = Some(runtime);
-                inner.config = Some(config);
-                inner.config_content = config_content;
-                inner.reload_count += 1;
-                inner.last_error = None;
-                inner.last_transition_at = Some(transition_at.clone());
-                inner.runtime_started_at = Some(runtime_started_at_after_success(
-                    previous_runtime_was_running,
-                    previous_runtime_started_at,
-                    transition_at,
+                return Err(format!(
+                    "{start_err}\nrestore skipped because product runtime reload was superseded by a newer lifecycle operation"
                 ));
-                inner.last_report = Some(report.clone());
-                Ok(RuntimeStartOutcome { report })
             }
-            Err(start_err) => {
-                let should_restore = self
-                    .inner
-                    .lock()
-                    .map(|inner| inner.lifecycle_epoch == lifecycle_epoch)
-                    .unwrap_or(false);
-                let restore_result = if should_restore {
-                    previous_config.as_ref().map(|previous| {
-                        start_product_runtime_instance(previous, "restore", &latency_seed)
-                    })
-                } else {
-                    None
-                };
-                let mut inner = self
-                    .inner
-                    .lock()
-                    .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-                if inner.lifecycle_epoch != lifecycle_epoch {
-                    if let Some(Ok((runtime, _))) = restore_result {
-                        drop(inner);
-                        drop(runtime);
-                    }
-                    return Err(format!(
-                        "{start_err}\nrestore skipped because product runtime reload was superseded by a newer lifecycle operation"
-                    ));
-                }
-                let restored = restore_result.map(|result| match result {
+            let restored = restore_result.map(|result| match result {
                     Ok((runtime, report)) => {
                         inner.runtime = Some(runtime);
                         inner.config = previous_config.clone();
@@ -409,26 +523,27 @@ impl ProductRuntimeManager {
                         false
                     }
                 });
-                let message = match restored {
-                    Some(true) => {
-                        format!("{start_err}\nrestore: restored previous product runtime")
-                    }
-                    Some(false) => inner
-                        .last_error
-                        .clone()
-                        .unwrap_or_else(|| start_err.clone()),
-                    None => start_err,
-                };
-                inner.last_transition_at = Some(now_text());
-                if restored != Some(true) {
-                    inner.runtime_started_at = None;
+            let message = match restored {
+                Some(true) => {
+                    format!("{start_err}\nrestore: restored previous product runtime")
                 }
-                inner.last_error = Some(message.clone());
-                Err(message)
+                Some(false) => inner
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| start_err.clone()),
+                None => start_err,
+            };
+            inner.last_transition_at = Some(now_text());
+            if restored != Some(true) {
+                inner.runtime_started_at = None;
             }
+            inner.last_error = Some(message.clone());
+            Err(message)
         }
     }
+}
 
+impl ProductRuntimeManager {
     pub(super) fn stop(&self) -> Result<Value, String> {
         let stop_started = Instant::now();
         let _lifecycle = self
@@ -540,41 +655,14 @@ impl ProductRuntimeManager {
         }))
     }
 
+    #[cfg(test)]
     pub(super) fn wait_for_cleanup_idle(&self, timeout: Duration) -> bool {
-        let started = Instant::now();
-        loop {
-            let cleanup_running = self
-                .inner
-                .lock()
-                .map(|inner| inner.cleanup.running)
-                .unwrap_or(false);
-            if !cleanup_running {
-                return true;
-            }
-            if started.elapsed() >= timeout {
-                return false;
-            }
-            thread::sleep(Duration::from_millis(25));
-        }
+        wait_for_cleanup_idle_for_inner(&self.inner, timeout)
     }
 
+    #[cfg(test)]
     pub(super) fn ensure_cleanup_allows_start(&self) -> Result<(), String> {
-        if !self.wait_for_cleanup_idle(PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT) {
-            return Err(self.cleanup_start_blocker().unwrap_or_else(|| {
-                "product runtime cleanup is still running; retry after cleanup finishes".to_owned()
-            }));
-        }
-        if let Some(blocker) = self.cleanup_start_blocker() {
-            return Err(blocker);
-        }
-        Ok(())
-    }
-
-    fn cleanup_start_blocker(&self) -> Option<String> {
-        let Ok(inner) = self.inner.lock() else {
-            return Some("product runtime manager lock poisoned while checking cleanup".to_owned());
-        };
-        cleanup_start_blocker(&inner.cleanup)
+        ensure_cleanup_allows_start_for_inner(&self.inner)
     }
 
     pub(super) fn summary(&self) -> Value {
@@ -836,6 +924,47 @@ fn spawn_background_cleanup(
             inner.cleanup.finish(cleanup_report);
         }
     });
+}
+
+fn wait_for_cleanup_idle_for_inner(
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+    timeout: Duration,
+) -> bool {
+    let started = Instant::now();
+    loop {
+        let cleanup_running = inner
+            .lock()
+            .map(|inner| inner.cleanup.running)
+            .unwrap_or(false);
+        if !cleanup_running {
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn ensure_cleanup_allows_start_for_inner(
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+) -> Result<(), String> {
+    if !wait_for_cleanup_idle_for_inner(inner, PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT) {
+        return Err(cleanup_start_blocker_for_inner(inner).unwrap_or_else(|| {
+            "product runtime cleanup is still running; retry after cleanup finishes".to_owned()
+        }));
+    }
+    if let Some(blocker) = cleanup_start_blocker_for_inner(inner) {
+        return Err(blocker);
+    }
+    Ok(())
+}
+
+fn cleanup_start_blocker_for_inner(inner: &Arc<Mutex<ProductRuntimeState>>) -> Option<String> {
+    let Ok(inner) = inner.lock() else {
+        return Some("product runtime manager lock poisoned while checking cleanup".to_owned());
+    };
+    cleanup_start_blocker(&inner.cleanup)
 }
 
 fn cleanup_start_blocker(cleanup: &RuntimeCleanupState) -> Option<String> {
