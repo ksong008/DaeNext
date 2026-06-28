@@ -11,8 +11,8 @@ use tokio::sync::Semaphore;
 use tokio::time;
 
 use super::dns::{
-    ResidentDnsPlan, ResidentDnsTraceSummary, handle_resident_dns_local_trace_async,
-    read_dns_tcp_payload_async, write_dns_tcp_payload_async,
+    ResidentDnsPlan, ResidentDnsTraceSummary, build_dns_server_failure_response,
+    handle_resident_dns_local_trace_async, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
 use super::*;
 
@@ -398,20 +398,46 @@ async fn handle_resident_dns_udp_bind_packet_async(
                 }
             }
         }
-        Err(err) => append_event(
-            &event_file,
-            &event_lock,
-            json!({
-                "event": "dns_bind_query_failed",
-                "local_addr": local_addr.to_string(),
-                "peer": peer.to_string(),
-                "network": "udp",
-                "request_bytes": request.len(),
-                "error": err,
-            }),
-        ),
+        Err(err) => {
+            let _ = send_resident_dns_udp_bind_failure_response(
+                &socket,
+                peer,
+                &request,
+                metrics.as_ref(),
+            )
+            .await;
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({
+                    "event": "dns_bind_query_failed",
+                    "local_addr": local_addr.to_string(),
+                    "peer": peer.to_string(),
+                    "network": "udp",
+                    "request_bytes": request.len(),
+                    "error": err,
+                }),
+            );
+        }
     }
     metrics.udp_closed();
+}
+
+async fn send_resident_dns_udp_bind_failure_response(
+    socket: &TokioUdpSocket,
+    peer: SocketAddr,
+    request: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<(), String> {
+    let Some(response) = dns_bind_failure_response(request) else {
+        return Ok(());
+    };
+    let sent = socket
+        .send_to(&response, peer)
+        .await
+        .map_err(|err| format!("send DNS bind UDP failure response: {err}"))?;
+    metrics.add_download(sent);
+    Ok(())
 }
 
 async fn run_resident_dns_tcp_bind_listener_async(
@@ -584,20 +610,45 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                     }),
                 );
             }
-            Err(err) => append_event(
-                &event_file,
-                &event_lock,
-                json!({
-                    "event": "dns_bind_query_failed",
-                    "local_addr": local_addr.to_string(),
-                    "peer": peer.to_string(),
-                    "network": "tcp",
-                    "request_bytes": request.len(),
-                    "error": err,
-                }),
-            ),
+            Err(err) => {
+                let _ = write_resident_dns_tcp_bind_failure_response(
+                    &mut stream,
+                    &request,
+                    metrics.as_ref(),
+                )
+                .await;
+                append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({
+                        "event": "dns_bind_query_failed",
+                        "local_addr": local_addr.to_string(),
+                        "peer": peer.to_string(),
+                        "network": "tcp",
+                        "request_bytes": request.len(),
+                        "error": err,
+                    }),
+                );
+            }
         }
     }
+}
+
+async fn write_resident_dns_tcp_bind_failure_response(
+    stream: &mut TokioTcpStream,
+    request: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<(), String> {
+    let Some(response) = dns_bind_failure_response(request) else {
+        return Ok(());
+    };
+    write_dns_tcp_payload_async(stream, &response).await?;
+    metrics.add_download(response.len());
+    Ok(())
+}
+
+fn dns_bind_failure_response(request: &[u8]) -> Option<Vec<u8>> {
+    build_dns_server_failure_response(request).ok()
 }
 
 struct DnsPathChosenEventInput<'a> {
@@ -685,6 +736,12 @@ fn parse_resident_dns_bind_endpoint(bind: &str) -> Result<Option<ResidentDnsBind
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dae_dns::{DNS_FLAG_RESPONSE, DNS_HEADER_LEN, DNS_RCODE_MASK, DNS_RCODE_SERVFAIL};
+
+    const QUERY: &[u8] = &[
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
+        b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+    ];
 
     #[test]
     fn resident_dns_bind_endpoint_accepts_empty_udp_and_tcp_forms() {
@@ -800,5 +857,24 @@ mod tests {
         assert_eq!(event["rcode"], json!(rcode));
         assert_eq!(event["sent_bytes"], json!(sent_bytes));
         assert_eq!(event["reason"], reason);
+    }
+
+    #[test]
+    fn dns_bind_failure_response_returns_servfail_for_valid_query() {
+        let response = dns_bind_failure_response(QUERY).unwrap();
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(&response[0..2], &QUERY[0..2]);
+        assert_eq!(flags & DNS_RCODE_MASK, DNS_RCODE_SERVFAIL);
+        assert_eq!(&response[DNS_HEADER_LEN..], &QUERY[DNS_HEADER_LEN..]);
+    }
+
+    #[test]
+    fn dns_bind_failure_response_ignores_non_request_payload() {
+        let mut response = QUERY.to_vec();
+        response[2] |= (DNS_FLAG_RESPONSE >> 8) as u8;
+
+        assert!(dns_bind_failure_response(&response).is_none());
+        assert!(dns_bind_failure_response(&[]).is_none());
     }
 }
