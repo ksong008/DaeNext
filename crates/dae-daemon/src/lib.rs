@@ -37,6 +37,10 @@ pub use control_plane_entrypoint::{
 };
 #[cfg(feature = "product-api")]
 pub use daed_product::{DaedProductOutput, run_daed_product_with_args_and_version};
+#[cfg(feature = "product-api")]
+pub use daed_product::{
+    ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
+};
 pub use identity::{DAEMON_CRATE_NAME, DAEMON_MANIFEST, PRODUCT_BINARY_NAME, daemon_identity};
 pub use lifecycle::{
     LifecyclePaths, default_lifecycle_smoke_root, lifecycle_smoke_report, run_lifecycle_smoke,

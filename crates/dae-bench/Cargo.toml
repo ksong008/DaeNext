@@ -11,7 +11,7 @@ dae-cli.workspace = true
 dae-config.workspace = true
 dae-runtime-control.workspace = true
 dae-core-types.workspace = true
-dae-daemon.workspace = true
+dae-daemon = { workspace = true, features = ["product-api"] }
 dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-ebpf-support.workspace = true
