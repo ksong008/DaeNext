@@ -26,8 +26,9 @@ use super::resident_dataplane::{
 };
 use super::resident_interfaces::{
     attach_resident_lan_egress_program, attach_resident_wan_programs,
-    configure_resident_kernel_parameters, configured_wan_ifaces, interface_link_layer,
-    resident_interface_validation_checks, resident_kernel_feature_checks,
+    configure_resident_kernel_parameters, configured_wan_ifaces, iface_exists_in_sysfs_root,
+    interface_arphrd_from_sysfs_root, interface_link_layer, interface_link_layer_from_sysfs_root,
+    resident_interface_validation_checks, resident_kernel_feature_checks, sys_class_net_path,
 };
 use super::resident_lan::{
     attach_resident_lan_program, cleanup_resident_lan_programs, configured_lan_ifaces,

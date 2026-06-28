@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use dae_config::Config;
@@ -9,6 +9,17 @@ use serde_json::{Value, json};
 use super::ProductionRuntimeOwnerOptions;
 use super::command::{CommandSpec, push_check, run_step};
 use super::native_ebpf::{NativeEbpfRuntimeState, NativeInterfaceAttachRole};
+
+const SYS_CLASS_NET: &str = "/sys/class/net";
+pub(super) const SYSFS_INTERFACE_TYPE_FILE: &str = "type";
+
+#[cfg(test)]
+pub(super) const ARPHRD_ETHER: u16 = 1;
+pub(super) const ARPHRD_PPP: u16 = 512;
+pub(super) const ARPHRD_SLIP: u16 = 768;
+#[cfg(test)]
+pub(super) const ARPHRD_LOOPBACK: u16 = 772;
+pub(super) const ARPHRD_NONE: u16 = 65_534;
 
 pub(crate) fn configured_wan_ifaces(config: &Config) -> Result<Vec<String>, String> {
     let mut resolved_auto = None;
@@ -100,8 +111,20 @@ pub(crate) fn validate_resident_runtime_interfaces(
     }
 }
 
+pub(super) fn sys_class_net_path() -> &'static Path {
+    Path::new(SYS_CLASS_NET)
+}
+
+fn iface_sysfs_path(sys_class_net: &Path, iface: &str) -> PathBuf {
+    sys_class_net.join(iface)
+}
+
 fn iface_exists_in_sysfs(iface: &str) -> bool {
-    !iface.is_empty() && Path::new("/sys/class/net").join(iface).exists()
+    iface_exists_in_sysfs_root(sys_class_net_path(), iface)
+}
+
+pub(super) fn iface_exists_in_sysfs_root(sys_class_net: &Path, iface: &str) -> bool {
+    !iface.is_empty() && iface_sysfs_path(sys_class_net, iface).exists()
 }
 
 pub(crate) fn resident_kernel_feature_checks(
@@ -152,13 +175,31 @@ pub(crate) fn resident_kernel_feature_checks(
 }
 
 pub(super) fn interface_link_layer(iface: &str) -> Result<TcAttachLayer, String> {
-    let value = fs::read_to_string(format!("/sys/class/net/{iface}/type"))
-        .map_err(|err| format!("failed to read interface type for {iface}: {err}"))?;
+    interface_link_layer_from_sysfs_root(sys_class_net_path(), iface)
+}
+
+pub(super) fn interface_link_layer_from_sysfs_root(
+    sys_class_net: &Path,
+    iface: &str,
+) -> Result<TcAttachLayer, String> {
+    Ok(link_layer_from_arphrd(interface_arphrd_from_sysfs_root(
+        sys_class_net,
+        iface,
+    )?))
+}
+
+pub(super) fn interface_arphrd_from_sysfs_root(
+    sys_class_net: &Path,
+    iface: &str,
+) -> Result<u16, String> {
+    let value =
+        fs::read_to_string(iface_sysfs_path(sys_class_net, iface).join(SYSFS_INTERFACE_TYPE_FILE))
+            .map_err(|err| format!("failed to read interface type for {iface}: {err}"))?;
     let arphrd = value
         .trim()
         .parse::<u16>()
         .map_err(|err| format!("failed to parse interface type for {iface}: {err}"))?;
-    Ok(link_layer_from_arphrd(arphrd))
+    Ok(arphrd)
 }
 
 pub(super) fn configure_resident_kernel_parameters(
@@ -314,9 +355,9 @@ fn configure_resident_wan_accept_ra(
     })
 }
 
-fn link_layer_from_arphrd(arphrd: u16) -> TcAttachLayer {
+pub(super) fn link_layer_from_arphrd(arphrd: u16) -> TcAttachLayer {
     match arphrd {
-        512 | 768 | 65_534 => TcAttachLayer::L3,
+        ARPHRD_PPP | ARPHRD_SLIP | ARPHRD_NONE => TcAttachLayer::L3,
         _ => TcAttachLayer::L2,
     }
 }
@@ -536,11 +577,11 @@ mod tests {
 
     #[test]
     fn link_layer_detection_matches_compatible_l2_l3_program_selection() {
-        assert_eq!(link_layer_from_arphrd(1), TcAttachLayer::L2);
-        assert_eq!(link_layer_from_arphrd(512), TcAttachLayer::L3);
-        assert_eq!(link_layer_from_arphrd(768), TcAttachLayer::L3);
-        assert_eq!(link_layer_from_arphrd(65_534), TcAttachLayer::L3);
-        assert_eq!(link_layer_from_arphrd(772), TcAttachLayer::L2);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_ETHER), TcAttachLayer::L2);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_PPP), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_SLIP), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_NONE), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_LOOPBACK), TcAttachLayer::L2);
     }
 
     #[test]
