@@ -178,6 +178,20 @@ pub(crate) fn runtime_cleanup_interlock_blocks_failed_cleanup() {
 }
 
 #[test]
+pub(crate) fn runtime_interface_recovery_ignores_fake_runtime() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
+            started_at: "2026-06-23T01:00:00.000Z".to_owned(),
+            tproxy_port: 12345,
+        }));
+    }
+
+    assert!(resident_interface_recovery_request(&manager.inner).is_none());
+}
+
+#[test]
 pub(crate) fn runtime_started_at_survives_reload_but_resets_for_new_start() {
     let initial_started_at = "2026-06-15T01:00:00.000Z".to_owned();
     let reload_transition_at = "2026-06-15T02:00:00.000Z".to_owned();

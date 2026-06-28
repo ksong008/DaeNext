@@ -60,15 +60,36 @@ impl ResidentProductionRuntime {
             "residentRuntimeStarted": self.start_report["resident_runtime_started"].as_bool().unwrap_or(false),
             "residentDataplane": resident_dataplane,
             "residentInterfaceState": self
-                .interface_monitor
-                .as_ref()
-                .map(ResidentInterfaceMonitorRuntime::snapshot)
-                .unwrap_or_else(|| self.start_report["resident_interface_monitor"].clone()),
+                .resident_interface_state_snapshot(),
             "startupEvidence": self.start_report["startupEvidence"].clone(),
             "artifactDir": self.start_report["artifact_dir"].clone(),
             "startFile": self.start_report["start_file"].clone(),
             "cleanupFile": self.start_report["cleanup_file"].clone(),
         })
+    }
+
+    pub(super) fn resident_interface_state_snapshot(&self) -> Value {
+        self.interface_monitor
+            .as_ref()
+            .map(ResidentInterfaceMonitorRuntime::snapshot)
+            .unwrap_or_else(|| self.start_report["resident_interface_monitor"].clone())
+    }
+
+    pub(crate) fn resident_interface_reattach_ready_snapshot(&self) -> Option<Value> {
+        let snapshot = self.resident_interface_state_snapshot();
+        if snapshot
+            .get("reattachRequired")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && snapshot
+                .get("reattachReady")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            Some(snapshot)
+        } else {
+            None
+        }
     }
 
     pub fn resident_dataplane_metrics_snapshot(&self) -> Option<Value> {
