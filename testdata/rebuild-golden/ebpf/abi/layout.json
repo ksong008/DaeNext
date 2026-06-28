@@ -208,6 +208,10 @@
           "offset": 16
         },
         {
+          "field": "link_layer",
+          "offset": 17
+        },
+        {
           "field": "ifindex",
           "offset": 0
         },

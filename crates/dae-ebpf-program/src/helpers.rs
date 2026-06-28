@@ -23,6 +23,8 @@ const BPF_FUNC_SKB_CHANGE_TYPE: usize = 32;
 #[cfg(target_arch = "bpf")]
 const BPF_FUNC_SKB_CHANGE_HEAD: usize = 43;
 #[cfg(target_arch = "bpf")]
+const BPF_FUNC_SKB_ADJUST_ROOM: usize = 50;
+#[cfg(target_arch = "bpf")]
 const BPF_FUNC_GET_SOCKET_COOKIE: usize = 46;
 #[cfg(target_arch = "bpf")]
 const BPF_FUNC_SK_LOOKUP_UDP: usize = 85;
@@ -239,6 +241,25 @@ pub unsafe fn bpf_skb_change_head(skb: *mut c_void, head_room_len: u32, flags: u
 #[cfg(not(target_arch = "bpf"))]
 #[inline(always)]
 pub unsafe fn bpf_skb_change_head(_skb: *mut c_void, _head_room_len: u32, _flags: u64) -> i64 {
+    0
+}
+
+#[cfg(target_arch = "bpf")]
+#[inline(always)]
+pub unsafe fn bpf_skb_adjust_room(skb: *mut c_void, len_diff: i32, mode: u32, flags: u64) -> i64 {
+    let helper: unsafe extern "C" fn(*mut c_void, i32, u32, u64) -> i64 =
+        unsafe { core::mem::transmute(BPF_FUNC_SKB_ADJUST_ROOM) };
+    unsafe { helper(skb, len_diff, mode, flags) }
+}
+
+#[cfg(not(target_arch = "bpf"))]
+#[inline(always)]
+pub unsafe fn bpf_skb_adjust_room(
+    _skb: *mut c_void,
+    _len_diff: i32,
+    _mode: u32,
+    _flags: u64,
+) -> i64 {
     0
 }
 

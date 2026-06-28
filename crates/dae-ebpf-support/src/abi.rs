@@ -52,7 +52,8 @@ pub struct BpfRedirectEntry {
     pub smac: [u8; 6],
     pub dmac: [u8; 6],
     pub from_wan: u8,
-    pub padding: [u8; 3],
+    pub link_layer: u8,
+    pub padding: [u8; 2],
 }
 
 #[repr(C)]

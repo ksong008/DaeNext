@@ -55,6 +55,12 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     assert_layout::<BpfOutboundConnectivityQuery>(&fixture, "bpfOutboundConnectivityQuery", 3, 1);
     assert_layout::<BpfPidPname>(&fixture, "bpfPidPname", 36, 4);
     assert_layout::<BpfRedirectEntry>(&fixture, "bpfRedirectEntry", 20, 4);
+    assert_offset(
+        &fixture,
+        "bpfRedirectEntry",
+        "link_layer",
+        offset_of!(BpfRedirectEntry, link_layer),
+    );
     assert_layout::<BpfRedirectTuple>(&fixture, "bpfRedirectTuple", 32, 1);
     assert_layout::<BpfRoutingResult>(&fixture, "bpfRoutingResult", 36, 4);
     assert_offset(
