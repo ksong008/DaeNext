@@ -43,6 +43,16 @@ fn redirect_entry_requires_l3_strip(entry: *const BpfRedirectEntry) -> bool {
     unsafe { (*entry).link_layer == REDIRECT_LINK_LAYER_L3 }
 }
 
+#[inline(always)]
+fn redirect_entry_l3_strip_delta() -> i32 {
+    -(ETH_HLEN as i32)
+}
+
+#[inline(always)]
+fn redirect_entry_l3_strip_mode() -> u32 {
+    BPF_ADJ_ROOM_MAC
+}
+
 pub fn chain_next() -> i32 {
     TCX_NEXT
 }
@@ -277,8 +287,8 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
         if redirect_entry_requires_l3_strip(entry) {
             if helpers::bpf_skb_adjust_room(
                 skb.cast::<c_void>(),
-                -(ETH_HLEN as i32),
-                BPF_ADJ_ROOM_MAC,
+                redirect_entry_l3_strip_delta(),
+                redirect_entry_l3_strip_mode(),
                 0,
             ) != 0
             {
@@ -343,12 +353,22 @@ mod tests {
     }
 
     #[test]
-    fn l3_redirect_return_requires_temporary_mac_header_strip() {
+    fn l3_wan_egress_return_path_records_and_strips_temporary_mac_header() {
         let l2 = redirect_entry(REDIRECT_LINK_LAYER_L2);
         let l3 = redirect_entry(REDIRECT_LINK_LAYER_L3);
 
+        assert_eq!(
+            redirect_link_layer_for_header_len(ETH_HLEN),
+            REDIRECT_LINK_LAYER_L2
+        );
+        assert_eq!(
+            redirect_link_layer_for_header_len(0),
+            REDIRECT_LINK_LAYER_L3
+        );
         assert!(!redirect_entry_requires_l3_strip(&l2));
         assert!(redirect_entry_requires_l3_strip(&l3));
+        assert_eq!(redirect_entry_l3_strip_delta(), -(ETH_HLEN as i32));
+        assert_eq!(redirect_entry_l3_strip_mode(), BPF_ADJ_ROOM_MAC);
     }
 }
 
