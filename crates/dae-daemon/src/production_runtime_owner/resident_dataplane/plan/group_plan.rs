@@ -572,6 +572,14 @@ impl ResidentProxyGroupPlan {
             .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_dns_upstream(
+        &self,
+        network_type: NetworkType,
+    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        self.select_candidate(network_type, false)
+            .map(|candidate| Arc::clone(&candidate.proxy))
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn snapshot_candidate(
         &self,
     ) -> Option<&ResidentProxyCandidatePlan> {

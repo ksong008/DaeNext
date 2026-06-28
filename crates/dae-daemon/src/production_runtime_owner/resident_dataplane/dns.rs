@@ -206,14 +206,7 @@ impl ResidentDnsUpstreamRouter {
                         OutboundIndex(outbound)
                     ));
                 };
-                let proxy = match proxy_network_type.l4proto {
-                    L4Proto::Tcp => {
-                        proxy_group.select_proxy_for_tcp_runtime(proxy_network_type, true)?
-                    }
-                    L4Proto::Udp => {
-                        proxy_group.select_proxy_for_udp_runtime(proxy_network_type, true)?
-                    }
-                };
+                let proxy = proxy_group.select_proxy_for_dns_upstream(proxy_network_type)?;
                 Ok(ResidentDnsUpstreamSelection::Proxy {
                     proxy: proxy_with_dns_upstream_mark(proxy, mark),
                 })

@@ -304,6 +304,76 @@ pub(super) fn resident_dataplane_runtime_udp_strict_family_does_not_fallback() {
 }
 
 #[test]
+pub(super) fn resident_dataplane_dns_upstream_selection_can_fallback_family() {
+    let udp_check = latency_udp_dual_stack_check_dns();
+    let config = two_node_latency_config(
+        "",
+        &format!(
+            r#"
+        filter: name(node_a, node_b)
+        policy: min
+        udp_check_dns: '{udp_check}'
+        "#
+        ),
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, None, 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::DNS_UDP4, None, 2)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 3)
+        .unwrap();
+
+    assert_eq!(
+        group
+            .select_proxy_for_dns_upstream(NetworkType::DNS_UDP4)
+            .unwrap()
+            .node_tag,
+        "node_b"
+    );
+    assert!(
+        group
+            .select_proxy_for_udp_runtime(NetworkType::DNS_UDP4, true)
+            .is_err()
+    );
+
+    let tcp_check = latency_tcp_dual_stack_check_url();
+    let config = two_node_latency_config(
+        "",
+        &format!(
+            r#"
+        filter: name(node_a, node_b)
+        policy: min
+        tcp_check_url: '{tcp_check}'
+        "#
+        ),
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP4, None, 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP4, None, 2)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP6, Some(50), 3)
+        .unwrap();
+
+    assert_eq!(
+        group
+            .select_proxy_for_dns_upstream(NetworkType::TCP4)
+            .unwrap()
+            .node_tag,
+        "node_b"
+    );
+}
+
+#[test]
 pub(super) fn resident_dataplane_udp_selection_uses_requested_ip_family_latency() {
     let config = two_node_latency_config(
         "",
