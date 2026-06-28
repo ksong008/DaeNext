@@ -469,13 +469,18 @@ fn select_dns_upstream_target(
     let Some(router) = plan.upstream_router.as_ref() else {
         return Ok(ResidentDnsUpstreamSelection::Direct { mark: plan.mark });
     };
-    router.select(upstream, target, dns_upstream_network_type(target, l4proto))
+    router.select(
+        upstream,
+        target,
+        l4proto,
+        dns_upstream_proxy_network_type(target, l4proto),
+    )
 }
 
-fn dns_upstream_network_type(target: SocketAddr, l4proto: L4Proto) -> NetworkType {
+fn dns_upstream_proxy_network_type(target: SocketAddr, l4proto: L4Proto) -> NetworkType {
     match (l4proto, target.is_ipv6()) {
-        (L4Proto::Tcp, false) => NetworkType::DNS_TCP4,
-        (L4Proto::Tcp, true) => NetworkType::DNS_TCP6,
+        (L4Proto::Tcp, false) => NetworkType::TCP4,
+        (L4Proto::Tcp, true) => NetworkType::TCP6,
         (L4Proto::Udp, false) => NetworkType::DNS_UDP4,
         (L4Proto::Udp, true) => NetworkType::DNS_UDP6,
     }
