@@ -166,9 +166,10 @@ impl ResidentDnsUpstreamRouter {
         &self,
         upstream: &ResidentDnsUpstream,
         target: SocketAddr,
-        network_type: NetworkType,
+        route_l4proto: L4Proto,
+        proxy_network_type: NetworkType,
     ) -> Result<ResidentDnsUpstreamSelection, String> {
-        let query = match network_type.l4proto {
+        let query = match route_l4proto {
             L4Proto::Tcp => Query::tcp(target.ip(), target.port(), upstream.target.host.clone()),
             L4Proto::Udp => Query::udp(target.ip(), target.port(), upstream.target.host.clone()),
         };
@@ -205,9 +206,13 @@ impl ResidentDnsUpstreamRouter {
                         OutboundIndex(outbound)
                     ));
                 };
-                let proxy = match network_type.l4proto {
-                    L4Proto::Tcp => proxy_group.select_proxy_for_tcp_runtime(network_type, true)?,
-                    L4Proto::Udp => proxy_group.select_proxy_for_udp_runtime(network_type, true)?,
+                let proxy = match proxy_network_type.l4proto {
+                    L4Proto::Tcp => {
+                        proxy_group.select_proxy_for_tcp_runtime(proxy_network_type, true)?
+                    }
+                    L4Proto::Udp => {
+                        proxy_group.select_proxy_for_udp_runtime(proxy_network_type, true)?
+                    }
                 };
                 Ok(ResidentDnsUpstreamSelection::Proxy {
                     proxy: proxy_with_dns_upstream_mark(proxy, mark),
@@ -1334,6 +1339,16 @@ mod tests {
     }
 
     fn dns_upstream_routing_config(routing: &str) -> Config {
+        dns_upstream_routing_config_with_group(
+            routing,
+            r#"
+            filter: name(node_a)
+            policy: fixed(0)
+            "#,
+        )
+    }
+
+    fn dns_upstream_routing_config_with_group(routing: &str, group_body: &str) -> Config {
         let input = r#"
         global {
           lan_interface: daerust0
@@ -1341,11 +1356,11 @@ mod tests {
         }
         node {
           node_a: 'socks5://identity-1:credential-1@node-1.fixture.invalid:28001'
+          node_b: 'socks5://identity-2:credential-2@node-2.fixture.invalid:28002'
         }
         group {
           proxy {
-            filter: name(node_a)
-            policy: fixed(0)
+            __GROUP__
           }
         }
         routing {
@@ -1363,6 +1378,7 @@ mod tests {
         }
         "#
         .replace("__ROUTING__", routing)
+        .replace("__GROUP__", group_body)
         .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST);
         parse_config(&input)
     }
@@ -1401,6 +1417,7 @@ mod tests {
             .select(
                 &upstream,
                 test_dns_upstream_target_v4(),
+                L4Proto::Udp,
                 NetworkType::DNS_UDP4,
             )
             .unwrap();
@@ -1425,7 +1442,8 @@ mod tests {
             .select(
                 &upstream,
                 test_dns_upstream_target_v4(),
-                NetworkType::DNS_TCP4,
+                L4Proto::Tcp,
+                NetworkType::TCP4,
             )
             .unwrap();
         let ResidentDnsUpstreamSelection::Direct { mark } = selection else {
@@ -1447,10 +1465,97 @@ mod tests {
             .select(
                 &upstream,
                 test_dns_upstream_target_v4(),
+                L4Proto::Udp,
                 NetworkType::DNS_UDP4,
             )
             .unwrap_err();
         assert!(err.contains("routed to block"));
+    }
+
+    #[test]
+    fn dns_upstream_router_selects_tcp_upstream_with_tcp_health_state() {
+        let config = dns_upstream_routing_config_with_group(
+            r#"
+            domain(full: __DNS_UPSTREAM_HOST__) -> proxy
+            fallback: direct
+            "#
+            .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
+            .as_str(),
+            r#"
+            filter: name(node_a, node_b)
+            policy: min
+            "#,
+        );
+        let (router, upstream) = dns_upstream_router_for_config(&config);
+        let group = router.proxy_groups.values().next().unwrap();
+        group
+            .record_check_result("node_a", NetworkType::TCP4, Some(200), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(20), 2)
+            .unwrap();
+        group
+            .record_check_result("node_a", NetworkType::DNS_TCP4, Some(1), 3)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::DNS_TCP4, None, 4)
+            .unwrap();
+
+        let selection = router
+            .select(
+                &upstream,
+                test_dns_upstream_target_v4(),
+                L4Proto::Tcp,
+                NetworkType::TCP4,
+            )
+            .unwrap();
+        let ResidentDnsUpstreamSelection::Proxy { proxy } = selection else {
+            panic!("expected proxied DNS upstream selection");
+        };
+        assert_eq!(proxy.node_tag, "node_b");
+    }
+
+    #[test]
+    fn dns_upstream_router_selects_udp_upstream_with_dns_udp_health_state() {
+        let config = dns_upstream_routing_config_with_group(
+            r#"
+            domain(full: __DNS_UPSTREAM_HOST__) -> proxy
+            fallback: direct
+            "#
+            .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
+            .as_str(),
+            r#"
+            filter: name(node_a, node_b)
+            policy: min
+            "#,
+        );
+        let (router, upstream) = dns_upstream_router_for_config(&config);
+        let group = router.proxy_groups.values().next().unwrap();
+        group
+            .record_check_result("node_a", NetworkType::TCP4, Some(200), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(20), 2)
+            .unwrap();
+        group
+            .record_check_result("node_a", NetworkType::DNS_UDP4, Some(20), 3)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::DNS_UDP4, Some(200), 4)
+            .unwrap();
+
+        let selection = router
+            .select(
+                &upstream,
+                test_dns_upstream_target_v4(),
+                L4Proto::Udp,
+                NetworkType::DNS_UDP4,
+            )
+            .unwrap();
+        let ResidentDnsUpstreamSelection::Proxy { proxy } = selection else {
+            panic!("expected proxied DNS upstream selection");
+        };
+        assert_eq!(proxy.node_tag, "node_a");
     }
 
     fn query_with_qtype(qtype: u16) -> Vec<u8> {
