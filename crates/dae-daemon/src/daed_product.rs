@@ -46,6 +46,11 @@ use crate::production_runtime_owner::{
     start_resident_production_runtime_with_latency_seed,
 };
 
+mod benchmark;
+pub use benchmark::{
+    ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
+};
+
 const DEFAULT_CONFIG_DIR: &str = "/etc/daed";
 const DEFAULT_LISTEN: &str = "0.0.0.0:2023";
 const DEFAULT_WEB_ROOT: &str = "/usr/share/daed/web";
