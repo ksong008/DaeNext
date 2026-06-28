@@ -4,6 +4,19 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing {}', 1, 1);
+        "#,
+    )
+    .unwrap();
+    drop(conn);
     initialize_log_store(&dir, &state).unwrap();
     let app = AppState {
         config_dir: dir.clone(),
@@ -39,6 +52,46 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
     assert_eq!(items[0]["fields"]["dry"], json!("true"));
     assert_eq!(items[0]["fields"]["applied"], json!("false"));
     assert!(items[0]["fields"]["elapsed"].as_str().is_some());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn materialize_runtime_requires_explicit_selected_resources() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 0, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 0, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing {}', 0, 1);
+        "#,
+    )
+    .unwrap();
+    assert_eq!(selected_id(&conn, SectionKind::Config).unwrap(), None);
+    drop(conn);
+
+    let err = materialize_runtime(&state, None, true).unwrap_err();
+    assert!(err.to_string().contains("no selected configs resource"));
+
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute("UPDATE configs SET selected = 1 WHERE id = 1", [])
+        .unwrap();
+    drop(conn);
+    let err = materialize_runtime(&state, None, true).unwrap_err();
+    assert!(err.to_string().contains("no selected dns resource"));
+
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute("UPDATE dns SET selected = 1 WHERE id = 1", [])
+        .unwrap();
+    drop(conn);
+    let err = materialize_runtime(&state, None, true).unwrap_err();
+    assert!(err.to_string().contains("no selected routings resource"));
 
     fs::remove_dir_all(dir).unwrap();
 }

@@ -20,6 +20,11 @@ pub(crate) fn default_resources_do_not_create_default_group_for_empty_state() {
         .query_row("SELECT COUNT(*) FROM groups", [], |row| row.get(0))
         .unwrap();
     assert_eq!(group_count, 0);
+    for table in ["configs", "dns", "routings"] {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE selected = 1");
+        let selected_count: i64 = conn.query_row(&sql, [], |row| row.get(0)).unwrap();
+        assert_eq!(selected_count, 1, "{table}");
+    }
     fs::remove_dir_all(dir).unwrap();
 }
 
