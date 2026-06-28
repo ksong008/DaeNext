@@ -70,6 +70,9 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         "selected, version",
         "0, 0",
     )?;
+    ensure_section_selected_if_missing(&conn, SectionKind::Config, config.id)?;
+    ensure_section_selected_if_missing(&conn, SectionKind::Dns, dns.id)?;
+    ensure_section_selected_if_missing(&conn, SectionKind::Routing, routing.id)?;
     let group = ensure_default_group(&conn, group_name, policy)?;
     let group_id = group.as_ref().map(|group| group.id);
     let mut group_changed = false;
@@ -298,6 +301,19 @@ pub(crate) fn group_id_by_name(conn: &Connection, name: &str) -> io::Result<Opti
     )
     .optional()
     .map_err(sqlite_io_error)
+}
+
+fn ensure_section_selected_if_missing(
+    conn: &Connection,
+    kind: SectionKind,
+    id: i64,
+) -> io::Result<()> {
+    if selected_id(conn, kind)?.is_some() {
+        return Ok(());
+    }
+    let sql = format!("UPDATE {} SET selected = 1 WHERE id = ?1", kind.table());
+    conn.execute(&sql, params![id]).map_err(sqlite_io_error)?;
+    Ok(())
 }
 
 pub(crate) fn upsert_named_resource(

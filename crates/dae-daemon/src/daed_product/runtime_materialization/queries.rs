@@ -23,21 +23,7 @@ pub(in crate::daed_product) fn selected_section_raw(
     if selected.is_some() {
         return Ok(selected);
     }
-    let sql = format!(
-        "SELECT id, name, {}, version FROM {} ORDER BY id LIMIT 1",
-        kind.value_column(),
-        kind.table()
-    );
-    conn.query_row(&sql, [], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, i64>(3)?,
-        ))
-    })
-    .optional()
-    .map_err(sqlite_io_error)
+    Ok(None)
 }
 
 pub(in crate::daed_product) fn selected_id(
@@ -55,10 +41,7 @@ pub(in crate::daed_product) fn selected_id(
     if selected.is_some() {
         return Ok(selected);
     }
-    let sql = format!("SELECT id FROM {} ORDER BY id LIMIT 1", kind.table());
-    conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
-        .optional()
-        .map_err(sqlite_io_error)
+    Ok(None)
 }
 
 pub(in crate::daed_product) fn group_version_sum(conn: &Connection) -> io::Result<i64> {

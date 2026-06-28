@@ -14,17 +14,17 @@ pub(in crate::daed_product) fn materialize_runtime(
 ) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
-    let config = selected_section_raw(&conn, SectionKind::Config)?;
-    let dns = selected_section_raw(&conn, SectionKind::Dns)?;
-    let routing = selected_section_raw(&conn, SectionKind::Routing)?;
+    let config = required_selected_section_raw(&conn, SectionKind::Config)?;
+    let dns = required_selected_section_raw(&conn, SectionKind::Dns)?;
+    let routing = required_selected_section_raw(&conn, SectionKind::Routing)?;
     let groups = list_groups_value(state)?;
     let nodes = list_all_nodes_value(state)?;
     let generated_at = now_text();
     let content = render_generated_config(
         &generated_at,
-        config.as_ref(),
-        dns.as_ref(),
-        routing.as_ref(),
+        Some(&config),
+        Some(&dns),
+        Some(&routing),
         &groups,
         &nodes,
     )?;
@@ -46,14 +46,14 @@ pub(in crate::daed_product) fn materialize_runtime(
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 1_i64,
-                config.as_ref().map(|(_, _, _, version)| *version).unwrap_or(0),
-                dns.as_ref().map(|(_, _, _, version)| *version).unwrap_or(0),
-                routing.as_ref().map(|(_, _, _, version)| *version).unwrap_or(0),
+                config.3,
+                dns.3,
+                routing.3,
                 group_version_sum(&conn)?,
                 group_ids_text(&conn)?,
-                config.as_ref().map(|(id, _, _, _)| *id),
-                dns.as_ref().map(|(id, _, _, _)| *id),
-                routing.as_ref().map(|(id, _, _, _)| *id),
+                config.0,
+                dns.0,
+                routing.0,
             ],
         )
         .map_err(sqlite_io_error)?;
@@ -76,9 +76,9 @@ pub(in crate::daed_product) fn materialize_runtime(
     report.insert(
         "selected".to_owned(),
         json!({
-            "configId": config.as_ref().map(|(id, _, _, _)| *id),
-            "dnsId": dns.as_ref().map(|(id, _, _, _)| *id),
-            "routingId": routing.as_ref().map(|(id, _, _, _)| *id),
+            "configId": config.0,
+            "dnsId": dns.0,
+            "routingId": routing.0,
         }),
     );
     report.insert(
@@ -90,4 +90,16 @@ pub(in crate::daed_product) fn materialize_runtime(
         json!(nodes["items"].as_array().map(Vec::len).unwrap_or(0)),
     );
     Ok(Value::Object(report))
+}
+
+fn required_selected_section_raw(
+    conn: &Connection,
+    kind: SectionKind,
+) -> io::Result<(i64, String, String, i64)> {
+    selected_section_raw(conn, kind)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("no selected {} resource", kind.table()),
+        )
+    })
 }

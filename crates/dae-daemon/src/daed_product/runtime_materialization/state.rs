@@ -113,18 +113,7 @@ pub(in crate::daed_product) fn selected_section_state(
     if selected.is_some() {
         return Ok(selected);
     }
-    let sql = format!(
-        "SELECT id, version FROM {} ORDER BY id LIMIT 1",
-        kind.table()
-    );
-    conn.query_row(&sql, [], |row| {
-        Ok(RuntimeSectionState {
-            id: row.get(0)?,
-            version: row.get(1)?,
-        })
-    })
-    .optional()
-    .map_err(sqlite_io_error)
+    Ok(None)
 }
 
 pub(in crate::daed_product) fn running_runtime_state(
