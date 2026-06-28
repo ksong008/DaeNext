@@ -168,6 +168,11 @@ pub(super) fn dae_tc_attach_matrix_supports_l3_and_aya_classifier_sections() {
     assert_eq!(wan_ingress.native.program_name, "tproxy_wan_ingress_l3");
     assert_eq!(wan_ingress.native.handle, tc_handle(0x2023, 0b011));
 
+    let wan_egress = attach_line(&matrix, DaeTcAttachRole::WanEgress);
+    assert_eq!(wan_egress.native.section, "classifier/wan_egress_l3");
+    assert_eq!(wan_egress.native.program_name, "tproxy_wan_egress_l3");
+    assert_eq!(wan_egress.native.handle, tc_handle(0x2023, 0b101));
+
     let peer = attach_line(&matrix, DaeTcAttachRole::Dae0peerIngress);
     assert_eq!(peer.native.section, "classifier/dae0peer_ingress");
     assert_eq!(peer.native.program_name, "tproxy_dae0peer_ingress");
