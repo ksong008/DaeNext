@@ -93,6 +93,7 @@ pub(crate) fn stored_successful_latency_seed_snapshots_skip_failures_and_redact_
         &conn,
         &NodeLatencyWrite {
             node_id: 11,
+            node_link: "socks://127.0.0.1:1080#one".to_owned(),
             latency_ms: Some(37),
             alive: true,
             tested_at: iso8601_utc(42),
@@ -104,6 +105,7 @@ pub(crate) fn stored_successful_latency_seed_snapshots_skip_failures_and_redact_
         &conn,
         &NodeLatencyWrite {
             node_id: 12,
+            node_link: "socks://127.0.0.1:1081#two".to_owned(),
             latency_ms: Some(10000),
             alive: false,
             tested_at: iso8601_utc(43),
@@ -183,7 +185,12 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
         current = current_node_latency_job_value(&jobs);
     }
 
-    assert_eq!(current["job"]["status"].as_str(), Some("finished"));
+    assert_eq!(
+        current["job"]["status"].as_str(),
+        Some("finished"),
+        "job message: {:?}",
+        current["job"]["message"]
+    );
     assert_eq!(current["job"]["total"].as_u64(), Some(2));
     assert_eq!(current["job"]["completed"].as_u64(), Some(2));
     assert_eq!(
