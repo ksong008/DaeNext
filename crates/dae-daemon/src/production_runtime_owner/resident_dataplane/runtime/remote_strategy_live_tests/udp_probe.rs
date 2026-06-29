@@ -4,6 +4,7 @@ pub(crate) fn resident_live_adapter_udp_probe(
     target: std::net::SocketAddr,
     payload: &[u8],
     config_path: Option<&Path>,
+    include_response_hex: bool,
 ) -> Value {
     let started = std::time::Instant::now();
     let node_shapes = plan::resident_node_link_shapes(config);
@@ -30,7 +31,7 @@ pub(crate) fn resident_live_adapter_udp_probe(
                     Ok(proxy) => {
                         let mut probe = match &probe_runtime {
                             Ok(runtime) => {
-                                runtime.block_on(probe_resident_proxy_udp_async(&proxy, target, payload))
+                                runtime.block_on(probe_resident_proxy_udp_async(&proxy, target, payload, include_response_hex))
                             }
                             Err(err) => json!({
                                 "status": "fail",

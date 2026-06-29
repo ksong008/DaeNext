@@ -157,6 +157,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddr,
     payload: &[u8],
+    include_response_hex: bool,
 ) -> serde_json::Value {
     let started = Instant::now();
     let handler = resident_udp_proxy_handler_name(proxy);
@@ -195,6 +196,9 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             if let Some(quic_underlay) = response.quic_underlay {
                 report["quic_underlay"] = json!(quic_underlay);
             }
+            if include_response_hex {
+                report["responsePayloadHex"] = json!(udp_probe_hex_encode(&response.payload));
+            }
             report
         }
         Err(err)
@@ -231,6 +235,16 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             "error": err,
         }),
     }
+}
+
+fn udp_probe_hex_encode(payload: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(payload.len() * 2);
+    for byte in payload {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 async fn wait_for_udp_probe_response(
