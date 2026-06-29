@@ -112,6 +112,11 @@ fn compare_dns_upstream_route_candidates(
     left: &ResidentDnsUpstreamRouteCandidate,
     right: &ResidentDnsUpstreamRouteCandidate,
 ) -> std::cmp::Ordering {
+    if left.route_kind != ResidentDnsUpstreamRouteKind::Proxy
+        || right.route_kind != ResidentDnsUpstreamRouteKind::Proxy
+    {
+        return left.order.cmp(&right.order);
+    }
     match (
         left.target_family_matches_selection(),
         right.target_family_matches_selection(),
@@ -153,5 +158,104 @@ fn dns_upstream_proxy_network_type(target: SocketAddr, l4proto: L4Proto) -> Netw
         (L4Proto::Tcp, true) => NetworkType::TCP6,
         (L4Proto::Udp, false) => NetworkType::DNS_UDP4,
         (L4Proto::Udp, true) => NetworkType::DNS_UDP6,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn route_candidate(
+        order: usize,
+        target: SocketAddr,
+        route_kind: ResidentDnsUpstreamRouteKind,
+        requested_network_type: NetworkType,
+        selected_network_type: NetworkType,
+        latency_ms: i64,
+    ) -> ResidentDnsUpstreamRouteCandidate {
+        ResidentDnsUpstreamRouteCandidate {
+            order,
+            target,
+            selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+            route_kind,
+            requested_network_type,
+            selected_network_type,
+            latency_ms,
+        }
+    }
+
+    fn dns_upstream_target_v4() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DNS_DEFAULT_PORT)
+    }
+
+    fn dns_upstream_target_v6() -> SocketAddr {
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), DNS_DEFAULT_PORT)
+    }
+
+    #[test]
+    fn direct_route_candidates_keep_resolved_order() {
+        let mut candidates = vec![
+            route_candidate(
+                0,
+                dns_upstream_target_v4(),
+                ResidentDnsUpstreamRouteKind::Proxy,
+                NetworkType::DNS_UDP4,
+                NetworkType::DNS_UDP6,
+                10,
+            ),
+            route_candidate(
+                1,
+                dns_upstream_target_v6(),
+                ResidentDnsUpstreamRouteKind::Direct,
+                NetworkType::DNS_UDP6,
+                NetworkType::DNS_UDP6,
+                0,
+            ),
+        ];
+
+        candidates.sort_by(compare_dns_upstream_route_candidates);
+
+        assert_eq!(candidates[0].target, dns_upstream_target_v4());
+        assert_eq!(candidates[1].target, dns_upstream_target_v6());
+    }
+
+    #[test]
+    fn proxy_route_candidates_prefer_matching_family_then_latency() {
+        let mut candidates = vec![
+            route_candidate(
+                0,
+                dns_upstream_target_v4(),
+                ResidentDnsUpstreamRouteKind::Proxy,
+                NetworkType::DNS_UDP4,
+                NetworkType::DNS_UDP6,
+                10,
+            ),
+            route_candidate(
+                1,
+                dns_upstream_target_v6(),
+                ResidentDnsUpstreamRouteKind::Proxy,
+                NetworkType::DNS_UDP6,
+                NetworkType::DNS_UDP6,
+                30,
+            ),
+            route_candidate(
+                2,
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), DNS_DEFAULT_PORT),
+                ResidentDnsUpstreamRouteKind::Proxy,
+                NetworkType::DNS_UDP6,
+                NetworkType::DNS_UDP6,
+                20,
+            ),
+        ];
+
+        candidates.sort_by(compare_dns_upstream_route_candidates);
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.order)
+                .collect::<Vec<_>>(),
+            vec![2, 1, 0]
+        );
     }
 }
