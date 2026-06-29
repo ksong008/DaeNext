@@ -527,15 +527,44 @@ mod tests {
     }
 
     #[test]
-    fn resident_vless_xhttp_udp_uses_standard_udp_over_stream_semantics() {
-        let mut proxy =
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
-        proxy.protocol = "vless".to_owned();
-        proxy.net = "xhttp".to_owned();
-        proxy.tls = "tls".to_owned();
-        proxy.flow = String::new();
-
+    fn resident_vless_standard_udp_uses_udp_over_stream_semantics() {
         let target = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 443));
+        for (net, tls) in [
+            ("", ""),
+            ("tcp", ""),
+            ("tcp", "none"),
+            ("tcp", "tls"),
+            ("tcp", "reality"),
+            ("websocket", ""),
+            ("websocket", "none"),
+            ("websocket", "tls"),
+            ("websocket", "reality"),
+            ("httpupgrade", ""),
+            ("httpupgrade", "none"),
+            ("httpupgrade", "tls"),
+            ("httpupgrade", "reality"),
+            ("grpc", "tls"),
+            ("grpc", "reality"),
+            ("h2", "tls"),
+            ("h2", "reality"),
+            ("xhttp", "tls"),
+            ("xhttp", "reality"),
+        ] {
+            let mut proxy =
+                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            proxy.protocol = "vless".to_owned();
+            proxy.net = net.to_owned();
+            proxy.tls = tls.to_owned();
+            proxy.flow = String::new();
+
+            assert_eq!(
+                udp_packet_semantics_for_destination(&proxy, target),
+                UdpPacketSemantics::UdpOverStream,
+                "net={net:?} tls={tls:?}"
+            );
+        }
+
+        let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
         assert_eq!(
             udp_packet_semantics_for_destination(&proxy, target),
             UdpPacketSemantics::UdpOverStream
@@ -547,6 +576,58 @@ mod tests {
             ),
             UdpPacketSemantics::Dns
         );
+    }
+
+    #[test]
+    fn resident_vless_vision_udp_uses_xudp_semantics() {
+        for flow in [XTLS_RPRX_VISION, "xtls-rprx-vision-udp443"] {
+            let mut proxy =
+                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            proxy.protocol = "vless".to_owned();
+            proxy.net = "tcp".to_owned();
+            proxy.tls = "tls".to_owned();
+            proxy.flow = flow.to_owned();
+
+            assert_eq!(
+                udp_packet_semantics_for_destination(
+                    &proxy,
+                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 443))
+                ),
+                UdpPacketSemantics::Xudp,
+                "flow={flow:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resident_vless_unsupported_udp_shapes_use_protocol_closed_semantics() {
+        for (net, tls, flow) in [
+            ("grpc", "", ""),
+            ("grpc", "none", ""),
+            ("h2", "", ""),
+            ("h2", "none", ""),
+            ("meek", "tls", ""),
+            ("websocket", "tls", XTLS_RPRX_VISION),
+            ("httpupgrade", "tls", XTLS_RPRX_VISION),
+            ("grpc", "tls", XTLS_RPRX_VISION),
+            ("h2", "tls", XTLS_RPRX_VISION),
+        ] {
+            let mut proxy =
+                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            proxy.protocol = "vless".to_owned();
+            proxy.net = net.to_owned();
+            proxy.tls = tls.to_owned();
+            proxy.flow = flow.to_owned();
+
+            assert_eq!(
+                udp_packet_semantics_for_destination(
+                    &proxy,
+                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 443))
+                ),
+                UdpPacketSemantics::ProtocolClosed,
+                "net={net:?} tls={tls:?} flow={flow:?}"
+            );
+        }
     }
 
     #[test]

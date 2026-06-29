@@ -344,6 +344,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     ));
     let vless_websocket_graph = vless_websocket.executable_graph_value();
     assert_eq!(vless_websocket_graph["streamWrapper"], "websocket");
+    assert_eq!(vless_websocket_graph["packetSemantics"], "udp-over-stream");
     assert_eq!(
         vless_websocket_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-websocket-binary-frame"
@@ -391,6 +392,10 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     ));
     let vless_httpupgrade_graph = vless_httpupgrade.executable_graph_value();
     assert_eq!(vless_httpupgrade_graph["streamWrapper"], "httpupgrade");
+    assert_eq!(
+        vless_httpupgrade_graph["packetSemantics"],
+        "udp-over-stream"
+    );
     assert_eq!(
         vless_httpupgrade_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-http-upgrade-stream"
@@ -441,6 +446,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     ));
     let vless_h2_graph = vless_h2.executable_graph_value();
     assert_eq!(vless_h2_graph["streamWrapper"], "h2");
+    assert_eq!(vless_h2_graph["packetSemantics"], "udp-over-stream");
     assert_eq!(
         vless_h2_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-http2-body-stream"

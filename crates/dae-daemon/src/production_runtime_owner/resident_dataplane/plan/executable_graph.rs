@@ -491,11 +491,14 @@ fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate".to_owned(),
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed".to_owned(),
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
-            if proxy.net == "xhttp" && proxy.flow.is_empty() =>
+            if proxy.uses_standard_vless_udp_over_stream() =>
         {
             "udp-over-stream".to_owned()
         }
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp".to_owned(),
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } if proxy.uses_vless_vision_xudp() => {
+            "xudp".to_owned()
+        }
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "protocol-closed".to_owned(),
         ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => "multiplexed-stream".to_owned(),
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead".to_owned(),
         ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => "datagram-aead-2022".to_owned(),

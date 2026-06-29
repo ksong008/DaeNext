@@ -385,6 +385,12 @@ pub(super) fn udp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
                 .with_transport_underlay("tcp")
                 .with_route_action("proxy")
         }
+        UdpExecutionLabel::VlessUdpOverStream => {
+            RuntimeExecutionDescriptor::new(label, "udp-over-stream", "packet-transport", "udp")
+                .with_packet_semantics("udp-over-stream")
+                .with_transport_underlay("tcp")
+                .with_route_action("proxy")
+        }
         UdpExecutionLabel::UdpDatagramAead => {
             RuntimeExecutionDescriptor::new(label, "packet-relay", "packet-transport", "udp")
                 .with_packet_semantics("datagram-aead")
@@ -431,5 +437,22 @@ pub(super) fn udp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
             RuntimeExecutionDescriptor::new(label, "packet-runtime", "packet-evidence", "udp")
                 .with_route_action("evidence")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn udp_execution_descriptor_classifies_vless_standard_udp_over_stream() {
+        let descriptor = udp_execution_descriptor("vless-udp-over-stream").to_value();
+
+        assert_eq!(descriptor["executor"], "udp-over-stream");
+        assert_eq!(descriptor["capability"], "packet-transport");
+        assert_eq!(descriptor["network"], "udp");
+        assert_eq!(descriptor["packetSemantics"], "udp-over-stream");
+        assert_eq!(descriptor["transportUnderlay"], "tcp");
+        assert_eq!(descriptor["routeAction"], "proxy");
     }
 }

@@ -441,6 +441,7 @@ impl TcpExecutionLabel {
 pub(super) enum UdpExecutionLabel {
     ResidentDnsUdp,
     VlessXudp,
+    VlessUdpOverStream,
     UdpDatagramAead,
     UdpDatagramAead2022,
     Socks5UdpAssociate,
@@ -457,6 +458,7 @@ impl UdpExecutionLabel {
         match value {
             "resident-dns-udp" => Self::ResidentDnsUdp,
             "vless-xudp" => Self::VlessXudp,
+            "vless-udp-over-stream" => Self::VlessUdpOverStream,
             "udp-datagram-aead" => Self::UdpDatagramAead,
             "udp-datagram-aead-2022" => Self::UdpDatagramAead2022,
             "socks5-udp-associate" => Self::Socks5UdpAssociate,
