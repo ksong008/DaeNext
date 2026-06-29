@@ -4,6 +4,7 @@ use super::*;
 #[derive(Clone, Debug)]
 pub(crate) struct NodeLatencyWrite {
     pub(in crate::daed_product) node_id: i64,
+    pub(in crate::daed_product) node_link: String,
     pub(in crate::daed_product) latency_ms: Option<i64>,
     pub(in crate::daed_product) alive: bool,
     pub(in crate::daed_product) tested_at: String,
@@ -72,12 +73,12 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
 ) -> (Vec<NodeLatencyWrite>, HashSet<i64>) {
     let mut results = Vec::with_capacity(snapshots.len().min(nodes.len()));
     let mut tested_ids = HashSet::with_capacity(nodes.len().min(snapshots.len()));
-    let mut node_ids_by_link_hash = HashMap::<String, Vec<i64>>::with_capacity(nodes.len());
+    let mut nodes_by_link_hash = HashMap::<String, Vec<(i64, &str)>>::with_capacity(nodes.len());
     for (id, node_link, _) in nodes {
-        node_ids_by_link_hash
+        nodes_by_link_hash
             .entry(runtime_link_hash(node_link))
             .or_default()
-            .push(*id);
+            .push((*id, node_link.as_str()));
     }
     for snapshot in snapshots {
         if !runtime_latency_snapshot_has_result(snapshot) {
@@ -86,7 +87,7 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
         let Some(link_hash) = runtime_latency_snapshot_link_hash(snapshot) else {
             continue;
         };
-        let Some(matched_ids) = node_ids_by_link_hash.get(link_hash) else {
+        let Some(matched_nodes) = nodes_by_link_hash.get(link_hash) else {
             continue;
         };
         let checked_at = snapshot
@@ -105,10 +106,11 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
             .and_then(Value::as_str)
             .filter(|message| !message.is_empty())
             .map(str::to_owned);
-        for &node_id in matched_ids {
+        for &(node_id, node_link) in matched_nodes {
             tested_ids.insert(node_id);
             results.push(NodeLatencyWrite {
                 node_id,
+                node_link: node_link.to_owned(),
                 latency_ms,
                 alive,
                 tested_at: checked_at.clone(),
@@ -168,8 +170,9 @@ pub(crate) fn native_probe_unavailable_results(
 ) -> Vec<NodeLatencyWrite> {
     nodes
         .iter()
-        .map(|(id, _, _)| NodeLatencyWrite {
+        .map(|(id, link, _)| NodeLatencyWrite {
             node_id: *id,
+            node_link: link.clone(),
             latency_ms: None,
             alive: false,
             tested_at: tested_at.to_owned(),

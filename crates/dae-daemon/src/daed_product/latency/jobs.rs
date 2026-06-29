@@ -186,7 +186,10 @@ pub(crate) fn enqueue_node_latency_job(
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let nodes = latency_probe_nodes_for_ids(&conn, ids)?;
+    drop(conn);
     let (job, should_spawn) = jobs.start_or_current(nodes.len())?;
+    let mut value = list_stored_node_latencies_value(state)?;
+    value["job"] = job.to_value();
     if should_spawn {
         let state = state.to_path_buf();
         let config_dir = config_dir.to_path_buf();
@@ -211,8 +214,6 @@ pub(crate) fn enqueue_node_latency_job(
             )));
         }
     }
-    let mut value = list_stored_node_latencies_value(state)?;
-    value["job"] = job.to_value();
     Ok(value)
 }
 
@@ -257,6 +258,11 @@ fn run_node_latency_job_inner(
         let chunk_size = chunk_size.max(1);
         for link_chunk in latency_probe_link_chunks(nodes, chunk_size) {
             let chunk_nodes = latency_probe_nodes_for_links(nodes, &link_chunk);
+            let chunk_nodes = current_latency_probe_nodes(&conn, &chunk_nodes)?;
+            if chunk_nodes.is_empty() {
+                continue;
+            }
+            let link_chunk = latency_probe_unique_links(&chunk_nodes);
             let mut write_error = None;
             let runtime_snapshots =
                 runtime.probe_node_latencies_streaming(&link_chunk, |runtime_snapshots| {
@@ -271,11 +277,12 @@ fn run_node_latency_job_inner(
                         return;
                     }
                     match write_node_latency_results(&mut conn, &results) {
-                        Ok(()) => {
-                            completed = completed.saturating_add(results.len());
-                            succeeded = succeeded.saturating_add(
-                                results.iter().filter(|result| result.alive).count(),
-                            );
+                        Ok((written, alive)) => {
+                            if written == 0 {
+                                return;
+                            }
+                            completed = completed.saturating_add(written);
+                            succeeded = succeeded.saturating_add(alive);
                             jobs.mark_progress(
                                 job_id,
                                 completed,
@@ -298,30 +305,34 @@ fn run_node_latency_job_inner(
                 );
                 let results =
                     node_latency_results_for_runtime_snapshots(&chunk_nodes, &runtime_snapshots);
-                write_node_latency_results(&mut conn, &results)?;
-                completed = completed.saturating_add(results.len());
-                succeeded =
-                    succeeded.saturating_add(results.iter().filter(|result| result.alive).count());
-                jobs.mark_progress(
-                    job_id,
-                    completed,
-                    succeeded,
-                    completed.saturating_sub(succeeded),
-                );
+                let (written, alive) = write_node_latency_results(&mut conn, &results)?;
+                if written != 0 {
+                    completed = completed.saturating_add(written);
+                    succeeded = succeeded.saturating_add(alive);
+                    jobs.mark_progress(
+                        job_id,
+                        completed,
+                        succeeded,
+                        completed.saturating_sub(succeeded),
+                    );
+                }
             }
         }
     } else if !nodes.is_empty() {
+        let nodes = current_latency_probe_nodes(&conn, nodes)?;
         let tested_at = now_text();
-        let results = native_probe_unavailable_results(nodes, &tested_at);
-        write_node_latency_results(&mut conn, &results)?;
-        completed = results.len();
-        succeeded = results.iter().filter(|result| result.alive).count();
-        jobs.mark_progress(
-            job_id,
-            completed,
-            succeeded,
-            completed.saturating_sub(succeeded),
-        );
+        let results = native_probe_unavailable_results(&nodes, &tested_at);
+        let (written, alive) = write_node_latency_results(&mut conn, &results)?;
+        if written != 0 {
+            completed = written;
+            succeeded = alive;
+            jobs.mark_progress(
+                job_id,
+                completed,
+                succeeded,
+                completed.saturating_sub(succeeded),
+            );
+        }
     }
 
     append_log_for_config(
@@ -400,12 +411,22 @@ pub(crate) fn node_latency_results_for_runtime_snapshots_only(
 fn write_node_latency_results(
     conn: &mut Connection,
     results: &[NodeLatencyWrite],
-) -> io::Result<()> {
+) -> io::Result<(usize, usize)> {
     let tx = conn.transaction().map_err(sqlite_io_error)?;
+    let mut written = 0_usize;
+    let mut alive = 0_usize;
     for result in results {
+        if !node_latency_result_target_exists(&tx, result.node_id, &result.node_link)? {
+            continue;
+        }
         store_node_latency_result(&tx, result)?;
+        written = written.saturating_add(1);
+        if result.alive {
+            alive = alive.saturating_add(1);
+        }
     }
-    tx.commit().map_err(sqlite_io_error)
+    tx.commit().map_err(sqlite_io_error)?;
+    Ok((written, alive))
 }
 
 pub(crate) fn current_node_latency_job_value(jobs: &LatencyJobManager) -> Value {
@@ -446,4 +467,159 @@ pub(crate) fn latency_probe_nodes_for_ids(
         }
     }
     Ok(nodes)
+}
+
+fn current_latency_probe_nodes(
+    conn: &Connection,
+    nodes: &[(i64, String, String)],
+) -> io::Result<Vec<(i64, String, String)>> {
+    let mut current = Vec::with_capacity(nodes.len());
+    for (id, link, address) in nodes {
+        if latency_probe_node_identity_exists(conn, *id, link)? {
+            current.push((*id, link.clone(), address.clone()));
+        }
+    }
+    Ok(current)
+}
+
+fn latency_probe_node_identity_exists(conn: &Connection, id: i64, link: &str) -> io::Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM nodes WHERE id = ?1 AND link = ?2",
+        params![id, link],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+    .map_err(sqlite_io_error)
+}
+
+fn node_latency_result_target_exists(
+    conn: &Connection,
+    node_id: i64,
+    node_link: &str,
+) -> io::Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM nodes WHERE id = ?1 AND link = ?2",
+        params![node_id, node_link],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+    .map_err(sqlite_io_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_state(name: &str) -> (PathBuf, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("daed-product-latency-{name}-{}", fastrand::u64(..)));
+        fs::create_dir_all(&dir).unwrap();
+        let state = dir.join("state.db");
+        ensure_state_schema(&state).unwrap();
+        (dir, state)
+    }
+
+    fn insert_latency_probe_node(conn: &Connection, id: i64, link: &str) {
+        let parsed = parse_node_link(link, Some(&format!("node-{id}")));
+        conn.execute(
+            "INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+            params![
+                id,
+                link,
+                parsed.name,
+                parsed.address,
+                parsed.protocol,
+                format!("node-{id}")
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn current_latency_probe_nodes_skip_deleted_or_changed_nodes() {
+        let (dir, state) = temp_state("current-nodes");
+        let conn = open_state_connection(&state).unwrap();
+        insert_latency_probe_node(&conn, 1, "socks://127.0.0.1:1080#one");
+        insert_latency_probe_node(&conn, 2, "socks://127.0.0.1:1081#two");
+        conn.execute(
+            "UPDATE nodes SET link = ?1 WHERE id = ?2",
+            params!["socks://127.0.0.1:2081#two", 2_i64],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM nodes WHERE id = ?1", params![1_i64])
+            .unwrap();
+
+        let nodes = vec![
+            (
+                1_i64,
+                "socks://127.0.0.1:1080#one".to_owned(),
+                "127.0.0.1".to_owned(),
+            ),
+            (
+                2_i64,
+                "socks://127.0.0.1:1081#two".to_owned(),
+                "127.0.0.1".to_owned(),
+            ),
+        ];
+
+        let current = current_latency_probe_nodes(&conn, &nodes).unwrap();
+
+        assert!(current.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn write_node_latency_results_skips_deleted_or_changed_nodes() {
+        let (dir, state) = temp_state("write-current");
+        let mut conn = open_state_connection(&state).unwrap();
+        insert_latency_probe_node(&conn, 1, "socks://127.0.0.1:1080#one");
+        insert_latency_probe_node(&conn, 3, "socks://127.0.0.1:1082#three");
+        conn.execute(
+            "UPDATE nodes SET link = ?1 WHERE id = ?2",
+            params!["socks://127.0.0.1:2082#three", 3_i64],
+        )
+        .unwrap();
+        let results = vec![
+            NodeLatencyWrite {
+                node_id: 1,
+                node_link: "socks://127.0.0.1:1080#one".to_owned(),
+                latency_ms: Some(11),
+                alive: true,
+                tested_at: "2026-06-29T00:00:00Z".to_owned(),
+                message: None,
+            },
+            NodeLatencyWrite {
+                node_id: 2,
+                node_link: "socks://127.0.0.1:1081#two".to_owned(),
+                latency_ms: Some(22),
+                alive: true,
+                tested_at: "2026-06-29T00:00:00Z".to_owned(),
+                message: None,
+            },
+            NodeLatencyWrite {
+                node_id: 3,
+                node_link: "socks://127.0.0.1:1082#three".to_owned(),
+                latency_ms: Some(33),
+                alive: true,
+                tested_at: "2026-06-29T00:00:00Z".to_owned(),
+                message: None,
+            },
+        ];
+
+        let (written, alive) = write_node_latency_results(&mut conn, &results).unwrap();
+
+        assert_eq!((written, alive), (1, 1));
+        let orphan_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM node_latency_results WHERE node_id IN (?1, ?2)",
+                params![2_i64, 3_i64],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphan_rows, 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
 }
