@@ -171,6 +171,7 @@ impl ResidentExecutableGraphDescriptor {
                 "client": &fingerprint.client,
                 "randomized": fingerprint.randomized,
                 "alpnPolicy": &fingerprint.alpn_policy,
+                "defaultAlpn": &fingerprint.default_alpn,
             })
         });
         let provider = match self.security_underlay.as_str() {

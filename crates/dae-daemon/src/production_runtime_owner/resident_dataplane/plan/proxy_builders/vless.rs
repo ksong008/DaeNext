@@ -157,11 +157,7 @@ pub(crate) fn build_vless_proxy_plan(
             &node_tag,
         )?;
     }
-    let alpn = if matches!(net.as_str(), "grpc" | "h2" | "xhttp") && vless.alpn.is_empty() {
-        vec!["h2".to_owned()]
-    } else {
-        split_alpn(&vless.alpn)
-    };
+    let alpn = resident_vless_alpn(&vless, &net, utls_fingerprint.as_ref());
     let stream_host = if let Some(meek_options) = &meek_options {
         meek_options.host.clone()
     } else if matches!(
@@ -262,4 +258,25 @@ fn resident_reality_utls_fingerprint_plan(
         return Ok(None);
     }
     resolve_optional_resident_utls_fingerprint("link fp", link_fingerprint)
+}
+
+fn resident_vless_alpn(
+    vless: &VLESSLink,
+    net: &str,
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+) -> Vec<String> {
+    let explicit_alpn = split_alpn(&vless.alpn);
+    if !explicit_alpn.is_empty() {
+        return explicit_alpn;
+    }
+    if vless.tls == "reality" {
+        if let Some(fingerprint) = fingerprint {
+            return fingerprint.default_alpn.clone();
+        }
+    }
+    if matches!(net, "grpc" | "h2" | "xhttp") {
+        vec![UTLS_ALPN_H2.to_owned()]
+    } else {
+        Vec::new()
+    }
 }

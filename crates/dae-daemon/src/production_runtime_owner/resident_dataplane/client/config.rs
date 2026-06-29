@@ -89,6 +89,7 @@ impl ResidentTlsFingerprintConfigKey {
             client: plan.client.clone(),
             randomized: plan.randomized,
             alpn_policy: plan.alpn_policy.clone(),
+            default_alpn: plan.default_alpn.clone(),
         }
     }
 }
@@ -370,7 +371,7 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
     if proxy
         .utls_fingerprint
         .as_ref()
-        .is_some_and(|fingerprint| fingerprint.alpn_policy == "force-no-alpn")
+        .is_some_and(|fingerprint| fingerprint.alpn_policy == UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN)
     {
         return Ok(Vec::new());
     }
@@ -379,9 +380,11 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
         && proxy
             .utls_fingerprint
             .as_ref()
-            .is_some_and(|fingerprint| fingerprint.alpn_policy == "force-alpn")
+            .is_some_and(|fingerprint| fingerprint.alpn_policy == UTLS_ALPN_POLICY_RANDOMIZED_ALPN)
     {
-        protocols.extend(["h2".to_owned(), "http/1.1".to_owned()]);
+        if let Some(fingerprint) = proxy.utls_fingerprint.as_ref() {
+            protocols.extend(fingerprint.default_alpn.iter().cloned());
+        }
     }
     let mut out = Vec::new();
     for protocol in protocols {
@@ -496,7 +499,11 @@ mod tests {
             family: family.to_owned(),
             client: family.to_owned(),
             randomized: family == UTLS_FAMILY_RANDOM,
-            alpn_policy: "auto".to_owned(),
+            alpn_policy: dae_outbound::shared_transport::UTLS_ALPN_POLICY_AUTO.to_owned(),
+            default_alpn: dae_outbound::shared_transport::UTLS_BROWSER_DEFAULT_ALPN
+                .iter()
+                .map(|protocol| (*protocol).to_owned())
+                .collect(),
         }
     }
 

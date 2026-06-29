@@ -12,6 +12,13 @@ pub struct UtlsFingerprint {
 }
 
 pub const U_TLS_WIRE_STACK_DEFERRED: bool = true;
+pub const UTLS_ALPN_H2: &str = "h2";
+pub const UTLS_ALPN_HTTP_1_1: &str = "http/1.1";
+pub const UTLS_BROWSER_DEFAULT_ALPN: &[&str] = &[UTLS_ALPN_H2, UTLS_ALPN_HTTP_1_1];
+pub const UTLS_ALPN_POLICY_AUTO: &str = "auto";
+pub const UTLS_ALPN_POLICY_FIXED: &str = "fixed";
+pub const UTLS_ALPN_POLICY_RANDOMIZED_ALPN: &str = "randomized-alpn";
+pub const UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN: &str = "randomized-no-alpn";
 pub const UTLS_FAMILY_360: &str = "360";
 pub const UTLS_FAMILY_ANDROID: &str = "android";
 pub const UTLS_FAMILY_CHROME: &str = "chrome";
@@ -30,7 +37,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Randomized",
         false,
         true,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
     fp(
         "randomized",
@@ -39,7 +46,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Randomized",
         true,
         true,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
     fp(
         "randomizedalpn",
@@ -48,7 +55,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "RandomizedALPN",
         false,
         true,
-        "force-alpn",
+        UTLS_ALPN_POLICY_RANDOMIZED_ALPN,
     ),
     fp(
         "randomizednoalpn",
@@ -57,7 +64,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "RandomizedNoALPN",
         false,
         true,
-        "force-no-alpn",
+        UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN,
     ),
     fp(
         "firefox",
@@ -66,7 +73,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         true,
         false,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
     fp(
         "firefox_auto",
@@ -75,7 +82,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         false,
         false,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
     fp(
         "firefox_55",
@@ -84,7 +91,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "firefox_56",
@@ -93,7 +100,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "firefox_63",
@@ -102,7 +109,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "firefox_65",
@@ -111,7 +118,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "firefox_99",
@@ -120,7 +127,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "firefox_102",
@@ -129,7 +136,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "firefox_105",
@@ -138,7 +145,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Firefox",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome",
@@ -147,7 +154,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         true,
         false,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
     fp(
         "chrome_auto",
@@ -156,7 +163,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
     fp(
         "chrome_58",
@@ -165,7 +172,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome_62",
@@ -174,7 +181,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome_70",
@@ -183,7 +190,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome_72",
@@ -192,7 +199,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome_83",
@@ -201,7 +208,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome_87",
@@ -210,7 +217,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome_96",
@@ -219,7 +226,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome_100",
@@ -228,7 +235,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "chrome_102",
@@ -237,14 +244,62 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Chrome",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
-    fp("ios", "ios_auto", "ios", "iOS", true, false, "auto"),
-    fp("ios_auto", "ios_auto", "ios", "iOS", false, false, "auto"),
-    fp("ios_11_1", "ios_11_1", "ios", "iOS", false, false, "fixed"),
-    fp("ios_12_1", "ios_12_1", "ios", "iOS", false, false, "fixed"),
-    fp("ios_13", "ios_13", "ios", "iOS", false, false, "fixed"),
-    fp("ios_14", "ios_14", "ios", "iOS", false, false, "fixed"),
+    fp(
+        "ios",
+        "ios_auto",
+        "ios",
+        "iOS",
+        true,
+        false,
+        UTLS_ALPN_POLICY_AUTO,
+    ),
+    fp(
+        "ios_auto",
+        "ios_auto",
+        "ios",
+        "iOS",
+        false,
+        false,
+        UTLS_ALPN_POLICY_AUTO,
+    ),
+    fp(
+        "ios_11_1",
+        "ios_11_1",
+        "ios",
+        "iOS",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
+    fp(
+        "ios_12_1",
+        "ios_12_1",
+        "ios",
+        "iOS",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
+    fp(
+        "ios_13",
+        "ios_13",
+        "ios",
+        "iOS",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
+    fp(
+        "ios_14",
+        "ios_14",
+        "ios",
+        "iOS",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
     fp(
         "android_11_okhttp",
         "android_11_okhttp",
@@ -252,9 +307,17 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Android",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
-    fp("edge", "edge_auto", "edge", "Edge", true, false, "auto"),
+    fp(
+        "edge",
+        "edge_auto",
+        "edge",
+        "Edge",
+        true,
+        false,
+        UTLS_ALPN_POLICY_AUTO,
+    ),
     fp(
         "edge_auto",
         "edge_auto",
@@ -262,11 +325,25 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Edge",
         false,
         false,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
-    fp("edge_85", "edge_85", "edge", "Edge", false, false, "fixed"),
     fp(
-        "edge_106", "edge_106", "edge", "Edge", false, false, "fixed",
+        "edge_85",
+        "edge_85",
+        "edge",
+        "Edge",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
+    fp(
+        "edge_106",
+        "edge_106",
+        "edge",
+        "Edge",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
         "safari",
@@ -275,7 +352,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Safari",
         true,
         false,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
     fp(
         "safari_auto",
@@ -284,7 +361,7 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Safari",
         false,
         false,
-        "auto",
+        UTLS_ALPN_POLICY_AUTO,
     ),
     fp(
         "safari_16_0",
@@ -293,15 +370,71 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         "Safari",
         false,
         false,
-        "fixed",
+        UTLS_ALPN_POLICY_FIXED,
     ),
-    fp("360", "360_auto", "360", "360", true, false, "auto"),
-    fp("360_auto", "360_auto", "360", "360", false, false, "auto"),
-    fp("360_7_5", "360_7_5", "360", "360", false, false, "fixed"),
-    fp("360_11_0", "360_11_0", "360", "360", false, false, "fixed"),
-    fp("qq", "qq_auto", "qq", "QQ", true, false, "auto"),
-    fp("qq_auto", "qq_auto", "qq", "QQ", false, false, "auto"),
-    fp("qq_11_1", "qq_11_1", "qq", "QQ", false, false, "fixed"),
+    fp(
+        "360",
+        "360_auto",
+        "360",
+        "360",
+        true,
+        false,
+        UTLS_ALPN_POLICY_AUTO,
+    ),
+    fp(
+        "360_auto",
+        "360_auto",
+        "360",
+        "360",
+        false,
+        false,
+        UTLS_ALPN_POLICY_AUTO,
+    ),
+    fp(
+        "360_7_5",
+        "360_7_5",
+        "360",
+        "360",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
+    fp(
+        "360_11_0",
+        "360_11_0",
+        "360",
+        "360",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
+    fp(
+        "qq",
+        "qq_auto",
+        "qq",
+        "QQ",
+        true,
+        false,
+        UTLS_ALPN_POLICY_AUTO,
+    ),
+    fp(
+        "qq_auto",
+        "qq_auto",
+        "qq",
+        "QQ",
+        false,
+        false,
+        UTLS_ALPN_POLICY_AUTO,
+    ),
+    fp(
+        "qq_11_1",
+        "qq_11_1",
+        "qq",
+        "QQ",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
 ];
 
 pub fn resolve_utls_client_hello_id(name: &str) -> Result<UtlsFingerprint, OutboundError> {
@@ -323,6 +456,17 @@ pub fn utls_fingerprint_names() -> Vec<&'static str> {
         .iter()
         .map(|fingerprint| fingerprint.name)
         .collect()
+}
+
+pub fn utls_fingerprint_default_alpn_protocols(
+    fingerprint: &UtlsFingerprint,
+) -> &'static [&'static str] {
+    match fingerprint.alpn_policy {
+        UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN => &[],
+        UTLS_ALPN_POLICY_RANDOMIZED_ALPN => UTLS_BROWSER_DEFAULT_ALPN,
+        _ if matches!(fingerprint.family, UTLS_FAMILY_ANDROID | UTLS_FAMILY_RANDOM) => &[],
+        _ => UTLS_BROWSER_DEFAULT_ALPN,
+    }
 }
 
 const fn fp(
