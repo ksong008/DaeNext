@@ -5,12 +5,17 @@ use std::task::{Context, Poll};
 
 use boring::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
 use dae_outbound::shared_transport::reality::REALITY_VERSION;
-use dae_outbound::shared_transport::{TlsFragmentOptions, fragment_tls_write};
+use dae_outbound::shared_transport::{
+    TlsFragmentOptions, UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE,
+    UTLS_FAMILY_FIREFOX, UTLS_FAMILY_IOS, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM, fragment_tls_write,
+};
 use dae_outbound::vless::contract::is_xtls_rprx_vision_flow;
 use rustls::client::RealityConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{
+    ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme, SupportedCipherSuite,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::time;
