@@ -123,6 +123,12 @@ pub(crate) fn vless_reality_fixture_url() -> String {
     vless_reality_fixture_url_with_allow_insecure(false)
 }
 
+pub(crate) fn vless_reality_fixture_url_with_fingerprint(fingerprint: &str) -> String {
+    let mut link = VLESSLink::parse(&vless_reality_fixture_url()).unwrap();
+    link.fingerprint = fingerprint.to_owned();
+    link.export_url()
+}
+
 pub(crate) fn vless_reality_insecure_fixture_url() -> String {
     vless_reality_fixture_url_with_allow_insecure(true)
 }
