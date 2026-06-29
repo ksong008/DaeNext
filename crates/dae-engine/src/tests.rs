@@ -3,7 +3,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dae_config::DynamicFunctionValue;
+use dae_config::{DEFAULT_LOG_LEVEL, DynamicFunctionValue};
 use serde_json::Value;
 
 use crate::*;
@@ -110,9 +110,10 @@ fn config_api_matches_golden_fixture() {
     let empty_fixture = &fixture["empty_config"];
     let empty = empty_config().unwrap();
     assert_eq!(
-        empty.global.log_level,
-        empty_fixture["log_level"].as_str().unwrap()
+        empty_fixture["log_level"].as_str().unwrap(),
+        DEFAULT_LOG_LEVEL
     );
+    assert_eq!(empty.global.log_level, DEFAULT_LOG_LEVEL);
     assert_eq!(
         empty.global.fallback_resolver,
         empty_fixture["fallback_resolver"].as_str().unwrap()
