@@ -6,6 +6,131 @@ pub(super) async fn resolved_upstream_targets(
     upstream.target.resolve_addrs().await
 }
 
+#[derive(Clone, Debug)]
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUpstreamRoutedTarget
+{
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) selection:
+        ResidentDnsUpstreamSelection,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResidentDnsUpstreamRouteKind {
+    Direct,
+    Proxy,
+}
+
+#[derive(Clone, Debug)]
+struct ResidentDnsUpstreamRouteCandidate {
+    order: usize,
+    target: SocketAddr,
+    selection: ResidentDnsUpstreamSelection,
+    route_kind: ResidentDnsUpstreamRouteKind,
+    requested_network_type: NetworkType,
+    selected_network_type: NetworkType,
+    latency_ms: i64,
+}
+
+impl ResidentDnsUpstreamRouteCandidate {
+    fn target_family_matches_selection(&self) -> bool {
+        self.requested_network_type.ipversion == self.selected_network_type.ipversion
+    }
+
+    fn into_routed_target(self) -> ResidentDnsUpstreamRoutedTarget {
+        ResidentDnsUpstreamRoutedTarget {
+            target: self.target,
+            selection: self.selection,
+        }
+    }
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) fn select_dns_upstream_targets(
+    plan: &ResidentDnsPlan,
+    upstream: &ResidentDnsUpstream,
+    targets: Vec<SocketAddr>,
+    l4proto: L4Proto,
+) -> Result<(Vec<ResidentDnsUpstreamRoutedTarget>, Vec<String>), String> {
+    let mut failures = Vec::new();
+    let mut candidates = Vec::new();
+    for (order, target) in targets.into_iter().enumerate() {
+        match select_dns_upstream_route_candidate(plan, upstream, target, l4proto, order) {
+            Ok(candidate) => candidates.push(candidate),
+            Err(err) => failures.push(format!("{target}: {err}")),
+        }
+    }
+    candidates.sort_by(compare_dns_upstream_route_candidates);
+    let routed = candidates
+        .into_iter()
+        .map(ResidentDnsUpstreamRouteCandidate::into_routed_target)
+        .collect::<Vec<_>>();
+    if routed.is_empty() {
+        return Err(dns_upstream_targets_failed(
+            upstream,
+            "select DNS upstream target for",
+            failures,
+        ));
+    }
+    Ok((routed, failures))
+}
+
+fn select_dns_upstream_route_candidate(
+    plan: &ResidentDnsPlan,
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    l4proto: L4Proto,
+    order: usize,
+) -> Result<ResidentDnsUpstreamRouteCandidate, String> {
+    let requested_network_type = dns_upstream_proxy_network_type(target, l4proto);
+    let Some(router) = plan.upstream_router.as_ref() else {
+        return Ok(ResidentDnsUpstreamRouteCandidate {
+            order,
+            target,
+            selection: ResidentDnsUpstreamSelection::Direct { mark: plan.mark },
+            route_kind: ResidentDnsUpstreamRouteKind::Direct,
+            requested_network_type,
+            selected_network_type: requested_network_type,
+            latency_ms: 0,
+        });
+    };
+    let selected = router.select_candidate(upstream, target, l4proto, requested_network_type)?;
+    let route_kind = match &selected.selection {
+        ResidentDnsUpstreamSelection::Direct { .. } => ResidentDnsUpstreamRouteKind::Direct,
+        ResidentDnsUpstreamSelection::Proxy { .. } => ResidentDnsUpstreamRouteKind::Proxy,
+    };
+    Ok(ResidentDnsUpstreamRouteCandidate {
+        order,
+        target,
+        selection: selected.selection,
+        route_kind,
+        requested_network_type,
+        selected_network_type: selected.network_type,
+        latency_ms: selected.latency_ms,
+    })
+}
+
+fn compare_dns_upstream_route_candidates(
+    left: &ResidentDnsUpstreamRouteCandidate,
+    right: &ResidentDnsUpstreamRouteCandidate,
+) -> std::cmp::Ordering {
+    match (
+        left.target_family_matches_selection(),
+        right.target_family_matches_selection(),
+    ) {
+        (true, false) => return std::cmp::Ordering::Less,
+        (false, true) => return std::cmp::Ordering::Greater,
+        _ => {}
+    }
+    if left.route_kind == ResidentDnsUpstreamRouteKind::Proxy
+        && right.route_kind == ResidentDnsUpstreamRouteKind::Proxy
+    {
+        match left.latency_ms.cmp(&right.latency_ms) {
+            std::cmp::Ordering::Equal => {}
+            ordering => return ordering,
+        }
+    }
+    left.order.cmp(&right.order)
+}
+
 pub(super) fn dns_upstream_targets_failed(
     upstream: &ResidentDnsUpstream,
     operation: &str,
@@ -19,23 +144,6 @@ pub(super) fn dns_upstream_targets_failed(
     format!(
         "{operation} upstream {} {} failed for all resolved targets: {detail}",
         upstream.tag, upstream.target.authority
-    )
-}
-
-pub(super) fn select_dns_upstream_target(
-    plan: &ResidentDnsPlan,
-    upstream: &ResidentDnsUpstream,
-    target: SocketAddr,
-    l4proto: L4Proto,
-) -> Result<ResidentDnsUpstreamSelection, String> {
-    let Some(router) = plan.upstream_router.as_ref() else {
-        return Ok(ResidentDnsUpstreamSelection::Direct { mark: plan.mark });
-    };
-    router.select(
-        upstream,
-        target,
-        l4proto,
-        dns_upstream_proxy_network_type(target, l4proto),
     )
 }
 

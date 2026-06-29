@@ -239,6 +239,19 @@ struct ResidentDialerLatencySnapshotState {
     ok: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxySelection {
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) network_type: NetworkType,
+    pub(in crate::production_runtime_owner::resident_dataplane) latency_ms: i64,
+}
+
+struct ResidentSelectedProxyCandidate<'a> {
+    candidate: &'a ResidentProxyCandidatePlan,
+    network_type: NetworkType,
+    latency_ms: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentGroupPolicyPlan {
     Fixed { index: usize },
@@ -572,12 +585,25 @@ impl ResidentProxyGroupPlan {
             .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_dns_upstream(
         &self,
         network_type: NetworkType,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
-        self.select_candidate(network_type, false)
-            .map(|candidate| Arc::clone(&candidate.proxy))
+        self.select_proxy_for_dns_upstream_candidate(network_type)
+            .map(|selection| selection.proxy)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_dns_upstream_candidate(
+        &self,
+        network_type: NetworkType,
+    ) -> Result<ResidentProxySelection, String> {
+        let selected = self.select_candidate_with_selection(network_type, false)?;
+        Ok(ResidentProxySelection {
+            proxy: Arc::clone(&selected.candidate.proxy),
+            network_type: selected.network_type,
+            latency_ms: selected.latency_ms,
+        })
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn snapshot_candidate(
@@ -600,6 +626,15 @@ impl ResidentProxyGroupPlan {
         network_type: NetworkType,
         strict_ip_version: bool,
     ) -> Result<&ResidentProxyCandidatePlan, String> {
+        self.select_candidate_with_selection(network_type, strict_ip_version)
+            .map(|selected| selected.candidate)
+    }
+
+    fn select_candidate_with_selection(
+        &self,
+        network_type: NetworkType,
+        strict_ip_version: bool,
+    ) -> Result<ResidentSelectedProxyCandidate<'_>, String> {
         let network = network_type.string_without_dns();
         if self.candidates.is_empty() {
             return Err(format!(
@@ -608,16 +643,23 @@ impl ResidentProxyGroupPlan {
             ));
         }
         match self.group_policy {
-            ResidentGroupPolicyPlan::Fixed { index } => self
-                .candidates
-                .iter()
-                .find(|candidate| candidate.match_index == index)
-                .ok_or_else(|| {
-                    format!(
-                        "resident dataplane group {} fixed policy index {} is not admitted for {network}",
-                        self.group_name, index
-                    )
-                }),
+            ResidentGroupPolicyPlan::Fixed { index } => {
+                let candidate = self
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.match_index == index)
+                    .ok_or_else(|| {
+                        format!(
+                            "resident dataplane group {} fixed policy index {} is not admitted for {network}",
+                            self.group_name, index
+                        )
+                    })?;
+                Ok(ResidentSelectedProxyCandidate {
+                    candidate,
+                    network_type,
+                    latency_ms: 0,
+                })
+            }
             ResidentGroupPolicyPlan::MinLastLatency
             | ResidentGroupPolicyPlan::MinAverage10
             | ResidentGroupPolicyPlan::MinMovingAverage
@@ -638,11 +680,16 @@ impl ResidentProxyGroupPlan {
                             self.group_name
                         )
                     })?;
-                self.candidates.get(selected.index).ok_or_else(|| {
+                let candidate = self.candidates.get(selected.index).ok_or_else(|| {
                     format!(
                         "resident dataplane group {} selector returned missing candidate {} for {network}",
                         self.group_name, selected.index
                     )
+                })?;
+                Ok(ResidentSelectedProxyCandidate {
+                    candidate,
+                    network_type: selected.network_type,
+                    latency_ms: selected.latency_ms,
                 })
             }
         }
