@@ -36,7 +36,7 @@ pub(crate) fn resident_live_adapter_udp_probe(
                                 "status": "fail",
                                 "ok": false,
                                 "protocol_closed": false,
-                                "handler": resident_udp_handler_name(&proxy.handler),
+                                "handler": resident_udp_proxy_handler_name(&proxy),
                                 "request_len": payload.len(),
                                 "response_len": 0,
                                 "payload_match": false,

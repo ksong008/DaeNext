@@ -159,7 +159,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
     payload: &[u8],
 ) -> serde_json::Value {
     let started = Instant::now();
-    let handler = resident_udp_handler_name(&proxy.handler);
+    let handler = resident_udp_proxy_handler_name(proxy);
     let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
     let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);
     let dns = ResidentDnsPlan::asis(proxy.mark);

@@ -741,7 +741,7 @@ fn udp_route_chosen_event(
         );
         map.insert(
             "handler".to_owned(),
-            serde_json::Value::String(resident_udp_handler_name(&proxy.handler).to_owned()),
+            serde_json::Value::String(resident_udp_proxy_handler_name(proxy).to_owned()),
         );
         map.insert(
             "graphId".to_owned(),

@@ -83,7 +83,7 @@ impl UdpSessionExecutor {
                 .map(|response| ("udp_packet_finished", response)),
             Self::FailClosed { reason } => Err(format!(
                 "unsupported_udp_handler: {reason}; handler={}; protocol={}; policy-closed without alternate execution",
-                resident_udp_handler_name(&proxy.handler),
+                resident_udp_proxy_handler_name(proxy),
                 proxy.protocol,
             )),
         }

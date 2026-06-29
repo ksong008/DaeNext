@@ -562,6 +562,11 @@ mod tests {
                 UdpPacketSemantics::UdpOverStream,
                 "net={net:?} tls={tls:?}"
             );
+            assert_eq!(
+                resident_udp_proxy_handler_name(&proxy),
+                "vless-udp-over-stream",
+                "net={net:?} tls={tls:?}"
+            );
         }
 
         let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
@@ -596,6 +601,11 @@ mod tests {
                 UdpPacketSemantics::Xudp,
                 "flow={flow:?}"
             );
+            assert_eq!(
+                resident_udp_proxy_handler_name(&proxy),
+                "vless-vision-tcp-tls",
+                "flow={flow:?}"
+            );
         }
     }
 
@@ -625,6 +635,11 @@ mod tests {
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 443))
                 ),
                 UdpPacketSemantics::ProtocolClosed,
+                "net={net:?} tls={tls:?} flow={flow:?}"
+            );
+            assert_eq!(
+                resident_udp_proxy_handler_name(&proxy),
+                "vless-udp-protocol-closed",
                 "net={net:?} tls={tls:?} flow={flow:?}"
             );
         }

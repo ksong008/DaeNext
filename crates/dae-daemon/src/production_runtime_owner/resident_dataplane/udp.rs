@@ -90,7 +90,7 @@ use self::packet_handler::*;
 mod probe_dns;
 pub(super) use self::probe_dns::*;
 mod descriptors;
-pub(in crate::production_runtime_owner::resident_dataplane) use self::descriptors::resident_udp_handler_name;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::descriptors::resident_udp_proxy_handler_name;
 use self::descriptors::*;
 mod stream_helpers;
 use self::stream_helpers::*;

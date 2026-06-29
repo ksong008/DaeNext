@@ -230,7 +230,7 @@ fn record_udp_session_exchange_result(
                 }
                 metrics.add_download(response.payload.len());
             }
-            let handler = resident_udp_handler_name(&proxy.handler);
+            let handler = resident_udp_proxy_handler_name(proxy);
             let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
             let network = udp_network_name(original_dst);
             let mut event_json = udp_exchange_base_event(
@@ -269,7 +269,7 @@ fn record_udp_session_exchange_result(
             append_event(&event_file, &event_lock, event_json)
         }
         Err(err) => {
-            let handler = resident_udp_handler_name(&proxy.handler);
+            let handler = resident_udp_proxy_handler_name(proxy);
             let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
             let network = udp_network_name(original_dst);
             let mut event_json = udp_exchange_base_event(
