@@ -554,6 +554,42 @@ pub(crate) fn runtime_process_stop_preserves_persisted_running_state() {
 }
 
 #[test]
+pub(crate) fn startup_restore_failure_keeps_server_recoverable() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-startup-restore-failure-{}",
+        fastrand::u64(..)
+    ));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    initialize_log_store(&dir, &state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids)
+         VALUES(1, 0, 0, 0, 0, '')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    record_startup_runtime_restore_failure(&dir, &state, "group proxy has no matched nodes");
+
+    assert!(!should_restore_runtime_on_start(&state).unwrap());
+    assert_eq!(
+        get_metadata(&state, "runtime_running").unwrap().as_deref(),
+        Some("false")
+    );
+    let logs = list_logs_value(&dir, &state, Some("error"), None, 10).unwrap();
+    assert!(logs["items"].as_array().unwrap().iter().any(|entry| {
+        entry["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("continuing with runtime stopped")
+    }));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn runtime_modified_matches_running_resource_snapshot() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

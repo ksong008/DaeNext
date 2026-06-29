@@ -32,13 +32,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
                 let _ = allocator_reclaim(AllocatorReclaimReason::StartupControlBuilt);
             }
             Err(err) => {
-                let _ = append_lifecycle_log_for_config(
-                    &options.config_dir,
-                    &options.state,
-                    "error",
-                    &format!("[Startup] runtime restore failed: {err}"),
-                );
-                return DaedProductOutput::error(format!("startup runtime restore failed: {err}"));
+                record_startup_runtime_restore_failure(&options.config_dir, &options.state, &err);
             }
         }
     }
@@ -61,6 +55,16 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         Ok(()) => DaedProductOutput::ok(String::new()),
         Err(err) => DaedProductOutput::error(format!("run failed: {err}")),
     }
+}
+
+pub(crate) fn record_startup_runtime_restore_failure(config_dir: &Path, state: &Path, err: &str) {
+    let _ = append_lifecycle_log_for_config(
+        config_dir,
+        state,
+        "error",
+        &format!("[Startup] runtime restore failed; continuing with runtime stopped: {err}"),
+    );
+    let _ = mark_system_stopped(state);
 }
 
 pub(crate) fn restore_runtime_from_state(
