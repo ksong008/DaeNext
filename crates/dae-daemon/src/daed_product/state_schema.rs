@@ -128,7 +128,8 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             running_group_ids TEXT NOT NULL DEFAULT '',
             running_config_id INTEGER NULL,
             running_dns_id INTEGER NULL,
-            running_routing_id INTEGER NULL
+            running_routing_id INTEGER NULL,
+            running_external_input_version INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS log_settings (
             id INTEGER PRIMARY KEY,
@@ -169,12 +170,71 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
         params![DEFAULT_RUNTIME_LOG_LEVEL],
     )
     .map_err(sqlite_io_error)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO daed_product_metadata(key, value)
+            VALUES(?1, '0')",
+        params![RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY],
+    )
+    .map_err(sqlite_io_error)?;
     ensure_table_column(
         conn,
         "subscriptions",
         "use_proxy",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    ensure_table_column(
+        conn,
+        "systems",
+        "running_external_input_version",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    migrate_legacy_geodata_reload_pending(conn)?;
+    Ok(())
+}
+
+fn migrate_legacy_geodata_reload_pending(conn: &Connection) -> io::Result<()> {
+    let migration_id = "runtime-external-input-version-from-geodata-pending";
+    let already_applied = conn
+        .query_row(
+            "SELECT 1 FROM daed_schema_migrations WHERE id = ?1",
+            params![migration_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(sqlite_io_error)?
+        .is_some();
+    if already_applied {
+        return Ok(());
+    }
+    let pending = conn
+        .query_row(
+            "SELECT value FROM daed_product_metadata WHERE key = ?1",
+            params![LEGACY_GEODATA_RELOAD_PENDING_METADATA_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map(|value| matches!(value.as_deref(), Some("true") | Some("1")))
+        .map_err(sqlite_io_error)?;
+    if pending {
+        conn.execute(
+            "INSERT INTO daed_product_metadata(key, value)
+             VALUES(?1, '1')
+             ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)",
+            params![RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY],
+        )
+        .map_err(sqlite_io_error)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO daed_product_metadata(key, value)
+             VALUES(?1, 'false')",
+            params![LEGACY_GEODATA_RELOAD_PENDING_METADATA_KEY],
+        )
+        .map_err(sqlite_io_error)?;
+    }
+    conn.execute(
+        "INSERT INTO daed_schema_migrations(id, applied_at) VALUES(?1, datetime('now'))",
+        params![migration_id],
+    )
+    .map_err(sqlite_io_error)?;
     Ok(())
 }
 

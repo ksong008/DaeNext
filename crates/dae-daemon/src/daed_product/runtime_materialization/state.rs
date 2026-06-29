@@ -1,8 +1,5 @@
 use super::*;
 
-pub(in crate::daed_product) const GEODATA_RELOAD_PENDING_METADATA_KEY: &str =
-    "geodata_reload_pending";
-
 pub(in crate::daed_product) fn general_state_report(
     state: &Path,
     config_dir: &Path,
@@ -58,6 +55,7 @@ pub(in crate::daed_product) struct RunningRuntimeState {
     pub(in crate::daed_product) routing_version: i64,
     pub(in crate::daed_product) group_version_sum: i64,
     pub(in crate::daed_product) group_ids: String,
+    pub(in crate::daed_product) external_input_version: i64,
 }
 
 pub(in crate::daed_product) fn runtime_modified(
@@ -66,9 +64,6 @@ pub(in crate::daed_product) fn runtime_modified(
 ) -> io::Result<bool> {
     if !running {
         return Ok(false);
-    }
-    if geodata_reload_pending(conn)? {
-        return Ok(true);
     }
     let Some(config) = selected_section_state(conn, SectionKind::Config)? else {
         return Ok(true);
@@ -90,7 +85,8 @@ pub(in crate::daed_product) fn runtime_modified(
         || running_state.routing_id != Some(routing.id)
         || running_state.routing_version != routing.version
         || running_state.group_version_sum != group_version_sum(conn)?
-        || running_state.group_ids != group_ids_text(conn)?)
+        || running_state.group_ids != group_ids_text(conn)?
+        || running_state.external_input_version != current_runtime_external_input_version(conn)?)
 }
 
 pub(in crate::daed_product) fn selected_section_state(
@@ -123,7 +119,8 @@ pub(in crate::daed_product) fn running_runtime_state(
         "SELECT running_config_id, running_config_version,
                 running_dns_id, running_dns_version,
                 running_routing_id, running_routing_version,
-                running_group_version_sum, running_group_ids
+                running_group_version_sum, running_group_ids,
+                running_external_input_version
          FROM systems
          WHERE running != 0
          ORDER BY id
@@ -139,6 +136,7 @@ pub(in crate::daed_product) fn running_runtime_state(
                 routing_version: row.get(5)?,
                 group_version_sum: row.get(6)?,
                 group_ids: row.get(7)?,
+                external_input_version: row.get(8)?,
             })
         },
     )
@@ -182,23 +180,36 @@ fn running_group_ids_contain(group_ids: &str, group_id: i64) -> bool {
         .any(|id| id == group_id)
 }
 
-pub(in crate::daed_product) fn mark_geodata_reload_pending(state: &Path) -> io::Result<()> {
-    set_metadata(state, GEODATA_RELOAD_PENDING_METADATA_KEY, "true")
+pub(in crate::daed_product) fn current_runtime_external_input_version(
+    conn: &Connection,
+) -> io::Result<i64> {
+    let value = conn
+        .query_row(
+            "SELECT value FROM daed_product_metadata WHERE key = ?1",
+            params![RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sqlite_io_error)?;
+    Ok(value
+        .as_deref()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0))
 }
 
-pub(in crate::daed_product) fn clear_geodata_reload_pending(state: &Path) -> io::Result<()> {
-    set_metadata(state, GEODATA_RELOAD_PENDING_METADATA_KEY, "false")
-}
-
-fn geodata_reload_pending(conn: &Connection) -> io::Result<bool> {
-    conn.query_row(
-        "SELECT value FROM daed_product_metadata WHERE key = ?1",
-        params![GEODATA_RELOAD_PENDING_METADATA_KEY],
-        |row| row.get::<_, String>(0),
+pub(in crate::daed_product) fn bump_runtime_external_input_version(
+    state: &Path,
+) -> io::Result<i64> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    conn.execute(
+        "INSERT INTO daed_product_metadata(key, value)
+         VALUES(?1, '1')
+         ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)",
+        params![RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY],
     )
-    .optional()
-    .map(|value| matches!(value.as_deref(), Some("true") | Some("1")))
-    .map_err(sqlite_io_error)
+    .map_err(sqlite_io_error)?;
+    current_runtime_external_input_version(&conn)
 }
 
 pub(in crate::daed_product) fn mark_system_stopped(state: &Path) -> io::Result<()> {

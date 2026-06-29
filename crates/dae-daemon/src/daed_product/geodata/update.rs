@@ -72,7 +72,7 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
     let _ = advise_file_dontneed(&path);
     let status = geodata_resource_status_from_parts(&dir, kind, summary, download.sha256)?;
     update_geodata_resource_status_cache(app, kind, status.clone());
-    let runtime_reload_required = mark_geodata_reload_pending_if_running(app)?;
+    let runtime_reload_required = bump_runtime_external_input_if_running(app)?;
     let mut response_object = serde_json::Map::new();
     response_object.insert(kind.response_key().to_owned(), status);
     response_object.insert("updated".to_owned(), json!(kind.response_key()));
@@ -112,7 +112,7 @@ fn default_direct_geodata_version(
         .version
 }
 
-fn mark_geodata_reload_pending_if_running(app: &AppState) -> io::Result<bool> {
+fn bump_runtime_external_input_if_running(app: &AppState) -> io::Result<bool> {
     let running = app
         .runtime
         .inner
@@ -120,7 +120,7 @@ fn mark_geodata_reload_pending_if_running(app: &AppState) -> io::Result<bool> {
         .map(|inner| inner.runtime.is_some())
         .unwrap_or(false);
     if running {
-        mark_geodata_reload_pending(&app.state)?;
+        bump_runtime_external_input_version(&app.state)?;
     }
     Ok(running)
 }

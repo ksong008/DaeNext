@@ -1,4 +1,10 @@
 use super::*;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ImportBundleOutcome {
+    pub(super) imported: bool,
+    pub(super) runtime_reload_required: bool,
+}
+
 pub(super) fn export_bundle(state: &Path, user: &UserRecord) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
@@ -35,9 +41,10 @@ pub(super) fn import_bundle(
     config_dir: &Path,
     body: &Value,
     user: &UserRecord,
-) -> io::Result<bool> {
+) -> io::Result<ImportBundleOutcome> {
     ensure_state_schema(state)?;
     let mut conn = open_state_connection(state)?;
+    let running_state = running_runtime_state(&conn)?;
     let tx = conn.transaction().map_err(sqlite_io_error)?;
     tx.execute("DELETE FROM group_policy_params", [])
         .map_err(sqlite_io_error)?;
@@ -66,10 +73,18 @@ pub(super) fn import_bundle(
     import_bundle_nodes(&tx, body.get("nodes"))?;
     import_bundle_groups(&tx, body.get("groups"))?;
 
-    if let Some(selected) = body.get("selected") {
-        set_selected_from_bundle(&tx, selected, "configId", SectionKind::Config)?;
-        set_selected_from_bundle(&tx, selected, "dnsId", SectionKind::Dns)?;
-        set_selected_from_bundle(&tx, selected, "routingId", SectionKind::Routing)?;
+    let selected = body.get("selected").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bundle selected resources are required",
+        )
+    })?;
+    set_selected_from_bundle(&tx, selected, "configId", SectionKind::Config)?;
+    set_selected_from_bundle(&tx, selected, "dnsId", SectionKind::Dns)?;
+    set_selected_from_bundle(&tx, selected, "routingId", SectionKind::Routing)?;
+    validate_imported_selected_sections(&tx)?;
+    if running_state.is_some() {
+        mark_imported_bundle_modified_if_running(&tx)?;
     }
     tx.commit().map_err(sqlite_io_error)?;
 
@@ -102,7 +117,10 @@ pub(super) fn import_bundle(
         "info",
         "DAE bundle imported by Rust daed",
     )?;
-    Ok(true)
+    Ok(ImportBundleOutcome {
+        imported: true,
+        runtime_reload_required: running_state.is_some(),
+    })
 }
 
 pub(super) fn bundle_sections(conn: &Connection, kind: SectionKind) -> io::Result<Vec<Value>> {
@@ -373,6 +391,31 @@ pub(super) fn import_bundle_groups(conn: &Connection, groups: Option<&Value>) ->
             }
         }
     }
+    Ok(())
+}
+
+pub(super) fn validate_imported_selected_sections(conn: &Connection) -> io::Result<()> {
+    for kind in [SectionKind::Config, SectionKind::Dns, SectionKind::Routing] {
+        if selected_id(conn, kind)?.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("bundle selected {} resource is missing", kind.table()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn mark_imported_bundle_modified_if_running(conn: &Connection) -> io::Result<()> {
+    for kind in [SectionKind::Config, SectionKind::Dns, SectionKind::Routing] {
+        let sql = format!(
+            "UPDATE {} SET version = version + 1 WHERE selected = 1",
+            kind.table()
+        );
+        conn.execute(&sql, []).map_err(sqlite_io_error)?;
+    }
+    conn.execute("UPDATE groups SET version = version + 1", [])
+        .map_err(sqlite_io_error)?;
     Ok(())
 }
 
