@@ -144,20 +144,11 @@ fn build_rustls_vless_client_config(
         let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
             .map_err(|err| format!("create VLESS Reality config: {err}"))?
             .with_client_version(REALITY_CLIENT_VERSION);
-        if proxy.allow_insecure {
-            builder
-                .dangerous()
-                .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
-                .with_reality(reality_config)
-                .with_no_client_auth()
-        } else {
-            let mut roots = RootCertStore::empty();
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            builder
-                .with_root_certificates(roots)
-                .with_reality(reality_config)
-                .with_no_client_auth()
-        }
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(ResidentRealityFallbackRejectVerifier::new())
+            .with_reality(reality_config)
+            .with_no_client_auth()
     } else if proxy.allow_insecure {
         builder
             .dangerous()
@@ -215,20 +206,11 @@ fn build_rustls_xhttp_endpoint_client_config(
         let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
             .map_err(|err| format!("create xHTTP Reality config: {err}"))?
             .with_client_version(REALITY_CLIENT_VERSION);
-        if endpoint.allow_insecure {
-            builder
-                .dangerous()
-                .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
-                .with_reality(reality_config)
-                .with_no_client_auth()
-        } else {
-            let mut roots = RootCertStore::empty();
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            builder
-                .with_root_certificates(roots)
-                .with_reality(reality_config)
-                .with_no_client_auth()
-        }
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(ResidentRealityFallbackRejectVerifier::new())
+            .with_reality(reality_config)
+            .with_no_client_auth()
     } else if endpoint.allow_insecure {
         builder
             .dangerous()
@@ -334,6 +316,68 @@ impl ServerCertVerifier for ResidentInsecureCertVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ResidentRealityFallbackRejectVerifier {
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl ResidentRealityFallbackRejectVerifier {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
+        })
+    }
+}
+
+impl ServerCertVerifier for ResidentRealityFallbackRejectVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, RustlsError> {
+        Err(RustlsError::InvalidCertificate(
+            CertificateError::ApplicationVerificationFailure,
+        ))
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
         rustls::crypto::verify_tls13_signature(
             message,
             cert,
@@ -460,8 +504,9 @@ mod tests {
 
     #[test]
     fn reality_provider_keeps_browser_style_groups_without_single_group_downgrade() {
-        let provider =
-            rustls_reality_crypto_provider(Some(&test_fingerprint_plan(UTLS_FAMILY_IOS)));
+        let provider = rustls_reality_crypto_provider(Some(&test_fingerprint_plan(
+            dae_outbound::shared_transport::UTLS_FAMILY_IOS,
+        )));
 
         let groups = provider
             .kx_groups
@@ -533,6 +578,27 @@ mod tests {
         let second = rustls_vless_client_config(&proxy).unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn reality_fallback_verifier_rejects_non_reality_certificates() {
+        let verifier = ResidentRealityFallbackRejectVerifier::new();
+        let cert = CertificateDer::from(vec![0_u8]);
+        let server_name = ServerName::try_from("example.com").unwrap();
+        let err = verifier
+            .verify_server_cert(
+                &cert,
+                &[],
+                &server_name,
+                &[],
+                UnixTime::since_unix_epoch(std::time::Duration::from_secs(0)),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            RustlsError::InvalidCertificate(CertificateError::ApplicationVerificationFailure)
+        ));
     }
 
     fn test_fingerprint_plan(family: &str) -> ResidentUtlsFingerprintPlan {
