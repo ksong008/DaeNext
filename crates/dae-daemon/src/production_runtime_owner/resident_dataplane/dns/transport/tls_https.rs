@@ -1,6 +1,7 @@
 use super::super::*;
 use super::route::{
-    dns_upstream_targets_failed, resolved_upstream_targets, select_dns_upstream_target,
+    ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
+    select_dns_upstream_targets,
 };
 use super::wire::{
     doh_request_target, forward_dns_framed_stream_async, http1_doh_request_bytes,
@@ -13,22 +14,16 @@ pub(super) async fn forward_dns_tls_async(
     payload: &[u8],
     plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
-    let mut failures = Vec::new();
-    for target in resolved_upstream_targets(upstream).await? {
-        match select_dns_upstream_target(plan, upstream, target, L4Proto::Tcp) {
-            Ok(ResidentDnsUpstreamSelection::Direct { mark }) => {
-                match forward_dns_tls_to_target_async(upstream, target, payload, mark).await {
-                    Ok(response) => return Ok(response),
-                    Err(err) => failures.push(format!("{target}: {err}")),
-                }
-            }
-            Ok(ResidentDnsUpstreamSelection::Proxy { proxy }) => {
-                match forward_dns_tls_to_proxy_async(upstream, target, payload, proxy).await {
-                    Ok(response) => return Ok(response),
-                    Err(err) => failures.push(format!("{target}: {err}")),
-                }
-            }
-            Err(err) => failures.push(format!("{target}: {err}")),
+    let (targets, mut failures) = select_dns_upstream_targets(
+        plan,
+        upstream,
+        resolved_upstream_targets(upstream).await?,
+        L4Proto::Tcp,
+    )?;
+    for target in targets {
+        match forward_dns_tls_to_routed_target_async(upstream, target, payload).await {
+            Ok(response) => return Ok(response),
+            Err(err) => failures.push(err),
         }
     }
     Err(dns_upstream_targets_failed(
@@ -36,6 +31,25 @@ pub(super) async fn forward_dns_tls_async(
         "forward DNS TLS to",
         failures,
     ))
+}
+
+async fn forward_dns_tls_to_routed_target_async(
+    upstream: &ResidentDnsUpstream,
+    target: ResidentDnsUpstreamRoutedTarget,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    match target.selection {
+        ResidentDnsUpstreamSelection::Direct { mark } => {
+            forward_dns_tls_to_target_async(upstream, target.target, payload, mark)
+                .await
+                .map_err(|err| format!("{}: {err}", target.target))
+        }
+        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+            forward_dns_tls_to_proxy_async(upstream, target.target, payload, proxy)
+                .await
+                .map_err(|err| format!("{}: {err}", target.target))
+        }
+    }
 }
 
 async fn forward_dns_tls_to_target_async(
@@ -117,22 +131,16 @@ pub(super) async fn forward_dns_https_async(
     payload: &[u8],
     plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
-    let mut failures = Vec::new();
-    for target in resolved_upstream_targets(upstream).await? {
-        match select_dns_upstream_target(plan, upstream, target, L4Proto::Tcp) {
-            Ok(ResidentDnsUpstreamSelection::Direct { mark }) => {
-                match forward_dns_https_to_target_async(upstream, target, payload, mark).await {
-                    Ok(response) => return Ok(response),
-                    Err(err) => failures.push(format!("{target}: {err}")),
-                }
-            }
-            Ok(ResidentDnsUpstreamSelection::Proxy { proxy }) => {
-                match forward_dns_https_to_proxy_async(upstream, target, payload, proxy).await {
-                    Ok(response) => return Ok(response),
-                    Err(err) => failures.push(format!("{target}: {err}")),
-                }
-            }
-            Err(err) => failures.push(format!("{target}: {err}")),
+    let (targets, mut failures) = select_dns_upstream_targets(
+        plan,
+        upstream,
+        resolved_upstream_targets(upstream).await?,
+        L4Proto::Tcp,
+    )?;
+    for target in targets {
+        match forward_dns_https_to_routed_target_async(upstream, target, payload).await {
+            Ok(response) => return Ok(response),
+            Err(err) => failures.push(err),
         }
     }
     Err(dns_upstream_targets_failed(
@@ -140,6 +148,25 @@ pub(super) async fn forward_dns_https_async(
         "forward DNS HTTPS to",
         failures,
     ))
+}
+
+async fn forward_dns_https_to_routed_target_async(
+    upstream: &ResidentDnsUpstream,
+    target: ResidentDnsUpstreamRoutedTarget,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    match target.selection {
+        ResidentDnsUpstreamSelection::Direct { mark } => {
+            forward_dns_https_to_target_async(upstream, target.target, payload, mark)
+                .await
+                .map_err(|err| format!("{}: {err}", target.target))
+        }
+        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+            forward_dns_https_to_proxy_async(upstream, target.target, payload, proxy)
+                .await
+                .map_err(|err| format!("{}: {err}", target.target))
+        }
+    }
 }
 
 async fn forward_dns_https_to_target_async(

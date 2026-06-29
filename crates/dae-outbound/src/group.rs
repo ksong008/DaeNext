@@ -9,6 +9,7 @@ use crate::types::{IpVersion, NetworkType};
 pub struct SelectedDialer {
     pub index: usize,
     pub latency_ms: i64,
+    pub network_type: NetworkType,
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +157,7 @@ impl DialerGroup {
                 Ok(SelectedDialer {
                     index,
                     latency_ms: 0,
+                    network_type,
                 })
             }
             SelectionPolicy::Random => {
@@ -168,6 +170,7 @@ impl DialerGroup {
                 Ok(SelectedDialer {
                     index,
                     latency_ms: 0,
+                    network_type,
                 })
             }
             SelectionPolicy::MinLastLatency
@@ -181,7 +184,11 @@ impl DialerGroup {
                 let (index, latency_ms) = alive_set
                     .get_min_latency()
                     .ok_or(OutboundError::NoAliveDialer)?;
-                Ok(SelectedDialer { index, latency_ms })
+                Ok(SelectedDialer {
+                    index,
+                    latency_ms,
+                    network_type,
+                })
             }
         }
     }

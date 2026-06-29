@@ -1,7 +1,8 @@
 use super::super::*;
 use super::quic::{append_dns_proxy_udp_bridge_error, connect_dns_quic_endpoint_async};
 use super::route::{
-    dns_upstream_targets_failed, resolved_upstream_targets, select_dns_upstream_target,
+    ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
+    select_dns_upstream_targets,
 };
 use super::wire::{doh_request_target, restore_dns_response_id};
 
@@ -10,22 +11,16 @@ pub(super) async fn forward_dns_h3_async(
     payload: &[u8],
     plan: &ResidentDnsPlan,
 ) -> Result<Vec<u8>, String> {
-    let mut failures = Vec::new();
-    for remote in resolved_upstream_targets(upstream).await? {
-        match select_dns_upstream_target(plan, upstream, remote, L4Proto::Udp) {
-            Ok(ResidentDnsUpstreamSelection::Direct { mark }) => {
-                match forward_dns_h3_to_target_async(upstream, remote, payload, mark).await {
-                    Ok(response) => return Ok(response),
-                    Err(err) => failures.push(format!("{remote}: {err}")),
-                }
-            }
-            Ok(ResidentDnsUpstreamSelection::Proxy { proxy }) => {
-                match forward_dns_h3_to_proxy_async(upstream, remote, payload, proxy).await {
-                    Ok(response) => return Ok(response),
-                    Err(err) => failures.push(format!("{remote}: {err}")),
-                }
-            }
-            Err(err) => failures.push(format!("{remote}: {err}")),
+    let (targets, mut failures) = select_dns_upstream_targets(
+        plan,
+        upstream,
+        resolved_upstream_targets(upstream).await?,
+        L4Proto::Udp,
+    )?;
+    for remote in targets {
+        match forward_dns_h3_to_routed_target_async(upstream, remote, payload).await {
+            Ok(response) => return Ok(response),
+            Err(err) => failures.push(err),
         }
     }
     Err(dns_upstream_targets_failed(
@@ -33,6 +28,25 @@ pub(super) async fn forward_dns_h3_async(
         "forward DNS H3 to",
         failures,
     ))
+}
+
+async fn forward_dns_h3_to_routed_target_async(
+    upstream: &ResidentDnsUpstream,
+    remote: ResidentDnsUpstreamRoutedTarget,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    match remote.selection {
+        ResidentDnsUpstreamSelection::Direct { mark } => {
+            forward_dns_h3_to_target_async(upstream, remote.target, payload, mark)
+                .await
+                .map_err(|err| format!("{}: {err}", remote.target))
+        }
+        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+            forward_dns_h3_to_proxy_async(upstream, remote.target, payload, proxy)
+                .await
+                .map_err(|err| format!("{}: {err}", remote.target))
+        }
+    }
 }
 
 async fn forward_dns_h3_to_target_async(
