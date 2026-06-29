@@ -1,17 +1,35 @@
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+mod cleanup;
+mod instance;
+mod recovery;
+mod summary;
+
+use cleanup::{
+    cleanup_report_error, cleanup_runtime_instance, cleanup_runtime_instance_with_reclaim,
+    cleanup_start_blocker_from_report, ensure_cleanup_allows_start_for_inner,
+    spawn_background_cleanup,
+};
+#[cfg(test)]
+pub(super) use instance::resident_dataplane_admission_detail;
+pub(super) use instance::{
+    product_runtime_fake_start_enabled, runtime_started_at_after_success,
+    start_product_runtime_instance,
+};
+use recovery::ProductRuntimeInterfaceRecoverySupervisor;
+#[cfg(test)]
+pub(super) use recovery::resident_interface_recovery_request;
+use summary::{
+    apply_runtime_traffic_metric_carry, runtime_instance_node_latencies,
+    runtime_traffic_metric_u64, runtime_traffic_metrics_snapshot,
+    successful_latency_seed_snapshots,
+};
 
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
     lifecycle: Arc<Mutex<()>>,
     pub(super) inner: Arc<Mutex<ProductRuntimeState>>,
     interface_recovery: ProductRuntimeInterfaceRecoverySupervisor,
-}
-
-#[derive(Debug)]
-struct ProductRuntimeInterfaceRecoverySupervisor {
-    stop: Arc<AtomicBool>,
-    handle: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, Default)]
@@ -308,83 +326,6 @@ impl Drop for ProductRuntimeManager {
     }
 }
 
-impl ProductRuntimeInterfaceRecoverySupervisor {
-    fn start(
-        lifecycle: Arc<Mutex<()>>,
-        inner: Arc<Mutex<ProductRuntimeState>>,
-    ) -> ProductRuntimeInterfaceRecoverySupervisor {
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread_stop = Arc::clone(&stop);
-        let handle = thread::Builder::new()
-            .name("product-runtime-interface-recovery".to_owned())
-            .spawn(move || {
-                let mut last_attempt = None::<Instant>;
-                while !thread_stop.load(AtomicOrdering::Relaxed) {
-                    let retry_elapsed = last_attempt
-                        .map(|attempt| {
-                            attempt.elapsed() >= PRODUCT_RUNTIME_INTERFACE_RECOVERY_RETRY
-                        })
-                        .unwrap_or(true);
-                    if retry_elapsed
-                        && let Some(request) = resident_interface_recovery_request(&inner)
-                    {
-                        let _ = reload_product_runtime_with_config_content(
-                            &lifecycle,
-                            &inner,
-                            request.config,
-                            request.config_content,
-                            PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE,
-                            &[],
-                        );
-                        last_attempt = Some(Instant::now());
-                    }
-                    sleep_interface_recovery_poll(&thread_stop);
-                }
-            })
-            .ok();
-        ProductRuntimeInterfaceRecoverySupervisor { stop, handle }
-    }
-
-    fn shutdown(&mut self) {
-        self.stop.store(true, AtomicOrdering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-pub(super) struct ResidentInterfaceRecoveryRequest {
-    config: Config,
-    config_content: Option<String>,
-}
-
-pub(super) fn resident_interface_recovery_request(
-    inner: &Arc<Mutex<ProductRuntimeState>>,
-) -> Option<ResidentInterfaceRecoveryRequest> {
-    let inner = inner.lock().ok()?;
-    if inner.cleanup.running {
-        return None;
-    }
-    let ProductRuntimeInstance::Resident(runtime) = inner.runtime.as_ref()? else {
-        return None;
-    };
-    runtime.resident_interface_reattach_ready_snapshot()?;
-    Some(ResidentInterfaceRecoveryRequest {
-        config: inner.config.clone()?,
-        config_content: inner.config_content.clone(),
-    })
-}
-
-fn sleep_interface_recovery_poll(stop: &AtomicBool) {
-    let sleep_step = PRODUCT_RUNTIME_INTERFACE_RECOVERY_POLL / 20;
-    for _ in 0..20 {
-        if stop.load(AtomicOrdering::Relaxed) {
-            return;
-        }
-        thread::sleep(sleep_step);
-    }
-}
-
 fn reload_product_runtime_with_config_content(
     lifecycle: &Arc<Mutex<()>>,
     inner: &Arc<Mutex<ProductRuntimeState>>,
@@ -657,7 +598,7 @@ impl ProductRuntimeManager {
 
     #[cfg(test)]
     pub(super) fn wait_for_cleanup_idle(&self, timeout: Duration) -> bool {
-        wait_for_cleanup_idle_for_inner(&self.inner, timeout)
+        cleanup::wait_for_cleanup_idle_for_inner(&self.inner, timeout)
     }
 
     #[cfg(test)]
@@ -874,298 +815,4 @@ impl ProductRuntimeManager {
         }
         Ok(())
     }
-}
-
-fn cleanup_runtime_instance(runtime: Option<ProductRuntimeInstance>) -> Option<Value> {
-    match runtime? {
-        ProductRuntimeInstance::Resident(mut runtime) => runtime.cleanup(),
-        ProductRuntimeInstance::Fake(fake) => Some(json!({
-            "status": "pass",
-            "cleanupRuntime": "fake-resident-runtime-test-only",
-            "fakeRuntime": true,
-            "startedAt": fake.started_at,
-            "tproxyPort": fake.tproxy_port,
-        })),
-    }
-}
-
-fn cleanup_runtime_instance_with_reclaim(
-    runtime: Option<ProductRuntimeInstance>,
-    reason: AllocatorReclaimReason,
-) -> Option<Value> {
-    let mut cleanup_report = cleanup_runtime_instance(runtime);
-    let reclaim = allocator_reclaim(reason);
-    match cleanup_report.as_mut() {
-        Some(Value::Object(map)) => {
-            map.insert("allocatorReclaim".to_owned(), reclaim);
-        }
-        Some(_) | None => {
-            cleanup_report = Some(json!({
-                "status": "pass",
-                "cleanupRuntime": "background-stop",
-                "allocatorReclaim": reclaim,
-            }));
-        }
-    }
-    cleanup_report
-}
-
-fn spawn_background_cleanup(
-    inner: Arc<Mutex<ProductRuntimeState>>,
-    cleanup_epoch: u64,
-    runtime: Option<ProductRuntimeInstance>,
-) {
-    let _ = thread::spawn(move || {
-        let cleanup_report =
-            cleanup_runtime_instance_with_reclaim(runtime, AllocatorReclaimReason::StopRuntime);
-        if let Ok(mut inner) = inner.lock()
-            && inner.cleanup.epoch == cleanup_epoch
-        {
-            inner.cleanup.finish(cleanup_report);
-        }
-    });
-}
-
-fn wait_for_cleanup_idle_for_inner(
-    inner: &Arc<Mutex<ProductRuntimeState>>,
-    timeout: Duration,
-) -> bool {
-    let started = Instant::now();
-    loop {
-        let cleanup_running = inner
-            .lock()
-            .map(|inner| inner.cleanup.running)
-            .unwrap_or(false);
-        if !cleanup_running {
-            return true;
-        }
-        if started.elapsed() >= timeout {
-            return false;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn ensure_cleanup_allows_start_for_inner(
-    inner: &Arc<Mutex<ProductRuntimeState>>,
-) -> Result<(), String> {
-    if !wait_for_cleanup_idle_for_inner(inner, PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT) {
-        return Err(cleanup_start_blocker_for_inner(inner).unwrap_or_else(|| {
-            "product runtime cleanup is still running; retry after cleanup finishes".to_owned()
-        }));
-    }
-    if let Some(blocker) = cleanup_start_blocker_for_inner(inner) {
-        return Err(blocker);
-    }
-    Ok(())
-}
-
-fn cleanup_start_blocker_for_inner(inner: &Arc<Mutex<ProductRuntimeState>>) -> Option<String> {
-    let Ok(inner) = inner.lock() else {
-        return Some("product runtime manager lock poisoned while checking cleanup".to_owned());
-    };
-    cleanup_start_blocker(&inner.cleanup)
-}
-
-fn cleanup_start_blocker(cleanup: &RuntimeCleanupState) -> Option<String> {
-    if cleanup.running {
-        return Some(format!(
-            "product runtime cleanup is still running: epoch={}, mode={}",
-            cleanup.epoch,
-            cleanup.mode.as_deref().unwrap_or("unknown")
-        ));
-    }
-    cleanup.last_error.as_ref().map(|err| {
-        format!(
-            "previous product runtime cleanup failed: epoch={}, mode={}, error={err}",
-            cleanup.epoch,
-            cleanup.mode.as_deref().unwrap_or("unknown")
-        )
-    })
-}
-
-fn cleanup_start_blocker_from_report(report: Option<&Value>) -> Option<String> {
-    cleanup_report_error(report)
-}
-
-fn cleanup_report_error(report: Option<&Value>) -> Option<String> {
-    let report = report?;
-    if report.get("status").and_then(Value::as_str) == Some("pass") {
-        return None;
-    }
-    Some(format!(
-        "runtime cleanup failed: loaded_map_cleaned={}, cleanup_command_timed_out={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
-        report
-            .get("loaded_map_cleaned")
-            .map(Value::to_string)
-            .unwrap_or_else(|| "null".to_owned()),
-        report
-            .get("cleanup_command_timed_out")
-            .map(Value::to_string)
-            .unwrap_or_else(|| "null".to_owned()),
-        report
-            .get("sys_fs_bpf_dae_mutated")
-            .map(Value::to_string)
-            .unwrap_or_else(|| "null".to_owned()),
-        report
-            .get("leftovers_after_cleanup")
-            .map(Value::to_string)
-            .unwrap_or_else(|| "null".to_owned())
-    ))
-}
-
-fn runtime_traffic_metrics_snapshot(runtime: &ProductRuntimeInstance) -> Option<Value> {
-    match runtime {
-        ProductRuntimeInstance::Resident(runtime) => runtime.resident_dataplane_metrics_snapshot(),
-        ProductRuntimeInstance::Fake(_) => None,
-    }
-}
-
-fn runtime_instance_node_latencies(runtime: &ProductRuntimeInstance) -> Vec<Value> {
-    match runtime {
-        ProductRuntimeInstance::Resident(runtime) => runtime.snapshot_node_latencies(),
-        ProductRuntimeInstance::Fake(_) => Vec::new(),
-    }
-}
-
-fn successful_latency_seed_snapshots(values: impl IntoIterator<Item = Value>) -> Vec<Value> {
-    let mut by_link_hash = BTreeMap::<String, Value>::new();
-    for value in values {
-        if !latency_seed_snapshot_is_success(&value) {
-            continue;
-        }
-        let Some(link_hash) = runtime_latency_snapshot_link_hash(&value) else {
-            continue;
-        };
-        if link_hash.is_empty() {
-            continue;
-        }
-        by_link_hash.insert(link_hash.to_owned(), value);
-    }
-    by_link_hash.into_values().collect()
-}
-
-fn latency_seed_snapshot_is_success(snapshot: &Value) -> bool {
-    snapshot.get("latencyMs").and_then(Value::as_i64).is_some()
-        && snapshot
-            .get("alive")
-            .and_then(Value::as_bool)
-            .unwrap_or(true)
-}
-
-fn apply_runtime_traffic_metric_carry(metrics: &mut Value, key: &str, carry: u64) {
-    if carry == 0 {
-        return;
-    }
-    metrics[key] = json!(runtime_traffic_metric_u64(metrics, key).saturating_add(carry));
-}
-
-fn runtime_traffic_metric_u64(metrics: &Value, key: &str) -> u64 {
-    metrics
-        .get(key)
-        .and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
-        })
-        .unwrap_or(0)
-}
-
-pub(super) fn runtime_started_at_after_success(
-    previous_runtime_was_running: bool,
-    previous_runtime_started_at: Option<String>,
-    transition_at: String,
-) -> String {
-    if previous_runtime_was_running {
-        previous_runtime_started_at.unwrap_or(transition_at)
-    } else {
-        transition_at
-    }
-}
-
-pub(super) fn start_product_runtime_instance(
-    config: &Config,
-    source: &str,
-    latency_seed: &[Value],
-) -> Result<(ProductRuntimeInstance, Value), String> {
-    if product_runtime_fake_start_enabled() {
-        let started_at = now_text();
-        let report = json!({
-            "status": "pass",
-            "runtimeControl": "fake-resident-runtime-test-only",
-            "source": source,
-            "fakeRuntime": true,
-            "startedAt": started_at,
-            "tproxyPort": config.global.tproxy_port,
-        });
-        return Ok((
-            ProductRuntimeInstance::Fake(FakeProductRuntime {
-                started_at,
-                tproxy_port: config.global.tproxy_port,
-            }),
-            report,
-        ));
-    }
-
-    crate::service_contract::validate_resident_runtime_reload_config(config)?;
-
-    let mut runtime = start_resident_production_runtime_with_latency_seed(config, latency_seed)?;
-    let state = runtime.product_state_summary();
-    let dataplane_enabled = state["residentDataplane"]["enabled"]
-        .as_bool()
-        .unwrap_or(false);
-    let dataplane_status = state["residentDataplane"]["status"].as_str().unwrap_or("");
-    if !dataplane_enabled || dataplane_status != "pass" {
-        let dataplane_detail = resident_dataplane_admission_detail(&state);
-        let _ = runtime.cleanup();
-        return Err(format!(
-            "resident production runtime started without admitted userspace dataplane: {dataplane_detail}; set {}=1 and require resident_dataplane.status=pass before Rust daed can be the production product path",
-            crate::service_contract::RESIDENT_DATAPLANE_ENV
-        ));
-    }
-    let report = json!({
-        "status": "pass",
-        "runtimeControl": "resident-production-runtime-manager",
-        "source": source,
-        "fakeRuntime": false,
-        "tproxyPort": config.global.tproxy_port,
-        "residentDataplane": state["residentDataplane"].clone(),
-        "residentStartupEvidence": state["startupEvidence"].clone(),
-    });
-    Ok((ProductRuntimeInstance::Resident(runtime), report))
-}
-
-pub(super) fn product_runtime_fake_start_enabled() -> bool {
-    std::env::var(PRODUCT_RUNTIME_FAKE_START_ENV)
-        .or_else(|_| std::env::var(PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV))
-        .map(|value| {
-            matches!(
-                value.as_str(),
-                "1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES"
-            )
-        })
-        .unwrap_or(false)
-}
-
-pub(super) fn resident_dataplane_admission_detail(state: &Value) -> String {
-    let dataplane = &state["residentDataplane"];
-    for key in ["error", "reason", "message"] {
-        if let Some(value) = dataplane
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return value.to_owned();
-        }
-    }
-    let enabled = dataplane.get("enabled").and_then(Value::as_bool);
-    let status = dataplane.get("status").and_then(Value::as_str);
-    format!(
-        "resident_dataplane.enabled={}, resident_dataplane.status={}",
-        enabled
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "unknown".to_owned()),
-        status.unwrap_or("unknown")
-    )
 }
