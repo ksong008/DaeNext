@@ -54,7 +54,10 @@ mod domain_routing;
 mod error_response;
 mod routing;
 mod tcp_wire;
+mod trace_summary;
 mod transport;
+mod upstream_model;
+mod upstream_router;
 use self::cache::ResidentDnsRuntimeCache;
 pub(super) use self::domain_routing::ResidentDnsDomainRouting;
 #[cfg(test)]
@@ -71,11 +74,20 @@ use self::routing::{
     select_response_action, select_response_action_for_upstream,
 };
 pub(super) use self::tcp_wire::{read_dns_tcp_payload_async, write_dns_tcp_payload_async};
+pub(super) use self::trace_summary::ResidentDnsTraceSummary;
 #[cfg(test)]
 use self::transport::parse_doh_http_response;
 use self::transport::{
     forward_dns_tcp_asis_async, forward_dns_to_upstream_async, forward_dns_udp_async,
 };
+pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_model::{
+    ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
+    ResidentDnsForwarderKey, ResidentDnsQuicForwarder, ResidentDnsRequestAction,
+    ResidentDnsResponseAction, ResidentDnsUpstream, ResidentDnsUpstreamScheme,
+    ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
+};
+pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
+pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_router::ResidentDnsUpstreamSelection;
 
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
@@ -134,196 +146,6 @@ pub(super) struct ResidentDnsPlan {
 pub(super) struct ResidentDnsQueryResult {
     pub(super) response: Vec<u8>,
     pub(super) trace: ResidentDnsTraceSummary,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ResidentDnsUpstreamRouter {
-    routing_matcher: RoutingMatcher,
-    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
-    so_mark_from_dae: u32,
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum ResidentDnsUpstreamSelection {
-    Direct { mark: u32 },
-    Proxy { proxy: Arc<ResidentProxyPlan> },
-}
-
-#[derive(Clone, Debug)]
-struct ResidentDnsUpstreamSelectionCandidate {
-    selection: ResidentDnsUpstreamSelection,
-    network_type: NetworkType,
-    latency_ms: i64,
-}
-
-impl ResidentDnsUpstreamRouter {
-    pub(super) fn new(
-        routing_matcher: RoutingMatcher,
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
-        so_mark_from_dae: u32,
-    ) -> Self {
-        Self {
-            routing_matcher,
-            proxy_groups,
-            so_mark_from_dae,
-        }
-    }
-
-    fn select_candidate(
-        &self,
-        upstream: &ResidentDnsUpstream,
-        target: SocketAddr,
-        route_l4proto: L4Proto,
-        proxy_network_type: NetworkType,
-    ) -> Result<ResidentDnsUpstreamSelectionCandidate, String> {
-        let query = match route_l4proto {
-            L4Proto::Tcp => Query::tcp(target.ip(), target.port(), upstream.target.host.clone()),
-            L4Proto::Udp => Query::udp(target.ip(), target.port(), upstream.target.host.clone()),
-        };
-        let outcome = self
-            .routing_matcher
-            .match_query_detail(&query)
-            .map_err(|err| {
-                format!(
-                    "route DNS upstream {} {} {}: {err}",
-                    upstream.tag, upstream.target.authority, target,
-                )
-            })?;
-        let mark = if outcome.mark == 0 {
-            self.so_mark_from_dae
-        } else {
-            outcome.mark
-        };
-        match outcome.outbound.value() {
-            OUTBOUND_DIRECT => Ok(ResidentDnsUpstreamSelectionCandidate {
-                selection: ResidentDnsUpstreamSelection::Direct { mark },
-                network_type: proxy_network_type,
-                latency_ms: 0,
-            }),
-            OUTBOUND_BLOCK => Err(format!(
-                "DNS upstream {} {} routed to block for {}",
-                upstream.tag, upstream.target.authority, target
-            )),
-            OUTBOUND_CONTROL_PLANE_ROUTING => Err(format!(
-                "DNS upstream {} {} still requires control-plane routing for {}; no recursive DNS upstream routing is admitted",
-                upstream.tag, upstream.target.authority, target
-            )),
-            outbound => {
-                let Some(proxy_group) = self.proxy_groups.get(&outbound) else {
-                    return Err(format!(
-                        "DNS upstream {} {} selected outbound {} but no Rust proxy plan is available",
-                        upstream.tag,
-                        upstream.target.authority,
-                        OutboundIndex(outbound)
-                    ));
-                };
-                let proxy =
-                    proxy_group.select_proxy_for_dns_upstream_candidate(proxy_network_type)?;
-                Ok(ResidentDnsUpstreamSelectionCandidate {
-                    selection: ResidentDnsUpstreamSelection::Proxy {
-                        proxy: proxy_with_dns_upstream_mark(proxy.proxy, mark),
-                    },
-                    network_type: proxy.network_type,
-                    latency_ms: proxy.latency_ms,
-                })
-            }
-        }
-    }
-}
-
-fn proxy_with_dns_upstream_mark(
-    proxy: Arc<ResidentProxyPlan>,
-    mark: u32,
-) -> Arc<ResidentProxyPlan> {
-    if mark == 0 || proxy.mark == mark {
-        return proxy;
-    }
-    let mut overridden = proxy.as_ref().clone();
-    overridden.mark = mark;
-    Arc::new(overridden)
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ResidentDnsTraceSummary {
-    pub(super) qname: String,
-    pub(super) qtype: u16,
-    pub(super) qclass: u16,
-    pub(super) cache: String,
-    pub(super) request_routing: String,
-    pub(super) response_routing: String,
-    pub(super) upstream: Option<String>,
-    pub(super) upstream_scheme: Option<&'static str>,
-    pub(super) upstream_chain: Vec<String>,
-    pub(super) reroutes: usize,
-    pub(super) fallback: bool,
-    pub(super) rcode: Option<u16>,
-    pub(super) reason: String,
-}
-
-impl ResidentDnsTraceSummary {
-    fn from_request(plan: &ResidentDnsPlan, request: &DnsPacketView<'_>) -> Result<Self, String> {
-        let question = request
-            .questions()
-            .next()
-            .ok_or_else(|| "DNS request has no question".to_owned())?;
-        let qname = question
-            .qname_to_canonical_string()
-            .map_err(|err| format!("read DNS request qname for trace: {err}"))?;
-        Ok(Self {
-            qname,
-            qtype: question.qtype(),
-            qclass: question.qclass(),
-            cache: DNS_TRACE_CACHE_UNRESOLVED.to_owned(),
-            request_routing: DNS_TRACE_ROUTING_UNRESOLVED.to_owned(),
-            response_routing: DNS_TRACE_ROUTING_UNRESOLVED.to_owned(),
-            upstream: None,
-            upstream_scheme: None,
-            upstream_chain: Vec::new(),
-            reroutes: 0,
-            fallback: plan.request_matcher.is_none(),
-            rcode: None,
-            reason: String::new(),
-        })
-    }
-
-    fn set_request_action(&mut self, action: &ResidentDnsRequestAction) {
-        self.request_routing = dns_request_action_name(action).to_owned();
-        if let ResidentDnsRequestAction::Upstream(upstream) = action {
-            self.set_upstream(upstream);
-        }
-    }
-
-    fn set_response_action(&mut self, action: &ResidentDnsResponseAction) {
-        self.response_routing = dns_response_action_name(action).to_owned();
-        if let ResidentDnsResponseAction::Upstream(upstream) = action {
-            self.set_upstream(upstream);
-        }
-    }
-
-    fn set_upstream(&mut self, upstream: &ResidentDnsUpstream) {
-        self.upstream = Some(upstream.tag.clone());
-        self.upstream_scheme = Some(upstream.scheme.as_str());
-    }
-
-    fn push_upstream_attempt(&mut self, upstream: &ResidentDnsUpstream) {
-        self.set_upstream(upstream);
-        self.upstream_chain.push(upstream.tag.clone());
-    }
-
-    fn push_asis_attempt(&mut self) {
-        self.upstream = Some("asis".to_owned());
-        self.upstream_scheme = Some("udp");
-        self.upstream_chain.push("asis".to_owned());
-    }
-
-    fn finish(mut self, response: Vec<u8>, reason: &str) -> ResidentDnsQueryResult {
-        self.rcode = dns_response_rcode(&response);
-        self.reason = reason.to_owned();
-        ResidentDnsQueryResult {
-            response,
-            trace: self,
-        }
-    }
 }
 
 impl ResidentDnsPlan {
@@ -418,170 +240,6 @@ impl ResidentDnsPlan {
             return false;
         };
         dns_response_has_any_ip(&response).unwrap_or(false)
-    }
-}
-
-#[derive(Clone, Debug)]
-enum ResidentDnsRequestAction {
-    AsIs,
-    Reject,
-    Upstream(ResidentDnsUpstream),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ResidentDnsResponseAction {
-    Accept,
-    Reject,
-    Upstream(ResidentDnsUpstream),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ResidentDnsUpstream {
-    index: u8,
-    tag: String,
-    target: ResidentDnsUpstreamTarget,
-    scheme: ResidentDnsUpstreamScheme,
-    path: String,
-}
-
-#[derive(Clone, Debug)]
-struct ResidentDnsUpstreams {
-    by_tag: BTreeMap<String, ResidentDnsUpstream>,
-    tag_to_index: BTreeMap<String, u8>,
-    request_actions: Vec<ResidentDnsRequestAction>,
-    response_actions: Vec<ResidentDnsResponseAction>,
-}
-
-#[derive(Clone, Debug)]
-struct ResidentDnsUpstreamTarget {
-    authority: String,
-    host: String,
-    port: u16,
-    literal_addr: Option<SocketAddr>,
-    fallback_resolver: SocketAddr,
-    resolver_mark: u32,
-    resolved_addrs: Arc<OnceCell<Vec<SocketAddr>>>,
-}
-
-impl ResidentDnsUpstreamTarget {
-    async fn resolve_addrs(&self) -> Result<Vec<SocketAddr>, String> {
-        if let Some(addr) = self.literal_addr {
-            return Ok(vec![addr]);
-        }
-        self.resolved_addrs
-            .get_or_try_init(|| async {
-                resolve_host_addrs_with_configured_fallback_dns(
-                    &self.host,
-                    self.port,
-                    self.fallback_resolver,
-                    self.resolver_mark,
-                    "resolve DNS upstream",
-                )
-                .await
-            })
-            .await
-            .cloned()
-    }
-}
-
-impl PartialEq for ResidentDnsUpstreamTarget {
-    fn eq(&self, other: &Self) -> bool {
-        self.authority == other.authority
-            && self.host == other.host
-            && self.port == other.port
-            && self.literal_addr == other.literal_addr
-            && self.fallback_resolver == other.fallback_resolver
-            && self.resolver_mark == other.resolver_mark
-    }
-}
-
-impl Eq for ResidentDnsUpstreamTarget {}
-
-struct ResidentDnsForwarderCache {
-    state: Mutex<ResidentDnsForwarderCacheState>,
-}
-
-impl Default for ResidentDnsForwarderCache {
-    fn default() -> Self {
-        Self {
-            state: Mutex::new(ResidentDnsForwarderCacheState::default()),
-        }
-    }
-}
-
-impl std::fmt::Debug for ResidentDnsForwarderCache {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let entries = self
-            .state
-            .lock()
-            .map(|state| state.entries.len())
-            .unwrap_or_default();
-        f.debug_struct("ResidentDnsForwarderCache")
-            .field("entries", &entries)
-            .finish()
-    }
-}
-
-#[derive(Default)]
-struct ResidentDnsForwarderCacheState {
-    entries: BTreeMap<ResidentDnsForwarderKey, ResidentDnsForwarderEntry>,
-    next_tick: u64,
-}
-
-struct ResidentDnsForwarderEntry {
-    last_used: u64,
-    quic: Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct ResidentDnsForwarderKey {
-    scheme: ResidentDnsUpstreamScheme,
-    authority: String,
-    path: String,
-    mark: u32,
-}
-
-struct ResidentDnsQuicForwarder {
-    upstream: ResidentDnsUpstream,
-    mark: u32,
-    endpoint: Option<quinn::Endpoint>,
-    connection: Option<quinn::Connection>,
-}
-
-impl Drop for ResidentDnsQuicForwarder {
-    fn drop(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            connection.close(0_u32.into(), b"dns forwarder dropped");
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum ResidentDnsUpstreamScheme {
-    Udp,
-    Tcp,
-    TcpUdp,
-    Tls,
-    Https,
-    Quic,
-    Http3,
-}
-
-impl ResidentDnsUpstreamScheme {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Udp => "udp",
-            Self::Tcp => "tcp",
-            Self::TcpUdp => "tcp+udp",
-            Self::Tls => "tls",
-            Self::Https => "https",
-            Self::Quic => "quic",
-            Self::Http3 => "http3",
-        }
-    }
-
-    const fn requires_dns_response_id_match(self) -> bool {
-        matches!(self, Self::Udp | Self::Tcp | Self::TcpUdp | Self::Tls)
     }
 }
 
