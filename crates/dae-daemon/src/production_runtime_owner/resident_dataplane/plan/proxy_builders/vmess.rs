@@ -95,7 +95,9 @@ pub(crate) fn build_vmess_proxy_plan(
         "none"
     };
     let server_name = if tls == "tls" {
-        if parsed.sni.is_empty() {
+        if net == "websocket" {
+            resident_websocket_tls_server_name(&parsed.sni, &parsed.host, &parsed.add)
+        } else if parsed.sni.is_empty() {
             parsed.add.clone()
         } else {
             parsed.sni.clone()

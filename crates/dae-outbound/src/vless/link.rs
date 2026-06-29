@@ -242,6 +242,7 @@ fn parse_allow_insecure(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_
         "allowInsecure",
         "allow_insecure",
         "allowinsecure",
+        "insecure",
         "skipVerify",
     ]
     .iter()
