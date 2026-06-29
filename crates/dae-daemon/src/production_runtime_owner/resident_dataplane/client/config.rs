@@ -106,6 +106,9 @@ impl ResidentRealityConfigKey {
 pub(super) fn rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<ClientConfig>, String> {
+    if proxy.reality.is_some() {
+        return build_rustls_vless_client_config(proxy);
+    }
     let key = ResidentTlsClientConfigKey::from_proxy(proxy);
     let cache =
         RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
@@ -117,6 +120,16 @@ pub(super) fn rustls_vless_client_config(
             return Ok(config);
         }
     }
+    let config = build_rustls_vless_client_config(proxy)?;
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
+    Ok(cache.insert_or_get(key, config))
+}
+
+fn build_rustls_vless_client_config(
+    proxy: &ResidentProxyPlan,
+) -> Result<Arc<ClientConfig>, String> {
     let builder = if proxy.reality.is_some() {
         let provider = rustls_reality_crypto_provider(proxy.utls_fingerprint.as_ref());
         ClientConfig::builder_with_provider(Arc::new(provider))
@@ -160,16 +173,15 @@ pub(super) fn rustls_vless_client_config(
         .iter()
         .map(|value| value.as_bytes().to_vec())
         .collect();
-    let config = Arc::new(config);
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
-    Ok(cache.insert_or_get(key, config))
+    Ok(Arc::new(config))
 }
 
 pub(super) fn rustls_xhttp_endpoint_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
 ) -> Result<Arc<ClientConfig>, String> {
+    if endpoint.reality.is_some() {
+        return build_rustls_xhttp_endpoint_client_config(endpoint);
+    }
     let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint);
     let cache =
         RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
@@ -181,6 +193,16 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
             return Ok(config);
         }
     }
+    let config = build_rustls_xhttp_endpoint_client_config(endpoint)?;
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
+    Ok(cache.insert_or_get(key, config))
+}
+
+fn build_rustls_xhttp_endpoint_client_config(
+    endpoint: &ResidentXhttpEndpointPlan,
+) -> Result<Arc<ClientConfig>, String> {
     let builder = if endpoint.reality.is_some() {
         let provider = rustls_reality_crypto_provider(None);
         ClientConfig::builder_with_provider(Arc::new(provider))
@@ -222,11 +244,7 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
         .iter()
         .map(|value| value.as_bytes().to_vec())
         .collect();
-    let config = Arc::new(config);
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
-    Ok(cache.insert_or_get(key, config))
+    Ok(Arc::new(config))
 }
 
 pub(super) fn rustls_reality_crypto_provider(
@@ -488,6 +506,33 @@ mod tests {
             provider.cipher_suites[2],
             rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384
         );
+    }
+
+    #[test]
+    fn reality_client_config_keeps_auth_slot_per_connection() {
+        let mut proxy =
+            test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        proxy.tls = "reality".to_owned();
+        proxy.reality = Some(ResidentRealityUnderlayPlan {
+            public_key: [7; 32],
+            short_id: vec![1, 2, 3, 4],
+            spider_x: "/".to_owned(),
+        });
+
+        let first = rustls_vless_client_config(&proxy).unwrap();
+        let second = rustls_vless_client_config(&proxy).unwrap();
+
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn standard_rustls_client_config_still_uses_cache() {
+        let proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+
+        let first = rustls_vless_client_config(&proxy).unwrap();
+        let second = rustls_vless_client_config(&proxy).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     fn test_fingerprint_plan(family: &str) -> ResidentUtlsFingerprintPlan {
