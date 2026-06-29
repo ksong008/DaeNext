@@ -6,7 +6,7 @@
     "dns_response_rule_count": 0,
     "fallback_resolver": "8.8.8.8:53",
     "group_count": 0,
-    "log_level": "info",
+    "log_level": "error",
     "node_count": 0,
     "routing_fallback": "direct",
     "routing_rule_count": 0,
