@@ -31,6 +31,27 @@ impl RelayError {
     }
 }
 
+pub(crate) fn is_graceful_vless_response_tls_plain_close_error(
+    err: &std::io::Error,
+    stats: &RelayStats,
+) -> bool {
+    if !vless_response_started(stats) {
+        return false;
+    }
+    if is_graceful_tls_plain_close_error(err) {
+        return true;
+    }
+    is_boringssl_tls_plain_close_after_response_message(&err.to_string())
+}
+
+fn vless_response_started(stats: &RelayStats) -> bool {
+    stats.response_header_stripped || stats.proxy_to_client > 0
+}
+
+fn is_boringssl_tls_plain_close_after_response_message(message: &str) -> bool {
+    message.contains("[BAD_DECRYPT]") && message.contains("[DECRYPTION_FAILED_OR_BAD_RECORD_MAC]")
+}
+
 #[derive(Default)]
 pub(crate) struct VlessResponseStripper {
     pub(in crate::production_runtime_owner::resident_dataplane::tcp) header: Vec<u8>,

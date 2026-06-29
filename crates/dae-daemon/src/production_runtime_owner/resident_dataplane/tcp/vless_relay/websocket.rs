@@ -68,6 +68,9 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
                         }
                         last_activity = Instant::now();
                     }
+                    Err(err) if is_graceful_vless_response_tls_plain_close_error(&err, &stats) => {
+                        break;
+                    }
                     Err(err) => {
                         return Err(RelayError::new(format!("read websocket TLS plaintext: {err}"), &stats));
                     }

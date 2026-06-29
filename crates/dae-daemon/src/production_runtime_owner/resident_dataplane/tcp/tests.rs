@@ -82,6 +82,38 @@ fn resident_upload_relay_treats_peer_close_as_graceful_end() {
 }
 
 #[test]
+fn vless_websocket_tls_close_error_is_graceful_only_after_response_progress() {
+    let boringssl_close =
+        || std::io::Error::other("[BAD_DECRYPT] [DECRYPTION_FAILED_OR_BAD_RECORD_MAC]");
+    assert!(!is_graceful_vless_response_tls_plain_close_error(
+        &boringssl_close(),
+        &RelayStats::default(),
+    ));
+
+    let stripped = RelayStats {
+        response_header_stripped: true,
+        ..RelayStats::default()
+    };
+    assert!(is_graceful_vless_response_tls_plain_close_error(
+        &boringssl_close(),
+        &stripped,
+    ));
+
+    let downloaded = RelayStats {
+        proxy_to_client: 1,
+        ..RelayStats::default()
+    };
+    assert!(is_graceful_vless_response_tls_plain_close_error(
+        &boringssl_close(),
+        &downloaded,
+    ));
+    assert!(!is_graceful_vless_response_tls_plain_close_error(
+        &std::io::Error::other("certificate verify failed"),
+        &downloaded,
+    ));
+}
+
+#[test]
 fn resident_tcp_probe_http_request_uses_configured_method_path_and_host() {
     let request = String::from_utf8(resident_tcp_probe_http_request(
         "HEAD",
