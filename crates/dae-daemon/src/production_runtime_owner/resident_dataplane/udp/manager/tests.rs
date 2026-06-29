@@ -60,7 +60,7 @@ fn udp_session_key_emits_display_and_redacted_identity() {
     assert_eq!(value["originalDestination"], original_dst_display);
     assert_eq!(value["sourceDisplay"], peer_display);
     assert_eq!(value["destinationDisplay"], original_dst_display);
-    assert_eq!(value["packetSemantics"], "xudp");
+    assert_eq!(value["packetSemantics"], "udp-over-stream");
     assert!(
         value["graphIdentityHash"]
             .as_str()

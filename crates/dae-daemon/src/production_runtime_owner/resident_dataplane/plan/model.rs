@@ -191,6 +191,37 @@ impl ResidentProxyPlan {
             )),
         }
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn uses_vless_vision_xudp(
+        &self,
+    ) -> bool {
+        matches!(
+            self.handler,
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+        ) && matches!(self.net.as_str(), "" | "tcp")
+            && is_xtls_rprx_vision_flow(&self.flow)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn uses_standard_vless_udp_over_stream(
+        &self,
+    ) -> bool {
+        if !matches!(
+            self.handler,
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+        ) || !self.flow.is_empty()
+        {
+            return false;
+        }
+
+        match (self.net.as_str(), self.tls.as_str()) {
+            ("" | "tcp", _) => true,
+            ("websocket" | "httpupgrade", _) => true,
+            ("grpc" | "h2", "" | "none") => false,
+            ("grpc" | "h2", _) => true,
+            ("xhttp", _) => true,
+            _ => false,
+        }
+    }
 }
 
 fn compact_string(value: &mut String) {

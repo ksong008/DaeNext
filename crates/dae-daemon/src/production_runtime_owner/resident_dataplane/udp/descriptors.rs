@@ -75,13 +75,15 @@ pub(super) fn udp_packet_semantics_for_destination(
 
 pub(super) fn udp_packet_semantics(proxy: &ResidentProxyPlan) -> UdpPacketSemantics {
     match &proxy.handler {
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
-            if proxy.net == "xhttp" && proxy.flow.is_empty() {
-                UdpPacketSemantics::UdpOverStream
-            } else {
-                UdpPacketSemantics::Xudp
-            }
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+            if proxy.uses_standard_vless_udp_over_stream() =>
+        {
+            UdpPacketSemantics::UdpOverStream
         }
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } if proxy.uses_vless_vision_xudp() => {
+            UdpPacketSemantics::Xudp
+        }
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => UdpPacketSemantics::ProtocolClosed,
         ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => UdpPacketSemantics::MultiplexedStream,
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => UdpPacketSemantics::UdpAssociate,
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => UdpPacketSemantics::ProtocolClosed,
