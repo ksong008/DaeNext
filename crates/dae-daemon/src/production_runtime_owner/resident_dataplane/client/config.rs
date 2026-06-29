@@ -131,7 +131,10 @@ fn build_rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<ClientConfig>, String> {
     let builder = if proxy.reality.is_some() {
-        let provider = rustls_reality_crypto_provider(proxy.utls_fingerprint.as_ref());
+        if proxy.utls_fingerprint.is_some() {
+            return Err("VLESS Reality with uTLS fingerprint requires a fingerprint-capable Reality TLS underlay; rustls cannot implement uTLS fingerprints".to_owned());
+        }
+        let provider = rustls_reality_crypto_provider();
         ClientConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|err| format!("create VLESS Reality rustls provider: {err}"))?
@@ -195,7 +198,7 @@ fn build_rustls_xhttp_endpoint_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
 ) -> Result<Arc<ClientConfig>, String> {
     let builder = if endpoint.reality.is_some() {
-        let provider = rustls_reality_crypto_provider(None);
+        let provider = rustls_reality_crypto_provider();
         ClientConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|err| format!("create xHTTP Reality rustls provider: {err}"))?
@@ -229,25 +232,14 @@ fn build_rustls_xhttp_endpoint_client_config(
     Ok(Arc::new(config))
 }
 
-pub(super) fn rustls_reality_crypto_provider(
-    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
-) -> rustls::crypto::CryptoProvider {
+pub(super) fn rustls_reality_crypto_provider() -> rustls::crypto::CryptoProvider {
     let mut provider = rustls::crypto::aws_lc_rs::default_provider();
-    provider.cipher_suites = rustls_reality_cipher_suites(fingerprint);
-    provider.kx_groups = rustls_reality_kx_groups(fingerprint);
+    provider.cipher_suites = rustls_reality_cipher_suites();
+    provider.kx_groups = rustls_reality_kx_groups();
     provider
 }
 
-fn rustls_reality_cipher_suites(
-    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
-) -> Vec<SupportedCipherSuite> {
-    if fingerprint.is_some_and(|fingerprint| fingerprint.family == UTLS_FAMILY_FIREFOX) {
-        return vec![
-            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256,
-            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
-            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384,
-        ];
-    }
+fn rustls_reality_cipher_suites() -> Vec<SupportedCipherSuite> {
     vec![
         rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256,
         rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384,
@@ -255,15 +247,7 @@ fn rustls_reality_cipher_suites(
     ]
 }
 
-fn rustls_reality_kx_groups(
-    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
-) -> Vec<&'static dyn rustls::crypto::SupportedKxGroup> {
-    if fingerprint.is_some_and(|fingerprint| fingerprint.family == UTLS_FAMILY_ANDROID) {
-        return vec![
-            rustls::crypto::aws_lc_rs::kx_group::X25519,
-            rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
-        ];
-    }
+fn rustls_reality_kx_groups() -> Vec<&'static dyn rustls::crypto::SupportedKxGroup> {
     vec![
         rustls::crypto::aws_lc_rs::kx_group::X25519,
         rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
@@ -503,10 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn reality_provider_keeps_browser_style_groups_without_single_group_downgrade() {
-        let provider = rustls_reality_crypto_provider(Some(&test_fingerprint_plan(
-            dae_outbound::shared_transport::UTLS_FAMILY_IOS,
-        )));
+    fn reality_provider_keeps_generic_tls13_shape_without_fingerprint() {
+        let provider = rustls_reality_crypto_provider();
 
         let groups = provider
             .kx_groups
@@ -516,40 +498,17 @@ mod tests {
         assert_eq!(groups[0], rustls::NamedGroup::X25519);
         assert_eq!(groups[1], rustls::NamedGroup::secp256r1);
         assert_eq!(groups[2], rustls::NamedGroup::secp384r1);
-    }
-
-    #[test]
-    fn reality_provider_uses_android_narrow_group_profile() {
-        let provider =
-            rustls_reality_crypto_provider(Some(&test_fingerprint_plan(UTLS_FAMILY_ANDROID)));
-
-        let groups = provider
-            .kx_groups
-            .iter()
-            .map(|group| group.name())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            groups,
-            vec![rustls::NamedGroup::X25519, rustls::NamedGroup::secp256r1]
-        );
-    }
-
-    #[test]
-    fn reality_provider_keeps_firefox_cipher_preference() {
-        let provider =
-            rustls_reality_crypto_provider(Some(&test_fingerprint_plan(UTLS_FAMILY_FIREFOX)));
-
         assert_eq!(
             provider.cipher_suites[0],
             rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256
         );
         assert_eq!(
             provider.cipher_suites[1],
-            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256
+            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384
         );
         assert_eq!(
             provider.cipher_suites[2],
-            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384
+            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256
         );
     }
 
@@ -568,6 +527,26 @@ mod tests {
         let second = rustls_vless_client_config(&proxy).unwrap();
 
         assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn reality_client_config_rejects_rustls_fingerprint_downgrade() {
+        let mut proxy =
+            test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        proxy.tls = "reality".to_owned();
+        proxy.reality = Some(ResidentRealityUnderlayPlan {
+            public_key: [7; 32],
+            short_id: vec![1, 2, 3, 4],
+            spider_x: "/".to_owned(),
+        });
+        proxy.utls_fingerprint = Some(test_fingerprint_plan(
+            dae_outbound::shared_transport::UTLS_FAMILY_IOS,
+        ));
+
+        let err = rustls_vless_client_config(&proxy).unwrap_err();
+        assert!(err.contains("rustls cannot implement uTLS fingerprints"));
+        let err = ResidentTlsProvider::from_proxy(&proxy).unwrap_err();
+        assert!(err.contains("rustls cannot implement uTLS fingerprints"));
     }
 
     #[test]
