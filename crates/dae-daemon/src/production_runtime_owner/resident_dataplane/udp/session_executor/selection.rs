@@ -42,6 +42,12 @@ impl UdpSessionExecutor {
                 if matches!(proxy.net.as_str(), "" | "tcp") && is_xtls_rprx_vision_flow(&proxy.flow)
                 {
                     Self::VlessVision(VlessXudpStreamSession::default())
+                } else if matches!(proxy.net.as_str(), "" | "tcp") && proxy.flow.is_empty() {
+                    if matches!(proxy.tls.as_str(), "" | "none") {
+                        Self::VlessStandard(VlessStandardUdpOverStreamSession::plain())
+                    } else {
+                        Self::VlessStandard(VlessStandardUdpOverStreamSession::tls())
+                    }
                 } else if proxy.net == "xhttp"
                     && proxy.flow.is_empty()
                     && resident_xhttp_uses_h3(proxy)

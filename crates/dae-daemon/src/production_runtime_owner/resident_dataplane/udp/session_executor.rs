@@ -5,6 +5,7 @@ pub(super) enum UdpSessionExecutor {
     ShadowsocksAead(ShadowsocksAeadDatagramSession),
     Shadowsocks2022(Shadowsocks2022DatagramSession),
     Socks5(Socks5UdpAssociateSession),
+    VlessStandard(VlessStandardUdpOverStreamSession),
     VlessVision(VlessXudpStreamSession),
     VlessXhttpH2(VlessXhttpH2UdpSession),
     VlessXhttpH3(VlessXhttpH3UdpSession),
@@ -30,6 +31,7 @@ mod shadowsocks;
 mod socks5;
 mod trojan;
 mod vless;
+mod vless_standard;
 use self::anytls::AnyTlsPacketStreamSession;
 use self::quic::{
     Hysteria2QuicDatagramSession, JuicityQuicStreamPacketSession, TuicQuicDatagramSession,
@@ -40,6 +42,7 @@ use self::trojan::TrojanUdpStreamSession;
 #[cfg(test)]
 pub(super) use self::vless::vless_udp_length_frame;
 use self::vless::{VlessXhttpH2UdpSession, VlessXhttpH3UdpSession, VlessXudpStreamSession};
+use self::vless_standard::VlessStandardUdpOverStreamSession;
 
 #[cfg(test)]
 mod datagram_udp_pending_tests {

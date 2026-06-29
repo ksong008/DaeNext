@@ -361,6 +361,25 @@ mod tests {
         let executor = UdpSessionExecutor::new_proxy_packet(&vless_udp443);
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::VlessVision);
 
+        for (net, tls) in [
+            ("tcp", ""),
+            ("tcp", "none"),
+            ("tcp", "tls"),
+            ("tcp", "reality"),
+        ] {
+            let mut proxy =
+                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            proxy.protocol = "vless".to_owned();
+            proxy.net = net.to_owned();
+            proxy.tls = tls.to_owned();
+            proxy.flow = String::new();
+            let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
+            assert_eq!(
+                udp_executor_shape(&executor),
+                UdpExecutorShape::VlessStandard
+            );
+        }
+
         let fail_closed = [
             ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [0; 16] },
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
@@ -447,7 +466,6 @@ mod tests {
         }
 
         let unsupported_vless_udp = [
-            ("tcp", ""),
             ("websocket", ""),
             ("httpupgrade", ""),
             ("grpc", ""),
@@ -543,6 +561,7 @@ mod tests {
         Shadowsocks2022,
         Socks5,
         VlessVision,
+        VlessStandard,
         VlessXhttpH2,
         VlessXhttpH3,
         Trojan,
@@ -561,6 +580,7 @@ mod tests {
             UdpSessionExecutor::Shadowsocks2022(_) => UdpExecutorShape::Shadowsocks2022,
             UdpSessionExecutor::Socks5(_) => UdpExecutorShape::Socks5,
             UdpSessionExecutor::VlessVision(_) => UdpExecutorShape::VlessVision,
+            UdpSessionExecutor::VlessStandard(_) => UdpExecutorShape::VlessStandard,
             UdpSessionExecutor::VlessXhttpH2(_) => UdpExecutorShape::VlessXhttpH2,
             UdpSessionExecutor::VlessXhttpH3(_) => UdpExecutorShape::VlessXhttpH3,
             UdpSessionExecutor::Trojan(_) => UdpExecutorShape::Trojan,
