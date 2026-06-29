@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use boring::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
+use dae_outbound::shared_transport::reality::REALITY_VERSION;
 use dae_outbound::shared_transport::{TlsFragmentOptions, fragment_tls_write};
 use dae_outbound::vless::contract::is_xtls_rprx_vision_flow;
 use rustls::client::RealityConfig;
