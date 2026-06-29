@@ -12,6 +12,15 @@ pub struct UtlsFingerprint {
 }
 
 pub const U_TLS_WIRE_STACK_DEFERRED: bool = true;
+pub const UTLS_FAMILY_360: &str = "360";
+pub const UTLS_FAMILY_ANDROID: &str = "android";
+pub const UTLS_FAMILY_CHROME: &str = "chrome";
+pub const UTLS_FAMILY_EDGE: &str = "edge";
+pub const UTLS_FAMILY_FIREFOX: &str = "firefox";
+pub const UTLS_FAMILY_IOS: &str = "ios";
+pub const UTLS_FAMILY_QQ: &str = "qq";
+pub const UTLS_FAMILY_RANDOM: &str = "random";
+pub const UTLS_FAMILY_SAFARI: &str = "safari";
 
 pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
     fp(

@@ -81,8 +81,10 @@ pub use tls_fragment::{
     snapshot_tls_fragment_stats,
 };
 pub use utls_fingerprint::{
-    SUPPORTED_UTLS_FINGERPRINTS, U_TLS_WIRE_STACK_DEFERRED, UtlsFingerprint,
-    resolve_utls_client_hello_id, supported_utls_fingerprint_count, utls_fingerprint_names,
+    SUPPORTED_UTLS_FINGERPRINTS, U_TLS_WIRE_STACK_DEFERRED, UTLS_FAMILY_360, UTLS_FAMILY_ANDROID,
+    UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE, UTLS_FAMILY_FIREFOX, UTLS_FAMILY_IOS, UTLS_FAMILY_QQ,
+    UTLS_FAMILY_RANDOM, UTLS_FAMILY_SAFARI, UtlsFingerprint, resolve_utls_client_hello_id,
+    supported_utls_fingerprint_count, utls_fingerprint_names,
 };
 pub use utls_wire::{
     UtlsClientHelloProfile, parse_utls_client_hello_record, parse_utls_client_hello_record_hex,

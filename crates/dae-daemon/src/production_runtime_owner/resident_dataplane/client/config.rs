@@ -117,8 +117,7 @@ pub(super) fn rustls_vless_client_config(
         }
     }
     let builder = if proxy.reality.is_some() {
-        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
-        provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519];
+        let provider = rustls_reality_crypto_provider(proxy.utls_fingerprint.as_ref());
         ClientConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|err| format!("create VLESS Reality rustls provider: {err}"))?
@@ -182,8 +181,7 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
         }
     }
     let builder = if endpoint.reality.is_some() {
-        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
-        provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519];
+        let provider = rustls_reality_crypto_provider(None);
         ClientConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|err| format!("create xHTTP Reality rustls provider: {err}"))?
@@ -228,6 +226,48 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
         .lock()
         .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
     Ok(cache.insert_or_get(key, config))
+}
+
+pub(super) fn rustls_reality_crypto_provider(
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+) -> rustls::crypto::CryptoProvider {
+    let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+    provider.cipher_suites = rustls_reality_cipher_suites(fingerprint);
+    provider.kx_groups = rustls_reality_kx_groups(fingerprint);
+    provider
+}
+
+fn rustls_reality_cipher_suites(
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+) -> Vec<SupportedCipherSuite> {
+    if fingerprint.is_some_and(|fingerprint| fingerprint.family == UTLS_FAMILY_FIREFOX) {
+        return vec![
+            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256,
+            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
+            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384,
+        ];
+    }
+    vec![
+        rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256,
+        rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384,
+        rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
+    ]
+}
+
+fn rustls_reality_kx_groups(
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+) -> Vec<&'static dyn rustls::crypto::SupportedKxGroup> {
+    if fingerprint.is_some_and(|fingerprint| fingerprint.family == UTLS_FAMILY_ANDROID) {
+        return vec![
+            rustls::crypto::aws_lc_rs::kx_group::X25519,
+            rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
+        ];
+    }
+    vec![
+        rustls::crypto::aws_lc_rs::kx_group::X25519,
+        rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
+        rustls::crypto::aws_lc_rs::kx_group::SECP384R1,
+    ]
 }
 
 #[derive(Debug)]
@@ -295,12 +335,12 @@ pub(super) fn configure_boring_fingerprint(
     fingerprint: &ResidentUtlsFingerprintPlan,
 ) -> Result<(), String> {
     match fingerprint.family.as_str() {
-        "firefox" => {
+        UTLS_FAMILY_FIREFOX => {
             builder
                 .set_curves_list("X25519:P-256:P-384:P-521")
                 .map_err(|err| format!("set VLESS BoringSSL Firefox-style groups: {err}"))?;
         }
-        "android" => {
+        UTLS_FAMILY_ANDROID => {
             builder
                 .set_curves_list("X25519:P-256")
                 .map_err(|err| format!("set VLESS BoringSSL Android-style groups: {err}"))?;
@@ -315,7 +355,11 @@ pub(super) fn configure_boring_fingerprint(
 
     if matches!(
         fingerprint.family.as_str(),
-        "chrome" | "edge" | "random" | "360" | "qq"
+        UTLS_FAMILY_CHROME
+            | UTLS_FAMILY_EDGE
+            | UTLS_FAMILY_RANDOM
+            | UTLS_FAMILY_360
+            | UTLS_FAMILY_QQ
     ) {
         builder.set_permute_extensions(true);
     }
@@ -391,6 +435,69 @@ mod tests {
             REALITY_CLIENT_VERSION,
             dae_outbound::shared_transport::reality::REALITY_VERSION
         );
+    }
+
+    #[test]
+    fn reality_provider_keeps_browser_style_groups_without_single_group_downgrade() {
+        let provider =
+            rustls_reality_crypto_provider(Some(&test_fingerprint_plan(UTLS_FAMILY_IOS)));
+
+        let groups = provider
+            .kx_groups
+            .iter()
+            .map(|group| group.name())
+            .collect::<Vec<_>>();
+        assert_eq!(groups[0], rustls::NamedGroup::X25519);
+        assert_eq!(groups[1], rustls::NamedGroup::secp256r1);
+        assert_eq!(groups[2], rustls::NamedGroup::secp384r1);
+    }
+
+    #[test]
+    fn reality_provider_uses_android_narrow_group_profile() {
+        let provider =
+            rustls_reality_crypto_provider(Some(&test_fingerprint_plan(UTLS_FAMILY_ANDROID)));
+
+        let groups = provider
+            .kx_groups
+            .iter()
+            .map(|group| group.name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            groups,
+            vec![rustls::NamedGroup::X25519, rustls::NamedGroup::secp256r1]
+        );
+    }
+
+    #[test]
+    fn reality_provider_keeps_firefox_cipher_preference() {
+        let provider =
+            rustls_reality_crypto_provider(Some(&test_fingerprint_plan(UTLS_FAMILY_FIREFOX)));
+
+        assert_eq!(
+            provider.cipher_suites[0],
+            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256
+        );
+        assert_eq!(
+            provider.cipher_suites[1],
+            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256
+        );
+        assert_eq!(
+            provider.cipher_suites[2],
+            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384
+        );
+    }
+
+    fn test_fingerprint_plan(family: &str) -> ResidentUtlsFingerprintPlan {
+        ResidentUtlsFingerprintPlan {
+            source: "test fp",
+            requested: family.to_owned(),
+            name: family.to_owned(),
+            canonical: family.to_owned(),
+            family: family.to_owned(),
+            client: family.to_owned(),
+            randomized: family == UTLS_FAMILY_RANDOM,
+            alpn_policy: "auto".to_owned(),
+        }
     }
 
     fn test_proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
