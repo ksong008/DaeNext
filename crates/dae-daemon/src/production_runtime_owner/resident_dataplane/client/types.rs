@@ -62,6 +62,7 @@ pub(crate) struct ResidentTlsFingerprintConfigKey {
     pub(super) client: String,
     pub(super) randomized: bool,
     pub(super) alpn_policy: String,
+    pub(super) default_alpn: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

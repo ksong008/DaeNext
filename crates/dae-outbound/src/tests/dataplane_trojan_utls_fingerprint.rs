@@ -43,7 +43,11 @@ fn case_utls_fingerprint_aliases_match_native_boundaries() {
     assert!(randomized.randomized);
 
     let no_alpn = shared_transport::resolve_utls_client_hello_id("randomizednoalpn").unwrap();
-    assert_eq!(no_alpn.alpn_policy, "force-no-alpn");
+    assert_eq!(
+        no_alpn.alpn_policy,
+        shared_transport::UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN
+    );
+    assert!(shared_transport::utls_fingerprint_default_alpn_protocols(&no_alpn).is_empty());
 
     let err = shared_transport::resolve_utls_client_hello_id("Chrome").unwrap_err();
     assert!(

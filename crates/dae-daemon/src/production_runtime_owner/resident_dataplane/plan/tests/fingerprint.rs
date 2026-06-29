@@ -81,6 +81,14 @@ pub(super) fn resident_dataplane_plan_carries_reality_link_fingerprint_without_l
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "ios_14");
     assert_eq!(utls.family, "ios");
+    assert_eq!(
+        utls.default_alpn,
+        dae_outbound::shared_transport::UTLS_BROWSER_DEFAULT_ALPN
+            .iter()
+            .map(|protocol| (*protocol).to_owned())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(proxy.alpn, utls.default_alpn);
 
     let graph = proxy.executable_graph_value();
     assert_eq!(graph["securityUnderlay"], "reality");
@@ -253,5 +261,52 @@ pub(super) fn resident_utls_fingerprint_resolution_uses_generic_registry() {
 
     let randomized_no_alpn = resolve_resident_utls_fingerprint("test", "randomizednoalpn").unwrap();
     assert!(randomized_no_alpn.randomized);
-    assert_eq!(randomized_no_alpn.alpn_policy, "force-no-alpn");
+    assert_eq!(
+        randomized_no_alpn.alpn_policy,
+        dae_outbound::shared_transport::UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN
+    );
+    assert!(randomized_no_alpn.default_alpn.is_empty());
+}
+
+#[test]
+pub(super) fn resident_reality_alpn_defaults_follow_fingerprint_registry_without_link_alpn() {
+    for (fingerprint, expected) in [
+        (
+            "chrome",
+            dae_outbound::shared_transport::UTLS_BROWSER_DEFAULT_ALPN.to_vec(),
+        ),
+        (
+            "ios",
+            dae_outbound::shared_transport::UTLS_BROWSER_DEFAULT_ALPN.to_vec(),
+        ),
+        (
+            "safari",
+            dae_outbound::shared_transport::UTLS_BROWSER_DEFAULT_ALPN.to_vec(),
+        ),
+        ("randomizednoalpn", Vec::<&str>::new()),
+        ("android_11_okhttp", Vec::<&str>::new()),
+    ] {
+        let mut link =
+            VLESSLink::parse(&vless_reality_fixture_url_with_fingerprint(fingerprint)).unwrap();
+        link.alpn.clear();
+        let config = fingerprint_config("", link.export_url());
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
+        let expected = expected.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(proxy.alpn, expected, "fingerprint={fingerprint}");
+    }
+}
+
+#[test]
+pub(super) fn resident_reality_keeps_explicit_link_alpn_over_fingerprint_default() {
+    let mut link = VLESSLink::parse(&vless_reality_fixture_url_with_fingerprint("chrome")).unwrap();
+    link.alpn = dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned();
+    let config = fingerprint_config("", link.export_url());
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let proxy = plan.default_proxy_snapshot().unwrap();
+
+    assert_eq!(
+        proxy.alpn,
+        vec![dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned()]
+    );
 }

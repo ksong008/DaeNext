@@ -72,6 +72,10 @@ pub(super) fn resident_utls_fingerprint_plan_from(
     requested: &str,
     fingerprint: UtlsFingerprint,
 ) -> ResidentUtlsFingerprintPlan {
+    let default_alpn = utls_fingerprint_default_alpn_protocols(&fingerprint)
+        .iter()
+        .map(|protocol| (*protocol).to_owned())
+        .collect();
     ResidentUtlsFingerprintPlan {
         source,
         requested: requested.to_owned(),
@@ -81,6 +85,7 @@ pub(super) fn resident_utls_fingerprint_plan_from(
         client: fingerprint.client.to_owned(),
         randomized: fingerprint.randomized,
         alpn_policy: fingerprint.alpn_policy.to_owned(),
+        default_alpn,
     }
 }
 

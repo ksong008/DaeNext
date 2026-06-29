@@ -10,6 +10,7 @@ pub(crate) struct ResidentUtlsFingerprintPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) client: String,
     pub(in crate::production_runtime_owner::resident_dataplane) randomized: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) alpn_policy: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) default_alpn: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -520,6 +521,7 @@ impl ResidentUtlsFingerprintPlan {
         compact_string(&mut self.family);
         compact_string(&mut self.client);
         compact_string(&mut self.alpn_policy);
+        compact_string_vec(&mut self.default_alpn);
     }
 }
 

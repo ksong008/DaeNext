@@ -23,7 +23,8 @@ use dae_outbound::{
         ShadowsocksLink, ShadowsocksRLink, cipher_spec, shadowsocksr_stream_cipher_supported,
     },
     shared_transport::{
-        MeekRoundTripOptions, TlsFragmentOptions, UtlsFingerprint, ir, resolve_utls_client_hello_id,
+        MeekRoundTripOptions, TlsFragmentOptions, UTLS_ALPN_H2, UtlsFingerprint, ir,
+        resolve_utls_client_hello_id, utls_fingerprint_default_alpn_protocols,
     },
     trojan::{TrojanLink, TrojanTransportType},
     tuic::TuicLink,
