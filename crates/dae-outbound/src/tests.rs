@@ -55,7 +55,6 @@ mod dataplane_tuic_quic;
 mod dataplane_tuic_underlay;
 mod dataplane_vless;
 mod dataplane_vless_vmess_grpc;
-mod dataplane_vless_vmess_reality_utls;
 mod dataplane_vless_vmess_tls_wrappers;
 mod dataplane_vless_vmess_utls_builder;
 mod dataplane_vless_vmess_utls_parser;
