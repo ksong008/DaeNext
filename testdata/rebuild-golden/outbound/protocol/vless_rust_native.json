@@ -17,6 +17,12 @@
       "export": "vless://uuid@fixture.invalid:443?allowInsecure=1&headerType=none&security=tls&type=tcp#node",
       "input": "vless://uuid@fixture.invalid:443?type=tcp&security=tls&allowinsecure=1#node",
       "name": "allowinsecure"
+    },
+    {
+      "allowInsecure": true,
+      "export": "vless://uuid@fixture.invalid:443?allowInsecure=1&headerType=none&security=tls&type=tcp#node",
+      "input": "vless://uuid@fixture.invalid:443?type=tcp&security=tls&insecure=1#node",
+      "name": "insecure"
     }
   ],
   "deferred_protocol_scope": [

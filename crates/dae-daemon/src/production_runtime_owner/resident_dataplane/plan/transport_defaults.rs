@@ -19,6 +19,20 @@ pub(super) fn resident_stream_host(host: &str, server_name: &str) -> String {
     }
 }
 
+pub(super) fn resident_websocket_tls_server_name(
+    sni: &str,
+    stream_host: &str,
+    server_host: &str,
+) -> String {
+    if !sni.is_empty() {
+        sni.to_owned()
+    } else if !stream_host.is_empty() {
+        stream_host.to_owned()
+    } else {
+        server_host.to_owned()
+    }
+}
+
 pub(super) fn resident_stream_path(path: &str) -> String {
     if path.is_empty() {
         "/".to_owned()

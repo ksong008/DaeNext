@@ -145,6 +145,24 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "rustls"
     );
 
+    let vmess_websocket_tls_host_sni = build_resident_proxy_plan_for_node(
+        config,
+        "proxy".to_owned(),
+        "vmess_ws_tls_host_sni_live".to_owned(),
+        vmess_fixture_url_with_sni(
+            &primary_host,
+            fixture_port(3),
+            "ws",
+            &authority_host,
+            "/vmess",
+            "tls",
+            "",
+        ),
+    )
+    .unwrap();
+    assert_eq!(vmess_websocket_tls_host_sni.server_name, authority_host);
+    assert_eq!(vmess_websocket_tls_host_sni.stream_host, authority_host);
+
     let vmess_httpupgrade = build_resident_proxy_plan_for_node(
         config,
         "proxy".to_owned(),
@@ -360,6 +378,26 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "/ws"
     );
     assert!(!vless_websocket_graph.to_string().contains(&authority_host));
+
+    let vless_websocket_host_sni = build_resident_proxy_plan_for_node(
+        config,
+        "proxy".to_owned(),
+        "vless_ws_host_sni_live".to_owned(),
+        vless_fixture_url(
+            "vless-ws-host-sni",
+            &primary_host,
+            fixture_port(6),
+            "ws",
+            &authority_host,
+            "/ws",
+            "",
+            "",
+            "",
+        ),
+    )
+    .unwrap();
+    assert_eq!(vless_websocket_host_sni.server_name, authority_host);
+    assert_eq!(vless_websocket_host_sni.stream_host, authority_host);
 
     let vless_httpupgrade = build_resident_proxy_plan_for_node(
         config,

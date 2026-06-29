@@ -105,7 +105,9 @@ pub(crate) fn build_vless_proxy_plan(
     })?;
     let key = password_to_key(&vless.id)
         .map_err(|err| format!("parse VLESS key for {node_tag}: {err}"))?;
-    let server_name = if vless.sni.is_empty() {
+    let server_name = if net == "websocket" {
+        resident_websocket_tls_server_name(&vless.sni, &vless.host, &vless.add)
+    } else if vless.sni.is_empty() {
         vless.add.clone()
     } else {
         vless.sni.clone()
