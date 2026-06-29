@@ -717,6 +717,40 @@ global {
 }
 
 #[test]
+pub(crate) fn parsed_global_uses_config_parser_for_compact_and_quoted_delimiters() {
+    let text = r#"
+# comment before global should not change section detection
+global { log_level:'debug' tproxy_port:'12345' tcp_check_url:'https://example.com/{probe}:443,127.0.0.1' wan_interface:'auto,eth0' }
+"#;
+    let parsed = normalize_global_result(Some(text));
+    assert_eq!(parsed.parse_status, "ok");
+    assert_eq!(parsed.parse_error, None);
+    assert_eq!(parsed.value["logLevel"], json!("debug"));
+    assert_eq!(parsed.value["tproxyPort"], json!(12345));
+    assert_eq!(
+        parsed.value["tcpCheckUrl"],
+        json!(["https://example.com/{probe}:443", "127.0.0.1"])
+    );
+    assert_eq!(parsed.value["wanInterface"], json!(["auto", "eth0"]));
+}
+
+#[test]
+pub(crate) fn parsed_global_records_fallback_when_config_parser_fails() {
+    let parsed = normalize_global_result(Some(
+        "global { tcp_check_url:'https://example.com/{probe}:443'",
+    ));
+    assert_eq!(parsed.parse_status, "fallback");
+    assert!(
+        parsed
+            .parse_error
+            .as_deref()
+            .is_some_and(|error| error.contains("global")),
+        "{:?}",
+        parsed.parse_error
+    );
+}
+
+#[test]
 pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
     let parsed_global = json!({
         "logLevel": "debug",

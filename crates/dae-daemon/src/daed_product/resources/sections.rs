@@ -71,11 +71,14 @@ pub(crate) fn api_section_preview(request: &HttpRequest, api_path: &str) -> Http
                 .map(str::to_owned)
                 .unwrap_or_else(|| DEFAULT_GLOBAL_RESOURCE_TEXT.to_owned())
         };
+        let parsed = normalize_global_result(Some(&global));
         return HttpResponse::json(
             200,
             json!({
                 "global": global,
-                "parsedGlobal": normalize_global_value(Some(&global)),
+                "parsedGlobal": parsed.value,
+                "parseStatus": parsed.parse_status,
+                "parseError": parsed.parse_error,
             }),
         );
     }
@@ -353,14 +356,19 @@ pub(crate) fn section_resource(
     version: i64,
 ) -> Value {
     match kind {
-        SectionKind::Config => json!({
-            "id": id,
-            "name": name,
-            "global": display_global_config_text(&raw),
-            "selected": selected,
-            "version": version,
-            "parsedGlobal": normalize_global_value(Some(&raw)),
-        }),
+        SectionKind::Config => {
+            let parsed = normalize_global_result(Some(&raw));
+            json!({
+                "id": id,
+                "name": name,
+                "global": display_global_config_text(&raw),
+                "selected": selected,
+                "version": version,
+                "parseStatus": parsed.parse_status,
+                "parseError": parsed.parse_error,
+                "parsedGlobal": parsed.value,
+            })
+        }
         SectionKind::Dns => {
             let mut value = parsed_dns_value(&raw);
             if let Value::Object(map) = &mut value {
