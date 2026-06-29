@@ -1,15 +1,55 @@
 use super::*;
+pub(crate) struct GlobalNormalizeResult {
+    pub(crate) value: Value,
+    pub(crate) parse_status: &'static str,
+    pub(crate) parse_error: Option<String>,
+}
+
 pub(crate) fn normalize_global_value(raw: Option<&str>) -> Value {
+    normalize_global_result(raw).value
+}
+
+pub(crate) fn normalize_global_result(raw: Option<&str>) -> GlobalNormalizeResult {
     let mut value = default_global_value();
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
-        return value;
+        return GlobalNormalizeResult::ok(value);
     };
     if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
         merge_global_json_value(&mut value, &parsed);
-        return value;
+        return GlobalNormalizeResult::ok(value);
+    }
+    if global_text_needs_config_parser(raw) {
+        match parse_global_directives_with_config_parser(raw) {
+            Ok(directives) => {
+                merge_global_directives(&mut value, &directives);
+                return GlobalNormalizeResult::ok(value);
+            }
+            Err(err) => {
+                merge_global_directives(&mut value, &parse_global_directives(raw));
+                return GlobalNormalizeResult::fallback(value, err);
+            }
+        }
     }
     merge_global_directives(&mut value, &parse_global_directives(raw));
-    value
+    GlobalNormalizeResult::ok(value)
+}
+
+impl GlobalNormalizeResult {
+    fn ok(value: Value) -> Self {
+        Self {
+            value,
+            parse_status: "ok",
+            parse_error: None,
+        }
+    }
+
+    fn fallback(value: Value, parse_error: String) -> Self {
+        Self {
+            value,
+            parse_status: "fallback",
+            parse_error: Some(parse_error),
+        }
+    }
 }
 
 pub(crate) fn display_global_config_text(raw: &str) -> String {

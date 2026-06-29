@@ -1,4 +1,6 @@
 use super::*;
+use dae_config::{Item, Section};
+
 pub(crate) fn parse_global_directives(raw: &str) -> HashMap<String, String> {
     let body = global_block_body(raw).unwrap_or(raw);
     let mut directives = HashMap::new();
@@ -17,6 +19,131 @@ pub(crate) fn parse_global_directives(raw: &str) -> HashMap<String, String> {
         directives.insert(key, clean_global_scalar(value));
     }
     directives
+}
+
+pub(crate) fn parse_global_directives_with_config_parser(
+    raw: &str,
+) -> Result<HashMap<String, String>, String> {
+    let sections = parse_config(raw).or_else(|raw_err| {
+        let wrapped = format!("global {{\n{raw}\n}}");
+        parse_config(&wrapped)
+            .map_err(|wrapped_err| format!("{raw_err}; wrapped global body: {wrapped_err}"))
+    })?;
+    let global = sections
+        .iter()
+        .find(|section| section.name == "global")
+        .ok_or_else(|| "global section not found".to_owned())?;
+    global_directives_from_section(global)
+}
+
+pub(crate) fn global_text_needs_config_parser(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('#') {
+        return true;
+    }
+    if trimmed.contains('\n') {
+        return false;
+    }
+    let body = global_block_body(trimmed).unwrap_or(trimmed);
+    if contains_quoted_global_block_delimiter(body) {
+        return true;
+    }
+    global_body_contains_inline_directive(body)
+}
+
+fn global_directives_from_section(section: &Section) -> Result<HashMap<String, String>, String> {
+    let mut directives = HashMap::new();
+    for item in &section.items {
+        let Item::Param(param) = item else {
+            return Err(format!(
+                "unexpected global item kind {:?}; expected parameter",
+                item.kind()
+            ));
+        };
+        if param.key.trim().is_empty() {
+            return Err("unexpected naked global parameter".to_owned());
+        }
+        if !param.and_functions.is_empty() {
+            return Err(format!(
+                "unexpected function value for global.{}",
+                param.key
+            ));
+        }
+        directives.insert(param.key.clone(), param.val.clone());
+    }
+    Ok(directives)
+}
+
+fn contains_quoted_global_block_delimiter(raw: &str) -> bool {
+    let mut quote = None;
+    for ch in raw.chars() {
+        match ch {
+            '\'' | '"' if quote == Some(ch) => quote = None,
+            '\'' | '"' if quote.is_none() => quote = Some(ch),
+            '{' | '}' if quote.is_some() => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn global_body_contains_inline_directive(body: &str) -> bool {
+    body.lines().any(|line| {
+        let line = strip_line_comment(line);
+        let Some((_, value)) = line.split_once(':') else {
+            return false;
+        };
+        contains_global_directive_key_after_whitespace(value)
+    })
+}
+
+fn contains_global_directive_key_after_whitespace(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut index = 0_usize;
+    let mut quote = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        match byte {
+            b'\'' | b'"' if quote == Some(byte) => {
+                quote = None;
+                index += 1;
+            }
+            b'\'' | b'"' if quote.is_none() => {
+                quote = Some(byte);
+                index += 1;
+            }
+            byte if quote.is_none() && byte.is_ascii_whitespace() => {
+                let mut ident_start = index + 1;
+                while ident_start < bytes.len() && bytes[ident_start].is_ascii_whitespace() {
+                    ident_start += 1;
+                }
+                let mut ident_end = ident_start;
+                while ident_end < bytes.len()
+                    && (bytes[ident_end].is_ascii_alphanumeric() || bytes[ident_end] == b'_')
+                {
+                    ident_end += 1;
+                }
+                let mut colon = ident_end;
+                while colon < bytes.len() && bytes[colon].is_ascii_whitespace() {
+                    colon += 1;
+                }
+                if colon < bytes.len()
+                    && bytes[colon] == b':'
+                    && ident_start < ident_end
+                    && is_identifier_start(bytes[ident_start])
+                {
+                    return true;
+                }
+                index = ident_end.max(index + 1);
+            }
+            _ => index += 1,
+        }
+    }
+    false
+}
+
+fn is_identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
 }
 
 pub(crate) fn global_block_body(raw: &str) -> Option<&str> {
