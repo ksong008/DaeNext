@@ -8,6 +8,7 @@ use super::wire::{
 };
 
 const DNS_UDP_FORWARD_ATTEMPTS: usize = 3;
+const DNS_UDP_MAX_STALE_RESPONSES: usize = 8;
 
 pub(super) async fn forward_dns_udp_upstream_async(
     upstream: &ResidentDnsUpstream,
@@ -126,27 +127,61 @@ async fn forward_dns_udp_with_attempts_async(
         .map_err(|err| format!("set DNS UDP nonblocking: {err}"))?;
     let socket = tokio::net::UdpSocket::from_std(socket)
         .map_err(|err| format!("adopt async DNS UDP socket: {err}"))?;
-    for attempt in 0..attempts {
+    let request = DnsPacketView::parse(payload).ok();
+    for _ in 0..attempts {
         socket
             .send_to(payload, target)
             .await
             .map_err(|err| format!("send DNS UDP packet: {err}"))?;
-        let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
-        match time::timeout(attempt_timeout, socket.recv_from(&mut response)).await {
-            Ok(Ok((read, _))) => {
-                response.truncate(read);
-                return Ok(response);
+        let deadline = time::Instant::now() + attempt_timeout;
+        let mut stale_responses = 0_usize;
+        loop {
+            let now = time::Instant::now();
+            if now >= deadline {
+                break;
             }
-            Ok(Err(err)) => return Err(format!("receive DNS UDP response: {err}")),
-            Err(_) if attempt + 1 < attempts => continue,
-            Err(_) => {
-                return Err(format!(
-                    "receive DNS UDP response timeout after {attempts} attempts"
-                ));
+            let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+            match time::timeout(deadline - now, socket.recv_from(&mut response)).await {
+                Ok(Ok((read, peer))) => {
+                    response.truncate(read);
+                    match validate_dns_udp_response(target, peer, request.as_ref(), &response) {
+                        Ok(()) => return Ok(response),
+                        Err(err) => {
+                            stale_responses += 1;
+                            if stale_responses > DNS_UDP_MAX_STALE_RESPONSES {
+                                return Err(format!(
+                                    "too many stale DNS UDP responses from {target}: {err}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(Err(err)) => return Err(format!("receive DNS UDP response: {err}")),
+                Err(_) => break,
             }
         }
     }
-    Err("receive DNS UDP response timeout".to_owned())
+    Err(format!(
+        "receive DNS UDP response timeout after {attempts} attempts"
+    ))
+}
+
+fn validate_dns_udp_response(
+    target: SocketAddr,
+    peer: SocketAddr,
+    request: Option<&DnsPacketView<'_>>,
+    response: &[u8],
+) -> Result<(), String> {
+    if peer != target {
+        return Err(format!("unexpected DNS UDP peer {peer}, expected {target}"));
+    }
+    let Some(request) = request else {
+        return Ok(());
+    };
+    let response = DnsPacketView::parse(response)
+        .map_err(|err| format!("parse DNS UDP response for request validation: {err}"))?;
+    validate_dns_packet_response_for_request_fast(request, Some(&response), true)
+        .map_err(|err| format!("validate DNS UDP response for request: {err:?}"))
 }
 
 fn dns_udp_forward_attempt_timeout() -> std::time::Duration {
@@ -351,6 +386,90 @@ mod tests {
         .unwrap_err();
 
         assert!(err.contains("after 2 attempts"));
+    }
+
+    #[tokio::test]
+    async fn forward_dns_udp_discards_stale_response_id() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let query = build_dns_query_packet(0x1234, "example.com", DNS_QTYPE_A).unwrap();
+        let response = dns_a_response_for_query(&query, [192, 0, 2, 1]);
+        let mut stale = response.clone();
+        stale[0..2].copy_from_slice(&0xabcd_u16.to_be_bytes());
+        let server = tokio::spawn(async move {
+            let mut buf = [0_u8; DNS_RESPONSE_READ_LIMIT];
+            let (_, peer) = upstream.recv_from(&mut buf).await.unwrap();
+            upstream.send_to(&stale, peer).await.unwrap();
+            upstream.send_to(&response, peer).await.unwrap();
+        });
+
+        let response = forward_dns_udp_with_attempts_async(
+            target,
+            &query,
+            0,
+            1,
+            std::time::Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response[0..2], 0x1234_u16.to_be_bytes());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn forward_dns_udp_discards_unexpected_peer_response() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let other_peer = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let query = build_dns_query_packet(0x4321, "example.com", DNS_QTYPE_A).unwrap();
+        let unexpected = dns_a_response_for_query(&query, [192, 0, 2, 1]);
+        let expected = dns_a_response_for_query(&query, [192, 0, 2, 2]);
+        let server = tokio::spawn(async move {
+            let mut buf = [0_u8; DNS_RESPONSE_READ_LIMIT];
+            let (_, peer) = upstream.recv_from(&mut buf).await.unwrap();
+            other_peer.send_to(&unexpected, peer).await.unwrap();
+            time::sleep(std::time::Duration::from_millis(10)).await;
+            upstream.send_to(&expected, peer).await.unwrap();
+        });
+
+        let response = forward_dns_udp_with_attempts_async(
+            target,
+            &query,
+            0,
+            1,
+            std::time::Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response, dns_a_response_for_query(&query, [192, 0, 2, 2]));
+        server.await.unwrap();
+    }
+
+    fn dns_a_response_for_query(query: &[u8], address: [u8; 4]) -> Vec<u8> {
+        let view = DnsPacketView::parse(query).unwrap();
+        let mut response = Vec::new();
+        response.extend_from_slice(&query[0..2]);
+        response.extend_from_slice(&0x8180_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&query[12..view.answer_offset()]);
+        response.extend_from_slice(&0xc00c_u16.to_be_bytes());
+        response.extend_from_slice(&DNS_QTYPE_A.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&60_u32.to_be_bytes());
+        response.extend_from_slice(&4_u16.to_be_bytes());
+        response.extend_from_slice(&address);
+        response
     }
 
     #[tokio::test]
