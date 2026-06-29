@@ -17,7 +17,14 @@ pub(in crate::daed_product) fn api_put_bundle(
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
     match import_bundle(&app.state, &app.config_dir, &body, user) {
-        Ok(imported) => HttpResponse::json(200, json!({"imported": imported})),
+        Ok(outcome) => {
+            let mut response = Map::new();
+            response.insert("imported".to_owned(), json!(outcome.imported));
+            if outcome.runtime_reload_required {
+                response.insert("runtimeReloadRequired".to_owned(), json!(true));
+            }
+            HttpResponse::json(200, Value::Object(response))
+        }
         Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
     }
 }

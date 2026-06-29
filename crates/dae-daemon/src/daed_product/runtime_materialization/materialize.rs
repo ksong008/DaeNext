@@ -42,8 +42,8 @@ pub(in crate::daed_product) fn materialize_runtime(
         conn.execute("DELETE FROM systems", [])
             .map_err(sqlite_io_error)?;
         conn.execute(
-            "INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids, running_config_id, running_dns_id, running_routing_id)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids, running_config_id, running_dns_id, running_routing_id, running_external_input_version)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 1_i64,
                 config.3,
@@ -54,11 +54,11 @@ pub(in crate::daed_product) fn materialize_runtime(
                 config.0,
                 dns.0,
                 routing.0,
+                current_runtime_external_input_version(&conn)?,
             ],
         )
         .map_err(sqlite_io_error)?;
         set_metadata(state, "runtime_running", "true")?;
-        clear_geodata_reload_pending(state)?;
     }
     let content_len = content.len();
     let mut report = Map::new();

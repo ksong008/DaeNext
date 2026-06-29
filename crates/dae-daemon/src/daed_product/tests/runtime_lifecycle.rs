@@ -596,6 +596,158 @@ pub(crate) fn runtime_modified_matches_running_resource_snapshot() {
 }
 
 #[test]
+pub(crate) fn runtime_modified_tracks_external_input_version_snapshot() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: direct }', 1, 1);
+        "#,
+    )
+    .unwrap();
+    insert_config_node(
+        &conn,
+        1,
+        "resource_node",
+        "socks://127.0.0.1:1080#resource_node",
+        None,
+    );
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(1, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    materialize_runtime(&state, None, false).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    assert!(!runtime_modified(&conn, true).unwrap());
+    drop(conn);
+
+    bump_runtime_external_input_version(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    assert!(runtime_modified(&conn, true).unwrap());
+    drop(conn);
+
+    materialize_runtime(&state, None, false).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    assert!(!runtime_modified(&conn, true).unwrap());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn running_bundle_import_marks_existing_selected_resources_modified() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 0);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 0);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: egress }', 1, 0);
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(1, 'egress', 'random', 0);
+        "#,
+    )
+    .unwrap();
+    insert_config_node(
+        &conn,
+        1,
+        "resource_node",
+        "socks://127.0.0.1:1080#resource_node",
+        None,
+    );
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(1, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    materialize_runtime(&state, None, false).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    assert!(!runtime_modified(&conn, true).unwrap());
+    drop(conn);
+
+    let user = UserRecord {
+        id: 1,
+        username: "tester".to_owned(),
+        password_hash: String::new(),
+        jwt_secret: String::new(),
+        json_storage: "{}".to_owned(),
+        avatar: None,
+        name: None,
+    };
+    let bundle = json!({
+        "schemaVersion": 1,
+        "mode": "rule",
+        "selected": {
+            "configId": 1,
+            "dnsId": 1,
+            "routingId": 1
+        },
+        "configs": [{
+            "id": 1,
+            "name": "global",
+            "global": "global { log_level: error }"
+        }],
+        "dnss": [{
+            "id": 1,
+            "name": "dns",
+            "dns": "dns {}"
+        }],
+        "routings": [{
+            "id": 1,
+            "name": "routing",
+            "routing": "routing { fallback: egress }"
+        }],
+        "subscriptions": [],
+        "nodes": [config_node_value(1, "resource_node", "socks://127.0.0.1:1080#resource_node")],
+        "groups": [{
+            "id": 1,
+            "name": "egress",
+            "policy": "random",
+            "policyParams": [],
+            "nodeIds": [1],
+            "subscriptionBindings": []
+        }]
+    });
+
+    let outcome = import_bundle(&state, &dir, &bundle, &user).unwrap();
+    assert!(outcome.imported);
+    assert!(outcome.runtime_reload_required);
+
+    let conn = open_state_connection(&state).unwrap();
+    assert!(runtime_modified(&conn, true).unwrap());
+    let config_version: i64 = conn
+        .query_row("SELECT version FROM configs WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let group_version: i64 = conn
+        .query_row("SELECT version FROM groups WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(config_version > 0);
+    assert!(group_version > 0);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn materializer_tolerates_legacy_orphan_group_node_rows() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
