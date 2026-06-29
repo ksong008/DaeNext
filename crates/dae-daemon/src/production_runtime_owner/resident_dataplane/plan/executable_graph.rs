@@ -439,7 +439,9 @@ fn graph_transport_underlay(proxy: &ResidentProxyPlan) -> String {
 }
 
 fn graph_security_underlay(proxy: &ResidentProxyPlan) -> String {
-    if proxy.utls_fingerprint.is_some() {
+    if proxy.tls == "reality" {
+        "reality".to_owned()
+    } else if proxy.utls_fingerprint.is_some() {
         "fingerprint-aware-tls".to_owned()
     } else {
         match proxy.tls.as_str() {

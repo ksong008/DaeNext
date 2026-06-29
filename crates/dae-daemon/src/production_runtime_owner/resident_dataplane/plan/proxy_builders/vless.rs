@@ -92,10 +92,10 @@ pub(crate) fn build_vless_proxy_plan(
     } else {
         None
     };
-    let utls_fingerprint = if vless.tls == "tls" {
-        resident_utls_fingerprint_plan(config, Some(&vless.fingerprint))?
-    } else {
-        None
+    let utls_fingerprint = match vless.tls.as_str() {
+        "tls" => resident_utls_fingerprint_plan(config, Some(&vless.fingerprint))?,
+        "reality" => resident_reality_utls_fingerprint_plan(&vless.fingerprint)?,
+        _ => None,
     };
     let server_port = vless.port.parse::<u16>().map_err(|err| {
         format!(
@@ -252,4 +252,14 @@ fn resident_reality_underlay_plan(
         short_id,
         spider_x: vless.spider_x.clone(),
     }))
+}
+
+fn resident_reality_utls_fingerprint_plan(
+    link_fingerprint: &str,
+) -> Result<Option<ResidentUtlsFingerprintPlan>, String> {
+    let link_fingerprint = link_fingerprint.trim();
+    if link_fingerprint.is_empty() || link_fingerprint.eq_ignore_ascii_case("unsafe") {
+        return Ok(None);
+    }
+    resolve_optional_resident_utls_fingerprint("link fp", link_fingerprint)
 }

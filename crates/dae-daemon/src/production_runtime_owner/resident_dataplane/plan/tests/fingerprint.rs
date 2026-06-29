@@ -68,6 +68,38 @@ pub(super) fn resident_dataplane_plan_carries_generic_link_fingerprint() {
 }
 
 #[test]
+pub(super) fn resident_dataplane_plan_carries_reality_link_fingerprint_without_losing_reality() {
+    let config = fingerprint_config("", vless_reality_fixture_url_with_fingerprint("ios_14"));
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let proxy = plan.default_proxy_snapshot().unwrap();
+    assert!(plan.enabled);
+    assert_eq!(proxy.node_tag, "vless_live");
+    assert_eq!(proxy.tls, "reality");
+    assert_eq!(proxy.flow, XTLS_RPRX_VISION);
+    assert!(proxy.reality.is_some());
+    let utls = proxy.utls_fingerprint.as_ref().unwrap();
+    assert_eq!(utls.source, "link fp");
+    assert_eq!(utls.requested, "ios_14");
+    assert_eq!(utls.family, "ios");
+
+    let graph = proxy.executable_graph_value();
+    assert_eq!(graph["securityUnderlay"], "reality");
+    let underlay = &graph["runtimeComponents"]["underlayFactory"];
+    assert_eq!(underlay["provider"], "rustls-reality");
+    assert_eq!(underlay["securityUnderlay"], "reality");
+    assert_eq!(underlay["fingerprint"]["requested"], "ios_14");
+    assert_eq!(underlay["fingerprint"]["family"], "ios");
+}
+
+#[test]
+pub(super) fn resident_dataplane_plan_rejects_unknown_reality_link_fingerprint() {
+    let config = fingerprint_config("", vless_reality_fixture_url_with_fingerprint("Chrome"));
+    let err = build_resident_dataplane_plan(&config).unwrap_err();
+    assert!(err.contains("unsupported link fp Chrome"));
+    assert!(err.contains("unknown uTLS Client Hello ID: Chrome"));
+}
+
+#[test]
 pub(super) fn latency_probe_helper_preserves_fingerprint_and_adds_control_mark_when_config_mark_is_zero()
  {
     let link = vless_vision_fixture_url("chrome");
@@ -83,6 +115,27 @@ pub(super) fn latency_probe_helper_preserves_fingerprint_and_adds_control_mark_w
     let utls = helper.proxy.utls_fingerprint.as_ref().unwrap();
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "chrome");
+}
+
+#[test]
+pub(super) fn latency_probe_helper_preserves_reality_fingerprint_and_adds_control_mark_when_config_mark_is_zero()
+ {
+    let link = vless_reality_fixture_url_with_fingerprint("safari_16_0");
+    let config = fingerprint_config_with_mark(0, "", link.clone());
+    let normal_plans = build_resident_manual_probe_plans(&config);
+    let normal = normal_plans.get(&link).unwrap().as_ref().unwrap();
+    assert_eq!(normal.proxy.mark, 0);
+    assert_eq!(normal.proxy.tls, "reality");
+    assert!(normal.proxy.reality.is_some());
+    assert!(normal.proxy.utls_fingerprint.is_some());
+
+    let helper_plans = build_resident_manual_probe_plans_for_helper(&config);
+    let helper = helper_plans.get(&link).unwrap().as_ref().unwrap();
+    assert_eq!(helper.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
+    assert_eq!(helper.proxy.tls, "reality");
+    let utls = helper.proxy.utls_fingerprint.as_ref().unwrap();
+    assert_eq!(utls.source, "link fp");
+    assert_eq!(utls.requested, "safari_16_0");
 }
 
 #[test]
