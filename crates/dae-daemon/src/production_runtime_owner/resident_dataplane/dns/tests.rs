@@ -1,4 +1,5 @@
 use dae_config::Config;
+use dae_dns::DnsCacheEntry;
 
 use super::*;
 use std::fs;
@@ -616,6 +617,31 @@ async fn resident_dns_inflight_lock_serializes_same_key() {
     );
     drop(first);
     assert_eq!(cache.inflight_len(), 0);
+}
+
+#[test]
+fn resident_dns_runtime_cache_sweeps_expired_entries_on_write_window() {
+    let cache = ResidentDnsRuntimeCache::default();
+    let now = 1_700_000_000_i64;
+    cache
+        .insert_response(
+            now,
+            DnsCacheKey::new("expired.example.", DNS_QTYPE_A, 1),
+            DnsCacheEntry::new(now - 1, now - 1),
+        )
+        .unwrap();
+    assert_eq!(cache.entry_len(), 1);
+
+    cache
+        .insert_response(
+            now + 120,
+            DnsCacheKey::new("live.example.", DNS_QTYPE_A, 1),
+            DnsCacheEntry::new(now + 180, now + 180),
+        )
+        .unwrap();
+
+    assert_eq!(cache.entry_len(), 1);
+    assert_eq!(cache.stats().expired_removal_total, 1);
 }
 
 #[test]
