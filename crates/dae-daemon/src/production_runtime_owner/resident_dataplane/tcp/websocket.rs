@@ -1,6 +1,6 @@
 use dae_outbound::shared_transport::{
-    DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, http_upgrade_request, validate_http_status,
-    websocket_client_binary_frame, websocket_handshake_request,
+    HttpUpgradeOptions, http_upgrade_request, validate_http_status,
+    websocket_client_binary_frame_with_random_mask, websocket_client_handshake_request,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
@@ -12,7 +12,7 @@ pub(super) async fn websocket_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
 ) -> Result<(), String> {
-    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
+    let request = websocket_client_handshake_request(options);
     client
         .write_plain_all(&request, "write websocket handshake")
         .await?;
@@ -41,7 +41,7 @@ pub(super) async fn websocket_handshake_over_async_stream<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
+    let request = websocket_client_handshake_request(options);
     stream
         .write_all(&request)
         .await
@@ -74,7 +74,7 @@ pub(super) async fn write_websocket_binary_frame_to_async_stream<S>(
 where
     S: AsyncWrite + Unpin,
 {
-    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
+    let frame = websocket_client_binary_frame_with_random_mask(payload)
         .map_err(|err| format!("{label}: {err}"))?;
     stream
         .write_all(&frame)
@@ -135,7 +135,7 @@ pub(super) async fn write_websocket_binary_frame_over_resident_tls_async(
     payload: &[u8],
     label: &str,
 ) -> Result<(), String> {
-    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
+    let frame = websocket_client_binary_frame_with_random_mask(payload)
         .map_err(|err| format!("{label}: {err}"))?;
     client.write_plain_all(&frame, label).await
 }

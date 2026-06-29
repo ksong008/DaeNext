@@ -566,7 +566,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let options = HttpUpgradeOptions::new(host, path);
-    let request = websocket_handshake_request(&options, DEFAULT_WS_KEY);
+    let request = websocket_client_handshake_request(&options);
     write_vmess_stream_bytes(stream, &request, &format!("write {label} handshake")).await?;
     let response = read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
     validate_http_status(&response, 101).map_err(|err| format!("validate {label} upgrade: {err}"))
@@ -620,7 +620,7 @@ async fn write_vmess_websocket_frame<S>(
 where
     S: AsyncWrite + Unpin,
 {
-    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
+    let frame = websocket_client_binary_frame_with_random_mask(payload)
         .map_err(|err| format!("{label}: {err}"))?;
     write_vmess_stream_bytes(stream, &frame, label).await
 }
