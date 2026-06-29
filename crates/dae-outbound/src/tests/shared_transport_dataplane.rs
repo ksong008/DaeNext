@@ -43,6 +43,49 @@ fn case_websocket_dataplane_echoes_binary_frame() {
 }
 
 #[test]
+fn case_websocket_client_material_is_runtime_generated() {
+    let options = shared_transport::HttpUpgradeOptions::new("ws.fixture.invalid", "/ws");
+    let keys = (0..4)
+        .map(|_| shared_transport::websocket_client_handshake_key())
+        .collect::<Vec<_>>();
+    assert!(
+        keys.iter()
+            .all(|key| STANDARD.decode(key).unwrap().len() == 16)
+    );
+    assert!(
+        keys.iter()
+            .any(|key| key != shared_transport::DEFAULT_WS_KEY)
+    );
+
+    let request = shared_transport::websocket_client_handshake_request(&options);
+    let request = String::from_utf8(request).unwrap();
+    assert!(request.contains("Host: ws.fixture.invalid\r\n"));
+    assert!(request.contains("Sec-WebSocket-Key: "));
+    assert!(!request.contains(shared_transport::DEFAULT_WS_KEY));
+
+    let masks = (0..4)
+        .map(|_| shared_transport::websocket_client_mask_key())
+        .collect::<Vec<_>>();
+    assert!(
+        masks
+            .iter()
+            .any(|mask| *mask != shared_transport::WS_MASK_KEY)
+    );
+
+    let payload = b"hello";
+    let frame = shared_transport::websocket_client_binary_frame_with_random_mask(payload).unwrap();
+    assert_eq!(frame[0], 0x82);
+    assert_eq!(frame[1], 0x80 | payload.len() as u8);
+    let mask_key = [frame[2], frame[3], frame[4], frame[5]];
+    let decoded = frame[6..]
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| byte ^ mask_key[index % 4])
+        .collect::<Vec<_>>();
+    assert_eq!(decoded, payload);
+}
+
+#[test]
 fn case_simpleobfs_http_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();

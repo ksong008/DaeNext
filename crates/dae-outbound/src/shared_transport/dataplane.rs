@@ -2,6 +2,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use base64::Engine as _;
+
 use crate::error::OutboundError;
 
 pub const DEFAULT_WS_KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
@@ -151,6 +153,23 @@ pub fn websocket_handshake_request(options: &HttpUpgradeOptions, key: &str) -> V
     .into_bytes()
 }
 
+pub fn websocket_client_handshake_key() -> String {
+    let mut nonce = [0_u8; 16];
+    fastrand::fill(&mut nonce);
+    base64::engine::general_purpose::STANDARD.encode(nonce)
+}
+
+pub fn websocket_client_handshake_request(options: &HttpUpgradeOptions) -> Vec<u8> {
+    let key = websocket_client_handshake_key();
+    websocket_handshake_request(options, &key)
+}
+
+pub fn websocket_client_mask_key() -> [u8; 4] {
+    let mut mask_key = [0_u8; 4];
+    fastrand::fill(&mut mask_key);
+    mask_key
+}
+
 pub fn simpleobfs_http_request(options: &SimpleObfsHttpOptions) -> Vec<u8> {
     format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: curl/7.64.1\r\nAccept: */*\r\n\r\n",
@@ -164,6 +183,12 @@ pub fn websocket_client_binary_frame(
     mask_key: [u8; 4],
 ) -> Result<Vec<u8>, OutboundError> {
     websocket_frame(payload, true, mask_key)
+}
+
+pub fn websocket_client_binary_frame_with_random_mask(
+    payload: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
+    websocket_client_binary_frame(payload, websocket_client_mask_key())
 }
 
 pub fn websocket_server_binary_frame(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {

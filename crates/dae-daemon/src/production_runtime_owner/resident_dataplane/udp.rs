@@ -22,8 +22,8 @@ use dae_outbound::{
         ss2022_udp_unix_timestamp_now,
     },
     shared_transport::{
-        DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, http_upgrade_request,
-        validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
+        HttpUpgradeOptions, http_upgrade_request, validate_http_status,
+        websocket_client_binary_frame_with_random_mask, websocket_client_handshake_request,
     },
     socks5::{Socks5Address, udp_packet},
     trojan::packet as trojan_packet,
