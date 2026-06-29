@@ -1,17 +1,9 @@
 use super::*;
-use std::future::poll_fn;
-use std::io::ErrorKind;
-use std::pin::Pin;
-use std::task::Poll;
-use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
 
 use super::vless::vless_udp_length_frame;
 
-#[derive(Clone, Copy)]
-pub(super) enum VlessStandardUdpWrapperKind {
-    PlainTcp,
-    TlsTcp,
-}
+mod underlay;
+use self::underlay::{VlessStandardUdpUnderlay, VlessStandardUdpWrapperKind};
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessStandardUdpOverStreamSession
 {
@@ -29,6 +21,30 @@ impl VlessStandardUdpOverStreamSession {
 
     pub(super) fn tls() -> Self {
         Self::new(VlessStandardUdpWrapperKind::TlsTcp)
+    }
+
+    pub(super) fn websocket_plain() -> Self {
+        Self::new(VlessStandardUdpWrapperKind::WebSocketPlain)
+    }
+
+    pub(super) fn websocket_tls() -> Self {
+        Self::new(VlessStandardUdpWrapperKind::WebSocketTls)
+    }
+
+    pub(super) fn httpupgrade_plain() -> Self {
+        Self::new(VlessStandardUdpWrapperKind::HttpUpgradePlain)
+    }
+
+    pub(super) fn httpupgrade_tls() -> Self {
+        Self::new(VlessStandardUdpWrapperKind::HttpUpgradeTls)
+    }
+
+    pub(super) fn grpc_tls() -> Self {
+        Self::new(VlessStandardUdpWrapperKind::GrpcTls)
+    }
+
+    pub(super) fn h2_tls() -> Self {
+        Self::new(VlessStandardUdpWrapperKind::H2Tls)
     }
 
     fn new(wrapper: VlessStandardUdpWrapperKind) -> Self {
@@ -87,55 +103,17 @@ impl VlessStandardUdpOverStreamSession {
     ) -> Result<(), String> {
         self.response_header_seen = false;
         self.response_plaintext.clear();
-        let underlay = match self.wrapper {
-            VlessStandardUdpWrapperKind::PlainTcp => {
-                let mut stream = open_proxy_tcp_stream_async(proxy).await?;
-                write_vless_stream_bytes(
-                    &mut stream,
-                    initial_packet,
-                    "write VLESS plain UDP-over-stream first packet",
-                )
-                .await?;
-                VlessStandardUdpUnderlay::PlainTcp { stream }
-            }
-            VlessStandardUdpWrapperKind::TlsTcp => {
-                let mut client = open_async_resident_tls_client(proxy).await?;
-                let tls_underlay = async_resident_tls_underlay_name(&client);
-                write_vless_stream_bytes(
-                    &mut client,
-                    initial_packet,
-                    "write VLESS TLS UDP-over-stream first packet",
-                )
-                .await?;
-                VlessStandardUdpUnderlay::TlsTcp {
-                    client,
-                    tls_underlay,
-                }
-            }
-        };
-        self.underlay = Some(underlay);
+        self.underlay =
+            Some(VlessStandardUdpUnderlay::open(self.wrapper, proxy, initial_packet).await?);
         Ok(())
     }
 
     async fn write_packet(&mut self, payload: &[u8]) -> Result<(), String> {
-        let underlay = self
-            .underlay
+        self.underlay
             .as_mut()
-            .ok_or_else(|| "VLESS standard UDP underlay is not initialized".to_owned())?;
-        match underlay {
-            VlessStandardUdpUnderlay::PlainTcp { stream } => {
-                write_vless_stream_bytes(
-                    stream,
-                    payload,
-                    "write VLESS plain UDP-over-stream packet",
-                )
-                .await
-            }
-            VlessStandardUdpUnderlay::TlsTcp { client, .. } => {
-                write_vless_stream_bytes(client, payload, "write VLESS TLS UDP-over-stream packet")
-                    .await
-            }
-        }
+            .ok_or_else(|| "VLESS standard UDP underlay is not initialized".to_owned())?
+            .write_packet(payload)
+            .await
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
@@ -145,14 +123,13 @@ impl VlessStandardUdpOverStreamSession {
         let Some(underlay) = self.underlay.as_mut() else {
             return Ok(None);
         };
-        let mut buf = [0_u8; 8192];
-        let Some(read) = poll_vless_standard_underlay(underlay, &mut buf).await? else {
+        let Some(chunk) = underlay.poll_response_chunk().await? else {
             return Ok(None);
         };
-        if read == 0 {
+        if chunk.is_empty() {
             return Ok(None);
         }
-        self.response_plaintext.extend_from_slice(&buf[..read]);
+        self.response_plaintext.extend_from_slice(&chunk);
         self.try_pop_response_payload()
             .map(|payload| payload.map(|payload| self.response_result(payload)))
     }
@@ -222,93 +199,4 @@ impl VlessStandardUdpOverStreamSession {
         }
         self.response_plaintext.clear();
     }
-}
-
-enum VlessStandardUdpUnderlay {
-    PlainTcp {
-        stream: tokio::net::TcpStream,
-    },
-    TlsTcp {
-        client: AsyncResidentTlsClient,
-        tls_underlay: &'static str,
-    },
-}
-
-impl VlessStandardUdpUnderlay {
-    fn evidence_fields(&self) -> (&'static str, &'static str, Option<&'static str>) {
-        match self {
-            Self::PlainTcp { .. } => ("tokio-stream-session", "tcp-stream-reused", None),
-            Self::TlsTcp { tls_underlay, .. } => (
-                "tokio-stream-session",
-                "tls-tcp-stream-reused",
-                Some(*tls_underlay),
-            ),
-        }
-    }
-
-    async fn shutdown(&mut self) {
-        match self {
-            Self::PlainTcp { stream } => {
-                let _ = stream.shutdown().await;
-            }
-            Self::TlsTcp { client, .. } => {
-                client.shutdown().await;
-            }
-        }
-    }
-}
-
-async fn poll_vless_standard_underlay(
-    underlay: &mut VlessStandardUdpUnderlay,
-    out: &mut [u8],
-) -> Result<Option<usize>, String> {
-    let mut read_buf = ReadBuf::new(out);
-    poll_fn(|cx| {
-        let poll_result = match underlay {
-            VlessStandardUdpUnderlay::PlainTcp { stream } => {
-                Pin::new(stream).poll_read(cx, &mut read_buf)
-            }
-            VlessStandardUdpUnderlay::TlsTcp { client, .. } => {
-                Pin::new(client).poll_read(cx, &mut read_buf)
-            }
-        };
-        match poll_result {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(Some(read_buf.filled().len()))),
-            Poll::Ready(Err(err))
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) =>
-            {
-                Poll::Ready(Ok(None))
-            }
-            Poll::Ready(Err(err)) => {
-                Poll::Ready(Err(format!("read VLESS standard UDP underlay: {err}")))
-            }
-            Poll::Pending => Poll::Ready(Ok(None)),
-        }
-    })
-    .await
-}
-
-async fn write_vless_stream_bytes<S>(
-    stream: &mut S,
-    payload: &[u8],
-    label: &str,
-) -> Result<(), String>
-where
-    S: tokio::io::AsyncWrite + Unpin,
-{
-    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
-        stream
-            .write_all(payload)
-            .await
-            .map_err(|err| format!("{label}: {err}"))?;
-        stream
-            .flush()
-            .await
-            .map_err(|err| format!("flush {label}: {err}"))
-    })
-    .await
-    .map_err(|_| format!("{label} timeout"))?
 }

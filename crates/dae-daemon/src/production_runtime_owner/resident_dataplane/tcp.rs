@@ -142,9 +142,10 @@ pub(crate) use self::transport_helpers::{
     GrpcHunkReadBuffer, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
     XhttpStreamUploadClient, XhttpUploadClient, close_xhttp_download_client,
     close_xhttp_stream_upload_client, close_xhttp_upload_client, collect_vmess_grpc_decrypted,
-    decode_vmess_grpc_response_stream_async, open_xhttp_packet_up_parts, open_xhttp_stream_parts,
-    poll_xhttp_download_data, relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream,
-    send_grpc_hunk, send_h2_data, send_xhttp_packet_up_request, send_xhttp_stream_data,
+    decode_vmess_grpc_response_stream_async, open_h2_body_stream, open_xhttp_packet_up_parts,
+    open_xhttp_stream_parts, poll_xhttp_download_data, relay_tcp_over_xhttp_packet_up,
+    relay_tcp_over_xhttp_stream, send_grpc_hunk, send_h2_data, send_h2_data_with_context,
+    send_xhttp_packet_up_request, send_xhttp_stream_data,
 };
 mod stream_helpers;
 use self::stream_helpers::*;

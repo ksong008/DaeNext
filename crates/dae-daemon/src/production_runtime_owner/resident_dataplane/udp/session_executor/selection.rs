@@ -42,19 +42,45 @@ impl UdpSessionExecutor {
                 if matches!(proxy.net.as_str(), "" | "tcp") && is_xtls_rprx_vision_flow(&proxy.flow)
                 {
                     Self::VlessVision(VlessXudpStreamSession::default())
-                } else if matches!(proxy.net.as_str(), "" | "tcp") && proxy.flow.is_empty() {
-                    if matches!(proxy.tls.as_str(), "" | "none") {
-                        Self::VlessStandard(VlessStandardUdpOverStreamSession::plain())
-                    } else {
-                        Self::VlessStandard(VlessStandardUdpOverStreamSession::tls())
+                } else if proxy.flow.is_empty() {
+                    match (proxy.net.as_str(), proxy.tls.as_str()) {
+                        ("" | "tcp", "" | "none") => {
+                            Self::VlessStandard(VlessStandardUdpOverStreamSession::plain())
+                        }
+                        ("" | "tcp", _) => {
+                            Self::VlessStandard(VlessStandardUdpOverStreamSession::tls())
+                        }
+                        ("websocket", "" | "none") => {
+                            Self::VlessStandard(VlessStandardUdpOverStreamSession::websocket_plain())
+                        }
+                        ("websocket", _) => {
+                            Self::VlessStandard(VlessStandardUdpOverStreamSession::websocket_tls())
+                        }
+                        ("httpupgrade", "" | "none") => Self::VlessStandard(
+                            VlessStandardUdpOverStreamSession::httpupgrade_plain(),
+                        ),
+                        ("httpupgrade", _) => {
+                            Self::VlessStandard(VlessStandardUdpOverStreamSession::httpupgrade_tls())
+                        }
+                        ("grpc", "" | "none") | ("h2", "" | "none") => Self::fail_closed(
+                            "VLESS HTTP/2 UDP transport requires a TLS or Reality underlay",
+                        ),
+                        ("grpc", _) => {
+                            Self::VlessStandard(VlessStandardUdpOverStreamSession::grpc_tls())
+                        }
+                        ("h2", _) => {
+                            Self::VlessStandard(VlessStandardUdpOverStreamSession::h2_tls())
+                        }
+                        _ if proxy.net == "xhttp" && resident_xhttp_uses_h3(proxy) => {
+                            Self::VlessXhttpH3(VlessXhttpH3UdpSession::default())
+                        }
+                        _ if proxy.net == "xhttp" => {
+                            Self::VlessXhttpH2(VlessXhttpH2UdpSession::default())
+                        }
+                        _ => Self::fail_closed(
+                            "VLESS wrapped-stream UDP requires a matching packet-over-wrapper executor for this transport and flow combination",
+                        ),
                     }
-                } else if proxy.net == "xhttp"
-                    && proxy.flow.is_empty()
-                    && resident_xhttp_uses_h3(proxy)
-                {
-                    Self::VlessXhttpH3(VlessXhttpH3UdpSession::default())
-                } else if proxy.net == "xhttp" && proxy.flow.is_empty() {
-                    Self::VlessXhttpH2(VlessXhttpH2UdpSession::default())
                 } else {
                     Self::fail_closed(
                         "VLESS wrapped-stream UDP requires a matching packet-over-wrapper executor for this transport and flow combination",

@@ -362,10 +362,23 @@ mod tests {
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::VlessVision);
 
         for (net, tls) in [
+            ("", ""),
             ("tcp", ""),
             ("tcp", "none"),
             ("tcp", "tls"),
             ("tcp", "reality"),
+            ("websocket", ""),
+            ("websocket", "none"),
+            ("websocket", "tls"),
+            ("websocket", "reality"),
+            ("httpupgrade", ""),
+            ("httpupgrade", "none"),
+            ("httpupgrade", "tls"),
+            ("httpupgrade", "reality"),
+            ("grpc", "tls"),
+            ("grpc", "reality"),
+            ("h2", "tls"),
+            ("h2", "reality"),
         ] {
             let mut proxy =
                 test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
@@ -465,20 +478,33 @@ mod tests {
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
         }
 
-        let unsupported_vless_udp = [
-            ("websocket", ""),
-            ("httpupgrade", ""),
-            ("grpc", ""),
-            ("meek", ""),
-        ];
-        for (net, flow) in unsupported_vless_udp {
+        for (net, tls) in [("grpc", ""), ("grpc", "none"), ("h2", ""), ("h2", "none")] {
             let mut proxy =
                 test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
             proxy.net = net.to_owned();
-            proxy.flow = flow.to_owned();
+            proxy.tls = tls.to_owned();
+            proxy.flow = String::new();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
         }
+
+        for net in ["websocket", "httpupgrade", "grpc", "h2", "meek"] {
+            let mut proxy =
+                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            proxy.net = net.to_owned();
+            proxy.tls = "tls".to_owned();
+            proxy.flow = "xtls-rprx-vision".to_owned();
+            let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
+            assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+        }
+
+        let mut meek =
+            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        meek.net = "meek".to_owned();
+        meek.tls = "tls".to_owned();
+        meek.flow = String::new();
+        let executor = UdpSessionExecutor::new_proxy_packet(&meek);
+        assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
 
         for net in ["websocket", "httpupgrade", "grpc"] {
             let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::TrojanTcpTls {
