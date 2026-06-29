@@ -6,10 +6,18 @@ use tokio::sync::OwnedMutexGuard;
 
 use super::unix_now;
 
+const DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS: i64 = 60;
+
 #[derive(Debug, Default)]
 pub(super) struct ResidentDnsRuntimeCache {
-    store: Mutex<DnsCacheStore>,
+    state: Mutex<ResidentDnsRuntimeCacheState>,
     inflight: Mutex<BTreeMap<DnsCacheKey, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+#[derive(Debug, Default)]
+struct ResidentDnsRuntimeCacheState {
+    store: DnsCacheStore,
+    next_sweep_unix: i64,
 }
 
 pub(super) struct ResidentDnsInflightGuard<'a> {
@@ -55,11 +63,12 @@ impl ResidentDnsRuntimeCache {
             .questions()
             .next()
             .ok_or_else(|| "DNS request has no question".to_owned())?;
-        let mut store = self
-            .store
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        let Some(entry) = store
+        let Some(entry) = state
+            .store
             .lookup_packet_question(now_unix, &question, ignore_fixed_ttl)
             .map_err(|err| format!("lookup resident DNS response cache: {err}"))?
         else {
@@ -74,11 +83,12 @@ impl ResidentDnsRuntimeCache {
         ignore_fixed_ttl: bool,
     ) -> Result<bool, String> {
         let now_unix = unix_now();
-        let mut store = self
-            .store
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        Ok(store
+        Ok(state
+            .store
             .lookup(now_unix, key, ignore_fixed_ttl)
             .is_some_and(|entry| entry.has_any_ip))
     }
@@ -89,10 +99,12 @@ impl ResidentDnsRuntimeCache {
         key: DnsCacheKey,
         entry: DnsCacheEntry,
     ) -> Result<(), String> {
-        self.store
+        let mut state = self
+            .state
             .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?
-            .insert(now_unix, key, entry);
+            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        sweep_expired_if_due(&mut state, now_unix);
+        state.store.insert(now_unix, key, entry);
         Ok(())
     }
 
@@ -104,9 +116,10 @@ impl ResidentDnsRuntimeCache {
             .questions()
             .next()
             .ok_or_else(|| "DNS request has no question".to_owned())?;
-        self.store
+        self.state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?
+            .store
             .remove_packet_question(&question)
             .map_err(|err| format!("remove resident DNS response cache entry: {err}"))
     }
@@ -118,6 +131,30 @@ impl ResidentDnsRuntimeCache {
             .map(|inflight| inflight.len())
             .unwrap_or(0)
     }
+
+    #[cfg(test)]
+    pub(super) fn entry_len(&self) -> usize {
+        self.state
+            .lock()
+            .map(|state| state.store.len())
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub(super) fn stats(&self) -> dae_dns::DnsCacheStats {
+        self.state
+            .lock()
+            .map(|state| state.store.stats().clone())
+            .unwrap_or_default()
+    }
+}
+
+fn sweep_expired_if_due(state: &mut ResidentDnsRuntimeCacheState, now_unix: i64) {
+    if now_unix < state.next_sweep_unix {
+        return;
+    }
+    state.store.sweep(now_unix);
+    state.next_sweep_unix = now_unix.saturating_add(DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS);
 }
 
 impl Drop for ResidentDnsInflightGuard<'_> {
