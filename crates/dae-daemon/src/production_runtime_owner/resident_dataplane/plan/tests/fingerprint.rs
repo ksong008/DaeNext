@@ -92,9 +92,17 @@ pub(super) fn resident_dataplane_plan_carries_reality_link_fingerprint_without_l
 
     let graph = proxy.executable_graph_value();
     assert_eq!(graph["securityUnderlay"], "reality");
+    assert_eq!(graph["admission"]["status"], "fail-closed");
     let underlay = &graph["runtimeComponents"]["underlayFactory"];
-    assert_eq!(underlay["provider"], "rustls-reality");
+    assert_eq!(underlay["status"], "fail-closed");
+    assert_eq!(underlay["provider"], "unsupported");
     assert_eq!(underlay["securityUnderlay"], "reality");
+    assert!(
+        underlay["unsupportedReason"]
+            .as_str()
+            .unwrap()
+            .contains("rustls cannot implement uTLS fingerprints")
+    );
     assert_eq!(underlay["fingerprint"]["requested"], "ios_14");
     assert_eq!(underlay["fingerprint"]["family"], "ios");
 }

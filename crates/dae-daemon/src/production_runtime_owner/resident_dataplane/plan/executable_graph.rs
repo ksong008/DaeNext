@@ -87,6 +87,15 @@ impl ResidentExecutableGraphDescriptor {
         let generation_cache = self.generation_cache_value(reload_generation);
         let packet_session_manager = self.packet_session_manager_value();
         let probe_executor = self.probe_executor_value(reload_generation);
+        let admission_block_reason = underlay_factory
+            .get("unsupportedReason")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let admission_status = if admission_block_reason.is_null() {
+            "admitted"
+        } else {
+            "fail-closed"
+        };
         json!({
             "schemaVersion": 1,
             "graphId": self.graph_id,
@@ -118,9 +127,9 @@ impl ResidentExecutableGraphDescriptor {
                 "mptcp": self.mptcp,
             },
             "admission": {
-                "status": "admitted",
+                "status": admission_status,
                 "source": "resident-plan",
-                "unsupportedReason": Value::Null,
+                "unsupportedReason": admission_block_reason,
             },
             "runtimeComponents": {
                 "underlayFactory": underlay_factory,
@@ -174,25 +183,35 @@ impl ResidentExecutableGraphDescriptor {
                 "defaultAlpn": &fingerprint.default_alpn,
             })
         });
-        let provider = match self.security_underlay.as_str() {
-            "fingerprint-aware-tls" => "boringssl",
-            "reality" => "rustls-reality",
-            "insecure-tls" => "rustls",
-            "tls-fragment" => "rustls",
-            "standard-tls" => "rustls",
-            "quic-tls" => "quinn-rustls",
-            "aead" => "protocol-aead-codec",
-            "aead-2022" => "protocol-aead-2022-codec",
-            "legacy-cipher" => "protocol-legacy-stream-codec",
-            "none" => "plain",
-            _ => "unsupported",
+        let reality_with_fingerprint =
+            self.security_underlay == "reality" && self.utls_fingerprint.is_some();
+        let provider = if reality_with_fingerprint {
+            "unsupported"
+        } else {
+            match self.security_underlay.as_str() {
+                "fingerprint-aware-tls" => "boringssl",
+                "reality" => "rustls-reality",
+                "insecure-tls" => "rustls",
+                "tls-fragment" => "rustls",
+                "standard-tls" => "rustls",
+                "quic-tls" => "quinn-rustls",
+                "aead" => "protocol-aead-codec",
+                "aead-2022" => "protocol-aead-2022-codec",
+                "legacy-cipher" => "protocol-legacy-stream-codec",
+                "none" => "plain",
+                _ => "unsupported",
+            }
         };
         let status = if provider == "unsupported" {
             "fail-closed"
         } else {
             "admitted"
         };
-        let unsupported_reason = if provider == "unsupported" {
+        let unsupported_reason = if reality_with_fingerprint {
+            json!(
+                "Reality uTLS fingerprint requires a fingerprint-capable Reality TLS underlay; rustls cannot implement uTLS fingerprints"
+            )
+        } else if provider == "unsupported" {
             json!("security underlay is not backed by a resident runtime factory")
         } else {
             Value::Null
