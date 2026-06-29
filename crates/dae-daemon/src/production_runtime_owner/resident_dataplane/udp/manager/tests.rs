@@ -396,7 +396,7 @@ fn udp_route_chosen_event_exposes_route_and_session_fields() {
     assert_eq!(event["proxy_group"], proxy.group_name);
     assert_eq!(event["group_policy"], proxy.group_policy);
     assert_eq!(event["node_tag"], proxy.node_tag);
-    assert_eq!(event["handler"], resident_udp_handler_name(&proxy.handler));
+    assert_eq!(event["handler"], resident_udp_proxy_handler_name(&proxy));
     assert_eq!(event["task_queued"], true);
     assert_eq!(event["reason"], UDP_ROUTE_REASON_QUEUED);
     assert_eq!(event["dscp"], 46);

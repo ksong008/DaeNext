@@ -37,6 +37,22 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_hand
     }
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_proxy_handler_name(
+    proxy: &ResidentProxyPlan,
+) -> &'static str {
+    if proxy.uses_standard_vless_udp_over_stream() {
+        "vless-udp-over-stream"
+    } else if matches!(
+        proxy.handler,
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+    ) && !proxy.uses_vless_vision_xudp()
+    {
+        "vless-udp-protocol-closed"
+    } else {
+        resident_udp_handler_name(&proxy.handler)
+    }
+}
+
 pub(super) fn udp_packet_session_value(
     proxy: &ResidentProxyPlan,
     peer: SocketAddr,
