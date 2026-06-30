@@ -46,7 +46,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     assert_eq!(https.server_port, primary_port);
     assert_eq!(https.server_name, primary_host);
     assert_eq!(https.tls, "tls");
-    assert_eq!(https.alpn, vec!["h2".to_owned(), "http/1.1".to_owned()]);
+    assert_eq!(https.alpn, vec!["http/1.1".to_owned()]);
     assert!(matches!(
         https.handler,
         ResidentProxyProtocolPlan::HttpProxyTcp { .. }

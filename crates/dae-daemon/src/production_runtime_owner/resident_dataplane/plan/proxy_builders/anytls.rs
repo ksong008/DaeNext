@@ -15,7 +15,6 @@ pub(crate) fn build_anytls_proxy_plan(
         .ok_or_else(|| format!("parse AnyTLS endpoint {node_tag}: missing host"))?
         .to_owned();
     let server_port = url.port().unwrap_or(443);
-    let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -40,7 +39,7 @@ pub(crate) fn build_anytls_proxy_plan(
         tls: "tls".to_owned(),
         allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,
-        utls_fingerprint,
+        utls_fingerprint: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::AnyTlsTcpTls { auth: parsed.auth },
         chain_parent: None,

@@ -93,7 +93,11 @@ pub(crate) fn build_vless_proxy_plan(
         None
     };
     let utls_fingerprint = match vless.tls.as_str() {
-        "tls" => resident_utls_fingerprint_plan(config, Some(&vless.fingerprint))?,
+        "tls" => resident_utls_fingerprint_plan_for_boundary(
+            config,
+            Some(&vless.fingerprint),
+            net == "tcp",
+        )?,
         "reality" => resident_reality_utls_fingerprint_plan(&vless.fingerprint)?,
         _ => None,
     };

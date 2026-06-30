@@ -105,15 +105,19 @@ pub(crate) fn build_vmess_proxy_plan(
     } else {
         String::new()
     };
+    let utls_fingerprint = if tls == "tls" {
+        resident_utls_fingerprint_plan_for_boundary(
+            config,
+            Some(parsed.fingerprint.as_str()),
+            net == "tcp",
+        )?
+    } else {
+        None
+    };
     let alpn = if matches!(net.as_str(), "grpc" | "h2") {
         vec!["h2".to_owned()]
     } else {
         Vec::new()
-    };
-    let utls_fingerprint = if tls == "tls" {
-        resident_utls_fingerprint_plan(config, Some(parsed.fingerprint.as_str()))?
-    } else {
-        None
     };
     let allow_insecure = tls == "tls" && (parsed.allow_insecure || config.global.allow_insecure);
     let graph = resident_graph_identity(&link);

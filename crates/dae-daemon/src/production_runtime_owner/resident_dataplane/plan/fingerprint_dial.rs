@@ -3,11 +3,23 @@ pub(super) fn resident_utls_fingerprint_plan(
     config: &Config,
     link_fingerprint: Option<&str>,
 ) -> Result<Option<ResidentUtlsFingerprintPlan>, String> {
+    resident_utls_fingerprint_plan_for_boundary(config, link_fingerprint, true)
+}
+
+pub(super) fn resident_utls_fingerprint_plan_for_boundary(
+    config: &Config,
+    link_fingerprint: Option<&str>,
+    allow_global_fingerprint: bool,
+) -> Result<Option<ResidentUtlsFingerprintPlan>, String> {
     let link_fingerprint = link_fingerprint.unwrap_or_default().trim();
     if !link_fingerprint.is_empty() && !link_fingerprint.eq_ignore_ascii_case("unsafe") {
         return resolve_optional_resident_utls_fingerprint("link fp", link_fingerprint);
     }
     if link_fingerprint.eq_ignore_ascii_case("unsafe") {
+        return Ok(None);
+    }
+
+    if !allow_global_fingerprint {
         return Ok(None);
     }
 

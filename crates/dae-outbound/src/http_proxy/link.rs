@@ -2,7 +2,7 @@ use url::Url;
 
 use crate::error::OutboundError;
 
-use super::contract::ALLOW_INSECURE_ALIASES;
+use super::contract::{ALLOW_INSECURE_ALIASES, HTTPS_DEFAULT_ALPN_QUERY_VALUE};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HttpScheme {
@@ -81,7 +81,7 @@ impl HttpProxyLink {
                 .unwrap_or_else(|| "tls".to_owned()),
             alpn: query_value(&query, "alpn")
                 .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| "h2,http/1.1".to_owned()),
+                .unwrap_or_else(|| HTTPS_DEFAULT_ALPN_QUERY_VALUE.to_owned()),
             utls_imitate: query_value(&query, "utlsImitate").unwrap_or_default(),
         })
     }
