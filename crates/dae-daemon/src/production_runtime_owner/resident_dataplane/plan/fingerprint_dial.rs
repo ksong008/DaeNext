@@ -19,7 +19,11 @@ pub(super) fn resident_utls_fingerprint_plan(
     {
         let global_fingerprint = config.global.utls_imitate.trim();
         if global_fingerprint.is_empty() {
-            return resolve_resident_utls_fingerprint("default fingerprint", "chrome").map(Some);
+            return resolve_resident_utls_fingerprint(
+                "default fingerprint",
+                DEFAULT_UTLS_FINGERPRINT,
+            )
+            .map(Some);
         }
         return resolve_optional_resident_utls_fingerprint(
             "global utls_imitate",
