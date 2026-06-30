@@ -2031,6 +2031,162 @@ int SSL_set1_client_key_shares(SSL *ssl, const uint16_t *group_ids,
   return 1;
 }
 
+static bool dae_copy_u16_array(Array<uint16_t> *out, const uint16_t *values,
+                               size_t num_values) {
+  if (num_values == 0) {
+    *out = Array<uint16_t>();
+    return true;
+  }
+  if (values == nullptr) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_BAD_LENGTH);
+    return false;
+  }
+  return out->CopyFrom(Span(values, num_values));
+}
+
+static bool dae_copy_non_grease_u16_array(Array<uint16_t> *out,
+                                          const uint16_t *values,
+                                          size_t num_values,
+                                          uint16_t grease_placeholder) {
+  if (num_values == 0) {
+    *out = Array<uint16_t>();
+    return true;
+  }
+  if (values == nullptr) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_BAD_LENGTH);
+    return false;
+  }
+  Array<uint16_t> filtered;
+  if (!filtered.InitForOverwrite(num_values)) {
+    return false;
+  }
+  size_t count = 0;
+  for (uint16_t value : Span(values, num_values)) {
+    if (value == grease_placeholder) {
+      continue;
+    }
+    filtered[count++] = value;
+  }
+  if (!out->CopyFrom(Span(filtered.data(), count))) {
+    return false;
+  }
+  return true;
+}
+
+static bool dae_copy_non_grease_unique_u16_array(Array<uint16_t> *out,
+                                                 const uint16_t *values,
+                                                 size_t num_values,
+                                                 uint16_t grease_placeholder) {
+  if (num_values == 0) {
+    *out = Array<uint16_t>();
+    return true;
+  }
+  if (values == nullptr) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_BAD_LENGTH);
+    return false;
+  }
+  Array<uint16_t> filtered;
+  if (!filtered.InitForOverwrite(num_values)) {
+    return false;
+  }
+  size_t count = 0;
+  for (uint16_t value : Span(values, num_values)) {
+    if (value == grease_placeholder) {
+      continue;
+    }
+    bool seen = false;
+    for (uint16_t existing : Span(filtered.data(), count)) {
+      if (existing == value) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen) {
+      filtered[count++] = value;
+    }
+  }
+  if (!out->CopyFrom(Span(filtered.data(), count))) {
+    return false;
+  }
+  return true;
+}
+
+int DAE_SSL_set1_utls_template(
+    SSL *ssl, const uint16_t *cipher_suites, size_t num_cipher_suites,
+    const uint16_t *extension_order, size_t num_extension_order,
+    const uint16_t *supported_versions, size_t num_supported_versions,
+    const uint16_t *supported_groups, size_t num_supported_groups,
+    const uint16_t *key_share_groups, size_t num_key_share_groups,
+    const uint16_t *signature_schemes, size_t num_signature_schemes,
+    const uint16_t *empty_extensions, size_t num_empty_extensions,
+    uint16_t grease_placeholder, size_t session_id_len,
+    size_t padding_target_handshake_len, int grease_enabled) {
+  if (ssl == nullptr || ssl->config == nullptr || SSL_is_server(ssl) ||
+      num_cipher_suites == 0 || num_extension_order == 0 ||
+      session_id_len > SSL_MAX_SSL_SESSION_ID_LENGTH) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_BAD_LENGTH);
+    return 0;
+  }
+
+  DAEUtlsTemplateConfig next;
+  next.enabled = true;
+  next.grease_enabled = !!grease_enabled;
+  next.grease_placeholder = grease_placeholder;
+  next.session_id_len = session_id_len;
+  next.padding_target_handshake_len = padding_target_handshake_len;
+  if (!dae_copy_u16_array(&next.cipher_suites, cipher_suites,
+                          num_cipher_suites) ||
+      !dae_copy_u16_array(&next.extension_order, extension_order,
+                          num_extension_order) ||
+      !dae_copy_u16_array(&next.supported_versions, supported_versions,
+                          num_supported_versions) ||
+      !dae_copy_u16_array(&next.supported_groups, supported_groups,
+                          num_supported_groups) ||
+      !dae_copy_u16_array(&next.key_share_groups, key_share_groups,
+                          num_key_share_groups) ||
+      !dae_copy_u16_array(&next.signature_schemes, signature_schemes,
+                          num_signature_schemes) ||
+      !dae_copy_u16_array(&next.empty_extensions, empty_extensions,
+                          num_empty_extensions)) {
+    return 0;
+  }
+
+  Array<uint16_t> real_supported_groups;
+  Array<uint16_t> real_key_share_groups;
+  Array<uint16_t> real_signature_schemes;
+  if (!dae_copy_non_grease_u16_array(&real_supported_groups, supported_groups,
+                                     num_supported_groups,
+                                     grease_placeholder) ||
+      !dae_copy_non_grease_u16_array(&real_key_share_groups, key_share_groups,
+                                     num_key_share_groups,
+                                     grease_placeholder) ||
+      !dae_copy_non_grease_unique_u16_array(
+          &real_signature_schemes, signature_schemes,
+          num_signature_schemes, grease_placeholder)) {
+    return 0;
+  }
+
+  if (!real_supported_groups.empty() &&
+      !SSL_set1_group_ids(ssl, real_supported_groups.data(),
+                          real_supported_groups.size())) {
+    return 0;
+  }
+  if (!SSL_set1_client_key_shares(ssl, real_key_share_groups.data(),
+                                  real_key_share_groups.size())) {
+    return 0;
+  }
+  if (!real_signature_schemes.empty() &&
+      !SSL_set_verify_algorithm_prefs(ssl, real_signature_schemes.data(),
+                                      real_signature_schemes.size())) {
+    return 0;
+  }
+
+  ssl->ctx->grease_enabled = next.grease_enabled;
+  ssl->config->permute_extensions = false;
+  ssl->config->dae_utls = std::move(next);
+  return 1;
+}
+
 int DAE_SSL_set1_reality_config(SSL *ssl, const uint8_t *server_public_key,
                                 size_t server_public_key_len,
                                 const uint8_t *short_id, size_t short_id_len,
@@ -2060,7 +2216,8 @@ int DAE_SSL_set1_reality_config(SSL *ssl, const uint8_t *server_public_key,
                                   std::size(kDaeRealityX25519Only))) {
     return 0;
   }
-  if (!SSL_set_verify_algorithm_prefs(
+  if (!ssl->config->dae_utls.enabled &&
+      !SSL_set_verify_algorithm_prefs(
           ssl, kDaeRealityVerifySigAlgs,
           std::size(kDaeRealityVerifySigAlgs))) {
     return 0;
@@ -2077,7 +2234,9 @@ int DAE_SSL_set1_reality_config(SSL *ssl, const uint8_t *server_public_key,
   config->short_id_len = short_id_len;
 
   ssl_set_session(ssl, nullptr);
-  SSL_set_options(ssl, SSL_OP_NO_TICKET);
+  if (!ssl->config->dae_utls.enabled) {
+    SSL_set_options(ssl, SSL_OP_NO_TICKET);
+  }
   SSL_set_early_data_enabled(ssl, 0);
   return 1;
 }

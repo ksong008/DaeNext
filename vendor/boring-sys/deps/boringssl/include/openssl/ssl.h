@@ -2666,6 +2666,22 @@ OPENSSL_EXPORT int SSL_set1_client_key_shares(SSL *ssl,
                                               const uint16_t *group_ids,
                                               size_t num_group_ids);
 
+// DAE_SSL_set1_utls_template enables DaeNext's typed uTLS ClientHello template
+// shaping for |ssl|. It must be called on a client SSL before the handshake
+// starts. The arrays describe the final ClientHello semantics and use
+// |grease_placeholder| for GREASE slots. This API is DaeNext-specific and
+// intentionally narrow; it does not expose arbitrary mutation callbacks.
+OPENSSL_EXPORT int DAE_SSL_set1_utls_template(
+    SSL *ssl, const uint16_t *cipher_suites, size_t num_cipher_suites,
+    const uint16_t *extension_order, size_t num_extension_order,
+    const uint16_t *supported_versions, size_t num_supported_versions,
+    const uint16_t *supported_groups, size_t num_supported_groups,
+    const uint16_t *key_share_groups, size_t num_key_share_groups,
+    const uint16_t *signature_schemes, size_t num_signature_schemes,
+    const uint16_t *empty_extensions, size_t num_empty_extensions,
+    uint16_t grease_placeholder, size_t session_id_len,
+    size_t padding_target_handshake_len, int grease_enabled);
+
 // DAE_SSL_set1_reality_config enables DaeNext's Reality ClientHello mutation
 // for |ssl|. It must be called on a client SSL before the handshake starts.
 // |server_public_key| must be the 32-byte Reality server public key.

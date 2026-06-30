@@ -1721,6 +1721,21 @@ struct DAERealityConfig {
   uint8_t auth_key[32] = {0};
 };
 
+struct DAEUtlsTemplateConfig {
+  bool enabled = false;
+  bool grease_enabled = false;
+  uint16_t grease_placeholder = 0;
+  size_t session_id_len = 0;
+  size_t padding_target_handshake_len = 0;
+  Array<uint16_t> cipher_suites;
+  Array<uint16_t> extension_order;
+  Array<uint16_t> supported_versions;
+  Array<uint16_t> supported_groups;
+  Array<uint16_t> key_share_groups;
+  Array<uint16_t> signature_schemes;
+  Array<uint16_t> empty_extensions;
+};
+
 struct SSL_HANDSHAKE {
   explicit SSL_HANDSHAKE(SSL *ssl);
   ~SSL_HANDSHAKE();
@@ -3324,6 +3339,7 @@ struct SSL_CONFIG {
   Array<uint16_t> server_supported_groups_hint;
 
   DAERealityConfig dae_reality;
+  DAEUtlsTemplateConfig dae_utls;
 
   // channel_id_private is the client's Channel ID private key, or null if
   // Channel ID should not be offered on this connection.
