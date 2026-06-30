@@ -2216,8 +2216,10 @@ int DAE_SSL_set1_reality_config(SSL *ssl, const uint8_t *server_public_key,
                                   std::size(kDaeRealityX25519Only))) {
     return 0;
   }
-  if (!ssl->config->dae_utls.enabled &&
-      !SSL_set_verify_algorithm_prefs(
+  // uTLS templates own the ClientHello signature_algorithms extension, but
+  // Reality certificates are Ed25519-authenticated and still need local
+  // verification support even when the exact browser template omits Ed25519.
+  if (!SSL_set_verify_algorithm_prefs(
           ssl, kDaeRealityVerifySigAlgs,
           std::size(kDaeRealityVerifySigAlgs))) {
     return 0;
