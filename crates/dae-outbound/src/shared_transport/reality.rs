@@ -1,12 +1,16 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::error::OutboundError;
 use crate::shared_transport::ir;
 
-pub const REALITY_VERSION: [u8; 3] = [1, 8, 10];
+pub const REALITY_CLIENT_VERSION_ENV: &str = "DAE_REALITY_CLIENT_VERSION";
+pub const REALITY_VERSION: [u8; 3] = [26, 6, 27];
 pub const REALITY_HARNESS_MAGIC: &[u8; 10] = b"DAEREALITY";
+
+static REALITY_CLIENT_VERSION: OnceLock<[u8; 3]> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealityMutationOptions {
@@ -41,6 +45,32 @@ pub struct RealityHarnessMessage {
     pub payload: Vec<u8>,
 }
 
+pub fn reality_client_version() -> [u8; 3] {
+    *REALITY_CLIENT_VERSION.get_or_init(|| {
+        std::env::var(REALITY_CLIENT_VERSION_ENV)
+            .ok()
+            .and_then(|value| parse_reality_client_version(&value))
+            .unwrap_or(REALITY_VERSION)
+    })
+}
+
+pub fn parse_reality_client_version(input: &str) -> Option<[u8; 3]> {
+    let mut out = [0_u8; 3];
+    let mut parts = input.split('.');
+    for slot in &mut out {
+        let part = parts.next()?;
+        if part.is_empty() {
+            return None;
+        }
+        let value = part.parse::<u16>().ok()?;
+        *slot = u8::try_from(value).ok()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(out)
+}
+
 impl RealityMutationOptions {
     pub fn new(
         server_name: impl Into<String>,
@@ -72,7 +102,7 @@ impl RealityMutationOptions {
 
 pub fn reality_session_id(options: &RealityMutationOptions) -> [u8; 32] {
     let mut session_id = [0_u8; 32];
-    session_id[..3].copy_from_slice(&REALITY_VERSION);
+    session_id[..3].copy_from_slice(&reality_client_version());
     session_id[3] = 0;
     session_id[4..8].copy_from_slice(&options.unix_seconds.to_be_bytes());
     session_id[8..16].copy_from_slice(&options.sid);
@@ -261,4 +291,26 @@ fn set_timeout(stream: &TcpStream, timeout: Duration) -> Result<(), OutboundErro
     stream
         .set_write_timeout(Some(timeout))
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reality_client_version_parser_accepts_three_u8_parts() {
+        assert_eq!(parse_reality_client_version("26.6.27"), Some([26, 6, 27]));
+        assert_eq!(parse_reality_client_version("0.0.0"), Some([0, 0, 0]));
+        assert_eq!(
+            parse_reality_client_version("255.255.255"),
+            Some([255, 255, 255])
+        );
+    }
+
+    #[test]
+    fn reality_client_version_parser_rejects_invalid_shapes() {
+        for input in ["", "26.6", "26.6.27.1", "26..27", "256.6.27", "x.6.27"] {
+            assert_eq!(parse_reality_client_version(input), None);
+        }
+    }
 }

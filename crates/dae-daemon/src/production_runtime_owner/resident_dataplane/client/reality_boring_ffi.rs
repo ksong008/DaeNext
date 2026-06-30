@@ -1,5 +1,6 @@
 use super::*;
 use boring::ssl::SslRef;
+use dae_outbound::shared_transport::reality::reality_client_version;
 use foreign_types::ForeignTypeRef;
 
 unsafe extern "C" {
@@ -30,6 +31,7 @@ pub(super) fn configure_reality_boring_ssl(
     } else {
         short_id.as_ptr()
     };
+    let client_version = reality_client_version();
     let ok = unsafe {
         DAE_SSL_set1_reality_config(
             ssl.as_ptr(),
@@ -37,7 +39,7 @@ pub(super) fn configure_reality_boring_ssl(
             reality.public_key.len(),
             short_id_ptr,
             short_id.len(),
-            REALITY_VERSION.as_ptr(),
+            client_version.as_ptr(),
         )
     };
     if ok == 1 {
