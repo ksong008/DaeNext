@@ -56,9 +56,12 @@ pub(in crate::daed_product) fn api_log_events(
     _app: &AppState,
     request: &HttpRequest,
 ) -> HttpResponse {
-    match log_level_filter_from_request(request) {
-        Ok(_) => sse_response_events(&[], Some(LOG_STREAM_RETRY_MS)),
-        Err(err) => HttpResponse::json(400, json!({"error": err})),
+    match (
+        log_level_filter_from_request(request),
+        log_event_after_id_from_request(request),
+    ) {
+        (Ok(_), Ok(_)) => sse_response_events(&[], Some(LOG_STREAM_RETRY_MS)),
+        (Err(err), _) | (_, Err(err)) => HttpResponse::json(400, json!({"error": err})),
     }
 }
 
@@ -69,6 +72,13 @@ pub(in crate::daed_product) fn stream_log_events(
 ) -> io::Result<()> {
     let level = match log_level_filter_from_request(request) {
         Ok(level) => level,
+        Err(err) => {
+            let response = HttpResponse::json(400, json!({"error": err}));
+            return write_http_response_for_request(stream, request, &response, false);
+        }
+    };
+    let after_id = match log_event_after_id_from_request(request) {
+        Ok(after_id) => after_id,
         Err(err) => {
             let response = HttpResponse::json(400, json!({"error": err}));
             return write_http_response_for_request(stream, request, &response, false);
@@ -85,8 +95,13 @@ pub(in crate::daed_product) fn stream_log_events(
     stream.flush()?;
 
     let log_file = product_log_file(&app.config_dir);
-    let mut last_seen_id = cached_last_log_id(&log_file).unwrap_or(0);
-    let mut scan_offset = log_file_size(&app.config_dir).unwrap_or(0);
+    let replay_from_cursor = after_id.is_some();
+    let mut last_seen_id = after_id.unwrap_or_else(|| cached_last_log_id(&log_file).unwrap_or(0));
+    let mut scan_offset = if replay_from_cursor {
+        0
+    } else {
+        log_file_size(&app.config_dir).unwrap_or(0)
+    };
     let mut last_heartbeat = Instant::now();
     loop {
         let current_last_id = cached_last_log_id(&log_file).unwrap_or(0);
@@ -122,5 +137,24 @@ pub(in crate::daed_product) fn stream_log_events(
             last_heartbeat = Instant::now();
         }
         thread::sleep(LOG_STREAM_POLL_INTERVAL);
+    }
+}
+
+pub(in crate::daed_product) fn log_event_after_id_from_request(
+    request: &HttpRequest,
+) -> Result<Option<u64>, String> {
+    let value = request
+        .query
+        .get("after_id")
+        .or_else(|| request.query.get("afterId"))
+        .and_then(|values| values.first())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    match value {
+        Some(value) => value
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| "invalid log event after_id".to_owned()),
+        None => Ok(None),
     }
 }

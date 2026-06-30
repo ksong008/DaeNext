@@ -158,6 +158,34 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
     assert!(!body.contains("event: log.entry"));
     assert!(!body.contains("Dial failed"));
 
+    for raw_query in ["level=all&after_id=2", "level=all&afterId=2", "after_id="] {
+        let (path, query) = split_path_query(&format!("/api/events/logs?{raw_query}"));
+        let response = api_log_events(
+            &app,
+            &HttpRequest {
+                method: "GET".to_owned(),
+                path,
+                query,
+                headers: HashMap::new(),
+                body: Vec::new(),
+            },
+        );
+        assert_eq!(response.status, 200, "{raw_query}");
+    }
+
+    let (path, query) = split_path_query("/api/events/logs?level=all&after_id=not-a-number");
+    let invalid_after_id = api_log_events(
+        &app,
+        &HttpRequest {
+            method: "GET".to_owned(),
+            path,
+            query,
+            headers: HashMap::new(),
+            body: Vec::new(),
+        },
+    );
+    assert_eq!(invalid_after_id.status, 400);
+
     for raw_query in ["level=any", "level=*", "level=invalid", "level=err"] {
         let (path, query) = split_path_query(&format!("/api/logs?{raw_query}"));
         let invalid = api_logs(
