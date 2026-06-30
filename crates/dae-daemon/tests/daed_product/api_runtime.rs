@@ -12,6 +12,8 @@ pub(super) fn daed_run_serves_minimal_api_and_static_webui() {
         .arg(&temp)
         .args(["--listen", &listen, "--web-root"])
         .arg(&web)
+        .arg("--control")
+        .arg(temp.join("control.sock"))
         .env("PRODUCT_RUNTIME_FAKE_START", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -83,6 +85,8 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
         .arg(&temp)
         .args(["--listen", &listen, "--web-root"])
         .arg(&web)
+        .arg("--control")
+        .arg(temp.join("control.sock"))
         .env("PRODUCT_RUNTIME_FAKE_START", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -394,6 +398,17 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
         state.contains("\"attachBackend\":\"fake-resident-runtime-test-only\""),
         "{state}"
     );
+    let local_reload = Command::new(binary())
+        .args(["reload", "--control"])
+        .arg(temp.join("control.sock"))
+        .output()
+        .unwrap();
+    assert!(
+        local_reload.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&local_reload.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&local_reload.stdout).trim(), "OK");
     let overview = http_request(port, "GET", "/api/runtime/overview", None, Some(&token));
     assert!(overview.contains("\"rssBytes\""), "{overview}");
     assert!(overview.contains("\"runtime\""), "{overview}");

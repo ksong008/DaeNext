@@ -106,6 +106,7 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
         state: state.clone(),
         web_root: dir.clone(),
         api_only: true,
+        control_socket: dir.join("control.sock"),
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
@@ -563,13 +564,7 @@ pub(crate) fn runtime_cycle_log_reset_preserves_startup_and_reload_logs() {
     set_metadata(&state, "runtime_log_level", "error").unwrap();
     append_log_for_config(&dir, &state, "error", "ordinary runtime log").unwrap();
     append_lifecycle_log_for_config(&dir, &state, "info", "[Startup] Finished").unwrap();
-    append_lifecycle_log_for_config(
-        &dir,
-        &state,
-        "info",
-        "[Reload] Received signal reload request",
-    )
-    .unwrap();
+    append_lifecycle_log_for_config(&dir, &state, "info", "[Reload] Finished").unwrap();
 
     refresh_log_policy_and_reset_runtime_cycle_logs(&dir, &state, None).unwrap();
 
@@ -578,10 +573,7 @@ pub(crate) fn runtime_cycle_log_reset_preserves_startup_and_reload_logs() {
     assert_eq!(items.len(), 2, "{logs}");
     assert_eq!(items[0]["message"], json!("[Startup] Finished"));
     assert_eq!(items[0]["fields"]["lifecycle"], json!("startup"));
-    assert_eq!(
-        items[1]["message"],
-        json!("[Reload] Received signal reload request")
-    );
+    assert_eq!(items[1]["message"], json!("[Reload] Finished"));
     assert_eq!(items[1]["fields"]["lifecycle"], json!("reload"));
     fs::remove_dir_all(dir).unwrap();
 }

@@ -121,6 +121,7 @@ fn geodata_status_reuses_cached_values_after_first_read() {
         state: dir.join("daed.db"),
         web_root: dir.join("web"),
         api_only: true,
+        control_socket: dir.join("control.sock"),
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),

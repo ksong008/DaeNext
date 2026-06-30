@@ -7,6 +7,7 @@ pub(super) fn serve_forever(
     let listen_started_at = Instant::now();
     let listener = TcpListener::bind(listen)?;
     let app = Arc::new(app);
+    spawn_local_control_socket(Arc::clone(&app))?;
     spawn_allocator_idle_reclaim_monitor(&app);
     let runtime_config = app.runtime.current_config();
     let config = ProductHttpWorkerConfig::from_config(runtime_config.as_ref());

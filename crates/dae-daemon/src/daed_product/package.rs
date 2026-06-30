@@ -117,7 +117,7 @@ pub(super) fn product_package_manifest() -> Value {
             "unitName": "daed.service",
             "execStartPre": "/usr/bin/daed validate -c /etc/daed/",
             "execStart": "/usr/bin/daed run -c /etc/daed/",
-            "execReload": "/bin/kill -HUP $MAINPID",
+            "execReload": "/usr/bin/daed reload",
             "export": "daed export systemd-unit",
         },
         "docker": {
@@ -307,10 +307,10 @@ User=root
 LimitNPROC=512
 LimitNOFILE=1048576
 RuntimeDirectory=daed
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0700
 ExecStartPre=/usr/bin/daed validate -c /etc/daed/
 ExecStart=/usr/bin/daed run -c /etc/daed/
-ExecReload=/bin/kill -HUP $MAINPID
+ExecReload=/usr/bin/daed reload
 Restart=on-abnormal
 
 [Install]

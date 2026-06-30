@@ -317,7 +317,7 @@ pub(super) fn daed_package_info(version: &str) -> Value {
         },
         "package_surface": {
             "validate": "daed validate -c /etc/daed/",
-            "systemd_unit": "daed.service validates then uses /usr/bin/daed run -c /etc/daed/",
+            "systemd_unit": "daed.service validates then uses /usr/bin/daed run -c /etc/daed/ and daed reload",
             "docker_entrypoint": "/usr/bin/daed run -c /etc/daed --listen 0.0.0.0:2023",
             "package_manifest": "daed export package-manifest",
             "admission_report": "daed export admission-report",

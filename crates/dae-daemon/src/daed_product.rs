@@ -54,6 +54,8 @@ pub use benchmark::{
 const DEFAULT_CONFIG_DIR: &str = "/etc/daed";
 const DEFAULT_LISTEN: &str = "0.0.0.0:2023";
 const DEFAULT_WEB_ROOT: &str = "/usr/share/daed/web";
+const DEFAULT_CONTROL_SOCKET: &str = "/run/daed/control.sock";
+const PRODUCT_CONTROL_SOCKET_ENV: &str = "DAED_CONTROL_SOCKET";
 const PRODUCT_LISTEN_ENV: &str = "PRODUCT_LISTEN";
 const PRODUCT_LISTEN_LEGACY_ENV: &str = "DAED_LISTEN";
 const PRODUCT_WEB_ROOT_ENV: &str = "PRODUCT_WEB_ROOT";
@@ -209,6 +211,7 @@ struct RunOptions {
     state: PathBuf,
     web_root: PathBuf,
     api_only: bool,
+    control_socket: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -217,6 +220,7 @@ struct AppState {
     state: PathBuf,
     web_root: PathBuf,
     api_only: bool,
+    control_socket: PathBuf,
     runtime: Arc<ProductRuntimeManager>,
     latency_jobs: Arc<LatencyJobManager>,
     http_metrics: Arc<ProductHttpMetrics>,
@@ -662,6 +666,8 @@ mod state_schema;
 use self::state_schema::*;
 mod http_server;
 use self::http_server::*;
+mod local_control;
+use self::local_control::*;
 mod api_routes;
 use self::api_routes::*;
 mod runtime_overview;

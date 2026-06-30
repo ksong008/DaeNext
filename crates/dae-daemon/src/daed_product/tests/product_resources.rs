@@ -404,6 +404,7 @@ fn product_test_app(dir: &Path, state: &Path) -> AppState {
         state: state.to_owned(),
         web_root: dir.to_owned(),
         api_only: true,
+        control_socket: dir.join("control.sock"),
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
