@@ -3,7 +3,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
-use boring::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
+use boring::ssl::{
+    CertificateCompressionAlgorithm, CertificateCompressor, SslConnector, SslMethod, SslRef,
+    SslVerifyMode, SslVersion,
+};
 use dae_outbound::shared_transport::{
     TlsFragmentOptions, UTLS_ALPN_POLICY_RANDOMIZED_ALPN, UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN,
     UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE,
@@ -41,6 +44,8 @@ mod reality_boring_cert;
 use self::reality_boring_cert::*;
 mod reality_boring_ffi;
 use self::reality_boring_ffi::*;
+mod utls_template_boring;
+use self::utls_template_boring::*;
 mod drive;
 pub(super) use self::drive::*;
 mod tls_fragment;

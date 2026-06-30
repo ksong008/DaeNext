@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 #include <openssl/aead.h>
 #include <openssl/bn.h>
@@ -322,6 +323,298 @@ static bool dae_reality_apply_session_id(SSL_HANDSHAKE *hs,
   return true;
 }
 
+struct DAEParsedClientHelloExtension {
+  uint16_t type = 0;
+  Span<const uint8_t> body;
+};
+
+static bool dae_utls_is_grease_placeholder(const DAEUtlsTemplateConfig *config,
+                                           uint16_t value) {
+  return config->grease_enabled && value == config->grease_placeholder;
+}
+
+static const DAEParsedClientHelloExtension *dae_utls_find_extension(
+    const std::vector<DAEParsedClientHelloExtension> &extensions,
+    uint16_t type) {
+  for (const auto &extension : extensions) {
+    if (extension.type == type) {
+      return &extension;
+    }
+  }
+  return nullptr;
+}
+
+static bool dae_utls_is_empty_template_extension(
+    const DAEUtlsTemplateConfig *config, uint16_t type) {
+  for (uint16_t empty_extension : config->empty_extensions) {
+    if (empty_extension == type) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool dae_utls_parse_client_hello_extensions(
+    Span<const uint8_t> msg,
+    std::vector<DAEParsedClientHelloExtension> *out_extensions) {
+  CBS cbs, random, session_id, cipher_suites, compression_methods, extensions;
+  uint8_t msg_type;
+  uint32_t body_len;
+  uint16_t legacy_version;
+  CBS_init(&cbs, msg.data(), msg.size());
+  if (!CBS_get_u8(&cbs, &msg_type) || msg_type != SSL3_MT_CLIENT_HELLO ||
+      !CBS_get_u24(&cbs, &body_len) || body_len != CBS_len(&cbs) ||
+      !CBS_get_u16(&cbs, &legacy_version) ||
+      !CBS_get_bytes(&cbs, &random, SSL3_RANDOM_SIZE) ||
+      !CBS_get_u8_length_prefixed(&cbs, &session_id) ||
+      !CBS_get_u16_length_prefixed(&cbs, &cipher_suites) ||
+      !CBS_get_u8_length_prefixed(&cbs, &compression_methods)) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_DECODE_ERROR);
+    return false;
+  }
+  (void)legacy_version;
+  (void)random;
+  (void)session_id;
+  (void)cipher_suites;
+  (void)compression_methods;
+  if (CBS_len(&cbs) == 0) {
+    return true;
+  }
+  if (!CBS_get_u16_length_prefixed(&cbs, &extensions) || CBS_len(&cbs) != 0) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_DECODE_ERROR);
+    return false;
+  }
+  while (CBS_len(&extensions) != 0) {
+    uint16_t type;
+    CBS body;
+    if (!CBS_get_u16(&extensions, &type) ||
+        !CBS_get_u16_length_prefixed(&extensions, &body)) {
+      OPENSSL_PUT_ERROR(SSL, SSL_R_DECODE_ERROR);
+      return false;
+    }
+    out_extensions->push_back({type, Span(CBS_data(&body), CBS_len(&body))});
+  }
+  return true;
+}
+
+static bool dae_utls_add_cipher_suites(const SSL_HANDSHAKE *hs, CBB *out) {
+  const DAEUtlsTemplateConfig *config = &hs->config->dae_utls;
+  CBB child;
+  if (!CBB_add_u16_length_prefixed(out, &child)) {
+    return false;
+  }
+  for (uint16_t cipher : config->cipher_suites) {
+    uint16_t value = dae_utls_is_grease_placeholder(config, cipher)
+                         ? ssl_get_grease_value(hs, ssl_grease_cipher)
+                         : cipher;
+    if (!CBB_add_u16(&child, value)) {
+      return false;
+    }
+  }
+  return CBB_flush(out);
+}
+
+static bool dae_utls_add_padding_extension(CBB *extensions, uint16_t type,
+                                           size_t len) {
+  CBB body;
+  return CBB_add_u16(extensions, type) &&
+         CBB_add_u16_length_prefixed(extensions, &body) &&
+         CBB_add_zeros(&body, len) &&
+         CBB_flush(extensions);
+}
+
+static bool dae_utls_add_supported_versions_extension(
+    SSL_HANDSHAKE *hs, CBB *extensions) {
+  const DAEUtlsTemplateConfig *config = &hs->config->dae_utls;
+  CBB body, versions;
+  if (!CBB_add_u16(extensions, TLSEXT_TYPE_supported_versions) ||
+      !CBB_add_u16_length_prefixed(extensions, &body) ||
+      !CBB_add_u8_length_prefixed(&body, &versions)) {
+    return false;
+  }
+  for (uint16_t version : config->supported_versions) {
+    uint16_t value = dae_utls_is_grease_placeholder(config, version)
+                         ? ssl_get_grease_value(hs, ssl_grease_version)
+                         : version;
+    if (!CBB_add_u16(&versions, value)) {
+      return false;
+    }
+  }
+  return CBB_flush(extensions);
+}
+
+static bool dae_utls_add_signature_algorithms_extension(
+    const DAEUtlsTemplateConfig *config, CBB *extensions) {
+  CBB body, schemes;
+  if (!CBB_add_u16(extensions, TLSEXT_TYPE_signature_algorithms) ||
+      !CBB_add_u16_length_prefixed(extensions, &body) ||
+      !CBB_add_u16_length_prefixed(&body, &schemes)) {
+    return false;
+  }
+  for (uint16_t scheme : config->signature_schemes) {
+    if (!CBB_add_u16(&schemes, scheme)) {
+      return false;
+    }
+  }
+  return CBB_flush(extensions);
+}
+
+static bool dae_utls_add_template_extensions(
+    SSL_HANDSHAKE *hs,
+    const std::vector<DAEParsedClientHelloExtension> &original_extensions,
+    CBB *extensions, size_t client_hello_prefix_len) {
+  const DAEUtlsTemplateConfig *config = &hs->config->dae_utls;
+  bool has_padding_template = false;
+  size_t grease_index = 0;
+
+  for (uint16_t extension_type : config->extension_order) {
+    if (dae_utls_is_grease_placeholder(config, extension_type)) {
+      uint16_t grease_ext = ssl_get_grease_value(
+          hs, grease_index == 0 ? ssl_grease_extension1
+                                : ssl_grease_extension2);
+      size_t grease_len = grease_index == 0 ? 0 : 1;
+      if (!dae_utls_add_padding_extension(extensions, grease_ext, grease_len)) {
+        return false;
+      }
+      grease_index++;
+      continue;
+    }
+
+    if (extension_type == TLSEXT_TYPE_padding) {
+      has_padding_template = true;
+      continue;
+    }
+
+    if (extension_type == TLSEXT_TYPE_supported_versions &&
+        !config->supported_versions.empty()) {
+      if (!dae_utls_add_supported_versions_extension(hs, extensions)) {
+        return false;
+      }
+      continue;
+    }
+
+    if (extension_type == TLSEXT_TYPE_signature_algorithms &&
+        !config->signature_schemes.empty()) {
+      if (!dae_utls_add_signature_algorithms_extension(config, extensions)) {
+        return false;
+      }
+      continue;
+    }
+
+    const DAEParsedClientHelloExtension *extension =
+        dae_utls_find_extension(original_extensions, extension_type);
+    if (extension == nullptr) {
+      if (!dae_utls_is_empty_template_extension(config, extension_type)) {
+        OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
+        return false;
+      }
+      if (!dae_utls_add_padding_extension(extensions, extension_type, 0)) {
+        return false;
+      }
+      continue;
+    }
+    CBB body;
+    if (!CBB_add_u16(extensions, extension_type) ||
+        !CBB_add_u16_length_prefixed(extensions, &body) ||
+        !CBB_add_bytes(&body, extension->body.data(), extension->body.size()) ||
+        !CBB_flush(extensions)) {
+      return false;
+    }
+  }
+
+  if (has_padding_template && config->padding_target_handshake_len != 0) {
+    const size_t current_len = client_hello_prefix_len + 2 + CBB_len(extensions);
+    if (current_len > config->padding_target_handshake_len) {
+      OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
+      return false;
+    }
+    size_t padding_total = config->padding_target_handshake_len - current_len;
+    if (padding_total != 0) {
+      size_t padding_len = padding_total > 4 ? padding_total - 4 : 1;
+      if (!dae_utls_add_padding_extension(extensions, TLSEXT_TYPE_padding,
+                                          padding_len)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+static bool dae_utls_apply_client_hello_template(SSL_HANDSHAKE *hs,
+                                                 Array<uint8_t> *msg) {
+  const DAEUtlsTemplateConfig *config = &hs->config->dae_utls;
+  if (!config->enabled) {
+    return true;
+  }
+
+  CBS cbs, random, session_id, cipher_suites, compression_methods;
+  uint8_t msg_type;
+  uint32_t body_len;
+  uint16_t legacy_version;
+  CBS_init(&cbs, msg->data(), msg->size());
+  if (!CBS_get_u8(&cbs, &msg_type) || msg_type != SSL3_MT_CLIENT_HELLO ||
+      !CBS_get_u24(&cbs, &body_len) || body_len != CBS_len(&cbs) ||
+      !CBS_get_u16(&cbs, &legacy_version) ||
+      !CBS_get_bytes(&cbs, &random, SSL3_RANDOM_SIZE) ||
+      !CBS_get_u8_length_prefixed(&cbs, &session_id) ||
+      !CBS_get_u16_length_prefixed(&cbs, &cipher_suites) ||
+      !CBS_get_u8_length_prefixed(&cbs, &compression_methods)) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_DECODE_ERROR);
+    return false;
+  }
+  (void)body_len;
+  (void)cipher_suites;
+
+  uint8_t template_session_id_storage[SSL_MAX_SSL_SESSION_ID_LENGTH];
+  Span<const uint8_t> template_session_id(CBS_data(&session_id),
+                                          CBS_len(&session_id));
+  if (config->session_id_len != 0 &&
+      config->session_id_len != CBS_len(&session_id)) {
+    if (config->session_id_len > sizeof(template_session_id_storage) ||
+        !RAND_bytes(template_session_id_storage, config->session_id_len)) {
+      OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
+      return false;
+    }
+    template_session_id =
+        Span<const uint8_t>(template_session_id_storage, config->session_id_len);
+  }
+
+  std::vector<DAEParsedClientHelloExtension> original_extensions;
+  if (!dae_utls_parse_client_hello_extensions(
+          Span<const uint8_t>(msg->data(), msg->size()), &original_extensions)) {
+    return false;
+  }
+
+  ScopedCBB cbb;
+  CBB body, session_id_cbb, compression_cbb, extensions;
+  if (!hs->ssl->method->init_message(hs->ssl, cbb.get(), &body,
+                                     SSL3_MT_CLIENT_HELLO)) {
+    return false;
+  }
+  const size_t prefix_len =
+      2 + SSL3_RANDOM_SIZE + 1 + template_session_id.size() + 2 +
+      config->cipher_suites.size() * 2 + 1 + CBS_len(&compression_methods);
+  if (!CBB_add_u16(&body, legacy_version) ||
+      !CBB_add_bytes(&body, CBS_data(&random), CBS_len(&random)) ||
+      !CBB_add_u8_length_prefixed(&body, &session_id_cbb) ||
+      !CBB_add_bytes(&session_id_cbb, template_session_id.data(),
+                     template_session_id.size()) ||
+      !dae_utls_add_cipher_suites(hs, &body) ||
+      !CBB_add_u8_length_prefixed(&body, &compression_cbb) ||
+      !CBB_add_bytes(&compression_cbb, CBS_data(&compression_methods),
+                     CBS_len(&compression_methods)) ||
+      !CBB_add_u16_length_prefixed(&body, &extensions) ||
+      !dae_utls_add_template_extensions(hs, original_extensions, &extensions,
+                                        prefix_len) ||
+      !CBB_flush(&body) ||
+      !hs->ssl->method->finish_message(hs->ssl, cbb.get(), msg)) {
+    return false;
+  }
+
+  return true;
+}
+
 bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
   SSL *const ssl = hs->ssl;
   ScopedCBB cbb;
@@ -344,6 +637,11 @@ bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
       !ssl_add_clienthello_tlsext(hs, &body, /*out_encoded=*/nullptr,
                                   &needs_psk_binder, type, CBB_len(&body)) ||
       !ssl->method->finish_message(ssl, cbb.get(), &msg)) {
+    hs->session_id = std::move(original_session_id);
+    return false;
+  }
+
+  if (!dae_utls_apply_client_hello_template(hs, &msg)) {
     hs->session_id = std::move(original_session_id);
     return false;
   }

@@ -49,6 +49,7 @@ blake2 = "0.10"
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 boring = "5.1"
 boring-sys = "5.1"
+brotli = "8"
 bytes = "1"
 chacha20poly1305 = "0.10"
 dae-cli = { path = "crates/dae-cli" }

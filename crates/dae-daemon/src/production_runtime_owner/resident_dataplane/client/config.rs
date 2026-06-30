@@ -23,7 +23,9 @@ pub(super) fn boring_vless_connector(
         SslVerifyMode::PEER
     });
     builder.set_read_ahead(boring_read_ahead_enabled(proxy));
-    if proxy.reality.is_some() || is_xtls_rprx_vision_flow(&proxy.flow) {
+    if proxy.utls_fingerprint.is_none()
+        && (proxy.reality.is_some() || is_xtls_rprx_vision_flow(&proxy.flow))
+    {
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))
             .map_err(|err| format!("set VLESS BoringSSL min TLS version: {err}"))?;
@@ -33,6 +35,7 @@ pub(super) fn boring_vless_connector(
     }
     if let Some(fingerprint) = &proxy.utls_fingerprint {
         configure_boring_fingerprint(&mut builder, fingerprint)?;
+        configure_utls_template_boring_context(&mut builder, fingerprint)?;
     }
     let alpn = boring_alpn_wire(proxy)?;
     if !alpn.is_empty() {

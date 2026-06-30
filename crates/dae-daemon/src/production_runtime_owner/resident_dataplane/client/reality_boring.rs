@@ -12,6 +12,7 @@ pub(crate) async fn open_async_reality_boring_resident_tls_client(
     let mut config = connector
         .configure()
         .map_err(|err| format!("configure VLESS Reality BoringSSL client: {err}"))?;
+    configure_utls_template_boring_ssl(&mut config, proxy)?;
     config.set_verify_hostname(false);
     config.set_custom_verify_callback(SslVerifyMode::PEER, verify_reality_boring_server_cert);
     configure_reality_boring_ssl(&mut config, reality)?;
