@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use boring::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
-use dae_outbound::shared_transport::reality::REALITY_VERSION;
 use dae_outbound::shared_transport::{
     TlsFragmentOptions, UTLS_ALPN_POLICY_RANDOMIZED_ALPN, UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN,
     UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE,

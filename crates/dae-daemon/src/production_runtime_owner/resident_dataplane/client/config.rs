@@ -1,6 +1,6 @@
 use super::*;
+use dae_outbound::shared_transport::reality::reality_client_version;
 
-const REALITY_CLIENT_VERSION: [u8; 3] = REALITY_VERSION;
 pub(super) fn boring_vless_connector(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<SslConnector>, String> {
@@ -146,7 +146,7 @@ fn build_rustls_vless_client_config(
     let mut config = if let Some(reality) = &proxy.reality {
         let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
             .map_err(|err| format!("create VLESS Reality config: {err}"))?
-            .with_client_version(REALITY_CLIENT_VERSION);
+            .with_client_version(reality_client_version());
         builder
             .dangerous()
             .with_custom_certificate_verifier(ResidentRealityFallbackRejectVerifier::new())
@@ -208,7 +208,7 @@ fn build_rustls_xhttp_endpoint_client_config(
     let mut config = if let Some(reality) = &endpoint.reality {
         let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
             .map_err(|err| format!("create xHTTP Reality config: {err}"))?
-            .with_client_version(REALITY_CLIENT_VERSION);
+            .with_client_version(reality_client_version());
         builder
             .dangerous()
             .with_custom_certificate_verifier(ResidentRealityFallbackRejectVerifier::new())
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn reality_client_version_uses_shared_protocol_version() {
         assert_eq!(
-            REALITY_CLIENT_VERSION,
+            reality_client_version(),
             dae_outbound::shared_transport::reality::REALITY_VERSION
         );
     }

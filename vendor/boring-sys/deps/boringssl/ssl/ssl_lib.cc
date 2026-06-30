@@ -2044,8 +2044,25 @@ int DAE_SSL_set1_reality_config(SSL *ssl, const uint8_t *server_public_key,
   }
 
   static const uint16_t kDaeRealityX25519Only[] = {SSL_GROUP_X25519};
+  static const uint16_t kDaeRealityVerifySigAlgs[] = {
+      SSL_SIGN_ED25519,
+      SSL_SIGN_ECDSA_SECP256R1_SHA256,
+      SSL_SIGN_RSA_PSS_RSAE_SHA256,
+      SSL_SIGN_RSA_PKCS1_SHA256,
+      SSL_SIGN_ECDSA_SECP384R1_SHA384,
+      SSL_SIGN_RSA_PSS_RSAE_SHA384,
+      SSL_SIGN_RSA_PKCS1_SHA384,
+      SSL_SIGN_RSA_PSS_RSAE_SHA512,
+      SSL_SIGN_RSA_PKCS1_SHA512,
+      SSL_SIGN_RSA_PKCS1_SHA1,
+  };
   if (!SSL_set1_client_key_shares(ssl, kDaeRealityX25519Only,
                                   std::size(kDaeRealityX25519Only))) {
+    return 0;
+  }
+  if (!SSL_set_verify_algorithm_prefs(
+          ssl, kDaeRealityVerifySigAlgs,
+          std::size(kDaeRealityVerifySigAlgs))) {
     return 0;
   }
 
