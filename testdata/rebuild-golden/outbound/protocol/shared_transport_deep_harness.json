@@ -10,7 +10,7 @@
     "spider_x": "/?p=10-20&c=30&t=40&i=50&r=60-70",
     "unix_seconds": 1715846400,
     "entropy_hex": "00112233445566778899aabbccddeeff",
-    "session_id_hex": "01080a006645bd000123456789abcdef00112233445566778899aabbccddeeff",
+    "session_id_hex": "1a061b006645bd000123456789abcdef00112233445566778899aabbccddeeff",
     "mutation_harness": true,
     "full_utls_stack": false
   },

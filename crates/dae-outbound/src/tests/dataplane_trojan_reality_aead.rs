@@ -35,7 +35,7 @@ fn case_reality_session_plaintext_layout_matches_native() {
     let plaintext =
         shared_transport::reality_session_id_plaintext(options.sid, options.unix_seconds);
 
-    assert_eq!(&plaintext[..3], &[1, 8, 10]);
+    assert_eq!(&plaintext[..3], &shared_transport::reality::REALITY_VERSION);
     assert_eq!(plaintext[3], 0);
     assert_eq!(&plaintext[4..8], &options.unix_seconds.to_be_bytes());
     assert_eq!(&plaintext[8..16], &options.sid);
