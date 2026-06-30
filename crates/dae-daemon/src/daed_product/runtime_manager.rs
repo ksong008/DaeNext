@@ -258,7 +258,7 @@ pub(super) struct RuntimeOverviewDeltaState {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductRuntimeLifecycleLogMode {
     StartupRestore,
-    ReloadSignal,
+    ReloadLocalControl,
     ReloadSubscriptionRefresh,
 }
 
@@ -266,7 +266,7 @@ impl ProductRuntimeLifecycleLogMode {
     pub(super) fn source(self) -> &'static str {
         match self {
             Self::StartupRestore => "startup-restore",
-            Self::ReloadSignal => "signal",
+            Self::ReloadLocalControl => "local-control",
             Self::ReloadSubscriptionRefresh => "subscription-refresh",
         }
     }

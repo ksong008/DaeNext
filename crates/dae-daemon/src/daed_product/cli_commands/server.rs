@@ -12,6 +12,9 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         return DaedProductOutput::error(format!("init log store failed: {err}"));
     }
     register_resident_event_product_log_sink(&options.config_dir, &options.state);
+    if let Err(err) = block_product_signals() {
+        return DaedProductOutput::error(format!("install signal control failed: {err}"));
+    }
     let runtime = Arc::new(ProductRuntimeManager::new());
     if let Err(err) = install_product_signal_thread(
         Arc::clone(&runtime),
@@ -46,6 +49,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         state: options.state,
         web_root: options.web_root,
         api_only: options.api_only,
+        control_socket: options.control_socket,
         runtime,
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
@@ -207,74 +211,7 @@ pub(crate) fn install_product_signal_thread(
     thread::spawn(move || {
         while let Ok(signal) = wait_product_signal() {
             match signal {
-                libc::SIGHUP | libc::SIGUSR1 => {
-                    let reload_started_at = Instant::now();
-                    let mut fields = BTreeMap::new();
-                    fields.insert("signal".to_owned(), signal.to_string());
-                    fields.insert("source".to_owned(), "signal".to_owned());
-                    let _ = append_lifecycle_log_fields_for_config(
-                        &config_dir,
-                        &state,
-                        "info",
-                        "[Reload] Received signal reload request",
-                        fields,
-                    );
-                    if !should_restore_runtime_on_start(&state).unwrap_or(false) {
-                        let _ = append_lifecycle_log_for_config(
-                            &config_dir,
-                            &state,
-                            "info",
-                            "[Reload] signal reload skipped because persisted running state is false",
-                        );
-                        continue;
-                    }
-                    let result = restore_runtime_from_state(
-                        &runtime,
-                        &state,
-                        Some(&config_dir),
-                        ProductRuntimeLifecycleLogMode::ReloadSignal,
-                    );
-                    match result {
-                        Ok(report) => {
-                            drop(report);
-                            let post_drop_reclaim =
-                                allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);
-                            let mut fields = BTreeMap::new();
-                            fields.insert("source".to_owned(), "signal".to_owned());
-                            fields.insert("applied".to_owned(), "true".to_owned());
-                            fields.insert(
-                                "allocatorReclaim".to_owned(),
-                                post_drop_reclaim["status"]
-                                    .as_str()
-                                    .unwrap_or("unknown")
-                                    .to_owned(),
-                            );
-                            fields.insert(
-                                "elapsed".to_owned(),
-                                format!("{:?}", reload_started_at.elapsed()),
-                            );
-                            let _ = append_lifecycle_log_fields_for_config(
-                                &config_dir,
-                                &state,
-                                "info",
-                                "[Reload] Finished",
-                                fields,
-                            );
-                        }
-                        Err(err) => {
-                            let mut fields = BTreeMap::new();
-                            fields.insert("source".to_owned(), "signal".to_owned());
-                            fields.insert("error".to_owned(), err.clone());
-                            let _ = append_lifecycle_log_fields_for_config(
-                                &config_dir,
-                                &state,
-                                "error",
-                                "[Reload] Failed to reload",
-                                fields,
-                            );
-                        }
-                    }
-                }
+                libc::SIGHUP | libc::SIGUSR1 => continue,
                 libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
                     let stop = runtime.stop_and_wait_for_cleanup("signal-stop");
                     let _ = mark_runtime_process_stopped(&state);
@@ -369,6 +306,7 @@ pub(crate) fn parse_run_args(args: &[String]) -> Result<RunOptions, String> {
         .or_else(|| std::env::var_os(PRODUCT_WEB_ROOT_LEGACY_ENV))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_WEB_ROOT));
+    let mut control_socket = std::env::var_os(PRODUCT_CONTROL_SOCKET_ENV).map(PathBuf::from);
     let mut api_only = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -409,16 +347,30 @@ pub(crate) fn parse_run_args(args: &[String]) -> Result<RunOptions, String> {
             _ if arg.starts_with("--web-root=") => {
                 web_root = arg.split_once('=').unwrap().1.into();
             }
+            "--control" | "--control-socket" => {
+                let Some(value) = iter.next() else {
+                    return Err("missing run --control value".to_owned());
+                };
+                control_socket = Some(value.into());
+            }
+            _ if arg.starts_with("--control=") => {
+                control_socket = Some(arg.split_once('=').unwrap().1.into());
+            }
+            _ if arg.starts_with("--control-socket=") => {
+                control_socket = Some(arg.split_once('=').unwrap().1.into());
+            }
             "--api-only" => api_only = true,
             _ => return Err(format!("unsupported run argument: {arg}")),
         }
     }
     let state = state.unwrap_or_else(|| config_dir.join("daed.db"));
+    let control_socket = control_socket.unwrap_or_else(|| PathBuf::from(DEFAULT_CONTROL_SOCKET));
     Ok(RunOptions {
         config_dir,
         listen,
         state,
         web_root,
         api_only,
+        control_socket,
     })
 }

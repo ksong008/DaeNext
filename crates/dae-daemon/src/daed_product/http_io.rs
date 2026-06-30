@@ -482,7 +482,8 @@ pub(super) fn status_reason(status: u16) -> &'static str {
 pub(super) fn help_text() -> String {
     r#"daed Rust native product commands:
   daed --version
-  daed run -c /etc/daed --listen 0.0.0.0:2023 [--api-only] [--web-root PATH]
+  daed run -c /etc/daed --listen 0.0.0.0:2023 [--api-only] [--web-root PATH] [--control PATH]
+  daed reload [--control PATH] [--timeout 30s] [--json]
   daed validate -c /etc/daed/|/etc/dae/config.dae [--json]
   daed service-contract [--json]
   daed package-info [--json]
