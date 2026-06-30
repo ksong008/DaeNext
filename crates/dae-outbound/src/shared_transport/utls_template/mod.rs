@@ -1,6 +1,7 @@
 mod coverage;
 mod model;
 mod normalize;
+mod runtime;
 
 pub use coverage::{
     UtlsTemplateCoverage, resolve_utls_template_mode, utls_template_coverage,
@@ -11,3 +12,7 @@ pub use model::{
     UtlsTemplateFamily, UtlsTemplateMode, UtlsTemplateProfile, UtlsTemplateValue,
 };
 pub use normalize::normalize_utls_template_profile;
+pub use runtime::{
+    UTLS_TEMPLATE_GREASE, UtlsRuntimeTemplate, UtlsRuntimeTemplateCapabilities,
+    resolve_utls_runtime_template,
+};

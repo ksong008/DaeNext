@@ -1,4 +1,4 @@
-use super::UtlsTemplateMode;
+use super::{UtlsTemplateMode, runtime::runtime_template_mode};
 use crate::OutboundError;
 use crate::shared_transport::{
     SUPPORTED_UTLS_FINGERPRINTS, UtlsFingerprint, resolve_utls_client_hello_id,
@@ -45,11 +45,7 @@ pub fn utls_template_mode_label(mode: UtlsTemplateMode) -> &'static str {
 }
 
 fn utls_template_mode(fingerprint: &UtlsFingerprint) -> UtlsTemplateMode {
-    if fingerprint.randomized {
-        UtlsTemplateMode::Randomized
-    } else {
-        UtlsTemplateMode::FamilyApproximation
-    }
+    runtime_template_mode(fingerprint)
 }
 
 impl Default for UtlsTemplateCoverage {
