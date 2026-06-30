@@ -28,6 +28,10 @@ pub const UTLS_FAMILY_IOS: &str = "ios";
 pub const UTLS_FAMILY_QQ: &str = "qq";
 pub const UTLS_FAMILY_RANDOM: &str = "random";
 pub const UTLS_FAMILY_SAFARI: &str = "safari";
+pub const DEFAULT_UTLS_FINGERPRINT: &str = UTLS_FAMILY_CHROME;
+pub const UTLS_CONTRACT_LINK_PROBE_FINGERPRINT: &str = DEFAULT_UTLS_FINGERPRINT;
+pub const UTLS_CONTRACT_GLOBAL_PROBE_FINGERPRINT: &str = UTLS_FAMILY_SAFARI;
+pub const UTLS_CONTRACT_UNKNOWN_PROBE_FINGERPRINT: &str = "Chrome";
 
 pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
     fp(

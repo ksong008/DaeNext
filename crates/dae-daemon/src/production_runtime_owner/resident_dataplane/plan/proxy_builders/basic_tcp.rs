@@ -81,8 +81,11 @@ pub(crate) fn build_http_proxy_plan(
             )?
         }
         HttpScheme::Https if tls_implementation.eq_ignore_ascii_case("utls") => {
-            resolve_resident_utls_fingerprint("HTTPS proxy tlsImplementation", "chrome")
-                .map(Some)?
+            resolve_resident_utls_fingerprint(
+                "HTTPS proxy tlsImplementation",
+                DEFAULT_UTLS_FINGERPRINT,
+            )
+            .map(Some)?
         }
         HttpScheme::Https => resident_utls_fingerprint_plan(config, None)?,
     };

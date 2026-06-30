@@ -9,12 +9,20 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
         .map(|row| (*row).to_value())
         .collect::<Vec<_>>();
     let supported_fingerprints = dae_outbound::shared_transport::supported_utls_fingerprint_count();
-    let link_fingerprint_plan_ready =
-        dae_outbound::shared_transport::resolve_utls_client_hello_id("chrome").is_ok();
+    let link_fingerprint_plan_ready = dae_outbound::shared_transport::resolve_utls_client_hello_id(
+        dae_outbound::shared_transport::UTLS_CONTRACT_LINK_PROBE_FINGERPRINT,
+    )
+    .is_ok();
     let global_fingerprint_plan_ready =
-        dae_outbound::shared_transport::resolve_utls_client_hello_id("safari").is_ok();
+        dae_outbound::shared_transport::resolve_utls_client_hello_id(
+            dae_outbound::shared_transport::UTLS_CONTRACT_GLOBAL_PROBE_FINGERPRINT,
+        )
+        .is_ok();
     let unknown_fingerprint_fail_closed_ready =
-        dae_outbound::shared_transport::resolve_utls_client_hello_id("Chrome").is_err();
+        dae_outbound::shared_transport::resolve_utls_client_hello_id(
+            dae_outbound::shared_transport::UTLS_CONTRACT_UNKNOWN_PROBE_FINGERPRINT,
+        )
+        .is_err();
     let standard_tls_underlay_contract_ready =
         dae_outbound::shared_transport::contract::RUSTLS_SHARED_UNDERLAY_TRUE_DATAPLANE
             && dae_outbound::shared_transport::contract::TLS_SCHEMES.contains(&"tls")
