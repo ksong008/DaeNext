@@ -14,12 +14,8 @@ const REALITY_CERT_KEY_SCAN_WINDOW: usize = 16;
 pub(super) fn verify_reality_boring_server_cert(ssl: &mut SslRef) -> Result<(), SslVerifyError> {
     let auth_key =
         reality_boring_auth_key(ssl).ok_or(SslVerifyError::Invalid(SslAlert::HANDSHAKE_FAILURE))?;
-    let cert = ssl
-        .peer_certificate()
+    let der = reality_boring_peer_leaf_der(ssl)
         .ok_or(SslVerifyError::Invalid(SslAlert::BAD_CERTIFICATE))?;
-    let der = cert
-        .to_der()
-        .map_err(|_| SslVerifyError::Invalid(SslAlert::BAD_CERTIFICATE))?;
     if reality_cert_matches_auth_key(&der, &auth_key) {
         Ok(())
     } else {

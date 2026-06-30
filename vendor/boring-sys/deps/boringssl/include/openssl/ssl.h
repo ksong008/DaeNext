@@ -2689,6 +2689,13 @@ OPENSSL_EXPORT int DAE_SSL_get0_reality_auth_key(const SSL *ssl,
                                                  const uint8_t **out_key,
                                                  size_t *out_key_len);
 
+// DAE_SSL_get0_peer_leaf_cert_der returns the raw DER bytes of the peer leaf
+// certificate as received on the wire, or zero if unavailable. The returned
+// pointer is owned by |ssl|.
+OPENSSL_EXPORT int DAE_SSL_get0_peer_leaf_cert_der(const SSL *ssl,
+                                                   const uint8_t **out_der,
+                                                   size_t *out_der_len);
+
 // SSL_set1_server_supported_groups_hint, when |ssl| is a client, indicates that
 // the server is likely to support groups listed in |server_groups|, in order of
 // decreasing server preference. This function returns one on success and zero
