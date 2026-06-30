@@ -31,6 +31,8 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
     let live_evidence_contract_ready = true;
     let wire_evidence_comparison_recorded = true;
     let full_parity_not_declared = true;
+    let reality_fingerprint_boring_underlay_ready =
+        boring_fingerprint_underlay_ready && standard_tls_underlay_contract_ready;
     let reality_fingerprint_rustls_fail_closed_ready = true;
     let contract_ready = standard_tls_underlay_contract_ready
         && fingerprint_aware_tls_underlay_contract_ready
@@ -38,7 +40,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
         && live_evidence_contract_ready
         && wire_evidence_comparison_recorded
         && full_parity_not_declared
-        && reality_fingerprint_rustls_fail_closed_ready;
+        && reality_fingerprint_boring_underlay_ready;
 
     if let Value::Object(report) = report {
         report.insert(
@@ -92,6 +94,10 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
         report.insert(
             "reality_fingerprint_rustls_fail_closed_ready".to_owned(),
             json!(reality_fingerprint_rustls_fail_closed_ready),
+        );
+        report.insert(
+            "reality_fingerprint_boring_underlay_ready".to_owned(),
+            json!(reality_fingerprint_boring_underlay_ready),
         );
         report.insert(
             "outbound_fingerprint_underlay_typed_report_ready".to_owned(),
@@ -178,6 +184,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
                 "full_utls_parity_declared": false,
                 "wire_evidence_required_before_full_utls_parity": true,
                 "reality_fingerprint_rustls_fail_closed_ready": reality_fingerprint_rustls_fail_closed_ready,
+                "reality_fingerprint_boring_underlay_ready": reality_fingerprint_boring_underlay_ready,
                 "current_report_schema": true,
             }),
         );
@@ -192,7 +199,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
                 "global_fingerprint_source": "global tls_implementation=utls plus utls_imitate is used when the node link has no fingerprint",
                 "unknown_fingerprint_policy": "fail-closed",
                 "no_silent_degrade_policy": "fingerprint-aware requests must not degrade to standard rustls",
-                "reality_fingerprint_boundary": "Reality links with uTLS fingerprint are fail-closed until a fingerprint-capable Reality underlay is admitted",
+                "reality_fingerprint_boundary": "Reality links with uTLS fingerprint use a dedicated BoringSSL Reality underlay; rustls is not used for fingerprint emission",
                 "live_evidence_field": "resident_dataplane TCP report tls_underlay",
                 "wire_evidence_scope": "Boring-backed fingerprint evidence is sufficient for current native admission; full uTLS parity still requires wire evidence and is not declared",
             }),

@@ -12,6 +12,9 @@ pub(crate) enum AsyncVlessTlsEngine {
     RealityRustls {
         tls: tokio_rustls::client::TlsStream<AsyncResidentTcpStream>,
     },
+    RealityBoring {
+        tls: tokio_boring::SslStream<AsyncResidentTcpStream>,
+    },
     Boring {
         tls: tokio_boring::SslStream<AsyncResidentTcpStream>,
     },
@@ -21,6 +24,7 @@ pub(crate) enum AsyncVlessTlsEngine {
 pub(crate) enum ResidentTlsProvider {
     StandardRustls,
     RealityRustls,
+    RealityFingerprintBoring,
     FingerprintAwareBoring,
 }
 
@@ -34,10 +38,7 @@ impl ResidentTlsProvider {
                     Ok(Self::StandardRustls)
                 }
             }
-            "reality" if proxy.utls_fingerprint.is_some() => Err(
-                "VLESS Reality with uTLS fingerprint requires a fingerprint-capable Reality TLS underlay; rustls cannot implement uTLS fingerprints"
-                    .to_owned(),
-            ),
+            "reality" if proxy.utls_fingerprint.is_some() => Ok(Self::RealityFingerprintBoring),
             "reality" => Ok(Self::RealityRustls),
             other => Err(format!(
                 "resident TLS factory cannot open security underlay {other} for protocol {}",

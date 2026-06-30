@@ -27,6 +27,9 @@ pub(crate) async fn open_async_resident_tls_client_with_flow(
         ResidentTlsProvider::RealityRustls => {
             open_async_reality_rustls_resident_tls_client(proxy, tcp).await
         }
+        ResidentTlsProvider::RealityFingerprintBoring => {
+            open_async_reality_boring_resident_tls_client(proxy, tcp).await
+        }
         ResidentTlsProvider::StandardRustls => {
             open_async_rustls_resident_tls_client(proxy, tcp).await
         }

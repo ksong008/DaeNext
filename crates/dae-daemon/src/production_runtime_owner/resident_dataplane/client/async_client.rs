@@ -19,7 +19,7 @@ impl AsyncVlessTlsClient {
                 .write_all(payload)
                 .await
                 .map_err(|err| format!("{label}: {err}")),
-            AsyncVlessTlsEngine::Boring { tls } => tls
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => tls
                 .write_all(payload)
                 .await
                 .map_err(|err| format!("{label}: {err}")),
@@ -35,7 +35,7 @@ impl AsyncVlessTlsClient {
                 .flush()
                 .await
                 .map_err(|err| format!("flush {label}: {err}")),
-            AsyncVlessTlsEngine::Boring { tls } => tls
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => tls
                 .flush()
                 .await
                 .map_err(|err| format!("flush {label}: {err}")),
@@ -50,7 +50,9 @@ impl AsyncVlessTlsClient {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 tls.read(buf).await
             }
-            AsyncVlessTlsEngine::Boring { tls } => tls.read(buf).await,
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                tls.read(buf).await
+            }
         }
     }
 
@@ -62,7 +64,9 @@ impl AsyncVlessTlsClient {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 tls.get_mut().0.read(buf).await
             }
-            AsyncVlessTlsEngine::Boring { tls } => tls.get_mut().read(buf).await,
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                tls.get_mut().read(buf).await
+            }
         }
     }
 
@@ -82,7 +86,7 @@ impl AsyncVlessTlsClient {
                     .await
                     .map_err(|err| format!("flush {label}: {err}"))
             }
-            AsyncVlessTlsEngine::Boring { tls } => {
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
                 let raw = tls.get_mut().raw_mut();
                 raw.write_all(payload)
                     .await
@@ -99,7 +103,7 @@ impl AsyncVlessTlsClient {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 let _ = tls.shutdown().await;
             }
-            AsyncVlessTlsEngine::Boring { tls } => {
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
                 let _ = tls.shutdown().await;
             }
         }
@@ -116,7 +120,9 @@ impl AsyncRead for AsyncVlessTlsClient {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 Pin::new(tls).poll_read(cx, buf)
             }
-            AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_read(cx, buf),
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_read(cx, buf)
+            }
         }
     }
 }
@@ -131,7 +137,9 @@ impl AsyncWrite for AsyncVlessTlsClient {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 Pin::new(tls).poll_write(cx, buf)
             }
-            AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_write(cx, buf),
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_write(cx, buf)
+            }
         }
     }
 
@@ -140,7 +148,9 @@ impl AsyncWrite for AsyncVlessTlsClient {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 Pin::new(tls).poll_flush(cx)
             }
-            AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_flush(cx),
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_flush(cx)
+            }
         }
     }
 
@@ -149,7 +159,9 @@ impl AsyncWrite for AsyncVlessTlsClient {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 Pin::new(tls).poll_shutdown(cx)
             }
-            AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_shutdown(cx),
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_shutdown(cx)
+            }
         }
     }
 }

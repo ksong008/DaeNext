@@ -23,7 +23,7 @@ pub(super) fn boring_vless_connector(
         SslVerifyMode::PEER
     });
     builder.set_read_ahead(boring_read_ahead_enabled(proxy));
-    if is_xtls_rprx_vision_flow(&proxy.flow) {
+    if proxy.reality.is_some() || is_xtls_rprx_vision_flow(&proxy.flow) {
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))
             .map_err(|err| format!("set VLESS BoringSSL min TLS version: {err}"))?;
@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn reality_client_config_rejects_rustls_fingerprint_downgrade() {
+    fn reality_client_config_keeps_rustls_fingerprint_fail_closed_if_called_directly() {
         let mut proxy =
             test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
         proxy.tls = "reality".to_owned();
@@ -545,8 +545,26 @@ mod tests {
 
         let err = rustls_vless_client_config(&proxy).unwrap_err();
         assert!(err.contains("rustls cannot implement uTLS fingerprints"));
-        let err = ResidentTlsProvider::from_proxy(&proxy).unwrap_err();
-        assert!(err.contains("rustls cannot implement uTLS fingerprints"));
+    }
+
+    #[test]
+    fn reality_fingerprint_uses_boring_provider() {
+        let mut proxy =
+            test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        proxy.tls = "reality".to_owned();
+        proxy.reality = Some(ResidentRealityUnderlayPlan {
+            public_key: [7; 32],
+            short_id: vec![1, 2, 3, 4],
+            spider_x: "/".to_owned(),
+        });
+        proxy.utls_fingerprint = Some(test_fingerprint_plan(
+            dae_outbound::shared_transport::UTLS_FAMILY_CHROME,
+        ));
+
+        assert_eq!(
+            ResidentTlsProvider::from_proxy(&proxy).unwrap(),
+            ResidentTlsProvider::RealityFingerprintBoring
+        );
     }
 
     #[test]
