@@ -2077,27 +2077,6 @@ int DAE_SSL_get0_reality_auth_key(const SSL *ssl, const uint8_t **out_key,
   return 1;
 }
 
-int DAE_SSL_get0_peer_leaf_cert_der(const SSL *ssl, const uint8_t **out_der,
-                                    size_t *out_der_len) {
-  if (ssl == nullptr || out_der == nullptr || out_der_len == nullptr) {
-    return 0;
-  }
-
-  const STACK_OF(CRYPTO_BUFFER) *certs = SSL_get0_peer_certificates(ssl);
-  if (certs == nullptr || sk_CRYPTO_BUFFER_num(certs) == 0) {
-    return 0;
-  }
-
-  const CRYPTO_BUFFER *leaf = sk_CRYPTO_BUFFER_value(certs, 0);
-  if (leaf == nullptr) {
-    return 0;
-  }
-
-  *out_der = CRYPTO_BUFFER_data(leaf);
-  *out_der_len = CRYPTO_BUFFER_len(leaf);
-  return 1;
-}
-
 int SSL_set1_server_supported_groups_hint(SSL *ssl,
                                           const uint16_t *server_groups,
                                           size_t num_server_groups) {

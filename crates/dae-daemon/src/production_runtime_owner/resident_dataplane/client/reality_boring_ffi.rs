@@ -18,11 +18,6 @@ unsafe extern "C" {
         out_key_len: *mut usize,
     ) -> libc::c_int;
 
-    fn DAE_SSL_get0_peer_leaf_cert_der(
-        ssl: *const boring_sys::SSL,
-        out_der: *mut *const u8,
-        out_der_len: *mut usize,
-    ) -> libc::c_int;
 }
 
 pub(super) fn configure_reality_boring_ssl(
@@ -63,14 +58,4 @@ pub(super) fn reality_boring_auth_key(ssl: &SslRef) -> Option<[u8; 32]> {
     let source = unsafe { std::slice::from_raw_parts(key_ptr, key_len) };
     key.copy_from_slice(source);
     Some(key)
-}
-
-pub(super) fn reality_boring_peer_leaf_der(ssl: &SslRef) -> Option<Vec<u8>> {
-    let mut der_ptr = std::ptr::null();
-    let mut der_len = 0_usize;
-    let ok = unsafe { DAE_SSL_get0_peer_leaf_cert_der(ssl.as_ptr(), &mut der_ptr, &mut der_len) };
-    if ok != 1 || der_ptr.is_null() || der_len == 0 {
-        return None;
-    }
-    Some(unsafe { std::slice::from_raw_parts(der_ptr, der_len) }.to_vec())
 }
