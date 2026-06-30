@@ -29,6 +29,7 @@ resolver = "3"
 [patch.crates-io]
 rustls = { git = "https://github.com/Watfaq/rustls.git", branch = "watfaq/0.23.40" }
 tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "watfaq/0.26.4" }
+boring-sys = { path = "vendor/boring-sys" }
 
 [workspace.package]
 version = "3.0.2"
