@@ -35,6 +35,19 @@ fn fingerprint_config_with_mark(mark: u32, global_tls_fields: &str, source: Stri
     parse_config(&config_source)
 }
 
+fn browser_default_alpn() -> Vec<String> {
+    dae_outbound::shared_transport::UTLS_BROWSER_DEFAULT_ALPN
+        .iter()
+        .map(|protocol| (*protocol).to_owned())
+        .collect()
+}
+
+fn default_proxy_for_source(global_tls_fields: &str, source: String) -> ResidentProxyPlan {
+    let config = fingerprint_config(global_tls_fields, source);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    plan.default_proxy_snapshot().unwrap()
+}
+
 #[test]
 pub(super) fn resident_dataplane_plan_resolves_link_fingerprint_before_wire_gate() {
     let config = fingerprint_config(
@@ -68,6 +81,196 @@ pub(super) fn resident_dataplane_plan_carries_generic_link_fingerprint() {
 }
 
 #[test]
+pub(super) fn resident_standard_tls_fingerprint_does_not_rewrite_protocol_alpn() {
+    let primary = fixture_host(FixtureEndpoint::Primary);
+    let primary_port = fixture_port(FixtureEndpoint::Primary.slot());
+
+    let mut vmess = VMessLink::parse(&vmess_fixture_url(
+        "",
+        &primary,
+        primary_port,
+        "tcp",
+        "",
+        "",
+        "tls",
+    ))
+    .unwrap();
+    vmess.fingerprint = "chrome_102".to_owned();
+
+    let mut https_proxy =
+        HttpProxyLink::parse(&https_proxy_fixture_url(&primary, primary_port)).unwrap();
+    https_proxy.alpn.clear();
+    https_proxy.utls_imitate = "chrome_102".to_owned();
+    let mut https_proxy_link = https_proxy.export_url();
+    let separator = if https_proxy_link.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    https_proxy_link.push(separator);
+    https_proxy_link.push_str("utlsImitate=chrome_102");
+
+    let http_1_1 = vec![dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned()];
+    for (label, proxy, expected_utls, expected_alpn) in [
+        (
+            "vless-tcp-link-fp",
+            default_proxy_for_source("", vless_vision_without_flow_fixture_url("chrome_102")),
+            true,
+            Vec::new(),
+        ),
+        (
+            "vmess-tcp-link-fp",
+            default_proxy_for_source("", vmess.export_url()),
+            true,
+            Vec::new(),
+        ),
+        (
+            "trojan-global-fp",
+            default_proxy_for_source(
+                r#"
+                tls_implementation: utls
+                utls_imitate: chrome_102
+                "#,
+                trojan_fixture_url("", &primary, primary_port),
+            ),
+            true,
+            Vec::new(),
+        ),
+        (
+            "https-proxy-link-fp-empty-alpn",
+            default_proxy_for_source("", https_proxy_link),
+            true,
+            http_1_1,
+        ),
+    ] {
+        assert_eq!(proxy.tls, "tls", "{label}");
+        assert_eq!(proxy.utls_fingerprint.is_some(), expected_utls, "{label}");
+        assert_eq!(proxy.alpn, expected_alpn, "{label}");
+    }
+}
+
+#[test]
+pub(super) fn resident_standard_tls_fingerprint_keeps_protocol_required_or_explicit_alpn() {
+    let primary = fixture_host(FixtureEndpoint::Primary);
+    let primary_port = fixture_port(FixtureEndpoint::Primary.slot());
+
+    let mut vmess_grpc = VMessLink::parse(&vmess_fixture_url(
+        "",
+        &primary,
+        primary_port,
+        "grpc",
+        &fixture_host(FixtureEndpoint::Authority),
+        "ServiceEndpoint",
+        "tls",
+    ))
+    .unwrap();
+    vmess_grpc.fingerprint = "chrome_102".to_owned();
+
+    let mut vless_explicit = VLESSLink::parse(&vless_vision_fixture_url("chrome_102")).unwrap();
+    vless_explicit.alpn = dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned();
+
+    for (label, proxy, expected_utls) in [
+        (
+            "vmess-grpc",
+            default_proxy_for_source("", vmess_grpc.export_url()),
+            true,
+        ),
+        (
+            "trojan-grpc-global-fp-excluded",
+            default_proxy_for_source(
+                r#"
+                tls_implementation: utls
+                utls_imitate: chrome_102
+                "#,
+                trojan_grpc_fixture_url("", &primary, primary_port),
+            ),
+            false,
+        ),
+    ] {
+        assert_eq!(proxy.tls, "tls", "{label}");
+        assert_eq!(proxy.utls_fingerprint.is_some(), expected_utls, "{label}");
+        assert_eq!(
+            proxy.alpn,
+            vec![dae_outbound::shared_transport::UTLS_ALPN_H2.to_owned()],
+            "{label}"
+        );
+    }
+
+    let explicit = default_proxy_for_source("", vless_explicit.export_url());
+    assert_eq!(explicit.tls, "tls");
+    assert!(explicit.utls_fingerprint.is_some());
+    assert_eq!(
+        explicit.alpn,
+        vec![dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned()]
+    );
+}
+
+#[test]
+pub(super) fn resident_global_utls_is_limited_to_raw_tls_boundaries() {
+    let primary = fixture_host(FixtureEndpoint::Primary);
+    let authority = fixture_host(FixtureEndpoint::Authority);
+    let primary_port = fixture_port(FixtureEndpoint::Primary.slot());
+    let global = r#"
+        tls_implementation: utls
+        utls_imitate: chrome_102
+        "#;
+
+    let vless_ws = vless_fixture_url(
+        "",
+        &primary,
+        primary_port,
+        "websocket",
+        &authority,
+        "/resource",
+        &authority,
+        "",
+        "",
+    );
+    let vmess_ws = vmess_fixture_url_with_sni(
+        &primary,
+        primary_port,
+        "ws",
+        &authority,
+        "/resource",
+        "tls",
+        &authority,
+    );
+
+    for (label, proxy) in [
+        (
+            "vless-websocket-global-excluded",
+            default_proxy_for_source(global, vless_ws),
+        ),
+        (
+            "vmess-websocket-global-excluded",
+            default_proxy_for_source(global, vmess_ws),
+        ),
+        (
+            "trojan-websocket-global-excluded",
+            default_proxy_for_source(
+                global,
+                trojan_websocket_fixture_url("", &primary, primary_port),
+            ),
+        ),
+        (
+            "trojan-grpc-global-excluded",
+            default_proxy_for_source(global, trojan_grpc_fixture_url("", &primary, primary_port)),
+        ),
+        (
+            "anytls-global-excluded",
+            default_proxy_for_source(global, anytls_fixture_url(&primary, primary_port)),
+        ),
+        (
+            "https-proxy-global-excluded",
+            default_proxy_for_source(global, https_proxy_fixture_url(&primary, primary_port)),
+        ),
+    ] {
+        assert_eq!(proxy.tls, "tls", "{label}");
+        assert!(proxy.utls_fingerprint.is_none(), "{label}");
+    }
+}
+
+#[test]
 pub(super) fn resident_dataplane_plan_carries_reality_link_fingerprint_without_losing_reality() {
     let config = fingerprint_config("", vless_reality_fixture_url_with_fingerprint("ios_14"));
     let plan = build_resident_dataplane_plan(&config).unwrap();
@@ -81,13 +284,7 @@ pub(super) fn resident_dataplane_plan_carries_reality_link_fingerprint_without_l
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "ios_14");
     assert_eq!(utls.family, "ios");
-    assert_eq!(
-        utls.default_alpn,
-        dae_outbound::shared_transport::UTLS_BROWSER_DEFAULT_ALPN
-            .iter()
-            .map(|protocol| (*protocol).to_owned())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(utls.default_alpn, browser_default_alpn());
     assert_eq!(proxy.alpn, utls.default_alpn);
 
     let graph = proxy.executable_graph_value();
@@ -168,6 +365,20 @@ pub(super) fn resident_dataplane_plan_keeps_standard_tls_when_link_fp_is_empty_a
 #[test]
 pub(super) fn resident_dataplane_plan_keeps_document_unsafe_auxiliary_rustls_path() {
     let config = fingerprint_config("", vless_vision_fixture_url("unsafe"));
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let proxy = plan.default_proxy_snapshot().unwrap();
+    assert!(proxy.utls_fingerprint.is_none());
+}
+
+#[test]
+pub(super) fn resident_dataplane_plan_fp_unsafe_blocks_global_utls_fallback() {
+    let config = fingerprint_config(
+        r#"
+        tls_implementation: utls
+        utls_imitate: safari
+        "#,
+        vless_vision_fixture_url("unsafe"),
+    );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let proxy = plan.default_proxy_snapshot().unwrap();
     assert!(proxy.utls_fingerprint.is_none());

@@ -11,6 +11,6 @@ pub const ALLOW_INSECURE_ALIASES: &[&str] = &[
     "allowinsecure",
     "skipVerify",
 ];
-pub const HTTPS_DEFAULT_ALPN_QUERY_VALUE: &str = "h2,http/1.1";
+pub const HTTPS_DEFAULT_ALPN_QUERY_VALUE: &str = "http/1.1";
 pub const HTTPS_DEFAULT_TLS_IMPLEMENTATION: &str = "tls";
 pub const HTTPS_H2_ROUTE_CONTEXT_REQUIRED: bool = true;

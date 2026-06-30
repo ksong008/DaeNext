@@ -27,7 +27,6 @@ pub(crate) fn build_trojan_proxy_plan(
         ));
     }
     let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
-    let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
     let parsed_alpn = split_alpn(&parsed.alpn);
     let net = if websocket {
         "websocket"
@@ -39,6 +38,11 @@ pub(crate) fn build_trojan_proxy_plan(
         "tcp"
     }
     .to_owned();
+    let utls_fingerprint = if plain {
+        resident_utls_fingerprint_plan(config, None)?
+    } else {
+        None
+    };
     let stream_host = if websocket || httpupgrade || grpc {
         resident_stream_host(&parsed.host, &parsed.sni)
     } else {

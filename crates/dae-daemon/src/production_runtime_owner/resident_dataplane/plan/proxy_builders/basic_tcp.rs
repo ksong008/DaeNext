@@ -87,7 +87,7 @@ pub(crate) fn build_http_proxy_plan(
             )
             .map(Some)?
         }
-        HttpScheme::Https => resident_utls_fingerprint_plan(config, None)?,
+        HttpScheme::Https => None,
     };
     let tls_fragment = match parsed.protocol {
         HttpScheme::Http => None,

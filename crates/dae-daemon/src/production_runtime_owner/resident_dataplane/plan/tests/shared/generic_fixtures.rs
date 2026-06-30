@@ -196,7 +196,7 @@ fn http_proxy_url(
         path: "/".to_owned(),
         transport: false,
         tls_implementation: "tls".to_owned(),
-        alpn: "h2,http/1.1".to_owned(),
+        alpn: dae_outbound::http_proxy::contract::HTTPS_DEFAULT_ALPN_QUERY_VALUE.to_owned(),
         utls_imitate: utls_imitate.to_owned(),
     }
     .export_url();

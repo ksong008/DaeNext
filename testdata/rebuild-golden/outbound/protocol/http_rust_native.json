@@ -47,7 +47,7 @@
       "allowinsecure",
       "skipVerify"
     ],
-    "alpn_default_query_value": "h2,http/1.1",
+    "alpn_default_query_value": "http/1.1",
     "default_port": 443,
     "default_sni": "proxy.fixture.invalid",
     "explicit_sni": "server.fixture.invalid",
