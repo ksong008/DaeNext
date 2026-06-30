@@ -3,6 +3,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
     report: &mut Value,
 ) {
     let security_underlay_capability = dae_outbound::security_underlay_capability_contract();
+    let utls_template_coverage = dae_outbound::shared_transport::utls_template_coverage();
     let security_underlay_rows = security_underlay_capability
         .rows
         .iter()
@@ -112,6 +113,22 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
             json!(contract_ready),
         );
         report.insert(
+            "utls_template_exact_fixture_count".to_owned(),
+            json!(utls_template_coverage.exact_fixtures),
+        );
+        report.insert(
+            "utls_template_family_approximation_count".to_owned(),
+            json!(utls_template_coverage.family_approximations),
+        );
+        report.insert(
+            "utls_template_randomized_count".to_owned(),
+            json!(utls_template_coverage.randomized),
+        );
+        report.insert(
+            "utls_template_unsupported_exact_count".to_owned(),
+            json!(utls_template_coverage.unsupported_exact_templates),
+        );
+        report.insert(
             "native_fingerprint_underlay_production_contract_ready".to_owned(),
             json!(contract_ready),
         );
@@ -190,6 +207,13 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
                 "boring_fingerprint_underlay_ready": boring_fingerprint_underlay_ready,
                 "no_silent_fingerprint_rustls_downgrade_ready": no_silent_fingerprint_rustls_downgrade_ready,
                 "full_utls_parity_declared": false,
+                "template_coverage": {
+                    "supported_fingerprints": utls_template_coverage.supported_fingerprints,
+                    "exact_fixtures": utls_template_coverage.exact_fixtures,
+                    "family_approximations": utls_template_coverage.family_approximations,
+                    "randomized": utls_template_coverage.randomized,
+                    "unsupported_exact_templates": utls_template_coverage.unsupported_exact_templates,
+                },
                 "wire_evidence_required_before_full_utls_parity": true,
                 "reality_fingerprint_rustls_fail_closed_ready": reality_fingerprint_rustls_fail_closed_ready,
                 "reality_fingerprint_boring_underlay_ready": reality_fingerprint_boring_underlay_ready,
