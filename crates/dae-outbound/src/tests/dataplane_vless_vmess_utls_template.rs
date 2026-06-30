@@ -1,7 +1,8 @@
 use crate::shared_transport::{
     UtlsAlpnTemplate, UtlsClientHelloProfile, UtlsPaddingTemplate, UtlsServerNameTemplate,
     UtlsTemplateFamily, UtlsTemplateMode, UtlsTemplateProfile, normalize_utls_template_profile,
-    parse_utls_client_hello_record_hex, resolve_utls_client_hello_id,
+    parse_utls_client_hello_record_hex, resolve_utls_client_hello_id, resolve_utls_template_mode,
+    utls_template_coverage,
 };
 
 use super::*;
@@ -82,6 +83,25 @@ fn case_utls_template_normalizer_preserves_family_without_string_matching_runtim
         chrome_template.extension_types,
         safari_template.extension_types
     );
+}
+
+#[test]
+fn case_runtime_utls_template_coverage_does_not_claim_exact_templates_yet() {
+    let coverage = utls_template_coverage();
+
+    assert_eq!(coverage.supported_fingerprints, 45);
+    assert_eq!(coverage.exact_fixtures, 0);
+    assert!(coverage.family_approximations > 0);
+    assert!(coverage.randomized > 0);
+    assert_eq!(
+        resolve_utls_template_mode("chrome_102").unwrap(),
+        UtlsTemplateMode::FamilyApproximation
+    );
+    assert_eq!(
+        resolve_utls_template_mode("randomized").unwrap(),
+        UtlsTemplateMode::Randomized
+    );
+    assert!(resolve_utls_template_mode("Chrome").is_err());
 }
 
 fn template_grease_count(template: &UtlsTemplateProfile) -> usize {

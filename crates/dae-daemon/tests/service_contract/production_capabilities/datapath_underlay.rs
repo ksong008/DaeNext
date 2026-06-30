@@ -110,6 +110,29 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .unwrap(),
         "outbound-fingerprint-underlay"
     );
+    assert_eq!(
+        report["utls_template_exact_fixture_count"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+    assert!(
+        report["utls_template_family_approximation_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["exact_fixtures"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+    assert!(
+        !report["outbound_fingerprint_underlay_typed_report"]["full_utls_parity_declared"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(
         report["native_fingerprint_underlay_production_ready"]
             .as_bool()

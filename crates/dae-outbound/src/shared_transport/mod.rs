@@ -89,8 +89,9 @@ pub use utls_fingerprint::{
 };
 pub use utls_template::{
     UtlsAlpnTemplate, UtlsPaddingTemplate, UtlsServerNameTemplate, UtlsSessionIdTemplate,
-    UtlsTemplateFamily, UtlsTemplateMode, UtlsTemplateProfile, UtlsTemplateValue,
-    normalize_utls_template_profile,
+    UtlsTemplateCoverage, UtlsTemplateFamily, UtlsTemplateMode, UtlsTemplateProfile,
+    UtlsTemplateValue, normalize_utls_template_profile, resolve_utls_template_mode,
+    utls_template_coverage, utls_template_mode_label,
 };
 pub use utls_wire::{
     UtlsClientHelloProfile, parse_utls_client_hello_record, parse_utls_client_hello_record_hex,
