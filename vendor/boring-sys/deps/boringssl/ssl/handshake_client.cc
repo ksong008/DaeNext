@@ -217,74 +217,26 @@ bool ssl_write_client_hello_without_extensions(const SSL_HANDSHAKE *hs,
   return true;
 }
 
-bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
-  SSL *const ssl = hs->ssl;
-  ScopedCBB cbb;
-  CBB body;
-  ssl_client_hello_type_t type = hs->selected_ech_config
-                                     ? ssl_client_hello_outer
-                                     : ssl_client_hello_unencrypted;
-  bool needs_psk_binder;
-  Array<uint8_t> msg;
-  if (!ssl->method->init_message(ssl, cbb.get(), &body, SSL3_MT_CLIENT_HELLO) ||
-      !ssl_write_client_hello_without_extensions(hs, &body, type,
-                                                 /*empty_session_id=*/false) ||
-      !ssl_add_clienthello_tlsext(hs, &body, /*out_encoded=*/nullptr,
-                                  &needs_psk_binder, type, CBB_len(&body)) ||
-      !ssl->method->finish_message(ssl, cbb.get(), &msg)) {
+static bool dae_reality_client_hello_session_id_span(
+    Span<const uint8_t> msg, size_t *out_offset, size_t *out_len) {
+  CBS cbs, random, session_id;
+  uint8_t msg_type;
+  uint16_t legacy_version;
+  uint32_t body_len;
+  CBS_init(&cbs, msg.data(), msg.size());
+  if (!CBS_get_u8(&cbs, &msg_type) || msg_type != SSL3_MT_CLIENT_HELLO ||
+      !CBS_get_u24(&cbs, &body_len) || body_len != CBS_len(&cbs) ||
+      !CBS_get_u16(&cbs, &legacy_version) ||
+      !CBS_get_bytes(&cbs, &random, SSL3_RANDOM_SIZE) ||
+      !CBS_get_u8_length_prefixed(&cbs, &session_id) ||
+      CBS_len(&session_id) != SSL_MAX_SSL_SESSION_ID_LENGTH) {
     return false;
   }
 
-  // Now that the length prefixes have been computed, fill in the placeholder
-  // PSK binder.
-  if (needs_psk_binder) {
-    // ClientHelloOuter cannot have a PSK binder. Otherwise the
-    // ClientHellOuterAAD computation would break.
-    assert(type != ssl_client_hello_outer);
-    if (!tls13_write_psk_binder(hs, hs->transcript, Span(msg),
-                                /*out_binder_len=*/nullptr)) {
-      return false;
-    }
-  }
-
-  return ssl->method->add_message(ssl, std::move(msg));
-}
-
-static bool dae_reality_build_zero_session_client_hello(
-    SSL_HANDSHAKE *hs, Array<uint8_t> *out) {
-  SSL *const ssl = hs->ssl;
-  if (hs->selected_ech_config || SSL_is_dtls(ssl) || SSL_is_quic(ssl)) {
-    OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
-    return false;
-  }
-
-  auto original_session_id = hs->session_id;
-  hs->session_id.ResizeForOverwrite(SSL_MAX_SSL_SESSION_ID_LENGTH);
-  OPENSSL_memset(hs->session_id.data(), 0, hs->session_id.size());
-
-  ScopedCBB cbb;
-  CBB body;
-  bool needs_psk_binder = false;
-  Array<uint8_t> msg;
-  const bool ok =
-      ssl->method->init_message(ssl, cbb.get(), &body, SSL3_MT_CLIENT_HELLO) &&
-      ssl_write_client_hello_without_extensions(
-          hs, &body, ssl_client_hello_unencrypted,
-          /*empty_session_id=*/false) &&
-      ssl_add_clienthello_tlsext(hs, &body, /*out_encoded=*/nullptr,
-                                 &needs_psk_binder,
-                                 ssl_client_hello_unencrypted,
-                                 CBB_len(&body)) &&
-      !needs_psk_binder &&
-      ssl->method->finish_message(ssl, cbb.get(), &msg);
-
-  hs->session_id = std::move(original_session_id);
-  if (!ok) {
-    OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
-    return false;
-  }
-
-  *out = std::move(msg);
+  (void)legacy_version;
+  (void)random;
+  *out_offset = CBS_data(&session_id) - msg.data();
+  *out_len = CBS_len(&session_id);
   return true;
 }
 
@@ -299,7 +251,8 @@ static bool dae_reality_x25519_private_key(SSL_HANDSHAKE *hs,
   return true;
 }
 
-static bool dae_reality_apply_session_id(SSL_HANDSHAKE *hs) {
+static bool dae_reality_apply_session_id(SSL_HANDSHAKE *hs,
+                                         Span<const uint8_t> aad) {
   SSL *const ssl = hs->ssl;
   DAERealityConfig *config = &hs->config->dae_reality;
   if (!config->enabled) {
@@ -319,7 +272,6 @@ static bool dae_reality_apply_session_id(SSL_HANDSHAKE *hs) {
   uint8_t session_id[SSL_MAX_SSL_SESSION_ID_LENGTH];
   size_t session_id_len = 0;
   uint8_t plaintext[16] = {0};
-  Array<uint8_t> aad;
 
   if (!dae_reality_x25519_private_key(hs, private_key) ||
       !X25519(shared_secret, private_key, config->server_public_key) ||
@@ -327,8 +279,7 @@ static bool dae_reality_apply_session_id(SSL_HANDSHAKE *hs) {
                     sizeof(shared_secret), ssl->s3->client_random, 20) ||
       !HKDF_expand(config->auth_key, sizeof(config->auth_key), EVP_sha256(),
                    prk, prk_len, reinterpret_cast<const uint8_t *>("REALITY"),
-                   7) ||
-      !dae_reality_build_zero_session_client_hello(hs, &aad)) {
+                   7)) {
     OPENSSL_cleanse(private_key, sizeof(private_key));
     OPENSSL_cleanse(shared_secret, sizeof(shared_secret));
     OPENSSL_cleanse(prk, sizeof(prk));
@@ -369,6 +320,69 @@ static bool dae_reality_apply_session_id(SSL_HANDSHAKE *hs) {
   OPENSSL_cleanse(plaintext, sizeof(plaintext));
   OPENSSL_cleanse(session_id, sizeof(session_id));
   return true;
+}
+
+bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
+  SSL *const ssl = hs->ssl;
+  ScopedCBB cbb;
+  CBB body;
+  ssl_client_hello_type_t type = hs->selected_ech_config
+                                     ? ssl_client_hello_outer
+                                     : ssl_client_hello_unencrypted;
+  const bool reality_enabled = hs->config->dae_reality.enabled;
+  auto original_session_id = hs->session_id;
+  if (reality_enabled) {
+    hs->session_id.ResizeForOverwrite(SSL_MAX_SSL_SESSION_ID_LENGTH);
+    OPENSSL_memset(hs->session_id.data(), 0, hs->session_id.size());
+  }
+
+  bool needs_psk_binder;
+  Array<uint8_t> msg;
+  if (!ssl->method->init_message(ssl, cbb.get(), &body, SSL3_MT_CLIENT_HELLO) ||
+      !ssl_write_client_hello_without_extensions(hs, &body, type,
+                                                 /*empty_session_id=*/false) ||
+      !ssl_add_clienthello_tlsext(hs, &body, /*out_encoded=*/nullptr,
+                                  &needs_psk_binder, type, CBB_len(&body)) ||
+      !ssl->method->finish_message(ssl, cbb.get(), &msg)) {
+    hs->session_id = std::move(original_session_id);
+    return false;
+  }
+
+  if (reality_enabled) {
+    if (needs_psk_binder || type != ssl_client_hello_unencrypted ||
+        !dae_reality_apply_session_id(hs, Span(msg)) ||
+        hs->session_id.size() != SSL_MAX_SSL_SESSION_ID_LENGTH) {
+      OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
+      hs->session_id = std::move(original_session_id);
+      return false;
+    }
+
+    size_t session_id_offset = 0;
+    size_t session_id_len = 0;
+    if (!dae_reality_client_hello_session_id_span(Span(msg), &session_id_offset,
+                                                 &session_id_len) ||
+        session_id_len != hs->session_id.size()) {
+      OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
+      hs->session_id = std::move(original_session_id);
+      return false;
+    }
+    OPENSSL_memcpy(msg.data() + session_id_offset, hs->session_id.data(),
+                   hs->session_id.size());
+  }
+
+  // Now that the length prefixes have been computed, fill in the placeholder
+  // PSK binder.
+  if (needs_psk_binder) {
+    // ClientHelloOuter cannot have a PSK binder. Otherwise the
+    // ClientHellOuterAAD computation would break.
+    assert(type != ssl_client_hello_outer);
+    if (!tls13_write_psk_binder(hs, hs->transcript, Span(msg),
+                                /*out_binder_len=*/nullptr)) {
+      return false;
+    }
+  }
+
+  return ssl->method->add_message(ssl, std::move(msg));
 }
 
 static bool parse_server_version(const SSL_HANDSHAKE *hs, uint16_t *out_version,
@@ -556,7 +570,6 @@ static enum ssl_hs_wait_t do_start_connect(SSL_HANDSHAKE *hs) {
 
   if (!ssl_setup_key_shares(hs, /*override_group_id=*/0) ||
       !ssl_setup_extension_permutation(hs) ||
-      !dae_reality_apply_session_id(hs) ||
       !ssl_encrypt_client_hello(hs, Span(ech_enc, ech_enc_len)) ||
       !ssl_add_client_hello(hs)) {
     return ssl_hs_error;
