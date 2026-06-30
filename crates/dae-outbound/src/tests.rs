@@ -58,6 +58,7 @@ mod dataplane_vless_vmess_grpc;
 mod dataplane_vless_vmess_tls_wrappers;
 mod dataplane_vless_vmess_utls_builder;
 mod dataplane_vless_vmess_utls_parser;
+mod dataplane_vless_vmess_utls_template;
 mod dataplane_vless_vmess_xhttp_h3;
 mod dataplane_vless_vmess_xhttp_http2;
 mod dataplane_vless_xhttp_xmux;

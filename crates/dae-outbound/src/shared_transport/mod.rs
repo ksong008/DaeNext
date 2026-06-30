@@ -12,6 +12,7 @@ pub mod reality_aead;
 pub mod tls;
 pub mod tls_fragment;
 pub mod utls_fingerprint;
+pub mod utls_template;
 pub mod utls_wire;
 pub mod utls_wire_builder;
 pub mod xhttp;
@@ -85,6 +86,11 @@ pub use utls_fingerprint::{
     UTLS_FAMILY_IOS, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM, UTLS_FAMILY_SAFARI, UtlsFingerprint,
     resolve_utls_client_hello_id, supported_utls_fingerprint_count,
     utls_fingerprint_default_alpn_protocols, utls_fingerprint_names,
+};
+pub use utls_template::{
+    UtlsAlpnTemplate, UtlsPaddingTemplate, UtlsServerNameTemplate, UtlsSessionIdTemplate,
+    UtlsTemplateFamily, UtlsTemplateMode, UtlsTemplateProfile, UtlsTemplateValue,
+    normalize_utls_template_profile,
 };
 pub use utls_wire::{
     UtlsClientHelloProfile, parse_utls_client_hello_record, parse_utls_client_hello_record_hex,
