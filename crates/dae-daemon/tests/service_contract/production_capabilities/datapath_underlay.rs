@@ -110,11 +110,11 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .unwrap(),
         "outbound-fingerprint-underlay"
     );
-    assert_eq!(
+    assert!(
         report["utls_template_exact_fixture_count"]
             .as_u64()
-            .unwrap(),
-        0
+            .unwrap()
+            > 0
     );
     assert!(
         report["utls_template_family_approximation_count"]
@@ -126,7 +126,45 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
         report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["exact_fixtures"]
             .as_u64()
             .unwrap(),
-        0
+        report["utls_template_exact_fixture_count"]
+            .as_u64()
+            .unwrap()
+    );
+    assert!(
+        report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["randomized"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]
+            ["unsupported_exact_templates"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let template_modes = report["outbound_fingerprint_underlay_typed_report"]["template_modes"]
+        .as_array()
+        .unwrap();
+    assert!(
+        template_modes
+            .iter()
+            .any(|row| row["mode"].as_str().unwrap() == "ExactFixture")
+    );
+    assert!(
+        template_modes
+            .iter()
+            .any(|row| row["mode"].as_str().unwrap() == "FamilyApproximation")
+    );
+    assert!(
+        template_modes
+            .iter()
+            .any(|row| row["mode"].as_str().unwrap() == "Randomized")
+    );
+    assert!(
+        template_modes
+            .iter()
+            .any(|row| row["mode"].as_str().unwrap() == "UnsupportedExactTemplate")
     );
     assert!(
         !report["outbound_fingerprint_underlay_typed_report"]["full_utls_parity_declared"]
