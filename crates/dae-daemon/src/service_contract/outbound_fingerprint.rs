@@ -9,6 +9,19 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
         .iter()
         .map(|row| (*row).to_value())
         .collect::<Vec<_>>();
+    let utls_template_modes = dae_outbound::shared_transport::SUPPORTED_UTLS_FINGERPRINTS
+        .iter()
+        .map(|fingerprint| {
+            let mode = dae_outbound::shared_transport::resolve_utls_template_mode(fingerprint.name)
+                .expect("supported uTLS fingerprint should resolve to a template mode");
+            json!({
+                "name": fingerprint.name,
+                "canonical": fingerprint.canonical,
+                "family": fingerprint.family,
+                "mode": dae_outbound::shared_transport::utls_template_mode_label(mode),
+            })
+        })
+        .collect::<Vec<_>>();
     let supported_fingerprints = dae_outbound::shared_transport::supported_utls_fingerprint_count();
     let link_fingerprint_plan_ready = dae_outbound::shared_transport::resolve_utls_client_hello_id(
         dae_outbound::shared_transport::UTLS_CONTRACT_LINK_PROBE_FINGERPRINT,
@@ -214,6 +227,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
                     "randomized": utls_template_coverage.randomized,
                     "unsupported_exact_templates": utls_template_coverage.unsupported_exact_templates,
                 },
+                "template_modes": utls_template_modes,
                 "wire_evidence_required_before_full_utls_parity": true,
                 "reality_fingerprint_rustls_fail_closed_ready": reality_fingerprint_rustls_fail_closed_ready,
                 "reality_fingerprint_boring_underlay_ready": reality_fingerprint_boring_underlay_ready,
