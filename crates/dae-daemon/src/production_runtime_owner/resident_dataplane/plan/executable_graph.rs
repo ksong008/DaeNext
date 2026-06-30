@@ -186,7 +186,7 @@ impl ResidentExecutableGraphDescriptor {
         let reality_with_fingerprint =
             self.security_underlay == "reality" && self.utls_fingerprint.is_some();
         let provider = if reality_with_fingerprint {
-            "unsupported"
+            "reality-boringssl"
         } else {
             match self.security_underlay.as_str() {
                 "fingerprint-aware-tls" => "boringssl",
@@ -207,11 +207,7 @@ impl ResidentExecutableGraphDescriptor {
         } else {
             "admitted"
         };
-        let unsupported_reason = if reality_with_fingerprint {
-            json!(
-                "Reality uTLS fingerprint requires a fingerprint-capable Reality TLS underlay; rustls cannot implement uTLS fingerprints"
-            )
-        } else if provider == "unsupported" {
+        let unsupported_reason = if provider == "unsupported" {
             json!("security underlay is not backed by a resident runtime factory")
         } else {
             Value::Null
