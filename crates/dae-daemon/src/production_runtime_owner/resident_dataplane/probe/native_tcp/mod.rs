@@ -53,7 +53,8 @@ async fn open_native_tcp_tunnel(
         | ResidentProxyProtocolPlan::HttpProxyTcp { .. } => {
             open_basic_native_tcp_tunnel(proxy, target).await
         }
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+        | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => {
             open_vless_native_tcp_tunnel(proxy, target).await
         }
         ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {

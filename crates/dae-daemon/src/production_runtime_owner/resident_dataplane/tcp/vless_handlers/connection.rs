@@ -368,7 +368,7 @@ fn resident_mux_stream_id(original_dst: SocketAddr) -> [u8; 2] {
 }
 
 pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncVlessTlsClient,
     stop: Arc<AtomicBool>,
     mux_id: [u8; 2],

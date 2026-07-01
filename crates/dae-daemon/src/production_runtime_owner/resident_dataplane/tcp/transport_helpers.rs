@@ -4,7 +4,7 @@ pub(crate) use self::grpc_common::*;
 mod xhttp_h2;
 pub(crate) use self::xhttp_h2::*;
 mod grpc_relay;
-pub(super) use self::grpc_relay::*;
+pub(crate) use self::grpc_relay::*;
 mod h2_body;
 pub(crate) use self::h2_body::*;
 mod vmess_grpc;

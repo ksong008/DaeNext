@@ -1,6 +1,6 @@
 use super::*;
 mod connection;
-pub(super) use self::connection::*;
+pub(crate) use self::connection::*;
 mod meek;
 pub(super) use self::meek::*;
 mod http;

@@ -129,7 +129,7 @@ pub(crate) async fn open_h2_body_stream_with_deferred_response(
 // Deferred H2 relay keeps stream halves, state, metrics, and protocol toggles explicit.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_deferred_h2_body(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     send_stream: &mut h2::SendStream<Bytes>,
     mut response_task: tokio::task::JoinHandle<Result<h2::RecvStream, String>>,
     stop: Arc<AtomicBool>,
@@ -194,7 +194,7 @@ pub(crate) async fn relay_tcp_over_deferred_h2_body(
 
 #[allow(clippy::too_many_arguments)]
 async fn relay_tcp_over_ready_h2_body(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     send_stream: &mut h2::SendStream<Bytes>,
     recv_stream: &mut h2::RecvStream,
     stop: Arc<AtomicBool>,
@@ -274,7 +274,7 @@ async fn relay_tcp_over_ready_h2_body(
 }
 
 async fn read_h2_upload_chunk(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + Unpin),
     buffer: &mut BytesMut,
 ) -> std::io::Result<Option<Bytes>> {
     buffer.reserve(H2_UPLOAD_READ_CHUNK);

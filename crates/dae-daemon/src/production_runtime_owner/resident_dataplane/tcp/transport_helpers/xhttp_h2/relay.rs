@@ -14,7 +14,7 @@ const XHTTP_UPLOAD_READ_CHUNK: usize = 16 * 1024;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_xhttp_packet_up(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     upload: &mut XhttpUploadClient,
     download: &mut XhttpDownloadClient,
     session_id: &str,
@@ -94,7 +94,7 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_xhttp_stream(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     upload: &mut XhttpStreamUploadClient,
     download: &mut XhttpDownloadClient,
     stop: Arc<AtomicBool>,
@@ -166,7 +166,7 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
 }
 
 async fn read_xhttp_upload_chunk(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + Unpin),
     buffer: &mut BytesMut,
 ) -> std::io::Result<Option<Bytes>> {
     buffer.reserve(XHTTP_UPLOAD_READ_CHUNK);
