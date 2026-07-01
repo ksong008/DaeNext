@@ -674,4 +674,67 @@ mod tests {
             NetworkType::TCP4
         );
     }
+
+    #[test]
+    fn manual_latency_snapshots_update_groups_only_when_explicitly_applied() {
+        let config = parse_test_config(
+            r#"
+            global {
+                lan_interface: daerust0
+            }
+            node {
+                node_a: 'socks5://127.0.0.1:1080#node_a'
+                node_b: 'socks5://127.0.0.1:1081#node_b'
+            }
+            group {
+                proxy {
+                    filter: name(node_a, node_b)
+                    policy: min
+                }
+            }
+            routing {
+                l4proto(tcp) -> proxy
+                fallback: direct
+            }
+            "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = Arc::new(plan.default_proxy_group().unwrap().clone());
+        group
+            .record_check_result("node_a", NetworkType::TCP4, Some(40), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(90), 2)
+            .unwrap();
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
+
+        let node_b_hash = group
+            .probe_candidates()
+            .into_iter()
+            .find(|candidate| candidate.node_tag == "node_b")
+            .unwrap()
+            .link_hash;
+        let snapshots = [json!({
+            "linkHash": node_b_hash,
+            "latencyMs": 20,
+            "alive": true,
+            "checkedAtUnix": 3,
+            "networkType": NetworkType::TCP4.string_without_dns(),
+        })];
+        let handle = ResidentManualProbeHandle {
+            groups: vec![Arc::clone(&group)],
+            manual_probe_plans: plan::build_resident_manual_probe_plans(&config),
+            reload_generation: 7,
+            resource_config: ResidentRuntimeResourceConfig::from_config(&config),
+        };
+
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
+        handle.apply_latency_probe_snapshots_to_groups(&snapshots);
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    }
+
+    fn parse_test_config(input: &str) -> Config {
+        let sections = dae_config::parser::parse_config(input).unwrap();
+        dae_config::schema::build_config(&sections).unwrap()
+    }
 }
