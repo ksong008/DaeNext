@@ -91,7 +91,7 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
 }
 
 pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncResidentTlsClient,
     stop: Arc<AtomicBool>,
     metrics: &ResidentDataplaneMetrics,

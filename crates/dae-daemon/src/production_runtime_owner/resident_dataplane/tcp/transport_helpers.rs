@@ -10,4 +10,4 @@ pub(crate) use self::h2_body::*;
 mod vmess_grpc;
 pub(crate) use self::vmess_grpc::*;
 mod resident_tls_plain;
-pub(super) use self::resident_tls_plain::*;
+pub(crate) use self::resident_tls_plain::*;
