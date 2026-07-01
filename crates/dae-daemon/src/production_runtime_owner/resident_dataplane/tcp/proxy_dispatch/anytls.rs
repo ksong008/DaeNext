@@ -151,7 +151,7 @@ pub(crate) async fn wait_anytls_synack(
 }
 
 pub(crate) async fn relay_tcp_over_anytls_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncResidentTlsClient,
     stop: Arc<AtomicBool>,
     sid: u32,

@@ -4,7 +4,7 @@ pub(super) use self::entry::*;
 mod trojan_handlers;
 pub(super) use self::trojan_handlers::*;
 mod anytls;
-pub(super) use self::anytls::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::anytls::*;
 mod quic_handlers;
 pub(super) use self::quic_handlers::*;
 mod quic_helpers;
