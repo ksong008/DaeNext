@@ -587,7 +587,7 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     assert!(unit.contains("Description=daed is a integration solution of dae, API and UI."));
     assert!(unit.contains("ExecStart=/usr/bin/daed run -c /etc/daed/"));
     assert!(unit.contains("ExecReload=/usr/bin/daed reload --timeout 60s"));
-    assert!(unit.contains("TimeoutReloadSec=75s"));
+    assert!(!unit.contains("TimeoutReloadSec="));
     assert!(unit.contains("Restart=on-abnormal"));
     assert!(!unit.contains("Environment="));
     assert!(!unit.contains("MALLOC_CONF"));
