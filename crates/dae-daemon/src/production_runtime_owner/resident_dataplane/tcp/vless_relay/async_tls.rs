@@ -1,6 +1,6 @@
 use super::*;
 pub(crate) async fn relay_tcp_over_vless_tls_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncVlessTlsClient,
     stop: Arc<AtomicBool>,
     flow: &str,

@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::task::{Context, Poll};
 
 use dae_outbound::vless::{contract::is_xtls_rprx_vision_flow, packet};
@@ -10,17 +13,20 @@ use super::super::super::client::{
     open_async_vless_tls_client_with_flow, open_proxy_tcp_stream_async_with_flow,
 };
 use super::super::super::plan::ResidentProxyPlan;
-use super::super::super::{VLESS_RESPONSE_VERSION, tcp::TcpProxySelection};
+use super::super::super::{
+    ResidentDataplaneMetrics, VLESS_RESPONSE_VERSION,
+    tcp::{TcpProxySelection, relay_tcp_over_vless_tls_async},
+};
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
-use super::tunnel::NativeTcpTunnel;
+use super::tunnel::{NativeTcpTunnel, SpawnedNativeTcpTunnel};
 
 pub(super) async fn open_vless_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let selection = native_tcp_probe_selection(proxy, target);
-    if !vless_native_tcp_admitted(&selection) {
+    if !vless_native_tcp_net_admitted(&selection) {
         return Err(NativeTcpProbeError::NotAdmitted);
     }
     let key = selection
@@ -56,17 +62,35 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         .write_plain_all(&request, "write native VLESS TLS request")
         .await
         .map_err(NativeTcpProbeError::Open)?;
+    if is_xtls_rprx_vision_flow(&selection.proxy.flow) {
+        let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
+        let stop = Arc::new(AtomicBool::new(false));
+        let relay_stop = Arc::clone(&stop);
+        let flow = selection.proxy.flow.clone();
+        let metrics = ResidentDataplaneMetrics::default();
+        let task = tokio::spawn(async move {
+            let _ = relay_tcp_over_vless_tls_async(
+                &mut relay_side,
+                &mut client,
+                relay_stop,
+                &flow,
+                key,
+                &[],
+                &metrics,
+            )
+            .await;
+            stop.store(true, Ordering::Relaxed);
+        });
+        return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
+    }
     Ok(Box::new(VlessNativeTunnel::new(client)))
 }
 
-fn vless_native_tcp_admitted(selection: &TcpProxySelection) -> bool {
-    if matches!(
+fn vless_native_tcp_net_admitted(selection: &TcpProxySelection) -> bool {
+    !matches!(
         selection.proxy.net.as_str(),
         "websocket" | "httpupgrade" | "grpc" | "h2" | "meek" | "xhttp"
-    ) {
-        return false;
-    }
-    !is_xtls_rprx_vision_flow(&selection.proxy.flow)
+    )
 }
 
 struct VlessNativeTunnel<S> {
