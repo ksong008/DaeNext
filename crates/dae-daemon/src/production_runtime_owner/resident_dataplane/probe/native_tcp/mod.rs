@@ -5,6 +5,7 @@ mod basic_tcp;
 mod check;
 mod errors;
 mod target;
+mod trojan;
 mod tunnel;
 mod vless;
 mod vmess;
@@ -12,6 +13,7 @@ mod vmess;
 use self::basic_tcp::open_basic_native_tcp_tunnel;
 use self::check::probe_native_tcp_tunnel;
 use self::errors::NativeTcpProbeError;
+use self::trojan::open_trojan_native_tcp_tunnel;
 use self::tunnel::NativeTcpTunnel;
 use self::vless::open_vless_native_tcp_tunnel;
 use self::vmess::open_vmess_native_tcp_tunnel;
@@ -52,6 +54,9 @@ async fn open_native_tcp_tunnel(
         }
         ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {
             open_vmess_native_tcp_tunnel(proxy, target).await
+        }
+        ResidentProxyProtocolPlan::TrojanTcpTls { .. } => {
+            open_trojan_native_tcp_tunnel(proxy, target).await
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }

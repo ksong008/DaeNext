@@ -6,7 +6,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::tcp) const TLS_PLAIN
     Duration::from_millis(1);
 
 pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncResidentTlsClient,
     stop: Arc<AtomicBool>,
     metrics: &ResidentDataplaneMetrics,
