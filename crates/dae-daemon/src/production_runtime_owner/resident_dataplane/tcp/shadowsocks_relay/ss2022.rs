@@ -32,19 +32,70 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
         metrics.add_upload(initial_payload.len());
     }
 
-    let mut inbound_closed = false;
-    let mut last_activity = Instant::now();
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut decoder = None;
+    let (mut inbound_reader, mut inbound_writer) = tokio::io::split(inbound);
+    let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy);
+    let upload_stop = Arc::clone(&stop);
+    let download_stop = Arc::clone(&stop);
+    let upload = relay_shadowsocks_2022_upload_async(
+        &mut inbound_reader,
+        &mut proxy_writer,
+        upload_stop,
+        &mut encoder,
+        metrics,
+    );
+    let download = relay_shadowsocks_2022_download_async(
+        &mut proxy_reader,
+        &mut inbound_writer,
+        download_stop,
+        cipher,
+        password,
+        &client_salt,
+        metrics,
+    );
+    tokio::pin!(upload);
+    tokio::pin!(download);
+    let mut upload_done = false;
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
-            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+            upload_result = &mut upload, if !upload_done => {
+                stats.client_to_direct += upload_result?;
+                upload_done = true;
+            }
+            download_result = &mut download => {
+                stats.direct_to_client += download_result?;
+                break;
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+async fn relay_shadowsocks_2022_upload_async<R, W>(
+    inbound: &mut R,
+    proxy: &mut W,
+    stop: Arc<AtomicBool>,
+    encoder: &mut Ss2022TcpClientStreamEncoder,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<usize, String>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut uploaded = 0_usize;
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    loop {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf) => {
                 match inbound_read {
                     Ok(0) => {
-                        inbound_closed = true;
                         let _ = proxy.shutdown().await;
-                        last_activity = Instant::now();
+                        break;
                     }
                     Ok(read) => {
                         let encrypted = encoder
@@ -54,14 +105,12 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
                             .write_all(&encrypted)
                             .await
                             .map_err(|err| format!("write Shadowsocks 2022 upload chunk: {err}"))?;
-                        stats.client_to_direct += read;
+                        uploaded += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
                         let _ = proxy.shutdown().await;
-                        last_activity = Instant::now();
+                        break;
                     }
                     Err(err) => {
                         return Err(format!(
@@ -70,60 +119,83 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
                     }
                 }
             }
-            proxy_plain = read_shadowsocks_2022_proxy_plain_async(
-                proxy,
-                &mut decoder,
-                cipher,
-                password,
-                &client_salt,
-            ) => {
-                match proxy_plain {
-                    Ok(Shadowsocks2022ProxyPlain::Initial {
-                        decoder: next_decoder,
-                        payload,
-                    }) => {
-                        decoder = Some(next_decoder);
-                        if !payload.is_empty() {
-                            inbound
-                                .write_all(&payload)
-                                .await
-                                .map_err(|err| format!("write Shadowsocks 2022 initial response to inbound: {err}"))?;
-                            stats.direct_to_client += payload.len();
-                            metrics.add_download(payload.len());
-                        }
-                        last_activity = Instant::now();
-                    }
-                    Ok(Shadowsocks2022ProxyPlain::Chunk(plain)) => {
-                        if !plain.is_empty() {
-                            inbound
-                                .write_all(&plain)
-                                .await
-                                .map_err(|err| format!("write Shadowsocks 2022 response to inbound: {err}"))?;
-                            stats.direct_to_client += plain.len();
-                            metrics.add_download(plain.len());
-                        }
-                        last_activity = Instant::now();
-                    }
-                    Err(err) => {
-                        let message = err.to_string();
-                        if is_graceful_shadowsocks_response_message(&message) {
-                            break;
-                        }
-                        return Err(format!("read Shadowsocks 2022 response chunk: {message}"));
-                    }
-                }
-            }
             _ = time::sleep(Duration::from_millis(100)) => {
-                if inbound_closed {
+                if stop.load(Ordering::Relaxed) {
+                    let _ = proxy.shutdown().await;
                     break;
-                }
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err("resident Shadowsocks 2022 relay idle timeout".to_owned());
                 }
             }
         }
     }
-    Ok(stats)
+    Ok(uploaded)
+}
+
+async fn relay_shadowsocks_2022_download_async<R, W>(
+    proxy: &mut R,
+    inbound: &mut W,
+    stop: Arc<AtomicBool>,
+    cipher: &str,
+    password: &str,
+    client_salt: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<usize, String>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut downloaded = 0_usize;
+    let mut decoder = None;
+    while !stop.load(Ordering::Relaxed) {
+        let proxy_plain = match time::timeout(
+            RESIDENT_TCP_IDLE_TIMEOUT,
+            read_shadowsocks_2022_proxy_plain_async(
+                proxy,
+                &mut decoder,
+                cipher,
+                password,
+                client_salt,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(plain)) => plain,
+            Ok(Err(err)) => {
+                let message = err.to_string();
+                if is_graceful_shadowsocks_response_message(&message) {
+                    break;
+                }
+                return Err(format!("read Shadowsocks 2022 response chunk: {message}"));
+            }
+            Err(_) => {
+                return Err("resident Shadowsocks 2022 relay idle timeout".to_owned());
+            }
+        };
+        match proxy_plain {
+            Shadowsocks2022ProxyPlain::Initial {
+                decoder: next_decoder,
+                payload,
+            } => {
+                decoder = Some(next_decoder);
+                if !payload.is_empty() {
+                    inbound.write_all(&payload).await.map_err(|err| {
+                        format!("write Shadowsocks 2022 initial response to inbound: {err}")
+                    })?;
+                    downloaded += payload.len();
+                    metrics.add_download(payload.len());
+                }
+            }
+            Shadowsocks2022ProxyPlain::Chunk(plain) => {
+                if !plain.is_empty() {
+                    inbound.write_all(&plain).await.map_err(|err| {
+                        format!("write Shadowsocks 2022 response to inbound: {err}")
+                    })?;
+                    downloaded += plain.len();
+                    metrics.add_download(plain.len());
+                }
+            }
+        }
+    }
+    Ok(downloaded)
 }
 
 enum Shadowsocks2022ProxyPlain {
@@ -135,7 +207,7 @@ enum Shadowsocks2022ProxyPlain {
 }
 
 async fn read_shadowsocks_2022_proxy_plain_async(
-    proxy: &mut TokioTcpStream,
+    proxy: &mut (impl AsyncRead + Unpin),
     decoder: &mut Option<Ss2022TcpServerStreamDecoder>,
     cipher: &str,
     password: &str,
@@ -232,5 +304,84 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         drop(client_side);
         let _ = tokio::time::timeout(Duration::from_secs(2), relay).await;
+    }
+
+    #[tokio::test]
+    async fn shadowsocks_2022_relay_keeps_downloading_after_client_half_close() {
+        let cipher = "2022-blake3-aes-128-gcm";
+        let password = "AQIDBAUGBwgJCgsMDQ4PEA==";
+        let target = "example.com:80";
+        let request = b"GET /large HTTP/1.1\r\nHost: example.com\r\n\r\n".to_vec();
+        let response_payload = vec![0x42; 32 * 1024];
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let expected_request = request.clone();
+        let expected_response = response_payload.clone();
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request_bytes = Vec::new();
+            std::io::Read::read_to_end(&mut stream, &mut request_bytes).unwrap();
+            let request_salt = request_bytes[..16].to_vec();
+            let observed = dae_outbound::shadowsocks::decode_client_request(
+                cipher,
+                password,
+                &request_bytes,
+                expected_request.len(),
+            )
+            .unwrap();
+            assert_eq!(observed.target, target);
+            assert_eq!(observed.payload, expected_request);
+            std::thread::sleep(Duration::from_millis(250));
+            let server_salt = [7_u8; 16];
+            let response = dae_outbound::shadowsocks::encode_ss2022_tcp_server_response(
+                cipher,
+                password,
+                &server_salt,
+                &request_salt,
+                &expected_response,
+                dae_outbound::shadowsocks::ss2022_tcp_unix_timestamp_now(),
+            )
+            .unwrap();
+            std::io::Write::write_all(&mut stream, &response).unwrap();
+        });
+
+        let mut proxy = TokioTcpStream::connect(endpoint).await.unwrap();
+        let (mut client_side, mut relay_side) = tokio::io::duplex(128 * 1024);
+        let stop = Arc::new(AtomicBool::new(false));
+        let relay_stop = Arc::clone(&stop);
+        let metrics = ResidentDataplaneMetrics::default();
+        let relay = tokio::spawn(async move {
+            relay_tcp_over_shadowsocks_2022_async(
+                &mut relay_side,
+                &mut proxy,
+                relay_stop,
+                target,
+                cipher,
+                password,
+                16,
+                &[],
+                &metrics,
+            )
+            .await
+        });
+
+        client_side.write_all(&request).await.unwrap();
+        client_side.shutdown().await.unwrap();
+        let mut observed = vec![0_u8; response_payload.len()];
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            client_side.read_exact(&mut observed),
+        )
+        .await
+        .expect("relay returned delayed response after upload EOF")
+        .unwrap();
+        assert_eq!(observed, response_payload);
+        stop.store(true, Ordering::Relaxed);
+        let relay_result = tokio::time::timeout(Duration::from_secs(2), relay)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(relay_result.unwrap().direct_to_client >= response_payload.len());
     }
 }
