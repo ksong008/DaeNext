@@ -144,7 +144,9 @@ use self::vless_handlers::*;
 mod proxy_dispatch;
 pub(super) use self::proxy_dispatch::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::proxy_dispatch::{
-    relay_tcp_over_anytls_async, wait_anytls_synack, write_anytls_frame,
+    open_marked_hysteria2_quic_endpoint_for_remote, open_marked_quic_endpoint_for_remote,
+    relay_tcp_over_anytls_async, resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async,
+    wait_anytls_synack, write_anytls_frame,
 };
 mod plain_handlers;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::plain_handlers::http_proxy_connect_async;
