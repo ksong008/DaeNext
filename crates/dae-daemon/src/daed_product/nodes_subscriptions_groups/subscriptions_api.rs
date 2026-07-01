@@ -232,14 +232,12 @@ pub(crate) fn reload_runtime_after_subscription_refresh(
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
 ) -> Result<Option<Value>, String> {
-    if !should_restore_runtime_on_start(state).map_err(|err| err.to_string())? {
+    if !runtime.is_running() {
         return Ok(None);
     }
-    let conn = open_state_connection(state).map_err(|err| err.to_string())?;
-    if !runtime_modified(&conn, true).map_err(|err| err.to_string())? {
+    if !runtime_modified_for_running_runtime(state, runtime)? {
         return Ok(None);
     }
-    drop(conn);
 
     let reload_started_at = Instant::now();
     match restore_runtime_from_state(

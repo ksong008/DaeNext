@@ -117,7 +117,7 @@ pub(super) fn product_package_manifest() -> Value {
             "unitName": "daed.service",
             "execStartPre": "/usr/bin/daed validate -c /etc/daed/",
             "execStart": "/usr/bin/daed run -c /etc/daed/",
-            "execReload": "/usr/bin/daed reload",
+            "execReload": "/usr/bin/daed reload --timeout 60s",
             "export": "daed export systemd-unit",
         },
         "docker": {
@@ -310,7 +310,8 @@ RuntimeDirectory=daed
 RuntimeDirectoryMode=0700
 ExecStartPre=/usr/bin/daed validate -c /etc/daed/
 ExecStart=/usr/bin/daed run -c /etc/daed/
-ExecReload=/usr/bin/daed reload
+ExecReload=/usr/bin/daed reload --timeout 60s
+TimeoutReloadSec=75s
 Restart=on-abnormal
 
 [Install]

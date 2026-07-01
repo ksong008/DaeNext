@@ -1,19 +1,26 @@
 use super::*;
 pub(crate) fn run_validate_command(args: &[String]) -> DaedProductOutput {
-    let (path, json_output) = match parse_validate_args(args) {
+    let options = match parse_validate_args(args) {
         Ok(parsed) => parsed,
         Err(err) => return DaedProductOutput::usage(err),
     };
-    match validate_product_config_path(&path) {
-        Ok(report) if json_output => DaedProductOutput::ok(format!("{report}\n")),
+    match validate_product_config_path(&options.path, options.runtime) {
+        Ok(report) if options.json_output => DaedProductOutput::ok(format!("{report}\n")),
         Ok(_) => DaedProductOutput::ok(String::new()),
         Err(err) => DaedProductOutput::error(format!("validate failed: {err}")),
     }
 }
 
-pub(crate) fn parse_validate_args(args: &[String]) -> Result<(PathBuf, bool), String> {
+pub(crate) struct ValidateOptions {
+    path: PathBuf,
+    json_output: bool,
+    runtime: bool,
+}
+
+pub(crate) fn parse_validate_args(args: &[String]) -> Result<ValidateOptions, String> {
     let mut config = None;
     let mut json_output = false;
+    let mut runtime = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -27,17 +34,22 @@ pub(crate) fn parse_validate_args(args: &[String]) -> Result<(PathBuf, bool), St
                 config = arg.split_once('=').map(|(_, value)| PathBuf::from(value));
             }
             "--json" => json_output = true,
+            "--runtime" => runtime = true,
             other => return Err(format!("unsupported validate argument: {other}")),
         }
     }
-    Ok((
-        config.ok_or_else(|| "validate requires -c/--config".to_owned())?,
+    Ok(ValidateOptions {
+        path: config.ok_or_else(|| "validate requires -c/--config".to_owned())?,
         json_output,
-    ))
+        runtime,
+    })
 }
 
-pub(crate) fn validate_product_config_path(path: &Path) -> Result<Value, String> {
+pub(crate) fn validate_product_config_path(path: &Path, runtime: bool) -> Result<Value, String> {
     if path.is_file() {
+        if runtime {
+            return Err("runtime validation requires a daed config directory".to_owned());
+        }
         let entries = validate_config_file(path)?;
         return Ok(json!({
             "status": "pass",
@@ -49,7 +61,7 @@ pub(crate) fn validate_product_config_path(path: &Path) -> Result<Value, String>
         }));
     }
     if path.is_dir() {
-        return validate_product_config_dir(path);
+        return validate_product_config_dir(path, runtime);
     }
     Err(format!(
         "config path is neither file nor directory: {}",
@@ -57,7 +69,10 @@ pub(crate) fn validate_product_config_path(path: &Path) -> Result<Value, String>
     ))
 }
 
-pub(crate) fn validate_product_config_dir(config_dir: &Path) -> Result<Value, String> {
+pub(crate) fn validate_product_config_dir(
+    config_dir: &Path,
+    runtime: bool,
+) -> Result<Value, String> {
     let state = config_dir.join("daed.db");
     let state_present = state.is_file();
     let mut tables = Vec::new();
@@ -81,7 +96,13 @@ pub(crate) fn validate_product_config_dir(config_dir: &Path) -> Result<Value, St
             .map_err(|err| format!("failed to count users: {err}"))?;
         user_count = json!(users);
     }
-    Ok(json!({
+    if runtime && !state_present {
+        return Err(format!(
+            "runtime validation requires state db: {}",
+            path_string(&state)
+        ));
+    }
+    let mut report = json!({
         "status": "pass",
         "kind": "daed-config-dir",
         "path": path_string(config_dir),
@@ -96,5 +117,18 @@ pub(crate) fn validate_product_config_dir(config_dir: &Path) -> Result<Value, St
         "rustDaedWritesWingDbByDefault": false,
         "readOnly": true,
         "mutationExecuted": false,
-    }))
+    });
+    if runtime {
+        let plan = prepare_runtime_materialization_plan(&state)
+            .map_err(|err| format!("runtime materialization validation failed: {err}"))?;
+        build_runtime_config_from_content(&plan.content)
+            .map_err(|err| format!("runtime config validation failed: {err}"))?;
+        if let Value::Object(map) = &mut report {
+            map.insert(
+                "runtimeValidation".to_owned(),
+                plan.report(Some(config_dir), false),
+            );
+        }
+    }
+    Ok(report)
 }

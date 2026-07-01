@@ -682,6 +682,84 @@ pub(crate) fn runtime_modified_tracks_external_input_version_snapshot() {
 }
 
 #[test]
+pub(crate) fn runtime_materialization_plan_apply_uses_prepared_snapshot() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global { log_level: info }', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: direct }', 1, 1);
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+
+    let plan = prepare_runtime_materialization_plan(&state).unwrap();
+    let prepared_content = plan.content.clone();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "UPDATE configs SET global = 'global { log_level: debug }', version = 2 WHERE id = 1",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let report = apply_runtime_materialization_plan(&state, Some(&dir), &plan).unwrap();
+    let generated_path = report["path"].as_str().unwrap();
+    assert_eq!(
+        fs::read_to_string(generated_path).unwrap(),
+        prepared_content
+    );
+    let conn = open_state_connection(&state).unwrap();
+    let running = running_runtime_state(&conn).unwrap().unwrap();
+    assert_eq!(running.config_version, 1);
+    assert!(runtime_modified(&conn, true).unwrap());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn validate_runtime_checks_generated_config_without_applying_it() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global { log_level: info }', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: direct }', 1, 1);
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+
+    let report = validate_product_config_path(&dir, true).unwrap();
+    assert_eq!(report["runtimeValidation"]["contentIncluded"], json!(false));
+    assert_eq!(
+        report["runtimeValidation"]["selected"]["configId"],
+        json!(1)
+    );
+    assert!(!dir.join("runtime").join("generated.dae").exists());
+    assert!(
+        running_runtime_state(&open_state_connection(&state).unwrap())
+            .unwrap()
+            .is_none()
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn running_bundle_import_marks_existing_selected_resources_modified() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
