@@ -3,9 +3,7 @@ use super::route::{
     ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
     select_dns_upstream_targets,
 };
-use super::wire::{
-    dns_response_truncated, forward_dns_framed_stream_async, open_dns_tcp_stream_async,
-};
+use super::wire::{forward_dns_framed_stream_async, open_dns_tcp_stream_async};
 
 const DNS_UDP_FORWARD_ATTEMPTS: usize = 3;
 const DNS_UDP_MAX_STALE_RESPONSES: usize = 8;
@@ -30,61 +28,6 @@ pub(super) async fn forward_dns_udp_upstream_async(
     Err(dns_upstream_targets_failed(
         upstream,
         "forward DNS UDP to",
-        failures,
-    ))
-}
-
-pub(super) async fn forward_dns_tcp_udp_async(
-    upstream: &ResidentDnsUpstream,
-    payload: &[u8],
-    plan: &ResidentDnsPlan,
-) -> Result<Vec<u8>, String> {
-    let (targets, mut failures) = select_dns_upstream_targets(
-        plan,
-        upstream,
-        resolved_upstream_targets(upstream).await?,
-        L4Proto::Udp,
-    )?;
-    for target in targets {
-        match forward_dns_udp_to_routed_target_async(target.clone(), payload).await {
-            Ok(response) if !dns_response_truncated(&response) => return Ok(response),
-            Ok(_) => {
-                let target_text = target.target.to_string();
-                match forward_dns_tcp_to_single_target_routed_async(
-                    plan,
-                    upstream,
-                    target.target,
-                    payload,
-                )
-                .await
-                {
-                    Ok(response) => return Ok(response),
-                    Err(err) => {
-                        failures.push(format!("{target_text} TCP after truncated UDP: {err}"))
-                    }
-                }
-            }
-            Err(udp_err) => {
-                match forward_dns_tcp_to_single_target_routed_async(
-                    plan,
-                    upstream,
-                    target.target,
-                    payload,
-                )
-                .await
-                {
-                    Ok(response) => return Ok(response),
-                    Err(tcp_err) => failures.push(format!(
-                        "{} UDP: {udp_err}; TCP after UDP failure: {tcp_err}",
-                        target.target
-                    )),
-                }
-            }
-        }
-    }
-    Err(dns_upstream_targets_failed(
-        upstream,
-        "forward DNS tcp+udp to",
         failures,
     ))
 }
@@ -217,7 +160,7 @@ pub(super) async fn forward_dns_tcp_async(
     ))
 }
 
-async fn forward_dns_udp_to_routed_target_async(
+pub(super) async fn forward_dns_udp_to_routed_target_async(
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -235,7 +178,7 @@ async fn forward_dns_udp_to_routed_target_async(
     }
 }
 
-async fn forward_dns_tcp_to_routed_target_async(
+pub(super) async fn forward_dns_tcp_to_routed_target_async(
     upstream: &ResidentDnsUpstream,
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
@@ -252,24 +195,6 @@ async fn forward_dns_tcp_to_routed_target_async(
                 .map_err(|err| format!("{}: {err}", target.target))
         }
     }
-}
-
-async fn forward_dns_tcp_to_single_target_routed_async(
-    plan: &ResidentDnsPlan,
-    upstream: &ResidentDnsUpstream,
-    target: SocketAddr,
-    payload: &[u8],
-) -> Result<Vec<u8>, String> {
-    let (targets, failures) =
-        select_dns_upstream_targets(plan, upstream, vec![target], L4Proto::Tcp)?;
-    let Some(target) = targets.into_iter().next() else {
-        return Err(dns_upstream_targets_failed(
-            upstream,
-            "select DNS TCP fallback target for",
-            failures,
-        ));
-    };
-    forward_dns_tcp_to_routed_target_async(upstream, target, payload).await
 }
 
 async fn forward_dns_tcp_to_target_async(
