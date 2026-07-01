@@ -181,8 +181,9 @@ use self::shadowsocksr_relay::*;
 mod vmess_relay;
 use self::vmess_relay::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vmess_relay::{
-    relay_tcp_over_vmess_aead_async, relay_tcp_over_vmess_tls_aead_async,
-    relay_tcp_over_vmess_websocket_aead_async, relay_tcp_over_vmess_websocket_tls_aead_async,
+    relay_tcp_over_trojan_websocket_inner_shadowsocks_tls, relay_tcp_over_vmess_aead_async,
+    relay_tcp_over_vmess_tls_aead_async, relay_tcp_over_vmess_websocket_aead_async,
+    relay_tcp_over_vmess_websocket_tls_aead_async,
 };
 mod event_builders;
 use self::event_builders::*;

@@ -152,7 +152,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncResidentTlsClient,
     stop: Arc<AtomicBool>,
     target: &str,

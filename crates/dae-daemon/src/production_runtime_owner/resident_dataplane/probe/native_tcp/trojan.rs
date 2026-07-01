@@ -12,8 +12,10 @@ use super::super::super::{
     tcp::{
         native_httpupgrade_handshake_over_resident_tls_async,
         native_websocket_handshake_over_resident_tls_async,
-        native_write_websocket_binary_frame_over_resident_tls_async,
-        relay_tcp_over_resident_tls_plain_async, relay_tcp_over_trojan_websocket_tls_async,
+        native_write_websocket_binary_frame_over_resident_tls_async, open_grpc_h2_stream,
+        relay_tcp_over_grpc_h2, relay_tcp_over_resident_tls_plain_async,
+        relay_tcp_over_trojan_websocket_inner_shadowsocks_tls,
+        relay_tcp_over_trojan_websocket_tls_async,
     },
 };
 use super::errors::NativeTcpProbeError;
@@ -25,17 +27,32 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let selection = native_tcp_probe_selection(proxy, target);
-    let ResidentProxyProtocolPlan::TrojanTcpTls { password } = &selection.proxy.handler else {
-        return Err(NativeTcpProbeError::NotAdmitted);
+    let password = match selection.proxy.handler.clone() {
+        ResidentProxyProtocolPlan::TrojanTcpTls { password } => password.clone(),
+        ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {
+            password,
+            inner_cipher,
+            inner_password,
+        } => {
+            return open_trojan_inner_shadowsocks_native_tcp_tunnel(
+                selection,
+                target,
+                password,
+                inner_cipher,
+                inner_password,
+            )
+            .await;
+        }
+        _ => return Err(NativeTcpProbeError::NotAdmitted),
     };
     if !matches!(
         selection.proxy.net.as_str(),
-        "tcp" | "websocket" | "httpupgrade"
+        "tcp" | "websocket" | "httpupgrade" | "grpc"
     ) {
         return Err(NativeTcpProbeError::NotAdmitted);
     }
 
-    let request = trojan_packet::tcp_request_header(password, "tcp", target, &[])
+    let request = trojan_packet::tcp_request_header(&password, "tcp", target, &[])
         .map_err(|err| NativeTcpProbeError::Open(format!("build native Trojan request: {err}")))?;
     let mut client =
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
@@ -92,6 +109,27 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
+        "grpc" => {
+            let (mut h2_send, mut h2_recv, connection_task) =
+                open_grpc_h2_stream(client, &selection.proxy, &request)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
+            let task = tokio::spawn(async move {
+                let _ = relay_tcp_over_grpc_h2(
+                    &mut relay_side,
+                    &mut h2_send,
+                    &mut h2_recv,
+                    relay_stop,
+                    Default::default(),
+                    &metrics,
+                    false,
+                )
+                .await;
+                connection_task.abort();
+                stop.store(true, Ordering::Relaxed);
+            });
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+        }
         _ => {
             client
                 .write_plain_all(&request, "write native Trojan request")
@@ -110,4 +148,47 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
     }
+}
+
+async fn open_trojan_inner_shadowsocks_native_tcp_tunnel(
+    selection: super::super::super::tcp::TcpProxySelection,
+    target: &str,
+    password: String,
+    inner_cipher: String,
+    inner_password: String,
+) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
+    if selection.proxy.net != "websocket" {
+        return Err(NativeTcpProbeError::NotAdmitted);
+    }
+    let mut client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    native_websocket_handshake_over_resident_tls_async(&mut client, &options)
+        .await
+        .map_err(NativeTcpProbeError::Open)?;
+
+    let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
+    let stop = Arc::new(AtomicBool::new(false));
+    let relay_stop = Arc::clone(&stop);
+    let metrics = ResidentDataplaneMetrics::default();
+    let target = target.to_owned();
+    let task = tokio::spawn(async move {
+        let _ = relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
+            &mut relay_side,
+            &mut client,
+            relay_stop,
+            &target,
+            &password,
+            &inner_cipher,
+            &inner_password,
+            &[],
+            &metrics,
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+    });
+    Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
 }
