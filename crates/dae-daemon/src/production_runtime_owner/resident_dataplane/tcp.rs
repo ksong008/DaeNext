@@ -100,7 +100,7 @@ use super::{
     resident_socket_addr_display, resident_tcp_network_name,
 };
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::runtime;
 use tokio::time;
@@ -168,6 +168,7 @@ use self::event_builders::*;
 mod direct_sniffing;
 use self::direct_sniffing::*;
 mod vless_relay;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::relay_tcp_over_vless_tls_async;
 use self::vless_relay::*;
 #[cfg(test)]
 mod tests;
