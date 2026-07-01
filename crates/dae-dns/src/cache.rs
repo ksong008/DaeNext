@@ -204,6 +204,18 @@ impl DnsCacheStore {
         removed
     }
 
+    pub fn snapshot_live_entries(&mut self, now_unix: i64) -> Vec<(DnsCacheKey, DnsCacheEntry)> {
+        let _ = self.sweep(now_unix);
+        let mut entries = Vec::with_capacity(self.entries.len());
+        self.entries.for_each(|key, entry| {
+            if entry.cache_expires_at() > now_unix {
+                entries.push((key.clone(), entry.clone()));
+            }
+        });
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        entries
+    }
+
     pub fn cache_stats_entries(&self, now_unix: i64) -> usize {
         self.entries.live_count(now_unix)
     }
@@ -412,5 +424,37 @@ mod tests {
             .expect("packed response restore into");
         assert_eq!(restored, vec![0x12, 0x34, 0x81, 0x80]);
         assert_eq!(store.stats().hit_total, 1);
+    }
+
+    #[test]
+    fn snapshot_live_entries_sweeps_expired_and_orders_by_key() {
+        let now = 1_700_000_000_i64;
+        let mut store = DnsCacheStore::new(8);
+        store.insert(
+            now,
+            DnsCacheKey::new("z.example.", 1, 1),
+            DnsCacheEntry::new(now + 60, now + 60),
+        );
+        store.insert(
+            now,
+            DnsCacheKey::new("expired.example.", 1, 1),
+            DnsCacheEntry::new(now - 1, now - 1),
+        );
+        store.insert(
+            now,
+            DnsCacheKey::new("a.example.", 1, 1),
+            DnsCacheEntry::new(now + 60, now + 60),
+        );
+
+        let snapshot = store.snapshot_live_entries(now);
+
+        assert_eq!(
+            snapshot
+                .iter()
+                .map(|(key, _)| key.qname.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.example.", "z.example."]
+        );
+        assert!(!store.contains_key(&DnsCacheKey::new("expired.example.", 1, 1)));
     }
 }

@@ -79,6 +79,21 @@ impl DnsCacheEntries {
         }
     }
 
+    pub(super) fn for_each(&self, mut f: impl FnMut(&DnsCacheKey, &DnsCacheEntry)) {
+        match self {
+            Self::Small(entries) => {
+                for (key, entry) in entries {
+                    f(key, entry);
+                }
+            }
+            Self::Map(entries) => {
+                for (key, entry) in entries {
+                    f(key, entry);
+                }
+            }
+        }
+    }
+
     pub(super) fn insert(&mut self, key: DnsCacheKey, entry: DnsCacheEntry) {
         match self {
             Self::Small(entries) => {

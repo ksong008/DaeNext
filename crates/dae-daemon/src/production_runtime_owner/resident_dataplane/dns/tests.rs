@@ -728,6 +728,50 @@ fn resident_dns_domain_routing_update_plan_records_accepted_response_ips() {
 }
 
 #[test]
+fn resident_dns_domain_routing_reload_plan_recomputes_bitmap_from_new_matcher() {
+    let old_matcher = RoutingMatcher::from_fixture_value(&serde_json::json!({
+        "domain_sets": [
+            {"bit": 3, "key": "suffix", "patterns": ["example.com"]}
+        ],
+        "matches": [
+            {"type": "domain_set", "outbound": "direct"},
+            {"type": "fallback", "outbound": "block"}
+        ]
+    }))
+    .unwrap();
+    let new_matcher = domain_routing_test_matcher();
+    let mut bitmap_buffer = Vec::new();
+    let response = a_response([203, 0, 113, 42]);
+    let cache_plan = build_response_cache_plan_from_packet(1_700_000_000, &response, None)
+        .unwrap()
+        .unwrap();
+    let old_plan = build_resident_dns_domain_routing_update_plan(
+        &old_matcher,
+        &mut bitmap_buffer,
+        &cache_plan,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(old_plan.entry.domain_bitmap, vec![0x8]);
+
+    let reloaded = build_resident_dns_domain_routing_update_plan_from_entry(
+        &new_matcher,
+        &mut bitmap_buffer,
+        &old_plan.key,
+        &old_plan.entry,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reloaded.entry.route_owner_key, "example.com.|1|1");
+    assert_eq!(reloaded.entry.domain_bitmap, vec![0x1]);
+    assert_eq!(
+        reloaded.ips,
+        vec![ip_to_key("203.0.113.42".parse().unwrap())]
+    );
+}
+
+#[test]
 fn resident_dns_domain_routing_update_plan_skips_unmatched_domain() {
     let matcher = domain_routing_test_matcher();
     let mut bitmap_buffer = Vec::new();
@@ -855,6 +899,37 @@ fn resident_dns_response_cache_is_scoped_by_upstream_identity() {
             .lookup_response_into(&first, &request, false, &mut cached_response)
             .unwrap()
     );
+}
+
+#[test]
+fn resident_dns_response_cache_reload_snapshot_restores_live_entries() {
+    let cache = ResidentDnsRuntimeCache::default();
+    let request = DnsPacketView::parse(QUERY).unwrap();
+    let response = a_response([203, 0, 113, 42]);
+    let now = unix_now();
+    let cache_plan = build_response_cache_plan_from_packet(now, &response, None)
+        .unwrap()
+        .unwrap();
+    let cache_key = test_asis_cache_key(&request);
+    cache
+        .insert_response(
+            now,
+            cache_key.with_base(cache_plan.key.clone()),
+            cache_plan.entry,
+        )
+        .unwrap();
+    let snapshot = cache.snapshot_for_reload().unwrap();
+    let restored = ResidentDnsRuntimeCache::default();
+
+    assert_eq!(restored.restore_reload_snapshot(&snapshot).unwrap(), 1);
+
+    let mut cached_response = Vec::new();
+    assert!(
+        restored
+            .lookup_response_into(&cache_key, &request, false, &mut cached_response)
+            .unwrap()
+    );
+    assert!(!cached_response.is_empty());
 }
 
 #[test]

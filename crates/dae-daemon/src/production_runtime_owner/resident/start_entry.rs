@@ -1,12 +1,26 @@
 use super::*;
+#[allow(dead_code)]
 pub(crate) fn start_resident_production_runtime_with_latency_seed(
     config: &Config,
     latency_seed: &[Value],
+) -> Result<ResidentProductionRuntime, String> {
+    start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot(
+        config,
+        latency_seed,
+        None,
+    )
+}
+
+pub(crate) fn start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot(
+    config: &Config,
+    latency_seed: &[Value],
+    dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> Result<ResidentProductionRuntime, String> {
     start_resident_production_runtime_with_asset_dirs_and_latency_seed(
         config,
         Vec::<PathBuf>::new(),
         latency_seed,
+        dns_reload_snapshot,
     )
 }
 
@@ -18,6 +32,7 @@ pub fn start_resident_production_runtime_with_asset_dirs(
         config,
         geodata_asset_dirs,
         &[],
+        None,
     )
 }
 
@@ -25,6 +40,7 @@ fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
     config: &Config,
     geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
     latency_seed: &[Value],
+    dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> Result<ResidentProductionRuntime, String> {
     let artifact_dir = resident_runtime_artifact_dir(std::process::id());
     cleanup_stale_resident_runtime_artifacts(&artifact_dir);
@@ -89,6 +105,7 @@ fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
         lan_ifaces,
         wan_ifaces,
         latency_seed,
+        dns_reload_snapshot,
     )
 }
 

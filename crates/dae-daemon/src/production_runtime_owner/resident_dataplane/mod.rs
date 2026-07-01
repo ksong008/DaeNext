@@ -54,6 +54,7 @@ mod subscription_fetch;
 mod tcp;
 mod udp;
 mod vision;
+pub(crate) use self::dns::ResidentDnsReloadSnapshot;
 pub use self::memory_bench::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
 };

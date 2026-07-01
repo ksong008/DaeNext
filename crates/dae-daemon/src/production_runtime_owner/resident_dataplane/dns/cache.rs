@@ -8,6 +8,9 @@ use tokio::sync::OwnedMutexGuard;
 
 use super::{ResidentDnsUpstream, ResidentDnsUpstreamScheme, unix_now};
 
+mod reload;
+pub(super) use self::reload::ResidentDnsRuntimeCacheSnapshot;
+
 const DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS: i64 = 60;
 
 #[derive(Debug, Default)]

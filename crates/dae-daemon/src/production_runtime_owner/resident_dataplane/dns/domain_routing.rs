@@ -10,6 +10,15 @@ use dae_runtime_control::{
 
 use super::{TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS, unix_now};
 
+mod reload;
+#[cfg(test)]
+pub(super) use self::reload::build_resident_dns_domain_routing_update_plan_from_entry;
+pub(super) use self::reload::{
+    ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
+};
+
+const TCP_SNIFF_OWNER_PREFIX: &str = "tcp-sniff";
+
 #[derive(Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsDomainRouting {
     map_id: u32,
@@ -22,7 +31,15 @@ struct ResidentDnsDomainRoutingState {
     owner: DomainRoutingOwner,
     cache: DnsCacheStore,
     domain_bitmap: Vec<u32>,
-    sniff_owners: BTreeMap<String, i64>,
+    sniff_owners: BTreeMap<String, ResidentSniffDomainOwner>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ResidentSniffDomainOwner {
+    owner_key: String,
+    domain: String,
+    ip: IpAddr,
+    deadline_unix: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,7 +122,7 @@ impl ResidentDnsDomainRouting {
         let Some(plan) = build_resident_domain_routing_ip_update_plan(
             &self.routing_matcher,
             &mut state.domain_bitmap,
-            "tcp-sniff",
+            TCP_SNIFF_OWNER_PREFIX,
             domain,
             ip,
         )?
@@ -119,9 +136,15 @@ impl ResidentDnsDomainRouting {
                 DomainRoutingDnsEvent::from_keys(&plan.owner_key, &plan.bitmap, [plan.ip]),
             )
             .map_err(|err| format!("apply resident TCP sniff domain routing update: {err}"))?;
+        let owner_key = plan.owner_key;
         state.sniff_owners.insert(
-            plan.owner_key,
-            now_unix.saturating_add(TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS),
+            owner_key.clone(),
+            ResidentSniffDomainOwner {
+                owner_key,
+                domain: domain.trim().trim_end_matches('.').to_ascii_lowercase(),
+                ip,
+                deadline_unix: now_unix.saturating_add(TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS),
+            },
         );
         Ok(true)
     }
@@ -178,7 +201,7 @@ impl ResidentDnsDomainRouting {
         let expired_sniff_owners = state
             .sniff_owners
             .iter()
-            .filter(|(_, deadline)| **deadline <= now_unix)
+            .filter(|(_, owner)| owner.deadline_unix <= now_unix)
             .map(|(owner, _)| owner.clone())
             .collect::<Vec<_>>();
         for owner in expired_sniff_owners {

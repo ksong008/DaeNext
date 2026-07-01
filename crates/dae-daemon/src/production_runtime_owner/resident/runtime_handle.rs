@@ -108,6 +108,13 @@ impl ResidentProductionRuntime {
             .unwrap_or_default()
     }
 
+    pub(crate) fn dns_reload_snapshot(&self) -> Result<ResidentDnsReloadSnapshot, String> {
+        self.dataplane
+            .as_ref()
+            .map(ResidentDataplaneRuntime::dns_reload_snapshot)
+            .unwrap_or_else(|| Ok(ResidentDnsReloadSnapshot::default()))
+    }
+
     pub(crate) fn manual_probe_handle(&self) -> Option<ResidentManualProbeHandle> {
         self.dataplane
             .as_ref()

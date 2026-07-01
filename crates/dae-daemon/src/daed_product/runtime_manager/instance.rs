@@ -12,10 +12,20 @@ pub(in crate::daed_product) fn runtime_started_at_after_success(
     }
 }
 
+#[allow(dead_code)]
 pub(in crate::daed_product) fn start_product_runtime_instance(
     config: &Config,
     source: &str,
     latency_seed: &[Value],
+) -> Result<(ProductRuntimeInstance, Value), String> {
+    start_product_runtime_instance_with_dns_reload_snapshot(config, source, latency_seed, None)
+}
+
+pub(in crate::daed_product) fn start_product_runtime_instance_with_dns_reload_snapshot(
+    config: &Config,
+    source: &str,
+    latency_seed: &[Value],
+    dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> Result<(ProductRuntimeInstance, Value), String> {
     if product_runtime_fake_start_enabled() {
         let started_at = now_text();
@@ -38,7 +48,11 @@ pub(in crate::daed_product) fn start_product_runtime_instance(
 
     crate::service_contract::validate_resident_runtime_reload_config(config)?;
 
-    let mut runtime = start_resident_production_runtime_with_latency_seed(config, latency_seed)?;
+    let mut runtime = start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot(
+        config,
+        latency_seed,
+        dns_reload_snapshot,
+    )?;
     let state = runtime.product_state_summary();
     let dataplane_enabled = state["residentDataplane"]["enabled"]
         .as_bool()

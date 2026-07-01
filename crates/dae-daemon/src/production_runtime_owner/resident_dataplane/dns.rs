@@ -52,6 +52,7 @@ use super::udp::{
 mod cache;
 mod domain_routing;
 mod error_response;
+mod reload;
 mod routing;
 mod tcp_wire;
 mod trace_summary;
@@ -60,14 +61,23 @@ mod upstream_model;
 mod upstream_router;
 use self::cache::{
     ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache,
+    ResidentDnsRuntimeCacheSnapshot,
 };
 pub(super) use self::domain_routing::ResidentDnsDomainRouting;
+use self::domain_routing::{
+    ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
+};
 #[cfg(test)]
 use self::domain_routing::{
-    build_resident_dns_domain_routing_update_plan, build_resident_domain_routing_ip_update_plan,
+    build_resident_dns_domain_routing_update_plan,
+    build_resident_dns_domain_routing_update_plan_from_entry,
+    build_resident_domain_routing_ip_update_plan,
 };
 pub(super) use self::error_response::build_dns_server_failure_response;
 use self::error_response::build_reject_response;
+pub(in crate::production_runtime_owner) use self::reload::ResidentDnsReloadHandle;
+use self::reload::ResidentDnsReloadRestoreReport;
+pub(crate) use self::reload::ResidentDnsReloadSnapshot;
 #[cfg(test)]
 use self::routing::parse_dns_upstream;
 use self::routing::{
@@ -183,6 +193,19 @@ impl ResidentDnsPlan {
     ) -> Self {
         self.upstream_router = upstream_router;
         self
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn reload_handle(
+        &self,
+    ) -> ResidentDnsReloadHandle {
+        ResidentDnsReloadHandle::new(Arc::clone(&self.cache), self.domain_routing.clone())
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn restore_reload_snapshot(
+        &self,
+        snapshot: &ResidentDnsReloadSnapshot,
+    ) -> Result<ResidentDnsReloadRestoreReport, String> {
+        ResidentDnsReloadRestoreReport::restore_into(self, snapshot)
     }
 
     pub(super) async fn resolve_domain_has_ip_for_dial(

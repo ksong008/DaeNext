@@ -14,6 +14,15 @@ pub(super) fn runtime_instance_node_latencies(runtime: &ProductRuntimeInstance) 
     }
 }
 
+pub(super) fn runtime_instance_dns_reload_snapshot(
+    runtime: &ProductRuntimeInstance,
+) -> Result<Option<ResidentDnsReloadSnapshot>, String> {
+    match runtime {
+        ProductRuntimeInstance::Resident(runtime) => runtime.dns_reload_snapshot().map(Some),
+        ProductRuntimeInstance::Fake(_) => Ok(None),
+    }
+}
+
 pub(super) fn successful_latency_seed_snapshots(
     values: impl IntoIterator<Item = Value>,
 ) -> Vec<Value> {

@@ -40,10 +40,11 @@ use crate::allocator::{
 };
 use crate::config_validate::{load_config_file, validate_config_file};
 use crate::production_runtime_owner::{
-    ResidentEventLogDecision, ResidentManualProbeHandle, ResidentProductionRuntime,
-    resident_live_adapter_config_assessment, resident_live_adapter_udp_probe,
-    resident_runtime_defaults_contract, set_resident_event_log_policy, set_resident_event_log_sink,
-    start_resident_production_runtime_with_latency_seed,
+    ResidentDnsReloadSnapshot, ResidentEventLogDecision, ResidentManualProbeHandle,
+    ResidentProductionRuntime, resident_live_adapter_config_assessment,
+    resident_live_adapter_udp_probe, resident_runtime_defaults_contract,
+    set_resident_event_log_policy, set_resident_event_log_sink,
+    start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot,
 };
 
 mod benchmark;
