@@ -32,7 +32,7 @@ tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "w
 boring-sys = { path = "vendor/boring-sys" }
 
 [workspace.package]
-version = "3.0.2"
+version = "3.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 repository = "https://github.com/ksong008/DaeNext"
