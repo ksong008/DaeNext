@@ -68,7 +68,11 @@ async fn open_native_tcp_tunnel(
             open_frame_tls_native_tcp_tunnel(proxy, target).await
         }
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => {
+        | ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
             open_shadowsocks_native_tcp_tunnel(proxy, target).await
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
