@@ -649,7 +649,7 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
     target: &plan::ResidentTcpCheckTarget,
 ) -> Result<i64, String> {
     let started = Instant::now();
-    probe_resident_proxy_tcp_async(
+    probe_native_proxy_tcp_async(
         Arc::clone(&candidate.proxy),
         &candidate.tcp_check.scheme,
         &target.target,

@@ -136,6 +136,7 @@ use self::vless_handlers::*;
 mod proxy_dispatch;
 pub(super) use self::proxy_dispatch::*;
 mod plain_handlers;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::plain_handlers::http_proxy_connect_async;
 use self::plain_handlers::*;
 mod vmess_handlers;
 pub(crate) use self::vmess_handlers::open_grpc_h2_stream;
@@ -153,6 +154,9 @@ pub(crate) use self::transport_helpers::{
 };
 mod stream_helpers;
 use self::stream_helpers::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::stream_helpers::{
+    http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async, socks5_connect_async,
+};
 mod shadowsocks_relay;
 use self::shadowsocks_relay::*;
 mod shadowsocksr_relay;

@@ -1,5 +1,5 @@
 use super::*;
-pub(super) async fn open_plain_proxy_tcp_stream_async(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn open_plain_proxy_tcp_stream_async(
     selection: &TcpProxySelection,
 ) -> Result<TokioTcpStream, String> {
     let proxy = selection.proxy.as_ref();
@@ -346,7 +346,7 @@ impl CursorBytes {
     }
 }
 
-pub(super) async fn socks5_connect_async(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn socks5_connect_async(
     stream: &mut TokioTcpStream,
     target: &str,
     username: &str,
@@ -407,7 +407,7 @@ pub(super) async fn socks5_connect_async(
     .map_err(|_| "SOCKS5 CONNECT timeout".to_owned())?
 }
 
-pub(super) async fn http_proxy_connect_plain_async(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn http_proxy_connect_plain_async(
     stream: &mut TokioTcpStream,
     target: &str,
     username: &str,
