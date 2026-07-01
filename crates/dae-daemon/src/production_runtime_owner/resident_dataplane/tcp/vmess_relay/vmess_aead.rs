@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) async fn relay_tcp_over_vmess_aead_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
     stop: Arc<AtomicBool>,
     session: VMessAeadTcpClientSessionStart,
@@ -82,7 +82,7 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
 }
 
 pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
     stop: Arc<AtomicBool>,
     session: VMessAeadTcpClientSessionStart,

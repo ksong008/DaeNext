@@ -7,12 +7,14 @@ mod errors;
 mod target;
 mod tunnel;
 mod vless;
+mod vmess;
 
 use self::basic_tcp::open_basic_native_tcp_tunnel;
 use self::check::probe_native_tcp_tunnel;
 use self::errors::NativeTcpProbeError;
 use self::tunnel::NativeTcpTunnel;
 use self::vless::open_vless_native_tcp_tunnel;
+use self::vmess::open_vmess_native_tcp_tunnel;
 use super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::super::tcp::probe_resident_proxy_tcp_async;
 
@@ -47,6 +49,9 @@ async fn open_native_tcp_tunnel(
         }
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
             open_vless_native_tcp_tunnel(proxy, target).await
+        }
+        ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {
+            open_vmess_native_tcp_tunnel(proxy, target).await
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }
