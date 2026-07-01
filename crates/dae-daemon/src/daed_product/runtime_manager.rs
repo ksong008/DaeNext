@@ -175,6 +175,12 @@ impl ProductRuntimeProbeHandle {
         }
     }
 
+    pub(super) fn apply_latency_probe_snapshots_to_groups(&self, snapshots: &[Value]) {
+        if let Self::Resident { handle, .. } = self {
+            handle.apply_latency_probe_snapshots_to_groups(snapshots);
+        }
+    }
+
     pub(super) fn probe_generation(&self) -> Option<u64> {
         match self {
             Self::Resident { handle, .. } => Some(handle.reload_generation()),

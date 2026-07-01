@@ -290,6 +290,7 @@ fn run_node_latency_job_inner(
                             if written == 0 {
                                 return;
                             }
+                            handle.apply_latency_probe_snapshots_to_groups(runtime_snapshots);
                             completed = completed.saturating_add(written);
                             succeeded = succeeded.saturating_add(alive);
                             jobs.mark_progress(
