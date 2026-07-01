@@ -26,7 +26,8 @@ pub(crate) use self::events::{
 };
 use self::events::{append_event, path_string};
 use self::plan::{build_resident_dataplane_plan, build_resident_dataplane_plan_with_geodata};
-use self::tcp::{ResidentTcpRouter, probe_resident_proxy_tcp_async, resident_tcp_accept_loop};
+use self::probe::*;
+use self::tcp::{ResidentTcpRouter, resident_tcp_accept_loop};
 use self::udp::{
     probe_resident_proxy_dns_udp_async, probe_resident_proxy_udp_async, resident_udp_loop,
     resident_udp_proxy_handler_name,
