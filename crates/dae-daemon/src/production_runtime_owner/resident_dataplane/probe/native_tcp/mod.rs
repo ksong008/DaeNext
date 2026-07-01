@@ -60,7 +60,8 @@ async fn open_native_tcp_tunnel(
         ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {
             open_vmess_native_tcp_tunnel(proxy, target).await
         }
-        ResidentProxyProtocolPlan::TrojanTcpTls { .. } => {
+        ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+        | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => {
             open_trojan_native_tcp_tunnel(proxy, target).await
         }
         ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => {

@@ -4,6 +4,6 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::vmess_aead
 mod vmess_tls;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vmess_tls::*;
 mod plugin_wrappers;
-pub(super) use self::plugin_wrappers::*;
+pub(crate) use self::plugin_wrappers::*;
 mod graceful_close;
 pub(super) use self::graceful_close::*;
