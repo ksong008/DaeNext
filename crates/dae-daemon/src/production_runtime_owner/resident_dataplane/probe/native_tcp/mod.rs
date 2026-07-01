@@ -5,6 +5,7 @@ mod basic_tcp;
 mod check;
 mod errors;
 mod frame_tls;
+mod quic_stream;
 mod shadowsocks;
 mod target;
 mod trojan;
@@ -16,6 +17,7 @@ use self::basic_tcp::open_basic_native_tcp_tunnel;
 use self::check::probe_native_tcp_tunnel;
 use self::errors::NativeTcpProbeError;
 use self::frame_tls::open_frame_tls_native_tcp_tunnel;
+use self::quic_stream::open_quic_stream_native_tcp_tunnel;
 use self::shadowsocks::open_shadowsocks_native_tcp_tunnel;
 use self::trojan::open_trojan_native_tcp_tunnel;
 use self::tunnel::NativeTcpTunnel;
@@ -74,6 +76,11 @@ async fn open_native_tcp_tunnel(
         | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
         | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
             open_shadowsocks_native_tcp_tunnel(proxy, target).await
+        }
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
+        | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+        | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
+            open_quic_stream_native_tcp_tunnel(proxy, target).await
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }
