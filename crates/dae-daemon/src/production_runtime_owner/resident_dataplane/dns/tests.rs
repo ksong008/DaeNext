@@ -41,6 +41,22 @@ fn test_dns_upstream_target_v6() -> SocketAddr {
     format!("[{TEST_DNS_UPSTREAM_IPV6}]:53").parse().unwrap()
 }
 
+fn test_asis_cache_key(request: &DnsPacketView<'_>) -> ResidentDnsResponseCacheKey {
+    ResidentDnsResponseCacheKey::new(
+        dns_cache_key_for_request(request).unwrap(),
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "127.0.0.1:53".parse().unwrap(),
+        },
+    )
+}
+
+fn test_scoped_cache_key(
+    request: &DnsPacketView<'_>,
+    scope: ResidentDnsResponseCacheScope,
+) -> ResidentDnsResponseCacheKey {
+    ResidentDnsResponseCacheKey::new(dns_cache_key_for_request(request).unwrap(), scope)
+}
+
 fn indexed_test_dns_upstream_link(index: usize) -> String {
     format!("quic://resolver-{index}.fixture.invalid")
 }
@@ -737,39 +753,158 @@ fn resident_dns_domain_routing_update_plan_skips_unmatched_domain() {
 #[test]
 fn resident_dns_response_cache_honors_fixed_domain_ttl() {
     let request = DnsPacketView::parse(QUERY).unwrap();
+    let cache_key = test_asis_cache_key(&request);
     let mut plan = ResidentDnsPlan::asis(0);
     plan.fixed_domain_ttl = Arc::new(BTreeMap::from([("example.com".to_owned(), 0)]));
 
-    record_accepted_dns_response(&plan, &a_response([203, 0, 113, 42])).unwrap();
+    record_accepted_dns_response(&plan, &cache_key, &a_response([203, 0, 113, 42])).unwrap();
 
     let mut cached_response = Vec::new();
     assert!(
         !plan
             .cache
-            .lookup_response_into(&request, false, &mut cached_response)
+            .lookup_response_into(&cache_key, &request, false, &mut cached_response)
             .unwrap()
     );
     assert!(cached_response.is_empty());
     assert!(
         plan.cache
-            .lookup_response_into(&request, true, &mut cached_response)
+            .lookup_response_into(&cache_key, &request, true, &mut cached_response)
             .unwrap()
     );
     assert!(!cached_response.is_empty());
+}
+
+#[test]
+fn resident_dns_response_cache_is_scoped_by_asis_destination() {
+    let cache = ResidentDnsRuntimeCache::default();
+    let request = DnsPacketView::parse(QUERY).unwrap();
+    let response = a_response([203, 0, 113, 42]);
+    let now = unix_now();
+    let cache_plan = build_response_cache_plan_from_packet(now, &response, None)
+        .unwrap()
+        .unwrap();
+    let first = test_scoped_cache_key(
+        &request,
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "192.0.2.1:53".parse().unwrap(),
+        },
+    );
+    let second = test_scoped_cache_key(
+        &request,
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "192.0.2.2:53".parse().unwrap(),
+        },
+    );
+    cache
+        .insert_response(now, first.with_base(cache_plan.key), cache_plan.entry)
+        .unwrap();
+
+    let mut cached_response = Vec::new();
+    assert!(
+        !cache
+            .lookup_response_into(&second, &request, false, &mut cached_response)
+            .unwrap()
+    );
+    assert!(
+        cache
+            .lookup_response_into(&first, &request, false, &mut cached_response)
+            .unwrap()
+    );
+}
+
+#[test]
+fn resident_dns_response_cache_is_scoped_by_upstream_identity() {
+    let cache = ResidentDnsRuntimeCache::default();
+    let request = DnsPacketView::parse(QUERY).unwrap();
+    let response = a_response([203, 0, 113, 42]);
+    let now = unix_now();
+    let cache_plan = build_response_cache_plan_from_packet(now, &response, None)
+        .unwrap()
+        .unwrap();
+    let first = test_scoped_cache_key(
+        &request,
+        ResidentDnsResponseCacheScope::Upstream {
+            index: 1,
+            scheme: ResidentDnsUpstreamScheme::TcpUdp,
+            authority: "resolver-a.fixture.invalid:53".to_owned(),
+            path: String::new(),
+        },
+    );
+    let second = test_scoped_cache_key(
+        &request,
+        ResidentDnsResponseCacheScope::Upstream {
+            index: 2,
+            scheme: ResidentDnsUpstreamScheme::TcpUdp,
+            authority: "resolver-b.fixture.invalid:53".to_owned(),
+            path: String::new(),
+        },
+    );
+    cache
+        .insert_response(now, first.with_base(cache_plan.key), cache_plan.entry)
+        .unwrap();
+
+    let mut cached_response = Vec::new();
+    assert!(
+        !cache
+            .lookup_response_into(&second, &request, false, &mut cached_response)
+            .unwrap()
+    );
+    assert!(
+        cache
+            .lookup_response_into(&first, &request, false, &mut cached_response)
+            .unwrap()
+    );
+}
+
+#[test]
+fn resident_dns_response_cache_removes_all_scoped_siblings_for_base_key() {
+    let cache = ResidentDnsRuntimeCache::default();
+    let request = DnsPacketView::parse(QUERY).unwrap();
+    let response = a_response([203, 0, 113, 42]);
+    let now = unix_now();
+    let cache_plan = build_response_cache_plan_from_packet(now, &response, None)
+        .unwrap()
+        .unwrap();
+    let base = cache_plan.key.clone();
+    for original_dst in ["192.0.2.1:53", "192.0.2.2:53"] {
+        let key = test_scoped_cache_key(
+            &request,
+            ResidentDnsResponseCacheScope::AsIs {
+                original_dst: original_dst.parse().unwrap(),
+            },
+        );
+        cache
+            .insert_response(
+                now,
+                key.with_base(cache_plan.key.clone()),
+                cache_plan.entry.clone(),
+            )
+            .unwrap();
+    }
+    assert_eq!(cache.entry_len(), 2);
+    let removed = cache.remove_base_key(&base).unwrap();
+    assert_eq!(removed.len(), 2);
+    assert_eq!(cache.entry_len(), 0);
 }
 
 #[tokio::test]
 async fn resident_dns_ipversion_prefer_rejects_non_preferred_when_preferred_has_ip() {
     let mut plan = ResidentDnsPlan::asis(0);
     plan.ipversion_prefer = Some(DNS_QTYPE_A);
-    record_accepted_dns_response(&plan, &a_response([203, 0, 113, 42])).unwrap();
+    let a_query = DnsPacketView::parse(QUERY).unwrap();
+    let a_cache_key = test_asis_cache_key(&a_query);
+    record_accepted_dns_response(&plan, &a_cache_key, &a_response([203, 0, 113, 42])).unwrap();
+    let aaaa_query = query_with_qtype(DNS_QTYPE_AAAA);
+    let aaaa_request = DnsPacketView::parse(&aaaa_query).unwrap();
+    let aaaa_cache_key = test_asis_cache_key(&aaaa_request);
     record_accepted_dns_response(
         &plan,
+        &aaaa_cache_key,
         &response_with_question_qtype(a_response([198, 51, 100, 42]), DNS_QTYPE_AAAA),
     )
     .unwrap();
 
-    let aaaa_query = query_with_qtype(DNS_QTYPE_AAAA);
     let response =
         handle_resident_dns_udp_async(&plan, "127.0.0.1:53".parse().unwrap(), &aaaa_query)
             .await
@@ -783,7 +918,12 @@ async fn resident_dns_ipversion_prefer_rejects_non_preferred_when_preferred_has_
 #[tokio::test]
 async fn resident_dns_inflight_lock_serializes_same_key() {
     let cache = ResidentDnsRuntimeCache::default();
-    let key = DnsCacheKey::new("example.com.", DNS_QTYPE_A, 1);
+    let key = ResidentDnsResponseCacheKey::new(
+        DnsCacheKey::new("example.com.", DNS_QTYPE_A, 1),
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "127.0.0.1:53".parse().unwrap(),
+        },
+    );
     let first = cache.lock_key(key.clone()).await.unwrap();
     let second = cache.lock_key(key);
     assert!(
@@ -802,7 +942,12 @@ fn resident_dns_runtime_cache_sweeps_expired_entries_on_write_window() {
     cache
         .insert_response(
             now,
-            DnsCacheKey::new("expired.example.", DNS_QTYPE_A, 1),
+            ResidentDnsResponseCacheKey::new(
+                DnsCacheKey::new("expired.example.", DNS_QTYPE_A, 1),
+                ResidentDnsResponseCacheScope::AsIs {
+                    original_dst: "127.0.0.1:53".parse().unwrap(),
+                },
+            ),
             DnsCacheEntry::new(now - 1, now - 1),
         )
         .unwrap();
@@ -811,7 +956,12 @@ fn resident_dns_runtime_cache_sweeps_expired_entries_on_write_window() {
     cache
         .insert_response(
             now + 120,
-            DnsCacheKey::new("live.example.", DNS_QTYPE_A, 1),
+            ResidentDnsResponseCacheKey::new(
+                DnsCacheKey::new("live.example.", DNS_QTYPE_A, 1),
+                ResidentDnsResponseCacheScope::AsIs {
+                    original_dst: "127.0.0.1:53".parse().unwrap(),
+                },
+            ),
             DnsCacheEntry::new(now + 180, now + 180),
         )
         .unwrap();

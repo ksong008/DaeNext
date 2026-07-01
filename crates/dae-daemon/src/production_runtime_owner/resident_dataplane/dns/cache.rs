@@ -1,28 +1,75 @@
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use dae_dns::{DnsCacheEntry, DnsCacheKey, DnsCacheStore, DnsPacketView};
+use dae_dns::cache::DNS_CACHE_MAX_ENTRIES;
+use dae_dns::{DnsCacheEntry, DnsCacheKey, DnsCacheStats, DnsPacketView};
 use tokio::sync::OwnedMutexGuard;
 
-use super::unix_now;
+use super::{ResidentDnsUpstream, ResidentDnsUpstreamScheme, unix_now};
 
 const DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS: i64 = 60;
 
 #[derive(Debug, Default)]
 pub(super) struct ResidentDnsRuntimeCache {
     state: Mutex<ResidentDnsRuntimeCacheState>,
-    inflight: Mutex<BTreeMap<DnsCacheKey, Arc<tokio::sync::Mutex<()>>>>,
+    inflight: Mutex<BTreeMap<ResidentDnsResponseCacheKey, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 #[derive(Debug, Default)]
 struct ResidentDnsRuntimeCacheState {
-    store: DnsCacheStore,
+    entries: BTreeMap<ResidentDnsResponseCacheKey, DnsCacheEntry>,
+    stats: DnsCacheStats,
     next_sweep_unix: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(super) struct ResidentDnsResponseCacheKey {
+    base: DnsCacheKey,
+    scope: ResidentDnsResponseCacheScope,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(super) enum ResidentDnsResponseCacheScope {
+    Reject,
+    AsIs {
+        original_dst: SocketAddr,
+    },
+    Upstream {
+        index: u8,
+        scheme: ResidentDnsUpstreamScheme,
+        authority: String,
+        path: String,
+    },
+}
+
+impl ResidentDnsResponseCacheKey {
+    pub(super) fn new(base: DnsCacheKey, scope: ResidentDnsResponseCacheScope) -> Self {
+        Self { base, scope }
+    }
+
+    pub(super) fn with_base(&self, base: DnsCacheKey) -> Self {
+        Self {
+            base,
+            scope: self.scope.clone(),
+        }
+    }
+}
+
+impl ResidentDnsResponseCacheScope {
+    pub(super) fn upstream(upstream: &ResidentDnsUpstream) -> Self {
+        Self::Upstream {
+            index: upstream.index,
+            scheme: upstream.scheme,
+            authority: upstream.target.authority.clone(),
+            path: upstream.path.clone(),
+        }
+    }
 }
 
 pub(super) struct ResidentDnsInflightGuard<'a> {
     cache: &'a ResidentDnsRuntimeCache,
-    key: DnsCacheKey,
+    key: ResidentDnsResponseCacheKey,
     lock: Arc<tokio::sync::Mutex<()>>,
     _guard: OwnedMutexGuard<()>,
 }
@@ -30,7 +77,7 @@ pub(super) struct ResidentDnsInflightGuard<'a> {
 impl ResidentDnsRuntimeCache {
     pub(super) async fn lock_key(
         &self,
-        key: DnsCacheKey,
+        key: ResidentDnsResponseCacheKey,
     ) -> Result<ResidentDnsInflightGuard<'_>, String> {
         let lock = {
             let mut inflight = self
@@ -53,25 +100,18 @@ impl ResidentDnsRuntimeCache {
 
     pub(super) fn lookup_response_into(
         &self,
+        key: &ResidentDnsResponseCacheKey,
         request: &DnsPacketView<'_>,
         ignore_fixed_ttl: bool,
         out: &mut Vec<u8>,
     ) -> Result<bool, String> {
         out.clear();
         let now_unix = unix_now();
-        let question = request
-            .questions()
-            .next()
-            .ok_or_else(|| "DNS request has no question".to_owned())?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        let Some(entry) = state
-            .store
-            .lookup_packet_question(now_unix, &question, ignore_fixed_ttl)
-            .map_err(|err| format!("lookup resident DNS response cache: {err}"))?
-        else {
+        let Some(entry) = lookup_scoped_entry(&mut state, now_unix, key, ignore_fixed_ttl) else {
             return Ok(false);
         };
         Ok(entry.fill_packed_response_into(request.id(), out).is_some())
@@ -87,41 +127,52 @@ impl ResidentDnsRuntimeCache {
             .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        Ok(state
-            .store
-            .lookup(now_unix, key, ignore_fixed_ttl)
-            .is_some_and(|entry| entry.has_any_ip))
+        sweep_expired_if_due(&mut state, now_unix);
+        Ok(state.entries.iter().any(|(candidate, entry)| {
+            &candidate.base == key
+                && entry.lookup_deadline(ignore_fixed_ttl) > now_unix
+                && entry.has_any_ip
+        }))
     }
 
     pub(super) fn insert_response(
         &self,
         now_unix: i64,
-        key: DnsCacheKey,
-        entry: DnsCacheEntry,
+        key: ResidentDnsResponseCacheKey,
+        mut entry: DnsCacheEntry,
     ) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
         sweep_expired_if_due(&mut state, now_unix);
-        state.store.insert(now_unix, key, entry);
+        if !state.entries.contains_key(&key) {
+            evict_entries(&mut state, now_unix);
+        }
+        entry.route_owner_key = key.base.to_string();
+        state.entries.insert(key, entry);
         Ok(())
     }
 
-    pub(super) fn remove_request(
-        &self,
-        request: &DnsPacketView<'_>,
-    ) -> Result<Option<DnsCacheEntry>, String> {
-        let question = request
-            .questions()
-            .next()
-            .ok_or_else(|| "DNS request has no question".to_owned())?;
-        self.state
+    pub(super) fn remove_base_key(&self, key: &DnsCacheKey) -> Result<Vec<DnsCacheEntry>, String> {
+        let mut state = self
+            .state
             .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?
-            .store
-            .remove_packet_question(&question)
-            .map_err(|err| format!("remove resident DNS response cache entry: {err}"))
+            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        let scoped_keys = state
+            .entries
+            .keys()
+            .filter(|candidate| &candidate.base == key)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut removed = Vec::with_capacity(scoped_keys.len());
+        for scoped_key in scoped_keys {
+            if let Some(entry) = state.entries.remove(&scoped_key) {
+                removed.push(entry);
+            }
+        }
+        state.stats.remove_callback_total += removed.len() as u64;
+        Ok(removed)
     }
 
     #[cfg(test)]
@@ -136,7 +187,7 @@ impl ResidentDnsRuntimeCache {
     pub(super) fn entry_len(&self) -> usize {
         self.state
             .lock()
-            .map(|state| state.store.len())
+            .map(|state| state.entries.len())
             .unwrap_or(0)
     }
 
@@ -144,8 +195,49 @@ impl ResidentDnsRuntimeCache {
     pub(super) fn stats(&self) -> dae_dns::DnsCacheStats {
         self.state
             .lock()
-            .map(|state| state.store.stats().clone())
+            .map(|state| state.stats.clone())
             .unwrap_or_default()
+    }
+}
+
+fn lookup_scoped_entry(
+    state: &mut ResidentDnsRuntimeCacheState,
+    now_unix: i64,
+    key: &ResidentDnsResponseCacheKey,
+    ignore_fixed_ttl: bool,
+) -> Option<DnsCacheEntry> {
+    let (lookup_deadline, cache_expires_at) = {
+        let entry = state.entries.get(key)?;
+        (
+            entry.lookup_deadline(ignore_fixed_ttl),
+            entry.cache_expires_at(),
+        )
+    };
+    if lookup_deadline > now_unix {
+        state.stats.hit_total += 1;
+        return state.entries.get(key).cloned();
+    }
+    if cache_expires_at <= now_unix {
+        state.entries.remove(key);
+        state.stats.expired_removal_total += 1;
+        state.stats.remove_callback_total += 1;
+    }
+    None
+}
+
+fn evict_entries(state: &mut ResidentDnsRuntimeCacheState, now_unix: i64) {
+    remove_expired_entries(state, now_unix);
+    while state.entries.len() >= DNS_CACHE_MAX_ENTRIES {
+        let Some(oldest_key) = state
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.cache_expires_at())
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        state.entries.remove(&oldest_key);
+        state.stats.remove_callback_total += 1;
     }
 }
 
@@ -153,8 +245,18 @@ fn sweep_expired_if_due(state: &mut ResidentDnsRuntimeCacheState, now_unix: i64)
     if now_unix < state.next_sweep_unix {
         return;
     }
-    state.store.sweep(now_unix);
+    remove_expired_entries(state, now_unix);
     state.next_sweep_unix = now_unix.saturating_add(DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS);
+}
+
+fn remove_expired_entries(state: &mut ResidentDnsRuntimeCacheState, now_unix: i64) {
+    let before = state.entries.len();
+    state
+        .entries
+        .retain(|_, entry| entry.cache_expires_at() > now_unix);
+    let removed = before - state.entries.len();
+    state.stats.expired_removal_total += removed as u64;
+    state.stats.remove_callback_total += removed as u64;
 }
 
 impl Drop for ResidentDnsInflightGuard<'_> {
