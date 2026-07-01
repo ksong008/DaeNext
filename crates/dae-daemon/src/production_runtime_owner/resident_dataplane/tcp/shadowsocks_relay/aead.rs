@@ -2,7 +2,7 @@ use super::*;
 // Shadowsocks AEAD relay keeps target, cipher, payload, and metrics context explicit.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
     stop: Arc<AtomicBool>,
     target: &str,
@@ -124,7 +124,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
 }
 
 async fn drain_pending_shadowsocks_aead_upload(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
     encoder: &mut AeadStreamCodec,
     stats: &mut DirectTcpRelayStats,

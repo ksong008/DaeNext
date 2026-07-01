@@ -1,8 +1,8 @@
 use super::*;
 mod aead;
-pub(super) use self::aead::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::aead::*;
 mod ss2022;
-pub(super) use self::ss2022::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::ss2022::*;
 mod simple_obfs_http;
 pub(super) use self::simple_obfs_http::*;
 mod simple_obfs_tls;

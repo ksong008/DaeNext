@@ -168,6 +168,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::stream_hel
 };
 mod shadowsocks_relay;
 use self::shadowsocks_relay::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::shadowsocks_relay::{
+    relay_tcp_over_shadowsocks_2022_async, relay_tcp_over_shadowsocks_aead_async,
+};
 mod shadowsocksr_relay;
 use self::shadowsocksr_relay::*;
 mod vmess_relay;

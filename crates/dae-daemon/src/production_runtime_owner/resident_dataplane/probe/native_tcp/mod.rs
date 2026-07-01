@@ -4,6 +4,7 @@ use std::time::Duration;
 mod basic_tcp;
 mod check;
 mod errors;
+mod shadowsocks;
 mod target;
 mod trojan;
 mod tunnel;
@@ -13,6 +14,7 @@ mod vmess;
 use self::basic_tcp::open_basic_native_tcp_tunnel;
 use self::check::probe_native_tcp_tunnel;
 use self::errors::NativeTcpProbeError;
+use self::shadowsocks::open_shadowsocks_native_tcp_tunnel;
 use self::trojan::open_trojan_native_tcp_tunnel;
 use self::tunnel::NativeTcpTunnel;
 use self::vless::open_vless_native_tcp_tunnel;
@@ -57,6 +59,10 @@ async fn open_native_tcp_tunnel(
         }
         ResidentProxyProtocolPlan::TrojanTcpTls { .. } => {
             open_trojan_native_tcp_tunnel(proxy, target).await
+        }
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. }
+        | ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => {
+            open_shadowsocks_native_tcp_tunnel(proxy, target).await
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }
