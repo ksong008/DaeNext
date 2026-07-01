@@ -8,7 +8,7 @@ use tokio::time;
 use super::super::RESIDENT_CONNECT_TIMEOUT;
 use super::super::client::AsyncVlessTlsClient;
 
-pub(super) async fn websocket_handshake_over_resident_tls_async(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn websocket_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
 ) -> Result<(), String> {
@@ -21,7 +21,7 @@ pub(super) async fn websocket_handshake_over_resident_tls_async(
     validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
 }
 
-pub(super) async fn httpupgrade_handshake_over_resident_tls_async(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn httpupgrade_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
 ) -> Result<(), String> {
@@ -34,7 +34,9 @@ pub(super) async fn httpupgrade_handshake_over_resident_tls_async(
     validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
 }
 
-pub(super) async fn websocket_handshake_over_async_stream<S>(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn websocket_handshake_over_async_stream<
+    S,
+>(
     stream: &mut S,
     options: &HttpUpgradeOptions,
 ) -> Result<(), String>
@@ -50,7 +52,9 @@ where
     validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
 }
 
-pub(super) async fn httpupgrade_handshake_over_async_stream<S>(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn httpupgrade_handshake_over_async_stream<
+    S,
+>(
     stream: &mut S,
     options: &HttpUpgradeOptions,
 ) -> Result<(), String>
@@ -66,7 +70,9 @@ where
     validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
 }
 
-pub(super) async fn write_websocket_binary_frame_to_async_stream<S>(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn write_websocket_binary_frame_to_async_stream<
+    S,
+>(
     stream: &mut S,
     payload: &[u8],
     label: &str,
@@ -130,7 +136,7 @@ where
     }
 }
 
-pub(super) async fn write_websocket_binary_frame_over_resident_tls_async(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn write_websocket_binary_frame_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     payload: &[u8],
     label: &str,

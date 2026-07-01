@@ -108,6 +108,14 @@ use tokio::time;
 mod shadowsocks_stream;
 mod websocket;
 
+pub(in crate::production_runtime_owner::resident_dataplane) use self::websocket::{
+    httpupgrade_handshake_over_async_stream as native_httpupgrade_handshake_over_async_stream,
+    httpupgrade_handshake_over_resident_tls_async as native_httpupgrade_handshake_over_resident_tls_async,
+    websocket_handshake_over_async_stream as native_websocket_handshake_over_async_stream,
+    websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async,
+    write_websocket_binary_frame_over_resident_tls_async as native_write_websocket_binary_frame_over_resident_tls_async,
+    write_websocket_binary_frame_to_async_stream as native_write_websocket_binary_frame_to_async_stream,
+};
 use shadowsocks_stream::{
     AsyncV2rayPluginMuxPayloadState, read_shadowsocks_aead_chunk_from_v2ray_plugin_mux,
     read_shadowsocks_aead_chunk_from_websocket_tls,
@@ -163,6 +171,10 @@ mod shadowsocksr_relay;
 use self::shadowsocksr_relay::*;
 mod vmess_relay;
 use self::vmess_relay::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::vmess_relay::{
+    relay_tcp_over_vmess_aead_async, relay_tcp_over_vmess_tls_aead_async,
+    relay_tcp_over_vmess_websocket_aead_async, relay_tcp_over_vmess_websocket_tls_aead_async,
+};
 mod event_builders;
 use self::event_builders::*;
 mod direct_sniffing;
