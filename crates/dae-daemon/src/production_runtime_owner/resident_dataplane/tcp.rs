@@ -88,7 +88,6 @@ use super::plan::{
     ResidentXhttpXmuxPlan,
 };
 use super::probe::{
-    read_resident_tcp_probe_https_response_async, read_resident_tcp_probe_response_async,
     resident_tcp_probe_http_request, resident_tcp_probe_status_ok, resident_tcp_probe_tls_config,
 };
 use super::vision::{
@@ -133,8 +132,6 @@ mod router;
 pub(super) use self::router::*;
 mod dns_fast_path;
 use self::dns_fast_path::*;
-mod probe;
-pub(super) use self::probe::*;
 mod proxy_fetch;
 pub(super) use self::proxy_fetch::*;
 mod accept_loop;

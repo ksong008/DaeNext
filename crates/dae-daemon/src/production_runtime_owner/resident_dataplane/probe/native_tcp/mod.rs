@@ -24,7 +24,6 @@ use self::tunnel::NativeTcpTunnel;
 use self::vless::open_vless_native_tcp_tunnel;
 use self::vmess::open_vmess_native_tcp_tunnel;
 use super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
-use super::super::tcp::probe_resident_proxy_tcp_async;
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_native_proxy_tcp_async(
     proxy: Arc<ResidentProxyPlan>,
@@ -39,9 +38,10 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
         Ok(mut tunnel) => {
             probe_native_tcp_tunnel(&mut *tunnel, scheme, host, path, method, timeout).await
         }
-        Err(NativeTcpProbeError::NotAdmitted) => {
-            probe_resident_proxy_tcp_async(proxy, scheme, target, host, path, method, timeout).await
-        }
+        Err(NativeTcpProbeError::NotAdmitted) => Err(format!(
+            "native outbound probe not admitted for protocol {} net {} tls {}",
+            proxy.protocol, proxy.net, proxy.tls
+        )),
         Err(NativeTcpProbeError::Open(err)) => Err(err),
     }
 }

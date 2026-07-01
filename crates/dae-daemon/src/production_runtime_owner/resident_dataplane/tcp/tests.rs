@@ -200,14 +200,15 @@ fn tcp_route_log_fields_use_generic_network_for_unparseable_destination() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn resident_tcp_probe_handler_join_uses_short_grace_after_probe_failure() {
+async fn resident_tcp_handler_join_uses_short_grace_after_exchange_failure() {
     let mut handle = tokio::spawn(async { std::future::pending::<Result<Value, String>>().await });
     let started = Instant::now();
-    let err = join_resident_tcp_probe_handler_async(&mut handle, Duration::from_secs(30), true)
-        .await
-        .unwrap_err();
+    let err =
+        join_resident_tcp_handler_after_exchange_async(&mut handle, Duration::from_secs(30), true)
+            .await
+            .unwrap_err();
 
-    assert!(err.contains("timeout after probe failure"));
+    assert!(err.contains("timeout after exchange failure"));
     assert!(
         started.elapsed() < Duration::from_secs(1),
         "failed TCP probe waited too long for handler cleanup: {:?}",
