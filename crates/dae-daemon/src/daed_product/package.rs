@@ -311,7 +311,6 @@ RuntimeDirectoryMode=0700
 ExecStartPre=/usr/bin/daed validate -c /etc/daed/
 ExecStart=/usr/bin/daed run -c /etc/daed/
 ExecReload=/usr/bin/daed reload --timeout 60s
-TimeoutReloadSec=75s
 Restart=on-abnormal
 
 [Install]
