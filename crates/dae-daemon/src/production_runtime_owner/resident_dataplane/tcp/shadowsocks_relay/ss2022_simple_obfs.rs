@@ -1,7 +1,7 @@
 use super::*;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
     stop: Arc<AtomicBool>,
     target: &str,

@@ -172,15 +172,17 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::stream_hel
     http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async, socks5_connect_async,
 };
 mod shadowsocks_relay;
-use self::shadowsocks_relay::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::shadowsocks_relay::{
-    relay_tcp_over_shadowsocks_2022_async, relay_tcp_over_shadowsocks_aead_async,
+    relay_tcp_over_shadowsocks_2022_async, relay_tcp_over_shadowsocks_2022_simple_obfs_http_async,
+    relay_tcp_over_shadowsocks_aead_async, relay_tcp_over_shadowsocks_simple_obfs_http_async,
+    relay_tcp_over_shadowsocks_simple_obfs_tls_async,
 };
 mod shadowsocksr_relay;
 use self::shadowsocksr_relay::*;
 mod vmess_relay;
 use self::vmess_relay::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vmess_relay::{
+    relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws,
     relay_tcp_over_trojan_websocket_inner_shadowsocks_tls, relay_tcp_over_vmess_aead_async,
     relay_tcp_over_vmess_tls_aead_async, relay_tcp_over_vmess_websocket_aead_async,
     relay_tcp_over_vmess_websocket_tls_aead_async,
