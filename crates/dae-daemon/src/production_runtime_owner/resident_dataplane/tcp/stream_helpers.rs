@@ -71,7 +71,7 @@ async fn connect_plain_parent_to_target_async(
     Ok(())
 }
 
-pub(super) async fn read_http_head_and_leftover_from_async_stream<S>(
+pub(crate) async fn read_http_head_and_leftover_from_async_stream<S>(
     stream: &mut S,
 ) -> Result<(Vec<u8>, Vec<u8>), String>
 where
@@ -100,7 +100,7 @@ where
     Err("incomplete http response header".to_owned())
 }
 
-pub(super) fn validate_simple_obfs_http_response_status(
+pub(crate) fn validate_simple_obfs_http_response_status(
     response_head: &[u8],
 ) -> Result<(), String> {
     if validate_http_status(response_head, 200).is_ok()

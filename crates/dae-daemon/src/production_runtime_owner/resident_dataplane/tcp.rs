@@ -180,7 +180,11 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::shadowsock
     relay_tcp_over_shadowsocks_simple_obfs_tls_async,
 };
 mod shadowsocksr_relay;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::shadowsocksr_relay::relay_tcp_shadowsocksr_stream_async;
 use self::shadowsocksr_relay::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::stream_helpers::{
+    read_http_head_and_leftover_from_async_stream, validate_simple_obfs_http_response_status,
+};
 mod vmess_relay;
 use self::vmess_relay::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vmess_relay::{
@@ -194,7 +198,9 @@ use self::event_builders::*;
 mod direct_sniffing;
 use self::direct_sniffing::*;
 mod vless_relay;
-pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_handlers::relay_tcp_over_vless_mux_tls_async;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_handlers::{
+    meek_round_trip_async, relay_tcp_over_vless_mux_tls_async,
+};
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::relay_tcp_over_trojan_websocket_tls_async;
 use self::vless_relay::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::{

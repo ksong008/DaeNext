@@ -74,7 +74,8 @@ async fn open_native_tcp_tunnel(
         | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => {
             open_shadowsocks_native_tcp_tunnel(proxy, target).await
         }
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
@@ -82,6 +83,5 @@ async fn open_native_tcp_tunnel(
         | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
             open_quic_stream_native_tcp_tunnel(proxy, target).await
         }
-        _ => Err(NativeTcpProbeError::NotAdmitted),
     }
 }

@@ -5,14 +5,16 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use dae_outbound::{
-    shared_transport::{HttpUpgradeOptions, MuxFrameOptions, mux_new_frame},
+    shared_transport::{HttpUpgradeOptions, MeekRoundTripOptions, MuxFrameOptions, mux_new_frame},
     vless::{contract::is_xtls_rprx_vision_flow, packet},
     vmess::VMessMetadata,
 };
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::time;
 
 use super::super::super::client::{
     open_async_vless_tls_client_with_flow, open_proxy_tcp_stream_async_with_flow,
@@ -23,7 +25,7 @@ use super::super::super::{
     ResidentDataplaneMetrics, VLESS_RESPONSE_VERSION,
     tcp::{
         TcpProxySelection, XhttpPacketUpParts, XhttpStreamParts, close_xhttp_download_client,
-        close_xhttp_stream_upload_client, close_xhttp_upload_client,
+        close_xhttp_stream_upload_client, close_xhttp_upload_client, meek_round_trip_async,
         native_httpupgrade_handshake_over_resident_tls_async,
         native_websocket_handshake_over_resident_tls_async,
         native_write_websocket_binary_frame_over_resident_tls_async, open_grpc_h2_stream,
@@ -75,6 +77,14 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                 NativeTcpProbeError::Open(format!("write native VLESS request: {err}"))
             })?;
         return Ok(Box::new(VlessNativeTunnel::new(stream)));
+    }
+
+    if selection.proxy.net == "meek" {
+        let meek_request =
+            packet::first_write_bytes(&key, "", "tcp", target, false, &[]).map_err(|err| {
+                NativeTcpProbeError::Open(format!("build native VLESS Meek request: {err}"))
+            })?;
+        return open_vless_meek_native_tcp_tunnel(selection, target, meek_request).await;
     }
 
     let mut client =
@@ -211,9 +221,104 @@ fn vless_native_tcp_net_admitted(selection: &TcpProxySelection) -> bool {
         "websocket" => !is_xtls_rprx_vision_flow(&selection.proxy.flow),
         "httpupgrade" => true,
         "grpc" | "h2" | "xhttp" => true,
-        "meek" => false,
+        "meek" => true,
         _ => true,
     }
+}
+
+async fn open_vless_meek_native_tcp_tunnel(
+    selection: TcpProxySelection,
+    target: &str,
+    first_payload: Vec<u8>,
+) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
+    let options = MeekRoundTripOptions {
+        url: format!(
+            "https://{}{}",
+            selection.proxy.stream_host, selection.proxy.stream_path
+        ),
+        host: selection.proxy.stream_host.clone(),
+        path: selection.proxy.stream_path.clone(),
+        session_tag: format!("{}|{}", selection.proxy.graph_id, target).into_bytes(),
+    };
+    let proxy = Arc::clone(&selection.proxy);
+    let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
+    let stop = Arc::new(AtomicBool::new(false));
+    let relay_stop = Arc::clone(&stop);
+    let metrics = ResidentDataplaneMetrics::default();
+    let task = tokio::spawn(async move {
+        let _ = relay_tcp_over_vless_meek_native_async(
+            &mut relay_side,
+            proxy,
+            options,
+            first_payload,
+            relay_stop,
+            &metrics,
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+    });
+    Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+}
+
+async fn relay_tcp_over_vless_meek_native_async(
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    proxy: Arc<ResidentProxyPlan>,
+    options: MeekRoundTripOptions,
+    first_payload: Vec<u8>,
+    stop: Arc<AtomicBool>,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<(), String> {
+    let mut stripper = VlessResponseStripper::default();
+    let mut next_body = Some(first_payload);
+    let mut inbound_closed = false;
+    let mut last_activity = Instant::now();
+    let mut empty_poll_count = 0_usize;
+
+    while !stop.load(Ordering::Relaxed) {
+        let body = if let Some(body) = next_body.take() {
+            body
+        } else {
+            let mut buf = [0_u8; 16 * 1024];
+            match time::timeout(Duration::from_millis(150), inbound.read(&mut buf)).await {
+                Ok(Ok(0)) => {
+                    inbound_closed = true;
+                    Vec::new()
+                }
+                Ok(Ok(read)) => {
+                    metrics.add_upload(read);
+                    last_activity = Instant::now();
+                    empty_poll_count = 0;
+                    buf[..read].to_vec()
+                }
+                Ok(Err(err)) => return Err(format!("read native VLESS Meek upload: {err}")),
+                Err(_) => Vec::new(),
+            }
+        };
+
+        if body.is_empty() {
+            empty_poll_count = empty_poll_count.saturating_add(1);
+        }
+        let response = meek_round_trip_async(&proxy, &options, &body).await?;
+        let response_payload = stripper.consume(&response)?;
+        if !response_payload.is_empty() {
+            inbound
+                .write_all(&response_payload)
+                .await
+                .map_err(|err| format!("write native VLESS Meek response: {err}"))?;
+            metrics.add_download(response_payload.len());
+            last_activity = Instant::now();
+            empty_poll_count = 0;
+        }
+        if inbound_closed && response_payload.is_empty() {
+            break;
+        }
+        if empty_poll_count >= 3
+            && last_activity.elapsed() > super::super::super::RESIDENT_TCP_IDLE_TIMEOUT
+        {
+            break;
+        }
+    }
+    Ok(())
 }
 
 async fn open_vless_mux_native_tcp_tunnel(
