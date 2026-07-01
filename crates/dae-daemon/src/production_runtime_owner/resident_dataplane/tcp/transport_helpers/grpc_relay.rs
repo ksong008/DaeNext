@@ -1,6 +1,6 @@
 use super::*;
 pub(crate) async fn relay_tcp_over_grpc_h2(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     send_stream: &mut h2::SendStream<Bytes>,
     recv_stream: &mut h2::RecvStream,
     stop: Arc<AtomicBool>,
