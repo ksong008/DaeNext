@@ -36,8 +36,8 @@ use dae_outbound::{
     },
     shadowsocks::{
         AeadStreamCodec, ShadowsocksMetadata, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
-        Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions, Ss2022TcpServerStreamDecoder,
-        cipher_spec, read_encrypted_chunk_from_async_stream,
+        Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions, Ss2022TcpClientStreamEncoder,
+        Ss2022TcpServerStreamDecoder, cipher_spec, read_encrypted_chunk_from_async_stream,
         shadowsocksr_http_simple_origin_request, simple_obfs_http_request_with_body,
         simple_obfs_tls_client_hello_with_body, ss2022_tcp_client_stream_encoder,
         ss2022_tcp_server_stream_decoder_async, ss2022_tcp_unix_timestamp_now,
