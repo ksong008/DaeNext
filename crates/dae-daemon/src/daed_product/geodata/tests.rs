@@ -212,6 +212,26 @@ fn geodata_source_settings_default_custom_and_reset_urls() {
 }
 
 #[test]
+fn geodata_source_settings_use_cdn_v2ray_rules_defaults() {
+    assert_eq!(
+        GeodataKind::Geosite.default_source_url(),
+        "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
+    );
+    assert_eq!(
+        GeodataKind::Geoip.default_source_url(),
+        "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"
+    );
+    assert_eq!(
+        GeodataKind::Geosite.legacy_release_api_url(),
+        "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest"
+    );
+    assert_eq!(
+        GeodataKind::Geoip.legacy_release_api_url(),
+        "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest"
+    );
+}
+
+#[test]
 fn geodata_source_settings_accept_direct_files_and_use_proxy() {
     let dir = std::env::temp_dir().join(format!(
         "daed-product-geodata-source-direct-{}",
@@ -220,7 +240,7 @@ fn geodata_source_settings_accept_direct_files_and_use_proxy() {
     fs::create_dir_all(&dir).unwrap();
     let state = dir.join("daed.db");
 
-    let direct_url = "https://fastly.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip.dat";
+    let direct_url = "https://mirror.example.test/data/geoip.dat";
     let geoip = set_geodata_source_url(&state, GeodataKind::Geoip, direct_url).unwrap();
     assert_eq!(geoip["url"], json!(direct_url));
     assert_eq!(geoip["sourceType"], json!("direct"));
@@ -239,6 +259,24 @@ fn geodata_source_settings_accept_direct_files_and_use_proxy() {
     assert_eq!(geoip["usingDefault"], json!(true));
     assert_eq!(geoip["sourceType"], json!("direct"));
     assert_eq!(geoip["useProxy"], json!(true));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geodata_source_settings_accepts_shared_release_api_url_for_both_kinds() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-geodata-source-shared-release-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("daed.db");
+    let release_api_url = GeodataKind::Geosite.legacy_release_api_url();
+
+    let geosite = set_geodata_source_url(&state, GeodataKind::Geosite, release_api_url).unwrap();
+    assert_eq!(geosite["sourceType"], json!("release"));
+    let geoip = set_geodata_source_url(&state, GeodataKind::Geoip, release_api_url).unwrap();
+    assert_eq!(geoip["sourceType"], json!("release"));
 
     let _ = fs::remove_dir_all(&dir);
 }

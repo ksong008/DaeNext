@@ -152,7 +152,11 @@ fn parse_geodata_source_url(raw_url: &str) -> io::Result<url::Url> {
 
 fn reject_obviously_wrong_geodata_source(kind: GeodataKind, url: &str) -> io::Result<()> {
     let other = other_geodata_kind(kind);
-    if url == other.default_source_url() || url == other.legacy_release_api_url() {
+    let own_release_api_url = kind.legacy_release_api_url();
+    let other_release_api_url = other.legacy_release_api_url();
+    let uses_other_only_release_api =
+        other_release_api_url != own_release_api_url && url == other_release_api_url;
+    if url == other.default_source_url() || uses_other_only_release_api {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
