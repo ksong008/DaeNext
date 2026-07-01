@@ -1,13 +1,13 @@
 pub(super) const GEOSITE_FILE: &str = "geosite.dat";
 pub(super) const GEOIP_FILE: &str = "geoip.dat";
 const GEOSITE_DEFAULT_SOURCE_URL: &str =
-    "https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat";
+    "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat";
 const GEOIP_DEFAULT_SOURCE_URL: &str =
-    "https://fastly.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip.dat";
+    "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat";
 const GEOSITE_RELEASE_API_URL: &str =
     "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest";
 const GEOIP_RELEASE_API_URL: &str =
-    "https://api.github.com/repos/Loyalsoldier/geoip/releases/latest";
+    "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest";
 pub(super) const GEODATA_HTTP_HEADER_LIMIT: usize = 64 * 1024;
 pub(super) const GEODATA_HTTP_BODY_LIMIT: usize = 64 * 1024 * 1024;
 pub(super) const GEODATA_REDIRECT_LIMIT: usize = 5;
