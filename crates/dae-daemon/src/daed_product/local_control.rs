@@ -7,7 +7,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 const LOCAL_CONTROL_DIR_MODE: u32 = 0o700;
 const LOCAL_CONTROL_SOCKET_MODE: u32 = 0o600;
 const LOCAL_CONTROL_MAX_REQUEST_BYTES: u64 = 16 * 1024;
-const LOCAL_CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(30);
+const LOCAL_CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const LOCAL_CONTROL_SERVER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCAL_CONTROL_OP_RELOAD: &str = "reload";
 
@@ -149,51 +149,50 @@ fn handle_local_control_stream(app: &AppState, stream: &mut UnixStream) -> Value
 
 fn handle_local_control_reload(app: &AppState) -> Value {
     let reload_started_at = Instant::now();
-    match should_restore_runtime_on_start(&app.state) {
-        Ok(false) => json!({
+    if !app.runtime.is_running() {
+        return json!({
             "ok": true,
             "applied": false,
             "skipped": true,
             "reason": "runtime is stopped",
-        }),
-        Err(err) => json!({"ok": false, "error": err.to_string()}),
-        Ok(true) => match restore_runtime_from_state(
-            &app.runtime,
-            &app.state,
-            Some(&app.config_dir),
-            ProductRuntimeLifecycleLogMode::ReloadLocalControl,
-        ) {
-            Ok(report) => {
-                let mut fields = BTreeMap::new();
-                fields.insert("source".to_owned(), "local-control".to_owned());
-                fields.insert("applied".to_owned(), "true".to_owned());
-                fields.insert(
-                    "elapsed".to_owned(),
-                    format!("{:?}", reload_started_at.elapsed()),
-                );
-                let _ = append_lifecycle_log_fields_for_config(
-                    &app.config_dir,
-                    &app.state,
-                    "info",
-                    "[Reload] Finished",
-                    fields,
-                );
-                json!({"ok": true, "applied": true, "skipped": false, "report": report})
-            }
-            Err(err) => {
-                let mut fields = BTreeMap::new();
-                fields.insert("source".to_owned(), "local-control".to_owned());
-                fields.insert("error".to_owned(), err.clone());
-                let _ = append_lifecycle_log_fields_for_config(
-                    &app.config_dir,
-                    &app.state,
-                    "error",
-                    "[Reload] Failed to reload",
-                    fields,
-                );
-                json!({"ok": false, "error": err})
-            }
-        },
+        });
+    }
+    match restore_runtime_from_state(
+        &app.runtime,
+        &app.state,
+        Some(&app.config_dir),
+        ProductRuntimeLifecycleLogMode::ReloadLocalControl,
+    ) {
+        Ok(report) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "local-control".to_owned());
+            fields.insert("applied".to_owned(), "true".to_owned());
+            fields.insert(
+                "elapsed".to_owned(),
+                format!("{:?}", reload_started_at.elapsed()),
+            );
+            let _ = append_lifecycle_log_fields_for_config(
+                &app.config_dir,
+                &app.state,
+                "info",
+                "[Reload] Finished",
+                fields,
+            );
+            json!({"ok": true, "applied": true, "skipped": false, "report": report})
+        }
+        Err(err) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "local-control".to_owned());
+            fields.insert("error".to_owned(), err.clone());
+            let _ = append_lifecycle_log_fields_for_config(
+                &app.config_dir,
+                &app.state,
+                "error",
+                "[Reload] Failed to reload",
+                fields,
+            );
+            json!({"ok": false, "error": err})
+        }
     }
 }
 
@@ -292,8 +291,8 @@ mod tests {
     #[test]
     fn local_control_timeout_accepts_seconds_and_milliseconds() {
         assert_eq!(
-            parse_local_control_timeout("30").unwrap(),
-            Duration::from_secs(30)
+            parse_local_control_timeout("60").unwrap(),
+            Duration::from_secs(60)
         );
         assert_eq!(
             parse_local_control_timeout("30s").unwrap(),
@@ -304,5 +303,40 @@ mod tests {
             Duration::from_millis(250)
         );
         assert!(parse_local_control_timeout("bad").is_err());
+    }
+
+    #[test]
+    fn local_control_reload_uses_live_runtime_state() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids)
+                VALUES(1, 1, 1, 1, 0, '');
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+        let app = AppState {
+            config_dir: dir.clone(),
+            state: state.clone(),
+            web_root: dir.clone(),
+            api_only: true,
+            control_socket: dir.join("control.sock"),
+            runtime: Arc::new(ProductRuntimeManager::new()),
+            latency_jobs: Arc::new(LatencyJobManager::default()),
+            http_metrics: Arc::new(ProductHttpMetrics::default()),
+            geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        };
+
+        let response = handle_local_control_reload(&app);
+        assert_eq!(response["ok"], json!(true));
+        assert_eq!(response["applied"], json!(false));
+        assert_eq!(response["skipped"], json!(true));
+        assert_eq!(response["reason"], json!("runtime is stopped"));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

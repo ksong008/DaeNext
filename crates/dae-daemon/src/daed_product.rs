@@ -682,6 +682,8 @@ mod product_net;
 use self::product_net::*;
 mod runtime_materialization;
 use self::runtime_materialization::*;
+mod runtime_reload;
+use self::runtime_reload::*;
 mod logs;
 use self::logs::*;
 mod latency;

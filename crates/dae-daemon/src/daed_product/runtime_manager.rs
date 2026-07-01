@@ -318,6 +318,13 @@ impl ProductRuntimeManager {
             latency_seed,
         )
     }
+
+    pub(super) fn is_running(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|inner| inner.runtime.is_some())
+            .unwrap_or(false)
+    }
 }
 
 impl Drop for ProductRuntimeManager {

@@ -81,31 +81,63 @@ pub(crate) fn restore_runtime_from_state(
         config_dir.unwrap_or_else(|| state.parent().unwrap_or(Path::new(DEFAULT_CONFIG_DIR)));
     let lifecycle_started_at = Instant::now();
     let source = log_mode.source();
-    refresh_log_policy_and_reset_runtime_cycle_logs(log_config_dir, state, Some(runtime))
-        .map_err(|err| err.to_string())?;
-    let preview = materialize_runtime(state, config_dir, true).map_err(|err| err.to_string())?;
-    let content = preview["content"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "runtime materializer did not return content".to_owned())?;
-    let config = build_runtime_config_from_content(&content)?;
-    let config_content = content.clone();
-    drop(content);
-    drop(preview);
-    set_runtime_log_level_from_config(state, &config).map_err(|err| err.to_string())?;
-    refresh_log_policy_and_reset_runtime_cycle_logs(log_config_dir, state, Some(runtime))
+    let prepared = prepare_runtime_reload_to_apply(log_config_dir, state, runtime)
         .map_err(|err| err.to_string())?;
     let latency_seed = stored_successful_node_latency_seed_snapshots(state).unwrap_or_default();
     let control_plane_started_at = Instant::now();
-    let outcome =
-        runtime.reload_with_config_content(config, Some(config_content), source, &latency_seed)?;
+    let reclaim_reason = if log_mode.is_startup() {
+        AllocatorReclaimReason::StartupControlBuilt
+    } else {
+        AllocatorReclaimReason::ReloadCompleted
+    };
+    let applied = match apply_prepared_runtime_reload(
+        runtime,
+        state,
+        config_dir,
+        source,
+        prepared,
+        &latency_seed,
+        reclaim_reason,
+    ) {
+        Ok(applied) => applied,
+        Err(err) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), source.to_owned());
+            fields.insert("error".to_owned(), err.clone());
+            if log_mode.is_startup() {
+                let _ = append_startup_step_failed_for_config(
+                    log_config_dir,
+                    state,
+                    "control-plane.create.total",
+                    lifecycle_started_at,
+                    &err,
+                    fields.clone(),
+                );
+            }
+            let _ = append_lifecycle_log_fields_for_config(
+                log_config_dir,
+                state,
+                "error",
+                if log_mode.is_startup() {
+                    "[Startup] runtime restore failed"
+                } else {
+                    "[Reload] Failed to reload"
+                },
+                fields,
+            );
+            return Err(err);
+        }
+    };
     if log_mode.is_startup() {
-        let _ =
-            append_startup_runtime_evidence_logs_for_config(log_config_dir, state, &outcome.report);
+        let _ = append_startup_runtime_evidence_logs_for_config(
+            log_config_dir,
+            state,
+            &applied.runtime_report,
+        );
         let _ = append_startup_reclaim_decision_log_for_config(
             log_config_dir,
             state,
-            &outcome.report,
+            &applied.runtime_report,
             true,
         );
         let _ = append_startup_step_completed_for_config(
@@ -123,38 +155,6 @@ pub(crate) fn restore_runtime_from_state(
             BTreeMap::new(),
         );
     }
-    let applied = match materialize_runtime(state, config_dir, false) {
-        Ok(applied) => applied,
-        Err(err) => {
-            let mut fields = BTreeMap::new();
-            fields.insert("source".to_owned(), source.to_owned());
-            fields.insert("error".to_owned(), err.to_string());
-            if log_mode.is_startup() {
-                let _ = append_startup_step_failed_for_config(
-                    log_config_dir,
-                    state,
-                    "control-plane.create.total",
-                    lifecycle_started_at,
-                    &err.to_string(),
-                    fields.clone(),
-                );
-            }
-            let _ = append_lifecycle_log_fields_for_config(
-                log_config_dir,
-                state,
-                "error",
-                if log_mode.is_startup() {
-                    "[Startup] runtime restore failed"
-                } else {
-                    "[Reload] Failed to materialize applied runtime config"
-                },
-                fields,
-            );
-            let _ = runtime.stop();
-            let _ = mark_system_stopped(state);
-            return Err(err.to_string());
-        }
-    };
     if log_mode.is_startup() {
         let _ = append_startup_step_completed_for_config(
             log_config_dir,
@@ -164,28 +164,21 @@ pub(crate) fn restore_runtime_from_state(
             BTreeMap::new(),
         );
     }
-    let reclaim_reason = if log_mode.is_startup() {
-        AllocatorReclaimReason::StartupControlBuilt
-    } else {
-        AllocatorReclaimReason::ReloadCompleted
-    };
     if !log_mode.returns_detailed_report() {
-        drop(outcome.report);
-        drop(applied);
-        let final_reclaim = allocator_reclaim(reclaim_reason);
+        drop(applied.runtime_report);
+        drop(applied.materialized_report);
         return Ok(json!({
             "restored": true,
             "detailedReport": false,
-            "allocatorReclaim": final_reclaim,
+            "allocatorReclaim": applied.allocator_reclaim,
         }));
     }
-    let final_reclaim = allocator_reclaim(reclaim_reason);
     Ok(json!({
         "restored": true,
         "detailedReport": true,
-        "runtime": outcome.report,
-        "materialized": applied,
-        "allocatorReclaim": final_reclaim,
+        "runtime": applied.runtime_report,
+        "materialized": applied.materialized_report,
+        "allocatorReclaim": applied.allocator_reclaim,
     }))
 }
 
