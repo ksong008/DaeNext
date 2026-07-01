@@ -5,15 +5,17 @@ mod h3;
 mod plain;
 mod quic;
 mod route;
+mod tcp_udp;
 mod tls_https;
 mod wire;
 
 use h3::forward_dns_h3_async;
 pub(super) use plain::{forward_dns_tcp_asis_async, forward_dns_udp_async};
-use plain::{forward_dns_tcp_async, forward_dns_tcp_udp_async, forward_dns_udp_upstream_async};
+use plain::{forward_dns_tcp_async, forward_dns_udp_upstream_async};
 use quic::forward_dns_quic_async;
 #[cfg(test)]
 pub(super) use route::select_dns_upstream_targets;
+use tcp_udp::forward_dns_tcp_udp_async;
 use tls_https::{forward_dns_https_async, forward_dns_tls_async};
 #[cfg(test)]
 pub(super) use wire::parse_doh_http_response;

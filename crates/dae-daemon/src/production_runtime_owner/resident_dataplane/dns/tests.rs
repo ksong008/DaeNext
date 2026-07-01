@@ -420,6 +420,182 @@ fn dns_upstream_targets_keep_single_family_selector_fallback() {
 }
 
 #[test]
+fn dns_upstream_fixed_group_stays_fixed_across_udp_and_tcp_selection() {
+    let config = dns_upstream_routing_config_with_group(
+        r#"
+            domain(full: __DNS_UPSTREAM_HOST__) -> proxy
+            fallback: direct
+            "#
+        .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
+        .as_str(),
+        r#"
+            filter: name(node_a, node_b)
+            policy: fixed(0)
+            "#,
+    );
+    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let group = router.proxy_groups.values().next().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, Some(300), 1)
+        .unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(300), 2)
+        .unwrap();
+
+    for l4proto in [L4Proto::Udp, L4Proto::Tcp] {
+        let selection = select_single_test_dns_upstream_target(
+            &config,
+            router.clone(),
+            &upstream,
+            test_dns_upstream_target_v4(),
+            l4proto,
+        );
+        let ResidentDnsUpstreamSelection::Proxy { proxy } = selection else {
+            panic!("expected proxied DNS upstream selection");
+        };
+        assert_eq!(proxy.node_tag, "node_a");
+    }
+}
+
+#[test]
+fn dns_upstream_selection_respects_l4_routing_per_phase() {
+    let input = r#"
+        global {
+          lan_interface: daerust0
+          so_mark_from_dae: 1234
+        }
+        node {
+          node_a: 'socks5://identity-1:credential-1@node-1.fixture.invalid:28001'
+          node_b: 'socks5://identity-2:credential-2@node-2.fixture.invalid:28002'
+        }
+        group {
+          udp_proxy {
+            filter: name(node_a)
+            policy: fixed(0)
+          }
+          tcp_proxy {
+            filter: name(node_b)
+            policy: fixed(0)
+          }
+        }
+        routing {
+          domain(full: __DNS_UPSTREAM_HOST__) && l4proto(udp) -> udp_proxy
+          domain(full: __DNS_UPSTREAM_HOST__) && l4proto(tcp) -> tcp_proxy
+          fallback: direct
+        }
+        dns {
+          upstream {
+            overseas: 'tcp+udp://__DNS_UPSTREAM_HOST__:53'
+          }
+          routing {
+            request {
+              fallback: overseas
+            }
+          }
+        }
+        "#
+    .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST);
+    let config = parse_config(&input);
+    let (router, upstream) = dns_upstream_router_for_config(&config);
+
+    let udp = select_single_test_dns_upstream_target(
+        &config,
+        router.clone(),
+        &upstream,
+        test_dns_upstream_target_v4(),
+        L4Proto::Udp,
+    );
+    let tcp = select_single_test_dns_upstream_target(
+        &config,
+        router,
+        &upstream,
+        test_dns_upstream_target_v4(),
+        L4Proto::Tcp,
+    );
+
+    let ResidentDnsUpstreamSelection::Proxy { proxy } = udp else {
+        panic!("expected UDP phase to select proxy");
+    };
+    assert_eq!(proxy.group_name, "udp_proxy");
+    assert_eq!(proxy.node_tag, "node_a");
+
+    let ResidentDnsUpstreamSelection::Proxy { proxy } = tcp else {
+        panic!("expected TCP phase to select proxy");
+    };
+    assert_eq!(proxy.group_name, "tcp_proxy");
+    assert_eq!(proxy.node_tag, "node_b");
+}
+
+#[test]
+fn dns_upstream_selection_respects_ipversion_routing_per_target() {
+    let input = r#"
+        global {
+          lan_interface: daerust0
+          so_mark_from_dae: 1234
+        }
+        node {
+          node_a: 'socks5://identity-1:credential-1@node-1.fixture.invalid:28001'
+          node_b: 'socks5://identity-2:credential-2@node-2.fixture.invalid:28002'
+        }
+        group {
+          v4_proxy {
+            filter: name(node_a)
+            policy: fixed(0)
+          }
+          v6_proxy {
+            filter: name(node_b)
+            policy: fixed(0)
+          }
+        }
+        routing {
+          domain(full: __DNS_UPSTREAM_HOST__) && ipversion(4) -> v4_proxy
+          domain(full: __DNS_UPSTREAM_HOST__) && ipversion(6) -> v6_proxy
+          fallback: direct
+        }
+        dns {
+          upstream {
+            overseas: 'tcp+udp://__DNS_UPSTREAM_HOST__:53'
+          }
+          routing {
+            request {
+              fallback: overseas
+            }
+          }
+        }
+        "#
+    .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST);
+    let config = parse_config(&input);
+    let (router, upstream) = dns_upstream_router_for_config(&config);
+
+    let v4 = select_single_test_dns_upstream_target(
+        &config,
+        router.clone(),
+        &upstream,
+        test_dns_upstream_target_v4(),
+        L4Proto::Udp,
+    );
+    let v6 = select_single_test_dns_upstream_target(
+        &config,
+        router,
+        &upstream,
+        test_dns_upstream_target_v6(),
+        L4Proto::Udp,
+    );
+
+    let ResidentDnsUpstreamSelection::Proxy { proxy } = v4 else {
+        panic!("expected IPv4 target to select proxy");
+    };
+    assert_eq!(proxy.group_name, "v4_proxy");
+    assert_eq!(proxy.node_tag, "node_a");
+
+    let ResidentDnsUpstreamSelection::Proxy { proxy } = v6 else {
+        panic!("expected IPv6 target to select proxy");
+    };
+    assert_eq!(proxy.group_name, "v6_proxy");
+    assert_eq!(proxy.node_tag, "node_b");
+}
+
+#[test]
 fn dns_upstream_targets_choose_lower_latency_matching_proxy_candidate() {
     let config = dns_upstream_routing_config_with_group(
         r#"
