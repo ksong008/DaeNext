@@ -7,6 +7,7 @@ pub(crate) fn start_resident_dataplane_workers(
     domain_routing_map_id: Option<u32>,
     geodata: &ResidentGeodataStore,
     latency_seed: &[Value],
+    dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> (Value, Option<ResidentDataplaneRuntime>) {
     let event_file = artifact_dir.join("resident-production-dataplane-events.jsonl");
     let plan = match build_resident_dataplane_plan_with_geodata(config, geodata) {
@@ -200,6 +201,29 @@ pub(crate) fn start_resident_dataplane_workers(
             .with_domain_routing(dns_domain_routing.clone())
             .with_upstream_routing(Some(dns_upstream_router)),
     );
+    let dns_reload_restore = match dns_reload_snapshot.as_ref() {
+        Some(snapshot) => match dns.restore_reload_snapshot(snapshot) {
+            Ok(report) => report.to_value(),
+            Err(err) => {
+                return (
+                    json!({
+                        "status": "fail",
+                        "enabled": true,
+                        "error": format!("restore resident DNS reload snapshot: {err}"),
+                        "event_file": Value::Null,
+                        "event_file_status": "disabled",
+                        "event_log": "product-log-sink",
+                    }),
+                    None,
+                );
+            }
+        },
+        None => json!({
+            "status": "skipped",
+            "reason": "no resident DNS reload snapshot provided",
+        }),
+    };
+    let dns_reload_handle = dns.reload_handle();
     let udp_routing_matcher = routing_matcher.clone();
     let udp_dial_mode = plan.tcp_dial_mode;
     let tcp_router = match ResidentTcpRouter::new(
@@ -399,6 +423,7 @@ pub(crate) fn start_resident_dataplane_workers(
         "domain_routing_map_id".to_owned(),
         json!(domain_routing_map_id),
     );
+    start_map.insert("dns_reload_restore".to_owned(), dns_reload_restore);
     start_map.insert(
         "dns_domain_routing".to_owned(),
         json!({
@@ -476,6 +501,7 @@ pub(crate) fn start_resident_dataplane_workers(
             owner,
             groups: runtime_groups,
             manual_probe_plans,
+            dns_reload_handle,
         }),
     )
 }

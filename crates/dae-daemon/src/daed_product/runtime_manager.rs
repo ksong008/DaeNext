@@ -12,16 +12,18 @@ use cleanup::{
 };
 #[cfg(test)]
 pub(super) use instance::resident_dataplane_admission_detail;
+#[cfg(test)]
+pub(super) use instance::start_product_runtime_instance;
 pub(super) use instance::{
     product_runtime_fake_start_enabled, runtime_started_at_after_success,
-    start_product_runtime_instance,
+    start_product_runtime_instance_with_dns_reload_snapshot,
 };
 use recovery::ProductRuntimeInterfaceRecoverySupervisor;
 #[cfg(test)]
 pub(super) use recovery::resident_interface_recovery_request;
 use summary::{
-    apply_runtime_traffic_metric_carry, runtime_instance_node_latencies,
-    runtime_traffic_metric_u64, runtime_traffic_metrics_snapshot,
+    apply_runtime_traffic_metric_carry, runtime_instance_dns_reload_snapshot,
+    runtime_instance_node_latencies, runtime_traffic_metric_u64, runtime_traffic_metrics_snapshot,
     successful_latency_seed_snapshots,
 };
 
@@ -383,6 +385,26 @@ fn reload_product_runtime_with_config_content(
         .as_ref()
         .map(runtime_instance_node_latencies)
         .unwrap_or_default();
+    let previous_dns_reload_snapshot = previous_runtime
+        .as_ref()
+        .and_then(|runtime| runtime_instance_dns_reload_snapshot(runtime).ok().flatten())
+        .filter(|snapshot| !snapshot.is_empty());
+    let dns_config_unchanged = previous_config
+        .as_ref()
+        .map(|previous| previous.dns == config.dns)
+        .unwrap_or(false);
+    let dns_reload_plan = dae_runtime_control::ReloadDnsCachePlan::decide(
+        dns_config_unchanged,
+        previous_dns_reload_snapshot.is_some(),
+        previous_dns_reload_snapshot
+            .as_ref()
+            .map(ResidentDnsReloadSnapshot::entry_count)
+            .unwrap_or(0),
+    );
+    let dns_reload_snapshot = dns_reload_plan
+        .restore_cache
+        .then(|| previous_dns_reload_snapshot.clone())
+        .flatten();
     let latency_seed =
         successful_latency_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
     let previous_cleanup_report = cleanup_runtime_instance(previous_runtime);
@@ -399,7 +421,12 @@ fn reload_product_runtime_with_config_content(
             "previous product runtime cleanup failed before reload: {blocker}"
         ));
     }
-    match start_product_runtime_instance(&config, source, &latency_seed) {
+    match start_product_runtime_instance_with_dns_reload_snapshot(
+        &config,
+        source,
+        &latency_seed,
+        dns_reload_snapshot.clone(),
+    ) {
         Ok((runtime, report)) => {
             let mut inner = inner
                 .lock()
@@ -434,7 +461,12 @@ fn reload_product_runtime_with_config_content(
                 .unwrap_or(false);
             let restore_result = if should_restore {
                 previous_config.as_ref().map(|previous| {
-                    start_product_runtime_instance(previous, "restore", &latency_seed)
+                    start_product_runtime_instance_with_dns_reload_snapshot(
+                        previous,
+                        "restore",
+                        &latency_seed,
+                        previous_dns_reload_snapshot.clone(),
+                    )
                 })
             } else {
                 None

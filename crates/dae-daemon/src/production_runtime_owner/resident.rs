@@ -22,7 +22,8 @@ use super::native_ebpf::{
 use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{
-    ResidentDataplaneRuntime, ResidentManualProbeHandle, start_resident_dataplane_workers,
+    ResidentDataplaneRuntime, ResidentDnsReloadSnapshot, ResidentManualProbeHandle,
+    start_resident_dataplane_workers,
 };
 use super::resident_interfaces::{
     attach_resident_lan_egress_program, attach_resident_wan_programs,

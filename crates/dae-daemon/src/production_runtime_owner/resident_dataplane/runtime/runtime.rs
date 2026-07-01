@@ -5,6 +5,7 @@ pub(crate) struct ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     pub(in crate::production_runtime_owner) manual_probe_plans:
         BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+    pub(in crate::production_runtime_owner) dns_reload_handle: dns::ResidentDnsReloadHandle,
 }
 
 impl ResidentDataplaneRuntime {
@@ -35,6 +36,12 @@ impl ResidentDataplaneRuntime {
     ) -> ResidentManualProbeHandle {
         self.owner
             .manual_probe_handle(&self.groups, &self.manual_probe_plans)
+    }
+
+    pub(in crate::production_runtime_owner) fn dns_reload_snapshot(
+        &self,
+    ) -> Result<ResidentDnsReloadSnapshot, String> {
+        self.dns_reload_handle.snapshot_for_reload()
     }
 
     pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {
