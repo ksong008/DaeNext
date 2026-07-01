@@ -1,5 +1,7 @@
 use super::*;
 
+pub(crate) const RESIDENT_TCP_FAILED_HANDLER_JOIN_GRACE: Duration = Duration::from_millis(100);
+
 pub(crate) async fn fetch_resident_proxy_http_response_async(
     proxy: Arc<ResidentProxyPlan>,
     tls: bool,
@@ -39,6 +41,38 @@ pub(crate) async fn fetch_resident_proxy_http_response_async(
         },
     )
     .await
+}
+
+pub(crate) async fn join_resident_tcp_handler_after_exchange_async(
+    handle: &mut tokio::task::JoinHandle<Result<Value, String>>,
+    timeout: Duration,
+    response_failed: bool,
+) -> Result<Value, String> {
+    let join_timeout = if response_failed {
+        std::cmp::min(timeout, RESIDENT_TCP_FAILED_HANDLER_JOIN_GRACE)
+    } else {
+        timeout
+    };
+    match time::timeout(join_timeout, &mut *handle).await {
+        Ok(joined) => joined.map_err(|err| format!("join resident TCP handler: {err}"))?,
+        Err(_) => {
+            handle.abort();
+            let _ = time::timeout(RESIDENT_TCP_FAILED_HANDLER_JOIN_GRACE, &mut *handle).await;
+            if response_failed {
+                Err("join resident TCP handler: timeout after exchange failure".to_owned())
+            } else {
+                Err("join resident TCP handler: timeout".to_owned())
+            }
+        }
+    }
+}
+
+pub(crate) fn sanitize_probe_event(event: Value) -> String {
+    event
+        .get("event")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned()
 }
 
 pub(crate) async fn exchange_resident_proxy_tcp_stream_async<F, Fut>(
@@ -162,8 +196,12 @@ where
 
     let response_result = exchange(client).await;
     stop.store(true, Ordering::Relaxed);
-    let handler_result =
-        join_resident_tcp_probe_handler_async(&mut handle, timeout, response_result.is_err()).await;
+    let handler_result = join_resident_tcp_handler_after_exchange_async(
+        &mut handle,
+        timeout,
+        response_result.is_err(),
+    )
+    .await;
     match response_result {
         Ok(response) => Ok(response),
         Err(response_err) => match handler_result {

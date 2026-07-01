@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream as TokioTcpStream;
 use tokio::time;
 
 pub(crate) fn resident_tcp_probe_http_request(method: &str, path: &str, host: &str) -> Vec<u8> {
@@ -13,17 +12,6 @@ pub(crate) fn resident_tcp_probe_http_request(method: &str, path: &str, host: &s
         "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: dae-rust-resident-check\r\nConnection: close\r\n\r\n"
     )
     .into_bytes()
-}
-
-pub(crate) async fn read_resident_tcp_probe_https_response_async(
-    stream: TokioTcpStream,
-    host: &str,
-    path: &str,
-    method: &str,
-    timeout: Duration,
-) -> Result<(), String> {
-    read_resident_tcp_probe_https_response_over_stream_async(stream, host, path, method, timeout)
-        .await
 }
 
 pub(crate) async fn read_resident_tcp_probe_https_response_over_stream_async<S>(
