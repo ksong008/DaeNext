@@ -91,8 +91,8 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
     })
 }
 
-async fn relay_tcp_shadowsocksr_stream_async(
-    inbound: &mut TokioTcpStream,
+pub(crate) async fn relay_tcp_shadowsocksr_stream_async(
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
     stop: Arc<AtomicBool>,
     metrics: &ResidentDataplaneMetrics,
