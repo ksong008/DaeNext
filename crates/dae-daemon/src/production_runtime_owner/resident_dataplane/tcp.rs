@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::slice;
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::task::{Context, Poll};
@@ -64,7 +64,7 @@ use dae_outbound::{
 };
 use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::{SniffingError, sniff_tcp};
-use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
 
 use super::client::{
@@ -86,6 +86,10 @@ use super::plan::{
     ResidentXhttpMetaPlacement, ResidentXhttpMode, ResidentXhttpPaddingMethod,
     ResidentXhttpPaddingPlacement, ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement,
     ResidentXhttpXmuxPlan,
+};
+use super::probe::{
+    read_resident_tcp_probe_https_response_async, read_resident_tcp_probe_response_async,
+    resident_tcp_probe_http_request, resident_tcp_probe_status_ok, resident_tcp_probe_tls_config,
 };
 use super::vision::{
     VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,

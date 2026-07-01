@@ -46,6 +46,7 @@ mod execution;
 mod execution_types;
 mod memory_bench;
 mod plan;
+mod probe;
 mod resolver;
 mod runtime_owner;
 mod subscription_fetch;
