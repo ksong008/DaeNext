@@ -1,6 +1,9 @@
 use super::*;
 use crate::allocator::{AllocatorReclaimReason, allocator_reclaim};
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
+
+const RESIDENT_HEALTH_INITIAL_JITTER_CEILING: Duration = Duration::from_secs(5);
 
 pub(crate) fn resident_group_health_check_loop(
     group: Arc<plan::ResidentProxyGroupPlan>,
@@ -11,6 +14,8 @@ pub(crate) fn resident_group_health_check_loop(
 ) {
     let interval = group.check_interval();
     let concurrency = concurrency.max(1);
+    let initial_jitter =
+        resident_health_initial_jitter(&group.group_name, group.candidate_count(), interval);
     append_event(
         &event_file,
         &event_lock,
@@ -22,6 +27,7 @@ pub(crate) fn resident_group_health_check_loop(
             "admitted_candidate_count": group.admitted_candidate_count(),
             "check_interval": format!("{interval:?}"),
             "concurrency": concurrency,
+            "initial_jitter": format!("{initial_jitter:?}"),
             "probe": "tokio-proxy-tcp-and-dns-udp-check",
             "tcp_probe_executor": "tokio-proxy-tcp-probe",
             "udp_probe_executor": "tokio-proxy-packet-dns-probe",
@@ -29,6 +35,9 @@ pub(crate) fn resident_group_health_check_loop(
             "udp_check_target": group.udp_check.target.authority().to_owned(),
         }),
     );
+    if !initial_jitter.is_zero() && sleep_until_stopped(&stop, initial_jitter) {
+        return;
+    }
     if run_resident_group_health_check_round(
         Arc::clone(&group),
         Arc::clone(&stop),
@@ -59,6 +68,30 @@ pub(crate) fn resident_group_health_check_loop(
             return;
         }
     }
+}
+
+fn resident_health_initial_jitter(
+    group_name: &str,
+    candidate_count: usize,
+    interval: Duration,
+) -> Duration {
+    if interval.is_zero() {
+        return Duration::ZERO;
+    }
+    let interval_ms = duration_millis_i64(interval).max(0) as u64;
+    let ceiling_ms = duration_millis_i64(RESIDENT_HEALTH_INITIAL_JITTER_CEILING).max(0) as u64;
+    let window_ms = (interval_ms / 4).min(ceiling_ms);
+    if window_ms == 0 {
+        return Duration::ZERO;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    group_name.hash(&mut hasher);
+    candidate_count.hash(&mut hasher);
+    Duration::from_millis(hasher.finish() % (window_ms + 1))
+}
+
+fn duration_millis_i64(duration: Duration) -> i64 {
+    duration.as_millis().min(i64::MAX as u128) as i64
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -851,6 +884,24 @@ mod tests {
             Some(
                 "all TCP check targets failed: 192.0.2.1:80: connect failed; [2001:db8::1]:80: timeout"
             )
+        );
+    }
+
+    #[test]
+    fn resident_health_initial_jitter_is_stable_and_bounded() {
+        let interval = Duration::from_secs(30);
+        let first = resident_health_initial_jitter("proxy", 3, interval);
+        let second = resident_health_initial_jitter("proxy", 3, interval);
+        assert_eq!(first, second);
+        assert!(first <= RESIDENT_HEALTH_INITIAL_JITTER_CEILING);
+        assert!(first <= interval / 4);
+    }
+
+    #[test]
+    fn resident_health_initial_jitter_is_disabled_for_zero_interval() {
+        assert_eq!(
+            resident_health_initial_jitter("proxy", 3, Duration::ZERO),
+            Duration::ZERO
         );
     }
 
