@@ -175,12 +175,6 @@ impl ProductRuntimeProbeHandle {
         }
     }
 
-    pub(super) fn apply_latency_probe_snapshots_to_groups(&self, snapshots: &[Value]) {
-        if let Self::Resident { handle, .. } = self {
-            handle.apply_latency_probe_snapshots_to_groups(snapshots);
-        }
-    }
-
     pub(super) fn probe_generation(&self) -> Option<u64> {
         match self {
             Self::Resident { handle, .. } => Some(handle.reload_generation()),
@@ -740,53 +734,6 @@ impl ProductRuntimeManager {
             None if product_runtime_fake_start_enabled() => Some(ProductRuntimeProbeHandle::Fake),
             None => None,
         }
-    }
-
-    pub(super) fn node_latency_probe_batch_size(&self, unique_link_count: usize) -> Option<usize> {
-        self.node_latency_probe_handle()
-            .map(|handle| handle.probe_batch_size(unique_link_count))
-    }
-
-    pub(super) fn probe_node_latencies_streaming<F>(
-        &self,
-        links: &[String],
-        mut on_snapshots: F,
-    ) -> Option<Vec<Value>>
-    where
-        F: FnMut(&[Value]),
-    {
-        let handle = self.node_latency_probe_handle()?;
-        let generation = handle.probe_generation();
-        let mut emitted_snapshots = Vec::<Value>::new();
-        let snapshots =
-            handle.probe_node_latencies_streaming_without_group_update(links, |snapshots| {
-                if let Some(generation) = generation
-                    && self.current_probe_generation() != Some(generation)
-                {
-                    return;
-                }
-                handle.apply_latency_probe_snapshots_to_groups(snapshots);
-                on_snapshots(snapshots);
-                emitted_snapshots.extend_from_slice(snapshots);
-            });
-        if let Some(generation) = generation
-            && self.current_probe_generation() != Some(generation)
-        {
-            let failures = latency_probe_failure_snapshots_for_unseen_links(
-                links,
-                generation,
-                "manual latency probe result discarded",
-                "resident runtime generation changed while latency probe was running",
-                &emitted_snapshots,
-            );
-            if !failures.is_empty() {
-                on_snapshots(&failures);
-                let mut snapshots = snapshots;
-                snapshots.extend(failures);
-                return Some(snapshots);
-            }
-        }
-        Some(snapshots)
     }
 
     pub(super) fn current_probe_generation(&self) -> Option<u64> {

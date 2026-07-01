@@ -252,10 +252,11 @@ fn run_node_latency_job_inner(
     let mut completed = 0usize;
     let mut succeeded = 0usize;
 
-    if let Some(chunk_size) =
-        runtime.node_latency_probe_batch_size(latency_probe_unique_link_count(nodes))
-    {
-        let chunk_size = chunk_size.max(1);
+    if let Some(handle) = runtime.node_latency_probe_handle() {
+        let generation = handle.probe_generation();
+        let chunk_size = handle
+            .probe_batch_size(latency_probe_unique_link_count(nodes))
+            .max(1);
         for link_chunk in latency_probe_link_chunks(nodes, chunk_size) {
             let chunk_nodes = latency_probe_nodes_for_links(nodes, &link_chunk);
             let chunk_nodes = current_latency_probe_nodes(&conn, &chunk_nodes)?;
@@ -264,11 +265,19 @@ fn run_node_latency_job_inner(
             }
             let link_chunk = latency_probe_unique_links(&chunk_nodes);
             let mut write_error = None;
-            let runtime_snapshots =
-                runtime.probe_node_latencies_streaming(&link_chunk, |runtime_snapshots| {
+            let mut emitted_snapshots = Vec::<Value>::new();
+            handle.probe_node_latencies_streaming_without_group_update(
+                &link_chunk,
+                |runtime_snapshots| {
+                    if let Some(generation) = generation
+                        && runtime.current_probe_generation() != Some(generation)
+                    {
+                        return;
+                    }
                     if write_error.is_some() {
                         return;
                     }
+                    emitted_snapshots.extend_from_slice(runtime_snapshots);
                     let results = node_latency_results_for_runtime_snapshots_only(
                         &chunk_nodes,
                         runtime_snapshots,
@@ -292,19 +301,25 @@ fn run_node_latency_job_inner(
                         }
                         Err(err) => write_error = Some(err),
                     }
-                });
+                },
+            );
             if let Some(err) = write_error {
                 return Err(err);
             }
-            if runtime_snapshots.is_none() {
-                let runtime_snapshots = latency_probe_failure_snapshots(
+            if let Some(generation) = generation
+                && runtime.current_probe_generation() != Some(generation)
+            {
+                let failures = latency_probe_failure_snapshots_for_unseen_links(
                     &link_chunk,
-                    0,
-                    "native outbound probe unavailable",
-                    "materialize/reload Rust runtime before testing this node",
+                    generation,
+                    "manual latency probe result discarded",
+                    "resident runtime generation changed while latency probe was running",
+                    &emitted_snapshots,
                 );
-                let results =
-                    node_latency_results_for_runtime_snapshots(&chunk_nodes, &runtime_snapshots);
+                if failures.is_empty() {
+                    continue;
+                }
+                let results = node_latency_results_for_runtime_snapshots(&chunk_nodes, &failures);
                 let (written, alive) = write_node_latency_results(&mut conn, &results)?;
                 if written != 0 {
                     completed = completed.saturating_add(written);
