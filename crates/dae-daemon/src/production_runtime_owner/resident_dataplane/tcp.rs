@@ -87,9 +87,9 @@ use super::plan::{
     ResidentXhttpPaddingPlacement, ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement,
     ResidentXhttpXmuxPlan,
 };
-use super::probe::{
-    resident_tcp_probe_http_request, resident_tcp_probe_status_ok, resident_tcp_probe_tls_config,
-};
+use super::probe::resident_tcp_probe_tls_config;
+#[cfg(test)]
+use super::probe::{resident_tcp_probe_http_request, resident_tcp_probe_status_ok};
 use super::vision::{
     VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,
 };
