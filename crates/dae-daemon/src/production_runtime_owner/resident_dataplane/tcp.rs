@@ -185,7 +185,9 @@ mod direct_sniffing;
 use self::direct_sniffing::*;
 mod vless_relay;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::relay_tcp_over_trojan_websocket_tls_async;
-pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::relay_tcp_over_vless_tls_async;
 use self::vless_relay::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::{
+    relay_tcp_over_vless_tls_async, relay_tcp_over_vless_websocket_tls_async,
+};
 #[cfg(test)]
 mod tests;

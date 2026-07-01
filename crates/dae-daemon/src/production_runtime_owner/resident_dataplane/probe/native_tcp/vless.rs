@@ -6,7 +6,10 @@ use std::sync::{
 };
 use std::task::{Context, Poll};
 
-use dae_outbound::vless::{contract::is_xtls_rprx_vision_flow, packet};
+use dae_outbound::{
+    shared_transport::HttpUpgradeOptions,
+    vless::{contract::is_xtls_rprx_vision_flow, packet},
+};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::super::super::client::{
@@ -15,7 +18,12 @@ use super::super::super::client::{
 use super::super::super::plan::ResidentProxyPlan;
 use super::super::super::{
     ResidentDataplaneMetrics, VLESS_RESPONSE_VERSION,
-    tcp::{TcpProxySelection, relay_tcp_over_vless_tls_async},
+    tcp::{
+        TcpProxySelection, native_httpupgrade_handshake_over_resident_tls_async,
+        native_websocket_handshake_over_resident_tls_async,
+        native_write_websocket_binary_frame_over_resident_tls_async,
+        relay_tcp_over_vless_tls_async, relay_tcp_over_vless_websocket_tls_async,
+    },
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
@@ -58,6 +66,43 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
             .await
             .map_err(NativeTcpProbeError::Open)?;
+    if selection.proxy.net == "websocket" {
+        let options =
+            HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+        native_websocket_handshake_over_resident_tls_async(&mut client, &options)
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
+        native_write_websocket_binary_frame_over_resident_tls_async(
+            &mut client,
+            &request,
+            "write native VLESS websocket request",
+        )
+        .await
+        .map_err(NativeTcpProbeError::Open)?;
+        let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
+        let stop = Arc::new(AtomicBool::new(false));
+        let relay_stop = Arc::clone(&stop);
+        let metrics = ResidentDataplaneMetrics::default();
+        let task = tokio::spawn(async move {
+            let _ = relay_tcp_over_vless_websocket_tls_async(
+                &mut relay_side,
+                &mut client,
+                relay_stop,
+                0,
+                &metrics,
+            )
+            .await;
+            stop.store(true, Ordering::Relaxed);
+        });
+        return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
+    }
+    if selection.proxy.net == "httpupgrade" {
+        let options =
+            HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+        native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
+    }
     client
         .write_plain_all(&request, "write native VLESS TLS request")
         .await
@@ -87,10 +132,12 @@ pub(super) async fn open_vless_native_tcp_tunnel(
 }
 
 fn vless_native_tcp_net_admitted(selection: &TcpProxySelection) -> bool {
-    !matches!(
-        selection.proxy.net.as_str(),
-        "websocket" | "httpupgrade" | "grpc" | "h2" | "meek" | "xhttp"
-    )
+    match selection.proxy.net.as_str() {
+        "websocket" => !is_xtls_rprx_vision_flow(&selection.proxy.flow),
+        "httpupgrade" => true,
+        "grpc" | "h2" | "meek" | "xhttp" => false,
+        _ => true,
+    }
 }
 
 struct VlessNativeTunnel<S> {
