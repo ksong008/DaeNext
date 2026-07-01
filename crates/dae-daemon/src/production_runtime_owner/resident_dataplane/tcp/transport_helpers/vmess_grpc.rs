@@ -1,6 +1,6 @@
 use super::*;
 pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     send_stream: &mut h2::SendStream<Bytes>,
     recv_stream: &mut h2::RecvStream,
     stop: Arc<AtomicBool>,
@@ -162,7 +162,7 @@ pub(crate) fn collect_vmess_grpc_decrypted(
 }
 
 pub(crate) async fn write_vmess_grpc_decrypted(
-    inbound: &mut TokioTcpStream,
+    inbound: &mut (impl AsyncWrite + Unpin),
     stats: &mut DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
     chunks: Vec<Vec<u8>>,
