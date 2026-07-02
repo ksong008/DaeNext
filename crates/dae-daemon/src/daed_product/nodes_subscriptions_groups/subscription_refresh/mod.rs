@@ -67,7 +67,10 @@ pub(crate) fn refresh_subscription_from_remote(
     ) {
         Ok(content) => {
             let links = subscription_links_from_content(&content);
+            let before_nodes = subscription_runtime_node_fingerprint(&conn, id)?;
             let node_import_result = replace_subscription_nodes(&conn, id, &links)?;
+            let after_nodes = subscription_runtime_node_fingerprint(&conn, id)?;
+            let runtime_input_changed = before_nodes != after_nodes;
             conn.execute(
                 "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
                 params![
@@ -78,10 +81,15 @@ pub(crate) fn refresh_subscription_from_remote(
                 ],
             )
             .map_err(sqlite_io_error)?;
+            drop(conn);
+            if runtime_input_changed {
+                bump_runtime_external_input_version(state)?;
+            }
             Ok(json!({
                 "link": source.link,
                 "fetched": true,
                 "fetchedAt": fetched_at,
+                "runtimeInputChanged": runtime_input_changed,
                 "nodeImportResult": node_import_result,
             }))
         }
@@ -95,6 +103,7 @@ pub(crate) fn refresh_subscription_from_remote(
                 "link": source.link,
                 "fetched": false,
                 "fetchedAt": fetched_at,
+                "runtimeInputChanged": false,
                 "nodeImportResult": [{
                     "link": source.link,
                     "error": err.to_string(),
@@ -103,6 +112,35 @@ pub(crate) fn refresh_subscription_from_remote(
             }))
         }
     }
+}
+
+fn subscription_runtime_node_fingerprint(
+    conn: &Connection,
+    subscription_id: i64,
+) -> io::Result<Vec<(String, String, String, String)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT link, name, address, protocol
+             FROM nodes
+             WHERE subscription_id = ?1
+             ORDER BY name, link, address, protocol",
+        )
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![subscription_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(sqlite_io_error)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(sqlite_io_error)?);
+    }
+    Ok(out)
 }
 
 fn subscription_http_body_limit() -> usize {

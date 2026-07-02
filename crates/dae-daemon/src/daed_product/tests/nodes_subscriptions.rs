@@ -871,6 +871,61 @@ pub(crate) fn node_lists_keep_manual_subscription_and_runtime_scopes_separate() 
 }
 
 #[test]
+pub(crate) fn subscription_refresh_marks_runtime_modified_for_unbound_node_changes() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    fs::create_dir_all(dir.join("subs")).unwrap();
+    let subscription_file = dir.join("subs/list.txt");
+    fs::write(
+        &subscription_file,
+        "vless://11111111-1111-1111-1111-111111111111@203.0.113.1:443?security=tls&type=tcp&sni=example.com#DMIT-HKT1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&subscription_file, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: direct }', 1, 1);
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'file://subs/list.txt', 'pending', '', 'sub-a');
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+    materialize_runtime(&state, None, false).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    assert!(!runtime_modified(&conn, true).unwrap());
+    drop(conn);
+
+    let report = refresh_subscription_from_remote(&state, &dir, 7).unwrap();
+    assert_eq!(report["runtimeInputChanged"], json!(true));
+    let conn = open_state_connection(&state).unwrap();
+    assert!(runtime_modified(&conn, true).unwrap());
+    drop(conn);
+
+    materialize_runtime(&state, None, false).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    assert!(!runtime_modified(&conn, true).unwrap());
+    drop(conn);
+    let report = refresh_subscription_from_remote(&state, &dir, 7).unwrap();
+    assert_eq!(report["runtimeInputChanged"], json!(false));
+    let conn = open_state_connection(&state).unwrap();
+    assert!(!runtime_modified(&conn, true).unwrap());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn group_subscription_bindings_apply_name_regex_to_matched_nodes() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
