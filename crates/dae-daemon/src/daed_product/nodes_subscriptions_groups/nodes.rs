@@ -345,6 +345,7 @@ pub(crate) struct ParsedNodeLink {
     pub(in crate::daed_product) name: String,
     pub(in crate::daed_product) address: String,
     pub(in crate::daed_product) protocol: String,
+    pub(in crate::daed_product) display_identity: String,
     pub(in crate::daed_product) normalized_link: Option<String>,
 }
 
@@ -382,6 +383,7 @@ pub(crate) fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
         name,
         address,
         protocol: protocol.to_owned(),
+        display_identity: node_link_display_identity(link),
         normalized_link: None,
     }
 }
@@ -397,6 +399,7 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
                 .unwrap_or_else(|| format!("vmess-{address}")),
             address,
             protocol: parsed.protocol,
+            display_identity: node_link_display_identity(link),
             normalized_link: None,
         });
     }
@@ -409,6 +412,7 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
                 .unwrap_or_else(|| format!("vless-{address}")),
             address,
             protocol: parsed.protocol,
+            display_identity: node_link_display_identity(link),
             normalized_link: None,
         });
     }
@@ -421,6 +425,7 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
                 .unwrap_or_else(|| format!("{}-{address}", parsed.protocol)),
             address: parsed.server,
             protocol: parsed.protocol,
+            display_identity: node_link_display_identity(link),
             normalized_link: None,
         });
     }
@@ -433,10 +438,53 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
                 .unwrap_or_else(|| format!("hysteria2-{address}")),
             address,
             protocol: "hysteria2".to_owned(),
+            display_identity: node_link_display_identity(link),
             normalized_link,
         });
     }
     None
+}
+
+pub(crate) fn node_link_display_identity(link: &str) -> String {
+    if let Ok(mut parsed) = dae_outbound::VMessLink::parse(link) {
+        parsed.ps.clear();
+        return parsed.export_url();
+    }
+    if let Ok(mut parsed) = dae_outbound::VLESSLink::parse(link) {
+        parsed.ps.clear();
+        return parsed.export_url();
+    }
+    if let Ok(mut parsed) = dae_outbound::TrojanLink::parse(link) {
+        parsed.name.clear();
+        return parsed.export_url();
+    }
+    if let Ok(mut parsed) = dae_outbound::ShadowsocksLink::parse(link) {
+        parsed.name.clear();
+        return parsed.export_url();
+    }
+    if let Ok(mut parsed) = dae_outbound::Hysteria2Link::parse(link) {
+        parsed.name.clear();
+        return parsed.export_url();
+    }
+    if let Ok(mut parsed) = dae_outbound::TuicLink::parse(link) {
+        parsed.name.clear();
+        return parsed.export_url();
+    }
+    if let Ok(mut parsed) = dae_outbound::JuicityLink::parse(link) {
+        parsed.name.clear();
+        return parsed.export_url();
+    }
+    url_without_fragment(link)
+}
+
+fn url_without_fragment(link: &str) -> String {
+    if let Ok(mut url) = url::Url::parse(link) {
+        url.set_fragment(None);
+        return url.to_string();
+    }
+    link.split_once('#')
+        .map(|(without_fragment, _)| without_fragment.to_owned())
+        .unwrap_or_else(|| link.to_owned())
 }
 
 fn hysteria2_mport_query_present(link: &str) -> bool {

@@ -1152,6 +1152,155 @@ pub(crate) fn subscription_refresh_updates_unbound_unique_node_by_name() {
 }
 
 #[test]
+pub(crate) fn subscription_refresh_renames_unbound_node_by_display_identity() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+             VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a')",
+        [],
+    )
+    .unwrap();
+    replace_subscription_nodes(
+        &conn,
+        7,
+        &["vless://11111111-1111-1111-1111-111111111111@203.0.113.1:443?security=tls&type=tcp&sni=example.com#DMIT-HKT1".to_owned()],
+    )
+    .unwrap();
+    let node_id: i64 = conn
+        .query_row(
+            "SELECT id FROM nodes WHERE subscription_id = 7 AND name = 'DMIT-HKT1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
+             VALUES(?1, 37, 1, '2026-06-19T00:00:00Z', NULL, '2026-06-19T00:00:00Z')",
+        params![node_id],
+    )
+    .unwrap();
+
+    let report = replace_subscription_nodes(
+        &conn,
+        7,
+        &["vless://11111111-1111-1111-1111-111111111111@203.0.113.1:443?security=tls&type=tcp&sni=example.com#DMIT-HK-T1".to_owned()],
+    )
+    .unwrap();
+    assert_eq!(report.len(), 1);
+    assert_eq!(report[0]["node"]["id"], json!(node_id));
+    let (kept_id, kept_name, kept_link): (i64, String, String) = conn
+        .query_row(
+            "SELECT id, name, link FROM nodes WHERE subscription_id = 7",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(kept_id, node_id);
+    assert_eq!(kept_name, "DMIT-HK-T1");
+    assert!(kept_link.ends_with("#DMIT-HK-T1"), "{kept_link}");
+    let latency_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(latency_rows, 1);
+    let node_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM nodes WHERE subscription_id = 7",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(node_count, 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn subscription_refresh_renames_group_bound_node_by_display_identity() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(9, 'resource_group', 'random', 1);
+            "#,
+    )
+    .unwrap();
+    replace_subscription_nodes(
+        &conn,
+        7,
+        &["vless://11111111-1111-1111-1111-111111111111@203.0.113.1:443?security=tls&type=tcp&sni=example.com#DMIT-HKT1".to_owned()],
+    )
+    .unwrap();
+    let node_id: i64 = conn
+        .query_row(
+            "SELECT id FROM nodes WHERE subscription_id = 7 AND name = 'DMIT-HKT1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, ?1)",
+        params![node_id],
+    )
+    .unwrap();
+    let version_after_bind: i64 = conn
+        .query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+
+    let report = replace_subscription_nodes(
+        &conn,
+        7,
+        &["vless://11111111-1111-1111-1111-111111111111@203.0.113.1:443?security=tls&type=tcp&sni=example.com#DMIT-HK-T1".to_owned()],
+    )
+    .unwrap();
+    assert_eq!(report.len(), 1);
+    assert_eq!(report[0]["node"]["id"], json!(node_id));
+    let kept_name: String = conn
+        .query_row(
+            "SELECT name FROM nodes WHERE id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept_name, "DMIT-HK-T1");
+    let group_binding_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM group_nodes WHERE group_id = 9 AND node_id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(group_binding_count, 1);
+    let version_after_rename: i64 = conn
+        .query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version_after_rename, version_after_bind + 1);
+    let node_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM nodes WHERE subscription_id = 7",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(node_count, 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn subscription_refresh_scopes_unique_names_by_subscription_and_manual_nodes() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
