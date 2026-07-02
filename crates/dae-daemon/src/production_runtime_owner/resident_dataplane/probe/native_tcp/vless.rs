@@ -86,6 +86,9 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             })?;
         return open_vless_meek_native_tcp_tunnel(selection, target, meek_request).await;
     }
+    if selection.proxy.net == "xhttp" {
+        return open_vless_xhttp_native_tcp_tunnel(selection, request).await;
+    }
 
     let mut client =
         open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
@@ -148,7 +151,6 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             });
             return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
         }
-        "xhttp" => return open_vless_xhttp_native_tcp_tunnel(selection, request).await,
         _ => {}
     }
     if selection.proxy.net == "websocket" {
