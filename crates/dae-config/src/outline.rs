@@ -138,6 +138,7 @@ fn global_outline() -> Value {
             leaf("ResidentTcpFlowStackBytes", "resident_tcp_flow_stack_bytes", "uint64", None, Some("Optional stack size for resident TCP flow worker threads."), false, false),
             leaf("ResidentEventQueueDepth", "resident_event_queue_depth", "uint64", None, Some("Optional resident event writer queue depth."), false, false),
             leaf("ResidentManualProbeConcurrency", "resident_manual_probe_concurrency", "uint64", None, Some("Optional maximum parallel manual latency probes per batch."), false, false),
+            leaf("ResidentTcpProbeTimeoutMs", "resident_tcp_probe_timeout_ms", "uint64", None, Some("Optional TCP latency probe timeout in milliseconds."), false, false),
             leaf("ResidentHealthCheckConcurrency", "resident_health_check_concurrency", "uint64", None, Some("Optional maximum parallel health-check candidates per group."), false, false),
             leaf("HttpQueue", "http_queue", "uint64", None, Some("Optional product HTTP worker queue capacity."), false, false),
             leaf("HttpWorkers", "http_workers", "uint64", None, Some("Optional product HTTP worker count."), false, false),

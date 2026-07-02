@@ -3,11 +3,12 @@ mod jobs;
 mod runtime_snapshots;
 mod storage;
 
+#[cfg(test)]
+pub(crate) use helper::latency_probe_helper_timeout;
 pub(crate) use helper::{
     LATENCY_PROBE_HELPER_MAX_IO_BYTES, latency_probe_failure_snapshots_for_unseen_links,
     latency_probe_helper_parent_chunk_size, latency_probe_helper_response_from_request,
-    latency_probe_helper_response_lines_from_request, latency_probe_helper_timeout,
-    run_latency_probe_helper_streaming,
+    latency_probe_helper_response_lines_from_request, run_latency_probe_helper_streaming,
 };
 pub(crate) use jobs::{
     LatencyJobManager, add_node_latency_job_value, current_node_latency_job_value,

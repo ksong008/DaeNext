@@ -120,6 +120,7 @@ pub(crate) fn build_resident_manual_probe_plan(
         link,
         tcp_check: group_tcp_check_plan(config, &group)?,
         udp_check: group_udp_check_plan(config, &group)?,
+        tcp_probe_timeout: resident_tcp_latency_probe_timeout_from_config(config),
         proxy: Arc::new(proxy),
     })
 }
@@ -224,6 +225,7 @@ pub(crate) fn resident_proxy_plans(
             check_interval: group_check_interval(config, group),
             tcp_check: group_tcp_check_plan(config, group)?,
             udp_check: group_udp_check_plan(config, group)?,
+            tcp_probe_timeout: resident_tcp_latency_probe_timeout_from_config(config),
         };
         default_outbound.get_or_insert(outbound_index);
         proxies.insert(outbound_index, group_plan);

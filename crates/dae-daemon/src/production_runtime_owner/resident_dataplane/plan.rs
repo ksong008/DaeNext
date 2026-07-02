@@ -35,9 +35,12 @@ use serde_json::Value;
 use url::Url;
 
 use super::super::resident_routing::ResidentGeodataStore;
+#[cfg(test)]
+use super::RESIDENT_TCP_LATENCY_PROBE_TIMEOUT;
 use super::{
     dns::{ResidentDnsPlan, build_resident_dns_plan},
-    link_hash, redacted_link_source, resolve_host_with_configured_fallback_dns,
+    link_hash, redacted_link_source, resident_tcp_latency_probe_timeout_from_config,
+    resolve_host_with_configured_fallback_dns,
 };
 
 mod executable_graph;

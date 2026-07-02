@@ -364,8 +364,9 @@ pub(crate) fn latency_probe_helper_parent_chunk_size_uses_unique_link_count() {
 
 #[test]
 pub(crate) fn latency_probe_helper_timeout_scales_with_parallel_batches() {
-    let small = latency_probe_helper_timeout(8, 8);
-    let large = latency_probe_helper_timeout(8, 80);
+    let tcp_timeout = std::time::Duration::from_secs(4);
+    let small = latency_probe_helper_timeout(8, 8, tcp_timeout);
+    let large = latency_probe_helper_timeout(8, 80, tcp_timeout);
     assert!(small >= std::time::Duration::from_secs(20));
     assert!(large > small);
 }

@@ -7,7 +7,12 @@ pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT: Duration = Duration::from_se
 pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
     Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
 pub(crate) const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT: usize = 4_000;
+pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MIN: usize = 500;
+pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX: usize = 30_000;
+#[cfg(test)]
+pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT: Duration =
+    Duration::from_millis(RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT as u64);
 pub(crate) const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "RESIDENT_TCP_FLOW_STACK_BYTES";
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_LEGACY_ENV: &str =
@@ -100,6 +105,12 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "min": RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MIN,
                 "max": RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX,
             },
+            "tcpTimeoutMs": {
+                "configKey": "resident_tcp_probe_timeout_ms",
+                "default": RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT,
+                "min": RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MIN,
+                "max": RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX,
+            },
         },
         "healthCheck": {
             "concurrency": {
@@ -120,6 +131,19 @@ pub(crate) fn resident_manual_latency_probe_concurrency_default() -> usize {
             RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MIN,
             RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MAX,
         )
+}
+
+pub(crate) fn resident_tcp_latency_probe_timeout_from_config(config: &Config) -> Duration {
+    let timeout_ms = config
+        .global
+        .resident_tcp_probe_timeout_ms
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT)
+        .clamp(
+            RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MIN,
+            RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX,
+        );
+    Duration::from_millis(timeout_ms.try_into().unwrap_or(u64::MAX))
 }
 
 #[cfg(test)]

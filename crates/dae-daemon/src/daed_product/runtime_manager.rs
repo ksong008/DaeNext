@@ -143,6 +143,7 @@ impl ProductRuntimeProbeHandle {
                         config_content,
                         handle.reload_generation(),
                         handle.probe_concurrency(),
+                        handle.probe_timeout(),
                         links,
                         |snapshot| on_snapshots(std::slice::from_ref(snapshot)),
                     ) {

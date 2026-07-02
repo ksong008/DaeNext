@@ -656,7 +656,7 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
         &candidate.tcp_check.host,
         &candidate.tcp_check.path,
         &candidate.tcp_check.method,
-        RESIDENT_TCP_LATENCY_PROBE_TIMEOUT,
+        candidate.tcp_probe_timeout,
     )
     .await?;
     Ok(elapsed_millis(started.elapsed()))

@@ -294,6 +294,10 @@ impl ResidentManualProbeHandle {
         self.resource_config.manual_probe_concurrency.value()
     }
 
+    pub(crate) fn probe_timeout(&self) -> Duration {
+        self.resource_config.tcp_probe_timeout()
+    }
+
     pub(crate) fn probe_node_latencies_without_group_update(&self, links: &[String]) -> Vec<Value> {
         probe_resident_manual_latency_snapshots(
             &self.manual_probe_plans,

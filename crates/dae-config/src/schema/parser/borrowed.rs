@@ -83,6 +83,9 @@ pub(crate) fn parse_global(section: &Section) -> Result<Global, String> {
             "resident_manual_probe_concurrency" => {
                 global.resident_manual_probe_concurrency = Some(decode_param(param, "uint64")?)
             }
+            "resident_tcp_probe_timeout_ms" => {
+                global.resident_tcp_probe_timeout_ms = Some(decode_param(param, "uint64")?)
+            }
             "resident_health_check_concurrency" => {
                 global.resident_health_check_concurrency = Some(decode_param(param, "uint64")?)
             }

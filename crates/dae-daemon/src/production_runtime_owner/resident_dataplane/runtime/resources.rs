@@ -7,6 +7,7 @@ pub(crate) struct ResidentRuntimeResourceConfig {
     pub(crate) udp_session_queue_depth: EffectiveResidentUsize,
     pub(crate) event_queue_depth: EffectiveResidentUsize,
     pub(crate) manual_probe_concurrency: EffectiveResidentUsize,
+    pub(crate) tcp_probe_timeout_ms: EffectiveResidentUsize,
     pub(crate) health_check_concurrency: EffectiveResidentUsize,
 }
 
@@ -59,6 +60,15 @@ impl ResidentRuntimeResourceConfig {
                 RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MIN,
                 RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX,
             ),
+            tcp_probe_timeout_ms: effective_resident_usize(
+                "resident_tcp_probe_timeout_ms",
+                None,
+                None,
+                global.resident_tcp_probe_timeout_ms,
+                RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT,
+                RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MIN,
+                RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX,
+            ),
             health_check_concurrency: effective_resident_usize(
                 "resident_health_check_concurrency",
                 None,
@@ -87,11 +97,21 @@ impl ResidentRuntimeResourceConfig {
             },
             "manualProbe": {
                 "concurrency": self.manual_probe_concurrency.json(),
+                "tcpTimeoutMs": self.tcp_probe_timeout_ms.json(),
             },
             "healthCheck": {
                 "concurrency": self.health_check_concurrency.json(),
             },
         })
+    }
+
+    pub(crate) fn tcp_probe_timeout(&self) -> Duration {
+        Duration::from_millis(
+            self.tcp_probe_timeout_ms
+                .value()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        )
     }
 }
 

@@ -109,6 +109,11 @@ impl Marshaller {
             1,
         );
         self.optional_leaf(
+            "resident_tcp_probe_timeout_ms",
+            global.resident_tcp_probe_timeout_ms,
+            1,
+        );
+        self.optional_leaf(
             "resident_health_check_concurrency",
             global.resident_health_check_concurrency,
             1,
