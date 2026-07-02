@@ -5,8 +5,7 @@ use super::*;
 
 pub(crate) const LATENCY_PROBE_HELPER_MAX_IO_BYTES: usize = 64 * 1024 * 1024;
 const LATENCY_PROBE_HELPER_TIMEOUT: Duration = Duration::from_secs(20);
-pub(crate) const LATENCY_PROBE_HELPER_PARENT_MAX_INTERNAL_BATCHES: usize = 2;
-pub(crate) const LATENCY_PROBE_HELPER_PARENT_CONSERVATIVE_LINK_CAP: usize = 16;
+const LATENCY_PROBE_HELPER_TIMEOUT_GRACE: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct LatencyProbeHelperConfig {
@@ -136,6 +135,7 @@ where
     });
 
     let mut snapshots = Vec::new();
+    let timeout = latency_probe_helper_timeout(concurrency, links.len());
     let started = Instant::now();
     let status = loop {
         drain_latency_probe_helper_lines(
@@ -155,7 +155,7 @@ where
                 message: format!("wait latency probe helper: {err}"),
             })? {
             Some(exit_status) => break Some(exit_status),
-            None if started.elapsed() >= LATENCY_PROBE_HELPER_TIMEOUT => {
+            None if started.elapsed() >= timeout => {
                 let _ = child.kill();
                 break child.wait().ok();
             }
@@ -183,12 +183,12 @@ where
             message: "latency probe helper exited without status".to_owned(),
         });
     };
-    if started.elapsed() >= LATENCY_PROBE_HELPER_TIMEOUT && !status.success() {
+    if started.elapsed() >= timeout && !status.success() {
         return Err(LatencyProbeHelperStreamError {
             snapshots,
             message: format!(
                 "latency probe helper timed out after {:?}: {}",
-                LATENCY_PROBE_HELPER_TIMEOUT,
+                timeout,
                 stderr.trim()
             ),
         });
@@ -242,17 +242,20 @@ where
 }
 
 pub(crate) fn latency_probe_helper_parent_chunk_size(
-    concurrency: usize,
+    _concurrency: usize,
     unique_link_count: usize,
 ) -> usize {
-    let concurrency = concurrency.max(1);
     let unique_link_count = unique_link_count.max(1);
-    let max_links_per_helper = concurrency.max(
-        concurrency
-            .saturating_mul(LATENCY_PROBE_HELPER_PARENT_MAX_INTERNAL_BATCHES)
-            .min(LATENCY_PROBE_HELPER_PARENT_CONSERVATIVE_LINK_CAP),
-    );
-    unique_link_count.min(max_links_per_helper.max(1))
+    unique_link_count
+}
+
+pub(crate) fn latency_probe_helper_timeout(concurrency: usize, link_count: usize) -> Duration {
+    let concurrency = concurrency.max(1);
+    let link_count = link_count.max(1);
+    let batches = link_count.div_ceil(concurrency).max(1);
+    let task_budget =
+        RESIDENT_TCP_LATENCY_PROBE_TIMEOUT.saturating_mul(batches.try_into().unwrap_or(u32::MAX));
+    LATENCY_PROBE_HELPER_TIMEOUT.max(task_budget.saturating_add(LATENCY_PROBE_HELPER_TIMEOUT_GRACE))
 }
 
 pub(crate) fn latency_probe_helper_response_from_request(input: &[u8]) -> Result<Value, String> {

@@ -297,18 +297,12 @@ pub(crate) fn latency_probe_link_chunks_preserve_unique_order_and_node_mapping()
 }
 
 #[test]
-pub(crate) fn latency_probe_helper_parent_chunk_size_groups_bounded_internal_batches() {
+pub(crate) fn latency_probe_helper_parent_chunk_size_runs_one_helper_per_job() {
     assert_eq!(latency_probe_helper_parent_chunk_size(0, 0), 1);
-    assert_eq!(
-        latency_probe_helper_parent_chunk_size(0, 27),
-        LATENCY_PROBE_HELPER_PARENT_MAX_INTERNAL_BATCHES
-    );
+    assert_eq!(latency_probe_helper_parent_chunk_size(0, 27), 27);
     assert_eq!(latency_probe_helper_parent_chunk_size(8, 1), 1);
-    assert_eq!(
-        latency_probe_helper_parent_chunk_size(8, 27),
-        LATENCY_PROBE_HELPER_PARENT_CONSERVATIVE_LINK_CAP
-    );
-    assert_eq!(latency_probe_helper_parent_chunk_size(32, 129), 32);
+    assert_eq!(latency_probe_helper_parent_chunk_size(8, 27), 27);
+    assert_eq!(latency_probe_helper_parent_chunk_size(32, 129), 129);
 
     let make_nodes = |count, port_base: i64, prefix: &str| {
         (0..count)
@@ -327,29 +321,21 @@ pub(crate) fn latency_probe_helper_parent_chunk_size_groups_bounded_internal_bat
         &nodes,
         latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
     );
-    assert_eq!(
-        chunks.iter().map(Vec::len).collect::<Vec<_>>(),
-        vec![16, 11]
-    );
+    assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), vec![27]);
 
     let nodes = make_nodes(50, 20_000, "many");
     let chunks = latency_probe_link_chunks(
         &nodes,
         latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
     );
-    assert_eq!(
-        chunks.iter().map(Vec::len).collect::<Vec<_>>(),
-        vec![16, 16, 16, 2]
-    );
+    assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), vec![50]);
 
     let nodes = make_nodes(129, 30_000, "large");
     let chunks = latency_probe_link_chunks(
         &nodes,
         latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
     );
-    let mut expected = vec![16; 8];
-    expected.push(1);
-    assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), expected);
+    assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), vec![129]);
 }
 
 #[test]
@@ -373,10 +359,15 @@ pub(crate) fn latency_probe_helper_parent_chunk_size_uses_unique_link_count() {
         &nodes,
         latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
     );
-    assert_eq!(
-        chunks.iter().map(Vec::len).collect::<Vec<_>>(),
-        vec![16, 11]
-    );
+    assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), vec![27]);
+}
+
+#[test]
+pub(crate) fn latency_probe_helper_timeout_scales_with_parallel_batches() {
+    let small = latency_probe_helper_timeout(8, 8);
+    let large = latency_probe_helper_timeout(8, 80);
+    assert!(small >= std::time::Duration::from_secs(20));
+    assert!(large > small);
 }
 
 #[test]

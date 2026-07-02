@@ -6,12 +6,8 @@ mod storage;
 pub(crate) use helper::{
     LATENCY_PROBE_HELPER_MAX_IO_BYTES, latency_probe_failure_snapshots_for_unseen_links,
     latency_probe_helper_parent_chunk_size, latency_probe_helper_response_from_request,
-    latency_probe_helper_response_lines_from_request, run_latency_probe_helper_streaming,
-};
-#[cfg(test)]
-pub(crate) use helper::{
-    LATENCY_PROBE_HELPER_PARENT_CONSERVATIVE_LINK_CAP,
-    LATENCY_PROBE_HELPER_PARENT_MAX_INTERNAL_BATCHES,
+    latency_probe_helper_response_lines_from_request, latency_probe_helper_timeout,
+    run_latency_probe_helper_streaming,
 };
 pub(crate) use jobs::{
     LatencyJobManager, add_node_latency_job_value, current_node_latency_job_value,
