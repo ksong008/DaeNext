@@ -465,25 +465,30 @@ fn probe_resident_manual_latency_snapshots(
         }
     };
 
-    for chunk in tasks.chunks(concurrency.max(1)) {
-        let mut chunk_snapshots = runtime.block_on(async {
-            let mut handles = Vec::new();
-            for candidate in chunk.iter().cloned() {
-                handles.push(tokio::spawn(async move {
-                    probe_resident_candidate_tcp_latency_snapshot(candidate, reload_generation)
-                        .await
-                }));
+    let mut task_queue = std::collections::VecDeque::from(tasks);
+    let mut task_snapshots = runtime.block_on(async {
+        let mut values = Vec::new();
+        let mut handles = tokio::task::JoinSet::new();
+        fill_manual_probe_join_set(
+            &mut handles,
+            &mut task_queue,
+            concurrency,
+            reload_generation,
+        );
+        while let Some(result) = handles.join_next().await {
+            if let Ok(value) = result {
+                values.push(value);
             }
-            let mut values = Vec::new();
-            for handle in handles {
-                if let Ok(value) = handle.await {
-                    values.push(value);
-                }
-            }
-            values
-        });
-        snapshots.append(&mut chunk_snapshots);
-    }
+            fill_manual_probe_join_set(
+                &mut handles,
+                &mut task_queue,
+                concurrency,
+                reload_generation,
+            );
+        }
+        values
+    });
+    snapshots.append(&mut task_snapshots);
     drop(runtime);
     preferred_latency_snapshots(snapshots)
 }
@@ -552,25 +557,47 @@ where
         }
     };
 
-    for chunk in tasks.chunks(concurrency.max(1)) {
-        runtime.block_on(async {
-            let mut handles = tokio::task::JoinSet::new();
-            for candidate in chunk.iter().cloned() {
-                handles.spawn(async move {
-                    probe_resident_candidate_tcp_latency_snapshot(candidate, reload_generation)
-                        .await
-                });
+    let mut task_queue = std::collections::VecDeque::from(tasks);
+    runtime.block_on(async {
+        let mut handles = tokio::task::JoinSet::new();
+        fill_manual_probe_join_set(
+            &mut handles,
+            &mut task_queue,
+            concurrency,
+            reload_generation,
+        );
+        while let Some(result) = handles.join_next().await {
+            if let Ok(value) = result {
+                on_snapshot(value)?;
             }
-            while let Some(result) = handles.join_next().await {
-                if let Ok(value) = result {
-                    on_snapshot(value)?;
-                }
-            }
-            Ok::<(), String>(())
-        })?;
-    }
+            fill_manual_probe_join_set(
+                &mut handles,
+                &mut task_queue,
+                concurrency,
+                reload_generation,
+            );
+        }
+        Ok::<(), String>(())
+    })?;
     drop(runtime);
     Ok(())
+}
+
+fn fill_manual_probe_join_set(
+    handles: &mut tokio::task::JoinSet<Value>,
+    task_queue: &mut std::collections::VecDeque<plan::ResidentProxyProbePlan>,
+    concurrency: usize,
+    reload_generation: u64,
+) {
+    let concurrency = concurrency.max(1);
+    while handles.len() < concurrency {
+        let Some(candidate) = task_queue.pop_front() else {
+            break;
+        };
+        handles.spawn(async move {
+            probe_resident_candidate_tcp_latency_snapshot(candidate, reload_generation).await
+        });
+    }
 }
 
 pub(crate) fn build_transient_probe_runtime(
