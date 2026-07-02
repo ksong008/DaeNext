@@ -362,6 +362,14 @@ pub(crate) fn render_global_config_text(source: &Value) -> String {
         &mut lines,
         &normalized,
         source,
+        "residentTcpProbeTimeoutMs",
+        "resident_tcp_probe_timeout_ms",
+        &["residentTcpProbeTimeoutMs", "resident_tcp_probe_timeout_ms"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
         "residentHealthCheckConcurrency",
         "resident_health_check_concurrency",
         &[

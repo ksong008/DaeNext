@@ -36,6 +36,7 @@ pub(crate) fn run_latency_probe_helper_streaming<F>(
     config_content: &str,
     reload_generation: u64,
     concurrency: usize,
+    tcp_probe_timeout: Duration,
     links: &[String],
     mut on_snapshot: F,
 ) -> Result<Vec<Value>, LatencyProbeHelperStreamError>
@@ -135,7 +136,7 @@ where
     });
 
     let mut snapshots = Vec::new();
-    let timeout = latency_probe_helper_timeout(concurrency, links.len());
+    let timeout = latency_probe_helper_timeout(concurrency, links.len(), tcp_probe_timeout);
     let started = Instant::now();
     let status = loop {
         drain_latency_probe_helper_lines(
@@ -249,12 +250,15 @@ pub(crate) fn latency_probe_helper_parent_chunk_size(
     unique_link_count
 }
 
-pub(crate) fn latency_probe_helper_timeout(concurrency: usize, link_count: usize) -> Duration {
+pub(crate) fn latency_probe_helper_timeout(
+    concurrency: usize,
+    link_count: usize,
+    tcp_probe_timeout: Duration,
+) -> Duration {
     let concurrency = concurrency.max(1);
     let link_count = link_count.max(1);
     let batches = link_count.div_ceil(concurrency).max(1);
-    let task_budget =
-        RESIDENT_TCP_LATENCY_PROBE_TIMEOUT.saturating_mul(batches.try_into().unwrap_or(u32::MAX));
+    let task_budget = tcp_probe_timeout.saturating_mul(batches.try_into().unwrap_or(u32::MAX));
     LATENCY_PROBE_HELPER_TIMEOUT.max(task_budget.saturating_add(LATENCY_PROBE_HELPER_TIMEOUT_GRACE))
 }
 

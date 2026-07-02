@@ -252,6 +252,12 @@
             "type": "uint64"
           },
           {
+            "desc": "Optional TCP latency probe timeout in milliseconds.",
+            "mapping": "resident_tcp_probe_timeout_ms",
+            "name": "ResidentTcpProbeTimeoutMs",
+            "type": "uint64"
+          },
+          {
             "desc": "Optional maximum parallel health-check candidates per group.",
             "mapping": "resident_health_check_concurrency",
             "name": "ResidentHealthCheckConcurrency",

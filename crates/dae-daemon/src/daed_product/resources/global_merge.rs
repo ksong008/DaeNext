@@ -270,6 +270,14 @@ pub(crate) fn merge_global_json_value(target: &mut Value, source: &Value) {
     );
     set_global_u64(
         target,
+        "residentTcpProbeTimeoutMs",
+        json_u64(
+            source,
+            &["residentTcpProbeTimeoutMs", "resident_tcp_probe_timeout_ms"],
+        ),
+    );
+    set_global_u64(
+        target,
         "residentHealthCheckConcurrency",
         json_u64(
             source,
@@ -529,6 +537,11 @@ pub(crate) fn merge_global_directives(target: &mut Value, directives: &HashMap<S
         target,
         "residentManualProbeConcurrency",
         directive_u64(directives, "resident_manual_probe_concurrency"),
+    );
+    set_global_u64(
+        target,
+        "residentTcpProbeTimeoutMs",
+        directive_u64(directives, "resident_tcp_probe_timeout_ms"),
     );
     set_global_u64(
         target,

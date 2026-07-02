@@ -18,6 +18,7 @@ pub(crate) struct ResidentProxyProbePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
     pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) tcp_probe_timeout: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
 }
 
@@ -363,6 +364,7 @@ pub(crate) struct ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) check_interval: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) tcp_probe_timeout: Duration,
 }
 
 impl ResidentProxyGroupPlan {
@@ -488,6 +490,7 @@ impl ResidentProxyGroupPlan {
                 redacted_link_source: candidate.redacted_link_source.clone(),
                 tcp_check: self.tcp_check.clone(),
                 udp_check: self.udp_check.clone(),
+                tcp_probe_timeout: self.tcp_probe_timeout,
                 proxy: Arc::new(candidate.proxy.latency_probe_proxy()),
             })
             .collect()
@@ -863,6 +866,7 @@ impl ResidentProxyGroupPlan {
                 host: "localhost".to_owned(),
                 lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
             },
+            tcp_probe_timeout: RESIDENT_TCP_LATENCY_PROBE_TIMEOUT,
         }
     }
 }
