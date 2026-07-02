@@ -348,7 +348,90 @@ fn dns_upstream_router_selects_udp_upstream_with_dns_udp_health_state() {
 }
 
 #[test]
-fn dns_upstream_targets_prefer_matching_family_over_selector_fallback() {
+fn dns_upstream_candidates_select_lower_latency_tcp_path_for_tcp_udp() {
+    let config = dns_upstream_routing_config_with_group(
+        r#"
+            domain(full: __DNS_UPSTREAM_HOST__) -> proxy
+            fallback: direct
+            "#
+        .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
+        .as_str(),
+        r#"
+            filter: name(node_a, node_b)
+            policy: min
+            "#,
+    );
+    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let group = router.proxy_groups.values().next().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, Some(200), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP4, Some(20), 2)
+        .unwrap();
+
+    let plan = ResidentDnsPlan::asis(config.global.so_mark_from_dae)
+        .with_upstream_routing(Some(Arc::new(router)));
+    let candidates = transport::dns_upstream_candidates_for_l4protos(
+        &[test_dns_upstream_target_v4()],
+        &[L4Proto::Udp, L4Proto::Tcp],
+    );
+    let (targets, failures) =
+        transport::select_dns_upstream_candidates(&plan, &upstream, candidates).unwrap();
+
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(targets[0].target, test_dns_upstream_target_v4());
+    assert_eq!(targets[0].l4proto, L4Proto::Tcp);
+    let ResidentDnsUpstreamSelection::Proxy { proxy } = &targets[0].selection else {
+        panic!("expected proxied DNS upstream target");
+    };
+    assert_eq!(proxy.node_tag, "node_b");
+}
+
+#[test]
+fn dns_upstream_candidates_keep_multiple_resolved_targets_generic() {
+    let config = dns_upstream_routing_config_with_group(
+        r#"
+            domain(full: __DNS_UPSTREAM_HOST__) -> proxy
+            fallback: direct
+            "#
+        .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
+        .as_str(),
+        r#"
+            filter: name(node_a, node_b)
+            policy: min
+            "#,
+    );
+    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let group = router.proxy_groups.values().next().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, Some(80), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP6, Some(10), 2)
+        .unwrap();
+
+    let plan = ResidentDnsPlan::asis(config.global.so_mark_from_dae)
+        .with_upstream_routing(Some(Arc::new(router)));
+    let candidates = transport::dns_upstream_candidates_for_l4protos(
+        &[test_dns_upstream_target_v4(), test_dns_upstream_target_v6()],
+        &[L4Proto::Udp, L4Proto::Tcp],
+    );
+    let (targets, failures) =
+        transport::select_dns_upstream_candidates(&plan, &upstream, candidates).unwrap();
+
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(targets.len(), 4);
+    assert_eq!(targets[0].target, test_dns_upstream_target_v6());
+    assert_eq!(targets[0].l4proto, L4Proto::Tcp);
+    let ResidentDnsUpstreamSelection::Proxy { proxy } = &targets[0].selection else {
+        panic!("expected proxied DNS upstream target");
+    };
+    assert_eq!(proxy.node_tag, "node_b");
+}
+
+#[test]
+fn dns_upstream_targets_use_matching_family_as_selector_fallback_tie_breaker() {
     let config = dns_upstream_routing_config_with_group(
         r#"
             domain(full: __DNS_UPSTREAM_HOST__) -> proxy
@@ -1209,6 +1292,7 @@ fn resident_dns_plan_admits_official_upstream_schemes() {
             udpup: 'udp://__DNS_UPSTREAM_IPV4__'
             tcpup: 'tcp://__DNS_UPSTREAM_HOST__'
             tcpudp: 'tcp+udp://__DNS_UPSTREAM_HOST__:53'
+            udptcp: 'udp+tcp://__DNS_UPSTREAM_HOST__:53'
             tlsup: 'tls://__DNS_UPSTREAM_HOST__'
             httpsup: 'https://__DNS_UPSTREAM_HOST__/dns-query'
             quicup: 'quic://__DNS_UPSTREAM_HOST__'
@@ -1228,7 +1312,7 @@ fn resident_dns_plan_admits_official_upstream_schemes() {
     let config = parse_config(&input);
     let geodata = test_geodata();
     let plan = build_resident_dns_plan(&config, &geodata).unwrap();
-    assert_eq!(plan.request_actions.len(), 8);
+    assert_eq!(plan.request_actions.len(), 9);
     match plan.request_default_action {
         ResidentDnsRequestAction::Upstream(upstream) => {
             assert_eq!(upstream.tag, "h3up");
@@ -1259,6 +1343,24 @@ fn resident_dns_upstream_parser_applies_default_ports_and_paths() {
             "tcp",
             format!("tcp://{TEST_DNS_UPSTREAM_HOST}"),
             ResidentDnsUpstreamScheme::Tcp,
+            format!("{TEST_DNS_UPSTREAM_HOST}:53"),
+            TEST_DNS_UPSTREAM_HOST.to_owned(),
+            53,
+            "",
+        ),
+        (
+            "tcp+udp",
+            format!("tcp+udp://{TEST_DNS_UPSTREAM_HOST}"),
+            ResidentDnsUpstreamScheme::TcpUdp,
+            format!("{TEST_DNS_UPSTREAM_HOST}:53"),
+            TEST_DNS_UPSTREAM_HOST.to_owned(),
+            53,
+            "",
+        ),
+        (
+            "udp+tcp",
+            format!("udp+tcp://{TEST_DNS_UPSTREAM_HOST}"),
+            ResidentDnsUpstreamScheme::TcpUdp,
             format!("{TEST_DNS_UPSTREAM_HOST}:53"),
             TEST_DNS_UPSTREAM_HOST.to_owned(),
             53,
