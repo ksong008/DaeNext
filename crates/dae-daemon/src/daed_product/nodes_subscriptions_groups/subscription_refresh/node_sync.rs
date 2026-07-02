@@ -9,22 +9,35 @@ pub(crate) fn replace_subscription_nodes(
     let preserved_ids = preserved_subscription_node_ids(conn, subscription_id)?;
     let mut existing_name_counts = HashMap::<String, usize>::new();
     let mut existing_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
+    let mut existing_identity_counts = HashMap::<String, usize>::new();
+    let mut existing_by_identity = HashMap::<String, ExistingSubscriptionNode>::new();
     for node in &existing_nodes {
         *existing_name_counts.entry(node.name.clone()).or_default() += 1;
         existing_by_name.insert(node.name.clone(), node.clone());
+        *existing_identity_counts
+            .entry(node.display_identity.clone())
+            .or_default() += 1;
+        existing_by_identity.insert(node.display_identity.clone(), node.clone());
     }
     let mut preserved_name_counts = HashMap::<String, usize>::new();
     let mut preserved_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
+    let mut preserved_identity_counts = HashMap::<String, usize>::new();
+    let mut preserved_by_identity = HashMap::<String, ExistingSubscriptionNode>::new();
     for node in existing_nodes
         .iter()
         .filter(|node| preserved_ids.contains(&node.id))
     {
         *preserved_name_counts.entry(node.name.clone()).or_default() += 1;
         preserved_by_name.insert(node.name.clone(), node.clone());
+        *preserved_identity_counts
+            .entry(node.display_identity.clone())
+            .or_default() += 1;
+        preserved_by_identity.insert(node.display_identity.clone(), node.clone());
     }
 
     let mut candidates = Vec::<(String, ParsedNodeLink)>::new();
     let mut incoming_name_counts = HashMap::<String, usize>::new();
+    let mut incoming_identity_counts = HashMap::<String, usize>::new();
     for link in links {
         let parsed = parse_node_link(link.as_str(), None);
         let stored_link = parsed
@@ -32,6 +45,9 @@ pub(crate) fn replace_subscription_nodes(
             .clone()
             .unwrap_or_else(|| link.clone());
         *incoming_name_counts.entry(parsed.name.clone()).or_default() += 1;
+        *incoming_identity_counts
+            .entry(parsed.display_identity.clone())
+            .or_default() += 1;
         candidates.push((stored_link, parsed));
     }
 
@@ -50,8 +66,29 @@ pub(crate) fn replace_subscription_nodes(
             reusable_by_name.insert(name.clone(), node.clone());
         }
     }
+    let mut reusable_by_identity = HashMap::<String, ExistingSubscriptionNode>::new();
+    for (identity, incoming_count) in &incoming_identity_counts {
+        if *incoming_count != 1 {
+            continue;
+        }
+        if preserved_identity_counts
+            .get(identity)
+            .copied()
+            .unwrap_or(0)
+            == 1
+        {
+            if let Some(node) = preserved_by_identity.get(identity) {
+                reusable_by_identity.insert(identity.clone(), node.clone());
+            }
+        } else if existing_identity_counts.get(identity).copied().unwrap_or(0) == 1
+            && let Some(node) = existing_by_identity.get(identity)
+        {
+            reusable_by_identity.insert(identity.clone(), node.clone());
+        }
+    }
     let reusable_ids = reusable_by_name
         .values()
+        .chain(reusable_by_identity.values())
         .map(|node| node.id)
         .collect::<HashSet<_>>();
 
@@ -76,7 +113,9 @@ pub(crate) fn replace_subscription_nodes(
     let mut out = Vec::new();
     let mut reused_nodes = HashSet::<i64>::new();
     for (link, parsed) in candidates {
-        if let Some(preserved) = reusable_by_name.get(&parsed.name)
+        if let Some(preserved) = reusable_by_name
+            .get(&parsed.name)
+            .or_else(|| reusable_by_identity.get(&parsed.display_identity))
             && reused_nodes.insert(preserved.id)
         {
             if !subscription_node_changed(preserved, &link, &parsed) {
@@ -106,11 +145,13 @@ pub(crate) fn replace_subscription_nodes(
                 ],
             ) {
                 Ok(_) => {
-                    conn.execute(
-                        "DELETE FROM node_latency_results WHERE node_id = ?1",
-                        params![preserved.id],
-                    )
-                    .map_err(sqlite_io_error)?;
+                    if subscription_node_probe_target_changed(preserved, &link, &parsed) {
+                        conn.execute(
+                            "DELETE FROM node_latency_results WHERE node_id = ?1",
+                            params![preserved.id],
+                        )
+                        .map_err(sqlite_io_error)?;
+                    }
                     bump_group_versions_for_node(conn, preserved.id)?;
                     out.push(json!({
                         "link": link,
@@ -168,6 +209,7 @@ pub(crate) struct ExistingSubscriptionNode {
     pub(super) name: String,
     pub(super) address: String,
     pub(super) protocol: String,
+    pub(super) display_identity: String,
 }
 
 pub(crate) fn subscription_node_changed(
@@ -179,6 +221,16 @@ pub(crate) fn subscription_node_changed(
         || current.name != next.name
         || current.address != next.address
         || current.protocol != next.protocol
+}
+
+pub(crate) fn subscription_node_probe_target_changed(
+    current: &ExistingSubscriptionNode,
+    _next_link: &str,
+    next: &ParsedNodeLink,
+) -> bool {
+    current.address != next.address
+        || current.protocol != next.protocol
+        || current.display_identity != next.display_identity
 }
 
 pub(crate) fn existing_subscription_nodes(
@@ -195,12 +247,15 @@ pub(crate) fn existing_subscription_nodes(
         .map_err(sqlite_io_error)?;
     let rows = stmt
         .query_map(params![subscription_id], |row| {
+            let link = row.get::<_, String>(1)?;
+            let display_identity = node_link_display_identity(&link);
             Ok(ExistingSubscriptionNode {
                 id: row.get(0)?,
-                link: row.get(1)?,
+                link,
                 name: row.get(2)?,
                 address: row.get(3)?,
                 protocol: row.get(4)?,
+                display_identity,
             })
         })
         .map_err(sqlite_io_error)?;
