@@ -31,6 +31,7 @@ pub(crate) use self::parts::{open_xhttp_packet_up_parts, open_xhttp_stream_parts
 pub(crate) use self::request::{
     xhttp_h1_request_bytes, xhttp_h2_request, xhttp_session_path_suffix, xhttp_uri,
 };
+pub(crate) use self::xmux::clear_xhttp_xmux_managers;
 use self::xmux::{XhttpXmuxClientLease, XhttpXmuxRequestHandle};
 
 pub(crate) trait ResidentXhttpEndpointView {

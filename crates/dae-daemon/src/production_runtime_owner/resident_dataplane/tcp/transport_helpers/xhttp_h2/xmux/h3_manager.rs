@@ -192,6 +192,48 @@ impl XhttpXmuxH3Manager {
                 .unreusable_at
                 .is_none_or(|deadline| Instant::now() <= deadline)
     }
+
+    fn force_close(&mut self) -> usize {
+        self.opening = 0;
+        let mut closed = 0_usize;
+        for client in self.clients.drain(..) {
+            client
+                .connection
+                .abort_with_reason(b"resident xhttp h3 xmux runtime cleanup");
+            closed = closed.saturating_add(1);
+        }
+        closed
+    }
+}
+
+pub(super) fn clear_xhttp_h3_xmux_managers() -> XhttpXmuxManagerClearReport {
+    let Some(managers) = XHTTP_XMUX_H3_MANAGERS.get() else {
+        return XhttpXmuxManagerClearReport::default();
+    };
+    let Ok(mut managers) = managers.lock() else {
+        return XhttpXmuxManagerClearReport {
+            locked_managers: 1,
+            ..XhttpXmuxManagerClearReport::default()
+        };
+    };
+    let drained = std::mem::take(&mut *managers);
+    drop(managers);
+
+    let mut report = XhttpXmuxManagerClearReport {
+        managers: drained.len(),
+        ..XhttpXmuxManagerClearReport::default()
+    };
+    for manager in drained.into_values() {
+        match manager.try_lock() {
+            Ok(mut manager) => {
+                report.clients = report.clients.saturating_add(manager.force_close());
+            }
+            Err(_) => {
+                report.locked_managers = report.locked_managers.saturating_add(1);
+            }
+        }
+    }
+    report
 }
 
 pub(in super::super) async fn select_xhttp_h3_xmux_client<F, Fut>(

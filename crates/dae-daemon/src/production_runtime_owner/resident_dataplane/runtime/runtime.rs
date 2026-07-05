@@ -46,5 +46,37 @@ impl ResidentDataplaneRuntime {
 
     pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {
         steps.push(self.owner.shutdown());
+        let xmux = tcp::clear_xhttp_xmux_managers();
+        steps.push(json!({
+            "name": "clear-resident-xhttp-xmux-managers",
+            "status": if xmux.h2.locked_managers == 0 && xmux.h3.locked_managers == 0 {
+                "pass"
+            } else {
+                "partial"
+            },
+            "h2": {
+                "managers": xmux.h2.managers,
+                "clients": xmux.h2.clients,
+                "lockedManagers": xmux.h2.locked_managers,
+            },
+            "h3": {
+                "managers": xmux.h3.managers,
+                "clients": xmux.h3.clients,
+                "lockedManagers": xmux.h3.locked_managers,
+            },
+        }));
+        let udp_reply_sockets = udp::clear_udp_reply_socket_cache();
+        steps.push(json!({
+            "name": "clear-resident-udp-reply-socket-cache",
+            "status": "pass",
+            "sockets": udp_reply_sockets,
+        }));
+        let tls_caches = client::clear_resident_tls_config_caches();
+        steps.push(json!({
+            "name": "clear-resident-tls-config-caches",
+            "status": "pass",
+            "rustlsEntries": tls_caches.rustls,
+            "boringEntries": tls_caches.boring,
+        }));
     }
 }
