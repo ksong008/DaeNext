@@ -200,6 +200,7 @@ fn detach_sse_stream(
     } else {
         "runtime"
     };
+    stream.set_write_timeout(Some(PRODUCT_HTTP_SSE_WRITE_TIMEOUT))?;
     let thread_name = format!("daed-sse-{stream_kind}");
     match thread::Builder::new()
         .name(thread_name)
