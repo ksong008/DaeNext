@@ -106,6 +106,18 @@ fn drop_cached_udp_reply_socket(original_dst: SocketAddr) {
     }
 }
 
+pub(crate) fn clear_udp_reply_socket_cache() -> usize {
+    let Some(cache) = UDP_REPLY_SOCKET_CACHE.get() else {
+        return 0;
+    };
+    let Ok(mut cache) = cache.lock() else {
+        return 0;
+    };
+    let cleared = cache.entries.len();
+    cache.entries.clear();
+    cleared
+}
+
 fn evict_oldest_udp_reply_socket(cache: &mut UdpReplySocketCache) {
     let Some(oldest) = cache
         .entries
@@ -116,6 +128,34 @@ fn evict_oldest_udp_reply_socket(cache: &mut UdpReplySocketCache) {
         return;
     };
     cache.entries.remove(&oldest);
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    #[test]
+    fn udp_reply_socket_cache_clear_drops_retained_sockets() {
+        clear_udp_reply_socket_cache();
+        let cache =
+            UDP_REPLY_SOCKET_CACHE.get_or_init(|| Mutex::new(UdpReplySocketCache::default()));
+        let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").expect("bind udp socket"));
+        let key = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 5300));
+        {
+            let mut cache = cache.lock().expect("udp reply cache lock");
+            cache.entries.insert(
+                key,
+                UdpReplySocketEntry {
+                    socket,
+                    last_used: 1,
+                },
+            );
+        }
+
+        assert_eq!(clear_udp_reply_socket_cache(), 1);
+        assert_eq!(clear_udp_reply_socket_cache(), 0);
+    }
 }
 
 #[cfg(test)]

@@ -99,6 +99,7 @@ use self::quic_helpers::*;
 mod vless_xudp;
 use self::vless_xudp::*;
 mod reply;
+pub(super) use self::reply::clear_udp_reply_socket_cache;
 use self::reply::*;
 #[cfg(test)]
 mod tests;

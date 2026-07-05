@@ -163,6 +163,26 @@ pub(super) fn note_xhttp_xmux_request(xmux_lease: Option<&XhttpXmuxClientLease>)
     }
 }
 
+pub(crate) fn clear_xhttp_xmux_managers() -> XhttpXmuxClearReport {
+    XhttpXmuxClearReport {
+        h2: h2_manager::clear_xhttp_h2_xmux_managers(),
+        h3: h3_manager::clear_xhttp_h3_xmux_managers(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct XhttpXmuxClearReport {
+    pub(crate) h2: XhttpXmuxManagerClearReport,
+    pub(crate) h3: XhttpXmuxManagerClearReport,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct XhttpXmuxManagerClearReport {
+    pub(crate) managers: usize,
+    pub(crate) clients: usize,
+    pub(crate) locked_managers: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
