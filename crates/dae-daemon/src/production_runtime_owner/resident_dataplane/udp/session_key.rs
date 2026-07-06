@@ -20,6 +20,7 @@ pub(super) enum UdpPacketSemantics {
     QuicDatagram,
     QuicPacket,
     QuicStreamPacket,
+    Direct,
 }
 
 impl UdpPacketSemantics {
@@ -38,6 +39,7 @@ impl UdpPacketSemantics {
             Self::QuicDatagram => "quic-datagram",
             Self::QuicPacket => "quic-packet",
             Self::QuicStreamPacket => "quic-stream-packet",
+            Self::Direct => "direct",
         }
     }
 }

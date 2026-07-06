@@ -29,8 +29,10 @@ use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_re
 const UDP_ROUTE_CHOSEN_EVENT: &str = "udp_route_chosen";
 const UDP_ROUTE_KIND_PROXY: &str = "proxy";
 const UDP_ROUTE_KIND_BLOCK: &str = "block";
+const UDP_ROUTE_KIND_DIRECT: &str = "direct";
 const UDP_ROUTE_POLICY_FIXED: &str = "fixed";
 const UDP_ROUTE_DIALER_BLOCK: &str = "block";
+const UDP_ROUTE_DIALER_DIRECT: &str = "direct";
 const UDP_ROUTE_REASON_BLOCK: &str = "selected block outbound";
 const UDP_ROUTE_REASON_LIMIT: &str = "session limit reached";
 const UDP_ROUTE_REASON_QUEUE_FULL: &str = "session queue full";
@@ -46,6 +48,7 @@ pub(super) fn run_resident_udp_session_manager(
     routing_tuple_map_id: Option<u32>,
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
+    so_mark_from_dae: u32,
     dns: Arc<ResidentDnsPlan>,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
@@ -77,6 +80,7 @@ pub(super) fn run_resident_udp_session_manager(
         routing_tuple_map_id,
         routing_matcher,
         dial_mode,
+        so_mark_from_dae,
         dns,
         stop,
         event_file,
@@ -95,6 +99,7 @@ async fn run_resident_udp_session_manager_async(
     routing_tuple_map_id: Option<u32>,
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
+    so_mark_from_dae: u32,
     dns: Arc<ResidentDnsPlan>,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
@@ -118,6 +123,7 @@ async fn run_resident_udp_session_manager_async(
         routing_tuple_map_id,
         routing_matcher,
         dial_mode,
+        so_mark_from_dae,
     ) {
         Ok(router) => router,
         Err(err) => {
@@ -171,8 +177,11 @@ async fn run_resident_udp_session_manager_async(
     );
 
     let mut sessions: HashMap<UdpSessionKey, UdpSessionEntry> = HashMap::new();
+    let mut direct_sessions: HashMap<UdpDirectSessionKey, UdpDirectSessionEntry> = HashMap::new();
     let mut sniffers: HashMap<UdpSniffKey, UdpPendingSniffer> = HashMap::new();
     let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<UdpSessionKey>(session_limit);
+    let (direct_cleanup_tx, mut direct_cleanup_rx) =
+        mpsc::channel::<UdpDirectSessionKey>(session_limit);
     let payload_pool = UdpPayloadPool::new(
         session_limit
             .saturating_mul(session_queue_depth)
@@ -183,6 +192,11 @@ async fn run_resident_udp_session_manager_async(
         tokio::select! {
             Some(key) = cleanup_rx.recv() => {
                 if let Some(mut entry) = sessions.remove(&key) {
+                    let _ = (&mut entry.handle).await;
+                }
+            }
+            Some(key) = direct_cleanup_rx.recv() => {
+                if let Some(mut entry) = direct_sessions.remove(&key) {
                     let _ = (&mut entry.handle).await;
                 }
             }
@@ -197,8 +211,10 @@ async fn run_resident_udp_session_manager_async(
                         &metrics,
                         &active_sessions,
                         &mut sessions,
+                        &mut direct_sessions,
                         &mut sniffers,
                         &cleanup_tx,
+                        &direct_cleanup_tx,
                         session_limit,
                         session_queue_depth,
                     ),
@@ -231,6 +247,17 @@ async fn run_resident_udp_session_manager_async(
             }
         }
     }
+    for (_, mut entry) in direct_sessions.drain() {
+        drop(entry.sender);
+        match time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, &mut entry.handle).await {
+            Ok(Ok(())) => joined += 1,
+            Ok(Err(_)) => panicked += 1,
+            Err(_) => {
+                entry.handle.abort();
+                timed_out += 1;
+            }
+        }
+    }
     append_event(
         &event_file,
         &event_lock,
@@ -253,8 +280,10 @@ fn handle_manager_packet(
     metrics: &Arc<ResidentDataplaneMetrics>,
     active_sessions: &Arc<AtomicUsize>,
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
+    direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
     sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>,
     cleanup_tx: &mpsc::Sender<UdpSessionKey>,
+    direct_cleanup_tx: &mpsc::Sender<UdpDirectSessionKey>,
     session_limit: usize,
     session_queue_depth: usize,
 ) {
@@ -298,7 +327,9 @@ fn handle_manager_packet(
             metrics,
             active_sessions,
             sessions,
+            direct_sessions,
             cleanup_tx,
+            direct_cleanup_tx,
             session_limit,
             session_queue_depth,
             ready.initial,
@@ -316,7 +347,9 @@ fn forward_manager_packet(
     metrics: &Arc<ResidentDataplaneMetrics>,
     active_sessions: &Arc<AtomicUsize>,
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
+    direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
     cleanup_tx: &mpsc::Sender<UdpSessionKey>,
+    direct_cleanup_tx: &mpsc::Sender<UdpDirectSessionKey>,
     session_limit: usize,
     session_queue_depth: usize,
     initial: BpfRoutingResult,
@@ -360,6 +393,25 @@ fn forward_manager_packet(
             return;
         }
         ResidentUdpSelection::Proxy(selection) => selection,
+        ResidentUdpSelection::Direct(selection) => {
+            forward_direct_manager_packet(
+                packet,
+                original_dst,
+                selection,
+                event_file,
+                event_lock,
+                metrics,
+                active_sessions,
+                direct_sessions,
+                direct_cleanup_tx,
+                sessions.len() + direct_sessions.len(),
+                session_limit,
+                session_queue_depth,
+                sniffed_domain,
+                initial.dscp,
+            );
+            return;
+        }
         ResidentUdpSelection::Block(selection) => {
             append_event(
                 event_file,
@@ -435,7 +487,8 @@ fn forward_manager_packet(
     }
     let key = UdpSessionKey::new(&proxy, packet.peer, original_dst);
     if !sessions.contains_key(&key) {
-        if sessions.len() >= session_limit {
+        let existing_session_count = sessions.len() + direct_sessions.len();
+        if existing_session_count >= session_limit {
             append_event(
                 event_file,
                 event_lock,
@@ -458,7 +511,7 @@ fn forward_manager_packet(
                     "reason": "resident UDP session limit reached",
                     "peer": resident_socket_addr_display(packet.peer),
                     "original_dst": resident_socket_addr_display(original_dst),
-                    "active_sessions": sessions.len(),
+                    "active_sessions": existing_session_count,
                     "session_limit": session_limit,
                     "packetSession": key.to_value(),
                     "dscp": initial.dscp,
@@ -529,6 +582,122 @@ fn forward_manager_packet(
                 Some(&proxy_selection.proxy),
                 sniffed_domain,
                 initial.dscp,
+                true,
+                UDP_ROUTE_REASON_QUEUED,
+            ),
+        );
+    }
+}
+
+fn forward_direct_manager_packet(
+    packet: UdpOriginalDstPacket,
+    original_dst: SocketAddr,
+    selection: router::ResidentUdpDirectSelection,
+    event_file: &Path,
+    event_lock: &Arc<Mutex<()>>,
+    metrics: &Arc<ResidentDataplaneMetrics>,
+    active_sessions: &Arc<AtomicUsize>,
+    direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
+    direct_cleanup_tx: &mpsc::Sender<UdpDirectSessionKey>,
+    existing_session_count: usize,
+    session_limit: usize,
+    session_queue_depth: usize,
+    sniffed_domain: &str,
+    dscp: u8,
+) {
+    let key = UdpDirectSessionKey::new(packet.peer, original_dst, selection.route.final_mark);
+    if !direct_sessions.contains_key(&key) {
+        if existing_session_count >= session_limit {
+            append_event(
+                event_file,
+                event_lock,
+                udp_direct_route_chosen_event(
+                    packet.peer,
+                    original_dst,
+                    &selection.route,
+                    &key,
+                    sniffed_domain,
+                    dscp,
+                    false,
+                    UDP_ROUTE_REASON_LIMIT,
+                ),
+            );
+            append_event(
+                event_file,
+                event_lock,
+                json!({
+                    "event": "udp_packet_dropped",
+                    "reason": "resident UDP session limit reached",
+                    "peer": resident_socket_addr_display(packet.peer),
+                    "original_dst": resident_socket_addr_display(original_dst),
+                    "active_sessions": existing_session_count,
+                    "session_limit": session_limit,
+                    "packetSession": key.to_value(),
+                    "dscp": dscp,
+                }),
+            );
+            return;
+        }
+        let (sender, receiver) = mpsc::channel::<ManagedDirectUdpPacket>(session_queue_depth);
+        let context = UdpDirectSessionActorContext {
+            event_file: event_file.to_path_buf(),
+            event_lock: Arc::clone(event_lock),
+            metrics: Arc::clone(metrics),
+            active_sessions: Arc::clone(active_sessions),
+        };
+        let actor_key = key.clone();
+        let actor_cleanup_tx = direct_cleanup_tx.clone();
+        let handle = spawn_udp_direct_session_actor(actor_key, context, receiver, actor_cleanup_tx);
+        direct_sessions.insert(key.clone(), UdpDirectSessionEntry { sender, handle });
+    }
+    let peer = packet.peer;
+    let managed = ManagedDirectUdpPacket {
+        packet,
+        original_dst,
+        dscp,
+    };
+    let Some(entry) = direct_sessions.get(&key) else {
+        return;
+    };
+    if let Err(err) = entry.sender.try_send(managed) {
+        append_event(
+            event_file,
+            event_lock,
+            udp_direct_route_chosen_event(
+                peer,
+                original_dst,
+                &selection.route,
+                &key,
+                sniffed_domain,
+                dscp,
+                false,
+                UDP_ROUTE_REASON_QUEUE_FULL,
+            ),
+        );
+        append_event(
+            event_file,
+            event_lock,
+            json!({
+                "event": "udp_packet_dropped",
+                "reason": "resident UDP session queue full",
+                "error": err.to_string(),
+                "session_limit": session_limit,
+                "session_queue_depth": session_queue_depth,
+                "packetSession": key.to_value(),
+                "dscp": dscp,
+            }),
+        );
+    } else {
+        append_event(
+            event_file,
+            event_lock,
+            udp_direct_route_chosen_event(
+                peer,
+                original_dst,
+                &selection.route,
+                &key,
+                sniffed_domain,
+                dscp,
                 true,
                 UDP_ROUTE_REASON_QUEUED,
             ),
@@ -753,6 +922,40 @@ fn udp_route_chosen_event(
         );
     }
     event
+}
+
+fn udp_direct_route_chosen_event(
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    route: &ResidentUdpRouteSelection,
+    key: &UdpDirectSessionKey,
+    sniffed_domain: &str,
+    dscp: u8,
+    task_queued: bool,
+    reason: &str,
+) -> serde_json::Value {
+    json!({
+        "event": UDP_ROUTE_CHOSEN_EVENT,
+        "outbound_kind": UDP_ROUTE_KIND_DIRECT,
+        "peer": resident_socket_addr_display(peer),
+        "original_dst": resident_socket_addr_display(original_dst),
+        "direct_target": resident_socket_addr_display(original_dst),
+        "initial_outbound": route.initial_outbound,
+        "final_outbound": route.final_outbound,
+        "final_mark": route.final_mark,
+        "userspace_route_executed": route.userspace_route_executed,
+        "userspace_route_must": route.userspace_route_must,
+        "sniffed_domain": sniffed_domain,
+        "network": resident_udp_network_name(original_dst),
+        "outbound": UDP_ROUTE_KIND_DIRECT,
+        "policy": UDP_ROUTE_POLICY_FIXED,
+        "dialer": UDP_ROUTE_DIALER_DIRECT,
+        "ip": resident_socket_addr_display(original_dst),
+        "task_queued": task_queued,
+        "reason": reason,
+        "dscp": dscp,
+        "packetSession": key.to_value(),
+    })
 }
 
 fn udp_route_chosen_event_without_packet_session(

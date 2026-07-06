@@ -193,13 +193,16 @@ async fn drain_udp_session_responses(
     Ok(())
 }
 
-struct UdpManagedSessionGuard {
+pub(super) struct UdpManagedSessionGuard {
     active_sessions: Arc<AtomicUsize>,
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
 impl UdpManagedSessionGuard {
-    fn new(active_sessions: Arc<AtomicUsize>, metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+    pub(super) fn new(
+        active_sessions: Arc<AtomicUsize>,
+        metrics: Arc<ResidentDataplaneMetrics>,
+    ) -> Self {
         active_sessions.fetch_add(1, Ordering::Relaxed);
         metrics.udp_opened();
         Self {
