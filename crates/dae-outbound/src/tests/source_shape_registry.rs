@@ -1,14 +1,14 @@
 use super::*;
 
 #[test]
-fn source_shape_registry_separates_open_registry_from_complete_matrix() {
+fn source_shape_registry_opens_complete_expanded_matrix_after_xhttp_closure() {
     let contract = source_shape_registry_contract();
 
     assert_eq!(contract.schema, "outbound-source-shape-registry");
     assert_eq!(contract.schema_version, 1);
     assert!(contract.source_shape_registry_open);
     assert!(contract.expanded_source_matrix_open);
-    assert!(!contract.expanded_source_matrix_complete);
+    assert!(contract.expanded_source_matrix_complete);
     assert!(!contract.production_readiness_may_use_current_config_matrix_as_source_matrix);
     assert!(contract.rows.len() >= 20);
     assert!(
@@ -20,7 +20,7 @@ fn source_shape_registry_separates_open_registry_from_complete_matrix() {
         contract
             .scoped_expanded_source_matrix_evidence
             .excluded_stream_wrappers,
-        &["xhttp"]
+        &[] as &[&str]
     );
 }
 
@@ -356,18 +356,16 @@ fn source_shape_registry_records_scoped_production_readiness_evidence() {
 
     assert_eq!(evidence.schema, "scoped-expanded-source-evidence");
     assert_eq!(evidence.schema_version, 1);
-    assert_eq!(evidence.scope_id, "excluded-stream-wrapper-scope");
-    assert_eq!(
-        evidence.source_scope,
-        "remaining-expanded-source-closure-rows"
-    );
+    assert_eq!(evidence.scope_id, "full-expanded-source-scope");
+    assert_eq!(evidence.source_scope, "expanded-source-closure-rows");
+    assert!(evidence.excluded_stream_wrappers.is_empty());
     assert_eq!(
         evidence.validation_boundary,
         "external-client-through-resident-proxy"
     );
     assert_eq!(evidence.upstream_boundary, "external-proxy-server-path");
-    assert_eq!(evidence.row_count, 25);
-    assert_eq!(evidence.pass_count, 25);
+    assert_eq!(evidence.row_count, 27);
+    assert_eq!(evidence.pass_count, 27);
     assert!(evidence.all_pass);
     assert!(evidence.large_page_all_pass);
     assert!(evidence.proxy_evidence_all_pass);
@@ -387,6 +385,7 @@ fn source_shape_registry_records_scoped_production_readiness_evidence() {
         "plugin-wrapper-layer",
         "legacy-layer-shape",
         "stream-wrapper-meek",
+        "stream-wrapper-xhttp",
         "secure-websocket-framed-endpoint",
         "secure-httpupgrade-framed-endpoint",
         "verified-quic-security-underlay",
@@ -406,6 +405,8 @@ fn source_shape_registry_records_scoped_production_readiness_evidence() {
         "mux-transport-wrapper",
         "passthrough-udp-transport",
         "legacy-cipher-protocol-shape",
+        "xhttp-h3-wrapper",
+        "xhttp-extended-settings-wrapper",
     ] {
         assert!(evidence.opened_rows.contains(&expected), "{expected}");
     }

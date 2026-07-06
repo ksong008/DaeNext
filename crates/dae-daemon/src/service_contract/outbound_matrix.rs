@@ -77,7 +77,7 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
     let excluded_stream_wrapper_source_matrix_typed_report =
         excluded_stream_wrapper_source_matrix_typed_report(
             source_registry.rows,
-            &["xhttp"],
+            scoped_source_evidence.excluded_stream_wrappers,
             scoped_expanded_source_matrix_production_ready,
         );
     let excluded_stream_wrapper_source_matrix_complete =

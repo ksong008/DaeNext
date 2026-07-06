@@ -155,7 +155,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "udp-over-stream-or-datagram",
         "registry:stream-wrapper-meek",
     ),
-    admitted_row(
+    scoped_evidence_admitted_row(
         "stream-wrapper-xhttp",
         "multi-protocol",
         &["vless"],

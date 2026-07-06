@@ -188,6 +188,12 @@ pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
         && all_protocol_rows_open
         && policy_rejected_rows_fail_closed
         && scoped_closure_evidence_ready;
+    let source_scope = if excluded_stream_wrappers.is_empty() {
+        "source-supported-rows"
+    } else {
+        "source-supported-rows-excluding-stream-wrapper"
+    };
+    let full_expanded_source_matrix_complete = excluded_stream_wrappers.is_empty() && complete;
 
     json!({
         "schema": "excluded-stream-wrapper-source-report",
@@ -196,7 +202,7 @@ pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
         "complete": complete,
         "production_ready": complete,
         "final_state_ready": complete,
-        "source_scope": "source-supported-rows-excluding-stream-wrapper",
+        "source_scope": source_scope,
         "excluded_stream_wrappers": excluded_stream_wrappers,
         "excluded_shape_ids": excluded_shape_ids,
         "source_supported_row_count": included_source_supported.len(),
@@ -224,7 +230,7 @@ pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
         "policy_rejected_shape_ids": policy_rejected_shape_ids,
         "policy_rejected_rows_fail_closed": policy_rejected_rows_fail_closed,
         "scoped_closure_evidence_ready": scoped_closure_evidence_ready,
-        "full_expanded_source_matrix_complete": false,
+        "full_expanded_source_matrix_complete": full_expanded_source_matrix_complete,
         "current_report_schema": true,
     })
 }
