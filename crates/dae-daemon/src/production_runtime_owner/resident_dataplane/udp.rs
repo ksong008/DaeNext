@@ -81,6 +81,8 @@ mod manager;
 use self::manager::*;
 mod session_actor;
 use self::session_actor::*;
+mod direct_session;
+use self::direct_session::*;
 mod session_executor;
 use self::session_executor::*;
 mod vmess_session;

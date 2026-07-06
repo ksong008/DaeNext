@@ -27,6 +27,7 @@ pub(super) struct ResidentUdpRouter {
     routing_tuple_map_fd: Option<OwnedFd>,
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
+    so_mark_from_dae: u32,
 }
 
 impl ResidentUdpRouter {
@@ -36,6 +37,7 @@ impl ResidentUdpRouter {
         routing_tuple_map_id: Option<u32>,
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
+        so_mark_from_dae: u32,
     ) -> Result<Self, String> {
         let routing_tuple_map_id = routing_tuple_map_id.ok_or_else(|| {
             "resident UDP router needs routing_tuples_map id for compatible per-packet outbound selection"
@@ -51,6 +53,7 @@ impl ResidentUdpRouter {
             Some(routing_tuple_map_fd),
             routing_matcher,
             dial_mode,
+            so_mark_from_dae,
         )
     }
 
@@ -62,6 +65,7 @@ impl ResidentUdpRouter {
         routing_tuple_map_fd: Option<OwnedFd>,
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
+        so_mark_from_dae: u32,
     ) -> Result<Self, String> {
         Self::from_validated_parts(
             proxy_groups,
@@ -70,6 +74,7 @@ impl ResidentUdpRouter {
             routing_tuple_map_fd,
             routing_matcher,
             dial_mode,
+            so_mark_from_dae,
         )
     }
 
@@ -81,6 +86,7 @@ impl ResidentUdpRouter {
         routing_tuple_map_fd: Option<OwnedFd>,
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
+        so_mark_from_dae: u32,
     ) -> Result<Self, String> {
         Self::from_validated_parts(
             proxy_groups,
@@ -89,6 +95,7 @@ impl ResidentUdpRouter {
             routing_tuple_map_fd,
             routing_matcher,
             dial_mode,
+            so_mark_from_dae,
         )
     }
 
@@ -99,6 +106,7 @@ impl ResidentUdpRouter {
         routing_tuple_map_fd: Option<OwnedFd>,
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
+        so_mark_from_dae: u32,
     ) -> Result<Self, String> {
         if proxy_groups.is_empty() {
             return Err("resident UDP router needs at least one proxy outbound".to_owned());
@@ -116,6 +124,7 @@ impl ResidentUdpRouter {
             routing_tuple_map_fd,
             routing_matcher,
             dial_mode,
+            so_mark_from_dae,
         })
     }
 
@@ -161,25 +170,29 @@ impl ResidentUdpRouter {
         } else {
             initial
         };
+        let final_mark = if final_result.mark == 0 {
+            self.so_mark_from_dae
+        } else {
+            final_result.mark
+        };
         let route = ResidentUdpRouteSelection {
             initial_outbound: initial.outbound,
             final_outbound: final_result.outbound,
-            final_mark: final_result.mark,
+            final_mark,
             userspace_route_executed,
             userspace_route_must: userspace_route_executed && final_result.must > 0,
         };
         match final_result.outbound {
             OUTBOUND_BLOCK => Ok(ResidentUdpSelection::Block(route)),
-            OUTBOUND_DIRECT => Err(
-                "resident UDP selected direct outbound but direct UDP execution is not implemented; keeping fail-closed"
-                    .to_owned(),
-            ),
+            OUTBOUND_DIRECT => Ok(ResidentUdpSelection::Direct(ResidentUdpDirectSelection {
+                route,
+            })),
             OUTBOUND_CONTROL_PLANE_ROUTING => Err(
                 "resident UDP selected control-plane routing but no UDP domain/SNI was available for userspace reroute; DNS domain_routing_map or QUIC sniffing must resolve this before userspace"
                     .to_owned(),
             ),
             outbound => self
-                .select_proxy_from_group(outbound, final_result.mark, original_dst)
+                .select_proxy_from_group(outbound, final_mark, original_dst)
                 .map(|proxy| {
                     let route = ResidentUdpRouteSelection {
                         final_mark: proxy.mark,
@@ -299,6 +312,10 @@ pub(super) struct ResidentUdpProxySelection {
     pub(super) route: ResidentUdpRouteSelection,
 }
 
+pub(super) struct ResidentUdpDirectSelection {
+    pub(super) route: ResidentUdpRouteSelection,
+}
+
 pub(super) struct ResidentUdpRouteSelection {
     pub(super) initial_outbound: u8,
     pub(super) final_outbound: u8,
@@ -310,6 +327,7 @@ pub(super) struct ResidentUdpRouteSelection {
 pub(super) enum ResidentUdpSelection {
     ResidentDns,
     Proxy(ResidentUdpProxySelection),
+    Direct(ResidentUdpDirectSelection),
     Block(ResidentUdpRouteSelection),
 }
 
