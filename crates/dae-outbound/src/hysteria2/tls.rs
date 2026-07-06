@@ -5,7 +5,7 @@ use quinn::crypto::rustls::{HandshakeData, QuicClientConfig, QuicServerConfig};
 use rcgen::generate_simple_self_signed;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
+use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 
 use crate::error::OutboundError;
 
@@ -220,14 +220,21 @@ pub fn build_hysteria2_runtime_client_config(
     allow_insecure: bool,
     configured_pin_sha256: String,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    if !allow_insecure {
+    if !allow_insecure && !configured_pin_sha256.is_empty() {
         return build_hysteria2_pinned_client_config(configured_pin_sha256);
     }
-    let mut crypto =
+    let mut crypto = if allow_insecure {
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .dangerous()
             .with_custom_certificate_verifier(InsecureHysteria2CertVerifier::new())
-            .with_no_client_auth();
+            .with_no_client_auth()
+    } else {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    };
     crypto.alpn_protocols = vec![DEFAULT_HYSTERIA2_ALPN.as_bytes().to_vec()];
     let mut config = quinn::ClientConfig::new(Arc::new(
         QuicClientConfig::try_from(crypto)
