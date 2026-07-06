@@ -1047,6 +1047,65 @@ fn resident_dns_response_cache_removes_all_scoped_siblings_for_base_key() {
 }
 
 #[tokio::test]
+async fn resident_dns_request_reject_removes_scoped_cached_responses() {
+    let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://127.0.0.1:53'
+          }
+          routing {
+            request {
+              qtype(a) -> reject
+              fallback: primary
+            }
+          }
+        }
+        "#;
+    let config = parse_config(input);
+    let geodata = test_geodata();
+    let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+    let request = DnsPacketView::parse(QUERY).unwrap();
+    let response = a_response([203, 0, 113, 42]);
+    let now = unix_now();
+    let cache_plan = build_response_cache_plan_from_packet(now, &response, None)
+        .unwrap()
+        .unwrap();
+    let base = cache_plan.key.clone();
+    let asis = test_scoped_cache_key(
+        &request,
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "192.0.2.1:53".parse().unwrap(),
+        },
+    );
+    let upstream = test_scoped_cache_key(
+        &request,
+        ResidentDnsResponseCacheScope::Upstream {
+            index: 0,
+            scheme: ResidentDnsUpstreamScheme::Udp,
+            authority: "127.0.0.1:53".to_owned(),
+            path: String::new(),
+        },
+    );
+    plan.cache
+        .insert_response(now, asis.with_base(base.clone()), cache_plan.entry.clone())
+        .unwrap();
+    plan.cache
+        .insert_response(now, upstream.with_base(base), cache_plan.entry)
+        .unwrap();
+    assert_eq!(plan.cache.entry_len(), 2);
+
+    let rejected = handle_resident_dns_udp_async(&plan, "127.0.0.1:53".parse().unwrap(), QUERY)
+        .await
+        .unwrap();
+
+    assert_eq!(plan.cache.entry_len(), 0);
+    assert_eq!(&rejected[0..2], &QUERY[0..2]);
+    assert_eq!(rejected[3] & 0x0f, 0);
+}
+
+#[tokio::test]
 async fn resident_dns_ipversion_prefer_rejects_non_preferred_when_preferred_has_ip() {
     let mut plan = ResidentDnsPlan::asis(0);
     plan.ipversion_prefer = Some(DNS_QTYPE_A);
@@ -1205,6 +1264,65 @@ fn resident_dns_plan_admits_request_qname_and_qtype_rules() {
 }
 
 #[test]
+fn resident_dns_plan_admits_request_negation_and_fallback_actions() {
+    let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+          }
+          routing {
+            request {
+              !qname(suffix: blocked.example) -> primary
+              fallback: reject
+            }
+          }
+        }
+        "#
+    .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+    let config = parse_config(&input);
+    let geodata = test_geodata();
+    let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+
+    let allowed = DnsPacketView::parse(QUERY).unwrap();
+    match select_request_action(&plan, &allowed).unwrap() {
+        ResidentDnsRequestAction::Upstream(upstream) => assert_eq!(upstream.tag, "primary"),
+        other => panic!("expected negated qname to route to primary, got {other:?}"),
+    }
+
+    let blocked_query = build_dns_query_packet(0x1234, "www.blocked.example", DNS_QTYPE_A).unwrap();
+    let blocked = DnsPacketView::parse(&blocked_query).unwrap();
+    assert!(matches!(
+        select_request_action(&plan, &blocked).unwrap(),
+        ResidentDnsRequestAction::Reject
+    ));
+
+    let asis_input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+          }
+          routing {
+            request {
+              qname(suffix: unmatched.example) -> primary
+              fallback: asis
+            }
+          }
+        }
+        "#
+    .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+    let asis_config = parse_config(&asis_input);
+    let asis_plan = build_resident_dns_plan(&asis_config, &geodata).unwrap();
+    assert!(matches!(
+        select_request_action(&asis_plan, &allowed).unwrap(),
+        ResidentDnsRequestAction::AsIs
+    ));
+}
+
+#[test]
 fn resident_dns_plan_admits_response_qname_qtype_upstream_and_ip_rules() {
     let input = r#"
         global {}
@@ -1250,6 +1368,44 @@ fn resident_dns_plan_admits_response_qname_qtype_upstream_and_ip_rules() {
 }
 
 #[test]
+fn resident_dns_plan_admits_response_fallback_upstream() {
+    let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+            secondary: 'udp://127.0.0.1:53'
+          }
+          routing {
+            request {
+              fallback: primary
+            }
+            response {
+              qname(suffix: unmatched.example) -> accept
+              fallback: secondary
+            }
+          }
+        }
+        "#
+    .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+    let config = parse_config(&input);
+    let geodata = test_geodata();
+    let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+    let request = DnsPacketView::parse(QUERY).unwrap();
+    let primary = match select_request_action(&plan, &request).unwrap() {
+        ResidentDnsRequestAction::Upstream(upstream) => upstream,
+        other => panic!("expected primary upstream action, got {other:?}"),
+    };
+
+    match select_response_action(&plan, &request, &a_response([203, 0, 113, 42]), &primary).unwrap()
+    {
+        ResidentDnsResponseAction::Upstream(upstream) => assert_eq!(upstream.tag, "secondary"),
+        other => panic!("expected response fallback to secondary, got {other:?}"),
+    }
+}
+
+#[test]
 fn resident_dns_plan_admits_response_fallback_reject() {
     let input = r#"
         global {}
@@ -1280,6 +1436,65 @@ fn resident_dns_plan_admits_response_fallback_reject() {
         .unwrap(),
         ResidentDnsResponseAction::Reject
     ));
+}
+
+#[test]
+fn resident_dns_plan_rejects_bad_upstream_surface() {
+    let duplicate = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://127.0.0.1:53'
+            primary: 'tcp://127.0.0.1:53'
+          }
+          routing {
+            request {
+              fallback: primary
+            }
+          }
+        }
+        "#;
+    let config = parse_config(duplicate);
+    let geodata = test_geodata();
+    let err = build_resident_dns_plan(&config, &geodata).unwrap_err();
+    assert!(err.contains("duplicated DNS upstream tag"), "{err}");
+
+    let unknown = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://127.0.0.1:53'
+          }
+          routing {
+            request {
+              fallback: missing
+            }
+          }
+        }
+        "#;
+    let config = parse_config(unknown);
+    let err = build_resident_dns_plan(&config, &geodata).unwrap_err();
+    assert!(err.contains("references unknown upstream"), "{err}");
+
+    let unsupported_scheme = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'doh://resolver.fixture.invalid/dns-query'
+          }
+          routing {
+            request {
+              fallback: primary
+            }
+          }
+        }
+        "#;
+    let config = parse_config(unsupported_scheme);
+    let err = build_resident_dns_plan(&config, &geodata).unwrap_err();
+    assert!(err.contains("unsupported scheme doh"), "{err}");
 }
 
 #[test]
