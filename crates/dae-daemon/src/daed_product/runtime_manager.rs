@@ -418,6 +418,7 @@ fn reload_product_runtime_with_config_content(
     if previous_runtime_was_running
         && let Some(blocker) = cleanup_start_blocker_from_report(previous_cleanup_report.as_ref())
     {
+        let _ = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
         return Err(format!(
             "previous product runtime cleanup failed before reload: {blocker}"
         ));
@@ -435,6 +436,9 @@ fn reload_product_runtime_with_config_content(
             if inner.lifecycle_epoch != lifecycle_epoch {
                 drop(inner);
                 drop(runtime);
+                if previous_runtime_was_running {
+                    let _ = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
+                }
                 return Err(
                     "product runtime reload was superseded by a newer lifecycle operation"
                         .to_owned(),
@@ -476,9 +480,14 @@ fn reload_product_runtime_with_config_content(
                 .lock()
                 .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
             if inner.lifecycle_epoch != lifecycle_epoch {
-                if let Some(Ok((runtime, _))) = restore_result {
-                    drop(inner);
-                    drop(runtime);
+                let restored_runtime = match restore_result {
+                    Some(Ok((runtime, _))) => Some(runtime),
+                    _ => None,
+                };
+                drop(inner);
+                drop(restored_runtime);
+                if previous_runtime_was_running {
+                    let _ = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
                 }
                 return Err(format!(
                     "{start_err}\nrestore skipped because product runtime reload was superseded by a newer lifecycle operation"
@@ -519,6 +528,10 @@ fn reload_product_runtime_with_config_content(
                 inner.runtime_started_at = None;
             }
             inner.last_error = Some(message.clone());
+            drop(inner);
+            if previous_runtime_was_running {
+                let _ = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
+            }
             Err(message)
         }
     }

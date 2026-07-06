@@ -20,6 +20,7 @@ static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemall
 pub enum AllocatorReclaimReason {
     StartupControlBuilt,
     ReloadCompleted,
+    ReloadFailedAfterCleanup,
     StopRuntime,
     IdleMemoryPressure,
     ManualLatencyProbe,
@@ -32,6 +33,7 @@ impl AllocatorReclaimReason {
         match self {
             Self::StartupControlBuilt => "startup_control_built",
             Self::ReloadCompleted => "reload_completed",
+            Self::ReloadFailedAfterCleanup => "reload_failed_after_cleanup",
             Self::StopRuntime => "stop_runtime",
             Self::IdleMemoryPressure => "idle_memory_pressure",
             Self::ManualLatencyProbe => "manual_latency_probe",
@@ -104,6 +106,7 @@ struct LastAllocatorReclaim {
 
 static STARTUP_CONTROL_BUILT_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static RELOAD_COMPLETED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static RELOAD_FAILED_AFTER_CLEANUP_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static STOP_RUNTIME_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static IDLE_MEMORY_PRESSURE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static MANUAL_LATENCY_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
@@ -194,6 +197,7 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
         "reasons": {
             "startup_control_built": STARTUP_CONTROL_BUILT_RECLAIMS.load(Ordering::Relaxed),
             "reload_completed": RELOAD_COMPLETED_RECLAIMS.load(Ordering::Relaxed),
+            "reload_failed_after_cleanup": RELOAD_FAILED_AFTER_CLEANUP_RECLAIMS.load(Ordering::Relaxed),
             "stop_runtime": STOP_RUNTIME_RECLAIMS.load(Ordering::Relaxed),
             "idle_memory_pressure": IDLE_MEMORY_PRESSURE_RECLAIMS.load(Ordering::Relaxed),
             "manual_latency_probe": MANUAL_LATENCY_PROBE_RECLAIMS.load(Ordering::Relaxed),
@@ -211,6 +215,9 @@ fn increment_reason_counter(reason: AllocatorReclaimReason) {
         }
         AllocatorReclaimReason::ReloadCompleted => {
             RELOAD_COMPLETED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
+        AllocatorReclaimReason::ReloadFailedAfterCleanup => {
+            RELOAD_FAILED_AFTER_CLEANUP_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
         AllocatorReclaimReason::StopRuntime => {
             STOP_RUNTIME_RECLAIMS.fetch_add(1, Ordering::Relaxed);
