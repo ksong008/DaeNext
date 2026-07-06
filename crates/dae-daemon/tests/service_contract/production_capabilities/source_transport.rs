@@ -7,19 +7,19 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
     );
     assert!(report["source_shape_registry_open"].as_bool().unwrap());
     assert!(report["expanded_source_matrix_open"].as_bool().unwrap());
-    assert!(!report["expanded_source_matrix_complete"].as_bool().unwrap());
+    assert!(report["expanded_source_matrix_complete"].as_bool().unwrap());
     assert!(
         !report["expanded_source_matrix_blocked_rows_visible"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["expanded_source_matrix_production_ready"]
+        report["expanded_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["expanded_source_matrix_final_state_ready"]
+        report["expanded_source_matrix_final_state_ready"]
             .as_bool()
             .unwrap()
     );
@@ -108,7 +108,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             > 0
     );
     assert!(
-        report["expanded_source_matrix_release_evidence_incomplete"]
+        !report["expanded_source_matrix_release_evidence_incomplete"]
             .as_bool()
             .unwrap()
     );
@@ -116,13 +116,13 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["expanded_source_matrix_status_reason"]
             .as_str()
             .unwrap(),
-        "release-evidence-incomplete"
+        "pass"
     );
     assert_eq!(
         report["expanded_source_matrix_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "blocked"
+        "pass"
     );
     assert_eq!(
         report["expanded_source_matrix_typed_report"]["runtime_blocked_row_count"]
@@ -137,7 +137,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             > 0
     );
     assert!(
-        report["expanded_source_matrix_typed_report"]["release_evidence_incomplete"]
+        !report["expanded_source_matrix_typed_report"]["release_evidence_incomplete"]
             .as_bool()
             .unwrap()
     );
@@ -145,7 +145,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["expanded_source_matrix_typed_report"]["status_reason"]
             .as_str()
             .unwrap(),
-        "release-evidence-incomplete"
+        "pass"
     );
     assert!(
         !report["expanded_source_matrix_typed_report"]["blocked_rows_visible"]
@@ -284,20 +284,11 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
                     && row["securityUnderlay"].as_str().unwrap() == "aead-2022"
             )
     );
-    assert_eq!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["excluded_stream_wrappers"]
-            .as_array()
-            .unwrap()[0]
-            .as_str()
-            .unwrap(),
-        "xhttp"
-    );
     assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["excluded_shape_ids"]
             .as_array()
             .unwrap()
-            .iter()
-            .any(|shape| shape.as_str().unwrap() == "stream-wrapper-xhttp")
+            .is_empty()
     );
     assert_eq!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["policy_rejected_row_count"]
@@ -312,7 +303,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        !report["excluded_stream_wrapper_source_matrix_typed_report"]
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
             ["full_expanded_source_matrix_complete"]
             .as_bool()
             .unwrap()
