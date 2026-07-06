@@ -60,6 +60,22 @@ pub(super) fn resident_tls_fragment_plan(
     .map_err(|err| format!("resident dataplane tls_fragment: {err}"))
 }
 
+pub(super) fn resident_raw_tls_alpn(
+    explicit_alpn: Vec<String>,
+    net: &str,
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+) -> Vec<String> {
+    if !explicit_alpn.is_empty() {
+        return explicit_alpn;
+    }
+    if matches!(net, "grpc" | "h2" | "xhttp") {
+        return vec![UTLS_ALPN_H2.to_owned()];
+    }
+    fingerprint
+        .map(|fingerprint| fingerprint.default_alpn.clone())
+        .unwrap_or_default()
+}
+
 pub(super) fn resolve_optional_resident_utls_fingerprint(
     source: &'static str,
     requested: &str,

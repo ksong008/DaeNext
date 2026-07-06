@@ -67,11 +67,7 @@ pub(crate) fn build_trojan_proxy_plan(
         server_host: parsed.server,
         server_port: parsed.port,
         server_name: parsed.sni,
-        alpn: if grpc && parsed_alpn.is_empty() {
-            vec!["h2".to_owned()]
-        } else {
-            parsed_alpn
-        },
+        alpn: resident_raw_tls_alpn(parsed_alpn, net.as_str(), utls_fingerprint.as_ref()),
         flow: String::new(),
         net,
         stream_host,

@@ -81,7 +81,7 @@ pub(super) fn resident_dataplane_plan_carries_generic_link_fingerprint() {
 }
 
 #[test]
-pub(super) fn resident_standard_tls_fingerprint_does_not_rewrite_protocol_alpn() {
+pub(super) fn resident_standard_tls_fingerprint_uses_browser_default_alpn_at_raw_tls_boundary() {
     let primary = fixture_host(FixtureEndpoint::Primary);
     let primary_port = fixture_port(FixtureEndpoint::Primary.slot());
 
@@ -116,13 +116,13 @@ pub(super) fn resident_standard_tls_fingerprint_does_not_rewrite_protocol_alpn()
             "vless-tcp-link-fp",
             default_proxy_for_source("", vless_vision_without_flow_fixture_url("chrome_102")),
             true,
-            Vec::new(),
+            browser_default_alpn(),
         ),
         (
             "vmess-tcp-link-fp",
             default_proxy_for_source("", vmess.export_url()),
             true,
-            Vec::new(),
+            browser_default_alpn(),
         ),
         (
             "trojan-global-fp",
@@ -134,7 +134,7 @@ pub(super) fn resident_standard_tls_fingerprint_does_not_rewrite_protocol_alpn()
                 trojan_fixture_url("", &primary, primary_port),
             ),
             true,
-            Vec::new(),
+            browser_default_alpn(),
         ),
         (
             "https-proxy-link-fp-empty-alpn",
