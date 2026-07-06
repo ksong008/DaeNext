@@ -588,20 +588,7 @@ pub(crate) async fn open_grpc_h2_stream(
     let connection_task = tokio::spawn(async move {
         let _ = connection.await;
     });
-    let authority = grpc_authority(proxy);
-    let uri = format!(
-        "https://{}{}",
-        authority,
-        grpc_request_path(&proxy.stream_path)
-    );
-    let request = http::Request::builder()
-        .method(http::Method::POST)
-        .uri(uri)
-        .header(http::header::CONTENT_TYPE, "application/grpc")
-        .header("te", "trailers")
-        .header(http::header::USER_AGENT, "dae-rust-native-resident")
-        .body(())
-        .map_err(|err| format!("build gRPC HTTP/2 request: {err}"))?;
+    let request = grpc_h2_request(proxy)?;
     let (response, send_stream) = sender
         .send_request(request, false)
         .map_err(|err| format!("send gRPC HTTP/2 request headers: {err}"))?;

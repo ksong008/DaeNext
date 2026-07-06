@@ -47,8 +47,10 @@ use dae_outbound::{
         SESSION_STATUS_KEEPALIVE,
     },
     shared_transport::{
-        HttpUpgradeOptions, MeekRoundTripOptions, grpc_hunk_frame, grpc_hunk_payload, ir,
-        meek_http_request, mux_data_frame, mux_end_frame, mux_new_frame, validate_http_status,
+        GRPC_ACCEPT_ENCODING_HEADER, GRPC_CONTENT_TYPE_APPLICATION, GRPC_ENCODING_HEADER,
+        GRPC_IDENTITY_ENCODING, GRPC_TE_HEADER, GRPC_TE_TRAILERS, HttpUpgradeOptions,
+        MeekRoundTripOptions, grpc_hunk_frame, grpc_hunk_payload, ir, meek_http_request,
+        mux_data_frame, mux_end_frame, mux_new_frame, validate_http_status,
     },
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,

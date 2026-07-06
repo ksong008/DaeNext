@@ -2,7 +2,11 @@ use std::io::{Read, Write};
 
 use crate::error::OutboundError;
 
-use super::grpc_hunk_frame;
+use super::{
+    GRPC_ACCEPT_ENCODING_HEADER, GRPC_CONTENT_TYPE_APPLICATION, GRPC_CONTENT_TYPE_HEADER,
+    GRPC_ENCODING_HEADER, GRPC_IDENTITY_ENCODING, GRPC_TE_HEADER, GRPC_TE_TRAILERS,
+    grpc_hunk_frame,
+};
 
 pub const HTTP2_CLIENT_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
@@ -364,14 +368,36 @@ fn grpc_request_headers_payload(service_name: &str, authority: &str) -> Vec<u8> 
     let mut payload = vec![0x83, 0x87];
     push_hpack_literal_indexed_name(&mut payload, 4, path.as_bytes());
     push_hpack_literal_indexed_name(&mut payload, 1, authority.as_bytes());
-    push_hpack_literal_new_name(&mut payload, b"content-type", b"application/grpc");
-    push_hpack_literal_new_name(&mut payload, b"te", b"trailers");
+    push_hpack_literal_new_name(
+        &mut payload,
+        GRPC_CONTENT_TYPE_HEADER.as_bytes(),
+        GRPC_CONTENT_TYPE_APPLICATION.as_bytes(),
+    );
+    push_hpack_literal_new_name(
+        &mut payload,
+        GRPC_TE_HEADER.as_bytes(),
+        GRPC_TE_TRAILERS.as_bytes(),
+    );
+    push_hpack_literal_new_name(
+        &mut payload,
+        GRPC_ENCODING_HEADER.as_bytes(),
+        GRPC_IDENTITY_ENCODING.as_bytes(),
+    );
+    push_hpack_literal_new_name(
+        &mut payload,
+        GRPC_ACCEPT_ENCODING_HEADER.as_bytes(),
+        GRPC_IDENTITY_ENCODING.as_bytes(),
+    );
     payload
 }
 
 fn grpc_response_headers_payload() -> Vec<u8> {
     let mut payload = vec![0x88];
-    push_hpack_literal_new_name(&mut payload, b"content-type", b"application/grpc");
+    push_hpack_literal_new_name(
+        &mut payload,
+        GRPC_CONTENT_TYPE_HEADER.as_bytes(),
+        GRPC_CONTENT_TYPE_APPLICATION.as_bytes(),
+    );
     payload
 }
 
