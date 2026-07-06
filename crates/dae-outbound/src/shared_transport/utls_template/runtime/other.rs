@@ -59,6 +59,8 @@ pub(super) const BROWSER_360_11_0: UtlsRuntimeTemplate = UtlsRuntimeTemplate {
     supported_groups: CHROME_EDGE_GROUPS,
     key_share_groups: CHROME_EDGE_KEY_SHARES,
     signature_schemes: BROWSER_LEGACY_SIGALGS,
+    delegated_credential_signature_schemes: NO_DELEGATED_CREDENTIAL_SIGNATURE_SCHEMES,
+    record_size_limit: None,
     empty_extensions: BROWSER_360_11_0_EMPTY_EXTENSIONS,
     padding_target_handshake_len: Some(508),
     capabilities: BROWSER_360_CAPABILITIES,

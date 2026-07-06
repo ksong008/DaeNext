@@ -55,6 +55,8 @@ pub(super) const ANDROID_11_OKHTTP: UtlsRuntimeTemplate = UtlsRuntimeTemplate {
     supported_groups: ANDROID_GROUPS,
     key_share_groups: ANDROID_KEY_SHARES,
     signature_schemes: ANDROID_SIGALGS,
+    delegated_credential_signature_schemes: NO_DELEGATED_CREDENTIAL_SIGNATURE_SCHEMES,
+    record_size_limit: None,
     empty_extensions: NO_EMPTY_EXTENSIONS,
     padding_target_handshake_len: None,
     capabilities: ANDROID_CAPABILITIES,

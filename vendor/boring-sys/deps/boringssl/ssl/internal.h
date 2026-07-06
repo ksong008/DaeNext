@@ -1733,6 +1733,8 @@ struct DAEUtlsTemplateConfig {
   Array<uint16_t> supported_groups;
   Array<uint16_t> key_share_groups;
   Array<uint16_t> signature_schemes;
+  Array<uint16_t> delegated_credential_signature_schemes;
+  uint16_t record_size_limit = 0;
   Array<uint16_t> empty_extensions;
 };
 

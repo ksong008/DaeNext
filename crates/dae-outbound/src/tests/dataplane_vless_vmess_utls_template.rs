@@ -101,7 +101,8 @@ fn case_runtime_utls_template_coverage_reports_exact_and_non_exact_modes_honestl
     assert!(coverage.exact_fixtures > 0);
     assert!(coverage.family_approximations > 0);
     assert!(coverage.randomized > 0);
-    assert!(coverage.unsupported_exact_templates > 0);
+    assert_eq!(coverage.exact_fixtures, 16);
+    assert_eq!(coverage.unsupported_exact_templates, 0);
     assert_eq!(
         resolve_utls_template_mode("chrome_102").unwrap(),
         UtlsTemplateMode::ExactFixture
@@ -112,7 +113,7 @@ fn case_runtime_utls_template_coverage_reports_exact_and_non_exact_modes_honestl
     );
     assert_eq!(
         resolve_utls_template_mode("firefox_105").unwrap(),
-        UtlsTemplateMode::UnsupportedExactTemplate
+        UtlsTemplateMode::ExactFixture
     );
     assert_eq!(
         resolve_utls_template_mode("randomized").unwrap(),
@@ -175,6 +176,11 @@ fn case_runtime_exact_templates_have_fixture_semantic_evidence() {
             u16_template_values(&template.signature_schemes)
         );
         assert_eq!(
+            runtime.delegated_credential_signature_schemes,
+            delegated_credential_signature_schemes(&profile)
+        );
+        assert_eq!(runtime.record_size_limit, record_size_limit(&profile));
+        assert_eq!(
             runtime.padding_target_handshake_len,
             match template.padding {
                 UtlsPaddingTemplate::Absent => None,
@@ -182,6 +188,22 @@ fn case_runtime_exact_templates_have_fixture_semantic_evidence() {
             }
         );
     }
+}
+
+fn delegated_credential_signature_schemes(profile: &UtlsClientHelloProfile) -> Vec<u16> {
+    profile
+        .delegated_credential_signature_schemes
+        .as_deref()
+        .map(u16_hex_values)
+        .unwrap_or_default()
+}
+
+fn record_size_limit(profile: &UtlsClientHelloProfile) -> Option<u16> {
+    profile
+        .record_size_limit
+        .as_deref()
+        .and_then(|value| value.first())
+        .map(|value| u16::from_str_radix(value, 16).unwrap())
 }
 
 fn template_grease_count(template: &UtlsTemplateProfile) -> usize {
@@ -229,6 +251,13 @@ fn u16_template_values(values: &[UtlsTemplateValue]) -> Vec<u16> {
             UtlsTemplateValue::Exact(value) => u16::from_str_radix(value, 16).unwrap(),
             UtlsTemplateValue::Grease => crate::shared_transport::UTLS_TEMPLATE_GREASE,
         })
+        .collect()
+}
+
+fn u16_hex_values(values: &[String]) -> Vec<u16> {
+    values
+        .iter()
+        .map(|value| u16::from_str_radix(value, 16).unwrap())
         .collect()
 }
 

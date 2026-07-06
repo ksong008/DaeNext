@@ -1,4 +1,4 @@
-use crate::shared_transport::{UTLS_FAMILY_FIREFOX, UtlsFingerprint};
+use crate::shared_transport::UtlsFingerprint;
 
 use super::UtlsTemplateMode;
 
@@ -6,6 +6,7 @@ mod android;
 mod apple;
 mod chrome;
 mod common;
+mod firefox;
 mod other;
 
 pub const UTLS_TEMPLATE_GREASE: u16 = 0x0a0a;
@@ -23,6 +24,8 @@ pub struct UtlsRuntimeTemplate {
     pub supported_groups: &'static [u16],
     pub key_share_groups: &'static [u16],
     pub signature_schemes: &'static [u16],
+    pub delegated_credential_signature_schemes: &'static [u16],
+    pub record_size_limit: Option<u16>,
     pub empty_extensions: &'static [u16],
     pub padding_target_handshake_len: Option<usize>,
     pub capabilities: UtlsRuntimeTemplateCapabilities,
@@ -44,6 +47,15 @@ pub fn resolve_utls_runtime_template(
         "360_11_0" => Some(&other::BROWSER_360_11_0),
         "chrome_102" => Some(&chrome::CHROME_102),
         "edge_106" => Some(&chrome::EDGE_106),
+        "firefox" => Some(&firefox::FIREFOX),
+        "firefox_auto" => Some(&firefox::FIREFOX_AUTO),
+        "firefox_55" => Some(&firefox::FIREFOX_55),
+        "firefox_56" => Some(&firefox::FIREFOX_56),
+        "firefox_63" => Some(&firefox::FIREFOX_63),
+        "firefox_65" => Some(&firefox::FIREFOX_65),
+        "firefox_99" => Some(&firefox::FIREFOX_99),
+        "firefox_102" => Some(&firefox::FIREFOX_102),
+        "firefox_105" => Some(&firefox::FIREFOX_105),
         "safari_16_0" => Some(&apple::SAFARI_16_0),
         "ios_14" => Some(&apple::IOS_14),
         "android_11_okhttp" => Some(&android::ANDROID_11_OKHTTP),
@@ -58,9 +70,6 @@ pub fn runtime_template_mode(fingerprint: &UtlsFingerprint) -> UtlsTemplateMode 
     }
     if resolve_utls_runtime_template(fingerprint).is_some() {
         return UtlsTemplateMode::ExactFixture;
-    }
-    if fingerprint.family == UTLS_FAMILY_FIREFOX {
-        return UtlsTemplateMode::UnsupportedExactTemplate;
     }
     UtlsTemplateMode::FamilyApproximation
 }

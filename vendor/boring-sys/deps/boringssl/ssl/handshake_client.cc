@@ -243,13 +243,14 @@ static bool dae_reality_client_hello_session_id_span(
 
 static bool dae_reality_x25519_private_key(SSL_HANDSHAKE *hs,
                                            uint8_t out[32]) {
-  if (hs->key_shares.size() != 1 ||
-      hs->key_shares[0]->GroupID() != SSL_GROUP_X25519 ||
-      !hs->key_shares[0]->GetX25519PrivateKeyForDaeReality(out)) {
-    OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
-    return false;
+  for (const auto &key_share : hs->key_shares) {
+    if (key_share->GroupID() == SSL_GROUP_X25519 &&
+        key_share->GetX25519PrivateKeyForDaeReality(out)) {
+      return true;
+    }
   }
-  return true;
+  OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
+  return false;
 }
 
 static bool dae_reality_apply_session_id(SSL_HANDSHAKE *hs,
@@ -443,6 +444,26 @@ static bool dae_utls_add_supported_versions_extension(
   return CBB_flush(extensions);
 }
 
+static bool dae_utls_add_supported_groups_extension(
+    SSL_HANDSHAKE *hs, CBB *extensions) {
+  const DAEUtlsTemplateConfig *config = &hs->config->dae_utls;
+  CBB body, groups;
+  if (!CBB_add_u16(extensions, TLSEXT_TYPE_supported_groups) ||
+      !CBB_add_u16_length_prefixed(extensions, &body) ||
+      !CBB_add_u16_length_prefixed(&body, &groups)) {
+    return false;
+  }
+  for (uint16_t group : config->supported_groups) {
+    uint16_t value = dae_utls_is_grease_placeholder(config, group)
+                         ? ssl_get_grease_value(hs, ssl_grease_group)
+                         : group;
+    if (!CBB_add_u16(&groups, value)) {
+      return false;
+    }
+  }
+  return CBB_flush(extensions);
+}
+
 static bool dae_utls_add_signature_algorithms_extension(
     const DAEUtlsTemplateConfig *config, CBB *extensions) {
   CBB body, schemes;
@@ -457,6 +478,33 @@ static bool dae_utls_add_signature_algorithms_extension(
     }
   }
   return CBB_flush(extensions);
+}
+
+static constexpr uint16_t DAE_TLSEXT_TYPE_RECORD_SIZE_LIMIT = 28;
+
+static bool dae_utls_add_delegated_credential_extension(
+    const DAEUtlsTemplateConfig *config, CBB *extensions) {
+  CBB body, schemes;
+  if (!CBB_add_u16(extensions, TLSEXT_TYPE_delegated_credential) ||
+      !CBB_add_u16_length_prefixed(extensions, &body) ||
+      !CBB_add_u16_length_prefixed(&body, &schemes)) {
+    return false;
+  }
+  for (uint16_t scheme : config->delegated_credential_signature_schemes) {
+    if (!CBB_add_u16(&schemes, scheme)) {
+      return false;
+    }
+  }
+  return CBB_flush(extensions);
+}
+
+static bool dae_utls_add_record_size_limit_extension(
+    const DAEUtlsTemplateConfig *config, CBB *extensions) {
+  CBB body;
+  return CBB_add_u16(extensions, DAE_TLSEXT_TYPE_RECORD_SIZE_LIMIT) &&
+         CBB_add_u16_length_prefixed(extensions, &body) &&
+         CBB_add_u16(&body, config->record_size_limit) &&
+         CBB_flush(extensions);
 }
 
 static bool dae_utls_add_template_extensions(
@@ -493,9 +541,33 @@ static bool dae_utls_add_template_extensions(
       continue;
     }
 
+    if (extension_type == TLSEXT_TYPE_supported_groups &&
+        !config->supported_groups.empty()) {
+      if (!dae_utls_add_supported_groups_extension(hs, extensions)) {
+        return false;
+      }
+      continue;
+    }
+
     if (extension_type == TLSEXT_TYPE_signature_algorithms &&
         !config->signature_schemes.empty()) {
       if (!dae_utls_add_signature_algorithms_extension(config, extensions)) {
+        return false;
+      }
+      continue;
+    }
+
+    if (extension_type == TLSEXT_TYPE_delegated_credential &&
+        !config->delegated_credential_signature_schemes.empty()) {
+      if (!dae_utls_add_delegated_credential_extension(config, extensions)) {
+        return false;
+      }
+      continue;
+    }
+
+    if (extension_type == DAE_TLSEXT_TYPE_RECORD_SIZE_LIMIT &&
+        config->record_size_limit != 0) {
+      if (!dae_utls_add_record_size_limit_extension(config, extensions)) {
         return false;
       }
       continue;

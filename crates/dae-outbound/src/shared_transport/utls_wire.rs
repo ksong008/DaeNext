@@ -19,7 +19,9 @@ pub struct UtlsClientHelloProfile {
     pub supported_groups: Option<Vec<String>>,
     pub ec_point_formats: Option<Vec<String>>,
     pub signature_schemes: Option<Vec<String>>,
+    pub delegated_credential_signature_schemes: Option<Vec<String>>,
     pub key_share_groups: Option<Vec<String>>,
+    pub record_size_limit: Option<Vec<String>>,
 }
 
 pub fn parse_utls_client_hello_record_hex(
@@ -90,7 +92,9 @@ pub fn parse_utls_client_hello_record(
         supported_groups: None,
         ec_point_formats: None,
         signature_schemes: None,
+        delegated_credential_signature_schemes: None,
         key_share_groups: None,
+        record_size_limit: None,
     };
 
     if offset == hello.len() {
@@ -115,6 +119,8 @@ pub fn parse_utls_client_hello_record(
             "000b" => profile.ec_point_formats = parse_u8_vector(data)?,
             "000d" => profile.signature_schemes = parse_u16_vector(data)?,
             "0010" => profile.alpn = parse_alpn(data)?,
+            "001c" => profile.record_size_limit = parse_single_u16(data)?,
+            "0022" => profile.delegated_credential_signature_schemes = parse_u16_vector(data)?,
             "002b" => profile.supported_versions = parse_u8_len_u16_vector(data)?,
             "0033" => profile.key_share_groups = parse_key_share_groups(data)?,
             _ => {}
@@ -192,6 +198,13 @@ fn parse_u8_vector(data: &[u8]) -> Result<Option<Vec<String>>, OutboundError> {
     Ok(Some(
         data[1..end].iter().map(|value| hex_byte(*value)).collect(),
     ))
+}
+
+fn parse_single_u16(data: &[u8]) -> Result<Option<Vec<String>>, OutboundError> {
+    if data.len() != 2 {
+        return Err(bad_utls_wire("TLS single u16 extension length mismatch"));
+    }
+    Ok(Some(vec![hex_u16(data)]))
 }
 
 fn parse_key_share_groups(data: &[u8]) -> Result<Option<Vec<String>>, OutboundError> {

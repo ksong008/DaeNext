@@ -2678,6 +2678,9 @@ OPENSSL_EXPORT int DAE_SSL_set1_utls_template(
     const uint16_t *supported_groups, size_t num_supported_groups,
     const uint16_t *key_share_groups, size_t num_key_share_groups,
     const uint16_t *signature_schemes, size_t num_signature_schemes,
+    const uint16_t *delegated_credential_signature_schemes,
+    size_t num_delegated_credential_signature_schemes,
+    uint16_t record_size_limit,
     const uint16_t *empty_extensions, size_t num_empty_extensions,
     uint16_t grease_placeholder, size_t session_id_len,
     size_t padding_target_handshake_len, int grease_enabled);
