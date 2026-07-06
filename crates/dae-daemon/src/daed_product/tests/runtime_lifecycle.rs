@@ -438,6 +438,17 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
         overview["allocatorIdleReclaim"]["policy"]["sessionCountGate"],
         json!(false)
     );
+    assert!(overview["cgroupMemory"]["available"].as_bool().is_some());
+    if overview["cgroupMemory"]["available"] == json!(true) {
+        assert!(
+            overview["cgroupMemory"]["currentBytes"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                > 0
+        );
+    }
     assert_eq!(
         overview["resourcePools"]["udpEndpoint"]["defaultMaxEntries"],
         json!(DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES)
@@ -459,6 +470,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert!(delta.get("allocatorDerived").is_none());
     assert!(delta.get("allocatorReclaim").is_none());
     assert!(delta.get("allocatorIdleReclaim").is_none());
+    assert!(delta["cgroupMemory"]["available"].as_bool().is_some());
     assert!(delta.get("resourcePools").is_none());
     assert!(delta.get("runtime").is_none());
 
@@ -476,6 +488,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert!(body.contains("\"heapCompatBytes\""));
     assert!(body.contains("\"heapCompatBytesSource\""));
     assert!(body.contains("\"allocatorProfile\""));
+    assert!(body.contains("\"cgroupMemory\""));
     assert!(body.contains("\"resourcePools\""));
     assert!(body.contains("\"goroutines\""));
     assert!(body.contains("\"cpuUsagePercent\""));
@@ -487,13 +500,21 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
     let before = allocator_reclaim_snapshot_json();
     let before_total = before["total"].as_u64().unwrap_or(0);
     let before_reload_completed = before["reasons"]["reload_completed"].as_u64().unwrap_or(0);
+    let before_reload_failed = before["reasons"]["reload_failed_after_cleanup"]
+        .as_u64()
+        .unwrap_or(0);
     let before_geodata_update = before["reasons"]["geodata_update"].as_u64().unwrap_or(0);
 
     let reclaim = allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);
+    let failed_reclaim = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
     let geodata_reclaim = allocator_reclaim(AllocatorReclaimReason::GeodataUpdate);
     let after = allocator_reclaim_snapshot_json();
 
     assert_eq!(reclaim["reason"], json!("reload_completed"));
+    assert_eq!(
+        failed_reclaim["reason"],
+        json!("reload_failed_after_cleanup")
+    );
     assert_eq!(geodata_reclaim["reason"], json!("geodata_update"));
     assert_eq!(reclaim["profile"], json!(allocator_profile()));
     #[cfg(feature = "allocator-jemalloc")]
@@ -503,7 +524,54 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
     }
     assert!(after["total"].as_u64().unwrap_or(0) > before_total);
     assert!(after["reasons"]["reload_completed"].as_u64().unwrap_or(0) > before_reload_completed);
+    assert!(
+        after["reasons"]["reload_failed_after_cleanup"]
+            .as_u64()
+            .unwrap_or(0)
+            > before_reload_failed
+    );
     assert!(after["reasons"]["geodata_update"].as_u64().unwrap_or(0) > before_geodata_update);
+}
+
+#[test]
+pub(crate) fn runtime_reload_failure_after_cleanup_reclaims_allocator() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
+            started_at: "2026-07-06T01:00:00.000Z".to_owned(),
+            tproxy_port: 12345,
+        }));
+        inner.runtime_started_at = Some("2026-07-06T01:00:00.000Z".to_owned());
+    }
+    let sections = parse_config(
+        r#"
+global {
+  log_level: info
+}
+routing {
+  fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let before = allocator_reclaim_snapshot_json()["reasons"]["reload_failed_after_cleanup"]
+        .as_u64()
+        .unwrap_or(0);
+
+    let err = manager
+        .reload_with_config_content(config, None, "test", &[])
+        .unwrap_err();
+    let after = allocator_reclaim_snapshot_json()["reasons"]["reload_failed_after_cleanup"]
+        .as_u64()
+        .unwrap_or(0);
+
+    assert!(err.contains("global.lan_interface"), "{err}");
+    assert!(after > before);
+    let summary = manager.summary();
+    assert_eq!(summary["state"], json!("error"));
+    assert_eq!(summary["cleanup"]["state"], json!("done"));
 }
 
 #[test]
