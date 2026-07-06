@@ -16,6 +16,25 @@ pub(crate) fn grpc_request_path(service_name: &str) -> String {
     format!("/{service_name}/Tun")
 }
 
+pub(crate) fn grpc_h2_request(proxy: &ResidentProxyPlan) -> Result<http::Request<()>, String> {
+    let authority = grpc_authority(proxy);
+    let uri = format!(
+        "https://{}{}",
+        authority,
+        grpc_request_path(&proxy.stream_path)
+    );
+    http::Request::builder()
+        .method(http::Method::POST)
+        .uri(uri)
+        .header(http::header::CONTENT_TYPE, GRPC_CONTENT_TYPE_APPLICATION)
+        .header(GRPC_TE_HEADER, GRPC_TE_TRAILERS)
+        .header(GRPC_ENCODING_HEADER, GRPC_IDENTITY_ENCODING)
+        .header(GRPC_ACCEPT_ENCODING_HEADER, GRPC_IDENTITY_ENCODING)
+        .header(http::header::USER_AGENT, "dae-rust-native-resident")
+        .body(())
+        .map_err(|err| format!("build gRPC HTTP/2 request: {err}"))
+}
+
 pub(crate) async fn send_grpc_hunk(
     send_stream: &mut h2::SendStream<Bytes>,
     payload: &[u8],

@@ -332,6 +332,47 @@ fn xhttp_h1_request_uses_official_packet_up_shape() {
 }
 
 #[test]
+fn grpc_h2_request_declares_identity_encoding() {
+    let mut proxy = dummy_proxy_plan();
+    proxy.server_name = "tls.name.invalid".to_owned();
+    proxy.stream_host = "edge.transport.invalid".to_owned();
+    proxy.stream_path = "/GunService".to_owned();
+
+    let request = grpc_h2_request(&proxy).unwrap();
+
+    assert_eq!(
+        request.uri().to_string(),
+        "https://edge.transport.invalid/GunService/Tun"
+    );
+    assert_eq!(
+        request.headers().get(http::header::CONTENT_TYPE).unwrap(),
+        GRPC_CONTENT_TYPE_APPLICATION
+    );
+    assert_eq!(
+        request.headers().get(GRPC_TE_HEADER).unwrap(),
+        GRPC_TE_TRAILERS
+    );
+    assert_eq!(
+        request.headers().get(GRPC_ENCODING_HEADER).unwrap(),
+        GRPC_IDENTITY_ENCODING
+    );
+    assert_eq!(
+        request.headers().get(GRPC_ACCEPT_ENCODING_HEADER).unwrap(),
+        GRPC_IDENTITY_ENCODING
+    );
+}
+
+#[test]
+fn grpc_hunk_read_buffer_rejects_compressed_frames() {
+    let mut buffer = GrpcHunkReadBuffer::default();
+    buffer.extend_from_slice(&[1, 0, 0, 0, 0]);
+
+    let err = buffer.pop_payload().unwrap_err();
+
+    assert!(err.contains("compressed gRPC hunk"));
+}
+
+#[test]
 fn resident_vless_response_stripper_handles_split_header() {
     let mut stripper = VlessResponseStripper::default();
     assert!(stripper.consume(&[0]).unwrap().is_empty());

@@ -28,6 +28,8 @@ pub use dataplane::{
     websocket_handshake_request, websocket_server_binary_frame,
 };
 pub use grpc::{
+    GRPC_ACCEPT_ENCODING_HEADER, GRPC_CONTENT_TYPE_APPLICATION, GRPC_CONTENT_TYPE_HEADER,
+    GRPC_ENCODING_HEADER, GRPC_IDENTITY_ENCODING, GRPC_TE_HEADER, GRPC_TE_TRAILERS,
     GrpcCacheReport, GrpcLifecycleCache, GrpcLifecycleOptions, GrpcLifecycleReport,
     grpc_hunk_exchange, grpc_hunk_frame, grpc_hunk_frame_len, grpc_hunk_message, grpc_hunk_payload,
     grpc_stream_preface, read_grpc_hunk_frame,

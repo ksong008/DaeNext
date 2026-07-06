@@ -6,6 +6,14 @@ use std::time::Duration;
 use crate::error::OutboundError;
 use crate::shared_transport::ir;
 
+pub const GRPC_CONTENT_TYPE_HEADER: &str = "content-type";
+pub const GRPC_CONTENT_TYPE_APPLICATION: &str = "application/grpc";
+pub const GRPC_TE_HEADER: &str = "te";
+pub const GRPC_TE_TRAILERS: &str = "trailers";
+pub const GRPC_ENCODING_HEADER: &str = "grpc-encoding";
+pub const GRPC_ACCEPT_ENCODING_HEADER: &str = "grpc-accept-encoding";
+pub const GRPC_IDENTITY_ENCODING: &str = "identity";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GrpcLifecycleOptions {
     pub address: String,
@@ -115,7 +123,11 @@ pub fn grpc_stream_preface(service_name: &str) -> Vec<u8> {
         service_name
     };
     format!(
-        "POST /{service_name}/Tun HTTP/2\r\ncontent-type: application/grpc\r\nte: trailers\r\n\r\n"
+        "POST /{service_name}/Tun HTTP/2\r\n\
+         {GRPC_CONTENT_TYPE_HEADER}: {GRPC_CONTENT_TYPE_APPLICATION}\r\n\
+         {GRPC_TE_HEADER}: {GRPC_TE_TRAILERS}\r\n\
+         {GRPC_ENCODING_HEADER}: {GRPC_IDENTITY_ENCODING}\r\n\
+         {GRPC_ACCEPT_ENCODING_HEADER}: {GRPC_IDENTITY_ENCODING}\r\n\r\n"
     )
     .into_bytes()
 }
