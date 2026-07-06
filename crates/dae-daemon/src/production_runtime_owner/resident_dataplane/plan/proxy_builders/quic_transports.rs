@@ -74,11 +74,6 @@ pub(crate) fn build_hysteria2_proxy_plan(
     let parsed = Hysteria2Link::parse(&link)
         .map_err(|err| format!("parse Hysteria2 node {node_tag}: {err}"))?;
     let allow_insecure = parsed.insecure || config.global.allow_insecure;
-    if !allow_insecure && parsed.pin_sha256.is_empty() {
-        return Err(format!(
-            "resident dataplane generic QUIC handler requires Hysteria2 pinSHA256 for node {node_tag}; resident shape remains fail-closed for this config"
-        ));
-    }
     let auth = if parsed.password.is_empty() {
         parsed.user.clone()
     } else {

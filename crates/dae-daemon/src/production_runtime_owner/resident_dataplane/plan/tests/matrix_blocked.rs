@@ -323,8 +323,19 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
         "hy2_no_pin".to_owned(),
         hysteria2_fixture_url_with_pin("hy2", &fixture_hop_server(fixture_port(4), ""), ""),
     )
-    .unwrap_err();
-    assert!(hy2_no_pin.contains("requires Hysteria2 pinSHA256"));
+    .unwrap();
+    assert!(matches!(
+        hy2_no_pin.handler,
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            allow_insecure: false,
+            ref pin_sha256,
+            ..
+        } if pin_sha256.is_empty()
+    ));
+    assert_eq!(
+        hy2_no_pin.executable_graph_value()["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+        "system-roots"
+    );
 
     let hy2_hopping = build_resident_proxy_plan_for_node(
         &config,
@@ -354,6 +365,10 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
             fixture_port(7),
         ]
     ));
+    assert_eq!(
+        hy2_hopping.executable_graph_value()["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+        "pinned-raw-cert-sha256"
+    );
 
     let tuic_verified = build_resident_proxy_plan_for_node(
         &config,

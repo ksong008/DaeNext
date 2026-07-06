@@ -38,3 +38,10 @@ fn case_hysteria2_pin_sha256_matches_raw_cert_hash_only() {
     let mismatch = hysteria2::pin_sha256_matches_raw_cert("00", raw_cert);
     assert!(!mismatch.matched);
 }
+
+#[test]
+fn case_hysteria2_runtime_tls_uses_system_roots_without_pin() {
+    assert!(hysteria2::build_hysteria2_runtime_client_config(false, String::new()).is_ok());
+    assert!(hysteria2::build_hysteria2_runtime_client_config(false, "00".to_owned()).is_ok());
+    assert!(hysteria2::build_hysteria2_runtime_client_config(true, String::new()).is_ok());
+}
