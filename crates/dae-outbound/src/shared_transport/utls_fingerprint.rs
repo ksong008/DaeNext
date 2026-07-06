@@ -15,6 +15,7 @@ pub const U_TLS_WIRE_STACK_DEFERRED: bool = true;
 pub const UTLS_ALPN_H2: &str = "h2";
 pub const UTLS_ALPN_HTTP_1_1: &str = "http/1.1";
 pub const UTLS_BROWSER_DEFAULT_ALPN: &[&str] = &[UTLS_ALPN_H2, UTLS_ALPN_HTTP_1_1];
+pub const UTLS_BROWSER_H2_ONLY_ALPN: &[&str] = &[UTLS_ALPN_H2];
 pub const UTLS_ALPN_POLICY_AUTO: &str = "auto";
 pub const UTLS_ALPN_POLICY_FIXED: &str = "fixed";
 pub const UTLS_ALPN_POLICY_RANDOMIZED_ALPN: &str = "randomized-alpn";
@@ -28,6 +29,7 @@ pub const UTLS_FAMILY_IOS: &str = "ios";
 pub const UTLS_FAMILY_QQ: &str = "qq";
 pub const UTLS_FAMILY_RANDOM: &str = "random";
 pub const UTLS_FAMILY_SAFARI: &str = "safari";
+pub const UTLS_FIREFOX_102_FINGERPRINT: &str = "firefox_102";
 pub const DEFAULT_UTLS_FINGERPRINT: &str = UTLS_FAMILY_CHROME;
 pub const UTLS_CONTRACT_LINK_PROBE_FINGERPRINT: &str = DEFAULT_UTLS_FINGERPRINT;
 pub const UTLS_CONTRACT_GLOBAL_PROBE_FINGERPRINT: &str = UTLS_FAMILY_SAFARI;
@@ -468,6 +470,7 @@ pub fn utls_fingerprint_default_alpn_protocols(
     match fingerprint.alpn_policy {
         UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN => &[],
         UTLS_ALPN_POLICY_RANDOMIZED_ALPN => UTLS_BROWSER_DEFAULT_ALPN,
+        _ if fingerprint.name == UTLS_FIREFOX_102_FINGERPRINT => UTLS_BROWSER_H2_ONLY_ALPN,
         _ if matches!(fingerprint.family, UTLS_FAMILY_ANDROID | UTLS_FAMILY_RANDOM) => &[],
         _ => UTLS_BROWSER_DEFAULT_ALPN,
     }

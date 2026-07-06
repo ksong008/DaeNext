@@ -190,6 +190,18 @@ fn assert_profile_matches_template(
         template.signature_schemes,
         "{fingerprint_name} signature schemes"
     );
+    assert_eq!(
+        normalized_optional_u16_values(&profile.delegated_credential_signature_schemes),
+        template.delegated_credential_signature_schemes,
+        "{fingerprint_name} delegated credential signature schemes"
+    );
+    assert_eq!(
+        normalized_optional_u16_values(&profile.record_size_limit)
+            .first()
+            .copied(),
+        template.record_size_limit,
+        "{fingerprint_name} record size limit"
+    );
 }
 
 fn assert_profile_matches_fixture(

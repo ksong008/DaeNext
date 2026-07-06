@@ -2073,6 +2073,41 @@ static bool dae_copy_non_grease_u16_array(Array<uint16_t> *out,
   return true;
 }
 
+static bool dae_is_ffdhe_named_group(uint16_t value) {
+  static constexpr uint16_t kFFDHE2048 = 0x0100;
+  static constexpr uint16_t kFFDHE8192 = 0x0104;
+  return value >= kFFDHE2048 && value <= kFFDHE8192;
+}
+
+static bool dae_copy_boringssl_group_array(Array<uint16_t> *out,
+                                           const uint16_t *values,
+                                           size_t num_values,
+                                           uint16_t grease_placeholder) {
+  if (num_values == 0) {
+    *out = Array<uint16_t>();
+    return true;
+  }
+  if (values == nullptr) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_BAD_LENGTH);
+    return false;
+  }
+  Array<uint16_t> filtered;
+  if (!filtered.InitForOverwrite(num_values)) {
+    return false;
+  }
+  size_t count = 0;
+  for (uint16_t value : Span(values, num_values)) {
+    if (value == grease_placeholder || dae_is_ffdhe_named_group(value)) {
+      continue;
+    }
+    filtered[count++] = value;
+  }
+  if (!out->CopyFrom(Span(filtered.data(), count))) {
+    return false;
+  }
+  return true;
+}
+
 static bool dae_copy_non_grease_unique_u16_array(Array<uint16_t> *out,
                                                  const uint16_t *values,
                                                  size_t num_values,
@@ -2118,6 +2153,9 @@ int DAE_SSL_set1_utls_template(
     const uint16_t *supported_groups, size_t num_supported_groups,
     const uint16_t *key_share_groups, size_t num_key_share_groups,
     const uint16_t *signature_schemes, size_t num_signature_schemes,
+    const uint16_t *delegated_credential_signature_schemes,
+    size_t num_delegated_credential_signature_schemes,
+    uint16_t record_size_limit,
     const uint16_t *empty_extensions, size_t num_empty_extensions,
     uint16_t grease_placeholder, size_t session_id_len,
     size_t padding_target_handshake_len, int grease_enabled) {
@@ -2134,6 +2172,7 @@ int DAE_SSL_set1_utls_template(
   next.grease_placeholder = grease_placeholder;
   next.session_id_len = session_id_len;
   next.padding_target_handshake_len = padding_target_handshake_len;
+  next.record_size_limit = record_size_limit;
   if (!dae_copy_u16_array(&next.cipher_suites, cipher_suites,
                           num_cipher_suites) ||
       !dae_copy_u16_array(&next.extension_order, extension_order,
@@ -2146,6 +2185,9 @@ int DAE_SSL_set1_utls_template(
                           num_key_share_groups) ||
       !dae_copy_u16_array(&next.signature_schemes, signature_schemes,
                           num_signature_schemes) ||
+      !dae_copy_u16_array(&next.delegated_credential_signature_schemes,
+                          delegated_credential_signature_schemes,
+                          num_delegated_credential_signature_schemes) ||
       !dae_copy_u16_array(&next.empty_extensions, empty_extensions,
                           num_empty_extensions)) {
     return 0;
@@ -2154,9 +2196,9 @@ int DAE_SSL_set1_utls_template(
   Array<uint16_t> real_supported_groups;
   Array<uint16_t> real_key_share_groups;
   Array<uint16_t> real_signature_schemes;
-  if (!dae_copy_non_grease_u16_array(&real_supported_groups, supported_groups,
-                                     num_supported_groups,
-                                     grease_placeholder) ||
+  if (!dae_copy_boringssl_group_array(&real_supported_groups, supported_groups,
+                                      num_supported_groups,
+                                      grease_placeholder) ||
       !dae_copy_non_grease_u16_array(&real_key_share_groups, key_share_groups,
                                      num_key_share_groups,
                                      grease_placeholder) ||
@@ -2199,7 +2241,6 @@ int DAE_SSL_set1_reality_config(SSL *ssl, const uint8_t *server_public_key,
     return 0;
   }
 
-  static const uint16_t kDaeRealityX25519Only[] = {SSL_GROUP_X25519};
   static const uint16_t kDaeRealityVerifySigAlgs[] = {
       SSL_SIGN_ED25519,
       SSL_SIGN_ECDSA_SECP256R1_SHA256,
@@ -2212,9 +2253,24 @@ int DAE_SSL_set1_reality_config(SSL *ssl, const uint8_t *server_public_key,
       SSL_SIGN_RSA_PKCS1_SHA512,
       SSL_SIGN_RSA_PKCS1_SHA1,
   };
-  if (!SSL_set1_client_key_shares(ssl, kDaeRealityX25519Only,
-                                  std::size(kDaeRealityX25519Only))) {
-    return 0;
+  if (ssl->config->dae_utls.enabled) {
+    bool has_x25519_key_share = false;
+    for (uint16_t group : ssl->config->dae_utls.key_share_groups) {
+      if (group == SSL_GROUP_X25519) {
+        has_x25519_key_share = true;
+        break;
+      }
+    }
+    if (!has_x25519_key_share) {
+      OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
+      return 0;
+    }
+  } else {
+    static const uint16_t kDaeRealityX25519Only[] = {SSL_GROUP_X25519};
+    if (!SSL_set1_client_key_shares(ssl, kDaeRealityX25519Only,
+                                    std::size(kDaeRealityX25519Only))) {
+      return 0;
+    }
   }
   // uTLS templates own the ClientHello signature_algorithms extension, but
   // Reality certificates are Ed25519-authenticated and still need local

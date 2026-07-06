@@ -2215,6 +2215,13 @@ bool ssl_setup_key_shares(SSL_HANDSHAKE *hs, uint16_t override_group_id) {
     selected_key_shares.emplace(&override_group_id, 1u);
   }
 
+  // DaeNext uTLS templates describe exact ClientHello key share semantics.
+  // Preserve the caller-selected list before applying predictive server hints.
+  if (!selected_key_shares.has_value() && ssl->config->dae_utls.enabled &&
+      ssl->config->client_key_share_selections.has_value()) {
+    selected_key_shares.emplace(*ssl->config->client_key_share_selections);
+  }
+
   // First try to predict the most preferred (by our preference order) group
   // that was hinted by the server.
   const auto &server_hint_list = ssl->config->server_supported_groups_hint;

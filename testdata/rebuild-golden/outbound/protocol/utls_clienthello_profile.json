@@ -185,6 +185,15 @@
         "key_share_groups": [
           "001d",
           "0017"
+        ],
+        "delegated_credential_signature_schemes": [
+          "0403",
+          "0503",
+          "0603",
+          "0203"
+        ],
+        "record_size_limit": [
+          "4001"
         ]
       }
     },

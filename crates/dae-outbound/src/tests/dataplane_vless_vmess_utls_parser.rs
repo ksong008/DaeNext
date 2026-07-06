@@ -108,8 +108,18 @@ fn case_native_utls_clienthello_fixture_profiles_parse_exactly() {
             "{fingerprint}"
         );
         assert_eq!(
+            profile.delegated_credential_signature_schemes,
+            optional_string_vec(&expected["delegated_credential_signature_schemes"]),
+            "{fingerprint}"
+        );
+        assert_eq!(
             profile.key_share_groups,
             optional_string_vec(&expected["key_share_groups"]),
+            "{fingerprint}"
+        );
+        assert_eq!(
+            profile.record_size_limit,
+            optional_string_vec(&expected["record_size_limit"]),
             "{fingerprint}"
         );
     }

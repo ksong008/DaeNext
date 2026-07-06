@@ -136,12 +136,12 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .unwrap()
             > 0
     );
-    assert!(
+    assert_eq!(
         report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]
             ["unsupported_exact_templates"]
             .as_u64()
-            .unwrap()
-            > 0
+            .unwrap(),
+        0
     );
     let template_modes = report["outbound_fingerprint_underlay_typed_report"]["template_modes"]
         .as_array()
@@ -164,7 +164,7 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
     assert!(
         template_modes
             .iter()
-            .any(|row| row["mode"].as_str().unwrap() == "UnsupportedExactTemplate")
+            .all(|row| row["mode"].as_str().unwrap() != "UnsupportedExactTemplate")
     );
     assert!(
         !report["outbound_fingerprint_underlay_typed_report"]["full_utls_parity_declared"]

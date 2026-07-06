@@ -98,6 +98,13 @@ fn build_extension_entries(
                 "000b" => u8_vector_body(profile.ec_point_formats.as_deref().unwrap_or(&[]))?,
                 "000d" => u16_vector_body(profile.signature_schemes.as_deref().unwrap_or(&[]))?,
                 "0010" => alpn_body(profile.alpn.as_deref().unwrap_or(&[]))?,
+                "001c" => single_u16_body(profile.record_size_limit.as_deref().unwrap_or(&[]))?,
+                "0022" => u16_vector_body(
+                    profile
+                        .delegated_credential_signature_schemes
+                        .as_deref()
+                        .unwrap_or(&[]),
+                )?,
                 "002b" => {
                     u8_len_u16_vector_body(profile.supported_versions.as_deref().unwrap_or(&[]))?
                 }
@@ -209,6 +216,13 @@ fn u8_vector_body(values: &[String]) -> Result<Vec<u8>, OutboundError> {
     push_u8_len(&mut body, bytes.len(), "u8 vector")?;
     body.extend_from_slice(&bytes);
     Ok(body)
+}
+
+fn single_u16_body(values: &[String]) -> Result<Vec<u8>, OutboundError> {
+    if values.len() != 1 {
+        return Err(bad_builder("single u16 extension requires one value"));
+    }
+    Ok(hex_u16_bytes(&values[0])?.to_vec())
 }
 
 fn key_share_body(values: &[String]) -> Result<Vec<u8>, OutboundError> {
