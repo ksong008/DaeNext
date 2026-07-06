@@ -269,18 +269,5 @@ fn resident_vless_alpn(
     net: &str,
     fingerprint: Option<&ResidentUtlsFingerprintPlan>,
 ) -> Vec<String> {
-    let explicit_alpn = split_alpn(&vless.alpn);
-    if !explicit_alpn.is_empty() {
-        return explicit_alpn;
-    }
-    if vless.tls == "reality" {
-        if let Some(fingerprint) = fingerprint {
-            return fingerprint.default_alpn.clone();
-        }
-    }
-    if matches!(net, "grpc" | "h2" | "xhttp") {
-        vec![UTLS_ALPN_H2.to_owned()]
-    } else {
-        Vec::new()
-    }
+    resident_raw_tls_alpn(split_alpn(&vless.alpn), net, fingerprint)
 }

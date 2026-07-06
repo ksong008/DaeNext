@@ -114,11 +114,7 @@ pub(crate) fn build_vmess_proxy_plan(
     } else {
         None
     };
-    let alpn = if matches!(net.as_str(), "grpc" | "h2") {
-        vec!["h2".to_owned()]
-    } else {
-        Vec::new()
-    };
+    let alpn = resident_raw_tls_alpn(Vec::new(), net.as_str(), utls_fingerprint.as_ref());
     let allow_insecure = tls == "tls" && (parsed.allow_insecure || config.global.allow_insecure);
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
