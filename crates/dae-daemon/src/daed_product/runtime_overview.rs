@@ -9,5 +9,7 @@ mod resource_pools;
 pub(super) use self::resource_pools::*;
 mod idle_reclaim;
 pub(super) use self::idle_reclaim::*;
+mod cgroup_memory;
+pub(super) use self::cgroup_memory::*;
 mod reports;
 pub(super) use self::reports::*;

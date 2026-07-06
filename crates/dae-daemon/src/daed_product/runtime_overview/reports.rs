@@ -11,6 +11,7 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
     let process = current_process_metrics();
     let allocator_stats = allocator_stats_snapshot();
     let allocator_live_heap = allocator_stats.map(|stats| stats.allocated);
+    let cgroup_memory = cgroup_memory_snapshot_json();
     json!({
         "updatedAt": now_text(),
         "uploadRate": traffic.upload_rate.to_string(),
@@ -41,6 +42,7 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         ),
         "allocatorReclaim": allocator_reclaim_snapshot_json(),
         "allocatorIdleReclaim": allocator_idle_reclaim_snapshot_json(app),
+        "cgroupMemory": cgroup_memory,
         "resourcePools": resource_pool_policy_json(),
         "goroutines": process.thread_count,
         "productHttp": app.http_metrics.snapshot(),
@@ -64,6 +66,7 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
     );
     let process = current_process_metrics();
     let allocator_live_heap = allocator_live_heap_bytes();
+    let cgroup_memory = cgroup_memory_snapshot_json();
     json!({
         "updatedAt": now_text(),
         "uploadRate": traffic.upload_rate.to_string(),
@@ -83,6 +86,7 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
         "heapMetricSource": if allocator_live_heap.is_some() { "allocator-stats" } else { "unavailable" },
         "heapCompatBytes": process.heap_alloc_bytes_compat().to_string(),
         "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
+        "cgroupMemory": cgroup_memory,
         "goroutines": process.thread_count,
         "reloadCount": runtime_delta.reload_count,
         "samples": traffic.samples,
