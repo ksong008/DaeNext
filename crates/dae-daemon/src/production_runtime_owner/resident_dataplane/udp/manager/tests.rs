@@ -114,6 +114,7 @@ fn udp_router_blocks_when_kernel_selected_block() {
             assert_eq!(route.final_outbound, OUTBOUND_BLOCK);
         }
         ResidentUdpSelection::Proxy(_) => panic!("block outbound must not select a proxy"),
+        ResidentUdpSelection::Direct(_) => panic!("block outbound must not select direct"),
         ResidentUdpSelection::ResidentDns => {
             panic!("block outbound must not select resident DNS")
         }
@@ -121,12 +122,39 @@ fn udp_router_blocks_when_kernel_selected_block() {
 }
 
 #[test]
-fn udp_router_fails_closed_for_direct_and_control_plane_routing() {
+fn udp_router_selects_direct_and_fails_closed_for_unresolved_control_plane_routing() {
     let router = test_udp_router();
     let original_dst = SocketAddr::new(Ipv4Addr::new(203, 0, 113, 10).into(), 443);
 
-    let direct = select_udp_route_err(&router, original_dst, route_result(OUTBOUND_DIRECT, 0));
-    assert!(direct.contains("direct UDP execution is not implemented"));
+    let direct = router
+        .select_from_routing_result(original_dst, route_result(OUTBOUND_DIRECT, 0x1234))
+        .unwrap();
+    match direct {
+        ResidentUdpSelection::Direct(selection) => {
+            assert_eq!(selection.route.final_outbound, OUTBOUND_DIRECT);
+            assert_eq!(selection.route.final_mark, 0x1234);
+        }
+        ResidentUdpSelection::Proxy(_) => panic!("direct outbound must not select proxy"),
+        ResidentUdpSelection::Block(_) => panic!("direct outbound must not select block"),
+        ResidentUdpSelection::ResidentDns => panic!("direct outbound must not select DNS"),
+    }
+
+    let marked_router = test_udp_router_with_matcher_and_so_mark(
+        fallback_matcher("user:2", 0),
+        TcpDialMode::Ip,
+        0x4567,
+    );
+    let direct = marked_router
+        .select_from_routing_result(original_dst, route_result(OUTBOUND_DIRECT, 0))
+        .unwrap();
+    match direct {
+        ResidentUdpSelection::Direct(selection) => {
+            assert_eq!(selection.route.final_mark, 0x4567);
+        }
+        ResidentUdpSelection::Proxy(_) => panic!("direct outbound must not select proxy"),
+        ResidentUdpSelection::Block(_) => panic!("direct outbound must not select block"),
+        ResidentUdpSelection::ResidentDns => panic!("direct outbound must not select DNS"),
+    }
 
     let control_plane = select_udp_route_err(
         &router,
@@ -159,6 +187,7 @@ fn udp_router_reroutes_control_plane_with_sniffed_domain() {
             assert_eq!(selection.proxy.mark, 0x3333);
         }
         ResidentUdpSelection::Block(_) => panic!("domain reroute must select proxy"),
+        ResidentUdpSelection::Direct(_) => panic!("domain reroute must select proxy"),
         ResidentUdpSelection::ResidentDns => panic!("domain reroute must select proxy"),
     }
 }
@@ -187,6 +216,7 @@ fn udp_router_domain_plus_plus_reroutes_user_outbound_with_sniffed_domain() {
             assert_eq!(key.original_destination(), original_dst);
         }
         ResidentUdpSelection::Block(_) => panic!("domain++ reroute must select proxy"),
+        ResidentUdpSelection::Direct(_) => panic!("domain++ reroute must select proxy"),
         ResidentUdpSelection::ResidentDns => panic!("domain++ reroute must select proxy"),
     }
 }
@@ -205,6 +235,7 @@ fn udp_router_overrides_proxy_mark_from_routing_result() {
             assert_eq!(selection.proxy.mark, 0x1234_5678);
         }
         ResidentUdpSelection::Block(_) => panic!("route mark override must keep proxy route"),
+        ResidentUdpSelection::Direct(_) => panic!("route mark override must keep proxy route"),
         ResidentUdpSelection::ResidentDns => {
             panic!("route mark override must keep proxy route")
         }
@@ -222,6 +253,7 @@ fn udp_router_keeps_dns_packets_on_resident_dns_path() {
     match selection {
         ResidentUdpSelection::ResidentDns => {}
         ResidentUdpSelection::Proxy(_) => panic!("non-must DNS must not select proxy"),
+        ResidentUdpSelection::Direct(_) => panic!("non-must DNS must not select direct"),
         ResidentUdpSelection::Block(_) => panic!("non-must DNS must use resident DNS"),
     }
 }
@@ -256,6 +288,7 @@ fn udp_dns_fast_path_applies_to_all_dns() {
         }
         ResidentUdpSelection::Block(_) => panic!("non-must DNS should use resident DNS"),
         ResidentUdpSelection::Proxy(_) => panic!("non-must DNS should use resident DNS"),
+        ResidentUdpSelection::Direct(_) => panic!("non-must DNS should use resident DNS"),
     }
 
     let must_dns = router
@@ -267,6 +300,7 @@ fn udp_dns_fast_path_applies_to_all_dns() {
             assert!(selection.force_proxy_packet);
         }
         ResidentUdpSelection::Block(_) => panic!("must DNS proxy route should select proxy"),
+        ResidentUdpSelection::Direct(_) => panic!("must DNS proxy route should select proxy"),
         ResidentUdpSelection::ResidentDns => {
             panic!("must DNS proxy route should select proxy")
         }
@@ -282,6 +316,7 @@ fn udp_dns_fast_path_applies_to_all_dns() {
             assert!(!selection.force_proxy_packet);
         }
         ResidentUdpSelection::Block(_) => panic!("non-DNS proxy route should select proxy"),
+        ResidentUdpSelection::Direct(_) => panic!("non-DNS proxy route should select proxy"),
         ResidentUdpSelection::ResidentDns => {
             panic!("non-DNS proxy route should select proxy")
         }
@@ -335,6 +370,7 @@ fn udp_router_keeps_must_dns_proxy_route_for_independent_datagram() {
             assert_eq!(route.final_outbound, OUTBOUND_BLOCK);
         }
         ResidentUdpSelection::Proxy(_) => panic!("must block DNS must not use resident DNS"),
+        ResidentUdpSelection::Direct(_) => panic!("must block DNS must not use resident DNS"),
         ResidentUdpSelection::ResidentDns => {
             panic!("must block DNS must not use resident DNS")
         }
@@ -350,6 +386,7 @@ fn udp_router_keeps_must_dns_proxy_route_for_independent_datagram() {
             assert!(resident_udp_dns_fast_path_applies(dns_dst));
         }
         ResidentUdpSelection::Block(_) => panic!("user outbound DNS must select proxy"),
+        ResidentUdpSelection::Direct(_) => panic!("user outbound DNS must select proxy"),
         ResidentUdpSelection::ResidentDns => {
             panic!("user outbound DNS must select proxy")
         }
@@ -468,6 +505,14 @@ fn test_udp_router_with_matcher(
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
 ) -> ResidentUdpRouter {
+    test_udp_router_with_matcher_and_so_mark(routing_matcher, dial_mode, 0)
+}
+
+fn test_udp_router_with_matcher_and_so_mark(
+    routing_matcher: RoutingMatcher,
+    dial_mode: TcpDialMode,
+    so_mark_from_dae: u32,
+) -> ResidentUdpRouter {
     let mut groups = BTreeMap::new();
     groups.insert(
         2,
@@ -477,7 +522,16 @@ fn test_udp_router_with_matcher(
         3,
         ResidentProxyGroupPlan::fixed_single_for_test(test_udp_proxy_with_group("sg", 0x2222)),
     );
-    ResidentUdpRouter::from_parts(Arc::new(groups), 2, 1, None, routing_matcher, dial_mode).unwrap()
+    ResidentUdpRouter::from_parts(
+        Arc::new(groups),
+        2,
+        1,
+        None,
+        routing_matcher,
+        dial_mode,
+        so_mark_from_dae,
+    )
+    .unwrap()
 }
 
 fn test_udp_router_with_udp_family_latency_group() -> ResidentUdpRouter {
@@ -524,6 +578,7 @@ fn test_udp_router_with_udp_family_latency_group() -> ResidentUdpRouter {
         None,
         fallback_matcher("direct", 0),
         TcpDialMode::Ip,
+        0,
     )
     .unwrap()
 }
@@ -586,6 +641,7 @@ fn selected_proxy_group_name(selection: ResidentUdpSelection) -> String {
     match selection {
         ResidentUdpSelection::Proxy(selection) => selection.proxy.group_name.clone(),
         ResidentUdpSelection::Block(_) => panic!("expected proxy route"),
+        ResidentUdpSelection::Direct(_) => panic!("expected proxy route"),
         ResidentUdpSelection::ResidentDns => panic!("expected proxy route"),
     }
 }
@@ -594,6 +650,7 @@ fn selected_proxy_node_tag(selection: ResidentUdpSelection) -> String {
     match selection {
         ResidentUdpSelection::Proxy(selection) => selection.proxy.node_tag.clone(),
         ResidentUdpSelection::Block(_) => panic!("expected proxy route"),
+        ResidentUdpSelection::Direct(_) => panic!("expected proxy route"),
         ResidentUdpSelection::ResidentDns => panic!("expected proxy route"),
     }
 }
