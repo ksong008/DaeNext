@@ -25,7 +25,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-daenext-${{ inputs.tag }}
@@ -38,7 +38,9 @@ env:
 jobs:
   prepare-tag:
     name: prepare tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     outputs:
       source_sha: ${{ steps.prepare.outputs.source_sha }}
       source_short_sha: ${{ steps.prepare.outputs.source_short_sha }}
@@ -213,6 +215,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-shared
+          retention-days: 14
           path: shared/*
 
   build:
@@ -603,6 +606,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.release_name }}
+          retention-days: 14
           path: |
             DaeNext-${{ inputs.tag }}-${{ matrix.release_name }}.tar.gz
             DaeNext-${{ inputs.tag }}-${{ matrix.release_name }}-manifest.txt
@@ -613,6 +617,8 @@ jobs:
     needs: [prepare-tag, shared-artifacts, build]
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - name: Download release artifacts
         uses: actions/download-artifact@v4
