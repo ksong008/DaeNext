@@ -9,7 +9,8 @@ use crate::packet::{
 };
 use crate::{helpers, maps, routing, udp_state};
 
-const TCX_NEXT: i32 = -1;
+const TC_ACT_UNSPEC: i32 = -1;
+const TCX_NEXT: i32 = TC_ACT_UNSPEC;
 const TC_ACT_OK: i32 = 0;
 const TC_ACT_SHOT: i32 = 2;
 const BPF_ANY: u64 = 0;
@@ -54,6 +55,10 @@ fn redirect_entry_l3_strip_mode() -> u32 {
 }
 
 pub fn chain_next() -> i32 {
+    // TC clsact and TCX both use -1 as the explicit "continue" action
+    // (TC_ACT_UNSPEC / TCX_NEXT). Keep pass-through physical-interface paths
+    // on this action so co-hosted TC/TCX programs, such as NAT helpers, still
+    // see the packet.
     TCX_NEXT
 }
 
@@ -353,6 +358,14 @@ mod tests {
     }
 
     #[test]
+    fn chain_next_is_non_terminal_pass_through_action() {
+        assert_eq!(TCX_NEXT, TC_ACT_UNSPEC);
+        assert_eq!(chain_next(), TCX_NEXT);
+        assert_ne!(chain_next(), TC_ACT_OK);
+        assert_ne!(chain_next(), TC_ACT_SHOT);
+    }
+
+    #[test]
     fn l3_wan_egress_return_path_records_and_strips_temporary_mac_header() {
         let l2 = redirect_entry(REDIRECT_LINK_LAYER_L2);
         let l3 = redirect_entry(REDIRECT_LINK_LAYER_L3);
@@ -398,7 +411,7 @@ pub fn wan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     let mut info = ParsedPacket::zeroed();
     let ret = unsafe { packet::parse_transport(skb, link_h_len, ptr::addr_of_mut!(info)) };
     if ret != 0 {
-        return TC_ACT_OK;
+        return chain_next();
     }
     if info.l4proto == IPPROTO_UDP
         && !udp_state::refresh_reversed_udp_state(ptr::addr_of!(info), true)
@@ -416,7 +429,7 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         return chain_next();
     }
     if info.l4proto == IPPROTO_ICMPV6 {
-        return TC_ACT_OK;
+        return chain_next();
     }
 
     let mut key = BpfTuplesKey::zeroed();
@@ -460,7 +473,7 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
                 (*skb).mark = (*routing_result).mark;
             }
         }
-        return TC_ACT_OK;
+        return chain_next();
     }
 
     let mut new_udp_state = BpfUdpConnState::new(false);
@@ -476,7 +489,7 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
             return TC_ACT_SHOT;
         }
         if unsafe { (*state).is_wan_ingress_direction } != 0 {
-            return TC_ACT_OK;
+            return chain_next();
         }
     }
 
@@ -509,7 +522,7 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         unsafe {
             (*skb).mark = mark;
         }
-        return TC_ACT_OK;
+        return chain_next();
     }
     if outbound == routing::ROUTE_OUTBOUND_BLOCK {
         return TC_ACT_SHOT;
@@ -546,15 +559,15 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
 #[inline(always)]
 pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     if unsafe { (*skb).ingress_ifindex } != NOWHERE_IFINDEX {
-        return TC_ACT_OK;
+        return chain_next();
     }
     let mut info = ParsedPacket::zeroed();
     let ret = unsafe { packet::parse_transport(skb, link_h_len, ptr::addr_of_mut!(info)) };
     if ret != 0 {
-        return TC_ACT_OK;
+        return chain_next();
     }
     if info.l4proto == IPPROTO_ICMPV6 {
-        return TC_ACT_OK;
+        return chain_next();
     }
 
     let mut key = BpfTuplesKey::zeroed();
@@ -572,7 +585,7 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     if info.l4proto == IPPROTO_TCP && !is_new_tcp(ptr::addr_of!(info)) {
         let routing_result = routing::lookup_routing_result(ptr::addr_of!(key));
         if routing_result.is_null() {
-            return TC_ACT_OK;
+            return chain_next();
         }
         unsafe {
             outbound = (*routing_result).outbound;
@@ -592,7 +605,7 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
                 return TC_ACT_SHOT;
             }
             if unsafe { (*state).is_wan_ingress_direction } != 0 {
-                return TC_ACT_OK;
+                return chain_next();
             }
         }
 
@@ -628,7 +641,7 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         unsafe {
             (*skb).mark = mark;
         }
-        return TC_ACT_OK;
+        return chain_next();
     }
     if outbound == routing::ROUTE_OUTBOUND_BLOCK {
         return TC_ACT_SHOT;
