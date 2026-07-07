@@ -1034,6 +1034,11 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
         )
         .unwrap();
     }
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, ?1)",
+        params![999_999_i64],
+    )
+    .unwrap();
     drop(conn);
 
     let summary = list_group_summaries_value(&state).unwrap();
@@ -1078,6 +1083,33 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
         full["items"][0]["subscriptions"][0]["matchedNodes"][0]["name"],
         json!("candidate-alpha")
     );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn state_schema_removes_dangling_group_and_latency_references() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO group_nodes(group_id, node_id) VALUES(777, 888);
+            INSERT INTO group_subscriptions(group_id, subscription_id) VALUES(777, 999);
+            INSERT INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
+                VALUES(888, 10, 1, 'now', 'ok', 'now');
+            "#,
+    )
+    .unwrap();
+    drop(conn);
+
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    for table in ["group_nodes", "group_subscriptions", "node_latency_results"] {
+        let sql = format!("SELECT COUNT(*) FROM {table}");
+        let count: i64 = conn.query_row(&sql, [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
     fs::remove_dir_all(dir).unwrap();
 }
 
