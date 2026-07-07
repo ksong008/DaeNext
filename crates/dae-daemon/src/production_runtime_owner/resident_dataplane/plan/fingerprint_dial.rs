@@ -68,6 +68,9 @@ pub(super) fn resident_raw_tls_alpn(
     if !explicit_alpn.is_empty() {
         return explicit_alpn;
     }
+    if matches!(net, "websocket" | "httpupgrade") {
+        return vec![UTLS_ALPN_HTTP_1_1.to_owned()];
+    }
     if matches!(net, "grpc" | "h2" | "xhttp") {
         return vec![UTLS_ALPN_H2.to_owned()];
     }

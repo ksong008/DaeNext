@@ -168,12 +168,30 @@ pub(super) fn resident_standard_tls_fingerprint_keeps_protocol_required_or_expli
 
     let mut vless_explicit = VLESSLink::parse(&vless_vision_fixture_url("chrome_102")).unwrap();
     vless_explicit.alpn = dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned();
+    let vless_websocket = vless_fixture_url(
+        "",
+        &primary,
+        primary_port,
+        "websocket",
+        &fixture_host(FixtureEndpoint::Authority),
+        "/resource",
+        &fixture_host(FixtureEndpoint::Authority),
+        "",
+        "chrome_102",
+    );
 
-    for (label, proxy, expected_utls) in [
+    for (label, proxy, expected_utls, expected_alpn) in [
         (
             "vmess-grpc",
             default_proxy_for_source("", vmess_grpc.export_url()),
             true,
+            vec![dae_outbound::shared_transport::UTLS_ALPN_H2.to_owned()],
+        ),
+        (
+            "vless-websocket-link-fp",
+            default_proxy_for_source("", vless_websocket),
+            true,
+            vec![dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned()],
         ),
         (
             "trojan-grpc-global-fp-excluded",
@@ -185,15 +203,12 @@ pub(super) fn resident_standard_tls_fingerprint_keeps_protocol_required_or_expli
                 trojan_grpc_fixture_url("", &primary, primary_port),
             ),
             false,
+            vec![dae_outbound::shared_transport::UTLS_ALPN_H2.to_owned()],
         ),
     ] {
         assert_eq!(proxy.tls, "tls", "{label}");
         assert_eq!(proxy.utls_fingerprint.is_some(), expected_utls, "{label}");
-        assert_eq!(
-            proxy.alpn,
-            vec![dae_outbound::shared_transport::UTLS_ALPN_H2.to_owned()],
-            "{label}"
-        );
+        assert_eq!(proxy.alpn, expected_alpn, "{label}");
     }
 
     let explicit = default_proxy_for_source("", vless_explicit.export_url());
