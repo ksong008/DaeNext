@@ -3,7 +3,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use dae_outbound::NetworkType;
 
-use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpSettingsPlan;
+use crate::production_runtime_owner::resident_dataplane::plan::{
+    RESIDENT_CONTROL_PLANE_SO_MARK, ResidentXhttpSettingsPlan,
+};
 
 use super::*;
 
@@ -150,6 +152,18 @@ fn udp_router_selects_direct_and_fails_closed_for_unresolved_control_plane_routi
     match direct {
         ResidentUdpSelection::Direct(selection) => {
             assert_eq!(selection.route.final_mark, 0x4567);
+        }
+        ResidentUdpSelection::Proxy(_) => panic!("direct outbound must not select proxy"),
+        ResidentUdpSelection::Block(_) => panic!("direct outbound must not select block"),
+        ResidentUdpSelection::ResidentDns => panic!("direct outbound must not select DNS"),
+    }
+
+    let direct = router
+        .select_from_routing_result(original_dst, route_result(OUTBOUND_DIRECT, 0))
+        .unwrap();
+    match direct {
+        ResidentUdpSelection::Direct(selection) => {
+            assert_eq!(selection.route.final_mark, RESIDENT_CONTROL_PLANE_SO_MARK);
         }
         ResidentUdpSelection::Proxy(_) => panic!("direct outbound must not select proxy"),
         ResidentUdpSelection::Block(_) => panic!("direct outbound must not select block"),

@@ -12,3 +12,5 @@ mod group_selection;
 mod matrix_blocked;
 #[cfg(test)]
 mod resident_handlers;
+#[cfg(test)]
+mod socket_mark;

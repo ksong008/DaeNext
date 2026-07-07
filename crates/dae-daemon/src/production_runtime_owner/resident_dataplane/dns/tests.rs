@@ -110,6 +110,35 @@ fn resident_dns_plan_admits_fallback_upstream_udp() {
     assert_eq!(plan.mark, 1234);
 }
 
+#[test]
+fn resident_dns_plan_defaults_zero_mark_to_control_plane_mark() {
+    let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://resolver.fixture.invalid:53'
+          }
+          routing {
+            request {
+              fallback: primary
+            }
+          }
+        }
+        "#;
+    let config = parse_config(input);
+    let geodata = test_geodata();
+    let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+    let expected = effective_so_mark_from_dae(0);
+    assert_eq!(plan.mark, expected);
+    match plan.request_default_action {
+        ResidentDnsRequestAction::Upstream(upstream) => {
+            assert_eq!(upstream.target.resolver_mark, expected);
+        }
+        _ => panic!("expected upstream default action"),
+    }
+}
+
 fn dns_upstream_routing_config(routing: &str) -> Config {
     dns_upstream_routing_config_with_group(
         routing,
