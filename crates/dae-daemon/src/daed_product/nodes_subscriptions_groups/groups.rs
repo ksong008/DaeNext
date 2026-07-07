@@ -1,3 +1,4 @@
+use super::group_summary::group_materialized_candidate_summary;
 use super::*;
 
 const GROUP_SUMMARY_MATCHED_NODE_SAMPLE_LIMIT: usize = 5;
@@ -44,6 +45,11 @@ fn group_summary_value(
     policy: String,
     version: i64,
 ) -> io::Result<Value> {
+    let materialized_candidates = group_materialized_candidate_summary(
+        conn,
+        group_id,
+        GROUP_SUMMARY_MATCHED_NODE_SAMPLE_LIMIT,
+    )?;
     Ok(json!({
         "id": group_id,
         "name": name,
@@ -54,6 +60,10 @@ fn group_summary_value(
         "subscriptionCount": count_group_subscriptions(conn, group_id)?,
         "firstNode": first_group_node_value(conn, group_id)?,
         "sampleNodes": group_node_sample_value(conn, group_id, GROUP_SUMMARY_MATCHED_NODE_SAMPLE_LIMIT)?,
+        "materializedCandidateCount": materialized_candidates.count,
+        "sampleMaterializedCandidates": materialized_candidates.sample_nodes,
+        "currentNode": materialized_candidates.current_node,
+        "bestNode": materialized_candidates.best_node,
         "subscriptions": group_subscription_summaries_value(conn, group_id)?,
     }))
 }

@@ -1009,6 +1009,19 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
         ],
     )
     .unwrap();
+    let selected_beta_id: i64 = conn
+        .query_row(
+            "SELECT id FROM nodes WHERE name = ?1",
+            params!["selected-beta"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
+         VALUES(?1, 7, 1, 'now', '7ms', 'now')",
+        params![selected_beta_id],
+    )
+    .unwrap();
     for (index, name) in [
         "manual-alpha",
         "manual-beta",
@@ -1047,6 +1060,20 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
     assert_eq!(group["nodeCount"], json!(6));
     assert_eq!(group["subscriptionCount"], json!(2));
     assert_eq!(group["firstNode"]["name"], json!("manual-alpha"));
+    assert_eq!(group["materializedCandidateCount"], json!(15));
+    assert_eq!(group["currentNode"]["name"], json!("selected-beta"));
+    assert_eq!(group["bestNode"]["name"], json!("selected-beta"));
+    assert_eq!(
+        group["sampleMaterializedCandidates"]
+            .as_array()
+            .map(Vec::len),
+        Some(5),
+        "{group}"
+    );
+    assert_eq!(
+        group["sampleMaterializedCandidates"][0]["name"],
+        json!("manual-alpha")
+    );
     assert_eq!(
         group["sampleNodes"].as_array().map(Vec::len),
         Some(5),
