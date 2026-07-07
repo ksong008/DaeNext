@@ -508,6 +508,44 @@ fn resident_tcp_selection_allows_builtin_direct_without_proxy_plan() {
 }
 
 #[test]
+fn resident_tcp_selection_defaults_zero_mark_to_control_plane_mark() {
+    let mut proxies = BTreeMap::new();
+    proxies.insert(
+        OutboundIndex::USER_DEFINED_MIN.value(),
+        ResidentProxyGroupPlan::fixed_single_for_test(dummy_proxy_plan()),
+    );
+    let router = ResidentTcpRouter::new_for_test(
+        proxies,
+        fallback_matcher("direct", 0),
+        TcpDialMode::Ip,
+        Duration::from_millis(100),
+        0,
+        true,
+    )
+    .unwrap();
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443));
+    let selection = router
+        .select_from_routing_result(
+            peer,
+            dst,
+            "",
+            BpfRoutingResult {
+                outbound: OUTBOUND_DIRECT,
+                ..BpfRoutingResult::default()
+            },
+        )
+        .unwrap();
+    let TcpSelection::Direct(selection) = selection else {
+        panic!("expected direct selection");
+    };
+    assert_eq!(
+        selection.route.final_mark,
+        super::super::plan::RESIDENT_CONTROL_PLANE_SO_MARK
+    );
+}
+
+#[test]
 fn resident_tcp_selection_reroutes_control_plane_result_to_direct() {
     let router = tcp_router_for_test(
         fallback_matcher("direct", 0x77),

@@ -329,7 +329,7 @@ pub(super) fn latency_probe_helper_preserves_fingerprint_and_adds_control_mark_w
     let config = fingerprint_config_with_mark(0, "", link.clone());
     let normal_plans = build_resident_manual_probe_plans(&config);
     let normal = normal_plans.get(&link).unwrap().as_ref().unwrap();
-    assert_eq!(normal.proxy.mark, 0);
+    assert_eq!(normal.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
     assert!(normal.proxy.utls_fingerprint.is_some());
 
     let helper_plans = build_resident_manual_probe_plans_for_helper(&config);
@@ -347,7 +347,7 @@ pub(super) fn latency_probe_helper_preserves_reality_fingerprint_and_adds_contro
     let config = fingerprint_config_with_mark(0, "", link.clone());
     let normal_plans = build_resident_manual_probe_plans(&config);
     let normal = normal_plans.get(&link).unwrap().as_ref().unwrap();
-    assert_eq!(normal.proxy.mark, 0);
+    assert_eq!(normal.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
     assert_eq!(normal.proxy.tls, "reality");
     assert!(normal.proxy.reality.is_some());
     assert!(normal.proxy.utls_fingerprint.is_some());
