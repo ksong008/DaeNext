@@ -15,8 +15,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  workflow-lint:
+    name: workflow lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$(go env GOPATH)/bin/actionlint"
+
   release-gate:
     name: release gate
+    needs: [workflow-lint]
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-22.04
     timeout-minutes: 60
