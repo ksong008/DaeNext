@@ -81,7 +81,10 @@ pub(crate) fn list_groups_value(state: &Path) -> io::Result<Value> {
 
 fn count_group_nodes(conn: &Connection, group_id: i64) -> io::Result<i64> {
     conn.query_row(
-        "SELECT COUNT(*) FROM group_nodes WHERE group_id = ?1",
+        "SELECT COUNT(*)
+         FROM group_nodes gn
+         JOIN nodes n ON n.id = gn.node_id
+         WHERE gn.group_id = ?1",
         params![group_id],
         |row| row.get(0),
     )

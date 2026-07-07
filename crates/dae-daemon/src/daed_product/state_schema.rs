@@ -155,6 +155,14 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
         DELETE FROM group_policy_params
             WHERE group_id IS NULL
                OR group_id NOT IN (SELECT id FROM groups);
+        DELETE FROM group_nodes
+            WHERE group_id NOT IN (SELECT id FROM groups)
+               OR node_id NOT IN (SELECT id FROM nodes);
+        DELETE FROM group_subscriptions
+            WHERE group_id NOT IN (SELECT id FROM groups)
+               OR subscription_id NOT IN (SELECT id FROM subscriptions);
+        DELETE FROM node_latency_results
+            WHERE node_id NOT IN (SELECT id FROM nodes);
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
             VALUES('production-daed-product-schema', datetime('now'));
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
