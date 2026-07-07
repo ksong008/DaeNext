@@ -226,11 +226,21 @@ fn run_node_latency_job(
     nodes: Vec<(i64, String, String)>,
 ) {
     jobs.mark_running(job_id);
-    match run_node_latency_job_inner(job_id, &state, &config_dir, &runtime, &jobs, &nodes) {
-        Ok((completed, succeeded, failed)) => {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_node_latency_job_inner(job_id, &state, &config_dir, &runtime, &jobs, &nodes)
+    }));
+    match result {
+        Ok(Ok((completed, succeeded, failed))) => {
             jobs.mark_finished(job_id, completed, succeeded, failed);
         }
-        Err(err) => jobs.mark_failed(job_id, err.to_string()),
+        Ok(Err(err)) => jobs.mark_failed(job_id, err.to_string()),
+        Err(payload) => jobs.mark_failed(
+            job_id,
+            format!(
+                "manual latency probe panicked: {}",
+                panic_payload_message(payload.as_ref())
+            ),
+        ),
     }
     drop(nodes);
     drop(runtime);
@@ -238,6 +248,16 @@ fn run_node_latency_job(
     drop(config_dir);
     drop(state);
     let _ = allocator_reclaim(AllocatorReclaimReason::ManualLatencyProbe);
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return (*message).to_owned();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_owned()
 }
 
 fn run_node_latency_job_inner(
@@ -552,6 +572,15 @@ mod tests {
             ],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn panic_payload_message_preserves_string_payloads() {
+        let literal = "latency panic literal";
+        let owned = "latency panic string".to_owned();
+
+        assert_eq!(panic_payload_message(&literal), literal);
+        assert_eq!(panic_payload_message(&owned), owned);
     }
 
     #[test]

@@ -40,7 +40,10 @@ impl LatenciesN {
     }
 
     pub fn avg(&self) -> Option<i64> {
-        (self.len > 0).then_some(self.sum / self.len as i64)
+        if self.len == 0 {
+            return None;
+        }
+        Some(self.sum / self.len as i64)
     }
 
     pub fn len(&self) -> usize {
@@ -49,5 +52,37 @@ impl LatenciesN {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_average_is_none_without_dividing_by_zero() {
+        let latencies = LatenciesN::new(10);
+
+        assert_eq!(latencies.avg(), None);
+    }
+
+    #[test]
+    fn average_uses_recorded_samples_only() {
+        let mut latencies = LatenciesN::new(3);
+        latencies.append(10);
+        latencies.append(20);
+
+        assert_eq!(latencies.avg(), Some(15));
+    }
+
+    #[test]
+    fn average_respects_ring_capacity() {
+        let mut latencies = LatenciesN::new(2);
+        latencies.append(10);
+        latencies.append(30);
+        latencies.append(50);
+
+        assert_eq!(latencies.avg(), Some(40));
+        assert_eq!(latencies.last(), Some(50));
     }
 }
