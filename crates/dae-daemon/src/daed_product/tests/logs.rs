@@ -21,6 +21,36 @@ fn assert_log_field_from_json(fields: &Value, key: &str, value: &Value) {
 }
 
 #[test]
+pub(crate) fn product_json_log_timestamp_uses_local_offset_shape() {
+    assert_eq!(iso8601_utc(0), "1970-01-01T00:00:00Z");
+    assert_eq!(
+        format_product_log_timestamp_with_offset(2026, 7, 7, 10, 35, 12, 8 * 3_600),
+        "2026-07-07T10:35:12+08:00"
+    );
+    assert_eq!(
+        format_product_log_timestamp_with_offset(2026, 1, 2, 3, 4, 5, -(5 * 3_600 + 30 * 60)),
+        "2026-01-02T03:04:05-05:30"
+    );
+
+    #[cfg(target_family = "unix")]
+    {
+        let line =
+            encode_log_entry_json_line(1, "info", "local timestamp", &BTreeMap::new()).unwrap();
+        let entry: Value = serde_json::from_slice(&line).unwrap();
+        let ts = entry["ts"].as_str().unwrap();
+        assert_eq!(ts.len(), "2026-07-07T10:35:12+08:00".len(), "{ts}");
+        assert_eq!(&ts[4..5], "-", "{ts}");
+        assert_eq!(&ts[7..8], "-", "{ts}");
+        assert_eq!(&ts[10..11], "T", "{ts}");
+        assert_eq!(&ts[13..14], ":", "{ts}");
+        assert_eq!(&ts[16..17], ":", "{ts}");
+        assert!(matches!(&ts[19..20], "+" | "-"), "{ts}");
+        assert_eq!(&ts[22..23], ":", "{ts}");
+        assert!(!ts.ends_with('Z'), "{ts}");
+    }
+}
+
+#[test]
 pub(crate) fn runtime_log_level_defaults_to_error() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
