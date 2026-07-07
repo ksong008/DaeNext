@@ -53,6 +53,7 @@ fn group_summary_value(
         "nodeCount": count_group_nodes(conn, group_id)?,
         "subscriptionCount": count_group_subscriptions(conn, group_id)?,
         "firstNode": first_group_node_value(conn, group_id)?,
+        "sampleNodes": group_node_sample_value(conn, group_id, GROUP_SUMMARY_MATCHED_NODE_SAMPLE_LIMIT)?,
         "subscriptions": group_subscription_summaries_value(conn, group_id)?,
     }))
 }
@@ -110,6 +111,32 @@ fn first_group_node_value(conn: &Connection, group_id: i64) -> io::Result<Value>
     .optional()
     .map(|value| value.unwrap_or(Value::Null))
     .map_err(sqlite_io_error)
+}
+
+fn group_node_sample_value(
+    conn: &Connection,
+    group_id: i64,
+    limit: usize,
+) -> io::Result<Vec<Value>> {
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let mut stmt = conn
+        .prepare(
+            "SELECT n.id, n.link, n.name, n.address, n.protocol, n.tag, n.subscription_id
+             FROM nodes n
+             JOIN group_nodes gn ON gn.node_id = n.id
+             WHERE gn.group_id = ?1
+             ORDER BY n.id
+             LIMIT ?2",
+        )
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![group_id, limit], node_row_value)
+        .map_err(sqlite_io_error)?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row.map_err(sqlite_io_error)?);
+    }
+    Ok(items)
 }
 
 fn group_subscription_summaries_value(conn: &Connection, group_id: i64) -> io::Result<Vec<Value>> {

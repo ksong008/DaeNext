@@ -1009,26 +1009,46 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
         ],
     )
     .unwrap();
-    insert_config_node(
-        &conn,
-        30,
-        "manual",
-        "http://127.0.0.1:9/manual#manual",
-        None,
-    );
-    conn.execute(
-        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, 30)",
-        [],
-    )
-    .unwrap();
+    for (index, name) in [
+        "manual-alpha",
+        "manual-beta",
+        "manual-gamma",
+        "manual-delta",
+        "manual-epsilon",
+        "manual-zeta",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let node_id = 30 + i64::try_from(index).unwrap();
+        insert_config_node(
+            &conn,
+            node_id,
+            name,
+            &format!("http://127.0.0.1:9/{name}#{name}"),
+            None,
+        );
+        conn.execute(
+            "INSERT INTO group_nodes(group_id, node_id) VALUES(9, ?1)",
+            params![node_id],
+        )
+        .unwrap();
+    }
     drop(conn);
 
     let summary = list_group_summaries_value(&state).unwrap();
     let group = &summary["items"][0];
     assert_eq!(group["id"], json!(9));
-    assert_eq!(group["nodeCount"], json!(1));
+    assert_eq!(group["nodeCount"], json!(6));
     assert_eq!(group["subscriptionCount"], json!(2));
-    assert_eq!(group["firstNode"]["name"], json!("manual"));
+    assert_eq!(group["firstNode"]["name"], json!("manual-alpha"));
+    assert_eq!(
+        group["sampleNodes"].as_array().map(Vec::len),
+        Some(5),
+        "{group}"
+    );
+    assert_eq!(group["sampleNodes"][0]["name"], json!("manual-alpha"));
+    assert_eq!(group["sampleNodes"][4]["name"], json!("manual-epsilon"));
     assert_eq!(group["subscriptions"].as_array().map(Vec::len), Some(2));
     assert_eq!(group["subscriptions"][0]["matchedCount"], json!(7));
     assert_eq!(
