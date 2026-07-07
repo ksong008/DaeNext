@@ -25,6 +25,7 @@ pub(crate) fn build_proxy_plan(
             "resident dataplane selected unsupported {scheme} node {node_tag}; no resident executor is admitted for this node shape; shape remains fail-closed for this config",
         )),
     }?;
+    plan.apply_effective_so_mark_from_dae();
     plan.compact_allocations();
     Ok(plan)
 }

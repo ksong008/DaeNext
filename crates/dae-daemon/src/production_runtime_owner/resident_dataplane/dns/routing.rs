@@ -17,6 +17,7 @@ use upstream_parse::split_keyable_link;
 
 pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstreams, String> {
     let fallback_resolver = parse_dns_fallback_resolver(config)?;
+    let resolver_mark = effective_so_mark_from_dae(config.global.so_mark_from_dae);
     let mut by_tag = BTreeMap::new();
     let mut tag_to_index = BTreeMap::new();
     let mut request_actions = Vec::new();
@@ -32,13 +33,8 @@ pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstream
         if by_tag.contains_key(&tag) {
             return Err(format!("duplicated DNS upstream tag {tag:?}"));
         }
-        let upstream = parse_dns_upstream(
-            index as u8,
-            &tag,
-            &link,
-            fallback_resolver,
-            config.global.so_mark_from_dae,
-        )?;
+        let upstream =
+            parse_dns_upstream(index as u8, &tag, &link, fallback_resolver, resolver_mark)?;
         tag_to_index.insert(tag.clone(), index as u8);
         request_actions.push(ResidentDnsRequestAction::Upstream(upstream.clone()));
         response_actions.push(ResidentDnsResponseAction::Upstream(upstream.clone()));

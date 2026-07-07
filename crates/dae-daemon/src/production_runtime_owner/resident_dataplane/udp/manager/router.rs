@@ -15,7 +15,7 @@ use dae_ebpf_support::{
 };
 use dae_routing::{Query, RoutingMatcher};
 
-use super::super::super::plan::resident_udp_check_network_type;
+use super::super::super::plan::{effective_so_mark_from_dae, resident_udp_check_network_type};
 use super::*;
 
 const BPF_L4_UDP: u8 = 17;
@@ -124,7 +124,7 @@ impl ResidentUdpRouter {
             routing_tuple_map_fd,
             routing_matcher,
             dial_mode,
-            so_mark_from_dae,
+            so_mark_from_dae: effective_so_mark_from_dae(so_mark_from_dae),
         })
     }
 

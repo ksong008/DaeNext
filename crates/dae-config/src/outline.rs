@@ -101,7 +101,7 @@ fn global_outline() -> Value {
         "structure": [
             leaf("TproxyPort", "tproxy_port", "uint16", Some("12345"), Some("tproxy port to listen on. It is NOT a HTTP/SOCKS port, and is just used by eBPF program.\nIn normal case, you do not need to use it."), false, false),
             leaf("TproxyPortProtect", "tproxy_port_protect", "bool", Some("true"), Some("Set it true to protect tproxy port from unsolicited traffic. Set it false to allow users to use self-managed iptables tproxy rules."), false, false),
-            leaf("SoMarkFromDae", "so_mark_from_dae", "uint32", None, Some("If not zero, traffic sent from dae will be set SO_MARK. It is useful to avoid traffic loop with iptables tproxy rules."), false, false),
+            leaf("SoMarkFromDae", "so_mark_from_dae", "uint32", None, Some("Socket mark for dae-originated traffic. When zero, dae uses its internal control-plane mark to avoid self-capture loops."), false, false),
             leaf("LogLevel", "log_level", "string", Some(DEFAULT_LOG_LEVEL), Some("Log level: error, warn, info, debug, trace."), false, false),
             leaf("TcpCheckUrl", "tcp_check_url", "string", Some("http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"), Some("Node connectivity check.\nHost of URL should have both IPv4 and IPv6 if you have double stack in local.\nConsidering traffic consumption, it is recommended to choose a site with anycast IP and less response."), true, false),
             leaf("TcpCheckHttpMethod", "tcp_check_http_method", "string", Some("HEAD"), Some("The HTTP request method to `tcp_check_url`. Use 'HEAD' by default because some server implementations bypass accounting for this kind of traffic."), false, false),

@@ -1,7 +1,7 @@
 // Router construction keeps map, matcher, DNS, and socket policy ownership explicit.
 #![allow(clippy::too_many_arguments)]
 
-use super::super::plan::resident_tcp_check_network_type;
+use super::super::plan::{effective_so_mark_from_dae, resident_tcp_check_network_type};
 use super::*;
 pub(crate) const BPF_L4_TCP: u8 = 6;
 pub(crate) const ROUTING_L4_TCP: u8 = 1;
@@ -85,7 +85,7 @@ impl ResidentTcpRouter {
             dns,
             dial_mode,
             sniffing_timeout,
-            so_mark_from_dae,
+            so_mark_from_dae: effective_so_mark_from_dae(so_mark_from_dae),
             mptcp,
         })
     }

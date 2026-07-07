@@ -15,6 +15,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) use xhttp::{
 pub(in crate::production_runtime_owner::resident_dataplane) const RESIDENT_CONTROL_PLANE_SO_MARK:
     u32 = 0x100;
 
+pub(in crate::production_runtime_owner::resident_dataplane) fn effective_so_mark_from_dae(
+    configured: u32,
+) -> u32 {
+    if configured == 0 {
+        RESIDENT_CONTROL_PLANE_SO_MARK
+    } else {
+        configured
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SelectedGroupNode {
     pub(in crate::production_runtime_owner::resident_dataplane) match_index: usize,
@@ -117,6 +127,15 @@ impl ResidentProxyPlan {
         }
         if let Some(parent) = self.chain_parent.as_mut() {
             Arc::make_mut(parent).disable_latency_probe_persistent_caches();
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_effective_so_mark_from_dae(
+        &mut self,
+    ) {
+        self.mark = effective_so_mark_from_dae(self.mark);
+        if let Some(parent) = self.chain_parent.as_mut() {
+            Arc::make_mut(parent).apply_effective_so_mark_from_dae();
         }
     }
 
