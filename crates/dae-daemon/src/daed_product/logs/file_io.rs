@@ -130,7 +130,7 @@ pub(crate) fn encode_log_entry_json_line(
 ) -> io::Result<Vec<u8>> {
     let mut object = Map::new();
     object.insert("id".to_owned(), json!(id));
-    object.insert("ts".to_owned(), json!(now_text()));
+    object.insert("ts".to_owned(), json!(product_log_timestamp_text()));
     object.insert("level".to_owned(), json!(level));
     object.insert("message".to_owned(), json!(message));
     if !fields.is_empty() {
@@ -140,6 +140,53 @@ pub(crate) fn encode_log_entry_json_line(
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     data.push(b'\n');
     Ok(data)
+}
+
+fn product_log_timestamp_text() -> String {
+    local_product_log_timestamp_text(unix_now()).unwrap_or_else(now_text)
+}
+
+#[cfg(target_family = "unix")]
+fn local_product_log_timestamp_text(timestamp: u64) -> Option<String> {
+    let timestamp = libc::time_t::try_from(timestamp).ok()?;
+    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
+    let local = unsafe { libc::localtime_r(&timestamp, tm.as_mut_ptr()) };
+    if local.is_null() {
+        return None;
+    }
+    let tm = unsafe { tm.assume_init() };
+    Some(format_product_log_timestamp_with_offset(
+        i64::from(tm.tm_year) + 1900,
+        i64::from(tm.tm_mon) + 1,
+        i64::from(tm.tm_mday),
+        i64::from(tm.tm_hour),
+        i64::from(tm.tm_min),
+        i64::from(tm.tm_sec),
+        tm.tm_gmtoff as i64,
+    ))
+}
+
+#[cfg(not(target_family = "unix"))]
+fn local_product_log_timestamp_text(_timestamp: u64) -> Option<String> {
+    None
+}
+
+pub(crate) fn format_product_log_timestamp_with_offset(
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    offset_seconds: i64,
+) -> String {
+    let sign = if offset_seconds < 0 { '-' } else { '+' };
+    let offset_minutes = (offset_seconds / 60).abs();
+    let offset_hour = offset_minutes / 60;
+    let offset_minute = offset_minutes % 60;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{sign}{offset_hour:02}:{offset_minute:02}"
+    )
 }
 
 pub(crate) fn trim_log_fields(
