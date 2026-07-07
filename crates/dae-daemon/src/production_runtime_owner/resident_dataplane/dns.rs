@@ -40,7 +40,7 @@ use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::direct::open_direct_tcp_connection_async;
 #[cfg(test)]
 use super::plan::build_resident_dataplane_plan;
-use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan};
+use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, effective_so_mark_from_dae};
 use super::resolve_host_addrs_with_configured_fallback_dns;
 use super::tcp::{exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_tcp_stream_async};
 use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
@@ -162,6 +162,7 @@ pub(super) struct ResidentDnsQueryResult {
 
 impl ResidentDnsPlan {
     pub(super) fn asis(mark: u32) -> Self {
+        let mark = effective_so_mark_from_dae(mark);
         Self {
             request_matcher: None,
             request_actions: Vec::new(),
@@ -272,6 +273,7 @@ pub(super) fn build_resident_dns_plan(
     config: &Config,
     geodata: &ResidentGeodataStore,
 ) -> Result<ResidentDnsPlan, String> {
+    let so_mark_from_dae = effective_so_mark_from_dae(config.global.so_mark_from_dae);
     let upstreams = parse_dns_upstreams(config)?;
     let fixed_domain_ttl = parse_fixed_domain_ttl(&config.dns.fixed_domain_ttl)?;
     let ipversion_prefer = parse_ipversion_prefer(config.dns.ipversion_prefer)?;
@@ -293,7 +295,7 @@ pub(super) fn build_resident_dns_plan(
         forwarders: Arc::new(ResidentDnsForwarderCache::default()),
         fixed_domain_ttl: Arc::new(fixed_domain_ttl),
         ipversion_prefer,
-        mark: config.global.so_mark_from_dae,
+        mark: so_mark_from_dae,
         upstream_router: None,
     })
 }

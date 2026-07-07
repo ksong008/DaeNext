@@ -1,3 +1,4 @@
+use super::plan::effective_so_mark_from_dae;
 use super::*;
 pub(crate) fn start_resident_dataplane_workers(
     handoff: &LiveLoadedTproxyListenSocketMap,
@@ -39,6 +40,7 @@ pub(crate) fn start_resident_dataplane_workers(
             None,
         );
     }
+    let so_mark_from_dae = effective_so_mark_from_dae(config.global.so_mark_from_dae);
     let Some(default_group) = plan.default_proxy_group().cloned() else {
         return (
             json!({
@@ -194,7 +196,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let dns_upstream_router = Arc::new(dns::ResidentDnsUpstreamRouter::new(
         routing_matcher.clone(),
         Arc::clone(&udp_proxy_groups),
-        config.global.so_mark_from_dae,
+        so_mark_from_dae,
     ));
     let dns = Arc::new(
         plan.dns
@@ -226,7 +228,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let dns_reload_handle = dns.reload_handle();
     let udp_routing_matcher = routing_matcher.clone();
     let udp_dial_mode = plan.tcp_dial_mode;
-    let udp_so_mark_from_dae = config.global.so_mark_from_dae;
+    let udp_so_mark_from_dae = so_mark_from_dae;
     let tcp_router = match ResidentTcpRouter::new(
         plan.proxies,
         routing_tuple_map_id,
@@ -235,7 +237,7 @@ pub(crate) fn start_resident_dataplane_workers(
         Arc::clone(&dns),
         plan.tcp_dial_mode,
         plan.sniffing_timeout,
-        config.global.so_mark_from_dae,
+        so_mark_from_dae,
         config.global.mptcp,
     ) {
         Ok(router) => Arc::new(router),

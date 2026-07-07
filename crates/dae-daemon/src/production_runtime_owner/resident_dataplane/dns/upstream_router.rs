@@ -33,7 +33,7 @@ impl ResidentDnsUpstreamRouter {
         Self {
             routing_matcher,
             proxy_groups,
-            so_mark_from_dae,
+            so_mark_from_dae: effective_so_mark_from_dae(so_mark_from_dae),
         }
     }
 

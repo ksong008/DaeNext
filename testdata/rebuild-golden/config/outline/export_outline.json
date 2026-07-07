@@ -35,7 +35,7 @@
             "type": "bool"
           },
           {
-            "desc": "If not zero, traffic sent from dae will be set SO_MARK. It is useful to avoid traffic loop with iptables tproxy rules.",
+            "desc": "Socket mark for dae-originated traffic. When zero, dae uses its internal control-plane mark to avoid self-capture loops.",
             "mapping": "so_mark_from_dae",
             "name": "SoMarkFromDae",
             "type": "uint32"

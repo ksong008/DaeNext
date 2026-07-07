@@ -131,7 +131,7 @@ pub(super) fn group_udp_check_plan(
         port,
         explicit_addresses,
         fallback_resolver,
-        config.global.so_mark_from_dae,
+        effective_so_mark_from_dae(config.global.so_mark_from_dae),
     )
     .map_err(|err| {
         format!(
