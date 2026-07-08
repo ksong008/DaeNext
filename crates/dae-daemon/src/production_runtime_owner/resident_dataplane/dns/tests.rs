@@ -31,6 +31,15 @@ const DNS_PRESSURE_UPSTREAM_TAG_ENV: &str = "DAENEXT_DNS_PRESSURE_UPSTREAM_TAG";
 const DNS_PRESSURE_UPSTREAM_SCHEME_ENV: &str = "DAENEXT_DNS_PRESSURE_UPSTREAM_SCHEME";
 const DNS_PRESSURE_RESPONSE_IP_ENV: &str = "DAENEXT_DNS_PRESSURE_RESPONSE_IP";
 const DNS_PRESSURE_RESPONSE_TTL_ENV: &str = "DAENEXT_DNS_PRESSURE_RESPONSE_TTL";
+const DNS_LIVE_PRESSURE_ENABLE_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_ENABLE";
+const DNS_LIVE_PRESSURE_TOTAL_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_TOTAL";
+const DNS_LIVE_PRESSURE_CONCURRENCY_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_CONCURRENCY";
+const DNS_LIVE_PRESSURE_QNAME_PREFIX_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_QNAME_PREFIX";
+const DNS_LIVE_PRESSURE_QNAME_SUFFIX_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_QNAME_SUFFIX";
+const DNS_LIVE_PRESSURE_QTYPE_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_QTYPE";
+const DNS_LIVE_PRESSURE_UPSTREAM_TAG_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_UPSTREAM_TAG";
+const DNS_LIVE_PRESSURE_UPSTREAM_LINK_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_UPSTREAM_LINK";
+const DNS_LIVE_PRESSURE_ORIGINAL_DST_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_ORIGINAL_DST";
 
 fn parse_config(input: &str) -> Config {
     let sections = dae_config::parser::parse_config(input).unwrap();
@@ -1282,15 +1291,45 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency));
     let latencies = Arc::new(Mutex::new(Vec::with_capacity(config.total)));
     let failures = Arc::new(Mutex::new(Vec::<String>::new()));
+    let trace_qname = dns_pressure_qname(&config.qname_prefix, 0, &config.qname_suffix);
+    let trace_query = build_dns_query_packet(1, &trace_qname, config.qtype).unwrap();
+    let trace_request = DnsPacketView::parse(&trace_query).unwrap();
     let started = std::time::Instant::now();
+    let trace_started = std::time::Instant::now();
+    let trace =
+        match handle_resident_dns_local_trace_async(&plan, upstream_addr, &trace_query).await {
+            Ok(result) => {
+                if let Err(err) =
+                    validate_dns_response_for_request(&trace_request, &result.response, true)
+                {
+                    failures
+                        .lock()
+                        .unwrap()
+                        .push(format!("{trace_qname}: {err}"));
+                } else {
+                    latencies
+                        .lock()
+                        .unwrap()
+                        .push(trace_started.elapsed().as_micros());
+                }
+                dns_pressure_trace_json(&result.trace)
+            }
+            Err(err) => {
+                failures
+                    .lock()
+                    .unwrap()
+                    .push(format!("{trace_qname}: {err}"));
+                serde_json::json!({"status": "fail", "error": err})
+            }
+        };
     let mut tasks = Vec::with_capacity(config.total);
 
-    for index in 0..config.total {
+    for index in 1..config.total {
         let permit = Arc::clone(&semaphore).acquire_owned().await.unwrap();
         let plan = Arc::clone(&plan);
         let latencies = Arc::clone(&latencies);
         let failures = Arc::clone(&failures);
-        let qname = format!("{}-{}.{}", config.qname_prefix, index, config.qname_suffix);
+        let qname = dns_pressure_qname(&config.qname_prefix, index, &config.qname_suffix);
         let qtype = config.qtype;
         tasks.push(tokio::spawn(async move {
             let _permit = permit;
@@ -1359,6 +1398,148 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
                 "p95": percentile(95),
                 "p99": percentile(99),
             },
+            "trace": trace,
+            "first_errors": failure_values.into_iter().take(5).collect::<Vec<_>>(),
+        })
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn resident_dns_live_upstream_pressure_uses_parameterized_upstream() {
+    let Some(config) = dns_live_pressure_config_from_env() else {
+        println!(
+            "dns_live_pressure_result {}",
+            serde_json::json!({
+                "status": "skipped",
+                "reason": format!("{DNS_LIVE_PRESSURE_ENABLE_ENV} is not enabled"),
+            })
+        );
+        return;
+    };
+
+    let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            __UPSTREAM_TAG__: '__UPSTREAM_LINK__'
+          }
+          routing {
+            request {
+              fallback: __UPSTREAM_TAG__
+            }
+          }
+        }
+        "#
+    .replace("__UPSTREAM_TAG__", &config.upstream_tag)
+    .replace("__UPSTREAM_LINK__", &config.upstream_link);
+    let plan = Arc::new(build_resident_dns_plan(&parse_config(&input), &test_geodata()).unwrap());
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency));
+    let latencies = Arc::new(Mutex::new(Vec::with_capacity(config.total)));
+    let failures = Arc::new(Mutex::new(Vec::<String>::new()));
+    let trace_qname = dns_pressure_qname(&config.qname_prefix, 0, &config.qname_suffix);
+    let trace_query = build_dns_query_packet(1, &trace_qname, config.qtype).unwrap();
+    let trace_request = DnsPacketView::parse(&trace_query).unwrap();
+    let started = std::time::Instant::now();
+    let trace_started = std::time::Instant::now();
+    let trace =
+        match handle_resident_dns_local_trace_async(&plan, config.original_dst, &trace_query).await
+        {
+            Ok(result) => {
+                if let Err(err) =
+                    validate_dns_response_for_request(&trace_request, &result.response, true)
+                {
+                    failures
+                        .lock()
+                        .unwrap()
+                        .push(format!("{trace_qname}: {err}"));
+                } else {
+                    latencies
+                        .lock()
+                        .unwrap()
+                        .push(trace_started.elapsed().as_micros());
+                }
+                dns_pressure_trace_json(&result.trace)
+            }
+            Err(err) => {
+                failures
+                    .lock()
+                    .unwrap()
+                    .push(format!("{trace_qname}: {err}"));
+                serde_json::json!({"status": "fail", "error": err})
+            }
+        };
+    let mut tasks = Vec::with_capacity(config.total);
+
+    for index in 1..config.total {
+        let permit = Arc::clone(&semaphore).acquire_owned().await.unwrap();
+        let plan = Arc::clone(&plan);
+        let latencies = Arc::clone(&latencies);
+        let failures = Arc::clone(&failures);
+        let qname = dns_pressure_qname(&config.qname_prefix, index, &config.qname_suffix);
+        let qtype = config.qtype;
+        let original_dst = config.original_dst;
+        tasks.push(tokio::spawn(async move {
+            let _permit = permit;
+            let query =
+                build_dns_query_packet((index as u16).wrapping_add(1), &qname, qtype).unwrap();
+            let request = DnsPacketView::parse(&query).unwrap();
+            let query_started = std::time::Instant::now();
+            match handle_resident_dns_udp_async(&plan, original_dst, &query).await {
+                Ok(response) => {
+                    if let Err(err) = validate_dns_response_for_request(&request, &response, true) {
+                        failures.lock().unwrap().push(format!("{qname}: {err}"));
+                    } else {
+                        latencies
+                            .lock()
+                            .unwrap()
+                            .push(query_started.elapsed().as_micros());
+                    }
+                }
+                Err(err) => {
+                    failures.lock().unwrap().push(format!("{qname}: {err}"));
+                }
+            }
+        }));
+    }
+
+    for task in tasks {
+        task.await.unwrap();
+    }
+    let elapsed = started.elapsed();
+    let mut latency_values = latencies.lock().unwrap().clone();
+    latency_values.sort_unstable();
+    let success = latency_values.len();
+    let failure_values = failures.lock().unwrap().clone();
+    let failure = failure_values.len();
+    let percentile = |percent: usize| -> u128 {
+        if latency_values.is_empty() {
+            return 0;
+        }
+        let rank = latency_values
+            .len()
+            .saturating_sub(1)
+            .saturating_mul(percent)
+            / 100;
+        latency_values[rank]
+    };
+    println!(
+        "dns_live_pressure_result {}",
+        serde_json::json!({
+            "status": if failure == 0 && success == config.total { "pass" } else { "fail" },
+            "total": config.total,
+            "concurrency": config.concurrency,
+            "success": success,
+            "failure": failure,
+            "elapsed_ms": elapsed.as_millis(),
+            "qps": success as f64 / elapsed.as_secs_f64(),
+            "latency_us": {
+                "p50": percentile(50),
+                "p95": percentile(95),
+                "p99": percentile(99),
+            },
+            "trace": trace,
             "first_errors": failure_values.into_iter().take(5).collect::<Vec<_>>(),
         })
     );
@@ -1377,13 +1558,27 @@ struct DnsPressureConfig {
     response_ttl: u32,
 }
 
+struct DnsLivePressureConfig {
+    total: usize,
+    concurrency: usize,
+    qname_prefix: String,
+    qname_suffix: String,
+    qtype: u16,
+    upstream_tag: String,
+    upstream_link: String,
+    original_dst: SocketAddr,
+}
+
 fn dns_pressure_config_from_env() -> Option<DnsPressureConfig> {
     if std::env::var(DNS_PRESSURE_ENABLE_ENV).ok().as_deref() != Some("1") {
         return None;
     }
     Some(DnsPressureConfig {
         bind_ip: dns_pressure_env(DNS_PRESSURE_BIND_IP_ENV).parse().unwrap(),
-        total: dns_pressure_env(DNS_PRESSURE_TOTAL_ENV).parse().unwrap(),
+        total: dns_pressure_env(DNS_PRESSURE_TOTAL_ENV)
+            .parse::<usize>()
+            .unwrap()
+            .max(1),
         concurrency: dns_pressure_env(DNS_PRESSURE_CONCURRENCY_ENV)
             .parse::<usize>()
             .unwrap()
@@ -1402,8 +1597,72 @@ fn dns_pressure_config_from_env() -> Option<DnsPressureConfig> {
     })
 }
 
+fn dns_live_pressure_config_from_env() -> Option<DnsLivePressureConfig> {
+    if std::env::var(DNS_LIVE_PRESSURE_ENABLE_ENV).ok().as_deref() != Some("1") {
+        return None;
+    }
+    Some(DnsLivePressureConfig {
+        total: dns_pressure_env(DNS_LIVE_PRESSURE_TOTAL_ENV)
+            .parse::<usize>()
+            .unwrap()
+            .max(1),
+        concurrency: dns_pressure_env(DNS_LIVE_PRESSURE_CONCURRENCY_ENV)
+            .parse::<usize>()
+            .unwrap()
+            .max(1),
+        qname_prefix: dns_pressure_env(DNS_LIVE_PRESSURE_QNAME_PREFIX_ENV),
+        qname_suffix: dns_pressure_env(DNS_LIVE_PRESSURE_QNAME_SUFFIX_ENV),
+        qtype: dns_pressure_env(DNS_LIVE_PRESSURE_QTYPE_ENV)
+            .parse()
+            .unwrap(),
+        upstream_tag: dns_pressure_env(DNS_LIVE_PRESSURE_UPSTREAM_TAG_ENV),
+        upstream_link: dns_pressure_env(DNS_LIVE_PRESSURE_UPSTREAM_LINK_ENV),
+        original_dst: dns_pressure_env(DNS_LIVE_PRESSURE_ORIGINAL_DST_ENV)
+            .parse()
+            .unwrap(),
+    })
+}
+
 fn dns_pressure_env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|err| panic!("{name} is required for DNS pressure: {err}"))
+}
+
+fn dns_pressure_qname(prefix: &str, index: usize, suffix: &str) -> String {
+    format!("{prefix}-{index}.{suffix}")
+}
+
+fn dns_pressure_trace_json(trace: &ResidentDnsTraceSummary) -> serde_json::Value {
+    serde_json::json!({
+        "qname": &trace.qname,
+        "qtype": trace.qtype,
+        "qclass": trace.qclass,
+        "cache": &trace.cache,
+        "request_routing": &trace.request_routing,
+        "response_routing": &trace.response_routing,
+        "upstream": &trace.upstream,
+        "upstream_scheme": trace.upstream_scheme,
+        "upstream_chain": &trace.upstream_chain,
+        "reroutes": trace.reroutes,
+        "fallback": trace.fallback,
+        "rcode": trace.rcode,
+        "total_ms": trace.total_ms,
+        "cache_ms": trace.cache_ms,
+        "routing_ms": trace.routing_ms,
+        "upstream_ms": trace.upstream_ms,
+        "transport_attempts": trace.transport_attempts.iter().map(|attempt| {
+            serde_json::json!({
+                "upstream": &attempt.upstream,
+                "scheme": attempt.scheme,
+                "target": &attempt.target,
+                "target_family": attempt.target_family,
+                "l4proto": attempt.l4proto,
+                "route": attempt.route,
+                "elapsed_ms": attempt.elapsed_ms,
+                "outcome": attempt.outcome,
+                "error": &attempt.error,
+            })
+        }).collect::<Vec<_>>(),
+    })
 }
 
 fn dns_pressure_response_for_query(query: &[u8], response_ip: IpAddr, ttl: u32) -> Vec<u8> {
