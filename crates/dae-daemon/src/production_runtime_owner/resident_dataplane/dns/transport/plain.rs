@@ -188,7 +188,14 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
             result
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_resident_proxy_dns_udp_async(Arc::clone(proxy), remote, payload)
+            let forwarder = forwarders.proxy_udp_forwarder(
+                upstream,
+                remote,
+                Arc::clone(proxy),
+                &target.selection,
+            )?;
+            forwarder
+                .exchange(payload, DNS_UDP_FORWARD_ATTEMPTS)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
