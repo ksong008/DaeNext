@@ -40,6 +40,11 @@ const DNS_LIVE_PRESSURE_QTYPE_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_QTYPE";
 const DNS_LIVE_PRESSURE_UPSTREAM_TAG_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_UPSTREAM_TAG";
 const DNS_LIVE_PRESSURE_UPSTREAM_LINK_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_UPSTREAM_LINK";
 const DNS_LIVE_PRESSURE_ORIGINAL_DST_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_ORIGINAL_DST";
+const DNS_LIVE_PRESSURE_PROXY_LINK_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_PROXY_LINK";
+const DNS_LIVE_PRESSURE_PROXY_NODE_TAG_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_PROXY_NODE_TAG";
+const DNS_LIVE_PRESSURE_PROXY_GROUP_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_PROXY_GROUP";
+const DNS_LIVE_PRESSURE_UPSTREAM_HOST_MATCH_ENV: &str =
+    "DAENEXT_DNS_LIVE_PRESSURE_UPSTREAM_HOST_MATCH";
 
 fn parse_config(input: &str) -> Config {
     let sections = dae_config::parser::parse_config(input).unwrap();
@@ -1418,23 +1423,22 @@ async fn resident_dns_live_upstream_pressure_uses_parameterized_upstream() {
         return;
     };
 
-    let input = r#"
-        global {}
-        routing {}
-        dns {
-          upstream {
-            __UPSTREAM_TAG__: '__UPSTREAM_LINK__'
-          }
-          routing {
-            request {
-              fallback: __UPSTREAM_TAG__
-            }
-          }
-        }
-        "#
-    .replace("__UPSTREAM_TAG__", &config.upstream_tag)
-    .replace("__UPSTREAM_LINK__", &config.upstream_link);
-    let plan = Arc::new(build_resident_dns_plan(&parse_config(&input), &test_geodata()).unwrap());
+    let input = dns_live_pressure_config_input(&config);
+    let parsed = parse_config(&input);
+    let geodata = test_geodata();
+    let mut plan = build_resident_dns_plan(&parsed, &geodata).unwrap();
+    if config.proxy.is_some() {
+        let runtime_plan = build_resident_dataplane_plan(&parsed).unwrap();
+        let matcher =
+            build_resident_userspace_routing_matcher_with_geodata(&parsed, &geodata).unwrap();
+        let router = ResidentDnsUpstreamRouter::new(
+            matcher,
+            Arc::new(runtime_plan.proxies.clone()),
+            parsed.global.so_mark_from_dae,
+        );
+        plan = plan.with_upstream_routing(Some(Arc::new(router)));
+    }
+    let plan = Arc::new(plan);
     let semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency));
     let latencies = Arc::new(Mutex::new(Vec::with_capacity(config.total)));
     let failures = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1567,6 +1571,14 @@ struct DnsLivePressureConfig {
     upstream_tag: String,
     upstream_link: String,
     original_dst: SocketAddr,
+    proxy: Option<DnsLivePressureProxyConfig>,
+}
+
+struct DnsLivePressureProxyConfig {
+    node_tag: String,
+    group_name: String,
+    link: String,
+    upstream_host_match: String,
 }
 
 fn dns_pressure_config_from_env() -> Option<DnsPressureConfig> {
@@ -1601,6 +1613,15 @@ fn dns_live_pressure_config_from_env() -> Option<DnsLivePressureConfig> {
     if std::env::var(DNS_LIVE_PRESSURE_ENABLE_ENV).ok().as_deref() != Some("1") {
         return None;
     }
+    let proxy = match std::env::var(DNS_LIVE_PRESSURE_PROXY_LINK_ENV) {
+        Ok(link) if !link.trim().is_empty() => Some(DnsLivePressureProxyConfig {
+            node_tag: dns_pressure_env(DNS_LIVE_PRESSURE_PROXY_NODE_TAG_ENV),
+            group_name: dns_pressure_env(DNS_LIVE_PRESSURE_PROXY_GROUP_ENV),
+            link,
+            upstream_host_match: dns_pressure_env(DNS_LIVE_PRESSURE_UPSTREAM_HOST_MATCH_ENV),
+        }),
+        _ => None,
+    };
     Some(DnsLivePressureConfig {
         total: dns_pressure_env(DNS_LIVE_PRESSURE_TOTAL_ENV)
             .parse::<usize>()
@@ -1620,7 +1641,68 @@ fn dns_live_pressure_config_from_env() -> Option<DnsLivePressureConfig> {
         original_dst: dns_pressure_env(DNS_LIVE_PRESSURE_ORIGINAL_DST_ENV)
             .parse()
             .unwrap(),
+        proxy,
     })
+}
+
+fn dns_live_pressure_config_input(config: &DnsLivePressureConfig) -> String {
+    let base = r#"
+        global {}
+        __NODE__
+        __GROUP__
+        routing {
+          __ROUTING__
+        }
+        dns {
+          upstream {
+            __UPSTREAM_TAG__: '__UPSTREAM_LINK__'
+          }
+          routing {
+            request {
+              fallback: __UPSTREAM_TAG__
+            }
+          }
+        }
+        "#;
+    let (node, group, routing) = match &config.proxy {
+        Some(proxy) => (
+            format!(
+                r#"
+        node {{
+          __PROXY_NODE_TAG__: '__PROXY_LINK__'
+        }}
+        "#
+            )
+            .replace("__PROXY_NODE_TAG__", &proxy.node_tag)
+            .replace("__PROXY_LINK__", &proxy.link),
+            format!(
+                r#"
+        group {{
+          __PROXY_GROUP__ {{
+            filter: name(__PROXY_NODE_TAG__)
+            policy: fixed(0)
+          }}
+        }}
+        "#
+            )
+            .replace("__PROXY_GROUP__", &proxy.group_name)
+            .replace("__PROXY_NODE_TAG__", &proxy.node_tag),
+            format!(
+                r#"
+          domain(full: __UPSTREAM_HOST_MATCH__) -> __PROXY_GROUP__
+          fallback: direct
+        "#
+            )
+            .replace("__UPSTREAM_HOST_MATCH__", &proxy.upstream_host_match)
+            .replace("__PROXY_GROUP__", &proxy.group_name),
+        ),
+        None => (String::new(), String::new(), String::new()),
+    };
+    base.replace("__NODE__", &node)
+        .replace("__GROUP__", &group)
+        .replace("__ROUTING__", &routing)
+        .replace("__UPSTREAM_TAG__", &config.upstream_tag)
+        .replace("__UPSTREAM_LINK__", &config.upstream_link)
 }
 
 fn dns_pressure_env(name: &str) -> String {
