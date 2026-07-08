@@ -133,6 +133,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDn
     Tcp(Arc<AsyncMutex<ResidentDnsTcpForwarder>>),
     Tls(Arc<AsyncMutex<ResidentDnsTlsForwarder>>),
     Https(Arc<AsyncMutex<ResidentDnsHttpsForwarder>>),
+    H3(Arc<AsyncMutex<ResidentDnsH3Forwarder>>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -171,6 +172,8 @@ impl ResidentDnsForwarderSelectionKey {
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsQuicForwarder {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fixed_remote:
+        Option<SocketAddr>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) endpoint:
         Option<quinn::Endpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
@@ -207,10 +210,35 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<tokio_rustls::client::TlsStream<TokioTcpStream>>,
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsH3Forwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) endpoint:
+        Option<quinn::Endpoint>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
+        Option<quinn::Connection>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) client:
+        Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) driver_task:
+        Option<tokio::task::JoinHandle<()>>,
+}
+
 impl Drop for ResidentDnsQuicForwarder {
     fn drop(&mut self) {
         if let Some(connection) = self.connection.take() {
             connection.close(0_u32.into(), b"dns forwarder dropped");
+        }
+    }
+}
+
+impl Drop for ResidentDnsH3Forwarder {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            connection.close(0_u32.into(), b"dns forwarder dropped");
+        }
+        if let Some(task) = self.driver_task.take() {
+            task.abort();
         }
     }
 }

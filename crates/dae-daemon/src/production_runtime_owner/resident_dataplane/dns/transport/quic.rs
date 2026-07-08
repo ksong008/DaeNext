@@ -52,7 +52,7 @@ pub(super) async fn forward_dns_quic_async(
         L4Proto::Udp,
     )?;
     for remote in targets {
-        match forward_dns_quic_to_routed_target_async(upstream, remote, payload).await {
+        match forward_dns_quic_to_routed_target_async(upstream, remote, payload, forwarders).await {
             Ok(response) => return Ok(response),
             Err(err) => failures.push(err),
         }
@@ -68,13 +68,20 @@ async fn forward_dns_quic_to_routed_target_async(
     upstream: &ResidentDnsUpstream,
     remote: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let started_at = std::time::Instant::now();
     let target = remote.target;
     let route = dns_transport_route_name(&remote.selection);
     let result = match remote.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            forward_dns_quic_to_target_async(upstream, target, payload, mark)
+            let forwarder = forwarders.quic_forwarder_for_target(
+                upstream,
+                target,
+                mark,
+                &ResidentDnsUpstreamSelection::Direct { mark },
+            )?;
+            forward_dns_quic_cached(forwarder, payload)
                 .await
                 .map_err(|err| format!("{target}: {err}"))
         }
@@ -94,22 +101,6 @@ async fn forward_dns_quic_to_routed_target_async(
         error: result.as_ref().err().cloned(),
     });
     result
-}
-
-async fn forward_dns_quic_to_target_async(
-    upstream: &ResidentDnsUpstream,
-    remote: SocketAddr,
-    payload: &[u8],
-    mark: u32,
-) -> Result<Vec<u8>, String> {
-    let mut forwarder = ResidentDnsQuicForwarder {
-        upstream: upstream.clone(),
-        mark,
-        endpoint: None,
-        connection: None,
-    };
-    let connection = forwarder.connect_remote(remote).await?;
-    forward_dns_over_quic_connection(upstream, &connection, payload).await
 }
 
 async fn forward_dns_quic_to_proxy_async(
@@ -150,7 +141,11 @@ impl ResidentDnsQuicForwarder {
             return Ok(connection.clone());
         }
         let mut failures = Vec::new();
-        for remote in resolved_upstream_targets(&self.upstream).await? {
+        let remotes = match self.fixed_remote {
+            Some(remote) => vec![remote],
+            None => resolved_upstream_targets(&self.upstream).await?,
+        };
+        for remote in remotes {
             match self.connect_remote(remote).await {
                 Ok(connection) => return Ok(connection),
                 Err(err) => failures.push(format!("{remote}: {err}")),
