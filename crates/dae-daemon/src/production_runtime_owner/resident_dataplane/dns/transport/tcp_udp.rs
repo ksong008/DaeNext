@@ -42,6 +42,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
                             payload,
                             tcp_targets,
                             &mut failures,
+                            forwarders,
                         )
                         .await
                         {
@@ -70,6 +71,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
                                     payload,
                                     tcp_targets,
                                     &mut failures,
+                                    forwarders,
                                 )
                                 .await
                                 {
@@ -120,10 +122,11 @@ async fn forward_dns_tcp_candidates_async(
     payload: &[u8],
     targets: Vec<ResidentDnsUpstreamRoutedTarget>,
     failures: &mut Vec<String>,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Option<Vec<u8>> {
     let attempted = !targets.is_empty();
     for target in targets {
-        match forward_dns_tcp_to_routed_target_async(upstream, target, payload).await {
+        match forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders).await {
             Ok(response) => return Some(response),
             Err(err) => failures.push(format!("TCP fallback: {err}")),
         }

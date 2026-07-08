@@ -46,6 +46,57 @@ impl ResidentDnsForwarderCache {
         self.get_or_insert_udp_forwarder(key, forwarder)
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn tcp_forwarder(
+        &self,
+        upstream: &ResidentDnsUpstream,
+        target: SocketAddr,
+        mark: u32,
+        selection: &ResidentDnsUpstreamSelection,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsTcpForwarder>>, String> {
+        let key = routed_dns_forwarder_key(upstream, target, mark, selection);
+        let forwarder = Arc::new(AsyncMutex::new(ResidentDnsTcpForwarder {
+            upstream: upstream.clone(),
+            target,
+            mark,
+            stream: None,
+        }));
+        self.get_or_insert_tcp_forwarder(key, forwarder)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn tls_forwarder(
+        &self,
+        upstream: &ResidentDnsUpstream,
+        target: SocketAddr,
+        mark: u32,
+        selection: &ResidentDnsUpstreamSelection,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsTlsForwarder>>, String> {
+        let key = routed_dns_forwarder_key(upstream, target, mark, selection);
+        let forwarder = Arc::new(AsyncMutex::new(ResidentDnsTlsForwarder {
+            upstream: upstream.clone(),
+            target,
+            mark,
+            stream: None,
+        }));
+        self.get_or_insert_tls_forwarder(key, forwarder)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn https_forwarder(
+        &self,
+        upstream: &ResidentDnsUpstream,
+        target: SocketAddr,
+        mark: u32,
+        selection: &ResidentDnsUpstreamSelection,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsHttpsForwarder>>, String> {
+        let key = routed_dns_forwarder_key(upstream, target, mark, selection);
+        let forwarder = Arc::new(AsyncMutex::new(ResidentDnsHttpsForwarder {
+            upstream: upstream.clone(),
+            target,
+            mark,
+            stream: None,
+        }));
+        self.get_or_insert_https_forwarder(key, forwarder)
+    }
+
     fn get_or_insert_quic_forwarder(
         &self,
         key: ResidentDnsForwarderKey,
@@ -108,12 +159,121 @@ impl ResidentDnsForwarderCache {
         Ok(forwarder)
     }
 
+    fn get_or_insert_tcp_forwarder(
+        &self,
+        key: ResidentDnsForwarderKey,
+        forwarder: Arc<AsyncMutex<ResidentDnsTcpForwarder>>,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsTcpForwarder>>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
+        state.next_tick = state.next_tick.wrapping_add(1);
+        let last_used = state.next_tick;
+        if let Some(entry) = state.entries.get_mut(&key) {
+            entry.last_used = last_used;
+            return match &entry.kind {
+                ResidentDnsForwarderEntryKind::Tcp(forwarder) => Ok(Arc::clone(forwarder)),
+                _ => Err("resident DNS forwarder cache kind mismatch for TCP".to_owned()),
+            };
+        }
+        if state.entries.len() >= DNS_FORWARDER_CACHE_MAX_ENTRIES {
+            evict_oldest_dns_forwarder(&mut state);
+        }
+        state.entries.insert(
+            key,
+            ResidentDnsForwarderEntry {
+                last_used,
+                kind: ResidentDnsForwarderEntryKind::Tcp(Arc::clone(&forwarder)),
+            },
+        );
+        Ok(forwarder)
+    }
+
+    fn get_or_insert_tls_forwarder(
+        &self,
+        key: ResidentDnsForwarderKey,
+        forwarder: Arc<AsyncMutex<ResidentDnsTlsForwarder>>,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsTlsForwarder>>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
+        state.next_tick = state.next_tick.wrapping_add(1);
+        let last_used = state.next_tick;
+        if let Some(entry) = state.entries.get_mut(&key) {
+            entry.last_used = last_used;
+            return match &entry.kind {
+                ResidentDnsForwarderEntryKind::Tls(forwarder) => Ok(Arc::clone(forwarder)),
+                _ => Err("resident DNS forwarder cache kind mismatch for TLS".to_owned()),
+            };
+        }
+        if state.entries.len() >= DNS_FORWARDER_CACHE_MAX_ENTRIES {
+            evict_oldest_dns_forwarder(&mut state);
+        }
+        state.entries.insert(
+            key,
+            ResidentDnsForwarderEntry {
+                last_used,
+                kind: ResidentDnsForwarderEntryKind::Tls(Arc::clone(&forwarder)),
+            },
+        );
+        Ok(forwarder)
+    }
+
+    fn get_or_insert_https_forwarder(
+        &self,
+        key: ResidentDnsForwarderKey,
+        forwarder: Arc<AsyncMutex<ResidentDnsHttpsForwarder>>,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsHttpsForwarder>>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
+        state.next_tick = state.next_tick.wrapping_add(1);
+        let last_used = state.next_tick;
+        if let Some(entry) = state.entries.get_mut(&key) {
+            entry.last_used = last_used;
+            return match &entry.kind {
+                ResidentDnsForwarderEntryKind::Https(forwarder) => Ok(Arc::clone(forwarder)),
+                _ => Err("resident DNS forwarder cache kind mismatch for HTTPS".to_owned()),
+            };
+        }
+        if state.entries.len() >= DNS_FORWARDER_CACHE_MAX_ENTRIES {
+            evict_oldest_dns_forwarder(&mut state);
+        }
+        state.entries.insert(
+            key,
+            ResidentDnsForwarderEntry {
+                last_used,
+                kind: ResidentDnsForwarderEntryKind::Https(Arc::clone(&forwarder)),
+            },
+        );
+        Ok(forwarder)
+    }
+
     #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn len(&self) -> usize {
         self.state
             .lock()
             .map(|state| state.entries.len())
             .unwrap_or_default()
+    }
+}
+
+fn routed_dns_forwarder_key(
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    mark: u32,
+    selection: &ResidentDnsUpstreamSelection,
+) -> ResidentDnsForwarderKey {
+    ResidentDnsForwarderKey {
+        scheme: upstream.scheme,
+        authority: upstream.target.authority.clone(),
+        path: upstream.path.clone(),
+        mark,
+        target: Some(target),
+        selection: ResidentDnsForwarderSelectionKey::from_selection(selection),
     }
 }
 

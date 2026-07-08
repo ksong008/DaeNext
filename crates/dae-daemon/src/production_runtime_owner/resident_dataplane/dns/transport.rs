@@ -33,12 +33,18 @@ pub(super) async fn forward_dns_to_upstream_async(
         ResidentDnsUpstreamScheme::Udp => {
             forward_dns_udp_upstream_async(upstream, payload, plan, forwarders).await
         }
-        ResidentDnsUpstreamScheme::Tcp => forward_dns_tcp_async(upstream, payload, plan).await,
+        ResidentDnsUpstreamScheme::Tcp => {
+            forward_dns_tcp_async(upstream, payload, plan, forwarders).await
+        }
         ResidentDnsUpstreamScheme::TcpUdp => {
             forward_dns_tcp_udp_async(upstream, payload, plan, forwarders).await
         }
-        ResidentDnsUpstreamScheme::Tls => forward_dns_tls_async(upstream, payload, plan).await,
-        ResidentDnsUpstreamScheme::Https => forward_dns_https_async(upstream, payload, plan).await,
+        ResidentDnsUpstreamScheme::Tls => {
+            forward_dns_tls_async(upstream, payload, plan, forwarders).await
+        }
+        ResidentDnsUpstreamScheme::Https => {
+            forward_dns_https_async(upstream, payload, plan, forwarders).await
+        }
         ResidentDnsUpstreamScheme::Quic => {
             forward_dns_quic_async(upstream, payload, plan, forwarders).await
         }
