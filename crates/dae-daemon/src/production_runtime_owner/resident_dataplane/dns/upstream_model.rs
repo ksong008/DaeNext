@@ -1,3 +1,4 @@
+use super::transport::udp_multiplex::ResidentDnsUdpMultiplexHandle;
 use super::*;
 
 #[derive(Clone, Debug)]
@@ -129,10 +130,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsForwarderEntryKind
 {
     Quic(Arc<AsyncMutex<ResidentDnsQuicForwarder>>),
-    Udp(Arc<AsyncMutex<ResidentDnsUdpForwarder>>),
-    Tcp(Arc<AsyncMutex<ResidentDnsTcpForwarder>>),
-    Tls(Arc<AsyncMutex<ResidentDnsTlsForwarder>>),
-    Https(Arc<AsyncMutex<ResidentDnsHttpsForwarder>>),
+    Udp(Arc<ResidentDnsUdpForwarder>),
+    Tcp(Arc<ResidentDnsTcpForwarder>),
+    Tls(Arc<ResidentDnsTlsForwarder>),
+    Https(Arc<ResidentDnsHttpsForwarder>),
     H3(Arc<AsyncMutex<ResidentDnsH3Forwarder>>),
 }
 
@@ -183,31 +184,46 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpForwarder {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) socket:
-        Option<tokio::net::UdpSocket>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) handle:
+        AsyncMutex<Option<ResidentDnsUdpMultiplexHandle>>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTcpForwarder {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) stream: Option<TokioTcpStream>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) idle:
+        AsyncMutex<Vec<TokioTcpStream>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Semaphore,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTlsForwarder {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) stream:
-        Option<tokio_rustls::client::TlsStream<TokioTcpStream>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) idle:
+        AsyncMutex<Vec<tokio_rustls::client::TlsStream<TokioTcpStream>>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Semaphore,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsHttpsForwarder {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) stream:
-        Option<tokio_rustls::client::TlsStream<TokioTcpStream>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) http1_idle:
+        AsyncMutex<Vec<tokio_rustls::client::TlsStream<TokioTcpStream>>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) http1_permits: Semaphore,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) h2:
+        AsyncMutex<Option<ResidentDnsH2Forwarder>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_disabled:
+        std::sync::atomic::AtomicBool,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsH2Forwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) sender:
+        h2::client::SendRequest<Bytes>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) driver_task:
+        tokio::task::JoinHandle<()>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsH3Forwarder {
@@ -240,6 +256,12 @@ impl Drop for ResidentDnsH3Forwarder {
         if let Some(task) = self.driver_task.take() {
             task.abort();
         }
+    }
+}
+
+impl Drop for ResidentDnsH2Forwarder {
+    fn drop(&mut self) {
+        self.driver_task.abort();
     }
 }
 
