@@ -48,7 +48,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
                         }
                     }
                     L4Proto::Udp => {
-                        match forward_dns_udp_primary_async(primary, payload).await {
+                        match forward_dns_udp_primary_async(upstream, primary, payload).await {
                             DnsTcpUdpPrimaryResult::Answered(response) => return Ok(response),
                             DnsTcpUdpPrimaryResult::TcpFallbackNeeded(phase_failures) => {
                                 failures.extend(phase_failures);
@@ -95,11 +95,12 @@ enum DnsTcpUdpPrimaryResult {
 }
 
 async fn forward_dns_udp_primary_async(
+    upstream: &ResidentDnsUpstream,
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
 ) -> DnsTcpUdpPrimaryResult {
     let target_text = target.target.to_string();
-    match forward_dns_udp_to_routed_target_async(target, payload).await {
+    match forward_dns_udp_to_routed_target_async(upstream, target, payload).await {
         Ok(response) if !dns_response_truncated(&response) => {
             DnsTcpUdpPrimaryResult::Answered(response)
         }

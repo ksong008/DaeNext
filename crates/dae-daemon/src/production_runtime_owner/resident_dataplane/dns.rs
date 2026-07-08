@@ -3,7 +3,7 @@ use std::future::poll_fn;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
@@ -86,7 +86,10 @@ use self::routing::{
     select_response_action, select_response_action_for_upstream,
 };
 pub(super) use self::tcp_wire::{read_dns_tcp_payload_async, write_dns_tcp_payload_async};
-pub(super) use self::trace_summary::ResidentDnsTraceSummary;
+pub(super) use self::trace_summary::{ResidentDnsTraceSummary, ResidentDnsTransportTrace};
+use self::trace_summary::{
+    ResidentDnsTransportTraceInput, capture_dns_transport_trace_async, record_dns_transport_trace,
+};
 #[cfg(test)]
 use self::transport::parse_doh_http_response;
 use self::transport::{
@@ -136,6 +139,12 @@ const DNS_TRACE_REASON_ASIS_REJECTED: &str = "resident DNS asis response rejecte
 const DNS_TRACE_REASON_UPSTREAM_ACCEPTED: &str = "resident DNS upstream response accepted";
 const DNS_TRACE_REASON_UPSTREAM_REJECTED: &str = "resident DNS upstream response rejected";
 const DNS_TRACE_REASON_IPVERSION: &str = "ipversion preference resolved DNS path";
+pub(super) const DNS_TRANSPORT_ROUTE_DIRECT: &str = "direct";
+pub(super) const DNS_TRANSPORT_ROUTE_PROXY: &str = "proxy";
+pub(super) const DNS_TRANSPORT_TARGET_FAMILY_IPV4: &str = "ipv4";
+pub(super) const DNS_TRANSPORT_TARGET_FAMILY_IPV6: &str = "ipv6";
+pub(super) const DNS_TRANSPORT_OUTCOME_SUCCESS: &str = "success";
+pub(super) const DNS_TRANSPORT_OUTCOME_ERROR: &str = "error";
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsPlan {
@@ -481,21 +490,31 @@ pub(super) async fn handle_resident_dns_local_trace_async(
     }
     let mut trace = ResidentDnsTraceSummary::from_request(plan, &request)?;
     if dns_ipversion_preference_applies(plan, &request) {
-        let response = handle_resident_dns_request_async(plan, original_dst, payload, None).await?;
+        let (response, transport_attempts) = capture_dns_transport_trace_async(
+            handle_resident_dns_request_async(plan, original_dst, payload, None),
+        )
+        .await;
+        let response = response?;
         trace.cache = DNS_TRACE_CACHE_UNKNOWN.to_owned();
         trace.request_routing = DNS_TRACE_ROUTING_IPVERSION_PREFERENCE.to_owned();
         trace.response_routing = DNS_TRACE_ROUTING_RESOLVED.to_owned();
+        trace.transport_attempts = transport_attempts;
         return Ok(trace.finish(response, DNS_TRACE_REASON_IPVERSION));
     }
-    handle_resident_dns_request_without_preference_trace(
-        plan,
-        original_dst,
-        payload,
-        &request,
-        None,
-        trace,
-    )
-    .await
+    let (result, transport_attempts) =
+        capture_dns_transport_trace_async(handle_resident_dns_request_without_preference_trace(
+            plan,
+            original_dst,
+            payload,
+            &request,
+            None,
+            trace,
+        ))
+        .await;
+    result.map(|mut result| {
+        result.trace.transport_attempts = transport_attempts;
+        result
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -696,8 +715,10 @@ async fn handle_resident_dns_request_without_preference_trace(
     asis_transport: Option<ResidentDnsAsisTransport>,
     mut trace: ResidentDnsTraceSummary,
 ) -> Result<ResidentDnsQueryResult, String> {
+    let routing_started = Instant::now();
     let action = select_request_action(plan, request)?;
     trace.set_request_action(&action);
+    trace.add_routing_elapsed(routing_started);
     if matches!(action, ResidentDnsRequestAction::Reject) {
         remove_dns_response_cache_for_request(plan, request)?;
         trace.cache = DNS_TRACE_CACHE_BYPASS.to_owned();
@@ -715,10 +736,12 @@ async fn handle_resident_dns_request_without_preference_trace(
     }
     let cache_key = dns_response_cache_key_for_request_action(request, &action, original_dst)?;
     let mut cached_response = Vec::new();
+    let cache_started = Instant::now();
     if plan
         .cache
         .lookup_response_into(&cache_key, request, false, &mut cached_response)?
     {
+        trace.add_cache_elapsed(cache_started);
         trace.cache = DNS_TRACE_CACHE_HIT.to_owned();
         trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
         return Ok(trace.finish(cached_response, DNS_TRACE_REASON_CACHE_HIT));
@@ -728,10 +751,12 @@ async fn handle_resident_dns_request_without_preference_trace(
         .cache
         .lookup_response_into(&cache_key, request, false, &mut cached_response)?
     {
+        trace.add_cache_elapsed(cache_started);
         trace.cache = DNS_TRACE_CACHE_LOCKED_HIT.to_owned();
         trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
         return Ok(trace.finish(cached_response, DNS_TRACE_REASON_CACHE_LOCKED_HIT));
     }
+    trace.add_cache_elapsed(cache_started);
     trace.cache = DNS_TRACE_CACHE_MISS.to_owned();
     match action {
         ResidentDnsRequestAction::AsIs => {
@@ -744,6 +769,7 @@ async fn handle_resident_dns_request_without_preference_trace(
             )
             .await?;
             validate_dns_response_for_request(request, &response, true)?;
+            let routing_started = Instant::now();
             let response_action = select_response_action_for_upstream(
                 plan,
                 request,
@@ -751,6 +777,7 @@ async fn handle_resident_dns_request_without_preference_trace(
                 DnsRequestOutboundIndex::ASIS,
             )?;
             trace.set_response_action(&response_action);
+            trace.add_routing_elapsed(routing_started);
             match response_action {
                 ResidentDnsResponseAction::Accept => {
                     record_accepted_dns_response(plan, &cache_key, &response)?;
@@ -939,8 +966,10 @@ async fn resolve_dns_response_routing_trace(
             &response,
             upstream.scheme.requires_dns_response_id_match(),
         )?;
+        let routing_started = Instant::now();
         let response_action = select_response_action(plan, request, &response, &upstream)?;
         trace.set_response_action(&response_action);
+        trace.add_routing_elapsed(routing_started);
         match response_action {
             ResidentDnsResponseAction::Accept => {
                 record_accepted_dns_response(plan, cache_key, &response)?;

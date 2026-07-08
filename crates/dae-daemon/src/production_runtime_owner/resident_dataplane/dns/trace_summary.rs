@@ -1,4 +1,12 @@
+use std::cell::RefCell;
+use std::future::Future;
+use std::time::Instant;
+
 use super::*;
+
+tokio::task_local! {
+    static DNS_TRANSPORT_TRACE: RefCell<Vec<ResidentDnsTransportTrace>>;
+}
 
 #[derive(Clone, Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsTraceSummary {
@@ -16,9 +24,47 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsTr
     pub(in crate::production_runtime_owner::resident_dataplane) fallback: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) rcode: Option<u16>,
     pub(in crate::production_runtime_owner::resident_dataplane) reason: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) total_ms: u64,
+    pub(in crate::production_runtime_owner::resident_dataplane) cache_ms: u64,
+    pub(in crate::production_runtime_owner::resident_dataplane) routing_ms: u64,
+    pub(in crate::production_runtime_owner::resident_dataplane) upstream_ms: u64,
+    pub(in crate::production_runtime_owner::resident_dataplane) transport_attempts:
+        Vec<ResidentDnsTransportTrace>,
+    started_at: Instant,
+    upstream_started_at: Option<Instant>,
 }
 
 impl ResidentDnsTraceSummary {
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new_for_test(
+        qname: String,
+        qtype: u16,
+        qclass: u16,
+    ) -> Self {
+        Self {
+            qname,
+            qtype,
+            qclass,
+            cache: DNS_TRACE_CACHE_UNRESOLVED.to_owned(),
+            request_routing: DNS_TRACE_ROUTING_UNRESOLVED.to_owned(),
+            response_routing: DNS_TRACE_ROUTING_UNRESOLVED.to_owned(),
+            upstream: None,
+            upstream_scheme: None,
+            upstream_chain: Vec::new(),
+            reroutes: 0,
+            fallback: false,
+            rcode: None,
+            reason: String::new(),
+            total_ms: 0,
+            cache_ms: 0,
+            routing_ms: 0,
+            upstream_ms: 0,
+            transport_attempts: Vec::new(),
+            started_at: Instant::now(),
+            upstream_started_at: None,
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn from_request(
         plan: &ResidentDnsPlan,
         request: &DnsPacketView<'_>,
@@ -44,6 +90,13 @@ impl ResidentDnsTraceSummary {
             fallback: plan.request_matcher.is_none(),
             rcode: None,
             reason: String::new(),
+            total_ms: 0,
+            cache_ms: 0,
+            routing_ms: 0,
+            upstream_ms: 0,
+            transport_attempts: Vec::new(),
+            started_at: Instant::now(),
+            upstream_started_at: None,
         })
     }
 
@@ -72,12 +125,28 @@ impl ResidentDnsTraceSummary {
         self.upstream_scheme = Some(upstream.scheme.as_str());
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn add_cache_elapsed(
+        &mut self,
+        started_at: Instant,
+    ) {
+        self.cache_ms = self.cache_ms.saturating_add(elapsed_ms(started_at));
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn add_routing_elapsed(
+        &mut self,
+        started_at: Instant,
+    ) {
+        self.routing_ms = self.routing_ms.saturating_add(elapsed_ms(started_at));
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn push_upstream_attempt(
         &mut self,
         upstream: &ResidentDnsUpstream,
     ) {
+        self.finish_upstream_attempt();
         self.set_upstream(upstream);
         self.upstream_chain.push(upstream.tag.clone());
+        self.upstream_started_at = Some(Instant::now());
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn push_asis_attempt(
@@ -93,6 +162,8 @@ impl ResidentDnsTraceSummary {
         response: Vec<u8>,
         reason: &str,
     ) -> ResidentDnsQueryResult {
+        self.finish_upstream_attempt();
+        self.total_ms = elapsed_ms(self.started_at);
         self.rcode = dns_response_rcode(&response);
         self.reason = reason.to_owned();
         ResidentDnsQueryResult {
@@ -100,4 +171,82 @@ impl ResidentDnsTraceSummary {
             trace: self,
         }
     }
+
+    fn finish_upstream_attempt(&mut self) {
+        if let Some(started) = self.upstream_started_at.take() {
+            self.upstream_ms = self.upstream_ms.saturating_add(elapsed_ms(started));
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsTransportTrace {
+    pub(in crate::production_runtime_owner::resident_dataplane) upstream: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) scheme: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) target: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) target_family: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) l4proto: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) route: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) elapsed_ms: u64,
+    pub(in crate::production_runtime_owner::resident_dataplane) outcome: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTransportTraceInput
+{
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: String,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) scheme: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) l4proto: L4Proto,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) route: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) started_at: Instant,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) error: Option<String>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn capture_dns_transport_trace_async<
+    F,
+    T,
+>(
+    future: F,
+) -> (T, Vec<ResidentDnsTransportTrace>)
+where
+    F: Future<Output = T>,
+{
+    DNS_TRANSPORT_TRACE
+        .scope(RefCell::new(Vec::new()), async {
+            let output = future.await;
+            let attempts = DNS_TRANSPORT_TRACE.with(|trace| trace.borrow().clone());
+            (output, attempts)
+        })
+        .await
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) fn record_dns_transport_trace(
+    input: ResidentDnsTransportTraceInput,
+) {
+    let attempt = ResidentDnsTransportTrace {
+        upstream: input.upstream,
+        scheme: input.scheme,
+        target: input.target.to_string(),
+        target_family: if input.target.is_ipv6() {
+            DNS_TRANSPORT_TARGET_FAMILY_IPV6
+        } else {
+            DNS_TRANSPORT_TARGET_FAMILY_IPV4
+        },
+        l4proto: input.l4proto.as_str(),
+        route: input.route,
+        elapsed_ms: elapsed_ms(input.started_at),
+        outcome: if input.error.is_some() {
+            DNS_TRANSPORT_OUTCOME_ERROR
+        } else {
+            DNS_TRANSPORT_OUTCOME_SUCCESS
+        },
+        error: input.error,
+    };
+    let _ = DNS_TRANSPORT_TRACE.try_with(|trace| trace.borrow_mut().push(attempt));
+}
+
+fn elapsed_ms(started_at: Instant) -> u64 {
+    started_at.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
