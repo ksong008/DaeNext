@@ -98,7 +98,8 @@ use self::transport::{
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_model::{
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
     ResidentDnsForwarderEntryKind, ResidentDnsForwarderKey, ResidentDnsForwarderSelectionKey,
-    ResidentDnsQuicForwarder, ResidentDnsRequestAction, ResidentDnsResponseAction,
+    ResidentDnsHttpsForwarder, ResidentDnsQuicForwarder, ResidentDnsRequestAction,
+    ResidentDnsResponseAction, ResidentDnsTcpForwarder, ResidentDnsTlsForwarder,
     ResidentDnsUdpForwarder, ResidentDnsUpstream, ResidentDnsUpstreamScheme,
     ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
 };

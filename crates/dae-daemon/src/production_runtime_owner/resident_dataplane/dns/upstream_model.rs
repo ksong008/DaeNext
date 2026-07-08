@@ -130,6 +130,9 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDn
 {
     Quic(Arc<AsyncMutex<ResidentDnsQuicForwarder>>),
     Udp(Arc<AsyncMutex<ResidentDnsUdpForwarder>>),
+    Tcp(Arc<AsyncMutex<ResidentDnsTcpForwarder>>),
+    Tls(Arc<AsyncMutex<ResidentDnsTlsForwarder>>),
+    Https(Arc<AsyncMutex<ResidentDnsHttpsForwarder>>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -179,6 +182,29 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) socket:
         Option<tokio::net::UdpSocket>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTcpForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) stream: Option<TokioTcpStream>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTlsForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) stream:
+        Option<tokio_rustls::client::TlsStream<TokioTcpStream>>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsHttpsForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) stream:
+        Option<tokio_rustls::client::TlsStream<TokioTcpStream>>,
 }
 
 impl Drop for ResidentDnsQuicForwarder {

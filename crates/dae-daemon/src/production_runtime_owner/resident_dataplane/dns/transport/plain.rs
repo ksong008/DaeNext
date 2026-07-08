@@ -228,6 +228,7 @@ pub(super) async fn forward_dns_tcp_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
     plan: &ResidentDnsPlan,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let (targets, mut failures) = select_dns_upstream_targets(
         plan,
@@ -236,7 +237,7 @@ pub(super) async fn forward_dns_tcp_async(
         L4Proto::Tcp,
     )?;
     for target in targets {
-        match forward_dns_tcp_to_routed_target_async(upstream, target, payload).await {
+        match forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders).await {
             Ok(response) => return Ok(response),
             Err(err) => failures.push(err),
         }
@@ -316,18 +317,22 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
     upstream: &ResidentDnsUpstream,
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let started_at = std::time::Instant::now();
     let remote = target.target;
     let route = dns_transport_route_name(&target.selection);
-    let result = match target.selection {
+    let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            forward_dns_tcp_to_target_async(upstream, remote, payload, mark)
+            let forwarder = forwarders.tcp_forwarder(upstream, remote, *mark, &target.selection)?;
+            let mut forwarder = forwarder.lock().await;
+            forwarder
+                .exchange(payload)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_tcp_to_proxy_async(upstream, remote, payload, proxy)
+            forward_dns_tcp_to_proxy_async(upstream, remote, payload, Arc::clone(proxy))
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
@@ -344,32 +349,52 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
     result
 }
 
+impl ResidentDnsTcpForwarder {
+    async fn exchange(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        match self.exchange_with_cached_stream(payload).await {
+            Ok(response) => Ok(response),
+            Err(first_err) => {
+                self.stream = None;
+                self.exchange_with_cached_stream(payload)
+                    .await
+                    .map_err(|retry_err| {
+                        format!(
+                            "DNS TCP cached forwarder retry failed after {first_err}: {retry_err}"
+                        )
+                    })
+            }
+        }
+    }
+
+    async fn exchange_with_cached_stream(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        if self.stream.is_none() {
+            self.stream =
+                Some(open_dns_tcp_stream_async(&self.upstream, self.target, self.mark).await?);
+        }
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| "DNS TCP stream was not initialized".to_owned())?;
+        time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            forward_dns_framed_stream_async(stream, payload),
+        )
+        .await
+        .map_err(|_| "DNS TCP exchange timeout".to_owned())?
+        .map_err(|err| {
+            format!(
+                "forward DNS over TCP to upstream {} {}: {err}",
+                self.upstream.tag, self.upstream.target.authority
+            )
+        })
+    }
+}
+
 pub(super) fn dns_transport_route_name(selection: &ResidentDnsUpstreamSelection) -> &'static str {
     match selection {
         ResidentDnsUpstreamSelection::Direct { .. } => DNS_TRANSPORT_ROUTE_DIRECT,
         ResidentDnsUpstreamSelection::Proxy { .. } => DNS_TRANSPORT_ROUTE_PROXY,
     }
-}
-
-async fn forward_dns_tcp_to_target_async(
-    upstream: &ResidentDnsUpstream,
-    target: SocketAddr,
-    payload: &[u8],
-    mark: u32,
-) -> Result<Vec<u8>, String> {
-    let mut stream = open_dns_tcp_stream_async(upstream, target, mark).await?;
-    time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        forward_dns_framed_stream_async(&mut stream, payload),
-    )
-    .await
-    .map_err(|_| "DNS TCP exchange timeout".to_owned())?
-    .map_err(|err| {
-        format!(
-            "forward DNS over TCP to upstream {} {}: {err}",
-            upstream.tag, upstream.target.authority
-        )
-    })
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn forward_dns_tcp_asis_async(
@@ -595,7 +620,8 @@ mod tests {
         };
 
         let plan = ResidentDnsPlan::asis(0);
-        let response = forward_dns_tcp_async(&upstream, b"fixture-query", &plan)
+        let forwarders = Arc::new(ResidentDnsForwarderCache::default());
+        let response = forward_dns_tcp_async(&upstream, b"fixture-query", &plan, &forwarders)
             .await
             .unwrap();
 

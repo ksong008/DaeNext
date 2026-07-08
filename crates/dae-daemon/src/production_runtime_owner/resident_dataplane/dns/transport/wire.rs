@@ -98,6 +98,24 @@ pub(super) fn resident_dns_quic_client_config(alpn: &str) -> Result<quinn::Clien
 }
 
 pub(super) fn http1_doh_request_bytes(doh: &dae_dns::DohRequest, target: &str) -> Vec<u8> {
+    http1_doh_request_bytes_with_connection(doh, target, HTTP_CONNECTION_CLOSE)
+}
+
+pub(super) fn http1_doh_keep_alive_request_bytes(
+    doh: &dae_dns::DohRequest,
+    target: &str,
+) -> Vec<u8> {
+    http1_doh_request_bytes_with_connection(doh, target, HTTP_CONNECTION_KEEP_ALIVE)
+}
+
+const HTTP_CONNECTION_CLOSE: &[u8] = b"close";
+const HTTP_CONNECTION_KEEP_ALIVE: &[u8] = b"keep-alive";
+
+fn http1_doh_request_bytes_with_connection(
+    doh: &dae_dns::DohRequest,
+    target: &str,
+    connection: &[u8],
+) -> Vec<u8> {
     let mut request = Vec::new();
     request.extend_from_slice(doh.method.as_bytes());
     request.extend_from_slice(b" ");
@@ -106,7 +124,9 @@ pub(super) fn http1_doh_request_bytes(doh: &dae_dns::DohRequest, target: &str) -
     request.extend_from_slice(doh.host.as_bytes());
     request.extend_from_slice(b"\r\nAccept: ");
     request.extend_from_slice(doh.accept.as_bytes());
-    request.extend_from_slice(b"\r\nConnection: close\r\n");
+    request.extend_from_slice(b"\r\nConnection: ");
+    request.extend_from_slice(connection);
+    request.extend_from_slice(b"\r\n");
     if !doh.content_type.is_empty() {
         request.extend_from_slice(b"Content-Type: ");
         request.extend_from_slice(doh.content_type.as_bytes());
@@ -151,6 +171,122 @@ where
             return Err(format!("HTTP response exceeds read limit {limit}"));
         }
         out.extend_from_slice(&buf[..read]);
+    }
+}
+
+pub(super) async fn read_http1_response_message_capped_async<S>(
+    stream: &mut S,
+    limit: usize,
+) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut raw = Vec::new();
+    let mut buf = [0_u8; 8192];
+    let header_end = loop {
+        if let Some(header_end) = find_http_header_end(&raw) {
+            break header_end;
+        }
+        let read = stream
+            .read(&mut buf)
+            .await
+            .map_err(|err| format!("read HTTP response: {err}"))?;
+        if read == 0 {
+            return Ok(raw);
+        }
+        append_http_response_bytes(&mut raw, &buf[..read], limit)?;
+    };
+    let body_start = header_end + 4;
+    let boundary = http1_response_body_boundary(&raw[..header_end])?;
+    match boundary {
+        Http1ResponseBodyBoundary::ContentLength(len) => {
+            let expected = body_start
+                .checked_add(len)
+                .ok_or_else(|| "HTTP response content-length overflow".to_owned())?;
+            while raw.len() < expected {
+                let read = stream
+                    .read(&mut buf)
+                    .await
+                    .map_err(|err| format!("read HTTP response body: {err}"))?;
+                if read == 0 {
+                    break;
+                }
+                append_http_response_bytes(&mut raw, &buf[..read], limit)?;
+            }
+            if raw.len() < expected {
+                return Err(format!(
+                    "HTTP response body shorter than content-length: {} < {len}",
+                    raw.len().saturating_sub(body_start)
+                ));
+            }
+            raw.truncate(expected);
+            Ok(raw)
+        }
+        Http1ResponseBodyBoundary::Chunked => {
+            while decode_http_chunked_body(&raw[body_start..]).is_err() {
+                let read = stream
+                    .read(&mut buf)
+                    .await
+                    .map_err(|err| format!("read chunked HTTP response body: {err}"))?;
+                if read == 0 {
+                    break;
+                }
+                append_http_response_bytes(&mut raw, &buf[..read], limit)?;
+            }
+            let _ = decode_http_chunked_body(&raw[body_start..])?;
+            Ok(raw)
+        }
+        Http1ResponseBodyBoundary::CloseDelimited => {
+            Err("HTTP response has no reusable body boundary".to_owned())
+        }
+    }
+}
+
+fn append_http_response_bytes(raw: &mut Vec<u8>, bytes: &[u8], limit: usize) -> Result<(), String> {
+    if raw.len().saturating_add(bytes.len()) > limit {
+        return Err(format!("HTTP response exceeds read limit {limit}"));
+    }
+    raw.extend_from_slice(bytes);
+    Ok(())
+}
+
+enum Http1ResponseBodyBoundary {
+    ContentLength(usize),
+    Chunked,
+    CloseDelimited,
+}
+
+fn http1_response_body_boundary(headers: &[u8]) -> Result<Http1ResponseBodyBoundary, String> {
+    let header_text = std::str::from_utf8(headers)
+        .map_err(|err| format!("HTTP response headers are not UTF-8: {err}"))?;
+    let mut chunked = false;
+    let mut content_length = None;
+    for line in header_text.split("\r\n").skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim();
+        match name.as_str() {
+            "content-length" => {
+                content_length = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|err| format!("parse HTTP content-length: {err}"))?,
+                );
+            }
+            "transfer-encoding" if value.to_ascii_lowercase().contains("chunked") => {
+                chunked = true;
+            }
+            _ => {}
+        }
+    }
+    if chunked {
+        Ok(Http1ResponseBodyBoundary::Chunked)
+    } else if let Some(content_length) = content_length {
+        Ok(Http1ResponseBodyBoundary::ContentLength(content_length))
+    } else {
+        Ok(Http1ResponseBodyBoundary::CloseDelimited)
     }
 }
 

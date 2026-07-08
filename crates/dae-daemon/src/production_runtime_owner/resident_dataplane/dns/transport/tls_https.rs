@@ -5,8 +5,9 @@ use super::route::{
     select_dns_upstream_targets,
 };
 use super::wire::{
-    doh_request_target, forward_dns_framed_stream_async, http1_doh_request_bytes,
-    open_dns_tcp_stream_async, parse_doh_http_response, read_to_end_capped_async,
+    doh_request_target, forward_dns_framed_stream_async, http1_doh_keep_alive_request_bytes,
+    http1_doh_request_bytes, open_dns_tcp_stream_async, parse_doh_http_response,
+    read_http1_response_message_capped_async, read_to_end_capped_async,
     resident_dns_tls_client_config,
 };
 
@@ -14,6 +15,7 @@ pub(super) async fn forward_dns_tls_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
     plan: &ResidentDnsPlan,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let (targets, mut failures) = select_dns_upstream_targets(
         plan,
@@ -22,7 +24,7 @@ pub(super) async fn forward_dns_tls_async(
         L4Proto::Tcp,
     )?;
     for target in targets {
-        match forward_dns_tls_to_routed_target_async(upstream, target, payload).await {
+        match forward_dns_tls_to_routed_target_async(upstream, target, payload, forwarders).await {
             Ok(response) => return Ok(response),
             Err(err) => failures.push(err),
         }
@@ -38,18 +40,22 @@ async fn forward_dns_tls_to_routed_target_async(
     upstream: &ResidentDnsUpstream,
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let started_at = std::time::Instant::now();
     let remote = target.target;
     let route = dns_transport_route_name(&target.selection);
-    let result = match target.selection {
+    let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            forward_dns_tls_to_target_async(upstream, remote, payload, mark)
+            let forwarder = forwarders.tls_forwarder(upstream, remote, *mark, &target.selection)?;
+            let mut forwarder = forwarder.lock().await;
+            forwarder
+                .exchange(payload)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_tls_to_proxy_async(upstream, remote, payload, proxy)
+            forward_dns_tls_to_proxy_async(upstream, remote, payload, Arc::clone(proxy))
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
@@ -66,14 +72,45 @@ async fn forward_dns_tls_to_routed_target_async(
     result
 }
 
-async fn forward_dns_tls_to_target_async(
-    upstream: &ResidentDnsUpstream,
-    target: SocketAddr,
-    payload: &[u8],
-    mark: u32,
-) -> Result<Vec<u8>, String> {
-    let stream = open_dns_tcp_stream_async(upstream, target, mark).await?;
-    forward_dns_tls_over_stream_async(upstream, stream, payload).await
+impl ResidentDnsTlsForwarder {
+    async fn exchange(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        match self.exchange_with_cached_stream(payload).await {
+            Ok(response) => Ok(response),
+            Err(first_err) => {
+                self.stream = None;
+                self.exchange_with_cached_stream(payload)
+                    .await
+                    .map_err(|retry_err| {
+                        format!(
+                            "DNS TLS cached forwarder retry failed after {first_err}: {retry_err}"
+                        )
+                    })
+            }
+        }
+    }
+
+    async fn exchange_with_cached_stream(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        if self.stream.is_none() {
+            let stream = open_dns_tcp_stream_async(&self.upstream, self.target, self.mark).await?;
+            self.stream = Some(open_dns_tls_stream_async(&self.upstream, stream).await?);
+        }
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| "DNS TLS stream was not initialized".to_owned())?;
+        time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            forward_dns_framed_stream_async(stream, payload),
+        )
+        .await
+        .map_err(|_| "DNS TLS exchange timeout".to_owned())?
+        .map_err(|err| {
+            format!(
+                "forward DNS over TLS to upstream {} {}: {err}",
+                self.upstream.tag, self.upstream.target.authority
+            )
+        })
+    }
 }
 
 async fn forward_dns_tls_to_proxy_async(
@@ -106,26 +143,7 @@ async fn forward_dns_tls_over_stream_async(
     stream: TokioTcpStream,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let config = resident_dns_tls_client_config(&[])?;
-    let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
-        format!(
-            "invalid DNS TLS server name {}: {err}",
-            upstream.target.host
-        )
-    })?;
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let mut tls = time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        connector.connect(server_name, stream),
-    )
-    .await
-    .map_err(|_| "DNS TLS handshake timeout".to_owned())?
-    .map_err(|err| {
-        format!(
-            "connect DNS TLS upstream {} {}: {err}",
-            upstream.tag, upstream.target.authority
-        )
-    })?;
+    let mut tls = open_dns_tls_stream_async(upstream, stream).await?;
     time::timeout(
         RESIDENT_UDP_RESPONSE_TIMEOUT,
         forward_dns_framed_stream_async(&mut tls, payload),
@@ -140,10 +158,38 @@ async fn forward_dns_tls_over_stream_async(
     })
 }
 
+async fn open_dns_tls_stream_async(
+    upstream: &ResidentDnsUpstream,
+    stream: TokioTcpStream,
+) -> Result<tokio_rustls::client::TlsStream<TokioTcpStream>, String> {
+    let config = resident_dns_tls_client_config(&[])?;
+    let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
+        format!(
+            "invalid DNS TLS server name {}: {err}",
+            upstream.target.host
+        )
+    })?;
+    let connector = tokio_rustls::TlsConnector::from(config);
+    let tls = time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        connector.connect(server_name, stream),
+    )
+    .await
+    .map_err(|_| "DNS TLS handshake timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "connect DNS TLS upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    Ok(tls)
+}
+
 pub(super) async fn forward_dns_https_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
     plan: &ResidentDnsPlan,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let (targets, mut failures) = select_dns_upstream_targets(
         plan,
@@ -152,7 +198,8 @@ pub(super) async fn forward_dns_https_async(
         L4Proto::Tcp,
     )?;
     for target in targets {
-        match forward_dns_https_to_routed_target_async(upstream, target, payload).await {
+        match forward_dns_https_to_routed_target_async(upstream, target, payload, forwarders).await
+        {
             Ok(response) => return Ok(response),
             Err(err) => failures.push(err),
         }
@@ -168,18 +215,23 @@ async fn forward_dns_https_to_routed_target_async(
     upstream: &ResidentDnsUpstream,
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let started_at = std::time::Instant::now();
     let remote = target.target;
     let route = dns_transport_route_name(&target.selection);
-    let result = match target.selection {
+    let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            forward_dns_https_to_target_async(upstream, remote, payload, mark)
+            let forwarder =
+                forwarders.https_forwarder(upstream, remote, *mark, &target.selection)?;
+            let mut forwarder = forwarder.lock().await;
+            forwarder
+                .exchange(payload)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_https_to_proxy_async(upstream, remote, payload, proxy)
+            forward_dns_https_to_proxy_async(upstream, remote, payload, Arc::clone(proxy))
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
@@ -196,14 +248,34 @@ async fn forward_dns_https_to_routed_target_async(
     result
 }
 
-async fn forward_dns_https_to_target_async(
-    upstream: &ResidentDnsUpstream,
-    target: SocketAddr,
-    payload: &[u8],
-    mark: u32,
-) -> Result<Vec<u8>, String> {
-    let stream = open_dns_tcp_stream_async(upstream, target, mark).await?;
-    forward_dns_https_over_stream_async(upstream, stream, payload).await
+impl ResidentDnsHttpsForwarder {
+    async fn exchange(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        match self.exchange_with_cached_stream(payload).await {
+            Ok(response) => Ok(response),
+            Err(first_err) => {
+                self.stream = None;
+                self.exchange_with_cached_stream(payload)
+                    .await
+                    .map_err(|retry_err| {
+                        format!(
+                            "DNS HTTPS cached forwarder retry failed after {first_err}: {retry_err}"
+                        )
+                    })
+            }
+        }
+    }
+
+    async fn exchange_with_cached_stream(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        if self.stream.is_none() {
+            let stream = open_dns_tcp_stream_async(&self.upstream, self.target, self.mark).await?;
+            self.stream = Some(open_dns_https_tls_stream_async(&self.upstream, stream).await?);
+        }
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| "DNS HTTPS stream was not initialized".to_owned())?;
+        forward_dns_https_over_reusable_stream_async(&self.upstream, stream, payload).await
+    }
 }
 
 async fn forward_dns_https_to_proxy_async(
@@ -236,6 +308,14 @@ async fn forward_dns_https_over_stream_async(
     stream: TokioTcpStream,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
+    let mut tls = open_dns_https_tls_stream_async(upstream, stream).await?;
+    forward_dns_https_over_close_delimited_stream_async(upstream, &mut tls, payload).await
+}
+
+async fn open_dns_https_tls_stream_async(
+    upstream: &ResidentDnsUpstream,
+    stream: TokioTcpStream,
+) -> Result<tokio_rustls::client::TlsStream<TokioTcpStream>, String> {
     let config = resident_dns_tls_client_config(&["http/1.1"])?;
     let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
         format!(
@@ -244,7 +324,7 @@ async fn forward_dns_https_over_stream_async(
         )
     })?;
     let connector = tokio_rustls::TlsConnector::from(config);
-    let mut tls = time::timeout(
+    let tls = time::timeout(
         RESIDENT_UDP_RESPONSE_TIMEOUT,
         connector.connect(server_name, stream),
     )
@@ -256,6 +336,49 @@ async fn forward_dns_https_over_stream_async(
             upstream.tag, upstream.target.authority
         )
     })?;
+    Ok(tls)
+}
+
+async fn forward_dns_https_over_reusable_stream_async(
+    upstream: &ResidentDnsUpstream,
+    tls: &mut tokio_rustls::client::TlsStream<TokioTcpStream>,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    let doh = build_doh_request(
+        &upstream.target.authority,
+        &upstream.target.authority,
+        &upstream.path,
+        payload,
+    )
+    .map_err(|err| format!("build DoH request: {err}"))?;
+    let request_target = doh_request_target(&upstream.path, doh.dns_query.as_deref());
+    let request = http1_doh_keep_alive_request_bytes(&doh, &request_target);
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        tls.write_all(&request)
+            .await
+            .map_err(|err| format!("write DoH request: {err}"))?;
+        tls.flush()
+            .await
+            .map_err(|err| format!("flush DoH request: {err}"))?;
+        let raw =
+            read_http1_response_message_capped_async(tls, DNS_DOH_RESPONSE_READ_LIMIT).await?;
+        parse_doh_http_response(payload, &raw)
+    })
+    .await
+    .map_err(|_| "DNS HTTPS exchange timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "forward DNS over HTTPS to upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })
+}
+
+async fn forward_dns_https_over_close_delimited_stream_async(
+    upstream: &ResidentDnsUpstream,
+    tls: &mut tokio_rustls::client::TlsStream<TokioTcpStream>,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
     let doh = build_doh_request(
         &upstream.target.authority,
         &upstream.target.authority,
@@ -272,7 +395,7 @@ async fn forward_dns_https_over_stream_async(
         tls.flush()
             .await
             .map_err(|err| format!("flush DoH request: {err}"))?;
-        let raw = read_to_end_capped_async(&mut tls, DNS_DOH_RESPONSE_READ_LIMIT).await?;
+        let raw = read_to_end_capped_async(tls, DNS_DOH_RESPONSE_READ_LIMIT).await?;
         parse_doh_http_response(payload, &raw)
     })
     .await
