@@ -10,9 +10,15 @@ use tokio::net::{
 use tokio::sync::Semaphore;
 use tokio::time;
 
+#[cfg(test)]
 use super::dns::{
-    ResidentDnsPlan, ResidentDnsTraceSummary, build_dns_server_failure_response,
-    handle_resident_dns_local_trace_async, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
+    DNS_TRANSPORT_OUTCOME_SUCCESS, DNS_TRANSPORT_ROUTE_DIRECT, DNS_TRANSPORT_TARGET_FAMILY_IPV4,
+    DNS_TRANSPORT_TARGET_FAMILY_IPV6,
+};
+use super::dns::{
+    ResidentDnsPlan, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
+    build_dns_server_failure_response, handle_resident_dns_local_trace_async,
+    read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
 use super::*;
 
@@ -687,6 +693,11 @@ fn dns_path_chosen_event(input: DnsPathChosenEventInput<'_>) -> Value {
         "fallback": input.trace.fallback,
         "rcode": input.trace.rcode,
         "reason": &input.trace.reason,
+        "total_ms": input.trace.total_ms,
+        "cache_ms": input.trace.cache_ms,
+        "routing_ms": input.trace.routing_ms,
+        "upstream_ms": input.trace.upstream_ms,
+        "transport_attempts": dns_transport_attempts_value(&input.trace.transport_attempts),
     });
     if let Some(send_error) = input.send_error
         && let Some(map) = event.as_object_mut()
@@ -697,6 +708,27 @@ fn dns_path_chosen_event(input: DnsPathChosenEventInput<'_>) -> Value {
         );
     }
     event
+}
+
+fn dns_transport_attempts_value(attempts: &[ResidentDnsTransportTrace]) -> Value {
+    Value::Array(
+        attempts
+            .iter()
+            .map(|attempt| {
+                json!({
+                    "upstream": &attempt.upstream,
+                    "scheme": attempt.scheme,
+                    "target": &attempt.target,
+                    "target_family": attempt.target_family,
+                    "l4proto": attempt.l4proto,
+                    "route": attempt.route,
+                    "elapsed_ms": attempt.elapsed_ms,
+                    "outcome": attempt.outcome,
+                    "error": &attempt.error,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn parse_resident_dns_bind_endpoint(bind: &str) -> Result<Option<ResidentDnsBindEndpoint>, String> {
@@ -736,97 +768,130 @@ fn parse_resident_dns_bind_endpoint(bind: &str) -> Result<Option<ResidentDnsBind
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dae_dns::{DNS_FLAG_RESPONSE, DNS_HEADER_LEN, DNS_RCODE_MASK, DNS_RCODE_SERVFAIL};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use dae_dns::{
+        DNS_DEFAULT_PORT, DNS_FLAG_RESPONSE, DNS_HEADER_LEN, DNS_RCODE_MASK, DNS_RCODE_SERVFAIL,
+        DnsPacketView,
+    };
 
     const QUERY: &[u8] = &[
         0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
         b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
     ];
 
+    fn dns_bind_test_addr() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DNS_DEFAULT_PORT)
+    }
+
+    fn dns_bind_endpoint(udp: bool, tcp: bool) -> ResidentDnsBindEndpoint {
+        ResidentDnsBindEndpoint {
+            udp,
+            tcp,
+            addr: dns_bind_test_addr(),
+        }
+    }
+
+    fn dns_bind_value(scheme: Option<&str>) -> String {
+        match scheme {
+            Some(scheme) => format!("{scheme}://{}", dns_bind_test_addr()),
+            None => dns_bind_test_addr().to_string(),
+        }
+    }
+
     #[test]
     fn resident_dns_bind_endpoint_accepts_empty_udp_and_tcp_forms() {
-        let udp = ResidentDnsBindEndpoint {
-            udp: true,
-            tcp: false,
-            addr: "127.0.0.1:8053".parse().unwrap(),
-        };
-        let tcp = ResidentDnsBindEndpoint {
-            udp: false,
-            tcp: true,
-            addr: "127.0.0.1:8053".parse().unwrap(),
-        };
-        let both = ResidentDnsBindEndpoint {
-            udp: true,
-            tcp: true,
-            addr: "127.0.0.1:8053".parse().unwrap(),
-        };
+        let udp = dns_bind_endpoint(true, false);
+        let tcp = dns_bind_endpoint(false, true);
+        let both = dns_bind_endpoint(true, true);
 
         assert_eq!(parse_resident_dns_bind_endpoint("").unwrap(), None);
         assert_eq!(
-            parse_resident_dns_bind_endpoint("127.0.0.1:8053").unwrap(),
+            parse_resident_dns_bind_endpoint(&dns_bind_value(None)).unwrap(),
             Some(udp)
         );
         assert_eq!(
-            parse_resident_dns_bind_endpoint("udp://127.0.0.1:8053").unwrap(),
+            parse_resident_dns_bind_endpoint(&dns_bind_value(Some("udp"))).unwrap(),
             Some(udp)
         );
         assert_eq!(
-            parse_resident_dns_bind_endpoint("tcp://127.0.0.1:8053").unwrap(),
+            parse_resident_dns_bind_endpoint(&dns_bind_value(Some("tcp"))).unwrap(),
             Some(tcp)
         );
         assert_eq!(
-            parse_resident_dns_bind_endpoint("tcp+udp://127.0.0.1:8053").unwrap(),
+            parse_resident_dns_bind_endpoint(&dns_bind_value(Some("tcp+udp"))).unwrap(),
             Some(both)
         );
         assert_eq!(
-            parse_resident_dns_bind_endpoint("udp+tcp://127.0.0.1:8053").unwrap(),
+            parse_resident_dns_bind_endpoint(&dns_bind_value(Some("udp+tcp"))).unwrap(),
             Some(both)
         );
     }
 
     #[test]
     fn resident_dns_bind_endpoint_rejects_invalid_values() {
-        assert!(parse_resident_dns_bind_endpoint("127.0.0.1").is_err());
-        assert!(parse_resident_dns_bind_endpoint("http://127.0.0.1:8053").is_err());
+        assert!(parse_resident_dns_bind_endpoint(&Ipv4Addr::LOCALHOST.to_string()).is_err());
+        assert!(parse_resident_dns_bind_endpoint(&dns_bind_value(Some("http"))).is_err());
     }
 
     #[test]
     fn dns_path_chosen_event_exposes_trace_summary_fields() {
-        let local_addr = "127.0.0.1:53".parse().unwrap();
-        let peer = "127.0.0.1:53000".parse().unwrap();
+        let local_addr = dns_bind_test_addr();
+        let peer = SocketAddr::new(
+            local_addr.ip(),
+            local_addr
+                .port()
+                .saturating_add(u16::from(QUERY[0] != QUERY[1])),
+        );
         let handler = "resident-dns-udp";
         let network = handler.strip_prefix("resident-dns-").unwrap();
-        let qname = "example.com.".to_owned();
-        let qtype = 1_u16;
-        let qclass = 1_u16;
-        let cache = "miss".to_owned();
-        let request_routing = "upstream".to_owned();
-        let response_routing = "accept".to_owned();
-        let upstream = Some("primary".to_owned());
-        let upstream_scheme = Some("udp");
-        let upstream_chain = vec!["primary".to_owned()];
+        let request = DnsPacketView::parse(QUERY).unwrap();
+        let question = request.questions().next().unwrap();
+        let qname = question.qname_to_canonical_string().unwrap();
+        let qtype = question.qtype();
+        let qclass = question.qclass();
+        let upstream_tag = qname.trim_end_matches('.').to_owned();
+        let upstream = Some(upstream_tag.clone());
+        let upstream_scheme = Some(network);
+        let upstream_chain = vec![upstream_tag.clone()];
         let reroutes = 0_usize;
         let fallback = false;
-        let rcode = Some(0_u16);
-        let reason = "resident DNS upstream response accepted".to_owned();
-        let request_bytes = 29_usize;
-        let response_bytes = 45_usize;
-        let sent_bytes = Some(45_usize);
-        let trace = ResidentDnsTraceSummary {
-            qname: qname.clone(),
-            qtype,
-            qclass,
-            cache: cache.clone(),
-            request_routing: request_routing.clone(),
-            response_routing: response_routing.clone(),
-            upstream: upstream.clone(),
-            upstream_scheme,
-            upstream_chain: upstream_chain.clone(),
-            reroutes,
-            fallback,
-            rcode,
-            reason: reason.clone(),
-        };
+        let rcode = Some(u16::from(QUERY[3] & DNS_RCODE_MASK as u8));
+        let request_bytes = QUERY.len();
+        let response_bytes = request_bytes.saturating_add(DNS_HEADER_LEN);
+        let sent_bytes = Some(response_bytes);
+        let transport_target = local_addr.to_string();
+        let mut trace = ResidentDnsTraceSummary::new_for_test(qname.clone(), qtype, qclass);
+        trace.upstream = upstream.clone();
+        trace.upstream_scheme = upstream_scheme;
+        trace.upstream_chain = upstream_chain.clone();
+        trace.reroutes = reroutes;
+        trace.fallback = fallback;
+        trace.rcode = rcode;
+        let reason = format!("{}:{}", trace.request_routing, trace.response_routing);
+        trace.reason = reason.clone();
+        trace.cache_ms = u64::try_from(request.question_count()).unwrap_or_default();
+        trace.routing_ms = u64::try_from(request_bytes).unwrap_or_default();
+        trace.upstream_ms = u64::try_from(response_bytes).unwrap_or_default();
+        trace.total_ms = trace
+            .cache_ms
+            .saturating_add(trace.routing_ms)
+            .saturating_add(trace.upstream_ms);
+        trace.transport_attempts = vec![ResidentDnsTransportTrace {
+            upstream: upstream_tag,
+            scheme: network,
+            target: transport_target.clone(),
+            target_family: if local_addr.is_ipv6() {
+                DNS_TRANSPORT_TARGET_FAMILY_IPV6
+            } else {
+                DNS_TRANSPORT_TARGET_FAMILY_IPV4
+            },
+            l4proto: network,
+            route: DNS_TRANSPORT_ROUTE_DIRECT,
+            elapsed_ms: trace.upstream_ms,
+            outcome: DNS_TRANSPORT_OUTCOME_SUCCESS,
+            error: None,
+        }];
         let event = dns_path_chosen_event(DnsPathChosenEventInput {
             local_addr,
             peer,
@@ -845,10 +910,10 @@ mod tests {
         assert_eq!(event["qname"], qname);
         assert_eq!(event["qtype"], qtype);
         assert_eq!(event["qclass"], qclass);
-        assert_eq!(event["cache"], cache);
-        assert_eq!(event["routing"], request_routing);
-        assert_eq!(event["request_routing"], request_routing);
-        assert_eq!(event["response_routing"], response_routing);
+        assert_eq!(event["cache"], trace.cache);
+        assert_eq!(event["routing"], trace.request_routing);
+        assert_eq!(event["request_routing"], trace.request_routing);
+        assert_eq!(event["response_routing"], trace.response_routing);
         assert_eq!(event["upstream"], json!(upstream));
         assert_eq!(event["upstream_scheme"], json!(upstream_scheme));
         assert_eq!(event["upstream_chain"][0], upstream_chain[0]);
@@ -857,6 +922,23 @@ mod tests {
         assert_eq!(event["rcode"], json!(rcode));
         assert_eq!(event["sent_bytes"], json!(sent_bytes));
         assert_eq!(event["reason"], reason);
+        assert_eq!(event["total_ms"], trace.total_ms);
+        assert_eq!(event["cache_ms"], trace.cache_ms);
+        assert_eq!(event["routing_ms"], trace.routing_ms);
+        assert_eq!(event["upstream_ms"], trace.upstream_ms);
+        assert_eq!(
+            event["transport_attempts"][0]["route"],
+            DNS_TRANSPORT_ROUTE_DIRECT
+        );
+        assert_eq!(event["transport_attempts"][0]["target"], transport_target);
+        assert_eq!(
+            event["transport_attempts"][0]["target_family"],
+            if local_addr.is_ipv6() {
+                DNS_TRANSPORT_TARGET_FAMILY_IPV6
+            } else {
+                DNS_TRANSPORT_TARGET_FAMILY_IPV4
+            }
+        );
     }
 
     #[test]

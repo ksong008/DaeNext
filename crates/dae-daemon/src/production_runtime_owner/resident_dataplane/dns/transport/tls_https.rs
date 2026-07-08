@@ -1,4 +1,5 @@
 use super::super::*;
+use super::plain::dns_transport_route_name;
 use super::route::{
     ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
     select_dns_upstream_targets,
@@ -38,18 +39,31 @@ async fn forward_dns_tls_to_routed_target_async(
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
-    match target.selection {
+    let started_at = std::time::Instant::now();
+    let remote = target.target;
+    let route = dns_transport_route_name(&target.selection);
+    let result = match target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            forward_dns_tls_to_target_async(upstream, target.target, payload, mark)
+            forward_dns_tls_to_target_async(upstream, remote, payload, mark)
                 .await
-                .map_err(|err| format!("{}: {err}", target.target))
+                .map_err(|err| format!("{remote}: {err}"))
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_tls_to_proxy_async(upstream, target.target, payload, proxy)
+            forward_dns_tls_to_proxy_async(upstream, remote, payload, proxy)
                 .await
-                .map_err(|err| format!("{}: {err}", target.target))
+                .map_err(|err| format!("{remote}: {err}"))
         }
-    }
+    };
+    record_dns_transport_trace(ResidentDnsTransportTraceInput {
+        upstream: upstream.tag.clone(),
+        scheme: upstream.scheme.as_str(),
+        target: remote,
+        l4proto: L4Proto::Tcp,
+        route,
+        started_at,
+        error: result.as_ref().err().cloned(),
+    });
+    result
 }
 
 async fn forward_dns_tls_to_target_async(
@@ -155,18 +169,31 @@ async fn forward_dns_https_to_routed_target_async(
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
-    match target.selection {
+    let started_at = std::time::Instant::now();
+    let remote = target.target;
+    let route = dns_transport_route_name(&target.selection);
+    let result = match target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            forward_dns_https_to_target_async(upstream, target.target, payload, mark)
+            forward_dns_https_to_target_async(upstream, remote, payload, mark)
                 .await
-                .map_err(|err| format!("{}: {err}", target.target))
+                .map_err(|err| format!("{remote}: {err}"))
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_https_to_proxy_async(upstream, target.target, payload, proxy)
+            forward_dns_https_to_proxy_async(upstream, remote, payload, proxy)
                 .await
-                .map_err(|err| format!("{}: {err}", target.target))
+                .map_err(|err| format!("{remote}: {err}"))
         }
-    }
+    };
+    record_dns_transport_trace(ResidentDnsTransportTraceInput {
+        upstream: upstream.tag.clone(),
+        scheme: upstream.scheme.as_str(),
+        target: remote,
+        l4proto: L4Proto::Tcp,
+        route,
+        started_at,
+        error: result.as_ref().err().cloned(),
+    });
+    result
 }
 
 async fn forward_dns_https_to_target_async(
