@@ -48,6 +48,8 @@ pub(super) async fn forward_dns_to_upstream_async(
         ResidentDnsUpstreamScheme::Quic => {
             forward_dns_quic_async(upstream, payload, plan, forwarders).await
         }
-        ResidentDnsUpstreamScheme::Http3 => forward_dns_h3_async(upstream, payload, plan).await,
+        ResidentDnsUpstreamScheme::Http3 => {
+            forward_dns_h3_async(upstream, payload, plan, forwarders).await
+        }
     }
 }

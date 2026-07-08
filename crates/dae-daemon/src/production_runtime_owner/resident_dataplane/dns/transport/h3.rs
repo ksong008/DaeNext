@@ -11,6 +11,7 @@ pub(super) async fn forward_dns_h3_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
     plan: &ResidentDnsPlan,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let (targets, mut failures) = select_dns_upstream_targets(
         plan,
@@ -19,7 +20,7 @@ pub(super) async fn forward_dns_h3_async(
         L4Proto::Udp,
     )?;
     for remote in targets {
-        match forward_dns_h3_to_routed_target_async(upstream, remote, payload).await {
+        match forward_dns_h3_to_routed_target_async(upstream, remote, payload, forwarders).await {
             Ok(response) => return Ok(response),
             Err(err) => failures.push(err),
         }
@@ -35,18 +36,22 @@ async fn forward_dns_h3_to_routed_target_async(
     upstream: &ResidentDnsUpstream,
     remote: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let started_at = std::time::Instant::now();
     let target = remote.target;
     let route = dns_transport_route_name(&remote.selection);
-    let result = match remote.selection {
+    let result = match &remote.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            forward_dns_h3_to_target_async(upstream, target, payload, mark)
+            let forwarder = forwarders.h3_forwarder(upstream, target, *mark, &remote.selection)?;
+            let mut forwarder = forwarder.lock().await;
+            forwarder
+                .exchange(payload)
                 .await
                 .map_err(|err| format!("{target}: {err}"))
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_h3_to_proxy_async(upstream, target, payload, proxy)
+            forward_dns_h3_to_proxy_async(upstream, target, payload, Arc::clone(proxy))
                 .await
                 .map_err(|err| format!("{target}: {err}"))
         }
@@ -63,23 +68,69 @@ async fn forward_dns_h3_to_routed_target_async(
     result
 }
 
-async fn forward_dns_h3_to_target_async(
-    upstream: &ResidentDnsUpstream,
-    remote: SocketAddr,
-    payload: &[u8],
-    mark: u32,
-) -> Result<Vec<u8>, String> {
-    let (endpoint, connection) = connect_dns_quic_endpoint_async(
-        upstream,
-        remote,
-        mark,
-        DNS_DOH3_ALPN,
-        "connect DoH3 endpoint",
-        "DNS H3 handshake timeout",
-        "connect DNS H3 upstream",
-    )
-    .await?;
-    forward_dns_h3_over_connection_async(upstream, payload, endpoint, connection).await
+impl ResidentDnsH3Forwarder {
+    async fn exchange(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        match self.exchange_with_cached_client(payload).await {
+            Ok(response) => Ok(response),
+            Err(first_err) => {
+                self.close();
+                self.exchange_with_cached_client(payload)
+                    .await
+                    .map_err(|retry_err| {
+                        format!(
+                            "DNS H3 cached forwarder retry failed after {first_err}: {retry_err}"
+                        )
+                    })
+            }
+        }
+    }
+
+    async fn exchange_with_cached_client(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        if self.client.is_none() {
+            self.open_client().await?;
+        }
+        let client = self
+            .client
+            .as_mut()
+            .ok_or_else(|| "DNS H3 client was not initialized".to_owned())?;
+        forward_dns_h3_with_client_async(&self.upstream, payload, client).await
+    }
+
+    async fn open_client(&mut self) -> Result<(), String> {
+        let (endpoint, connection) = connect_dns_quic_endpoint_async(
+            &self.upstream,
+            self.target,
+            self.mark,
+            DNS_DOH3_ALPN,
+            "connect DoH3 endpoint",
+            "DNS H3 handshake timeout",
+            "connect DNS H3 upstream",
+        )
+        .await?;
+        let h3_connection = h3_quinn::Connection::new(connection.clone());
+        let (mut driver, client) = h3::client::new(h3_connection)
+            .await
+            .map_err(|err| format!("create DNS H3 client: {err:?}"))?;
+        let driver_task = tokio::spawn(async move {
+            let _ = poll_fn(|cx| driver.poll_close(cx)).await;
+        });
+        self.endpoint = Some(endpoint);
+        self.connection = Some(connection);
+        self.client = Some(client);
+        self.driver_task = Some(driver_task);
+        Ok(())
+    }
+
+    fn close(&mut self) {
+        self.client = None;
+        if let Some(connection) = self.connection.take() {
+            connection.close(0_u32.into(), b"dns-query failed");
+        }
+        self.endpoint = None;
+        if let Some(task) = self.driver_task.take() {
+            task.abort();
+        }
+    }
 }
 
 async fn forward_dns_h3_to_proxy_async(
@@ -125,7 +176,20 @@ async fn forward_dns_h3_over_connection_async(
         .map_err(|err| format!("create DNS H3 client: {err:?}"))?;
     let driver_task = tokio::spawn(async move { poll_fn(|cx| driver.poll_close(cx)).await });
 
-    let response = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+    let response = forward_dns_h3_with_client_async(upstream, payload, &mut client).await?;
+    drop(client);
+    connection.close(0_u32.into(), b"dns-query done");
+    endpoint.wait_idle().await;
+    let _ = driver_task.await;
+    Ok(response)
+}
+
+async fn forward_dns_h3_with_client_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+) -> Result<Vec<u8>, String> {
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
         let doh = build_doh_request(
             &upstream.target.authority,
             &upstream.target.authority,
@@ -201,10 +265,5 @@ async fn forward_dns_h3_over_connection_async(
             "forward DNS over HTTP/3 to upstream {} {}: {err}",
             upstream.tag, upstream.target.authority
         )
-    })?;
-    drop(client);
-    connection.close(0_u32.into(), b"dns-query done");
-    endpoint.wait_idle().await;
-    let _ = driver_task.await;
-    Ok(response)
+    })
 }
