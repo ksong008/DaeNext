@@ -131,6 +131,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDn
 {
     Quic(Arc<AsyncMutex<ResidentDnsQuicForwarder>>),
     Udp(Arc<ResidentDnsUdpForwarder>),
+    ProxyUdp(Arc<ResidentProxyDnsUdpForwarder>),
     Tcp(Arc<ResidentDnsTcpForwarder>),
     Tls(Arc<ResidentDnsTlsForwarder>),
     Https(Arc<ResidentDnsHttpsForwarder>),

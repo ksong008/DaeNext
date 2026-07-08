@@ -67,6 +67,18 @@ impl ResidentDnsForwarderCache {
         self.get_or_insert_udp_forwarder(key, forwarder)
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn proxy_udp_forwarder(
+        &self,
+        upstream: &ResidentDnsUpstream,
+        target: SocketAddr,
+        proxy: Arc<ResidentProxyPlan>,
+        selection: &ResidentDnsUpstreamSelection,
+    ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
+        let key = routed_dns_forwarder_key(upstream, target, proxy.mark, selection);
+        let forwarder = Arc::new(ResidentProxyDnsUdpForwarder::new(proxy, target));
+        self.get_or_insert_proxy_udp_forwarder(key, forwarder)
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn tcp_forwarder(
         &self,
         upstream: &ResidentDnsUpstream,
@@ -202,6 +214,37 @@ impl ResidentDnsForwarderCache {
             ResidentDnsForwarderEntry {
                 last_used,
                 kind: ResidentDnsForwarderEntryKind::Udp(Arc::clone(&forwarder)),
+            },
+        );
+        Ok(forwarder)
+    }
+
+    fn get_or_insert_proxy_udp_forwarder(
+        &self,
+        key: ResidentDnsForwarderKey,
+        forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+    ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
+        state.next_tick = state.next_tick.wrapping_add(1);
+        let last_used = state.next_tick;
+        if let Some(entry) = state.entries.get_mut(&key) {
+            entry.last_used = last_used;
+            return match &entry.kind {
+                ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => Ok(Arc::clone(forwarder)),
+                _ => Err("resident DNS forwarder cache kind mismatch for proxied UDP".to_owned()),
+            };
+        }
+        if state.entries.len() >= DNS_FORWARDER_CACHE_MAX_ENTRIES {
+            evict_oldest_dns_forwarder(&mut state);
+        }
+        state.entries.insert(
+            key,
+            ResidentDnsForwarderEntry {
+                last_used,
+                kind: ResidentDnsForwarderEntryKind::ProxyUdp(Arc::clone(&forwarder)),
             },
         );
         Ok(forwarder)

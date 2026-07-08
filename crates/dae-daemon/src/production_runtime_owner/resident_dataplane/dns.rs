@@ -44,8 +44,7 @@ use super::resolve_host_addrs_with_configured_fallback_dns;
 use super::tcp::{exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_tcp_stream_async};
 use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
 use super::udp::{
-    ResidentProxyUdpBridge, forward_resident_proxy_dns_udp_async,
-    open_resident_proxy_udp_bridge_async,
+    ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
 };
 use super::{RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT};
 

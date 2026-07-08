@@ -2300,6 +2300,35 @@ fn resident_dns_forwarder_cache_reuses_doq_by_upstream_and_mark() {
 }
 
 #[test]
+fn resident_dns_forwarder_cache_reuses_proxy_udp_by_selection() {
+    let config = dns_upstream_routing_config(
+        r#"
+            domain(full: __DNS_UPSTREAM_HOST__) -> proxy
+            fallback: direct
+            "#
+        .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
+        .as_str(),
+    );
+    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let target = test_dns_upstream_target_v4();
+    let selection =
+        select_single_test_dns_upstream_target(&config, router, &upstream, target, L4Proto::Udp);
+    let ResidentDnsUpstreamSelection::Proxy { proxy } = &selection else {
+        panic!("expected proxied DNS upstream selection");
+    };
+    let cache = ResidentDnsForwarderCache::default();
+    let first = cache
+        .proxy_udp_forwarder(&upstream, target, Arc::clone(proxy), &selection)
+        .unwrap();
+    let second = cache
+        .proxy_udp_forwarder(&upstream, target, Arc::clone(proxy), &selection)
+        .unwrap();
+
+    assert!(Arc::ptr_eq(&first, &second));
+    assert!(first.shard_count() > 0);
+}
+
+#[test]
 fn resident_dns_forwarder_cache_evicts_oldest_entry() {
     let cache = ResidentDnsForwarderCache::default();
     let first = parse_dns_upstream(
