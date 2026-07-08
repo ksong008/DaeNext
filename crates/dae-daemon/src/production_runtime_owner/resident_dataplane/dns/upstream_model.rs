@@ -186,6 +186,14 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpForwarder {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) next_shard:
+        std::sync::atomic::AtomicUsize,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) shards:
+        Vec<ResidentDnsUdpForwarderShard>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpForwarderShard
+{
     pub(in crate::production_runtime_owner::resident_dataplane::dns) handle:
         AsyncMutex<Option<ResidentDnsUdpMultiplexHandle>>,
 }

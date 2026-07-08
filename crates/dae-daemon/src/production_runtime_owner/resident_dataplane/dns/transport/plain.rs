@@ -175,17 +175,10 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
     let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
             let forwarder = forwarders.udp_forwarder(upstream, remote, *mark, &target.selection)?;
-            let handle = forwarder.handle().await?;
-            let result = handle
+            forwarder
                 .exchange(payload)
                 .await
-                .map_err(|err| format!("{remote}: {err}"));
-            if result.is_err() && handle.is_closed() {
-                let forwarder =
-                    forwarders.udp_forwarder(upstream, remote, *mark, &target.selection)?;
-                forwarder.clear_closed_handle(&handle).await;
-            }
-            result
+                .map_err(|err| format!("{remote}: {err}"))
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
             let forwarder = forwarders.proxy_udp_forwarder(
@@ -213,15 +206,41 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
 }
 
 impl ResidentDnsUdpForwarder {
-    async fn handle(&self) -> Result<ResidentDnsUdpMultiplexHandle, String> {
-        let mut handle = self.handle.lock().await;
+    async fn exchange(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        let shard_index = self.next_shard_index();
+        let handle = self.handle(shard_index).await?;
+        let result = handle.exchange(payload).await;
+        if result.is_err() && handle.is_closed() {
+            self.clear_closed_handle(shard_index, &handle).await;
+        }
+        result
+    }
+
+    fn next_shard_index(&self) -> usize {
+        if self.shards.len() <= 1 {
+            return 0;
+        }
+        self.next_shard
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.shards.len()
+    }
+
+    async fn handle(&self, shard_index: usize) -> Result<ResidentDnsUdpMultiplexHandle, String> {
+        let shard = self
+            .shards
+            .get(shard_index)
+            .ok_or_else(|| format!("DNS UDP forwarder shard {shard_index} is missing"))?;
+        let mut handle = shard.handle.lock().await;
         if handle
             .as_ref()
             .is_none_or(ResidentDnsUdpMultiplexHandle::is_closed)
         {
-            *handle = Some(
-                super::udp_multiplex::open_udp_multiplex_handle(self.target, self.mark).await?,
-            );
+            *handle = Some(if self.shards.len() > 1 {
+                super::udp_multiplex::open_threaded_udp_multiplex_handle(self.target, self.mark)
+                    .await?
+            } else {
+                super::udp_multiplex::open_udp_multiplex_handle(self.target, self.mark).await?
+            });
         }
         handle
             .as_ref()
@@ -229,11 +248,18 @@ impl ResidentDnsUdpForwarder {
             .ok_or_else(|| "DNS UDP multiplex handle was not initialized".to_owned())
     }
 
-    async fn clear_closed_handle(&self, failed: &ResidentDnsUdpMultiplexHandle) {
+    async fn clear_closed_handle(
+        &self,
+        shard_index: usize,
+        failed: &ResidentDnsUdpMultiplexHandle,
+    ) {
         if !failed.is_closed() {
             return;
         }
-        let mut handle = self.handle.lock().await;
+        let Some(shard) = self.shards.get(shard_index) else {
+            return;
+        };
+        let mut handle = shard.handle.lock().await;
         if handle
             .as_ref()
             .is_some_and(ResidentDnsUdpMultiplexHandle::is_closed)
