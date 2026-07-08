@@ -3,9 +3,10 @@ use super::route::{
     ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
     select_dns_upstream_targets,
 };
+use super::udp_multiplex::ResidentDnsUdpMultiplexHandle;
 use super::wire::{forward_dns_framed_stream_async, open_dns_tcp_stream_async};
 
-const DNS_UDP_FORWARD_ATTEMPTS: usize = 3;
+pub(super) const DNS_UDP_FORWARD_ATTEMPTS: usize = 3;
 const DNS_UDP_MAX_STALE_RESPONSES: usize = 8;
 
 pub(super) async fn forward_dns_udp_upstream_async(
@@ -110,79 +111,6 @@ async fn forward_dns_udp_with_attempts_async(
     ))
 }
 
-async fn open_connected_dns_udp_socket(
-    target: SocketAddr,
-    mark: u32,
-) -> Result<tokio::net::UdpSocket, String> {
-    let bind = match target {
-        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
-    };
-    let socket =
-        std::net::UdpSocket::bind(bind).map_err(|err| format!("bind DNS UDP socket: {err}"))?;
-    if mark != 0 {
-        set_socket_mark(socket.as_raw_fd(), mark)
-            .map_err(|err| format!("set DNS UDP SO_MARK {mark}: {err}"))?;
-    }
-    socket
-        .set_nonblocking(true)
-        .map_err(|err| format!("set DNS UDP nonblocking: {err}"))?;
-    let socket = tokio::net::UdpSocket::from_std(socket)
-        .map_err(|err| format!("adopt async DNS UDP socket: {err}"))?;
-    socket
-        .connect(target)
-        .await
-        .map_err(|err| format!("connect DNS UDP socket to {target}: {err}"))?;
-    Ok(socket)
-}
-
-async fn forward_dns_udp_connected_with_attempts_async(
-    socket: &tokio::net::UdpSocket,
-    target: SocketAddr,
-    payload: &[u8],
-    attempts: usize,
-    attempt_timeout: std::time::Duration,
-) -> Result<Vec<u8>, String> {
-    let attempts = attempts.max(1);
-    let request = DnsPacketView::parse(payload).ok();
-    for _ in 0..attempts {
-        socket
-            .send(payload)
-            .await
-            .map_err(|err| format!("send DNS UDP packet: {err}"))?;
-        let deadline = time::Instant::now() + attempt_timeout;
-        let mut stale_responses = 0_usize;
-        loop {
-            let now = time::Instant::now();
-            if now >= deadline {
-                break;
-            }
-            let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
-            match time::timeout(deadline - now, socket.recv(&mut response)).await {
-                Ok(Ok(read)) => {
-                    response.truncate(read);
-                    match validate_dns_connected_udp_response(target, request.as_ref(), &response) {
-                        Ok(()) => return Ok(response),
-                        Err(err) => {
-                            stale_responses += 1;
-                            if stale_responses > DNS_UDP_MAX_STALE_RESPONSES {
-                                return Err(format!(
-                                    "too many stale DNS UDP responses from {target}: {err}"
-                                ));
-                            }
-                        }
-                    }
-                }
-                Ok(Err(err)) => return Err(format!("receive DNS UDP response: {err}")),
-                Err(_) => break,
-            }
-        }
-    }
-    Err(format!(
-        "receive DNS UDP response timeout after {attempts} attempts"
-    ))
-}
-
 fn validate_dns_udp_response(
     target: SocketAddr,
     peer: SocketAddr,
@@ -201,21 +129,7 @@ fn validate_dns_udp_response(
         .map_err(|err| format!("validate DNS UDP response for request: {err:?}"))
 }
 
-fn validate_dns_connected_udp_response(
-    target: SocketAddr,
-    request: Option<&DnsPacketView<'_>>,
-    response: &[u8],
-) -> Result<(), String> {
-    let Some(request) = request else {
-        return Ok(());
-    };
-    let response = DnsPacketView::parse(response)
-        .map_err(|err| format!("parse DNS UDP response from {target}: {err}"))?;
-    validate_dns_packet_response_for_request_fast(request, Some(&response), true)
-        .map_err(|err| format!("validate DNS UDP response from {target}: {err:?}"))
-}
-
-fn dns_udp_forward_attempt_timeout() -> std::time::Duration {
+pub(super) fn dns_udp_forward_attempt_timeout() -> std::time::Duration {
     let divisor = (DNS_UDP_FORWARD_ATTEMPTS as u128).saturating_add(1);
     let millis = RESIDENT_UDP_RESPONSE_TIMEOUT
         .as_millis()
@@ -261,11 +175,17 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
     let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
             let forwarder = forwarders.udp_forwarder(upstream, remote, *mark, &target.selection)?;
-            let mut forwarder = forwarder.lock().await;
-            forwarder
+            let handle = forwarder.handle().await?;
+            let result = handle
                 .exchange(payload)
                 .await
-                .map_err(|err| format!("{remote}: {err}"))
+                .map_err(|err| format!("{remote}: {err}"));
+            if result.is_err() && handle.is_closed() {
+                let forwarder =
+                    forwarders.udp_forwarder(upstream, remote, *mark, &target.selection)?;
+                forwarder.clear_closed_handle(&handle).await;
+            }
+            result
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
             forward_resident_proxy_dns_udp_async(Arc::clone(proxy), remote, payload)
@@ -286,30 +206,33 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
 }
 
 impl ResidentDnsUdpForwarder {
-    async fn exchange(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
-        let result = self.exchange_with_cached_socket(payload).await;
-        if result.is_err() {
-            self.socket = None;
+    async fn handle(&self) -> Result<ResidentDnsUdpMultiplexHandle, String> {
+        let mut handle = self.handle.lock().await;
+        if handle
+            .as_ref()
+            .is_none_or(ResidentDnsUdpMultiplexHandle::is_closed)
+        {
+            *handle = Some(
+                super::udp_multiplex::open_udp_multiplex_handle(self.target, self.mark).await?,
+            );
         }
-        result
+        handle
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DNS UDP multiplex handle was not initialized".to_owned())
     }
 
-    async fn exchange_with_cached_socket(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
-        if self.socket.is_none() {
-            self.socket = Some(open_connected_dns_udp_socket(self.target, self.mark).await?);
+    async fn clear_closed_handle(&self, failed: &ResidentDnsUdpMultiplexHandle) {
+        if !failed.is_closed() {
+            return;
         }
-        let socket = self
-            .socket
+        let mut handle = self.handle.lock().await;
+        if handle
             .as_ref()
-            .ok_or_else(|| "DNS UDP socket was not initialized".to_owned())?;
-        forward_dns_udp_connected_with_attempts_async(
-            socket,
-            self.target,
-            payload,
-            DNS_UDP_FORWARD_ATTEMPTS,
-            dns_udp_forward_attempt_timeout(),
-        )
-        .await
+            .is_some_and(ResidentDnsUdpMultiplexHandle::is_closed)
+        {
+            *handle = None;
+        }
     }
 }
 
@@ -325,7 +248,6 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
     let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
             let forwarder = forwarders.tcp_forwarder(upstream, remote, *mark, &target.selection)?;
-            let mut forwarder = forwarder.lock().await;
             forwarder
                 .exchange(payload)
                 .await
@@ -350,34 +272,35 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
 }
 
 impl ResidentDnsTcpForwarder {
-    async fn exchange(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
-        match self.exchange_with_cached_stream(payload).await {
+    async fn exchange(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        match self.exchange_once(payload, true).await {
             Ok(response) => Ok(response),
-            Err(first_err) => {
-                self.stream = None;
-                self.exchange_with_cached_stream(payload)
-                    .await
-                    .map_err(|retry_err| {
-                        format!(
-                            "DNS TCP cached forwarder retry failed after {first_err}: {retry_err}"
-                        )
-                    })
-            }
+            Err(first_err) => self
+                .exchange_once(payload, false)
+                .await
+                .map_err(|retry_err| {
+                    format!("DNS TCP pooled forwarder retry failed after {first_err}: {retry_err}")
+                }),
         }
     }
 
-    async fn exchange_with_cached_stream(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
-        if self.stream.is_none() {
-            self.stream =
-                Some(open_dns_tcp_stream_async(&self.upstream, self.target, self.mark).await?);
-        }
-        let stream = self
-            .stream
-            .as_mut()
-            .ok_or_else(|| "DNS TCP stream was not initialized".to_owned())?;
-        time::timeout(
+    async fn exchange_once(&self, payload: &[u8], use_idle: bool) -> Result<Vec<u8>, String> {
+        let _permit = self
+            .permits
+            .acquire()
+            .await
+            .map_err(|_| "DNS TCP stream pool is closed".to_owned())?;
+        let mut stream = if use_idle {
+            match self.idle.lock().await.pop() {
+                Some(stream) => stream,
+                None => open_dns_tcp_stream_async(&self.upstream, self.target, self.mark).await?,
+            }
+        } else {
+            open_dns_tcp_stream_async(&self.upstream, self.target, self.mark).await?
+        };
+        let result = time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
-            forward_dns_framed_stream_async(stream, payload),
+            forward_dns_framed_stream_async(&mut stream, payload),
         )
         .await
         .map_err(|_| "DNS TCP exchange timeout".to_owned())?
@@ -386,7 +309,18 @@ impl ResidentDnsTcpForwarder {
                 "forward DNS over TCP to upstream {} {}: {err}",
                 self.upstream.tag, self.upstream.target.authority
             )
-        })
+        });
+        if result.is_ok() {
+            return_tcp_stream_to_pool(&self.idle, stream).await;
+        }
+        result
+    }
+}
+
+async fn return_tcp_stream_to_pool(pool: &AsyncMutex<Vec<TokioTcpStream>>, stream: TokioTcpStream) {
+    let mut idle = pool.lock().await;
+    if idle.len() < DNS_STREAM_POOL_MAX_IDLE {
+        idle.push(stream);
     }
 }
 

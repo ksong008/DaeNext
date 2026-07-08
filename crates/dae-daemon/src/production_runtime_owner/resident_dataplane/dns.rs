@@ -26,7 +26,7 @@ use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio::sync::{Mutex as AsyncMutex, OnceCell};
+use tokio::sync::{Mutex as AsyncMutex, OnceCell, Semaphore};
 use tokio::time;
 
 #[cfg(test)]
@@ -102,9 +102,9 @@ use self::transport::{
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_model::{
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
     ResidentDnsForwarderEntryKind, ResidentDnsForwarderKey, ResidentDnsForwarderSelectionKey,
-    ResidentDnsH3Forwarder, ResidentDnsHttpsForwarder, ResidentDnsQuicForwarder,
-    ResidentDnsRequestAction, ResidentDnsResponseAction, ResidentDnsTcpForwarder,
-    ResidentDnsTlsForwarder, ResidentDnsUdpForwarder, ResidentDnsUpstream,
+    ResidentDnsH2Forwarder, ResidentDnsH3Forwarder, ResidentDnsHttpsForwarder,
+    ResidentDnsQuicForwarder, ResidentDnsRequestAction, ResidentDnsResponseAction,
+    ResidentDnsTcpForwarder, ResidentDnsTlsForwarder, ResidentDnsUdpForwarder, ResidentDnsUpstream,
     ResidentDnsUpstreamScheme, ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
 };
 pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
@@ -123,6 +123,8 @@ const DNS_DOH3_ALPN: &str = "h3";
 const DNS_DOQ_ALPN: &str = "doq";
 const TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS: i64 = 600;
 const DNS_FORWARDER_CACHE_MAX_ENTRIES: usize = 128;
+const DNS_STREAM_POOL_MAX_STREAMS: usize = 16;
+const DNS_STREAM_POOL_MAX_IDLE: usize = 8;
 const DNS_TRACE_CACHE_UNRESOLVED: &str = "unresolved";
 const DNS_TRACE_CACHE_BYPASS: &str = "bypass";
 const DNS_TRACE_CACHE_HIT: &str = "hit";

@@ -7,6 +7,7 @@ mod quic;
 mod route;
 mod tcp_udp;
 mod tls_https;
+pub(in crate::production_runtime_owner::resident_dataplane::dns) mod udp_multiplex;
 mod wire;
 
 use h3::forward_dns_h3_async;

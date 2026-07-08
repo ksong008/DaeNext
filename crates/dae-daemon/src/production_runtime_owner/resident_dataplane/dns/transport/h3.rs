@@ -44,9 +44,7 @@ async fn forward_dns_h3_to_routed_target_async(
     let result = match &remote.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
             let forwarder = forwarders.h3_forwarder(upstream, target, *mark, &remote.selection)?;
-            let mut forwarder = forwarder.lock().await;
-            forwarder
-                .exchange(payload)
+            forward_dns_h3_cached(upstream, forwarder, payload)
                 .await
                 .map_err(|err| format!("{target}: {err}"))
         }
@@ -69,31 +67,16 @@ async fn forward_dns_h3_to_routed_target_async(
 }
 
 impl ResidentDnsH3Forwarder {
-    async fn exchange(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
-        match self.exchange_with_cached_client(payload).await {
-            Ok(response) => Ok(response),
-            Err(first_err) => {
-                self.close();
-                self.exchange_with_cached_client(payload)
-                    .await
-                    .map_err(|retry_err| {
-                        format!(
-                            "DNS H3 cached forwarder retry failed after {first_err}: {retry_err}"
-                        )
-                    })
-            }
-        }
-    }
-
-    async fn exchange_with_cached_client(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+    async fn client(
+        &mut self,
+    ) -> Result<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>, String> {
         if self.client.is_none() {
             self.open_client().await?;
         }
-        let client = self
-            .client
-            .as_mut()
-            .ok_or_else(|| "DNS H3 client was not initialized".to_owned())?;
-        forward_dns_h3_with_client_async(&self.upstream, payload, client).await
+        self.client
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DNS H3 client was not initialized".to_owned())
     }
 
     async fn open_client(&mut self) -> Result<(), String> {
@@ -129,6 +112,32 @@ impl ResidentDnsH3Forwarder {
         self.endpoint = None;
         if let Some(task) = self.driver_task.take() {
             task.abort();
+        }
+    }
+}
+
+async fn forward_dns_h3_cached(
+    upstream: &ResidentDnsUpstream,
+    forwarder: Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut client = {
+        let mut forwarder = forwarder.lock().await;
+        forwarder.client().await?
+    };
+    match forward_dns_h3_with_client_async(upstream, payload, &mut client).await {
+        Ok(response) => Ok(response),
+        Err(first_err) => {
+            let mut client = {
+                let mut forwarder = forwarder.lock().await;
+                forwarder.close();
+                forwarder.client().await?
+            };
+            forward_dns_h3_with_client_async(upstream, payload, &mut client)
+                .await
+                .map_err(|retry_err| {
+                    format!("DNS H3 cached forwarder retry failed after {first_err}: {retry_err}")
+                })
         }
     }
 }

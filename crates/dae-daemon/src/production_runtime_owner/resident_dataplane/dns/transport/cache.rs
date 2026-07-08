@@ -48,7 +48,7 @@ impl ResidentDnsForwarderCache {
         target: SocketAddr,
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
-    ) -> Result<Arc<AsyncMutex<ResidentDnsUdpForwarder>>, String> {
+    ) -> Result<Arc<ResidentDnsUdpForwarder>, String> {
         let key = ResidentDnsForwarderKey {
             scheme: upstream.scheme,
             authority: upstream.target.authority.clone(),
@@ -57,11 +57,11 @@ impl ResidentDnsForwarderCache {
             target: Some(target),
             selection: ResidentDnsForwarderSelectionKey::from_selection(selection),
         };
-        let forwarder = Arc::new(AsyncMutex::new(ResidentDnsUdpForwarder {
+        let forwarder = Arc::new(ResidentDnsUdpForwarder {
             target,
             mark,
-            socket: None,
-        }));
+            handle: AsyncMutex::new(None),
+        });
         self.get_or_insert_udp_forwarder(key, forwarder)
     }
 
@@ -71,14 +71,15 @@ impl ResidentDnsForwarderCache {
         target: SocketAddr,
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
-    ) -> Result<Arc<AsyncMutex<ResidentDnsTcpForwarder>>, String> {
+    ) -> Result<Arc<ResidentDnsTcpForwarder>, String> {
         let key = routed_dns_forwarder_key(upstream, target, mark, selection);
-        let forwarder = Arc::new(AsyncMutex::new(ResidentDnsTcpForwarder {
+        let forwarder = Arc::new(ResidentDnsTcpForwarder {
             upstream: upstream.clone(),
             target,
             mark,
-            stream: None,
-        }));
+            idle: AsyncMutex::new(Vec::new()),
+            permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
+        });
         self.get_or_insert_tcp_forwarder(key, forwarder)
     }
 
@@ -88,14 +89,15 @@ impl ResidentDnsForwarderCache {
         target: SocketAddr,
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
-    ) -> Result<Arc<AsyncMutex<ResidentDnsTlsForwarder>>, String> {
+    ) -> Result<Arc<ResidentDnsTlsForwarder>, String> {
         let key = routed_dns_forwarder_key(upstream, target, mark, selection);
-        let forwarder = Arc::new(AsyncMutex::new(ResidentDnsTlsForwarder {
+        let forwarder = Arc::new(ResidentDnsTlsForwarder {
             upstream: upstream.clone(),
             target,
             mark,
-            stream: None,
-        }));
+            idle: AsyncMutex::new(Vec::new()),
+            permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
+        });
         self.get_or_insert_tls_forwarder(key, forwarder)
     }
 
@@ -105,14 +107,17 @@ impl ResidentDnsForwarderCache {
         target: SocketAddr,
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
-    ) -> Result<Arc<AsyncMutex<ResidentDnsHttpsForwarder>>, String> {
+    ) -> Result<Arc<ResidentDnsHttpsForwarder>, String> {
         let key = routed_dns_forwarder_key(upstream, target, mark, selection);
-        let forwarder = Arc::new(AsyncMutex::new(ResidentDnsHttpsForwarder {
+        let forwarder = Arc::new(ResidentDnsHttpsForwarder {
             upstream: upstream.clone(),
             target,
             mark,
-            stream: None,
-        }));
+            http1_idle: AsyncMutex::new(Vec::new()),
+            http1_permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
+            h2: AsyncMutex::new(None),
+            h2_disabled: std::sync::atomic::AtomicBool::new(false),
+        });
         self.get_or_insert_https_forwarder(key, forwarder)
     }
 
@@ -170,8 +175,8 @@ impl ResidentDnsForwarderCache {
     fn get_or_insert_udp_forwarder(
         &self,
         key: ResidentDnsForwarderKey,
-        forwarder: Arc<AsyncMutex<ResidentDnsUdpForwarder>>,
-    ) -> Result<Arc<AsyncMutex<ResidentDnsUdpForwarder>>, String> {
+        forwarder: Arc<ResidentDnsUdpForwarder>,
+    ) -> Result<Arc<ResidentDnsUdpForwarder>, String> {
         let mut state = self
             .state
             .lock()
@@ -201,8 +206,8 @@ impl ResidentDnsForwarderCache {
     fn get_or_insert_tcp_forwarder(
         &self,
         key: ResidentDnsForwarderKey,
-        forwarder: Arc<AsyncMutex<ResidentDnsTcpForwarder>>,
-    ) -> Result<Arc<AsyncMutex<ResidentDnsTcpForwarder>>, String> {
+        forwarder: Arc<ResidentDnsTcpForwarder>,
+    ) -> Result<Arc<ResidentDnsTcpForwarder>, String> {
         let mut state = self
             .state
             .lock()
@@ -232,8 +237,8 @@ impl ResidentDnsForwarderCache {
     fn get_or_insert_tls_forwarder(
         &self,
         key: ResidentDnsForwarderKey,
-        forwarder: Arc<AsyncMutex<ResidentDnsTlsForwarder>>,
-    ) -> Result<Arc<AsyncMutex<ResidentDnsTlsForwarder>>, String> {
+        forwarder: Arc<ResidentDnsTlsForwarder>,
+    ) -> Result<Arc<ResidentDnsTlsForwarder>, String> {
         let mut state = self
             .state
             .lock()
@@ -263,8 +268,8 @@ impl ResidentDnsForwarderCache {
     fn get_or_insert_https_forwarder(
         &self,
         key: ResidentDnsForwarderKey,
-        forwarder: Arc<AsyncMutex<ResidentDnsHttpsForwarder>>,
-    ) -> Result<Arc<AsyncMutex<ResidentDnsHttpsForwarder>>, String> {
+        forwarder: Arc<ResidentDnsHttpsForwarder>,
+    ) -> Result<Arc<ResidentDnsHttpsForwarder>, String> {
         let mut state = self
             .state
             .lock()
