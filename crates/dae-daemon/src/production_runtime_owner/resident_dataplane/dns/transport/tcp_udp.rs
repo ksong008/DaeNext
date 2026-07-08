@@ -13,6 +13,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
     plan: &ResidentDnsPlan,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let resolved_targets = resolved_upstream_targets(upstream).await?;
     let mut failures = Vec::new();
@@ -48,7 +49,9 @@ pub(super) async fn forward_dns_tcp_udp_async(
                         }
                     }
                     L4Proto::Udp => {
-                        match forward_dns_udp_primary_async(upstream, primary, payload).await {
+                        match forward_dns_udp_primary_async(upstream, primary, payload, forwarders)
+                            .await
+                        {
                             DnsTcpUdpPrimaryResult::Answered(response) => return Ok(response),
                             DnsTcpUdpPrimaryResult::TcpFallbackNeeded(phase_failures) => {
                                 failures.extend(phase_failures);
@@ -98,9 +101,10 @@ async fn forward_dns_udp_primary_async(
     upstream: &ResidentDnsUpstream,
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> DnsTcpUdpPrimaryResult {
     let target_text = target.target.to_string();
-    match forward_dns_udp_to_routed_target_async(upstream, target, payload).await {
+    match forward_dns_udp_to_routed_target_async(upstream, target, payload, forwarders).await {
         Ok(response) if !dns_response_truncated(&response) => {
             DnsTcpUdpPrimaryResult::Answered(response)
         }

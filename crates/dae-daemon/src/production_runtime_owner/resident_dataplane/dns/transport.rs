@@ -31,11 +31,11 @@ pub(super) async fn forward_dns_to_upstream_async(
 ) -> Result<Vec<u8>, String> {
     match upstream.scheme {
         ResidentDnsUpstreamScheme::Udp => {
-            forward_dns_udp_upstream_async(upstream, payload, plan).await
+            forward_dns_udp_upstream_async(upstream, payload, plan, forwarders).await
         }
         ResidentDnsUpstreamScheme::Tcp => forward_dns_tcp_async(upstream, payload, plan).await,
         ResidentDnsUpstreamScheme::TcpUdp => {
-            forward_dns_tcp_udp_async(upstream, payload, plan).await
+            forward_dns_tcp_udp_async(upstream, payload, plan, forwarders).await
         }
         ResidentDnsUpstreamScheme::Tls => forward_dns_tls_async(upstream, payload, plan).await,
         ResidentDnsUpstreamScheme::Https => forward_dns_https_async(upstream, payload, plan).await,

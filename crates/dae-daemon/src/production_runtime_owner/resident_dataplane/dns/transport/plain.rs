@@ -12,6 +12,7 @@ pub(super) async fn forward_dns_udp_upstream_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
     plan: &ResidentDnsPlan,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let (targets, mut failures) = select_dns_upstream_targets(
         plan,
@@ -20,7 +21,7 @@ pub(super) async fn forward_dns_udp_upstream_async(
         L4Proto::Udp,
     )?;
     for target in targets {
-        match forward_dns_udp_to_routed_target_async(upstream, target, payload).await {
+        match forward_dns_udp_to_routed_target_async(upstream, target, payload, forwarders).await {
             Ok(response) => return Ok(response),
             Err(err) => failures.push(err),
         }
@@ -109,6 +110,79 @@ async fn forward_dns_udp_with_attempts_async(
     ))
 }
 
+async fn open_connected_dns_udp_socket(
+    target: SocketAddr,
+    mark: u32,
+) -> Result<tokio::net::UdpSocket, String> {
+    let bind = match target {
+        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+    };
+    let socket =
+        std::net::UdpSocket::bind(bind).map_err(|err| format!("bind DNS UDP socket: {err}"))?;
+    if mark != 0 {
+        set_socket_mark(socket.as_raw_fd(), mark)
+            .map_err(|err| format!("set DNS UDP SO_MARK {mark}: {err}"))?;
+    }
+    socket
+        .set_nonblocking(true)
+        .map_err(|err| format!("set DNS UDP nonblocking: {err}"))?;
+    let socket = tokio::net::UdpSocket::from_std(socket)
+        .map_err(|err| format!("adopt async DNS UDP socket: {err}"))?;
+    socket
+        .connect(target)
+        .await
+        .map_err(|err| format!("connect DNS UDP socket to {target}: {err}"))?;
+    Ok(socket)
+}
+
+async fn forward_dns_udp_connected_with_attempts_async(
+    socket: &tokio::net::UdpSocket,
+    target: SocketAddr,
+    payload: &[u8],
+    attempts: usize,
+    attempt_timeout: std::time::Duration,
+) -> Result<Vec<u8>, String> {
+    let attempts = attempts.max(1);
+    let request = DnsPacketView::parse(payload).ok();
+    for _ in 0..attempts {
+        socket
+            .send(payload)
+            .await
+            .map_err(|err| format!("send DNS UDP packet: {err}"))?;
+        let deadline = time::Instant::now() + attempt_timeout;
+        let mut stale_responses = 0_usize;
+        loop {
+            let now = time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+            match time::timeout(deadline - now, socket.recv(&mut response)).await {
+                Ok(Ok(read)) => {
+                    response.truncate(read);
+                    match validate_dns_connected_udp_response(target, request.as_ref(), &response) {
+                        Ok(()) => return Ok(response),
+                        Err(err) => {
+                            stale_responses += 1;
+                            if stale_responses > DNS_UDP_MAX_STALE_RESPONSES {
+                                return Err(format!(
+                                    "too many stale DNS UDP responses from {target}: {err}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(Err(err)) => return Err(format!("receive DNS UDP response: {err}")),
+                Err(_) => break,
+            }
+        }
+    }
+    Err(format!(
+        "receive DNS UDP response timeout after {attempts} attempts"
+    ))
+}
+
 fn validate_dns_udp_response(
     target: SocketAddr,
     peer: SocketAddr,
@@ -125,6 +199,20 @@ fn validate_dns_udp_response(
         .map_err(|err| format!("parse DNS UDP response for request validation: {err}"))?;
     validate_dns_packet_response_for_request_fast(request, Some(&response), true)
         .map_err(|err| format!("validate DNS UDP response for request: {err:?}"))
+}
+
+fn validate_dns_connected_udp_response(
+    target: SocketAddr,
+    request: Option<&DnsPacketView<'_>>,
+    response: &[u8],
+) -> Result<(), String> {
+    let Some(request) = request else {
+        return Ok(());
+    };
+    let response = DnsPacketView::parse(response)
+        .map_err(|err| format!("parse DNS UDP response from {target}: {err}"))?;
+    validate_dns_packet_response_for_request_fast(request, Some(&response), true)
+        .map_err(|err| format!("validate DNS UDP response from {target}: {err:?}"))
 }
 
 fn dns_udp_forward_attempt_timeout() -> std::time::Duration {
@@ -164,18 +252,22 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
     upstream: &ResidentDnsUpstream,
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
+    forwarders: &Arc<ResidentDnsForwarderCache>,
 ) -> Result<Vec<u8>, String> {
     let started_at = std::time::Instant::now();
     let remote = target.target;
     let route = dns_transport_route_name(&target.selection);
-    let result = match target.selection {
+    let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            forward_dns_udp_async(remote, payload, mark)
+            let forwarder = forwarders.udp_forwarder(upstream, remote, *mark, &target.selection)?;
+            let mut forwarder = forwarder.lock().await;
+            forwarder
+                .exchange(payload)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_resident_proxy_dns_udp_async(proxy, remote, payload)
+            forward_resident_proxy_dns_udp_async(Arc::clone(proxy), remote, payload)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
@@ -190,6 +282,34 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
         error: result.as_ref().err().cloned(),
     });
     result
+}
+
+impl ResidentDnsUdpForwarder {
+    async fn exchange(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        let result = self.exchange_with_cached_socket(payload).await;
+        if result.is_err() {
+            self.socket = None;
+        }
+        result
+    }
+
+    async fn exchange_with_cached_socket(&mut self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        if self.socket.is_none() {
+            self.socket = Some(open_connected_dns_udp_socket(self.target, self.mark).await?);
+        }
+        let socket = self
+            .socket
+            .as_ref()
+            .ok_or_else(|| "DNS UDP socket was not initialized".to_owned())?;
+        forward_dns_udp_connected_with_attempts_async(
+            socket,
+            self.target,
+            payload,
+            DNS_UDP_FORWARD_ATTEMPTS,
+            dns_udp_forward_attempt_timeout(),
+        )
+        .await
+    }
 }
 
 pub(super) async fn forward_dns_tcp_to_routed_target_async(
