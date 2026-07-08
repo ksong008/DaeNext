@@ -125,6 +125,7 @@ const TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS: i64 = 600;
 const DNS_FORWARDER_CACHE_MAX_ENTRIES: usize = 128;
 const DNS_STREAM_POOL_MAX_STREAMS: usize = 16;
 const DNS_STREAM_POOL_MAX_IDLE: usize = 8;
+const DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS: usize = 128;
 const DNS_TRACE_CACHE_UNRESOLVED: &str = "unresolved";
 const DNS_TRACE_CACHE_BYPASS: &str = "bypass";
 const DNS_TRACE_CACHE_HIT: &str = "hit";
@@ -153,6 +154,26 @@ pub(super) const DNS_TRANSPORT_TARGET_FAMILY_IPV4: &str = "ipv4";
 pub(super) const DNS_TRANSPORT_TARGET_FAMILY_IPV6: &str = "ipv6";
 pub(super) const DNS_TRANSPORT_OUTCOME_SUCCESS: &str = "success";
 pub(super) const DNS_TRANSPORT_OUTCOME_ERROR: &str = "error";
+
+async fn acquire_dns_permit<'a>(
+    semaphore: &'a Semaphore,
+    context: &'static str,
+) -> Result<tokio::sync::SemaphorePermit<'a>, String> {
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, semaphore.acquire())
+        .await
+        .map_err(|_| format!("{context} concurrency wait timeout"))?
+        .map_err(|_| format!("{context} concurrency limiter is closed"))
+}
+
+async fn acquire_dns_owned_permit(
+    semaphore: Arc<Semaphore>,
+    context: &'static str,
+) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, semaphore.acquire_owned())
+        .await
+        .map_err(|_| format!("{context} concurrency wait timeout"))?
+        .map_err(|_| format!("{context} concurrency limiter is closed"))
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsPlan {

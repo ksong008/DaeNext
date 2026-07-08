@@ -20,6 +20,7 @@ impl ResidentDnsForwarderCache {
             fixed_remote: None,
             endpoint: None,
             connection: None,
+            permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
         }));
         self.get_or_insert_quic_forwarder(key, forwarder)
     }
@@ -38,6 +39,7 @@ impl ResidentDnsForwarderCache {
             fixed_remote: Some(target),
             endpoint: None,
             connection: None,
+            permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
         }));
         self.get_or_insert_quic_forwarder(key, forwarder)
     }
@@ -115,6 +117,7 @@ impl ResidentDnsForwarderCache {
             mark,
             http1_idle: AsyncMutex::new(Vec::new()),
             http1_permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
+            h2_permits: Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS),
             h2: AsyncMutex::new(None),
             h2_disabled: std::sync::atomic::AtomicBool::new(false),
         });
@@ -137,6 +140,7 @@ impl ResidentDnsForwarderCache {
             connection: None,
             client: None,
             driver_task: None,
+            permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
         }));
         self.get_or_insert_h3_forwarder(key, forwarder)
     }

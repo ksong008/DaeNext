@@ -86,11 +86,7 @@ impl ResidentDnsTlsForwarder {
     }
 
     async fn exchange_once(&self, payload: &[u8], use_idle: bool) -> Result<Vec<u8>, String> {
-        let _permit = self
-            .permits
-            .acquire()
-            .await
-            .map_err(|_| "DNS TLS stream pool is closed".to_owned())?;
+        let _permit = acquire_dns_permit(&self.permits, "DNS TLS stream pool").await?;
         let mut stream = if use_idle {
             match self.idle.lock().await.pop() {
                 Some(stream) => stream,
@@ -307,11 +303,8 @@ impl ResidentDnsHttpsForwarder {
     }
 
     async fn exchange_http1_once(&self, payload: &[u8], use_idle: bool) -> Result<Vec<u8>, String> {
-        let _permit = self
-            .http1_permits
-            .acquire()
-            .await
-            .map_err(|_| "DNS HTTPS HTTP/1.1 stream pool is closed".to_owned())?;
+        let _permit =
+            acquire_dns_permit(&self.http1_permits, "DNS HTTPS HTTP/1.1 stream pool").await?;
         let mut stream = if use_idle {
             match self.http1_idle.lock().await.pop() {
                 Some(stream) => stream,
@@ -335,6 +328,7 @@ impl ResidentDnsHttpsForwarder {
     }
 
     async fn exchange_h2(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        let _permit = acquire_dns_permit(&self.h2_permits, "DNS HTTPS HTTP/2 stream pool").await?;
         let mut sender = self.h2_sender().await?;
         forward_dns_https_over_h2_async(&self.upstream, payload, &mut sender).await
     }

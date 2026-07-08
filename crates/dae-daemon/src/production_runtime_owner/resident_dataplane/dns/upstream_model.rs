@@ -179,6 +179,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<quinn::Endpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpForwarder {
@@ -213,6 +214,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) http1_idle:
         AsyncMutex<Vec<tokio_rustls::client::TlsStream<TokioTcpStream>>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) http1_permits: Semaphore,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_permits: Semaphore,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2:
         AsyncMutex<Option<ResidentDnsH2Forwarder>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_disabled:
@@ -238,6 +240,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) driver_task:
         Option<tokio::task::JoinHandle<()>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
 }
 
 impl Drop for ResidentDnsQuicForwarder {

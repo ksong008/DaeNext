@@ -121,6 +121,11 @@ async fn forward_dns_h3_cached(
     forwarder: Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
+    let permits = {
+        let forwarder = forwarder.lock().await;
+        Arc::clone(&forwarder.permits)
+    };
+    let _permit = acquire_dns_owned_permit(permits, "DNS H3 stream pool").await?;
     let mut client = {
         let mut forwarder = forwarder.lock().await;
         forwarder.client().await?

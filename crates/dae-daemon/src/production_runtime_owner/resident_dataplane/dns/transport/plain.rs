@@ -285,11 +285,7 @@ impl ResidentDnsTcpForwarder {
     }
 
     async fn exchange_once(&self, payload: &[u8], use_idle: bool) -> Result<Vec<u8>, String> {
-        let _permit = self
-            .permits
-            .acquire()
-            .await
-            .map_err(|_| "DNS TCP stream pool is closed".to_owned())?;
+        let _permit = acquire_dns_permit(&self.permits, "DNS TCP stream pool").await?;
         let mut stream = if use_idle {
             match self.idle.lock().await.pop() {
                 Some(stream) => stream,

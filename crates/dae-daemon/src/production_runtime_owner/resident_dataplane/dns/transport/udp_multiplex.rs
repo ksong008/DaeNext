@@ -58,13 +58,16 @@ impl ResidentDnsUdpMultiplexHandle {
 
     async fn exchange_once(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(UdpMultiplexRequest {
+        time::timeout(
+            dns_udp_forward_attempt_timeout(),
+            self.sender.send(UdpMultiplexRequest {
                 payload: payload.to_vec(),
                 response: response_tx,
-            })
-            .await
-            .map_err(|_| "DNS UDP multiplex actor is closed".to_owned())?;
+            }),
+        )
+        .await
+        .map_err(|_| "DNS UDP multiplex request queue wait timeout".to_owned())?
+        .map_err(|_| "DNS UDP multiplex actor is closed".to_owned())?;
         time::timeout(dns_udp_forward_attempt_timeout(), response_rx)
             .await
             .map_err(|_| "DNS UDP multiplex exchange timeout".to_owned())?
@@ -196,7 +199,9 @@ fn expire_pending_udp_requests(pending: &mut BTreeMap<u16, PendingUdpRequest>) {
     let now = time::Instant::now();
     let expired = pending
         .iter()
-        .filter_map(|(id, request)| (request.deadline <= now).then_some(*id))
+        .filter_map(|(id, request)| {
+            (request.deadline <= now || request.response.is_closed()).then_some(*id)
+        })
         .collect::<Vec<_>>();
     for id in expired {
         if let Some(request) = pending.remove(&id) {

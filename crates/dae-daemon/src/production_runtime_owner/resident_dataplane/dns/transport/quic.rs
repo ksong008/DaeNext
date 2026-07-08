@@ -13,6 +13,11 @@ async fn forward_dns_quic_cached(
     forwarder: Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
+    let permits = {
+        let forwarder = forwarder.lock().await;
+        Arc::clone(&forwarder.permits)
+    };
+    let _permit = acquire_dns_owned_permit(permits, "DNS QUIC stream pool").await?;
     let (connection, upstream) = {
         let mut forwarder = forwarder.lock().await;
         (forwarder.connection().await?, forwarder.upstream.clone())
