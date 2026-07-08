@@ -103,8 +103,9 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstr
     ResidentDnsForwarderEntryKind, ResidentDnsForwarderKey, ResidentDnsForwarderSelectionKey,
     ResidentDnsH2Forwarder, ResidentDnsH3Forwarder, ResidentDnsHttpsForwarder,
     ResidentDnsQuicForwarder, ResidentDnsRequestAction, ResidentDnsResponseAction,
-    ResidentDnsTcpForwarder, ResidentDnsTlsForwarder, ResidentDnsUdpForwarder, ResidentDnsUpstream,
-    ResidentDnsUpstreamScheme, ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
+    ResidentDnsTcpForwarder, ResidentDnsTlsForwarder, ResidentDnsUdpForwarder,
+    ResidentDnsUdpForwarderShard, ResidentDnsUpstream, ResidentDnsUpstreamScheme,
+    ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
 };
 pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_router::ResidentDnsUpstreamSelection;

@@ -5,6 +5,9 @@ use super::plain::{DNS_UDP_FORWARD_ATTEMPTS, dns_udp_forward_attempt_timeout};
 
 const DNS_UDP_MULTIPLEX_QUEUE_CAPACITY: usize = 4096;
 const DNS_UDP_MULTIPLEX_PENDING_CAPACITY: usize = 4096;
+const DNS_UDP_FORWARDER_MAX_SHARDS: usize = 4;
+const DNS_UDP_MULTIPLEX_WORKER_THREAD_NAME: &str = "daed-dns-udp";
+const DNS_UDP_MULTIPLEX_WORKER_STACK_BYTES: usize = 512 * 1024;
 const DNS_UDP_REQUEST_ID_SPACE: usize = (u16::MAX as usize) + 1;
 const DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS: usize = u64::BITS as usize;
 const DNS_UDP_REQUEST_ID_BITMAP_WORDS: usize =
@@ -127,6 +130,65 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn open_u
     let (sender, receiver) = tokio::sync::mpsc::channel(DNS_UDP_MULTIPLEX_QUEUE_CAPACITY);
     tokio::spawn(run_udp_multiplex_actor(target, socket, receiver));
     Ok(ResidentDnsUdpMultiplexHandle { sender })
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn open_threaded_udp_multiplex_handle(
+    target: SocketAddr,
+    mark: u32,
+) -> Result<ResidentDnsUdpMultiplexHandle, String> {
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name(DNS_UDP_MULTIPLEX_WORKER_THREAD_NAME.to_owned())
+        .stack_size(DNS_UDP_MULTIPLEX_WORKER_STACK_BYTES)
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    let _ = ready_tx.send(Err(format!(
+                        "build DNS UDP multiplex worker runtime: {err}"
+                    )));
+                    return;
+                }
+            };
+            let opened = runtime.block_on(async {
+                let socket = open_connected_dns_udp_socket(target, mark).await?;
+                let (sender, receiver) =
+                    tokio::sync::mpsc::channel(DNS_UDP_MULTIPLEX_QUEUE_CAPACITY);
+                Ok::<_, String>((ResidentDnsUdpMultiplexHandle { sender }, socket, receiver))
+            });
+            match opened {
+                Ok((handle, socket, receiver)) => {
+                    let _ = ready_tx.send(Ok(handle));
+                    runtime.block_on(run_udp_multiplex_actor(target, socket, receiver));
+                }
+                Err(err) => {
+                    let _ = ready_tx.send(Err(err));
+                }
+            }
+        })
+        .map_err(|err| format!("spawn DNS UDP multiplex worker thread: {err}"))?;
+    ready_rx
+        .await
+        .map_err(|_| "DNS UDP multiplex worker exited before initialization".to_owned())?
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) fn dns_udp_forwarder_shard_count()
+-> usize {
+    let parallelism = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1);
+    dns_udp_forwarder_shard_count_for_parallelism(parallelism)
+}
+
+fn dns_udp_forwarder_shard_count_for_parallelism(parallelism: usize) -> usize {
+    if parallelism <= 1 {
+        1
+    } else {
+        parallelism.min(DNS_UDP_FORWARDER_MAX_SHARDS)
+    }
 }
 
 impl ResidentDnsUdpMultiplexHandle {
@@ -539,6 +601,17 @@ mod tests {
         assert_eq!(
             next_udp_multiplex_deadline(&mut deadlines, &pending),
             Some(live_deadline)
+        );
+    }
+
+    #[test]
+    fn udp_forwarder_shard_count_follows_cpu_parallelism() {
+        assert_eq!(dns_udp_forwarder_shard_count_for_parallelism(0), 1);
+        assert_eq!(dns_udp_forwarder_shard_count_for_parallelism(1), 1);
+        assert_eq!(dns_udp_forwarder_shard_count_for_parallelism(2), 2);
+        assert_eq!(
+            dns_udp_forwarder_shard_count_for_parallelism(DNS_UDP_FORWARDER_MAX_SHARDS + 1),
+            DNS_UDP_FORWARDER_MAX_SHARDS
         );
     }
 

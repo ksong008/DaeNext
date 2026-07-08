@@ -59,10 +59,16 @@ impl ResidentDnsForwarderCache {
             target: Some(target),
             selection: ResidentDnsForwarderSelectionKey::from_selection(selection),
         };
+        let shard_count = super::udp_multiplex::dns_udp_forwarder_shard_count();
         let forwarder = Arc::new(ResidentDnsUdpForwarder {
             target,
             mark,
-            handle: AsyncMutex::new(None),
+            next_shard: std::sync::atomic::AtomicUsize::new(0),
+            shards: (0..shard_count)
+                .map(|_| ResidentDnsUdpForwarderShard {
+                    handle: AsyncMutex::new(None),
+                })
+                .collect(),
         });
         self.get_or_insert_udp_forwarder(key, forwarder)
     }
