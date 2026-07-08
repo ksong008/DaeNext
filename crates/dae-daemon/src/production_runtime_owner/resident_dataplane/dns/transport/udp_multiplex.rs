@@ -1,10 +1,14 @@
-use std::collections::BTreeMap;
+use std::collections::{HashMap, VecDeque};
 
 use super::super::*;
 use super::plain::{DNS_UDP_FORWARD_ATTEMPTS, dns_udp_forward_attempt_timeout};
 
 const DNS_UDP_MULTIPLEX_QUEUE_CAPACITY: usize = 4096;
 const DNS_UDP_MULTIPLEX_PENDING_CAPACITY: usize = 4096;
+const DNS_UDP_REQUEST_ID_SPACE: usize = (u16::MAX as usize) + 1;
+const DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS: usize = u64::BITS as usize;
+const DNS_UDP_REQUEST_ID_BITMAP_WORDS: usize =
+    DNS_UDP_REQUEST_ID_SPACE / DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS;
 
 #[derive(Clone)]
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpMultiplexHandle
@@ -18,10 +22,101 @@ struct UdpMultiplexRequest {
 }
 
 struct PendingUdpRequest {
-    upstream_payload: Vec<u8>,
+    upstream_id: u16,
     original_id: u16,
+    generation: u64,
     deadline: time::Instant,
+    questions: Vec<PendingDnsQuestion>,
     response: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingDnsQuestion {
+    qname_wire: Vec<u8>,
+    qtype: u16,
+    qclass: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingUdpDeadline {
+    id: u16,
+    generation: u64,
+    deadline: time::Instant,
+}
+
+struct UdpRequestIdAllocator {
+    occupied: [u64; DNS_UDP_REQUEST_ID_BITMAP_WORDS],
+    next_id: u16,
+    in_use: usize,
+}
+
+impl Default for UdpRequestIdAllocator {
+    fn default() -> Self {
+        Self {
+            occupied: [0_u64; DNS_UDP_REQUEST_ID_BITMAP_WORDS],
+            next_id: 0,
+            in_use: 0,
+        }
+    }
+}
+
+impl UdpRequestIdAllocator {
+    fn allocate(&mut self, capacity: usize) -> Result<u16, String> {
+        let capacity = capacity.min(DNS_UDP_REQUEST_ID_SPACE);
+        if self.in_use >= capacity {
+            return Err("DNS UDP multiplex pending queue is full".to_owned());
+        }
+        for _ in 0..DNS_UDP_REQUEST_ID_SPACE {
+            let candidate = self.next_id;
+            self.next_id = self.next_id.wrapping_add(1);
+            if self.is_occupied(candidate) {
+                continue;
+            }
+            self.set_occupied(candidate, true);
+            self.in_use += 1;
+            return Ok(candidate);
+        }
+        Err("DNS UDP multiplex request id space is exhausted".to_owned())
+    }
+
+    fn release(&mut self, id: u16) {
+        if !self.is_occupied(id) {
+            return;
+        }
+        self.set_occupied(id, false);
+        self.in_use = self.in_use.saturating_sub(1);
+    }
+
+    fn is_occupied(&self, id: u16) -> bool {
+        let (word, bit) = dns_udp_request_id_bitmap_slot(id);
+        self.occupied[word] & (1_u64 << bit) != 0
+    }
+
+    fn set_occupied(&mut self, id: u16, occupied: bool) {
+        let (word, bit) = dns_udp_request_id_bitmap_slot(id);
+        let mask = 1_u64 << bit;
+        if occupied {
+            self.occupied[word] |= mask;
+        } else {
+            self.occupied[word] &= !mask;
+        }
+    }
+}
+
+impl PendingDnsQuestion {
+    fn matches(&self, qname_wire: &[u8], qtype: u16, qclass: u16) -> bool {
+        self.qtype == qtype
+            && self.qclass == qclass
+            && self.qname_wire.eq_ignore_ascii_case(qname_wire)
+    }
+}
+
+fn dns_udp_request_id_bitmap_slot(id: u16) -> (usize, usize) {
+    let index = id as usize;
+    (
+        index / DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS,
+        index % DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS,
+    )
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn open_udp_multiplex_handle(
@@ -80,13 +175,35 @@ async fn run_udp_multiplex_actor(
     socket: tokio::net::UdpSocket,
     mut receiver: tokio::sync::mpsc::Receiver<UdpMultiplexRequest>,
 ) {
-    let mut pending = BTreeMap::<u16, PendingUdpRequest>::new();
-    let mut next_id = 0_u16;
+    let mut pending = HashMap::<u16, PendingUdpRequest>::new();
+    let mut id_allocator = UdpRequestIdAllocator::default();
+    let mut deadlines = VecDeque::<PendingUdpDeadline>::new();
+    let mut next_generation = 1_u64;
     let mut buf = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
-    let mut cleanup = time::interval(dns_udp_forward_attempt_timeout());
     loop {
+        expire_pending_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);
+        if receiver.is_closed() && pending.is_empty() {
+            break;
+        }
+        let cleanup_deadline = next_udp_multiplex_deadline(&mut deadlines, &pending);
         tokio::select! {
             biased;
+
+            received = socket.recv(&mut buf) => {
+                match received {
+                    Ok(read) => {
+                        handle_udp_multiplex_response(&mut pending, &mut id_allocator, &buf[..read]);
+                    }
+                    Err(err) => {
+                        fail_pending_udp_requests(
+                            &mut pending,
+                            &mut id_allocator,
+                            format!("receive DNS UDP multiplex response from {target}: {err}"),
+                        );
+                        break;
+                    }
+                }
+            }
 
             maybe_request = receiver.recv(), if pending.len() < DNS_UDP_MULTIPLEX_PENDING_CAPACITY => {
                 let Some(request) = maybe_request else {
@@ -95,29 +212,19 @@ async fn run_udp_multiplex_actor(
                     }
                     continue;
                 };
-                handle_udp_multiplex_request(target, &socket, &mut pending, &mut next_id, request).await;
+                handle_udp_multiplex_request(
+                    target,
+                    &socket,
+                    &mut pending,
+                    &mut id_allocator,
+                    &mut deadlines,
+                    &mut next_generation,
+                    request,
+                ).await;
             }
 
-            received = socket.recv(&mut buf) => {
-                match received {
-                    Ok(read) => {
-                        handle_udp_multiplex_response(&mut pending, &buf[..read]);
-                    }
-                    Err(err) => {
-                        fail_pending_udp_requests(
-                            &mut pending,
-                            format!("receive DNS UDP multiplex response from {target}: {err}"),
-                        );
-                        break;
-                    }
-                }
-            }
-
-            _ = cleanup.tick() => {
-                expire_pending_udp_requests(&mut pending);
-                if receiver.is_closed() && pending.is_empty() {
-                    break;
-                }
+            _ = wait_for_udp_multiplex_deadline(cleanup_deadline) => {
+                expire_pending_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);
             }
         }
     }
@@ -126,9 +233,11 @@ async fn run_udp_multiplex_actor(
 async fn handle_udp_multiplex_request(
     target: SocketAddr,
     socket: &tokio::net::UdpSocket,
-    pending: &mut BTreeMap<u16, PendingUdpRequest>,
-    next_id: &mut u16,
-    request: UdpMultiplexRequest,
+    pending: &mut HashMap<u16, PendingUdpRequest>,
+    id_allocator: &mut UdpRequestIdAllocator,
+    deadlines: &mut VecDeque<PendingUdpDeadline>,
+    next_generation: &mut u64,
+    mut request: UdpMultiplexRequest,
 ) {
     if pending.len() >= DNS_UDP_MULTIPLEX_PENDING_CAPACITY {
         let _ = request
@@ -136,33 +245,47 @@ async fn handle_udp_multiplex_request(
             .send(Err("DNS UDP multiplex pending queue is full".to_owned()));
         return;
     }
-    let original_id = match dns_packet_id(&request.payload) {
+    let request_view = match DnsPacketView::parse(&request.payload) {
+        Ok(view) => view,
+        Err(err) => {
+            let _ = request
+                .response
+                .send(Err(format!("parse DNS UDP multiplex request: {err}")));
+            return;
+        }
+    };
+    let original_id = request_view.id();
+    let questions = pending_dns_questions(&request_view);
+    let upstream_id = match id_allocator.allocate(DNS_UDP_MULTIPLEX_PENDING_CAPACITY) {
         Ok(id) => id,
         Err(err) => {
             let _ = request.response.send(Err(err));
             return;
         }
     };
-    let upstream_id = match allocate_dns_udp_request_id(pending, next_id) {
-        Ok(id) => id,
-        Err(err) => {
-            let _ = request.response.send(Err(err));
-            return;
-        }
-    };
-    let upstream_payload = rewrite_dns_packet_id(&request.payload, upstream_id);
+    rewrite_dns_packet_id_in_place(&mut request.payload, upstream_id);
     let deadline = time::Instant::now() + dns_udp_forward_attempt_timeout();
+    let generation = *next_generation;
+    *next_generation = (*next_generation).wrapping_add(1).max(1);
     pending.insert(
         upstream_id,
         PendingUdpRequest {
-            upstream_payload: upstream_payload.clone(),
+            upstream_id,
             original_id,
+            generation,
             deadline,
+            questions,
             response: request.response,
         },
     );
-    if let Err(err) = socket.send(&upstream_payload).await {
+    deadlines.push_back(PendingUdpDeadline {
+        id: upstream_id,
+        generation,
+        deadline,
+    });
+    if let Err(err) = socket.send(&request.payload).await {
         if let Some(pending) = pending.remove(&upstream_id) {
+            id_allocator.release(upstream_id);
             let _ = pending.response.send(Err(format!(
                 "send DNS UDP multiplex packet to {target}: {err}"
             )));
@@ -170,13 +293,18 @@ async fn handle_udp_multiplex_request(
     }
 }
 
-fn handle_udp_multiplex_response(pending: &mut BTreeMap<u16, PendingUdpRequest>, response: &[u8]) {
+fn handle_udp_multiplex_response(
+    pending: &mut HashMap<u16, PendingUdpRequest>,
+    id_allocator: &mut UdpRequestIdAllocator,
+    response: &[u8],
+) {
     let Ok(response_id) = dns_packet_id(response) else {
         return;
     };
     let Some(pending_request) = pending.remove(&response_id) else {
         return;
     };
+    id_allocator.release(response_id);
     let result = validate_and_restore_udp_multiplex_response(&pending_request, response);
     let _ = pending_request.response.send(result);
 }
@@ -185,26 +313,80 @@ fn validate_and_restore_udp_multiplex_response(
     pending: &PendingUdpRequest,
     response: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let request = DnsPacketView::parse(&pending.upstream_payload)
-        .map_err(|err| format!("parse DNS UDP multiplex request: {err}"))?;
     let response_view = DnsPacketView::parse(response)
         .map_err(|err| format!("parse DNS UDP multiplex response: {err}"))?;
-    validate_dns_packet_response_for_request_fast(&request, Some(&response_view), true)
-        .map_err(|err| format!("validate DNS UDP multiplex response: {err:?}"))?;
+    validate_dns_udp_multiplex_response_for_request(pending, &response_view)?;
     restore_packed_response_request_id(response, pending.original_id)
         .ok_or_else(|| "DNS UDP multiplex response is too short to restore request id".to_owned())
 }
 
-fn expire_pending_udp_requests(pending: &mut BTreeMap<u16, PendingUdpRequest>) {
-    let now = time::Instant::now();
-    let expired = pending
+fn validate_dns_udp_multiplex_response_for_request(
+    pending: &PendingUdpRequest,
+    response: &DnsPacketView<'_>,
+) -> Result<(), String> {
+    if !response.response() {
+        return Err("validate DNS UDP multiplex response: DNS request received".to_owned());
+    }
+    if response.id() != pending.upstream_id {
+        return Err(format!(
+            "validate DNS UDP multiplex response: id mismatch got {} want {}",
+            response.id(),
+            pending.upstream_id
+        ));
+    }
+    if pending.questions.is_empty() {
+        return Ok(());
+    }
+    if response.question_count() == 0 {
+        return Err("validate DNS UDP multiplex response: missing question".to_owned());
+    }
+    if response.question_count() != pending.questions.len() {
+        return Err(format!(
+            "validate DNS UDP multiplex response: question count mismatch got {} want {}",
+            response.question_count(),
+            pending.questions.len()
+        ));
+    }
+    for (index, (want, got)) in pending
+        .questions
         .iter()
-        .filter_map(|(id, request)| {
-            (request.deadline <= now || request.response.is_closed()).then_some(*id)
-        })
-        .collect::<Vec<_>>();
-    for id in expired {
-        if let Some(request) = pending.remove(&id) {
+        .zip(response.questions())
+        .enumerate()
+    {
+        if want.matches(got.qname_wire(), got.qtype(), got.qclass()) {
+            continue;
+        }
+        return Err(format!(
+            "validate DNS UDP multiplex response: question mismatch at index {index}"
+        ));
+    }
+    Ok(())
+}
+
+fn expire_pending_udp_requests(
+    pending: &mut HashMap<u16, PendingUdpRequest>,
+    deadlines: &mut VecDeque<PendingUdpDeadline>,
+    id_allocator: &mut UdpRequestIdAllocator,
+) {
+    let now = time::Instant::now();
+    loop {
+        let Some(deadline) = deadlines.front().copied() else {
+            break;
+        };
+        let Some(request) = pending.get(&deadline.id) else {
+            deadlines.pop_front();
+            continue;
+        };
+        if request.generation != deadline.generation || request.deadline != deadline.deadline {
+            deadlines.pop_front();
+            continue;
+        }
+        if request.deadline > now && !request.response.is_closed() {
+            break;
+        }
+        deadlines.pop_front();
+        if let Some(request) = pending.remove(&deadline.id) {
+            id_allocator.release(deadline.id);
             let _ = request
                 .response
                 .send(Err("DNS UDP multiplex pending request timed out".to_owned()));
@@ -212,25 +394,41 @@ fn expire_pending_udp_requests(pending: &mut BTreeMap<u16, PendingUdpRequest>) {
     }
 }
 
-fn fail_pending_udp_requests(pending: &mut BTreeMap<u16, PendingUdpRequest>, error: String) {
+fn fail_pending_udp_requests(
+    pending: &mut HashMap<u16, PendingUdpRequest>,
+    id_allocator: &mut UdpRequestIdAllocator,
+    error: String,
+) {
     let pending_requests = std::mem::take(pending);
-    for (_, request) in pending_requests {
+    for (id, request) in pending_requests {
+        id_allocator.release(id);
         let _ = request.response.send(Err(error.clone()));
     }
 }
 
-fn allocate_dns_udp_request_id(
-    pending: &BTreeMap<u16, PendingUdpRequest>,
-    next_id: &mut u16,
-) -> Result<u16, String> {
-    for _ in 0..=u16::MAX {
-        let candidate = *next_id;
-        *next_id = next_id.wrapping_add(1);
-        if !pending.contains_key(&candidate) {
-            return Ok(candidate);
+fn next_udp_multiplex_deadline(
+    deadlines: &mut VecDeque<PendingUdpDeadline>,
+    pending: &HashMap<u16, PendingUdpRequest>,
+) -> Option<time::Instant> {
+    loop {
+        let deadline = *deadlines.front()?;
+        let Some(request) = pending.get(&deadline.id) else {
+            deadlines.pop_front();
+            continue;
+        };
+        if request.generation != deadline.generation || request.deadline != deadline.deadline {
+            deadlines.pop_front();
+            continue;
         }
+        return Some(deadline.deadline);
     }
-    Err("DNS UDP multiplex request id space is exhausted".to_owned())
+}
+
+async fn wait_for_udp_multiplex_deadline(deadline: Option<time::Instant>) {
+    match deadline {
+        Some(deadline) => time::sleep_until(deadline).await,
+        None => std::future::pending::<()>().await,
+    }
 }
 
 fn dns_packet_id(payload: &[u8]) -> Result<u16, String> {
@@ -240,12 +438,21 @@ fn dns_packet_id(payload: &[u8]) -> Result<u16, String> {
     Ok(u16::from_be_bytes([id[0], id[1]]))
 }
 
-fn rewrite_dns_packet_id(payload: &[u8], id: u16) -> Vec<u8> {
-    let mut out = payload.to_vec();
-    if out.len() >= 2 {
-        out[0..2].copy_from_slice(&id.to_be_bytes());
+fn pending_dns_questions(request: &DnsPacketView<'_>) -> Vec<PendingDnsQuestion> {
+    request
+        .questions()
+        .map(|question| PendingDnsQuestion {
+            qname_wire: question.qname_wire().to_vec(),
+            qtype: question.qtype(),
+            qclass: question.qclass(),
+        })
+        .collect()
+}
+
+fn rewrite_dns_packet_id_in_place(payload: &mut [u8], id: u16) {
+    if payload.len() >= 2 {
+        payload[0..2].copy_from_slice(&id.to_be_bytes());
     }
-    out
 }
 
 async fn open_connected_dns_udp_socket(
@@ -277,6 +484,91 @@ async fn open_connected_dns_udp_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn udp_request_id_allocator_enforces_capacity_and_releases_ids() {
+        let mut allocator = UdpRequestIdAllocator::default();
+        let first = allocator.allocate(1).unwrap();
+        assert!(allocator.allocate(1).is_err());
+        assert!(allocator.is_occupied(first));
+
+        allocator.release(first);
+        assert!(!allocator.is_occupied(first));
+        allocator.next_id = first;
+        assert_eq!(allocator.allocate(1).unwrap(), first);
+    }
+
+    #[test]
+    fn udp_deadline_cleanup_ignores_stale_generation_for_reused_id() {
+        let mut allocator = UdpRequestIdAllocator::default();
+        let id = allocator
+            .allocate(DNS_UDP_MULTIPLEX_PENDING_CAPACITY)
+            .unwrap();
+        let mut pending = HashMap::new();
+        let mut deadlines = VecDeque::new();
+        let now = time::Instant::now();
+        let live_deadline = now + dns_udp_forward_attempt_timeout();
+        let (response, _receiver) = tokio::sync::oneshot::channel();
+
+        pending.insert(
+            id,
+            PendingUdpRequest {
+                upstream_id: id,
+                original_id: id,
+                generation: 2,
+                deadline: live_deadline,
+                questions: Vec::new(),
+                response,
+            },
+        );
+        deadlines.push_back(PendingUdpDeadline {
+            id,
+            generation: 1,
+            deadline: now,
+        });
+        deadlines.push_back(PendingUdpDeadline {
+            id,
+            generation: 2,
+            deadline: live_deadline,
+        });
+
+        expire_pending_udp_requests(&mut pending, &mut deadlines, &mut allocator);
+
+        assert!(pending.contains_key(&id));
+        assert!(allocator.is_occupied(id));
+        assert_eq!(
+            next_udp_multiplex_deadline(&mut deadlines, &pending),
+            Some(live_deadline)
+        );
+    }
+
+    #[test]
+    fn udp_multiplex_validation_rejects_question_mismatch() {
+        const UPSTREAM_ID: u16 = 0x5151;
+        const ORIGINAL_ID: u16 = 0x1515;
+        const EXPECTED_QNAME: &str = "expected.example";
+        const DIFFERENT_QNAME: &str = "different.example";
+
+        let expected_query =
+            build_dns_query_packet(ORIGINAL_ID, EXPECTED_QNAME, DNS_QTYPE_A).unwrap();
+        let expected_view = DnsPacketView::parse(&expected_query).unwrap();
+        let (response, _receiver) = tokio::sync::oneshot::channel();
+        let pending = PendingUdpRequest {
+            upstream_id: UPSTREAM_ID,
+            original_id: ORIGINAL_ID,
+            generation: 1,
+            deadline: time::Instant::now() + dns_udp_forward_attempt_timeout(),
+            questions: pending_dns_questions(&expected_view),
+            response,
+        };
+        let different_query =
+            build_dns_query_packet(UPSTREAM_ID, DIFFERENT_QNAME, DNS_QTYPE_A).unwrap();
+        let different_response = dns_a_response_for_query(&different_query, [192, 0, 2, 1]);
+
+        assert!(
+            validate_and_restore_udp_multiplex_response(&pending, &different_response).is_err()
+        );
+    }
 
     #[tokio::test]
     async fn udp_multiplex_handles_out_of_order_responses() {
