@@ -122,8 +122,14 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsForwarderEntry {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) last_used: u64,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) quic:
-        Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) kind:
+        ResidentDnsForwarderEntryKind,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsForwarderEntryKind
+{
+    Quic(Arc<AsyncMutex<ResidentDnsQuicForwarder>>),
+    Udp(Arc<AsyncMutex<ResidentDnsUdpForwarder>>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -133,6 +139,30 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) authority: String,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) path: String,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) target: Option<SocketAddr>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) selection:
+        ResidentDnsForwarderSelectionKey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsForwarderSelectionKey
+{
+    Unrouted,
+    Direct,
+    Proxy { graph_link_hash: String },
+}
+
+impl ResidentDnsForwarderSelectionKey {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn from_selection(
+        selection: &ResidentDnsUpstreamSelection,
+    ) -> Self {
+        match selection {
+            ResidentDnsUpstreamSelection::Direct { .. } => Self::Direct,
+            ResidentDnsUpstreamSelection::Proxy { proxy } => Self::Proxy {
+                graph_link_hash: proxy.graph_link_hash.clone(),
+            },
+        }
+    }
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsQuicForwarder {
@@ -142,6 +172,13 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<quinn::Endpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) socket:
+        Option<tokio::net::UdpSocket>,
 }
 
 impl Drop for ResidentDnsQuicForwarder {
