@@ -5,7 +5,7 @@ use super::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 use std::time::Duration;
@@ -19,6 +19,18 @@ const TEST_UNMATCHED_DNS_HOST: &str = "unmatched-resolver.fixture.invalid";
 const TEST_DNS_UPSTREAM_IPV4: &str = "192.0.2.53";
 const TEST_DNS_UPSTREAM_IPV6: &str = "2001:db8::53";
 static TEST_ASSET_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+const DNS_PRESSURE_ENABLE_ENV: &str = "DAENEXT_DNS_PRESSURE_ENABLE";
+const DNS_PRESSURE_BIND_IP_ENV: &str = "DAENEXT_DNS_PRESSURE_BIND_IP";
+const DNS_PRESSURE_TOTAL_ENV: &str = "DAENEXT_DNS_PRESSURE_TOTAL";
+const DNS_PRESSURE_CONCURRENCY_ENV: &str = "DAENEXT_DNS_PRESSURE_CONCURRENCY";
+const DNS_PRESSURE_QNAME_PREFIX_ENV: &str = "DAENEXT_DNS_PRESSURE_QNAME_PREFIX";
+const DNS_PRESSURE_QNAME_SUFFIX_ENV: &str = "DAENEXT_DNS_PRESSURE_QNAME_SUFFIX";
+const DNS_PRESSURE_QTYPE_ENV: &str = "DAENEXT_DNS_PRESSURE_QTYPE";
+const DNS_PRESSURE_UPSTREAM_TAG_ENV: &str = "DAENEXT_DNS_PRESSURE_UPSTREAM_TAG";
+const DNS_PRESSURE_UPSTREAM_SCHEME_ENV: &str = "DAENEXT_DNS_PRESSURE_UPSTREAM_SCHEME";
+const DNS_PRESSURE_RESPONSE_IP_ENV: &str = "DAENEXT_DNS_PRESSURE_RESPONSE_IP";
+const DNS_PRESSURE_RESPONSE_TTL_ENV: &str = "DAENEXT_DNS_PRESSURE_RESPONSE_TTL";
 
 fn parse_config(input: &str) -> Config {
     let sections = dae_config::parser::parse_config(input).unwrap();
@@ -1211,6 +1223,214 @@ async fn resident_dns_ipversion_prefer_does_not_synthesize_preferred_lookup() {
     server.await.unwrap();
 
     assert_eq!(received.load(Ordering::Relaxed), expected_queries);
+}
+
+#[tokio::test]
+#[ignore]
+async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
+    let Some(config) = dns_pressure_config_from_env() else {
+        println!(
+            "dns_pressure_result {}",
+            serde_json::json!({
+                "status": "skipped",
+                "reason": format!("{DNS_PRESSURE_ENABLE_ENV} is not enabled"),
+            })
+        );
+        return;
+    };
+
+    let upstream = tokio::net::UdpSocket::bind((config.bind_ip, 0))
+        .await
+        .unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let upstream_authority = upstream_addr.to_string();
+    let received = Arc::new(AtomicUsize::new(0));
+    let server_received = Arc::clone(&received);
+    let response_ip = config.response_ip;
+    let response_ttl = config.response_ttl;
+    let total = config.total;
+    let server = tokio::spawn(async move {
+        let mut buf = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+        while server_received.load(Ordering::Relaxed) < total {
+            let Ok((read, peer)) = upstream.recv_from(&mut buf).await else {
+                break;
+            };
+            server_received.fetch_add(1, Ordering::Relaxed);
+            let response = dns_pressure_response_for_query(&buf[..read], response_ip, response_ttl);
+            let _ = upstream.send_to(&response, peer).await;
+        }
+    });
+
+    let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            __UPSTREAM_TAG__: '__UPSTREAM_SCHEME__://__UPSTREAM_AUTHORITY__'
+          }
+          routing {
+            request {
+              fallback: __UPSTREAM_TAG__
+            }
+          }
+        }
+        "#
+    .replace("__UPSTREAM_TAG__", &config.upstream_tag)
+    .replace("__UPSTREAM_SCHEME__", &config.upstream_scheme)
+    .replace("__UPSTREAM_AUTHORITY__", &upstream_authority);
+    let plan = Arc::new(build_resident_dns_plan(&parse_config(&input), &test_geodata()).unwrap());
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency));
+    let latencies = Arc::new(Mutex::new(Vec::with_capacity(config.total)));
+    let failures = Arc::new(Mutex::new(Vec::<String>::new()));
+    let started = std::time::Instant::now();
+    let mut tasks = Vec::with_capacity(config.total);
+
+    for index in 0..config.total {
+        let permit = Arc::clone(&semaphore).acquire_owned().await.unwrap();
+        let plan = Arc::clone(&plan);
+        let latencies = Arc::clone(&latencies);
+        let failures = Arc::clone(&failures);
+        let qname = format!("{}-{}.{}", config.qname_prefix, index, config.qname_suffix);
+        let qtype = config.qtype;
+        tasks.push(tokio::spawn(async move {
+            let _permit = permit;
+            let query =
+                build_dns_query_packet((index as u16).wrapping_add(1), &qname, qtype).unwrap();
+            let request = DnsPacketView::parse(&query).unwrap();
+            let query_started = std::time::Instant::now();
+            match handle_resident_dns_udp_async(&plan, upstream_addr, &query).await {
+                Ok(response) => {
+                    if let Err(err) = validate_dns_response_for_request(&request, &response, true) {
+                        let mut failures = failures.lock().unwrap();
+                        failures.push(format!("{qname}: {err}"));
+                    } else {
+                        let mut latencies = latencies.lock().unwrap();
+                        latencies.push(query_started.elapsed().as_micros());
+                    }
+                }
+                Err(err) => {
+                    let mut failures = failures.lock().unwrap();
+                    failures.push(format!("{qname}: {err}"));
+                }
+            }
+        }));
+    }
+
+    for task in tasks {
+        task.await.unwrap();
+    }
+    let elapsed = started.elapsed();
+    if received.load(Ordering::Relaxed) < config.total {
+        server.abort();
+        let _ = server.await;
+    } else {
+        server.await.unwrap();
+    }
+
+    let mut latency_values = latencies.lock().unwrap().clone();
+    latency_values.sort_unstable();
+    let success = latency_values.len();
+    let failure_values = failures.lock().unwrap().clone();
+    let failure = failure_values.len();
+    let percentile = |percent: usize| -> u128 {
+        if latency_values.is_empty() {
+            return 0;
+        }
+        let rank = latency_values
+            .len()
+            .saturating_sub(1)
+            .saturating_mul(percent)
+            / 100;
+        latency_values[rank]
+    };
+    println!(
+        "dns_pressure_result {}",
+        serde_json::json!({
+            "status": if failure == 0 && success == config.total { "pass" } else { "fail" },
+            "total": config.total,
+            "concurrency": config.concurrency,
+            "success": success,
+            "failure": failure,
+            "upstream_received": received.load(Ordering::Relaxed),
+            "elapsed_ms": elapsed.as_millis(),
+            "qps": success as f64 / elapsed.as_secs_f64(),
+            "latency_us": {
+                "p50": percentile(50),
+                "p95": percentile(95),
+                "p99": percentile(99),
+            },
+            "first_errors": failure_values.into_iter().take(5).collect::<Vec<_>>(),
+        })
+    );
+}
+
+struct DnsPressureConfig {
+    bind_ip: IpAddr,
+    total: usize,
+    concurrency: usize,
+    qname_prefix: String,
+    qname_suffix: String,
+    qtype: u16,
+    upstream_tag: String,
+    upstream_scheme: String,
+    response_ip: IpAddr,
+    response_ttl: u32,
+}
+
+fn dns_pressure_config_from_env() -> Option<DnsPressureConfig> {
+    if std::env::var(DNS_PRESSURE_ENABLE_ENV).ok().as_deref() != Some("1") {
+        return None;
+    }
+    Some(DnsPressureConfig {
+        bind_ip: dns_pressure_env(DNS_PRESSURE_BIND_IP_ENV).parse().unwrap(),
+        total: dns_pressure_env(DNS_PRESSURE_TOTAL_ENV).parse().unwrap(),
+        concurrency: dns_pressure_env(DNS_PRESSURE_CONCURRENCY_ENV)
+            .parse::<usize>()
+            .unwrap()
+            .max(1),
+        qname_prefix: dns_pressure_env(DNS_PRESSURE_QNAME_PREFIX_ENV),
+        qname_suffix: dns_pressure_env(DNS_PRESSURE_QNAME_SUFFIX_ENV),
+        qtype: dns_pressure_env(DNS_PRESSURE_QTYPE_ENV).parse().unwrap(),
+        upstream_tag: dns_pressure_env(DNS_PRESSURE_UPSTREAM_TAG_ENV),
+        upstream_scheme: dns_pressure_env(DNS_PRESSURE_UPSTREAM_SCHEME_ENV),
+        response_ip: dns_pressure_env(DNS_PRESSURE_RESPONSE_IP_ENV)
+            .parse()
+            .unwrap(),
+        response_ttl: dns_pressure_env(DNS_PRESSURE_RESPONSE_TTL_ENV)
+            .parse()
+            .unwrap(),
+    })
+}
+
+fn dns_pressure_env(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|err| panic!("{name} is required for DNS pressure: {err}"))
+}
+
+fn dns_pressure_response_for_query(query: &[u8], response_ip: IpAddr, ttl: u32) -> Vec<u8> {
+    let view = DnsPacketView::parse(query).unwrap();
+    let qtype = view.questions().next().unwrap().qtype();
+    let answer_data = match (qtype, response_ip) {
+        (DNS_QTYPE_A, IpAddr::V4(ip)) => Some((DNS_QTYPE_A, ip.octets().to_vec())),
+        (DNS_QTYPE_AAAA, IpAddr::V6(ip)) => Some((DNS_QTYPE_AAAA, ip.octets().to_vec())),
+        _ => None,
+    };
+    let mut response = Vec::new();
+    response.extend_from_slice(&query[0..2]);
+    response.extend_from_slice(&0x8180_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&(answer_data.is_some() as u16).to_be_bytes());
+    response.extend_from_slice(&0_u16.to_be_bytes());
+    response.extend_from_slice(&0_u16.to_be_bytes());
+    response.extend_from_slice(&query[12..view.answer_offset()]);
+    if let Some((answer_qtype, data)) = answer_data {
+        response.extend_from_slice(&0xc00c_u16.to_be_bytes());
+        response.extend_from_slice(&answer_qtype.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&ttl.to_be_bytes());
+        response.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        response.extend_from_slice(&data);
+    }
+    response
 }
 
 #[tokio::test]
