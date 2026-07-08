@@ -807,6 +807,19 @@ fn response_with_question_qtype(mut response: Vec<u8>, qtype: u16) -> Vec<u8> {
     response
 }
 
+fn empty_response_for_query(query: &[u8]) -> Vec<u8> {
+    let view = DnsPacketView::parse(query).unwrap();
+    let mut response = Vec::new();
+    response.extend_from_slice(&query[0..2]);
+    response.extend_from_slice(&0x8180_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&0_u16.to_be_bytes());
+    response.extend_from_slice(&0_u16.to_be_bytes());
+    response.extend_from_slice(&0_u16.to_be_bytes());
+    response.extend_from_slice(&query[12..view.answer_offset()]);
+    response
+}
+
 fn domain_routing_test_matcher() -> RoutingMatcher {
     RoutingMatcher::from_fixture_value(&serde_json::json!({
         "domain_sets": [
@@ -1159,6 +1172,45 @@ async fn resident_dns_ipversion_prefer_rejects_non_preferred_when_preferred_has_
     assert_eq!(&response[0..2], &[0x12, 0x34]);
     assert_eq!(u16::from_be_bytes([response[2], response[3]]) & 0x000f, 0);
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+}
+
+#[tokio::test]
+async fn resident_dns_ipversion_prefer_does_not_synthesize_preferred_lookup() {
+    let socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let upstream_addr = socket.local_addr().unwrap();
+    let received = Arc::new(AtomicUsize::new(0));
+    let server_received = Arc::clone(&received);
+    let query = query_with_qtype(DNS_QTYPE_AAAA);
+    let expected_queries = usize::from(DnsPacketView::parse(&query).unwrap().question_count());
+    let server = tokio::spawn(async move {
+        let mut buf = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+        loop {
+            let timeout = if server_received.load(Ordering::Relaxed) == 0 {
+                RESIDENT_UDP_RESPONSE_TIMEOUT
+            } else {
+                dns_ipversion_preference_wait_timeout() + dns_ipversion_preference_wait_timeout()
+            };
+            let Ok(Ok((read, peer))) = time::timeout(timeout, socket.recv_from(&mut buf)).await
+            else {
+                break;
+            };
+            server_received.fetch_add(1, Ordering::Relaxed);
+            let response = empty_response_for_query(&buf[..read]);
+            socket.send_to(&response, peer).await.unwrap();
+        }
+    });
+
+    let mut plan = ResidentDnsPlan::asis(0);
+    plan.ipversion_prefer = Some(DNS_QTYPE_A);
+    let response = handle_resident_dns_udp_async(&plan, upstream_addr, &query)
+        .await
+        .unwrap();
+    assert_eq!(&response[0..2], &query[0..2]);
+    server.await.unwrap();
+
+    assert_eq!(received.load(Ordering::Relaxed), expected_queries);
 }
 
 #[tokio::test]

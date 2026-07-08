@@ -36,7 +36,6 @@ use super::super::resident_routing::{
     expand_resident_dns_response_ip_params_with_resolver,
     expand_resident_dns_response_qname_rules_with_resolver,
 };
-use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::direct::open_direct_tcp_connection_async;
 #[cfg(test)]
 use super::plan::build_resident_dataplane_plan;
@@ -48,10 +47,12 @@ use super::udp::{
     ResidentProxyUdpBridge, forward_resident_proxy_dns_udp_async,
     open_resident_proxy_udp_bridge_async,
 };
+use super::{RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT};
 
 mod cache;
 mod domain_routing;
 mod error_response;
+mod ipversion_preference;
 mod reload;
 mod routing;
 mod tcp_wire;
@@ -75,6 +76,9 @@ use self::domain_routing::{
 };
 pub(super) use self::error_response::build_dns_server_failure_response;
 use self::error_response::build_reject_response;
+use self::ipversion_preference::{
+    ResidentDnsIpversionPreferenceRegistry, dns_ipversion_preference_wait_timeout,
+};
 pub(in crate::production_runtime_owner) use self::reload::ResidentDnsReloadHandle;
 use self::reload::ResidentDnsReloadRestoreReport;
 pub(crate) use self::reload::ResidentDnsReloadSnapshot;
@@ -161,6 +165,7 @@ pub(super) struct ResidentDnsPlan {
     forwarders: Arc<ResidentDnsForwarderCache>,
     fixed_domain_ttl: Arc<BTreeMap<String, i64>>,
     ipversion_prefer: Option<u16>,
+    ipversion_preference_registry: Arc<ResidentDnsIpversionPreferenceRegistry>,
     mark: u32,
     upstream_router: Option<Arc<ResidentDnsUpstreamRouter>>,
 }
@@ -186,6 +191,9 @@ impl ResidentDnsPlan {
             forwarders: Arc::new(ResidentDnsForwarderCache::default()),
             fixed_domain_ttl: Arc::new(BTreeMap::new()),
             ipversion_prefer: None,
+            ipversion_preference_registry: Arc::new(
+                ResidentDnsIpversionPreferenceRegistry::default(),
+            ),
             mark,
             upstream_router: None,
         }
@@ -306,6 +314,7 @@ pub(super) fn build_resident_dns_plan(
         forwarders: Arc::new(ResidentDnsForwarderCache::default()),
         fixed_domain_ttl: Arc::new(fixed_domain_ttl),
         ipversion_prefer,
+        ipversion_preference_registry: Arc::new(ResidentDnsIpversionPreferenceRegistry::default()),
         mark: so_mark_from_dae,
         upstream_router: None,
     })
@@ -589,55 +598,47 @@ async fn handle_ipversion_preference(
     if !matches!(requested_qtype, DNS_QTYPE_A | DNS_QTYPE_AAAA) {
         return Ok(None);
     }
-    if requested_qtype == preferred_qtype {
-        return Ok(None);
-    }
-    let preferred_payload = dns_request_with_qtype(payload, request, preferred_qtype)?;
-    let preferred_request = DnsPacketView::parse(&preferred_payload)
-        .map_err(|err| format!("parse preferred DNS request: {err}"))?;
-    let preferred_future = handle_resident_dns_request_without_preference(
-        plan,
-        original_dst,
-        &preferred_payload,
-        &preferred_request,
-        asis_transport,
-    );
-    let requested_future = handle_resident_dns_request_without_preference(
+    let qname = question
+        .qname_to_canonical_string()
+        .map_err(|err| format!("read DNS request qname for ipversion preference: {err}"))?;
+    let preferred_key = DnsCacheKey::new(qname, preferred_qtype, question.qclass());
+    let requested = handle_resident_dns_request_without_preference(
         plan,
         original_dst,
         payload,
         request,
         asis_transport,
-    );
-    tokio::pin!(preferred_future);
-    tokio::pin!(requested_future);
-    let mut requested = None;
-    let preferred = loop {
-        tokio::select! {
-            preferred = &mut preferred_future => break preferred,
-            requested_result = &mut requested_future, if requested.is_none() => {
-                requested = Some(requested_result);
-            }
+    )
+    .await;
+    if requested_qtype == preferred_qtype {
+        if let Ok(response) = requested.as_ref() {
+            plan.ipversion_preference_registry
+                .notify_preferred(&preferred_key, dns_response_has_any_ip(response)?);
+        } else {
+            plan.ipversion_preference_registry
+                .notify_preferred(&preferred_key, false);
         }
-    };
-    if let Ok(response) = preferred.as_ref()
-        && dns_response_has_any_ip(response)?
-    {
+        return requested.map(Some);
+    }
+    if dns_preferred_cache_has_ip(plan, &preferred_key)? {
         return build_reject_response(payload, request).map(Some);
     }
-    let requested = match requested {
-        Some(requested) => requested,
-        None => requested_future.await,
-    };
-    match requested {
-        Ok(response) => Ok(Some(response)),
-        Err(requested_err) => match preferred {
-            Ok(_) => Err(requested_err),
-            Err(preferred_err) => Err(format!(
-                "{requested_err}; preferred lookup: {preferred_err}"
-            )),
-        },
+    let preferred_wait = plan
+        .ipversion_preference_registry
+        .wait_for_preferred(&preferred_key, dns_ipversion_preference_wait_timeout())
+        .await
+        .unwrap_or(false);
+    if preferred_wait || dns_preferred_cache_has_ip(plan, &preferred_key)? {
+        return build_reject_response(payload, request).map(Some);
     }
+    requested.map(Some)
+}
+
+fn dns_preferred_cache_has_ip(
+    plan: &ResidentDnsPlan,
+    preferred_key: &DnsCacheKey,
+) -> Result<bool, String> {
+    plan.cache.lookup_key_has_any_ip(preferred_key, false)
 }
 
 async fn handle_resident_dns_request_without_preference(
@@ -856,23 +857,6 @@ fn dns_response_cache_key_for_request_action(
         }
     };
     Ok(ResidentDnsResponseCacheKey::new(base, scope))
-}
-
-fn dns_request_with_qtype(
-    payload: &[u8],
-    request: &DnsPacketView<'_>,
-    qtype: u16,
-) -> Result<Vec<u8>, String> {
-    let qtype_offset = request
-        .answer_offset()
-        .checked_sub(4)
-        .ok_or_else(|| "DNS request question section is truncated".to_owned())?;
-    if payload.len() < qtype_offset + 2 {
-        return Err("DNS request qtype offset is outside packet".to_owned());
-    }
-    let mut out = payload.to_vec();
-    out[qtype_offset..qtype_offset + 2].copy_from_slice(&qtype.to_be_bytes());
-    Ok(out)
 }
 
 fn dns_response_has_any_ip(response: &[u8]) -> Result<bool, String> {
