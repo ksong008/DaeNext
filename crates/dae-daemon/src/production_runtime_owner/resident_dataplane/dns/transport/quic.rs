@@ -18,18 +18,12 @@ async fn forward_dns_quic_cached(
         Arc::clone(&forwarder.permits)
     };
     let _permit = acquire_dns_owned_permit(permits, "DNS QUIC stream pool").await?;
-    let (connection, upstream) = {
-        let mut forwarder = forwarder.lock().await;
-        (forwarder.connection().await?, forwarder.upstream.clone())
-    };
+    let (connection, upstream) = cached_dns_quic_connection(&forwarder).await?;
     match forward_dns_over_quic_connection(&upstream, &connection, payload).await {
         Ok(response) => Ok(response),
         Err(first_err) => {
-            let (connection, upstream) = {
-                let mut forwarder = forwarder.lock().await;
-                forwarder.close_connection();
-                (forwarder.connection().await?, forwarder.upstream.clone())
-            };
+            close_cached_dns_quic_connection(&forwarder).await;
+            let (connection, upstream) = cached_dns_quic_connection(&forwarder).await?;
             forward_dns_over_quic_connection(&upstream, &connection, payload)
                 .await
                 .map_err(|retry_err| {
@@ -37,6 +31,72 @@ async fn forward_dns_quic_cached(
                 })
         }
     }
+}
+
+async fn cached_dns_quic_connection(
+    forwarder: &Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
+) -> Result<(quinn::Connection, ResidentDnsUpstream), String> {
+    {
+        let forwarder = forwarder.lock().await;
+        if let Some(connection) = forwarder.connection.as_ref() {
+            return Ok((connection.clone(), forwarder.upstream.clone()));
+        }
+    }
+    let open_lock = {
+        let forwarder = forwarder.lock().await;
+        Arc::clone(&forwarder.open_lock)
+    };
+    let _open_guard = open_lock.lock().await;
+    {
+        let forwarder = forwarder.lock().await;
+        if let Some(connection) = forwarder.connection.as_ref() {
+            return Ok((connection.clone(), forwarder.upstream.clone()));
+        }
+    }
+    let (upstream, mark, fixed_remote) = {
+        let forwarder = forwarder.lock().await;
+        (
+            forwarder.upstream.clone(),
+            forwarder.mark,
+            forwarder.fixed_remote,
+        )
+    };
+    let mut failures = Vec::new();
+    let remotes = match fixed_remote {
+        Some(remote) => vec![remote],
+        None => resolved_upstream_targets(&upstream).await?,
+    };
+    for remote in remotes {
+        match connect_dns_quic_endpoint_async(
+            &upstream,
+            remote,
+            mark,
+            DNS_DOQ_ALPN,
+            "connect DoQ endpoint",
+            "DNS QUIC handshake timeout",
+            "connect DNS QUIC upstream",
+        )
+        .await
+        {
+            Ok((endpoint, connection)) => {
+                let mut forwarder = forwarder.lock().await;
+                forwarder.endpoint = Some(endpoint);
+                forwarder.connection = Some(connection.clone());
+                return Ok((connection, upstream));
+            }
+            Err(err) => failures.push(format!("{remote}: {err}")),
+        }
+    }
+    Err(dns_upstream_targets_failed(
+        &upstream,
+        "connect DNS QUIC to",
+        failures,
+    ))
+}
+
+async fn close_cached_dns_quic_connection(forwarder: &Arc<AsyncMutex<ResidentDnsQuicForwarder>>) {
+    let mut forwarder = forwarder.lock().await;
+    forwarder.close_connection();
 }
 
 pub(super) async fn forward_dns_quic_async(
@@ -141,44 +201,6 @@ async fn forward_dns_quic_to_proxy_async(
 }
 
 impl ResidentDnsQuicForwarder {
-    async fn connection(&mut self) -> Result<quinn::Connection, String> {
-        if let Some(connection) = self.connection.as_ref() {
-            return Ok(connection.clone());
-        }
-        let mut failures = Vec::new();
-        let remotes = match self.fixed_remote {
-            Some(remote) => vec![remote],
-            None => resolved_upstream_targets(&self.upstream).await?,
-        };
-        for remote in remotes {
-            match self.connect_remote(remote).await {
-                Ok(connection) => return Ok(connection),
-                Err(err) => failures.push(format!("{remote}: {err}")),
-            }
-        }
-        Err(dns_upstream_targets_failed(
-            &self.upstream,
-            "connect DNS QUIC to",
-            failures,
-        ))
-    }
-
-    async fn connect_remote(&mut self, remote: SocketAddr) -> Result<quinn::Connection, String> {
-        let (endpoint, connection) = connect_dns_quic_endpoint_async(
-            &self.upstream,
-            remote,
-            self.mark,
-            DNS_DOQ_ALPN,
-            "connect DoQ endpoint",
-            "DNS QUIC handshake timeout",
-            "connect DNS QUIC upstream",
-        )
-        .await?;
-        self.endpoint = Some(endpoint);
-        self.connection = Some(connection.clone());
-        Ok(connection)
-    }
-
     fn close_connection(&mut self) {
         if let Some(connection) = self.connection.take() {
             connection.close(0_u32.into(), b"dns-query failed");
