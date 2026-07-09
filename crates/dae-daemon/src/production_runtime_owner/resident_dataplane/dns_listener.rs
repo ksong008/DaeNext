@@ -4,6 +4,7 @@
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener, UdpSocket};
 
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{
     TcpListener as TokioTcpListener, TcpStream as TokioTcpStream, UdpSocket as TokioUdpSocket,
 };
@@ -24,6 +25,8 @@ use super::*;
 
 const DNS_BIND_READ_LIMIT: usize = 4096;
 const DNS_BIND_UDP_MAX_INFLIGHT: usize = 128;
+const DNS_BIND_TCP_MAX_INFLIGHT: usize = 128;
+const DNS_BIND_TCP_IO_TIMEOUT: std::time::Duration = RESIDENT_UDP_RESPONSE_TIMEOUT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResidentDnsBindEndpoint {
@@ -281,9 +284,30 @@ async fn run_resident_dns_udp_bind_listener_async(
                     }
                 };
                 let request = buf[..read].to_vec();
-                let permit = match Arc::clone(&semaphore).acquire_owned().await {
+                let permit = match Arc::clone(&semaphore).try_acquire_owned() {
                     Ok(permit) => permit,
-                    Err(_) => break,
+                    Err(tokio::sync::TryAcquireError::NoPermits) => {
+                        metrics.add_upload(request.len());
+                        let _ = send_resident_dns_udp_bind_failure_response(
+                            &socket,
+                            peer,
+                            &request,
+                            metrics.as_ref(),
+                        ).await;
+                        append_event(
+                            &event_file,
+                            &event_lock,
+                            json!({
+                                "event": "dns_bind_overloaded",
+                                "local_addr": local_addr.to_string(),
+                                "peer": peer.to_string(),
+                                "network": "udp",
+                                "max_inflight": DNS_BIND_UDP_MAX_INFLIGHT,
+                            }),
+                        );
+                        continue;
+                    }
+                    Err(tokio::sync::TryAcquireError::Closed) => break,
                 };
                 tasks.spawn(handle_resident_dns_udp_bind_packet_async(
                     Arc::clone(&socket),
@@ -465,8 +489,10 @@ async fn run_resident_dns_tcp_bind_listener_async(
             "local_addr": local_addr.to_string(),
             "network": "tcp",
             "handler": "resident-dns-tcp",
+            "max_inflight": DNS_BIND_TCP_MAX_INFLIGHT,
         }),
     );
+    let semaphore = Arc::new(Semaphore::new(DNS_BIND_TCP_MAX_INFLIGHT));
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
             accepted = listener.accept() => {
@@ -489,6 +515,25 @@ async fn run_resident_dns_tcp_bind_listener_async(
                         continue;
                     }
                 };
+                let permit = match Arc::clone(&semaphore).try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(tokio::sync::TryAcquireError::NoPermits) => {
+                        append_event(
+                            &event_file,
+                            &event_lock,
+                            json!({
+                                "event": "dns_bind_overloaded",
+                                "local_addr": local_addr.to_string(),
+                                "peer": peer.to_string(),
+                                "network": "tcp",
+                                "max_inflight": DNS_BIND_TCP_MAX_INFLIGHT,
+                            }),
+                        );
+                        drop(stream);
+                        continue;
+                    }
+                    Err(tokio::sync::TryAcquireError::Closed) => break,
+                };
                 tokio::spawn(handle_resident_dns_tcp_bind_connection_async(
                     stream,
                     peer,
@@ -498,6 +543,7 @@ async fn run_resident_dns_tcp_bind_listener_async(
                     event_file.clone(),
                     Arc::clone(&event_lock),
                     Arc::clone(&metrics),
+                    permit,
                 ));
             }
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {}
@@ -523,13 +569,14 @@ async fn handle_resident_dns_tcp_bind_connection_async(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
     loop {
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        let request = match read_dns_tcp_payload_async(&mut stream).await {
+        let request = match read_dns_tcp_payload_bind_timeout_async(&mut stream).await {
             Ok(Some(request)) => request,
             Ok(None) => return,
             Err(err) => {
@@ -553,7 +600,9 @@ async fn handle_resident_dns_tcp_bind_connection_async(
             Ok(result) => {
                 let response = result.response;
                 let response_len = response.len();
-                if let Err(err) = write_dns_tcp_payload_async(&mut stream, &response).await {
+                if let Err(err) =
+                    write_dns_tcp_payload_bind_timeout_async(&mut stream, &response).await
+                {
                     let err = err.to_string();
                     append_event(
                         &event_file,
@@ -648,9 +697,47 @@ async fn write_resident_dns_tcp_bind_failure_response(
     let Some(response) = dns_bind_failure_response(request) else {
         return Ok(());
     };
-    write_dns_tcp_payload_async(stream, &response).await?;
+    write_dns_tcp_payload_bind_timeout_async(stream, &response).await?;
     metrics.add_download(response.len());
     Ok(())
+}
+
+async fn read_dns_tcp_payload_bind_timeout_async(
+    stream: &mut TokioTcpStream,
+) -> Result<Option<Vec<u8>>, String> {
+    read_dns_tcp_payload_with_timeout_async(stream, DNS_BIND_TCP_IO_TIMEOUT).await
+}
+
+async fn read_dns_tcp_payload_with_timeout_async<S>(
+    stream: &mut S,
+    timeout: std::time::Duration,
+) -> Result<Option<Vec<u8>>, String>
+where
+    S: AsyncRead + Unpin,
+{
+    time::timeout(timeout, read_dns_tcp_payload_async(stream))
+        .await
+        .map_err(|_| "DNS TCP bind read timeout".to_owned())?
+}
+
+async fn write_dns_tcp_payload_bind_timeout_async(
+    stream: &mut TokioTcpStream,
+    payload: &[u8],
+) -> Result<(), String> {
+    write_dns_tcp_payload_with_timeout_async(stream, payload, DNS_BIND_TCP_IO_TIMEOUT).await
+}
+
+async fn write_dns_tcp_payload_with_timeout_async<S>(
+    stream: &mut S,
+    payload: &[u8],
+    timeout: std::time::Duration,
+) -> Result<(), String>
+where
+    S: AsyncWrite + Unpin,
+{
+    time::timeout(timeout, write_dns_tcp_payload_async(stream, payload))
+        .await
+        .map_err(|_| "DNS TCP bind write timeout".to_owned())?
 }
 
 fn dns_bind_failure_response(request: &[u8]) -> Option<Vec<u8>> {
@@ -769,6 +856,7 @@ fn parse_resident_dns_bind_endpoint(bind: &str) -> Result<Option<ResidentDnsBind
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
 
     use dae_dns::{
         DNS_DEFAULT_PORT, DNS_FLAG_RESPONSE, DNS_HEADER_LEN, DNS_RCODE_MASK, DNS_RCODE_SERVFAIL,
@@ -958,5 +1046,28 @@ mod tests {
 
         assert!(dns_bind_failure_response(&response).is_none());
         assert!(dns_bind_failure_response(&[]).is_none());
+    }
+
+    #[tokio::test]
+    async fn dns_bind_tcp_read_timeout_closes_slow_client() {
+        let (_client, mut server) = tokio::io::duplex(64);
+
+        let err = read_dns_tcp_payload_with_timeout_async(&mut server, Duration::from_millis(1))
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("read timeout"));
+    }
+
+    #[tokio::test]
+    async fn dns_bind_tcp_write_timeout_closes_slow_client() {
+        let (mut client, _server) = tokio::io::duplex(1);
+
+        let err =
+            write_dns_tcp_payload_with_timeout_async(&mut client, QUERY, Duration::from_millis(1))
+                .await
+                .unwrap_err();
+
+        assert!(err.contains("write timeout"));
     }
 }
