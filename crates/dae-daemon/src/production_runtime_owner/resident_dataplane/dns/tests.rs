@@ -2323,8 +2323,17 @@ fn resident_dns_forwarder_cache_reuses_proxy_udp_by_selection() {
     let second = cache
         .proxy_udp_forwarder(&upstream, target, Arc::clone(proxy), &selection)
         .unwrap();
+    let different_target = cache
+        .proxy_udp_forwarder(
+            &upstream,
+            test_dns_upstream_target_v6(),
+            Arc::clone(proxy),
+            &selection,
+        )
+        .unwrap();
 
     assert!(Arc::ptr_eq(&first, &second));
+    assert!(!Arc::ptr_eq(&first, &different_target));
     assert!(first.shard_count() > 0);
 }
 

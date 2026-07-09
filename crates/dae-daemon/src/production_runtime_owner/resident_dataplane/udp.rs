@@ -89,6 +89,8 @@ mod vmess_session;
 use self::vmess_session::*;
 mod packet_handler;
 use self::packet_handler::*;
+mod proxy_dns_forwarder;
+pub(super) use self::proxy_dns_forwarder::*;
 mod probe_dns;
 pub(super) use self::probe_dns::*;
 mod descriptors;
