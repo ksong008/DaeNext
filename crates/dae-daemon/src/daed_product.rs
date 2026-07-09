@@ -241,6 +241,7 @@ struct ProductHttpMetrics {
     queue_capacity: AtomicU64,
     worker_stack_bytes: AtomicU64,
     active_connections: AtomicU64,
+    active_sse_connections: AtomicU64,
     accepted_total: AtomicU64,
     enqueued_total: AtomicU64,
     rejected_total: AtomicU64,
@@ -286,12 +287,25 @@ impl ProductHttpMetrics {
         self.active_connections.fetch_sub(1, Ordering::Relaxed);
     }
 
+    fn sse_opened(&self) {
+        self.active_sse_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn sse_closed(&self) {
+        let _ = self.active_sse_connections.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |connections| Some(connections.saturating_sub(1)),
+        );
+    }
+
     fn snapshot(&self) -> Value {
         json!({
             "configuredWorkers": self.configured_workers.load(Ordering::Relaxed),
             "queueCapacity": self.queue_capacity.load(Ordering::Relaxed),
             "workerStackBytes": self.worker_stack_bytes.load(Ordering::Relaxed),
             "activeConnections": self.active_connections.load(Ordering::Relaxed),
+            "activeSseConnections": self.active_sse_connections.load(Ordering::Relaxed),
             "acceptedTotal": self.accepted_total.load(Ordering::Relaxed),
             "enqueuedTotal": self.enqueued_total.load(Ordering::Relaxed),
             "rejectedTotal": self.rejected_total.load(Ordering::Relaxed),

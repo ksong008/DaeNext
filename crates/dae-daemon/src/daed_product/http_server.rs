@@ -202,6 +202,8 @@ fn detach_sse_stream(
     };
     stream.set_write_timeout(Some(PRODUCT_HTTP_SSE_WRITE_TIMEOUT))?;
     let thread_name = format!("daed-sse-{stream_kind}");
+    metrics.sse_opened();
+    let thread_metrics = Arc::clone(&metrics);
     match thread::Builder::new()
         .name(thread_name)
         .stack_size(PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT)
@@ -211,9 +213,13 @@ fn detach_sse_stream(
             } else {
                 let _ = stream_runtime_events(&mut stream, &app, &request);
             }
-            metrics.closed();
+            thread_metrics.sse_closed();
+            thread_metrics.closed();
         }) {
         Ok(_) => Ok(ProductHttpConnectionResult::Detached),
-        Err(err) => Err(err),
+        Err(err) => {
+            metrics.sse_closed();
+            Err(err)
+        }
     }
 }
