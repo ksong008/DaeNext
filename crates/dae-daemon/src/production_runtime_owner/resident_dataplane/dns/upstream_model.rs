@@ -181,6 +181,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: Arc<AsyncMutex<()>>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpForwarder {
@@ -226,6 +227,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_permits: Semaphore,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2:
         AsyncMutex<Option<ResidentDnsH2Forwarder>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_open_lock: AsyncMutex<()>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_disabled:
         std::sync::atomic::AtomicBool,
 }
@@ -250,6 +252,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) driver_task:
         Option<tokio::task::JoinHandle<()>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: Arc<AsyncMutex<()>>,
 }
 
 impl Drop for ResidentDnsQuicForwarder {

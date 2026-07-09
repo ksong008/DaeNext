@@ -67,43 +67,6 @@ async fn forward_dns_h3_to_routed_target_async(
 }
 
 impl ResidentDnsH3Forwarder {
-    async fn client(
-        &mut self,
-    ) -> Result<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>, String> {
-        if self.client.is_none() {
-            self.open_client().await?;
-        }
-        self.client
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "DNS H3 client was not initialized".to_owned())
-    }
-
-    async fn open_client(&mut self) -> Result<(), String> {
-        let (endpoint, connection) = connect_dns_quic_endpoint_async(
-            &self.upstream,
-            self.target,
-            self.mark,
-            DNS_DOH3_ALPN,
-            "connect DoH3 endpoint",
-            "DNS H3 handshake timeout",
-            "connect DNS H3 upstream",
-        )
-        .await?;
-        let h3_connection = h3_quinn::Connection::new(connection.clone());
-        let (mut driver, client) = h3::client::new(h3_connection)
-            .await
-            .map_err(|err| format!("create DNS H3 client: {err:?}"))?;
-        let driver_task = tokio::spawn(async move {
-            let _ = poll_fn(|cx| driver.poll_close(cx)).await;
-        });
-        self.endpoint = Some(endpoint);
-        self.connection = Some(connection);
-        self.client = Some(client);
-        self.driver_task = Some(driver_task);
-        Ok(())
-    }
-
     fn close(&mut self) {
         self.client = None;
         if let Some(connection) = self.connection.take() {
@@ -126,18 +89,12 @@ async fn forward_dns_h3_cached(
         Arc::clone(&forwarder.permits)
     };
     let _permit = acquire_dns_owned_permit(permits, "DNS H3 stream pool").await?;
-    let mut client = {
-        let mut forwarder = forwarder.lock().await;
-        forwarder.client().await?
-    };
+    let mut client = cached_dns_h3_client(&forwarder).await?;
     match forward_dns_h3_with_client_async(upstream, payload, &mut client).await {
         Ok(response) => Ok(response),
         Err(first_err) => {
-            let mut client = {
-                let mut forwarder = forwarder.lock().await;
-                forwarder.close();
-                forwarder.client().await?
-            };
+            close_cached_dns_h3_client(&forwarder).await;
+            let mut client = cached_dns_h3_client(&forwarder).await?;
             forward_dns_h3_with_client_async(upstream, payload, &mut client)
                 .await
                 .map_err(|retry_err| {
@@ -145,6 +102,64 @@ async fn forward_dns_h3_cached(
                 })
         }
     }
+}
+
+async fn cached_dns_h3_client(
+    forwarder: &Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
+) -> Result<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>, String> {
+    {
+        let forwarder = forwarder.lock().await;
+        if let Some(client) = forwarder.client.as_ref() {
+            return Ok(client.clone());
+        }
+    }
+    let open_lock = {
+        let forwarder = forwarder.lock().await;
+        Arc::clone(&forwarder.open_lock)
+    };
+    let _open_guard = open_lock.lock().await;
+    {
+        let forwarder = forwarder.lock().await;
+        if let Some(client) = forwarder.client.as_ref() {
+            return Ok(client.clone());
+        }
+    }
+    let (upstream, target, mark) = {
+        let forwarder = forwarder.lock().await;
+        (forwarder.upstream.clone(), forwarder.target, forwarder.mark)
+    };
+    let (endpoint, connection) = connect_dns_quic_endpoint_async(
+        &upstream,
+        target,
+        mark,
+        DNS_DOH3_ALPN,
+        "connect DoH3 endpoint",
+        "DNS H3 handshake timeout",
+        "connect DNS H3 upstream",
+    )
+    .await?;
+    let h3_connection = h3_quinn::Connection::new(connection.clone());
+    let (mut driver, client) = time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        h3::client::new(h3_connection),
+    )
+    .await
+    .map_err(|_| "create DNS H3 client timeout".to_owned())?
+    .map_err(|err| format!("create DNS H3 client: {err:?}"))?;
+    let driver_task = tokio::spawn(async move {
+        let _ = poll_fn(|cx| driver.poll_close(cx)).await;
+    });
+    let mut forwarder = forwarder.lock().await;
+    forwarder.endpoint = Some(endpoint);
+    forwarder.connection = Some(connection);
+    forwarder.client = Some(client.clone());
+    forwarder.driver_task = Some(driver_task);
+    Ok(client)
+}
+
+async fn close_cached_dns_h3_client(forwarder: &Arc<AsyncMutex<ResidentDnsH3Forwarder>>) {
+    let mut forwarder = forwarder.lock().await;
+    forwarder.close();
 }
 
 async fn forward_dns_h3_to_proxy_async(

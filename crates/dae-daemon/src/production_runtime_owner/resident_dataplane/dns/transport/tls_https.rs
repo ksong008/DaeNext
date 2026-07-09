@@ -334,13 +334,23 @@ impl ResidentDnsHttpsForwarder {
     }
 
     async fn h2_sender(&self) -> Result<h2::client::SendRequest<Bytes>, String> {
-        let mut h2 = self.h2.lock().await;
-        if let Some(forwarder) = h2.as_ref() {
-            return Ok(forwarder.sender.clone());
+        {
+            let h2 = self.h2.lock().await;
+            if let Some(forwarder) = h2.as_ref() {
+                return Ok(forwarder.sender.clone());
+            }
+        }
+        let _open_guard = self.h2_open_lock.lock().await;
+        {
+            let h2 = self.h2.lock().await;
+            if let Some(forwarder) = h2.as_ref() {
+                return Ok(forwarder.sender.clone());
+            }
         }
         match open_dns_https_h2_forwarder_async(&self.upstream, self.target, self.mark).await {
             Ok(forwarder) => {
                 let sender = forwarder.sender.clone();
+                let mut h2 = self.h2.lock().await;
                 *h2 = Some(forwarder);
                 Ok(sender)
             }
