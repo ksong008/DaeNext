@@ -226,6 +226,7 @@ pub(crate) fn resident_proxy_plans(
             tcp_check: group_tcp_check_plan(config, group)?,
             udp_check: group_udp_check_plan(config, group)?,
             tcp_probe_timeout: resident_tcp_latency_probe_timeout_from_config(config),
+            resuscitation_last_unix_ms: Arc::new(AtomicI64::new(0)),
         };
         default_outbound.get_or_insert(outbound_index);
         proxies.insert(outbound_index, group_plan);

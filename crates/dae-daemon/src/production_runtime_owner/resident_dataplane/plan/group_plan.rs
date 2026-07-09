@@ -1,5 +1,10 @@
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use super::*;
 use tokio::sync::OnceCell;
+
+const RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentProxyCandidatePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) match_index: usize,
@@ -177,6 +182,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_chec
     }
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) fn resident_data_udp_network_type(
+    addr: SocketAddr,
+) -> NetworkType {
+    if addr.is_ipv6() {
+        NetworkType::DATA_UDP6
+    } else {
+        NetworkType::DATA_UDP4
+    }
+}
+
 fn push_unique_network_type(network_types: &mut Vec<NetworkType>, network_type: NetworkType) {
     if !network_types.contains(&network_type) {
         network_types.push(network_type);
@@ -245,6 +260,12 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxy
     pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) network_type: NetworkType,
     pub(in crate::production_runtime_owner::resident_dataplane) latency_ms: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxySelectionError {
+    pub(in crate::production_runtime_owner::resident_dataplane) message: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) no_alive: bool,
 }
 
 struct ResidentSelectedProxyCandidate<'a> {
@@ -365,6 +386,8 @@ pub(crate) struct ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) tcp_probe_timeout: Duration,
+    pub(in crate::production_runtime_owner::resident_dataplane) resuscitation_last_unix_ms:
+        Arc<AtomicI64>,
 }
 
 impl ResidentProxyGroupPlan {
@@ -478,6 +501,36 @@ impl ResidentProxyGroupPlan {
         self.check_interval
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn try_begin_resuscitation(
+        &self,
+    ) -> bool {
+        if !self.group_policy.needs_alive_state() {
+            return false;
+        }
+        let now_ms = resident_group_resuscitation_now_ms();
+        let interval = if self.check_interval < RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL {
+            RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL
+        } else {
+            self.check_interval
+        };
+        let interval_ms = interval.as_millis().min(i64::MAX as u128) as i64;
+        let mut last_ms = self.resuscitation_last_unix_ms.load(Ordering::Relaxed);
+        loop {
+            if now_ms.saturating_sub(last_ms) < interval_ms {
+                return false;
+            }
+            match self.resuscitation_last_unix_ms.compare_exchange(
+                last_ms,
+                now_ms,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(value) => last_ms = value,
+            }
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn probe_candidates(
         &self,
     ) -> Vec<ResidentProxyProbePlan> {
@@ -584,8 +637,62 @@ impl ResidentProxyGroupPlan {
         network_type: NetworkType,
         strict_ip_version: bool,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
-        self.select_candidate(network_type, strict_ip_version)
-            .map(|candidate| Arc::clone(&candidate.proxy))
+        self.select_proxy_for_udp_runtime_candidate(network_type, strict_ip_version)
+            .map(|selection| selection.proxy)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp_runtime_candidate(
+        &self,
+        network_type: NetworkType,
+        strict_ip_version: bool,
+    ) -> Result<ResidentProxySelection, String> {
+        self.select_proxy_for_udp_runtime_candidate_detail(network_type, strict_ip_version)
+            .map_err(|err| err.message)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp_runtime_candidate_detail(
+        &self,
+        network_type: NetworkType,
+        strict_ip_version: bool,
+    ) -> Result<ResidentProxySelection, ResidentProxySelectionError> {
+        let selected =
+            self.select_candidate_with_selection_detail(network_type, strict_ip_version)?;
+        Ok(ResidentProxySelection {
+            proxy: Arc::clone(&selected.candidate.proxy),
+            network_type: selected.network_type,
+            latency_ms: selected.latency_ms,
+        })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn record_data_udp_available_traffic(
+        &self,
+        node_tag: &str,
+        network_type: NetworkType,
+        checked_at_unix: i64,
+    ) -> Result<(), String> {
+        if !self.group_policy.needs_alive_state() {
+            return Ok(());
+        }
+        let Some(index) = self
+            .candidates
+            .iter()
+            .position(|candidate| candidate.proxy.node_tag == node_tag)
+        else {
+            return Err(format!(
+                "resident dataplane group {} has no admitted candidate named {node_tag}",
+                self.group_name
+            ));
+        };
+        self.selector
+            .lock()
+            .map_err(|_| {
+                format!(
+                    "resident dataplane group {} selector lock is poisoned",
+                    self.group_name
+                )
+            })?
+            .record_available_traffic(index, network_type, checked_at_unix);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -638,11 +745,23 @@ impl ResidentProxyGroupPlan {
         network_type: NetworkType,
         strict_ip_version: bool,
     ) -> Result<ResidentSelectedProxyCandidate<'_>, String> {
+        self.select_candidate_with_selection_detail(network_type, strict_ip_version)
+            .map_err(|err| err.message)
+    }
+
+    fn select_candidate_with_selection_detail(
+        &self,
+        network_type: NetworkType,
+        strict_ip_version: bool,
+    ) -> Result<ResidentSelectedProxyCandidate<'_>, ResidentProxySelectionError> {
         let network = network_type.string_without_dns();
         if self.candidates.is_empty() {
-            return Err(format!(
-                "resident dataplane group {} has no admitted candidate for {network}",
-                self.group_name
+            return Err(resident_proxy_selection_error(
+                format!(
+                    "resident dataplane group {} has no admitted candidate for {network}",
+                    self.group_name
+                ),
+                false,
             ));
         }
         match self.group_policy {
@@ -652,9 +771,12 @@ impl ResidentProxyGroupPlan {
                     .iter()
                     .find(|candidate| candidate.match_index == index)
                     .ok_or_else(|| {
-                        format!(
-                            "resident dataplane group {} fixed policy index {} is not admitted for {network}",
-                            self.group_name, index
+                        resident_proxy_selection_error(
+                            format!(
+                                "resident dataplane group {} fixed policy index {} is not admitted for {network}",
+                                self.group_name, index
+                            ),
+                            false,
                         )
                     })?;
                 Ok(ResidentSelectedProxyCandidate {
@@ -671,22 +793,31 @@ impl ResidentProxyGroupPlan {
                     .selector
                     .lock()
                     .map_err(|_| {
-                        format!(
-                            "resident dataplane group {} selector lock is poisoned",
-                            self.group_name
+                        resident_proxy_selection_error(
+                            format!(
+                                "resident dataplane group {} selector lock is poisoned",
+                                self.group_name
+                            ),
+                            false,
                         )
                     })?
                     .select(network_type, strict_ip_version)
                     .map_err(|err| {
-                        format!(
-                            "resident dataplane group {} selector failed for {network}: {err}",
-                            self.group_name
+                        resident_proxy_selection_error(
+                            format!(
+                                "resident dataplane group {} selector failed for {network}: {err}",
+                                self.group_name
+                            ),
+                            matches!(err, OutboundError::NoAliveDialer),
                         )
                     })?;
                 let candidate = self.candidates.get(selected.index).ok_or_else(|| {
-                    format!(
-                        "resident dataplane group {} selector returned missing candidate {} for {network}",
-                        self.group_name, selected.index
+                    resident_proxy_selection_error(
+                        format!(
+                            "resident dataplane group {} selector returned missing candidate {} for {network}",
+                            self.group_name, selected.index
+                        ),
+                        false,
                     )
                 })?;
                 Ok(ResidentSelectedProxyCandidate {
@@ -867,8 +998,20 @@ impl ResidentProxyGroupPlan {
                 lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
             },
             tcp_probe_timeout: RESIDENT_TCP_LATENCY_PROBE_TIMEOUT,
+            resuscitation_last_unix_ms: Arc::new(AtomicI64::new(0)),
         }
     }
+}
+
+fn resident_proxy_selection_error(message: String, no_alive: bool) -> ResidentProxySelectionError {
+    ResidentProxySelectionError { message, no_alive }
+}
+
+fn resident_group_resuscitation_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
 }
 
 pub(crate) fn resident_latency_message(ok: bool, alive: bool, latency_ms: i64) -> String {

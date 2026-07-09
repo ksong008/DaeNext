@@ -290,6 +290,25 @@ fn udp_router_uses_destination_ip_family_for_proxy_group() {
 }
 
 #[test]
+fn udp_router_prefers_data_udp_health_for_client_udp() {
+    let router = test_udp_router_with_data_udp_health_group();
+    let udp_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 443);
+    let selection = router
+        .select_from_routing_result(udp_dst, route_result(2, 0))
+        .unwrap();
+
+    match selection {
+        ResidentUdpSelection::Proxy(selection) => {
+            assert_eq!(selection.proxy.node_tag, "node_b");
+            assert_eq!(selection.selected_network_type, NetworkType::DATA_UDP4);
+        }
+        ResidentUdpSelection::Block(_) => panic!("client UDP must not select block"),
+        ResidentUdpSelection::Direct(_) => panic!("client UDP must not select direct"),
+        ResidentUdpSelection::ResidentDns => panic!("client UDP must not select resident DNS"),
+    }
+}
+
+#[test]
 fn udp_dns_fast_path_applies_to_all_dns() {
     let router = test_udp_router();
     let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
@@ -584,6 +603,49 @@ fn test_udp_router_with_udp_family_latency_group() -> ResidentUdpRouter {
         .unwrap();
     group
         .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 4)
+        .unwrap();
+    ResidentUdpRouter::from_parts(
+        Arc::new(plan.proxies.clone()),
+        plan.default_outbound.unwrap(),
+        1,
+        None,
+        fallback_matcher("direct", 0),
+        TcpDialMode::Ip,
+        0,
+    )
+    .unwrap()
+}
+
+fn test_udp_router_with_data_udp_health_group() -> ResidentUdpRouter {
+    let sections = dae_config::parser::parse_config(
+        r#"
+            global {
+            lan_interface: daerust0
+            }
+            node {
+            node_a: 'socks5://127.0.0.1:1080'
+            node_b: 'socks5://127.0.0.2:1080'
+            }
+            group {
+            proxy {
+                filter: name(node_a, node_b)
+                policy: min
+            }
+            }
+            routing {
+            fallback: proxy
+            }
+            "#,
+    )
+    .unwrap();
+    let config = dae_config::schema::build_config(&sections).unwrap();
+    let plan = super::super::super::plan::build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_check_result("node_a", NetworkType::DNS_UDP4, Some(20), 1)
+        .unwrap();
+    group
+        .record_data_udp_available_traffic("node_b", NetworkType::DATA_UDP4, 2)
         .unwrap();
     ResidentUdpRouter::from_parts(
         Arc::new(plan.proxies.clone()),

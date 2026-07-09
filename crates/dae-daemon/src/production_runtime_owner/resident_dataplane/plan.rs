@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::AtomicI64};
 use std::time::Duration;
 
 use dae_config::{Config, DynamicFunctionValue, Function, Group, Param};
@@ -9,7 +9,7 @@ use dae_core_types::OutboundIndex;
 use dae_datapath::TcpDialMode;
 use dae_outbound::{
     Annotation, AnyTLSLink, Dialer, DialerGroup, DialerSet, Filter, FilterParam, NetworkType,
-    SelectionPolicy,
+    OutboundError, SelectionPolicy,
     http_proxy::{HttpProxyLink, HttpScheme},
     hysteria2::{
         DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS, Hysteria2Link, build_port_hop_schedule,
