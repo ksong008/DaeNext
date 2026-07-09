@@ -12,7 +12,7 @@ use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRE
 use dae_ebpf_support::BpfRoutingResult;
 use dae_routing::RoutingMatcher;
 use tokio::io::unix::AsyncFd;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 
 use super::super::plan::resident_data_udp_network_type;
 use super::*;
@@ -61,6 +61,7 @@ pub(super) fn run_resident_udp_session_manager(
     session_limit: usize,
     session_queue_depth: usize,
     health_check_concurrency: usize,
+    dns_fast_path_concurrency: usize,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -94,6 +95,7 @@ pub(super) fn run_resident_udp_session_manager(
         session_limit.max(1),
         session_queue_depth.max(1),
         health_check_concurrency.max(1),
+        dns_fast_path_concurrency.max(1),
     ));
 }
 
@@ -114,6 +116,7 @@ async fn run_resident_udp_session_manager_async(
     session_limit: usize,
     session_queue_depth: usize,
     health_check_concurrency: usize,
+    dns_fast_path_concurrency: usize,
 ) {
     if let Err(err) = socket.set_nonblocking(true) {
         append_event(
@@ -174,6 +177,7 @@ async fn run_resident_udp_session_manager_async(
             "default_outbound": default_outbound,
             "routing_tuple_map_id": router.routing_tuple_map_id(),
             "session_limit": session_limit,
+            "dns_fast_path_concurrency": dns_fast_path_concurrency,
             "packetSessionManager": {
                 "schemaVersion": 1,
                 "manager": "resident-udp-session-manager",
@@ -194,6 +198,7 @@ async fn run_resident_udp_session_manager_async(
     let mut sessions: HashMap<UdpSessionKey, UdpSessionEntry> = HashMap::new();
     let mut direct_sessions: HashMap<UdpDirectSessionKey, UdpDirectSessionEntry> = HashMap::new();
     let mut sniffers: HashMap<UdpSniffKey, UdpPendingSniffer> = HashMap::new();
+    let dns_fast_path_permits = Arc::new(Semaphore::new(dns_fast_path_concurrency));
     let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<UdpSessionKey>(session_limit);
     let (direct_cleanup_tx, mut direct_cleanup_rx) =
         mpsc::channel::<UdpDirectSessionKey>(session_limit);
@@ -228,6 +233,7 @@ async fn run_resident_udp_session_manager_async(
                         &mut sessions,
                         &mut direct_sessions,
                         &mut sniffers,
+                        &dns_fast_path_permits,
                         &cleanup_tx,
                         &direct_cleanup_tx,
                         session_limit,
@@ -298,6 +304,7 @@ fn handle_manager_packet(
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
     direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
     sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>,
+    dns_fast_path_permits: &Arc<Semaphore>,
     cleanup_tx: &mpsc::Sender<UdpSessionKey>,
     direct_cleanup_tx: &mpsc::Sender<UdpDirectSessionKey>,
     session_limit: usize,
@@ -344,6 +351,7 @@ fn handle_manager_packet(
             active_sessions,
             sessions,
             direct_sessions,
+            dns_fast_path_permits,
             cleanup_tx,
             direct_cleanup_tx,
             session_limit,
@@ -364,6 +372,7 @@ fn forward_manager_packet(
     active_sessions: &Arc<AtomicUsize>,
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
     direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
+    dns_fast_path_permits: &Arc<Semaphore>,
     cleanup_tx: &mpsc::Sender<UdpSessionKey>,
     direct_cleanup_tx: &mpsc::Sender<UdpDirectSessionKey>,
     session_limit: usize,
@@ -404,6 +413,7 @@ fn forward_manager_packet(
                 packet,
                 original_dst,
                 Arc::clone(dns),
+                Arc::clone(dns_fast_path_permits),
                 Arc::clone(metrics),
             );
             return;
@@ -487,6 +497,7 @@ fn forward_manager_packet(
                 original_dst,
                 initial.dscp,
                 Arc::clone(dns),
+                Arc::clone(dns_fast_path_permits),
                 event_file.to_path_buf(),
                 Arc::clone(event_lock),
                 Arc::clone(metrics),
@@ -496,6 +507,7 @@ fn forward_manager_packet(
                 packet,
                 original_dst,
                 Arc::clone(dns),
+                Arc::clone(dns_fast_path_permits),
                 Arc::clone(metrics),
             );
         }
@@ -734,9 +746,20 @@ fn spawn_resident_dns_datagram_handler(
     packet: UdpOriginalDstPacket,
     original_dst: SocketAddr,
     dns: Arc<ResidentDnsPlan>,
+    permits: Arc<Semaphore>,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) {
+    let Ok(permit) = permits.try_acquire_owned() else {
+        metrics.add_upload(packet.payload.len());
+        if let Ok(response) = build_dns_server_failure_response(&packet.payload)
+            && send_udp_reply(original_dst, packet.peer, &response).is_ok()
+        {
+            metrics.add_download(response.len());
+        }
+        return;
+    };
     tokio::spawn(async move {
+        let _permit = permit;
         metrics.add_upload(packet.payload.len());
         let response = match time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
@@ -762,11 +785,22 @@ fn spawn_forced_resident_dns_proxy_datagram_handler(
     original_dst: SocketAddr,
     dscp: u8,
     dns: Arc<ResidentDnsPlan>,
+    permits: Arc<Semaphore>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) {
+    let Ok(permit) = permits.try_acquire_owned() else {
+        metrics.add_upload(packet.payload.len());
+        if let Ok(response) = build_dns_server_failure_response(&packet.payload)
+            && send_udp_reply(original_dst, packet.peer, &response).is_ok()
+        {
+            metrics.add_download(response.len());
+        }
+        return;
+    };
     tokio::spawn(async move {
+        let _permit = permit;
         let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
         let exchange = match time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,

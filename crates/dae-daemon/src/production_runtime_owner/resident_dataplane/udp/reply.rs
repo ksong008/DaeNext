@@ -47,9 +47,10 @@ fn cached_udp_reply_socket(original_dst: SocketAddr) -> Result<Arc<UdpSocket>, S
         open_transparent_udp_socket_bound_in_netns(PRODUCTION_NETNS, original_dst)
             .map_err(|err| format!("open transparent UDP reply socket: {err}"))?,
     );
+    apply_resident_udp_socket_buffer_tuning(&socket);
     socket
-        .set_write_timeout(Some(Duration::from_secs(3)))
-        .map_err(|err| format!("set UDP reply timeout: {err}"))?;
+        .set_nonblocking(true)
+        .map_err(|err| format!("set UDP reply nonblocking: {err}"))?;
 
     insert_cached_udp_reply_socket(original_dst, socket)
 }

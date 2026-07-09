@@ -154,6 +154,7 @@ pub(crate) fn start_resident_dataplane_workers(
 
     let reload_generation = RESIDENT_RELOAD_GENERATION.fetch_add(1, Ordering::Relaxed);
     let resource_config = ResidentRuntimeResourceConfig::from_config(config);
+    apply_resident_udp_socket_buffer_tuning(&udp_socket);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let udp_sessions_active = Arc::new(AtomicUsize::new(0));
     let event_lock = Arc::new(Mutex::new(()));
@@ -290,6 +291,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let metrics = owner.metrics();
         let active_sessions = owner.udp_sessions_active();
         let health_check_concurrency = resource_config.health_check_concurrency.value();
+        let dns_fast_path_concurrency = resource_config.dns_fast_path_concurrency.value();
         owner.register_thread(
             "udp-session-manager",
             "udp-session-manager",
@@ -311,6 +313,7 @@ pub(crate) fn start_resident_dataplane_workers(
                     udp_session_limit,
                     udp_session_queue_depth,
                     health_check_concurrency,
+                    dns_fast_path_concurrency,
                 )
             }),
         );
