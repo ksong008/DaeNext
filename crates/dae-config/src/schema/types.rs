@@ -4,6 +4,7 @@ use super::*;
 pub type KeyableString = String;
 
 pub const DEFAULT_LOG_LEVEL: &str = "error";
+pub const DEFAULT_UDP_CHECK_DNS: &str = "dns.google:53,8.8.8.8,2001:4860:4860::8888";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
@@ -74,7 +75,7 @@ impl Default for Global {
             log_level: DEFAULT_LOG_LEVEL.to_owned(),
             tcp_check_url: split_csv("http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"),
             tcp_check_http_method: "HEAD".to_owned(),
-            udp_check_dns: split_csv("dns.google:53"),
+            udp_check_dns: split_csv(DEFAULT_UDP_CHECK_DNS),
             check_interval: parse_default_duration("30s"),
             check_tolerance: parse_default_duration("0"),
             udp_endpoint_pool_size: 4096,
