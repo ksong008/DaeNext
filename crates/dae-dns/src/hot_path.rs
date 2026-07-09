@@ -12,6 +12,7 @@ const DNS_RCODE_MASK: u16 = 0x000f;
 const DNS_RCODE_SUCCESS: u16 = 0;
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
+const DNS_EMPTY_SUCCESS_CACHE_TTL_SECS: i64 = 30;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DnsPacketCacheHit {
@@ -67,14 +68,21 @@ pub fn build_response_cache_plan_from_packet(
     let Some(question) = response.questions().next() else {
         return Ok(None);
     };
-    if response.answer_count() == 0 {
-        return Ok(None);
-    }
-
     let qname = question.qname_to_canonical_string()?;
     let cache_host = qname.trim_end_matches('.');
     if cache_host.parse::<IpAddr>().is_ok() {
         return Ok(None);
+    }
+    if response.answer_count() == 0 {
+        return build_empty_success_response_cache_plan(
+            now_unix,
+            response_packet,
+            &response,
+            question.qtype(),
+            question.qclass(),
+            qname,
+            fixed_domain_ttl,
+        );
     }
 
     let mut min_ttl = None;
@@ -115,6 +123,33 @@ pub fn build_response_cache_plan_from_packet(
         min_ttl,
         answer_count,
         client_ttl_zeroed,
+    }))
+}
+
+fn build_empty_success_response_cache_plan(
+    now_unix: i64,
+    response_packet: &[u8],
+    response: &DnsPacketView<'_>,
+    qtype: u16,
+    qclass: u16,
+    qname: String,
+    fixed_domain_ttl: Option<i64>,
+) -> Result<Option<DnsResponseCachePlan>, DnsError> {
+    let packed_response = normalized_packed_response(response_packet, response, false)?;
+    let min_ttl = DNS_EMPTY_SUCCESS_CACHE_TTL_SECS as u32;
+    let (deadline_unix, original_deadline_unix) =
+        effective_deadline_from_ttl(now_unix, DNS_EMPTY_SUCCESS_CACHE_TTL_SECS, fixed_domain_ttl);
+    let key = DnsCacheKey::new(&qname, qtype, qclass);
+    let mut entry = DnsCacheEntry::new(deadline_unix, original_deadline_unix);
+    entry.route_owner_key = key.to_string();
+    entry.packed_response = packed_response;
+    Ok(Some(DnsResponseCachePlan {
+        ip_count: 0,
+        entry,
+        key,
+        min_ttl,
+        answer_count: 0,
+        client_ttl_zeroed: false,
     }))
 }
 
@@ -268,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn response_cache_plan_skips_non_success_and_empty_answer_packets() {
+    fn response_cache_plan_skips_non_success_and_caches_empty_success_packets() {
         let mut request = QUERY.to_vec();
         request[2] = 0x01;
         request[3] = 0x00;
@@ -290,10 +325,38 @@ mod tests {
         empty[6] = 0;
         empty[7] = 0;
         empty.truncate(DNS_HEADER_LEN + QUERY.len() - DNS_HEADER_LEN);
-        assert!(
-            build_response_cache_plan_from_packet(NOW, &empty, None)
-                .unwrap()
-                .is_none()
+        let plan = build_response_cache_plan_from_packet(NOW, &empty, None)
+            .unwrap()
+            .expect("empty success cache plan");
+        assert_eq!(plan.key, DnsCacheKey::new("example.com.", 1, 1));
+        assert_eq!(plan.min_ttl, DNS_EMPTY_SUCCESS_CACHE_TTL_SECS as u32);
+        assert_eq!(
+            plan.entry.deadline_unix,
+            NOW + DNS_EMPTY_SUCCESS_CACHE_TTL_SECS
         );
+        assert_eq!(
+            plan.entry.original_deadline_unix,
+            NOW + DNS_EMPTY_SUCCESS_CACHE_TTL_SECS
+        );
+        assert_eq!(plan.answer_count, 0);
+        assert_eq!(plan.ip_count, 0);
+        assert!(!plan.entry.has_any_ip);
+
+        let mut store = DnsCacheStore::new(8);
+        store.insert_without_route_owner_key(NOW, plan.key, plan.entry);
+        let mut restored = Vec::new();
+        let hit = restore_cached_response_for_packet_question(
+            &mut store,
+            NOW,
+            QUERY,
+            false,
+            &mut restored,
+        )
+        .unwrap()
+        .expect("empty success cache hit");
+        assert_eq!(hit.request_id, 0x1234);
+        assert_eq!(&restored[0..2], &[0x12, 0x34]);
+        let restored_view = DnsPacketView::parse(&restored).unwrap();
+        assert_eq!(restored_view.answer_count(), 0);
     }
 }
