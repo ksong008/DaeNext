@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use serde_json::{Value, json};
 
-use crate::schema::DEFAULT_LOG_LEVEL;
+use crate::schema::{DEFAULT_LOG_LEVEL, DEFAULT_UDP_CHECK_DNS};
 
 const OUTLINE_VERSION_PLACEHOLDER: &str = "__DAE_OUTLINE_VERSION_PLACEHOLDER__";
 
@@ -105,7 +105,7 @@ fn global_outline() -> Value {
             leaf("LogLevel", "log_level", "string", Some(DEFAULT_LOG_LEVEL), Some("Log level: error, warn, info, debug, trace."), false, false),
             leaf("TcpCheckUrl", "tcp_check_url", "string", Some("http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"), Some("Node connectivity check.\nHost of URL should have both IPv4 and IPv6 if you have double stack in local.\nConsidering traffic consumption, it is recommended to choose a site with anycast IP and less response."), true, false),
             leaf("TcpCheckHttpMethod", "tcp_check_http_method", "string", Some("HEAD"), Some("The HTTP request method to `tcp_check_url`. Use 'HEAD' by default because some server implementations bypass accounting for this kind of traffic."), false, false),
-            leaf("UdpCheckDns", "udp_check_dns", "string", Some("dns.google:53"), Some("This DNS will be used to check UDP connectivity of nodes. And if dns_upstream below contains tcp, it also be used to check TCP DNS connectivity of nodes.\nSet explicit IPv4/IPv6 addresses here if your health check should avoid resolver-dependent targets."), true, false),
+            leaf("UdpCheckDns", "udp_check_dns", "string", Some(DEFAULT_UDP_CHECK_DNS), Some("This DNS will be used to check UDP connectivity of nodes. And if dns_upstream below contains tcp, it also be used to check TCP DNS connectivity of nodes.\nSet explicit IPv4/IPv6 addresses here if your health check should avoid resolver-dependent targets."), true, false),
             leaf("CheckInterval", "check_interval", "time.Duration", Some("30s"), Some("Interval of connectivity check for TCP and UDP"), false, false),
             leaf("CheckTolerance", "check_tolerance", "time.Duration", Some("0"), Some("Group will switch node only when new_latency <= old_latency - tolerance."), false, false),
             leaf("UdpEndpointPoolSize", "udp_endpoint_pool_size", "int", Some("4096"), Some("Maximum number of cached UDP endpoints before dae evicts the oldest inactive entries. Increase it for heavy QUIC, gaming, or P2P workloads."), false, false),

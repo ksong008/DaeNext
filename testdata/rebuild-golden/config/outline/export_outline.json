@@ -63,7 +63,7 @@
             "type": "string"
           },
           {
-            "defaultValue": "dns.google:53",
+            "defaultValue": "dns.google:53,8.8.8.8,2001:4860:4860::8888",
             "desc": "This DNS will be used to check UDP connectivity of nodes. And if dns_upstream below contains tcp, it also be used to check TCP DNS connectivity of nodes.\nSet explicit IPv4/IPv6 addresses here if your health check should avoid resolver-dependent targets.",
             "isArray": true,
             "mapping": "udp_check_dns",
