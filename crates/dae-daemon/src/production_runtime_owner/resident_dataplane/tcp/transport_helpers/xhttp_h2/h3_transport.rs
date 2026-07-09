@@ -88,15 +88,19 @@ async fn open_xhttp_h3_connection(
     let remote = resolve_xhttp_endpoint_udp_addr_async(endpoint).await?;
     let mut quic_endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
     quic_endpoint.set_default_client_config(build_xhttp_h3_client_config(endpoint)?);
-    let connection = quic_endpoint
+    let connecting = quic_endpoint
         .connect(remote, &endpoint.server_name)
-        .map_err(|err| format!("connect xHTTP H3 QUIC endpoint: {err}"))?
+        .map_err(|err| format!("connect xHTTP H3 QUIC endpoint: {err}"))?;
+    let connection = time::timeout(RESIDENT_CONNECT_TIMEOUT, connecting)
         .await
+        .map_err(|_| "xHTTP H3 QUIC connect timeout".to_owned())?
         .map_err(|err| format!("await xHTTP H3 QUIC connect: {err}"))?;
     let h3_connection = h3_quinn::Connection::new(connection.clone());
-    let (mut driver, client) = h3::client::new(h3_connection)
-        .await
-        .map_err(|err| format!("create xHTTP H3 client: {err:?}"))?;
+    let (mut driver, client) =
+        time::timeout(RESIDENT_CONNECT_TIMEOUT, h3::client::new(h3_connection))
+            .await
+            .map_err(|_| "create xHTTP H3 client timeout".to_owned())?
+            .map_err(|err| format!("create xHTTP H3 client: {err:?}"))?;
     let driver_task = tokio::spawn(async move {
         let _ = poll_fn(|cx| driver.poll_close(cx)).await;
     });

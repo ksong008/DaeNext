@@ -62,7 +62,13 @@ pub(crate) async fn send_h2_data_with_context(
     if required > 0 {
         send_stream.reserve_capacity(required);
         while send_stream.capacity() < required {
-            let Some(capacity) = poll_fn(|cx| send_stream.poll_capacity(cx)).await else {
+            let Some(capacity) = time::timeout(
+                RESIDENT_CONNECT_TIMEOUT,
+                poll_fn(|cx| send_stream.poll_capacity(cx)),
+            )
+            .await
+            .map_err(|_| format!("{context} send capacity wait timeout"))?
+            else {
                 return Err(format!(
                     "{context} send stream closed before capacity became available"
                 ));
