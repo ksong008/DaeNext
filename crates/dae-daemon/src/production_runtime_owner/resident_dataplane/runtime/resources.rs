@@ -5,6 +5,8 @@ pub(crate) struct ResidentRuntimeResourceConfig {
     pub(crate) tcp_flow_stack_bytes: EffectiveResidentUsize,
     pub(crate) udp_session_limit: EffectiveResidentUsize,
     pub(crate) udp_session_queue_depth: EffectiveResidentUsize,
+    pub(crate) udp_socket_buffer_bytes: EffectiveResidentUsize,
+    pub(crate) dns_fast_path_concurrency: EffectiveResidentUsize,
     pub(crate) event_queue_depth: EffectiveResidentUsize,
     pub(crate) manual_probe_concurrency: EffectiveResidentUsize,
     pub(crate) tcp_probe_timeout_ms: EffectiveResidentUsize,
@@ -41,6 +43,24 @@ impl ResidentRuntimeResourceConfig {
                 RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT,
                 RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN,
                 RESIDENT_UDP_SESSION_QUEUE_DEPTH_MAX,
+            ),
+            udp_socket_buffer_bytes: effective_resident_usize(
+                "resident_udp_socket_buffer_bytes",
+                Some(RESIDENT_UDP_SOCKET_BUFFER_BYTES_ENV),
+                None,
+                None,
+                RESIDENT_UDP_SOCKET_BUFFER_BYTES_DEFAULT,
+                RESIDENT_UDP_SOCKET_BUFFER_BYTES_MIN,
+                RESIDENT_UDP_SOCKET_BUFFER_BYTES_MAX,
+            ),
+            dns_fast_path_concurrency: effective_resident_usize(
+                "resident_dns_fast_path_concurrency",
+                Some(RESIDENT_DNS_FAST_PATH_CONCURRENCY_ENV),
+                None,
+                None,
+                resident_dns_fast_path_concurrency(),
+                RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN,
+                RESIDENT_DNS_FAST_PATH_CONCURRENCY_MAX,
             ),
             event_queue_depth: effective_resident_usize(
                 "resident_event_queue_depth",
@@ -90,6 +110,10 @@ impl ResidentRuntimeResourceConfig {
             "udpSessions": {
                 "limit": self.udp_session_limit.json(),
                 "queueDepth": self.udp_session_queue_depth.json(),
+                "socketBufferBytes": self.udp_socket_buffer_bytes.json(),
+            },
+            "dnsFastPath": {
+                "concurrency": self.dns_fast_path_concurrency.json(),
             },
             "eventWriter": {
                 "queueDepth": self.event_queue_depth.json(),

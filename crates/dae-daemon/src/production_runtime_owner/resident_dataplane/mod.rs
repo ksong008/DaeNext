@@ -77,6 +77,9 @@ mod workers;
 use self::display::*;
 use self::dns_listener::*;
 pub(super) use self::workers::*;
+#[path = "runtime/socket_buffers.rs"]
+mod socket_buffers;
+pub(crate) use self::socket_buffers::*;
 #[path = "runtime/resources.rs"]
 mod resources;
 use self::resources::*;

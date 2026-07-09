@@ -63,6 +63,7 @@ async fn forward_dns_udp_with_attempts_async(
     };
     let socket =
         std::net::UdpSocket::bind(bind).map_err(|err| format!("bind DNS UDP socket: {err}"))?;
+    apply_resident_udp_socket_buffer_tuning(&socket);
     if mark != 0 {
         set_socket_mark(socket.as_raw_fd(), mark)
             .map_err(|err| format!("set DNS UDP SO_MARK {mark}: {err}"))?;

@@ -46,7 +46,9 @@ use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
 use super::udp::{
     ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
 };
-use super::{RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT};
+use super::{
+    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, apply_resident_udp_socket_buffer_tuning,
+};
 
 mod cache;
 mod domain_routing;
