@@ -13,6 +13,8 @@ impl L4Proto {
     }
 }
 
+pub const NETWORK_TYPE_COLLECTION_COUNT: usize = 8;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum IpVersion {
     V4,
@@ -63,6 +65,16 @@ impl NetworkType {
         ipversion: IpVersion::V6,
         is_dns: true,
     };
+    pub const DATA_UDP4: Self = Self {
+        l4proto: L4Proto::Udp,
+        ipversion: IpVersion::V4,
+        is_dns: false,
+    };
+    pub const DATA_UDP6: Self = Self {
+        l4proto: L4Proto::Udp,
+        ipversion: IpVersion::V6,
+        is_dns: false,
+    };
     pub const TCP4: Self = Self {
         l4proto: L4Proto::Tcp,
         ipversion: IpVersion::V4,
@@ -82,8 +94,28 @@ impl NetworkType {
             (true, L4Proto::Udp, IpVersion::V6) => 3,
             (false, L4Proto::Tcp, IpVersion::V4) => 4,
             (false, L4Proto::Tcp, IpVersion::V6) => 5,
-            (false, L4Proto::Udp, IpVersion::V4) => 2,
-            (false, L4Proto::Udp, IpVersion::V6) => 3,
+            (false, L4Proto::Udp, IpVersion::V4) => 6,
+            (false, L4Proto::Udp, IpVersion::V6) => 7,
+        }
+    }
+
+    pub fn is_data_udp(self) -> bool {
+        self.l4proto == L4Proto::Udp && !self.is_dns
+    }
+
+    pub fn dns_udp_for_ipversion(ipversion: IpVersion) -> Self {
+        Self {
+            l4proto: L4Proto::Udp,
+            ipversion,
+            is_dns: true,
+        }
+    }
+
+    pub fn tcp_for_ipversion(ipversion: IpVersion) -> Self {
+        Self {
+            l4proto: L4Proto::Tcp,
+            ipversion,
+            is_dns: false,
         }
     }
 
