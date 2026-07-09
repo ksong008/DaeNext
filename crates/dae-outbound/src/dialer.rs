@@ -1,6 +1,6 @@
 use crate::alive::AliveDialerSet;
 use crate::latency::LatenciesN;
-use crate::types::NetworkType;
+use crate::types::{NETWORK_TYPE_COLLECTION_COUNT, NetworkType};
 
 pub const TIMEOUT_MS: i64 = 10_000;
 
@@ -42,7 +42,7 @@ impl Dialer {
             link: String::new(),
             name,
             subscription_tag: subscription_tag.into(),
-            collections: vec![None, None, None, None, None, None],
+            collections: vec![None; NETWORK_TYPE_COLLECTION_COUNT],
             probe_http_client_created: false,
             probe_http_transport_created: false,
         }
@@ -110,6 +110,12 @@ impl Dialer {
     pub fn record_check_failure_without_latency(&mut self, typ: NetworkType, checked_at_unix: i64) {
         let collection = self.must_get_collection(typ);
         collection.alive = false;
+        collection.checked_at_unix = checked_at_unix;
+    }
+
+    pub fn record_available_traffic(&mut self, typ: NetworkType, checked_at_unix: i64) {
+        let collection = self.must_get_collection(typ);
+        collection.alive = true;
         collection.checked_at_unix = checked_at_unix;
     }
 

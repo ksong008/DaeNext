@@ -111,6 +111,87 @@ fn failed_check_without_latency_marks_dead_without_polluting_latency_history() {
 }
 
 #[test]
+fn data_udp_health_is_separate_from_dns_udp_health() {
+    assert_ne!(
+        NetworkType::DATA_UDP4.collection_index(),
+        NetworkType::DNS_UDP4.collection_index()
+    );
+    assert_ne!(
+        NetworkType::DATA_UDP6.collection_index(),
+        NetworkType::DNS_UDP6.collection_index()
+    );
+
+    let mut group = make_group(2, SelectionPolicy::MinAverage10);
+    group.record_check_result(0, NetworkType::DNS_UDP6, Some(20), 1);
+    group.record_check_result(1, NetworkType::DATA_UDP6, Some(80), 2);
+    group.record_check_failure_without_latency(0, NetworkType::DATA_UDP6, 3);
+
+    let selected = group.select(NetworkType::DATA_UDP6, true).unwrap();
+    assert_eq!(selected.index, 1);
+    assert_eq!(selected.network_type, NetworkType::DATA_UDP6);
+}
+
+#[test]
+fn data_udp_selection_falls_back_same_family_for_non_fixed_policy() {
+    let mut group = make_group(2, SelectionPolicy::MinAverage10);
+    group.record_check_result(0, NetworkType::DNS_UDP6, Some(70), 2);
+    group.record_check_result(1, NetworkType::DNS_UDP6, Some(40), 2);
+
+    let selected = group.select(NetworkType::DATA_UDP6, true).unwrap();
+    assert_eq!(selected.index, 1);
+    assert_eq!(selected.network_type, NetworkType::DNS_UDP6);
+
+    group.record_check_failure_without_latency(0, NetworkType::DNS_UDP6, 3);
+    group.record_check_failure_without_latency(1, NetworkType::DNS_UDP6, 3);
+    group.record_check_result(0, NetworkType::TCP6, Some(30), 4);
+
+    let selected = group.select(NetworkType::DATA_UDP6, true).unwrap();
+    assert_eq!(selected.index, 0);
+    assert_eq!(selected.network_type, NetworkType::TCP6);
+}
+
+#[test]
+fn successful_data_udp_traffic_revives_data_udp_without_latency_pollution() {
+    let mut group = make_group(2, SelectionPolicy::MinAverage10);
+    group.record_check_result(0, NetworkType::DNS_UDP6, Some(70), 2);
+    group.record_check_result(1, NetworkType::DNS_UDP6, Some(40), 2);
+    assert_eq!(
+        group
+            .select(NetworkType::DATA_UDP6, true)
+            .unwrap()
+            .network_type,
+        NetworkType::DNS_UDP6
+    );
+
+    group.record_available_traffic(0, NetworkType::DATA_UDP6, 3);
+    let selected = group.select(NetworkType::DATA_UDP6, true).unwrap();
+    assert_eq!(selected.index, 0);
+    assert_eq!(selected.network_type, NetworkType::DATA_UDP6);
+    assert_eq!(selected.latency_ms, i64::MAX / 4);
+    assert_eq!(
+        group.dialers[0].last_latency_snapshot(NetworkType::DATA_UDP6),
+        (0, true, 3, false)
+    );
+}
+
+#[test]
+fn fixed_policy_keeps_data_udp_user_intent_without_fallback() {
+    let mut group = DialerGroup::new(
+        "fixed",
+        vec![Dialer::new("dialer0", ""), Dialer::new("dialer1", "")],
+        vec![Annotation::default(), Annotation::default()],
+        SelectionPolicy::Fixed { index: 1 },
+        false,
+        0,
+    );
+    group.record_check_result(0, NetworkType::DNS_UDP6, Some(10), 1);
+
+    let selected = group.select(NetworkType::DATA_UDP6, true).unwrap();
+    assert_eq!(selected.index, 1);
+    assert_eq!(selected.network_type, NetworkType::DATA_UDP6);
+}
+
+#[test]
 fn random_and_ipversion_fallback_match_golden_fixtures() {
     let random = fixture("outbound/group/random_alive.json");
     let mut group = make_group(

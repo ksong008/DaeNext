@@ -4,7 +4,7 @@ use std::str::FromStr;
 use dae_dns::DnsCacheKey;
 use dae_netutil::{encode_magic_network, parse_magic_network};
 use dae_outbound::policy::parse_policy;
-use dae_outbound::{Annotation, Dialer, DialerGroup, IpVersion, L4Proto, NetworkType};
+use dae_outbound::{Annotation, Dialer, DialerGroup, NetworkType};
 use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::sniff_tcp;
 use serde_json::json;
@@ -354,16 +354,8 @@ fn parse_network_type(input: &str) -> Option<NetworkType> {
     match input {
         "tcp4" => Some(NetworkType::TCP4),
         "tcp6" => Some(NetworkType::TCP6),
-        "udp4" => Some(NetworkType {
-            l4proto: L4Proto::Udp,
-            ipversion: IpVersion::V4,
-            is_dns: false,
-        }),
-        "udp6" => Some(NetworkType {
-            l4proto: L4Proto::Udp,
-            ipversion: IpVersion::V6,
-            is_dns: false,
-        }),
+        "udp4" => Some(NetworkType::DATA_UDP4),
+        "udp6" => Some(NetworkType::DATA_UDP6),
         _ => None,
     }
 }
