@@ -160,10 +160,13 @@ where
     let mut out = Vec::new();
     let mut buf = [0_u8; 8192];
     loop {
-        let read = stream
-            .read(&mut buf)
-            .await
-            .map_err(|err| format!("read HTTP response: {err}"))?;
+        let read = match stream.read(&mut buf).await {
+            Ok(read) => read,
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof && !out.is_empty() => {
+                return Ok(out);
+            }
+            Err(err) => return Err(format!("read HTTP response: {err}")),
+        };
         if read == 0 {
             return Ok(out);
         }
@@ -396,4 +399,64 @@ pub(super) fn dns_response_truncated(response: &[u8]) -> bool {
         .get(2..4)
         .map(|flags| u16::from_be_bytes([flags[0], flags[1]]) & 0x0200 != 0)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::ReadBuf;
+
+    struct UnexpectedEofReader {
+        bytes: &'static [u8],
+        offset: usize,
+    }
+
+    impl UnexpectedEofReader {
+        fn new(bytes: &'static [u8]) -> Self {
+            Self { bytes, offset: 0 }
+        }
+    }
+
+    impl AsyncRead for UnexpectedEofReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            if self.offset >= self.bytes.len() {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "missing TLS close_notify",
+                )));
+            }
+            let remaining = &self.bytes[self.offset..];
+            let len = remaining.len().min(buf.remaining());
+            buf.put_slice(&remaining[..len]);
+            self.offset += len;
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn read_to_end_capped_accepts_unexpected_eof_after_bytes() {
+        let mut reader = UnexpectedEofReader::new(b"HTTP/1.1 200 OK\r\n\r\nbody");
+
+        let response = read_to_end_capped_async(&mut reader, 1024).await.unwrap();
+
+        assert_eq!(response, b"HTTP/1.1 200 OK\r\n\r\nbody");
+    }
+
+    #[tokio::test]
+    async fn read_to_end_capped_rejects_unexpected_eof_before_bytes() {
+        let mut reader = UnexpectedEofReader::new(b"");
+
+        let err = read_to_end_capped_async(&mut reader, 1024)
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("missing TLS close_notify"));
+    }
 }
