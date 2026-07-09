@@ -289,6 +289,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
         let active_sessions = owner.udp_sessions_active();
+        let health_check_concurrency = resource_config.health_check_concurrency.value();
         owner.register_thread(
             "udp-session-manager",
             "udp-session-manager",
@@ -309,6 +310,7 @@ pub(crate) fn start_resident_dataplane_workers(
                     active_sessions,
                     udp_session_limit,
                     udp_session_queue_depth,
+                    health_check_concurrency,
                 )
             }),
         );

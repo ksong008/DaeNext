@@ -14,15 +14,18 @@ use dae_routing::RoutingMatcher;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
 
+use super::super::plan::resident_data_udp_network_type;
 use super::*;
 
 mod dns_fast_path;
+mod resuscitation;
 mod router;
 mod sniff;
 use self::dns_fast_path::{
     minimal_resident_dns_routing_result, resident_udp_dns_fast_path_applies,
     resident_udp_dns_fast_path_can_bypass_missing_tuple,
 };
+use self::resuscitation::ResidentUdpResuscitator;
 use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
 use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
 
@@ -57,6 +60,7 @@ pub(super) fn run_resident_udp_session_manager(
     active_sessions: Arc<AtomicUsize>,
     session_limit: usize,
     session_queue_depth: usize,
+    health_check_concurrency: usize,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -89,6 +93,7 @@ pub(super) fn run_resident_udp_session_manager(
         active_sessions,
         session_limit.max(1),
         session_queue_depth.max(1),
+        health_check_concurrency.max(1),
     ));
 }
 
@@ -108,6 +113,7 @@ async fn run_resident_udp_session_manager_async(
     active_sessions: Arc<AtomicUsize>,
     session_limit: usize,
     session_queue_depth: usize,
+    health_check_concurrency: usize,
 ) {
     if let Err(err) = socket.set_nonblocking(true) {
         append_event(
@@ -117,24 +123,6 @@ async fn run_resident_udp_session_manager_async(
         );
         return;
     }
-    let router = match ResidentUdpRouter::new(
-        proxy_groups,
-        default_outbound,
-        routing_tuple_map_id,
-        routing_matcher,
-        dial_mode,
-        so_mark_from_dae,
-    ) {
-        Ok(router) => router,
-        Err(err) => {
-            append_event(
-                &event_file,
-                &event_lock,
-                json!({"event": "udp_session_manager_start_failed", "error": err}),
-            );
-            return;
-        }
-    };
     let socket = match AsyncFd::new(socket) {
         Ok(socket) => socket,
         Err(err) => {
@@ -143,6 +131,33 @@ async fn run_resident_udp_session_manager_async(
                 &event_lock,
                 json!({"event": "udp_session_manager_async_fd_failed", "error": err.to_string()}),
             );
+            return;
+        }
+    };
+    let resuscitator = ResidentUdpResuscitator::start(
+        Arc::clone(&proxy_groups),
+        Arc::clone(&stop),
+        event_file.clone(),
+        Arc::clone(&event_lock),
+        health_check_concurrency,
+    );
+    let router = match ResidentUdpRouter::new(
+        proxy_groups,
+        default_outbound,
+        routing_tuple_map_id,
+        routing_matcher,
+        dial_mode,
+        so_mark_from_dae,
+        resuscitator.handle(),
+    ) {
+        Ok(router) => router,
+        Err(err) => {
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({"event": "udp_session_manager_start_failed", "error": err}),
+            );
+            resuscitator.stop();
             return;
         }
     };
@@ -269,6 +284,7 @@ async fn run_resident_udp_session_manager_async(
             "active_sessions": active_sessions.load(Ordering::Relaxed),
         }),
     );
+    resuscitator.stop();
 }
 
 fn handle_manager_packet(
@@ -522,6 +538,7 @@ fn forward_manager_packet(
         let (sender, receiver) = mpsc::channel::<ManagedUdpPacket>(session_queue_depth);
         let context = UdpSessionActorContext {
             dns: Arc::clone(dns),
+            proxy_groups: router.proxy_groups(),
             event_file: event_file.to_path_buf(),
             event_lock: Arc::clone(event_lock),
             metrics: Arc::clone(metrics),
@@ -537,6 +554,14 @@ fn forward_manager_packet(
         packet,
         original_dst,
         proxy,
+        proxy_outbound: proxy_selection.route.final_outbound,
+        data_udp_network_type: if proxy_selection.force_proxy_packet {
+            None
+        } else if proxy_selection.selected_network_type.is_data_udp() {
+            Some(proxy_selection.selected_network_type)
+        } else {
+            Some(resident_data_udp_network_type(original_dst))
+        },
         force_proxy_packet: proxy_selection.force_proxy_packet,
         dscp: initial.dscp,
     };

@@ -48,7 +48,7 @@ pub(super) fn udp_dns_datapath_contract_json() -> Value {
             "dns_nat_timeout_ms": DNS_NAT_TIMEOUT_MS,
             "anyfrom_timeout_ms": ANYFROM_TIMEOUT_MS,
             "max_retry": MAX_RETRY,
-            "dns_detection": "zero-copy UDP/53 DNS packet view; invalid UDP/53 remains ordinary UDP",
+            "dns_detection": "zero-copy UDP/53 DNS packet view; invalid UDP/53 remains client data-plane UDP",
             "non_dns_dial_target": "keep original destination string even when QUIC/domain sniffing succeeds",
             "stale_non_fixed_dialer_policy": "remove dead non-fixed endpoint and reroute before retry"
         },

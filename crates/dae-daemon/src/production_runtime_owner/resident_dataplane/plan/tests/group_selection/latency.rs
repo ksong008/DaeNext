@@ -748,3 +748,31 @@ pub(super) fn resident_dataplane_latency_seed_does_not_change_fixed_group_select
     assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
     assert_eq!(group.select_proxy_for_udp().unwrap().node_tag, "node_b");
 }
+
+#[test]
+pub(super) fn resident_dataplane_resuscitation_is_rate_limited_and_skips_fixed() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+
+    assert!(group.try_begin_resuscitation());
+    assert!(!group.try_begin_resuscitation());
+
+    let fixed_config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: fixed(0)
+        "#,
+    );
+    let fixed_plan = build_resident_dataplane_plan(&fixed_config).unwrap();
+    let fixed_group = fixed_plan.default_proxy_group().unwrap();
+
+    assert!(!fixed_group.try_begin_resuscitation());
+}

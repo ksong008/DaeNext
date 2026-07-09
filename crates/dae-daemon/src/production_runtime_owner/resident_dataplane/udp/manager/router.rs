@@ -13,9 +13,14 @@ use dae_dns::DNS_DEFAULT_PORT;
 use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
 };
+use dae_outbound::NetworkType;
 use dae_routing::{Query, RoutingMatcher};
 
-use super::super::super::plan::{effective_so_mark_from_dae, resident_udp_check_network_type};
+use super::super::super::plan::{
+    ResidentProxySelection, effective_so_mark_from_dae, resident_data_udp_network_type,
+    resident_udp_check_network_type,
+};
+use super::resuscitation::ResidentUdpResuscitatorHandle;
 use super::*;
 
 const BPF_L4_UDP: u8 = 17;
@@ -28,6 +33,7 @@ pub(super) struct ResidentUdpRouter {
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
     so_mark_from_dae: u32,
+    resuscitator: Option<ResidentUdpResuscitatorHandle>,
 }
 
 impl ResidentUdpRouter {
@@ -38,6 +44,7 @@ impl ResidentUdpRouter {
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         so_mark_from_dae: u32,
+        resuscitator: ResidentUdpResuscitatorHandle,
     ) -> Result<Self, String> {
         let routing_tuple_map_id = routing_tuple_map_id.ok_or_else(|| {
             "resident UDP router needs routing_tuples_map id for compatible per-packet outbound selection"
@@ -46,7 +53,7 @@ impl ResidentUdpRouter {
         let routing_tuple_map_fd = open_map_fd(routing_tuple_map_id).map_err(|err| {
             format!("open routing_tuples_map id {routing_tuple_map_id} for resident UDP: {err}")
         })?;
-        Self::from_parts(
+        Self::from_validated_parts(
             proxy_groups,
             default_outbound,
             routing_tuple_map_id,
@@ -54,6 +61,7 @@ impl ResidentUdpRouter {
             routing_matcher,
             dial_mode,
             so_mark_from_dae,
+            Some(resuscitator),
         )
     }
 
@@ -75,6 +83,7 @@ impl ResidentUdpRouter {
             routing_matcher,
             dial_mode,
             so_mark_from_dae,
+            None,
         )
     }
 
@@ -96,6 +105,7 @@ impl ResidentUdpRouter {
             routing_matcher,
             dial_mode,
             so_mark_from_dae,
+            None,
         )
     }
 
@@ -107,6 +117,7 @@ impl ResidentUdpRouter {
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         so_mark_from_dae: u32,
+        resuscitator: Option<ResidentUdpResuscitatorHandle>,
     ) -> Result<Self, String> {
         if proxy_groups.is_empty() {
             return Err("resident UDP router needs at least one proxy outbound".to_owned());
@@ -125,6 +136,7 @@ impl ResidentUdpRouter {
             routing_matcher,
             dial_mode,
             so_mark_from_dae: effective_so_mark_from_dae(so_mark_from_dae),
+            resuscitator,
         })
     }
 
@@ -136,6 +148,10 @@ impl ResidentUdpRouter {
         self.proxy_groups
             .get(&self.default_outbound)
             .expect("default outbound was validated")
+    }
+
+    pub(super) fn proxy_groups(&self) -> Arc<BTreeMap<u8, ResidentProxyGroupPlan>> {
+        Arc::clone(&self.proxy_groups)
     }
 
     #[cfg(test)]
@@ -192,14 +208,15 @@ impl ResidentUdpRouter {
                     .to_owned(),
             ),
             outbound => self
-                .select_proxy_from_group(outbound, final_mark, original_dst)
-                .map(|proxy| {
+                .select_proxy_from_group(outbound, final_mark, original_dst, force_proxy_packet)
+                .map(|selection| {
                     let route = ResidentUdpRouteSelection {
-                        final_mark: proxy.mark,
+                        final_mark: selection.proxy.mark,
                         ..route
                     };
                     ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
-                        proxy,
+                        proxy: selection.proxy,
+                        selected_network_type: selection.network_type,
                         force_proxy_packet,
                         route,
                     })
@@ -260,21 +277,39 @@ impl ResidentUdpRouter {
         outbound: u8,
         mark: u32,
         original_dst: SocketAddr,
-    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        force_proxy_packet: bool,
+    ) -> Result<ResidentProxySelection, String> {
         let Some(proxy_group) = self.proxy_groups.get(&outbound) else {
             return Err(format!(
                 "resident UDP selected outbound {} but no Rust proxy plan is available; unsupported protocol must stay fail-closed until implemented",
                 OutboundIndex(outbound)
             ));
         };
-        let network_type = resident_udp_check_network_type(original_dst);
-        let proxy = proxy_group.select_proxy_for_udp_runtime(network_type, true)?;
-        if mark == 0 || proxy.mark == mark {
-            return Ok(proxy);
+        let network_type = if force_proxy_packet {
+            resident_udp_check_network_type(original_dst)
+        } else {
+            resident_data_udp_network_type(original_dst)
+        };
+        let mut selection =
+            match proxy_group.select_proxy_for_udp_runtime_candidate_detail(network_type, true) {
+                Ok(selection) => selection,
+                Err(err) => {
+                    if network_type.is_data_udp()
+                        && err.no_alive
+                        && let Some(resuscitator) = self.resuscitator.as_ref()
+                    {
+                        resuscitator.trigger(outbound, network_type);
+                    }
+                    return Err(err.message);
+                }
+            };
+        if mark == 0 || selection.proxy.mark == mark {
+            return Ok(selection);
         }
-        let mut overridden = proxy.as_ref().clone();
+        let mut overridden = selection.proxy.as_ref().clone();
         overridden.mark = mark;
-        Ok(Arc::new(overridden))
+        selection.proxy = Arc::new(overridden);
+        Ok(selection)
     }
 
     pub(super) fn lookup_routing_result(
@@ -308,6 +343,7 @@ impl ResidentUdpRouter {
 
 pub(super) struct ResidentUdpProxySelection {
     pub(super) proxy: Arc<ResidentProxyPlan>,
+    pub(super) selected_network_type: NetworkType,
     pub(super) force_proxy_packet: bool,
     pub(super) route: ResidentUdpRouteSelection,
 }

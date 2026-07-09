@@ -143,6 +143,22 @@ fn run_resident_group_health_check_round(
     status
 }
 
+pub(crate) fn run_resident_group_resuscitation_check(
+    group: Arc<plan::ResidentProxyGroupPlan>,
+    stop: Arc<AtomicBool>,
+    event_file: &Path,
+    event_lock: &Mutex<()>,
+    concurrency: usize,
+) {
+    let _ = run_resident_group_health_check_round(
+        group,
+        stop,
+        event_file,
+        event_lock,
+        concurrency.max(1),
+    );
+}
+
 async fn run_resident_group_health_checks_concurrent_async(
     group: Arc<plan::ResidentProxyGroupPlan>,
     candidates: &[plan::ResidentProxyProbePlan],
