@@ -19,8 +19,9 @@ run_id="${RUN_ID:-$(date +%Y%m%d%H%M%S)-$$}"
 run_root="${RUN_ROOT:-/tmp/dae-daemon-native-ebpf-runtime-gate-${run_id}}"
 config_file="${CONFIG_FILE:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.dae}"
 rust_native_object="${RUST_NATIVE_OBJECT:-target/bpfel-unknown-none/release/libdae_ebpf_program.so}"
-cargo_log="${CARGO_LOG:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.log}"
+cargo_log="${RUNTIME_GATE_LOG:-${CARGO_LOG:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.log}}"
 cgroup_log="${CGROUP_LOG:-/tmp/dae-native-ebpf-cgroup-gate-${run_id}.log}"
+resource_log="${RUNTIME_RESOURCE_LOG:-/tmp/dae-native-ebpf-runtime-resources-${run_id}.env}"
 backend="${NATIVE_EBPF_BACKEND:-${DAE_NATIVE_EBPF_BACKEND:-auto}}"
 netns_link="${NETNS_LINK:-${DAE_NETNS_LINK:-auto}}"
 runtime_timeout="${RUNTIME_TIMEOUT:-180s}"
@@ -33,7 +34,8 @@ case "$run_root" in
     ;;
 esac
 
-printf 'global {\n  log_level: info\n}\n' > "$config_file"
+unset CARGO_LOG
+printf 'global {\n  log_level: info\n}\ndns {}\nrouting {\n  fallback: direct\n}\n' > "$config_file"
 rm -rf "$run_root"
 mkdir -p "$run_root"
 
@@ -70,12 +72,93 @@ if grep -q 'skip aya cgroup attach smoke' "$cgroup_log"; then
 fi
 echo "Aya cgroup attach/detach gate passed"
 
+process_tree_pids() {
+  local root_pid="$1"
+  local queue=("$root_pid")
+  local index=0
+  while ((index < ${#queue[@]})); do
+    local pid="${queue[$index]}"
+    index=$((index + 1))
+    printf '%s\n' "$pid"
+    if command -v pgrep >/dev/null 2>&1; then
+      while read -r child; do
+        [[ -n "$child" ]] && queue+=("$child")
+      done < <(pgrep -P "$pid" 2>/dev/null || true)
+    fi
+  done
+}
+
+run_with_resource_sample() {
+  local output="$1"
+  shift
+  local max_rss_kib=0
+  local max_threads=0
+  local max_fds=0
+  local max_processes=0
+  local samples=0
+
+  "$@" &
+  local root_pid="$!"
+  while kill -0 "$root_pid" >/dev/null 2>&1; do
+    local rss_kib=0
+    local threads=0
+    local fds=0
+    local processes=0
+    while read -r pid; do
+      [[ -r "/proc/$pid/status" ]] || continue
+      processes=$((processes + 1))
+      local process_rss
+      local process_threads
+      local process_fds
+      process_rss="$(awk '/^VmRSS:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+      process_threads="$(awk '/^Threads:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+      process_fds="$(find "/proc/$pid/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l || true)"
+      rss_kib=$((rss_kib + ${process_rss:-0}))
+      threads=$((threads + ${process_threads:-0}))
+      fds=$((fds + ${process_fds:-0}))
+    done < <(process_tree_pids "$root_pid")
+    if ((rss_kib > max_rss_kib)); then
+      max_rss_kib="$rss_kib"
+    fi
+    if ((threads > max_threads)); then
+      max_threads="$threads"
+    fi
+    if ((fds > max_fds)); then
+      max_fds="$fds"
+    fi
+    if ((processes > max_processes)); then
+      max_processes="$processes"
+    fi
+    samples=$((samples + 1))
+    sleep 0.02
+  done
+
+  local status=0
+  wait "$root_pid" || status="$?"
+  {
+    printf 'max_rss_kib=%s\n' "$max_rss_kib"
+    printf 'max_threads=%s\n' "$max_threads"
+    printf 'max_fds=%s\n' "$max_fds"
+    printf 'max_processes=%s\n' "$max_processes"
+    printf 'samples=%s\n' "$samples"
+    printf 'exit_status=%s\n' "$status"
+  } >"$output"
+  return "$status"
+}
+
 echo "running native eBPF runtime gate: root=$run_root backend=$backend netns_link=$netns_link timeout=$runtime_timeout"
-if ! timeout "$runtime_timeout" cargo run --manifest-path Cargo.toml \
+: >"$cargo_log"
+if ! cargo build --manifest-path Cargo.toml \
   -p dae-daemon \
   --features native-ebpf \
   --bin daed-contract-runner \
-  -- run \
+  >>"$cargo_log" 2>&1; then
+  echo "native eBPF contract runner build failed; tail follows" >&2
+  tail -c 20000 "$cargo_log" >&2 || true
+  exit 1
+fi
+if ! run_with_resource_sample "$resource_log" timeout "$runtime_timeout" \
+  target/debug/daed-contract-runner run \
   --config "$config_file" \
   --root "$run_root" \
   --no-listener-smoke \
@@ -91,7 +174,7 @@ if ! timeout "$runtime_timeout" cargo run --manifest-path Cargo.toml \
   --production-runtime-native-ebpf-completed-a3-local \
   --production-runtime-native-ebpf-backend "$backend" \
   --production-runtime-netns-link "$netns_link" \
-  --exit-after-ready >"$cargo_log" 2>&1; then
+  --exit-after-ready >>"$cargo_log" 2>&1; then
   echo "native eBPF runtime gate failed; tail of cargo log follows" >&2
   tail -c 20000 "$cargo_log" >&2 || true
   exit 1
