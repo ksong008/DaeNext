@@ -32,27 +32,7 @@ pub(crate) fn refresh_subscription_from_remote(
     id: i64,
 ) -> io::Result<Value> {
     ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    let Some(source) = conn
-        .query_row(
-            "SELECT link, tag, use_proxy FROM subscriptions WHERE id = ?1",
-            params![id],
-            |row| {
-                Ok(SubscriptionSource {
-                    link: row.get(0)?,
-                    tag: row.get(1)?,
-                    use_proxy: row.get::<_, i64>(2)? != 0,
-                })
-            },
-        )
-        .optional()
-        .map_err(sqlite_io_error)?
-    else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "subscription not found",
-        ));
-    };
+    let source = subscription_source_by_id(state, id)?;
     let fetched_at = now_text();
     let proxy_config = if source.use_proxy && subscription_link_uses_http_transport(&source.link) {
         Some(product_default_proxy_config(state)?)
@@ -67,21 +47,8 @@ pub(crate) fn refresh_subscription_from_remote(
     ) {
         Ok(content) => {
             let links = subscription_links_from_content(&content);
-            let before_nodes = subscription_runtime_node_fingerprint(&conn, id)?;
-            let node_import_result = replace_subscription_nodes(&conn, id, &links)?;
-            let after_nodes = subscription_runtime_node_fingerprint(&conn, id)?;
-            let runtime_input_changed = before_nodes != after_nodes;
-            conn.execute(
-                "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
-                params![
-                    fetched_at,
-                    "fetched",
-                    format!("{} node links fetched by Rust daed", links.len()),
-                    id
-                ],
-            )
-            .map_err(sqlite_io_error)?;
-            drop(conn);
+            let (runtime_input_changed, node_import_result) =
+                apply_subscription_refresh_result(state, id, &fetched_at, &links)?;
             if runtime_input_changed {
                 bump_runtime_external_input_version(state)?;
             }
@@ -94,11 +61,8 @@ pub(crate) fn refresh_subscription_from_remote(
             }))
         }
         Err(err) => {
-            conn.execute(
-                "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
-                params![fetched_at, "fetch_error", err.to_string(), id],
-            )
-            .map_err(sqlite_io_error)?;
+            let error = err.to_string();
+            record_subscription_fetch_error(state, id, &fetched_at, &error)?;
             Ok(json!({
                 "link": source.link,
                 "fetched": false,
@@ -106,12 +70,99 @@ pub(crate) fn refresh_subscription_from_remote(
                 "runtimeInputChanged": false,
                 "nodeImportResult": [{
                     "link": source.link,
-                    "error": err.to_string(),
+                    "error": error,
                     "node": Value::Null
                 }],
             }))
         }
     }
+}
+
+fn subscription_source_by_id(state: &Path, id: i64) -> io::Result<SubscriptionSource> {
+    let conn = open_state_connection(state)?;
+    conn.query_row(
+        "SELECT link, tag, use_proxy FROM subscriptions WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(SubscriptionSource {
+                link: row.get(0)?,
+                tag: row.get(1)?,
+                use_proxy: row.get::<_, i64>(2)? != 0,
+            })
+        },
+    )
+    .optional()
+    .map_err(sqlite_io_error)?
+    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "subscription not found"))
+}
+
+fn apply_subscription_refresh_result(
+    state: &Path,
+    id: i64,
+    fetched_at: &str,
+    links: &[String],
+) -> io::Result<(bool, Vec<Value>)> {
+    let _guard = subscription_write_guard()?;
+    let mut conn = open_state_connection(state)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_io_error)?;
+    ensure_subscription_exists(&tx, id)?;
+    let before_nodes = subscription_runtime_node_fingerprint(&tx, id)?;
+    let node_import_result = replace_subscription_nodes(&tx, id, links)?;
+    let after_nodes = subscription_runtime_node_fingerprint(&tx, id)?;
+    let runtime_input_changed = before_nodes != after_nodes;
+    tx.execute(
+        "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
+        params![
+            fetched_at,
+            "fetched",
+            format!("{} node links fetched by Rust daed", links.len()),
+            id
+        ],
+    )
+    .map_err(sqlite_io_error)?;
+    tx.commit().map_err(sqlite_io_error)?;
+    Ok((runtime_input_changed, node_import_result))
+}
+
+fn record_subscription_fetch_error(
+    state: &Path,
+    id: i64,
+    fetched_at: &str,
+    error: &str,
+) -> io::Result<()> {
+    let _guard = subscription_write_guard()?;
+    let mut conn = open_state_connection(state)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_io_error)?;
+    let updated = tx
+        .execute(
+            "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
+            params![fetched_at, "fetch_error", error, id],
+        )
+        .map_err(sqlite_io_error)?;
+    if updated == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "subscription not found",
+        ));
+    }
+    tx.commit().map_err(sqlite_io_error)?;
+    Ok(())
+}
+
+fn ensure_subscription_exists(conn: &Connection, id: i64) -> io::Result<()> {
+    conn.query_row(
+        "SELECT 1 FROM subscriptions WHERE id = ?1",
+        params![id],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(sqlite_io_error)?
+    .map(|_| ())
+    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "subscription not found"))
 }
 
 fn subscription_runtime_node_fingerprint(
