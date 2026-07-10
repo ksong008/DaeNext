@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use crate::*;
 
+#[cfg(feature = "aya-loader")]
+mod coexistence_fixture;
+
 #[test]
 fn dae_cgroup_attach_matrix_matches_native_attachcgroup_order() {
     let matrix = dae_cgroup_attach_matrix();
@@ -254,6 +257,7 @@ fn build_aya_compatible_bpf_object(root: &Path, output: &Path) {
             output.display()
         )
     });
+    let _ = std::fs::remove_dir_all(&target_dir);
 }
 
 #[cfg(feature = "aya-loader")]
