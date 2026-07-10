@@ -1,11 +1,18 @@
-use super::group_summary::group_materialized_candidate_summary;
+use super::group_summary::group_materialized_candidate_summary_with_runtime_selection;
 use super::*;
 
 const GROUP_SUMMARY_MATCHED_NODE_SAMPLE_LIMIT: usize = 5;
 
-pub(crate) fn list_groups(state: &Path, request: &HttpRequest) -> HttpResponse {
+pub(crate) fn list_groups(
+    state: &Path,
+    request: &HttpRequest,
+    runtime: Option<&ProductRuntimeManager>,
+) -> HttpResponse {
     let result = if request_summary_enabled(request) {
-        list_group_summaries_value(state)
+        let runtime_selectors = runtime
+            .map(ProductRuntimeManager::group_selector_snapshot_map)
+            .unwrap_or_default();
+        list_group_summaries_value_with_runtime_selection(state, &runtime_selectors)
     } else {
         list_groups_value(state)
     };
@@ -16,6 +23,13 @@ pub(crate) fn list_groups(state: &Path, request: &HttpRequest) -> HttpResponse {
 }
 
 pub(crate) fn list_group_summaries_value(state: &Path) -> io::Result<Value> {
+    list_group_summaries_value_with_runtime_selection(state, &BTreeMap::new())
+}
+
+pub(crate) fn list_group_summaries_value_with_runtime_selection(
+    state: &Path,
+    runtime_selectors: &BTreeMap<String, Value>,
+) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let mut stmt = conn
         .prepare("SELECT id, name, policy, version FROM groups ORDER BY id")
@@ -33,7 +47,15 @@ pub(crate) fn list_group_summaries_value(state: &Path) -> io::Result<Value> {
     let mut items = Vec::new();
     for row in rows {
         let (id, name, policy, version) = row.map_err(sqlite_io_error)?;
-        items.push(group_summary_value(&conn, id, name, policy, version)?);
+        let runtime_selection = runtime_selectors.get(&name);
+        items.push(group_summary_value(
+            &conn,
+            id,
+            name,
+            policy,
+            version,
+            runtime_selection,
+        )?);
     }
     Ok(json!({"items": items}))
 }
@@ -44,11 +66,13 @@ fn group_summary_value(
     name: String,
     policy: String,
     version: i64,
+    runtime_selection: Option<&Value>,
 ) -> io::Result<Value> {
-    let materialized_candidates = group_materialized_candidate_summary(
+    let materialized_candidates = group_materialized_candidate_summary_with_runtime_selection(
         conn,
         group_id,
         GROUP_SUMMARY_MATCHED_NODE_SAMPLE_LIMIT,
+        runtime_selection,
     )?;
     Ok(json!({
         "id": group_id,
@@ -64,8 +88,20 @@ fn group_summary_value(
         "sampleMaterializedCandidates": materialized_candidates.sample_nodes,
         "currentNode": materialized_candidates.current_node,
         "bestNode": materialized_candidates.best_node,
+        "runtimeSelectedNode": materialized_candidates.runtime_selected_node,
+        "runtimeSelectedNetworkType": runtime_selection_field(runtime_selection, "selectedNetworkType"),
+        "runtimeSelectedLatencyMs": runtime_selection_field(runtime_selection, "selectedLatencyMs"),
+        "runtimeSelectionSource": runtime_selection_field(runtime_selection, "selectionSource"),
+        "runtimeAliveCandidateCount": runtime_selection_field(runtime_selection, "aliveCandidateCount"),
         "subscriptions": group_subscription_summaries_value(conn, group_id)?,
     }))
+}
+
+fn runtime_selection_field(runtime_selection: Option<&Value>, field: &str) -> Value {
+    runtime_selection
+        .and_then(|value| value.get(field))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 pub(crate) fn list_groups_value(state: &Path) -> io::Result<Value> {

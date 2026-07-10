@@ -1114,6 +1114,59 @@ pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
 }
 
 #[test]
+pub(crate) fn group_summary_merges_runtime_selector_snapshot() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    let group_name = "runtime-group";
+    let node_a_link = "http://127.0.0.1:9/node-a#node-a";
+    let node_b_link = "http://127.0.0.2:9/node-b#node-b";
+    insert_config_node(&conn, 1, "node-a", node_a_link, None);
+    insert_config_node(&conn, 2, "node-b", node_b_link, None);
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, ?1, ?2, 1)",
+        params![group_name, GROUP_POLICY_MIN],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1), (9, 2)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut runtime_selectors = BTreeMap::new();
+    runtime_selectors.insert(
+        group_name.to_owned(),
+        json!({
+            "group": group_name,
+            "policy": GROUP_POLICY_MIN,
+            "selectedNodeTag": "node-b-renamed",
+            "selectedLinkHash": runtime_link_hash(node_b_link),
+            "selectedNetworkType": "tcp4",
+            "selectedLatencyMs": 17,
+            "selectionSource": "min-runtime-selector",
+            "aliveCandidateCount": 2,
+        }),
+    );
+
+    let summary =
+        list_group_summaries_value_with_runtime_selection(&state, &runtime_selectors).unwrap();
+    let group = &summary["items"][0];
+
+    assert_eq!(group["runtimeSelectedNode"]["name"], json!("node-b"));
+    assert_eq!(group["runtimeSelectedNetworkType"], json!("tcp4"));
+    assert_eq!(group["runtimeSelectedLatencyMs"], json!(17));
+    assert_eq!(
+        group["runtimeSelectionSource"],
+        json!("min-runtime-selector")
+    );
+    assert_eq!(group["runtimeAliveCandidateCount"], json!(2));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn state_schema_removes_dangling_group_and_latency_references() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

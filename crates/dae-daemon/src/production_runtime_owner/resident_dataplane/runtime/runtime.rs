@@ -31,6 +31,12 @@ impl ResidentDataplaneRuntime {
         )
     }
 
+    pub(in crate::production_runtime_owner) fn group_selector_snapshot_map(
+        &self,
+    ) -> BTreeMap<String, Value> {
+        resident_group_selector_snapshot_map(&self.groups)
+    }
+
     pub(in crate::production_runtime_owner) fn manual_probe_handle(
         &self,
     ) -> ResidentManualProbeHandle {

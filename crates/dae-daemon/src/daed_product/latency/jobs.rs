@@ -1,6 +1,8 @@
 use super::super::*;
 use super::*;
 
+const NODE_LATENCY_DB_WRITE_BATCH_SIZE: usize = 128;
+
 #[derive(Debug, Default)]
 pub(crate) struct LatencyJobManager {
     next_id: AtomicU64,
@@ -448,17 +450,33 @@ fn write_node_latency_results(
     conn: &mut Connection,
     results: &[NodeLatencyWrite],
 ) -> io::Result<(usize, usize)> {
+    let mut written = 0_usize;
+    let mut alive = 0_usize;
+    for chunk in results.chunks(NODE_LATENCY_DB_WRITE_BATCH_SIZE) {
+        let (chunk_written, chunk_alive) = write_node_latency_results_chunk(conn, chunk)?;
+        written = written.saturating_add(chunk_written);
+        alive = alive.saturating_add(chunk_alive);
+        if chunk_written != 0 {
+            thread::yield_now();
+        }
+    }
+    Ok((written, alive))
+}
+
+fn write_node_latency_results_chunk(
+    conn: &mut Connection,
+    results: &[NodeLatencyWrite],
+) -> io::Result<(usize, usize)> {
     let tx = conn.transaction().map_err(sqlite_io_error)?;
     let mut written = 0_usize;
     let mut alive = 0_usize;
     for result in results {
-        if !node_latency_result_target_exists(&tx, result.node_id, &result.node_link)? {
-            continue;
-        }
-        store_node_latency_result(&tx, result)?;
-        written = written.saturating_add(1);
-        if result.alive {
-            alive = alive.saturating_add(1);
+        if node_latency_result_target_exists(&tx, result.node_id, &result.node_link)? {
+            store_node_latency_result(&tx, result)?;
+            written = written.saturating_add(1);
+            if result.alive {
+                alive = alive.saturating_add(1);
+            }
         }
     }
     tx.commit().map_err(sqlite_io_error)?;
@@ -665,6 +683,43 @@ mod tests {
             )
             .unwrap();
         assert_eq!(orphan_rows, 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn write_node_latency_results_batches_large_sets() {
+        let (dir, state) = temp_state("write-batched");
+        let mut conn = open_state_connection(&state).unwrap();
+        let total = NODE_LATENCY_DB_WRITE_BATCH_SIZE + 7;
+        let changed_node_id = i64::try_from(total).unwrap();
+        let mut results = Vec::with_capacity(total);
+        for id in 1..=changed_node_id {
+            let link = format!("socks://127.0.0.1:{}#node-{id}", 10_000_i64 + id);
+            insert_latency_probe_node(&conn, id, &link);
+            results.push(NodeLatencyWrite {
+                node_id: id,
+                node_link: link,
+                latency_ms: Some(id),
+                alive: true,
+                tested_at: "2026-07-10T00:00:00Z".to_owned(),
+                message: None,
+            });
+        }
+        conn.execute(
+            "UPDATE nodes SET link = ?1 WHERE id = ?2",
+            params!["socks://127.0.0.1:29999#changed-node", changed_node_id],
+        )
+        .unwrap();
+
+        let (written, alive) = write_node_latency_results(&mut conn, &results).unwrap();
+
+        assert_eq!((written, alive), (total - 1, total - 1));
+        let stored_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM node_latency_results", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_rows, i64::try_from(total - 1).unwrap());
         fs::remove_dir_all(dir).unwrap();
     }
 }

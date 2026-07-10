@@ -69,6 +69,9 @@ pub(crate) use self::defaults::*;
 #[path = "runtime/runtime.rs"]
 mod runtime;
 pub(super) use self::runtime::*;
+#[path = "runtime/group_selector_summary.rs"]
+mod group_selector_summary;
+pub(super) use self::group_selector_summary::*;
 #[path = "runtime/metrics.rs"]
 mod metrics;
 pub(super) use self::metrics::*;
