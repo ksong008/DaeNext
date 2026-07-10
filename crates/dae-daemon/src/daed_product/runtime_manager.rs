@@ -762,6 +762,18 @@ impl ProductRuntimeManager {
         }
     }
 
+    pub(super) fn group_selector_snapshot_map(&self) -> BTreeMap<String, Value> {
+        let Ok(inner) = self.inner.lock() else {
+            return BTreeMap::new();
+        };
+        match inner.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => {
+                runtime.group_selector_snapshot_map()
+            }
+            Some(ProductRuntimeInstance::Fake(_)) | None => BTreeMap::new(),
+        }
+    }
+
     pub(super) fn current_config(&self) -> Option<Config> {
         self.inner
             .lock()

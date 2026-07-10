@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub struct ResidentProductionRuntime {
@@ -105,6 +106,13 @@ impl ResidentProductionRuntime {
         self.dataplane
             .as_ref()
             .map(ResidentDataplaneRuntime::node_latency_snapshots)
+            .unwrap_or_default()
+    }
+
+    pub fn group_selector_snapshot_map(&self) -> BTreeMap<String, Value> {
+        self.dataplane
+            .as_ref()
+            .map(ResidentDataplaneRuntime::group_selector_snapshot_map)
             .unwrap_or_default()
     }
 
