@@ -583,7 +583,7 @@ mod tests {
             params![
                 id,
                 link,
-                parsed.name,
+                parsed.display_name,
                 parsed.address,
                 parsed.protocol,
                 format!("node-{id}")

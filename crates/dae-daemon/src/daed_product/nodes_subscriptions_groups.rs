@@ -1,6 +1,8 @@
 use super::*;
 mod subscription_store;
 use self::subscription_store::subscription_write_guard;
+mod node_identity;
+pub(crate) use self::node_identity::StableNodeKey;
 mod nodes;
 mod response_ext;
 pub(super) use self::nodes::*;

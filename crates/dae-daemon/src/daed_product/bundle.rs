@@ -336,7 +336,7 @@ pub(super) fn import_bundle_nodes(conn: &Connection, nodes: Option<&Value>) -> i
                     link,
                     item.get("name")
                         .and_then(Value::as_str)
-                        .unwrap_or(&parsed.name),
+                        .unwrap_or(&parsed.display_name),
                     item.get("address")
                         .and_then(Value::as_str)
                         .unwrap_or(&parsed.address),
