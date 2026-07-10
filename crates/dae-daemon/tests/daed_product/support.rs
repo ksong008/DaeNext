@@ -1,4 +1,7 @@
 use super::*;
+#[path = "support/fresh_api.rs"]
+mod fresh_api;
+
 pub(super) fn temp_dir(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("daed-product-{name}-{}", fastrand::u64(..)));
     fs::create_dir_all(&path).unwrap();

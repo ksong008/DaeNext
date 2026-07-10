@@ -180,6 +180,7 @@ const DAED_PRODUCT_SOURCE_PATHS: &[&str] = &[
     "tests/daed_product/api_runtime.rs",
     "tests/daed_product/export_reset.rs",
     "tests/daed_product/support.rs",
+    "tests/daed_product/support/fresh_api.rs",
     "tests/daed_product/matrix/selected_node.rs",
     "tests/daed_product/matrix/shadowsocks_2022.rs",
     "tests/daed_product/matrix/websocket_blocked.rs",

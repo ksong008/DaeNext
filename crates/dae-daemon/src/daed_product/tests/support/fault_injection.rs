@@ -1,0 +1,82 @@
+use super::*;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum RuntimeFaultPoint {
+    CreateDirectory,
+    WriteCandidate,
+    SyncCandidate,
+    RenameCandidate,
+    CommitDatabase,
+    StartCandidate,
+    CommitPostStart,
+    Rollback,
+}
+
+impl RuntimeFaultPoint {
+    pub(crate) const ALL: [Self; 8] = [
+        Self::CreateDirectory,
+        Self::WriteCandidate,
+        Self::SyncCandidate,
+        Self::RenameCandidate,
+        Self::CommitDatabase,
+        Self::StartCandidate,
+        Self::CommitPostStart,
+        Self::Rollback,
+    ];
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::CreateDirectory => "create-directory",
+            Self::WriteCandidate => "write-candidate",
+            Self::SyncCandidate => "sync-candidate",
+            Self::RenameCandidate => "rename-candidate",
+            Self::CommitDatabase => "commit-database",
+            Self::StartCandidate => "start-candidate",
+            Self::CommitPostStart => "commit-post-start",
+            Self::Rollback => "rollback",
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct RuntimeFaultFixture {
+    armed: BTreeMap<RuntimeFaultPoint, usize>,
+    visited: Vec<RuntimeFaultPoint>,
+}
+
+impl RuntimeFaultFixture {
+    pub(crate) fn fail_next(&mut self, point: RuntimeFaultPoint) {
+        *self.armed.entry(point).or_default() += 1;
+    }
+
+    pub(crate) fn checkpoint(&mut self, point: RuntimeFaultPoint) -> io::Result<()> {
+        self.visited.push(point);
+        let Some(remaining) = self.armed.get_mut(&point) else {
+            return Ok(());
+        };
+        if *remaining == 0 {
+            return Ok(());
+        }
+        *remaining -= 1;
+        Err(io::Error::other(format!(
+            "injected runtime fixture fault at {}",
+            point.as_str()
+        )))
+    }
+
+    pub(crate) fn visited(&self) -> &[RuntimeFaultPoint] {
+        &self.visited
+    }
+}
+
+#[test]
+fn runtime_fault_fixture_covers_every_transaction_boundary_once() {
+    for point in RuntimeFaultPoint::ALL {
+        let mut fixture = RuntimeFaultFixture::default();
+        fixture.fail_next(point);
+        let error = fixture.checkpoint(point).unwrap_err();
+        assert!(error.to_string().contains(point.as_str()), "{error}");
+        fixture.checkpoint(point).unwrap();
+        assert_eq!(fixture.visited(), &[point, point]);
+    }
+}

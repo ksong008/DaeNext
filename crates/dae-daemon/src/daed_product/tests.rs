@@ -2,6 +2,8 @@ use super::*;
 #[cfg(test)]
 mod latency;
 #[cfg(test)]
+pub(super) mod support;
+#[cfg(test)]
 pub(super) use self::latency::*;
 #[cfg(test)]
 mod default_resources;
