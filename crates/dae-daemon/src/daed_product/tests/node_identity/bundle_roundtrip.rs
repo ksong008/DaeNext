@@ -17,7 +17,7 @@ fn bundle_roundtrip_preserves_node_id_runtime_tag_and_group_binding() {
         [],
     )
     .unwrap();
-    let report = replace_subscription_nodes(&conn, 11, &[link.clone()]).unwrap();
+    let report = replace_subscription_nodes(&conn, 11, std::slice::from_ref(&link)).unwrap();
     let node_id = report[0]["node"]["id"].as_i64().unwrap();
     conn.execute(
         "INSERT INTO groups(id, name, policy, version) VALUES(21, 'bundle_group', 'random', 1)",

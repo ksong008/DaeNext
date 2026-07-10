@@ -28,7 +28,8 @@ fn subscription_rename_preserves_runtime_identity_binding_and_latency() {
     let before = get_node_value(fixture.state(), node_id).unwrap().unwrap();
     let before_tag = runtime_node_tag(&before);
     let conn = fixture.connection();
-    let report = replace_subscription_nodes(&conn, 11, &[renamed_link.clone()]).unwrap();
+    let report =
+        replace_subscription_nodes(&conn, 11, std::slice::from_ref(&renamed_link)).unwrap();
     assert_eq!(report[0]["node"]["id"], json!(node_id));
     let latency_count = row_count(
         &conn,
