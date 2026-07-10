@@ -431,7 +431,7 @@ pub(crate) fn subscription_vmess_metadata_uses_protocol_parser() {
     let link = format!("vmess://{payload}");
     let parsed = parse_node_link(&link, None);
     assert_eq!(parsed.protocol, "vmess");
-    assert_eq!(parsed.name, "vmess-name");
+    assert_eq!(parsed.display_name, "vmess-name");
     assert_eq!(parsed.address, "vmess.example.com:443");
 }
 
@@ -444,7 +444,7 @@ pub(crate) fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
     );
     let link = node_link_from_config(&content, "resource_node");
     let parsed = parse_node_link(&link, None);
-    assert_eq!(parsed.name, "[label]resource-node");
+    assert_eq!(parsed.display_name, "[label]resource-node");
     assert_eq!(
         decode_node_label("%5Blabel%5Dresource-node"),
         "[label]resource-node"
@@ -453,7 +453,7 @@ pub(crate) fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
 
     let node = json!({
         "id": 1,
-        "name": parsed.name,
+        "name": parsed.display_name,
         "link": link
     });
     assert_eq!(runtime_node_tag(&node), "[label]resource-node");
@@ -517,6 +517,7 @@ pub(crate) fn update_node_preserves_latency_for_label_only_changes() {
     let node_id = 42_i64;
     let node_name = "label-node";
     let link = "http://127.0.0.3:9/resource#label-node";
+    let renamed_link = "http://127.0.0.3:9/resource#renamed-link-label";
     let next_tag = "renamed-label-node";
     insert_config_node(&conn, node_id, node_name, link, None);
     conn.execute(
@@ -560,7 +561,7 @@ pub(crate) fn update_node_preserves_latency_for_label_only_changes() {
         path: format!("/api/nodes/{node_id}"),
         query: HashMap::new(),
         headers: HashMap::new(),
-        body: serde_json::to_vec(&json!({ "link": link, "tag": node_name })).unwrap(),
+        body: serde_json::to_vec(&json!({ "link": renamed_link, "tag": next_tag })).unwrap(),
     };
     let response = update_node(&state, &link_and_tag_request, node_id);
     assert_eq!(response.status, 200);
@@ -573,6 +574,14 @@ pub(crate) fn update_node_preserves_latency_for_label_only_changes() {
         )
         .unwrap();
     assert_eq!(latency_rows, 1);
+    let stored_link: String = conn
+        .query_row(
+            "SELECT link FROM nodes WHERE id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_link, renamed_link);
     fs::remove_dir_all(dir).unwrap();
 }
 

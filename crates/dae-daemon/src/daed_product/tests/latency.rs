@@ -46,7 +46,7 @@ pub(crate) fn config_node_value(id: i64, node_name: &str, link: &str) -> Value {
     json!({
         "id": id,
         "link": link,
-        "name": parsed.name,
+        "name": parsed.display_name,
         "address": parsed.address,
         "protocol": parsed.protocol,
         "tag": node_name
@@ -70,7 +70,7 @@ pub(crate) fn insert_config_node(
         params![
             id,
             link,
-            parsed.name,
+            parsed.display_name,
             parsed.address,
             parsed.protocol,
             node_name,

@@ -177,7 +177,7 @@ pub(crate) fn import_nodes(
             "INSERT INTO nodes(link, name, address, protocol, tag, subscription_id) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 stored_link,
-                parsed.name,
+                parsed.display_name,
                 parsed.address,
                 parsed.protocol,
                 tag,
@@ -225,7 +225,7 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
         };
         let latency_identity_changed = previous_identity
             .as_ref()
-            .map(|current| node_latency_identity_changed(current, &stored_link, &parsed))
+            .map(|current| node_latency_identity_changed(current, &parsed))
             .unwrap_or(false);
         let updated = tx.execute(
             "UPDATE nodes
@@ -237,7 +237,7 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
              WHERE id = ?7",
             params![
                 stored_link,
-                parsed.name,
+                parsed.display_name,
                 parsed.address,
                 parsed.protocol,
                 tag_present,
@@ -277,7 +277,7 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
 
 #[derive(Clone, Debug)]
 struct NodeLatencyIdentity {
-    link: String,
+    stable_key: StableNodeKey,
     address: String,
     protocol: String,
 }
@@ -287,8 +287,9 @@ fn node_latency_identity(conn: &Connection, id: i64) -> io::Result<Option<NodeLa
         "SELECT link, address, protocol FROM nodes WHERE id = ?1",
         params![id],
         |row| {
+            let link = row.get::<_, String>(0)?;
             Ok(NodeLatencyIdentity {
-                link: row.get(0)?,
+                stable_key: StableNodeKey::from_link(&link),
                 address: row.get(1)?,
                 protocol: row.get(2)?,
             })
@@ -298,12 +299,8 @@ fn node_latency_identity(conn: &Connection, id: i64) -> io::Result<Option<NodeLa
     .map_err(sqlite_io_error)
 }
 
-fn node_latency_identity_changed(
-    current: &NodeLatencyIdentity,
-    next_link: &str,
-    next: &ParsedNodeLink,
-) -> bool {
-    current.link != next_link
+fn node_latency_identity_changed(current: &NodeLatencyIdentity, next: &ParsedNodeLink) -> bool {
+    current.stable_key != next.stable_key
         || current.address != next.address
         || current.protocol != next.protocol
 }
@@ -342,10 +339,10 @@ pub(crate) fn delete_node(state: &Path, id: i64) -> io::Result<usize> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ParsedNodeLink {
-    pub(in crate::daed_product) name: String,
+    pub(in crate::daed_product) display_name: String,
     pub(in crate::daed_product) address: String,
     pub(in crate::daed_product) protocol: String,
-    pub(in crate::daed_product) display_identity: String,
+    pub(in crate::daed_product) stable_key: StableNodeKey,
     pub(in crate::daed_product) normalized_link: Option<String>,
 }
 
@@ -375,15 +372,15 @@ pub(crate) fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
         })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_owned());
-    let name = tag
+    let display_name = tag
         .map(decode_node_label)
         .or_else(|| parsed_url.and_then(|url| url.fragment().map(decode_node_label)))
         .unwrap_or_else(|| format!("{protocol}-{address}"));
     ParsedNodeLink {
-        name,
+        display_name,
         address,
         protocol: protocol.to_owned(),
-        display_identity: node_link_display_identity(link),
+        stable_key: StableNodeKey::from_link(link),
         normalized_link: None,
     }
 }
@@ -393,39 +390,39 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
     if let Ok(parsed) = dae_outbound::VMessLink::parse(link) {
         let address = parsed.address();
         return Some(ParsedNodeLink {
-            name: tag
+            display_name: tag
                 .clone()
                 .or_else(|| non_empty(decoded_node_label(&parsed.ps)))
                 .unwrap_or_else(|| format!("vmess-{address}")),
             address,
             protocol: parsed.protocol,
-            display_identity: node_link_display_identity(link),
+            stable_key: StableNodeKey::from_link(link),
             normalized_link: None,
         });
     }
     if let Ok(parsed) = dae_outbound::VLESSLink::parse(link) {
         let address = parsed.add.clone();
         return Some(ParsedNodeLink {
-            name: tag
+            display_name: tag
                 .clone()
                 .or_else(|| non_empty(decoded_node_label(&parsed.ps)))
                 .unwrap_or_else(|| format!("vless-{address}")),
             address,
             protocol: parsed.protocol,
-            display_identity: node_link_display_identity(link),
+            stable_key: StableNodeKey::from_link(link),
             normalized_link: None,
         });
     }
     if let Ok(parsed) = dae_outbound::ShadowsocksLink::parse(link) {
         let address = parsed.address();
         return Some(ParsedNodeLink {
-            name: tag
+            display_name: tag
                 .clone()
                 .or_else(|| non_empty(decoded_node_label(&parsed.name)))
                 .unwrap_or_else(|| format!("{}-{address}", parsed.protocol)),
             address: parsed.server,
             protocol: parsed.protocol,
-            display_identity: node_link_display_identity(link),
+            stable_key: StableNodeKey::from_link(link),
             normalized_link: None,
         });
     }
@@ -433,58 +430,16 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
         let address = parsed.property_address();
         let normalized_link = hysteria2_mport_query_present(link).then(|| parsed.export_url());
         return Some(ParsedNodeLink {
-            name: tag
+            display_name: tag
                 .or_else(|| non_empty(parsed.name))
                 .unwrap_or_else(|| format!("hysteria2-{address}")),
             address,
             protocol: "hysteria2".to_owned(),
-            display_identity: node_link_display_identity(link),
+            stable_key: StableNodeKey::from_link(link),
             normalized_link,
         });
     }
     None
-}
-
-pub(crate) fn node_link_display_identity(link: &str) -> String {
-    if let Ok(mut parsed) = dae_outbound::VMessLink::parse(link) {
-        parsed.ps.clear();
-        return parsed.export_url();
-    }
-    if let Ok(mut parsed) = dae_outbound::VLESSLink::parse(link) {
-        parsed.ps.clear();
-        return parsed.export_url();
-    }
-    if let Ok(mut parsed) = dae_outbound::TrojanLink::parse(link) {
-        parsed.name.clear();
-        return parsed.export_url();
-    }
-    if let Ok(mut parsed) = dae_outbound::ShadowsocksLink::parse(link) {
-        parsed.name.clear();
-        return parsed.export_url();
-    }
-    if let Ok(mut parsed) = dae_outbound::Hysteria2Link::parse(link) {
-        parsed.name.clear();
-        return parsed.export_url();
-    }
-    if let Ok(mut parsed) = dae_outbound::TuicLink::parse(link) {
-        parsed.name.clear();
-        return parsed.export_url();
-    }
-    if let Ok(mut parsed) = dae_outbound::JuicityLink::parse(link) {
-        parsed.name.clear();
-        return parsed.export_url();
-    }
-    url_without_fragment(link)
-}
-
-fn url_without_fragment(link: &str) -> String {
-    if let Ok(mut url) = url::Url::parse(link) {
-        url.set_fragment(None);
-        return url.to_string();
-    }
-    link.split_once('#')
-        .map(|(without_fragment, _)| without_fragment.to_owned())
-        .unwrap_or_else(|| link.to_owned())
 }
 
 fn hysteria2_mport_query_present(link: &str) -> bool {
