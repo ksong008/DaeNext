@@ -48,9 +48,10 @@ pub(crate) fn generated_runtime_config_renders_parseable_nodes_and_groups() {
             &nodes,
         )
         .unwrap();
+    let runtime_tag = RuntimeNodeTag::from_node_id(1);
     assert!(content.contains("node {"));
-    assert!(content.contains("resource_node:"));
-    assert!(content.contains("filter: name('resource_node')"));
+    assert!(content.contains(&format!("{}:", runtime_tag.as_str())));
+    assert!(content.contains(&format!("filter: name('{}')", runtime_tag.as_str())));
     let config = build_runtime_config_from_content(&content).unwrap();
     assert_eq!(config.node.len(), 1);
     assert_eq!(config.group[0].name, "egress");

@@ -2,6 +2,8 @@ use super::*;
 #[cfg(test)]
 mod latency;
 #[cfg(test)]
+mod node_identity;
+#[cfg(test)]
 pub(super) mod support;
 #[cfg(test)]
 pub(super) use self::latency::*;

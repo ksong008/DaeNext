@@ -456,7 +456,7 @@ pub(crate) fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
         "name": parsed.display_name,
         "link": link
     });
-    assert_eq!(runtime_node_tag(&node), "[label]resource-node");
+    assert_eq!(runtime_node_tag(&node), RuntimeNodeTag::from_node_id(1));
 }
 
 #[test]
@@ -931,9 +931,10 @@ pub(crate) fn node_lists_keep_manual_subscription_and_runtime_scopes_separate() 
     let subscription = list_nodes_value(&state, Some(7)).unwrap();
     assert_eq!(subscription["totalCount"], json!(1));
     assert_eq!(subscription["items"][0]["name"], json!("subscription-node"));
+    let subscription_node_id = subscription["items"][0]["id"].as_i64().unwrap();
     assert_eq!(
         subscription["items"][0]["runtimeTag"],
-        json!("subscription-node")
+        json!(RuntimeNodeTag::from_node_id(subscription_node_id).into_string())
     );
 
     let runtime = list_all_nodes_value(&state).unwrap();
