@@ -226,6 +226,58 @@ pub(crate) fn create_subscription_persists_use_proxy_flag() {
 }
 
 #[test]
+pub(crate) fn subscription_create_delete_operations_are_serialized() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let subscription_dir = dir.join("sub");
+    fs::create_dir_all(&subscription_dir).unwrap();
+    let file_path = subscription_dir.join("test.sub");
+    fs::write(&file_path, b"vless://uuid@example.com:443#serialized\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let mut handles = Vec::new();
+    for index in 0..6 {
+        let state = state.clone();
+        let dir = dir.clone();
+        handles.push(thread::spawn(move || {
+            let body = serde_json::to_vec(&json!({
+                "link": "file://sub/test.sub",
+                "tag": format!("serialized-{index}"),
+                "cronEnable": false
+            }))
+            .unwrap();
+            let request = HttpRequest {
+                method: "POST".to_owned(),
+                path: "/api/subscriptions".to_owned(),
+                query: HashMap::new(),
+                headers: HashMap::new(),
+                body,
+            };
+            let response = create_subscription(&state, &dir, &request);
+            assert_eq!(response.status, 201);
+            let value: Value = serde_json::from_slice(&response.body).unwrap();
+            let id = value["subscription"]["id"].as_i64().unwrap();
+            assert_eq!(delete_subscription(&state, id).unwrap(), 1);
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let conn = open_state_connection(&state).unwrap();
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM subscriptions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn delete_subscription_removes_dependent_node_state() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
@@ -294,6 +346,16 @@ pub(crate) fn delete_subscription_removes_dependent_node_state() {
     let removed = delete_subscription(&state, subscription_id).unwrap();
     assert_eq!(removed, 1);
     let conn = open_state_connection(&state).unwrap();
+    let external_input_version = current_runtime_external_input_version(&conn).unwrap();
+    assert_eq!(external_input_version, 1);
+    let group_version: i64 = conn
+        .query_row(
+            "SELECT version FROM groups WHERE id = ?1",
+            params![group_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(group_version, 2);
     let subscription_rows: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM subscriptions WHERE id = ?1",

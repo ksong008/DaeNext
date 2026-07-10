@@ -58,11 +58,15 @@ pub(crate) fn create_subscription(
         .get("useProxy")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let now = now_text();
+    let _guard = match subscription_write_guard() {
+        Ok(guard) => guard,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
-    let now = now_text();
     if let Err(err) = conn.execute(
         "INSERT INTO subscriptions(updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
@@ -83,12 +87,10 @@ pub(crate) fn create_subscription(
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
     let id = conn.last_insert_rowid();
-    let _ = append_log_for_config(
-        config_dir,
-        state,
-        "info",
-        &format!("subscription {id} imported"),
-    );
+    drop(conn);
+    drop(_guard);
+    let import_log_message = format!("subscription {id} imported");
+    let _ = append_log_for_config(config_dir, state, "info", &import_log_message);
     let import_report =
         refresh_subscription_from_remote(state, config_dir, id).unwrap_or_else(|err| {
             json!({
@@ -301,35 +303,58 @@ pub(crate) fn delete_subscription_by_id(state: &Path, id: i64) -> HttpResponse {
 }
 
 pub(crate) fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
-    let mut conn = open_state_connection(state)?;
-    let tx = conn.transaction().map_err(sqlite_io_error)?;
-    tx.execute(
-        "DELETE FROM group_nodes
-         WHERE node_id IN (
-             SELECT id FROM nodes WHERE subscription_id = ?1
-         )",
-        params![id],
-    )
-    .map_err(sqlite_io_error)?;
-    tx.execute(
-        "DELETE FROM node_latency_results
-         WHERE node_id IN (
-             SELECT id FROM nodes WHERE subscription_id = ?1
-         )",
-        params![id],
-    )
-    .map_err(sqlite_io_error)?;
-    tx.execute(
-        "DELETE FROM group_subscriptions WHERE subscription_id = ?1",
-        params![id],
-    )
-    .map_err(sqlite_io_error)?;
-    tx.execute("DELETE FROM nodes WHERE subscription_id = ?1", params![id])
+    let removed = {
+        let _guard = subscription_write_guard()?;
+        let mut conn = open_state_connection(state)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_io_error)?;
+        tx.execute(
+            "UPDATE groups
+             SET version = version + 1
+             WHERE id IN (
+                 SELECT group_id FROM group_subscriptions WHERE subscription_id = ?1
+                 UNION
+                 SELECT group_id FROM group_nodes
+                 WHERE node_id IN (
+                     SELECT id FROM nodes WHERE subscription_id = ?1
+                 )
+             )",
+            params![id],
+        )
         .map_err(sqlite_io_error)?;
-    let removed = tx
-        .execute("DELETE FROM subscriptions WHERE id = ?1", params![id])
+        tx.execute(
+            "DELETE FROM group_nodes
+             WHERE node_id IN (
+                 SELECT id FROM nodes WHERE subscription_id = ?1
+             )",
+            params![id],
+        )
         .map_err(sqlite_io_error)?;
-    tx.commit().map_err(sqlite_io_error)?;
+        tx.execute(
+            "DELETE FROM node_latency_results
+             WHERE node_id IN (
+                 SELECT id FROM nodes WHERE subscription_id = ?1
+             )",
+            params![id],
+        )
+        .map_err(sqlite_io_error)?;
+        tx.execute(
+            "DELETE FROM group_subscriptions WHERE subscription_id = ?1",
+            params![id],
+        )
+        .map_err(sqlite_io_error)?;
+        tx.execute("DELETE FROM nodes WHERE subscription_id = ?1", params![id])
+            .map_err(sqlite_io_error)?;
+        let removed = tx
+            .execute("DELETE FROM subscriptions WHERE id = ?1", params![id])
+            .map_err(sqlite_io_error)?;
+        tx.commit().map_err(sqlite_io_error)?;
+        removed
+    };
+    if removed > 0 {
+        let _ = bump_runtime_external_input_version(state)?;
+    }
     Ok(removed)
 }
 
