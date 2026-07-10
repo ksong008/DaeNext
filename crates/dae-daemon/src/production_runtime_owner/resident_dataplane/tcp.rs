@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, VecDeque};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::io::ErrorKind;
 use std::mem::size_of;
@@ -82,12 +84,16 @@ use super::direct::{
 use super::dns::{ResidentDnsDomainRouting, ResidentDnsPlan};
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
+#[cfg(test)]
+use super::plan::ResidentProxyGroupPlan;
+#[cfg(test)]
+use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentHysteria2ObfsPlan, ResidentProxyGroupPlan, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion,
-    ResidentXhttpMetaPlacement, ResidentXhttpMode, ResidentXhttpPaddingMethod,
-    ResidentXhttpPaddingPlacement, ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement,
-    ResidentXhttpXmuxPlan,
+    ResidentHysteria2ObfsPlan, ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion, ResidentXhttpMetaPlacement,
+    ResidentXhttpMode, ResidentXhttpPaddingMethod, ResidentXhttpPaddingPlacement,
+    ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement, ResidentXhttpXmuxPlan,
+    SharedResidentProxyGroupMap,
 };
 use super::probe::resident_tcp_probe_tls_config;
 #[cfg(test)]

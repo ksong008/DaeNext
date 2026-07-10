@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -26,7 +25,7 @@ use super::*;
 const BPF_L4_UDP: u8 = 17;
 
 pub(super) struct ResidentUdpRouter {
-    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    proxy_groups: SharedResidentProxyGroupMap,
     default_outbound: u8,
     routing_tuple_map_id: u32,
     routing_tuple_map_fd: Option<OwnedFd>,
@@ -38,7 +37,7 @@ pub(super) struct ResidentUdpRouter {
 
 impl ResidentUdpRouter {
     pub(super) fn new(
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        proxy_groups: SharedResidentProxyGroupMap,
         default_outbound: u8,
         routing_tuple_map_id: Option<u32>,
         routing_matcher: RoutingMatcher,
@@ -67,7 +66,7 @@ impl ResidentUdpRouter {
 
     #[cfg(test)]
     pub(super) fn from_parts(
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        proxy_groups: SharedResidentProxyGroupMap,
         default_outbound: u8,
         routing_tuple_map_id: u32,
         routing_tuple_map_fd: Option<OwnedFd>,
@@ -89,7 +88,7 @@ impl ResidentUdpRouter {
 
     #[cfg(not(test))]
     fn from_parts(
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        proxy_groups: SharedResidentProxyGroupMap,
         default_outbound: u8,
         routing_tuple_map_id: u32,
         routing_tuple_map_fd: Option<OwnedFd>,
@@ -110,7 +109,7 @@ impl ResidentUdpRouter {
     }
 
     fn from_validated_parts(
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        proxy_groups: SharedResidentProxyGroupMap,
         default_outbound: u8,
         routing_tuple_map_id: u32,
         routing_tuple_map_fd: Option<OwnedFd>,
@@ -150,7 +149,7 @@ impl ResidentUdpRouter {
             .expect("default outbound was validated")
     }
 
-    pub(super) fn proxy_groups(&self) -> Arc<BTreeMap<u8, ResidentProxyGroupPlan>> {
+    pub(super) fn proxy_groups(&self) -> SharedResidentProxyGroupMap {
         Arc::clone(&self.proxy_groups)
     }
 

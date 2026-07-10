@@ -1,7 +1,7 @@
 // UDP session manager keeps kernel sockets, routing maps, session queues, and metrics explicit.
 #![allow(clippy::too_many_arguments)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
@@ -46,7 +46,7 @@ const UDP_ROUTE_REASON_FORCED_DNS_FAST_PATH: &str =
 
 pub(super) fn run_resident_udp_session_manager(
     socket: UdpSocket,
-    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    proxy_groups: SharedResidentProxyGroupMap,
     default_outbound: u8,
     routing_tuple_map_id: Option<u32>,
     routing_matcher: RoutingMatcher,
@@ -101,7 +101,7 @@ pub(super) fn run_resident_udp_session_manager(
 
 async fn run_resident_udp_session_manager_async(
     socket: UdpSocket,
-    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    proxy_groups: SharedResidentProxyGroupMap,
     default_outbound: u8,
     routing_tuple_map_id: Option<u32>,
     routing_matcher: RoutingMatcher,

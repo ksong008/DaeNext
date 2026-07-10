@@ -34,7 +34,7 @@ pub(super) struct ResidentUdpResuscitator {
 
 impl ResidentUdpResuscitator {
     pub(super) fn start(
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        proxy_groups: SharedResidentProxyGroupMap,
         stop: Arc<AtomicBool>,
         event_file: PathBuf,
         event_lock: Arc<Mutex<()>>,
@@ -79,7 +79,7 @@ struct ResidentUdpResuscitationRequest {
 
 fn run_udp_resuscitation_worker(
     receiver: Receiver<ResidentUdpResuscitationRequest>,
-    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    proxy_groups: SharedResidentProxyGroupMap,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
@@ -101,7 +101,7 @@ fn run_udp_resuscitation_worker(
             continue;
         }
         run_resident_group_resuscitation_check(
-            Arc::new(group.clone()),
+            Arc::clone(group),
             Arc::clone(&stop),
             &event_file,
             &event_lock,

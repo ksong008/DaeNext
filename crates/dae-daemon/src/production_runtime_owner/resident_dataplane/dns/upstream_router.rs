@@ -5,7 +5,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUp
     pub(in crate::production_runtime_owner::resident_dataplane::dns) routing_matcher:
         RoutingMatcher,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) proxy_groups:
-        Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        SharedResidentProxyGroupMap,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) so_mark_from_dae: u32,
 }
 
@@ -27,7 +27,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 impl ResidentDnsUpstreamRouter {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         routing_matcher: RoutingMatcher,
-        proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+        proxy_groups: SharedResidentProxyGroupMap,
         so_mark_from_dae: u32,
     ) -> Self {
         Self {

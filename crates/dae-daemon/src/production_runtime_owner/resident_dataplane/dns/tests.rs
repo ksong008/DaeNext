@@ -219,7 +219,7 @@ fn dns_upstream_router_for_config(
     let matcher = build_resident_userspace_routing_matcher_with_geodata(config, &geodata).unwrap();
     let router = ResidentDnsUpstreamRouter::new(
         matcher,
-        Arc::new(runtime_plan.proxies.clone()),
+        share_resident_proxy_groups(runtime_plan.proxies.clone()),
         config.global.so_mark_from_dae,
     );
     let ResidentDnsRequestAction::Upstream(upstream) = dns_plan.request_default_action else {
@@ -1433,7 +1433,7 @@ async fn resident_dns_live_upstream_pressure_uses_parameterized_upstream() {
             build_resident_userspace_routing_matcher_with_geodata(&parsed, &geodata).unwrap();
         let router = ResidentDnsUpstreamRouter::new(
             matcher,
-            Arc::new(runtime_plan.proxies.clone()),
+            share_resident_proxy_groups(runtime_plan.proxies.clone()),
             parsed.global.so_mark_from_dae,
         );
         plan = plan.with_upstream_routing(Some(Arc::new(router)));

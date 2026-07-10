@@ -778,6 +778,93 @@ fn resident_tcp_selection_uses_destination_ip_family_for_proxy_group() {
     assert_eq!(v6_selection.proxy.node_tag, "node_b");
 }
 
+#[test]
+fn resident_tcp_router_and_runtime_summary_share_group_selector_state() {
+    let sections = dae_config::parser::parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks5://127.0.0.1:1080'
+        node_b: 'socks5://127.0.0.2:1080'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: min
+        }
+        }
+        routing {
+        fallback: proxy
+        }
+        "#,
+    )
+    .unwrap();
+    let config = dae_config::schema::build_config(&sections).unwrap();
+    let plan = super::super::plan::build_resident_dataplane_plan(&config).unwrap();
+    let default_outbound = plan.default_outbound.unwrap();
+    let shared_groups = share_resident_proxy_groups(plan.proxies);
+    let group = shared_groups.get(&default_outbound).unwrap();
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(200), 1)
+        .unwrap();
+    group
+        .record_check_result("node_b", NetworkType::TCP4, Some(20), 2)
+        .unwrap();
+    let router = ResidentTcpRouter::new_for_test_shared(
+        Arc::clone(&shared_groups),
+        fallback_matcher("direct", 0),
+        TcpDialMode::Ip,
+        Duration::from_millis(100),
+        0x1234,
+        true,
+    )
+    .unwrap();
+    let runtime_groups = shared_groups.values().cloned().collect::<Vec<_>>();
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443));
+
+    let selection = router
+        .select_from_routing_result(
+            peer,
+            dst,
+            "",
+            BpfRoutingResult {
+                outbound: default_outbound,
+                ..BpfRoutingResult::default()
+            },
+        )
+        .unwrap();
+    let TcpSelection::Proxy(selection) = selection else {
+        panic!("expected proxy selection");
+    };
+    assert_eq!(selection.proxy.node_tag, "node_b");
+    let snapshot = super::super::resident_group_selector_snapshot_map(&runtime_groups);
+    assert_eq!(snapshot["proxy"]["selectedNodeTag"], json!("node_b"));
+
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(10), 3)
+        .unwrap();
+    let selection = router
+        .select_from_routing_result(
+            peer,
+            dst,
+            "",
+            BpfRoutingResult {
+                outbound: default_outbound,
+                ..BpfRoutingResult::default()
+            },
+        )
+        .unwrap();
+    let TcpSelection::Proxy(selection) = selection else {
+        panic!("expected proxy selection");
+    };
+    assert_eq!(selection.proxy.node_tag, "node_a");
+    let snapshot = super::super::resident_group_selector_snapshot_map(&runtime_groups);
+    assert_eq!(snapshot["proxy"]["selectedNodeTag"], json!("node_a"));
+}
+
 fn tcp_router_for_test(
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,

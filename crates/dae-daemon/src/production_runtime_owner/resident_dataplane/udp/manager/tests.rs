@@ -556,7 +556,7 @@ fn test_udp_router_with_matcher_and_so_mark(
         ResidentProxyGroupPlan::fixed_single_for_test(test_udp_proxy_with_group("sg", 0x2222)),
     );
     ResidentUdpRouter::from_parts(
-        Arc::new(groups),
+        share_resident_proxy_groups(groups),
         2,
         1,
         None,
@@ -605,7 +605,7 @@ fn test_udp_router_with_udp_family_latency_group() -> ResidentUdpRouter {
         .record_check_result("node_b", NetworkType::DNS_UDP6, Some(50), 4)
         .unwrap();
     ResidentUdpRouter::from_parts(
-        Arc::new(plan.proxies.clone()),
+        share_resident_proxy_groups(plan.proxies.clone()),
         plan.default_outbound.unwrap(),
         1,
         None,
@@ -648,7 +648,7 @@ fn test_udp_router_with_data_udp_health_group() -> ResidentUdpRouter {
         .record_data_udp_available_traffic("node_b", NetworkType::DATA_UDP4, 2)
         .unwrap();
     ResidentUdpRouter::from_parts(
-        Arc::new(plan.proxies.clone()),
+        share_resident_proxy_groups(plan.proxies.clone()),
         plan.default_outbound.unwrap(),
         1,
         None,

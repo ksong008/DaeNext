@@ -39,7 +39,9 @@ use super::super::resident_routing::{
 use super::direct::open_direct_tcp_connection_async;
 #[cfg(test)]
 use super::plan::build_resident_dataplane_plan;
-use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, effective_so_mark_from_dae};
+#[cfg(test)]
+use super::plan::share_resident_proxy_groups;
+use super::plan::{ResidentProxyPlan, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
 use super::resolve_host_addrs_with_configured_fallback_dns;
 use super::tcp::{exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_tcp_stream_async};
 use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
