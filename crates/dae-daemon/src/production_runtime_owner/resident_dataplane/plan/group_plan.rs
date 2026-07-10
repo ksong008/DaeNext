@@ -15,6 +15,24 @@ pub(crate) struct ResidentProxyCandidatePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) type ResidentProxyGroupHandle =
+    Arc<ResidentProxyGroupPlan>;
+pub(in crate::production_runtime_owner::resident_dataplane) type ResidentProxyGroupHandleMap =
+    BTreeMap<u8, ResidentProxyGroupHandle>;
+pub(in crate::production_runtime_owner::resident_dataplane) type SharedResidentProxyGroupMap =
+    Arc<ResidentProxyGroupHandleMap>;
+
+pub(in crate::production_runtime_owner::resident_dataplane) fn share_resident_proxy_groups(
+    groups: BTreeMap<u8, ResidentProxyGroupPlan>,
+) -> SharedResidentProxyGroupMap {
+    Arc::new(
+        groups
+            .into_iter()
+            .map(|(outbound, group)| (outbound, Arc::new(group)))
+            .collect(),
+    )
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentProxyProbePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) node_tag: String,

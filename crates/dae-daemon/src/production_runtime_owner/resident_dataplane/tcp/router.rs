@@ -12,7 +12,7 @@ pub(crate) const ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_mil
 
 pub(crate) struct ResidentTcpRouter {
     pub(in crate::production_runtime_owner::resident_dataplane) proxies:
-        BTreeMap<u8, ResidentProxyGroupPlan>,
+        SharedResidentProxyGroupMap,
     pub(in crate::production_runtime_owner::resident_dataplane) routing_tuple_map_id: u32,
     routing_tuple_map_fd: OwnedFd,
     pub(in crate::production_runtime_owner::resident_dataplane) routing_matcher: RoutingMatcher,
@@ -27,7 +27,7 @@ pub(crate) struct ResidentTcpRouter {
 
 impl ResidentTcpRouter {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
-        proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
+        proxies: SharedResidentProxyGroupMap,
         routing_tuple_map_id: Option<u32>,
         routing_matcher: RoutingMatcher,
         domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
@@ -62,7 +62,7 @@ impl ResidentTcpRouter {
     }
 
     fn from_open_routing_tuple_map(
-        proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
+        proxies: SharedResidentProxyGroupMap,
         routing_tuple_map_id: u32,
         routing_tuple_map_fd: OwnedFd,
         routing_matcher: RoutingMatcher,
@@ -93,6 +93,32 @@ impl ResidentTcpRouter {
     #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn new_for_test(
         proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
+        routing_matcher: RoutingMatcher,
+        dial_mode: TcpDialMode,
+        sniffing_timeout: Duration,
+        so_mark_from_dae: u32,
+        mptcp: bool,
+    ) -> Result<Self, String> {
+        let routing_tuple_map_fd: OwnedFd = std::fs::File::open("/dev/null")
+            .map_err(|err| format!("open /dev/null for resident TCP router test fd: {err}"))?
+            .into();
+        Self::from_open_routing_tuple_map(
+            share_resident_proxy_groups(proxies),
+            1,
+            routing_tuple_map_fd,
+            routing_matcher,
+            None,
+            Arc::new(ResidentDnsPlan::asis(so_mark_from_dae)),
+            dial_mode,
+            sniffing_timeout,
+            so_mark_from_dae,
+            mptcp,
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new_for_test_shared(
+        proxies: SharedResidentProxyGroupMap,
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         sniffing_timeout: Duration,

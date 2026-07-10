@@ -1,13 +1,11 @@
 // UDP worker startup keeps socket, routing, session, shutdown, and metrics ownership explicit.
 #![allow(clippy::too_many_arguments)]
 
-use std::collections::BTreeMap;
-
 use super::*;
 
 pub(crate) fn resident_udp_loop(
     socket: std::net::UdpSocket,
-    proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    proxy_groups: SharedResidentProxyGroupMap,
     default_outbound: u8,
     routing_tuple_map_id: Option<u32>,
     routing_matcher: RoutingMatcher,

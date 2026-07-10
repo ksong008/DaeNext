@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -27,7 +25,7 @@ pub(super) struct UdpSessionEntry {
 #[derive(Clone)]
 pub(super) struct UdpSessionActorContext {
     pub(super) dns: Arc<ResidentDnsPlan>,
-    pub(super) proxy_groups: Arc<BTreeMap<u8, ResidentProxyGroupPlan>>,
+    pub(super) proxy_groups: SharedResidentProxyGroupMap,
     pub(super) event_file: PathBuf,
     pub(super) event_lock: Arc<Mutex<()>>,
     pub(super) metrics: Arc<ResidentDataplaneMetrics>,

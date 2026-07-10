@@ -41,33 +41,12 @@ pub(crate) fn start_resident_dataplane_workers(
         );
     }
     let so_mark_from_dae = effective_so_mark_from_dae(config.global.so_mark_from_dae);
-    let Some(default_group) = plan.default_proxy_group().cloned() else {
-        return (
-            json!({
-                "status": "fail",
-                "enabled": true,
-                "error": "resident dataplane plan is enabled without a default proxy group plan",
-                "event_file": Value::Null,
-                "event_file_status": "disabled",
-                "event_log": "product-log-sink",
-            }),
-            None,
-        );
-    };
-    let Some(default_proxy) = default_group.default_proxy_snapshot() else {
-        return (
-            json!({
-                "status": "fail",
-                "enabled": true,
-                "error": "resident dataplane plan is enabled without an admitted default proxy candidate",
-                "event_file": Value::Null,
-                "event_file_status": "disabled",
-                "event_log": "product-log-sink",
-            }),
-            None,
-        );
-    };
-    let Some(default_outbound) = plan.default_outbound else {
+    let default_outbound = plan.default_outbound;
+    let tcp_dial_mode = plan.tcp_dial_mode;
+    let sniffing_timeout = plan.sniffing_timeout;
+    let dns_plan = plan.dns;
+    let proxy_groups = plan.proxies;
+    let Some(default_outbound) = default_outbound else {
         return (
             json!({
                 "status": "fail",
@@ -80,7 +59,37 @@ pub(crate) fn start_resident_dataplane_workers(
             None,
         );
     };
-    plan::apply_successful_latency_seed_snapshots(&plan.proxies, latency_seed);
+    let Some(default_proxy) = proxy_groups
+        .get(&default_outbound)
+        .and_then(|group| group.default_proxy_snapshot())
+    else {
+        return (
+            json!({
+                "status": "fail",
+                "enabled": true,
+                "error": "resident dataplane plan is enabled without an admitted default proxy candidate",
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
+            }),
+            None,
+        );
+    };
+    plan::apply_successful_latency_seed_snapshots(&proxy_groups, latency_seed);
+    let proxy_groups = plan::share_resident_proxy_groups(proxy_groups);
+    let Some(default_group) = proxy_groups.get(&default_outbound).cloned() else {
+        return (
+            json!({
+                "status": "fail",
+                "enabled": true,
+                "error": "resident dataplane plan is enabled without a default proxy group plan",
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
+            }),
+            None,
+        );
+    };
     let routing_matcher =
         match build_resident_userspace_routing_matcher_with_geodata(config, geodata) {
             Ok(matcher) => matcher,
@@ -167,7 +176,7 @@ pub(crate) fn start_resident_dataplane_workers(
         resource_config.clone(),
     );
     let proxy = Arc::new(default_proxy);
-    let proxy_group = Arc::new(default_group);
+    let proxy_group = Arc::clone(&default_group);
     let manual_probe_plans = plan::build_resident_manual_probe_plans(config);
     let manual_probe_plan_count = manual_probe_plans
         .values()
@@ -176,18 +185,13 @@ pub(crate) fn start_resident_dataplane_workers(
     let manual_probe_unavailable_count = manual_probe_plans
         .len()
         .saturating_sub(manual_probe_plan_count);
-    let runtime_groups = plan
-        .proxies
-        .values()
-        .cloned()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
+    let runtime_groups = proxy_groups.values().cloned().collect::<Vec<_>>();
     let health_groups = runtime_groups
         .iter()
         .filter(|group| group.needs_background_checks())
         .cloned()
         .collect::<Vec<_>>();
-    let udp_proxy_groups = Arc::new(plan.proxies.clone());
+    let udp_proxy_groups = Arc::clone(&proxy_groups);
     let dns_domain_routing = domain_routing_map_id.map(|map_id| {
         Arc::new(dns::ResidentDnsDomainRouting::new(
             map_id,
@@ -200,7 +204,7 @@ pub(crate) fn start_resident_dataplane_workers(
         so_mark_from_dae,
     ));
     let dns = Arc::new(
-        plan.dns
+        dns_plan
             .with_domain_routing(dns_domain_routing.clone())
             .with_upstream_routing(Some(dns_upstream_router)),
     );
@@ -228,16 +232,16 @@ pub(crate) fn start_resident_dataplane_workers(
     };
     let dns_reload_handle = dns.reload_handle();
     let udp_routing_matcher = routing_matcher.clone();
-    let udp_dial_mode = plan.tcp_dial_mode;
+    let udp_dial_mode = tcp_dial_mode;
     let udp_so_mark_from_dae = so_mark_from_dae;
     let tcp_router = match ResidentTcpRouter::new(
-        plan.proxies,
+        Arc::clone(&proxy_groups),
         routing_tuple_map_id,
         routing_matcher,
         dns_domain_routing,
         Arc::clone(&dns),
-        plan.tcp_dial_mode,
-        plan.sniffing_timeout,
+        tcp_dial_mode,
+        sniffing_timeout,
         so_mark_from_dae,
         config.global.mptcp,
     ) {

@@ -49,9 +49,12 @@ use super::dns::{
 };
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
+#[cfg(test)]
+use super::plan::share_resident_proxy_groups;
 use super::plan::{
     ResidentHysteria2ObfsPlan, ResidentProxyGroupPlan, ResidentProxyPlan,
     ResidentProxyProtocolPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
+    SharedResidentProxyGroupMap,
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,
