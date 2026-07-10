@@ -76,7 +76,7 @@ pub(in crate::daed_product) fn render_node_section(nodes: &Value) -> String {
         let tag = runtime_node_tag(node);
         out.push_str(&format!(
             "    {}: {}\n",
-            dae_key_literal(&tag),
+            dae_key_literal(tag.as_str()),
             dae_string_literal(link)
         ));
     }
@@ -118,7 +118,7 @@ pub(in crate::daed_product) fn render_group_section(
         }
         let names = node_tags
             .iter()
-            .map(|tag| dae_string_literal(tag))
+            .map(|tag| dae_string_literal(tag.as_str()))
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!("        filter: name({names})\n"));
@@ -240,8 +240,8 @@ fn default_global_resource_text_with_newline() -> String {
     format!("{DEFAULT_GLOBAL_RESOURCE_TEXT}\n")
 }
 
-pub(in crate::daed_product) fn runtime_group_node_tags(group: &Value) -> Vec<String> {
-    let mut tags = Vec::<String>::new();
+pub(in crate::daed_product) fn runtime_group_node_tags(group: &Value) -> Vec<RuntimeNodeTag> {
+    let mut tags = Vec::<RuntimeNodeTag>::new();
     for node in group["nodes"].as_array().into_iter().flatten() {
         push_unique(&mut tags, runtime_node_tag(node));
     }
@@ -257,28 +257,34 @@ pub(in crate::daed_product) fn runtime_group_node_tags(group: &Value) -> Vec<Str
     tags
 }
 
-pub(in crate::daed_product) fn runtime_node_tag(node: &Value) -> String {
-    node.get("runtimeTag")
+pub(in crate::daed_product) fn runtime_node_tag(node: &Value) -> RuntimeNodeTag {
+    if let Some(runtime_tag) = node
+        .get("runtimeTag")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            node.get("tag")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-        })
+    {
+        return RuntimeNodeTag::from_existing(runtime_tag);
+    }
+    if let Some(id) = node.get("id").and_then(Value::as_i64) {
+        return RuntimeNodeTag::from_node_id(id);
+    }
+    let legacy_tag = node
+        .get("tag")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
         .or_else(|| {
             node.get("name")
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
         })
-        .map(|value| value.trim().to_owned())
-        .unwrap_or_else(|| {
-            let id = node.get("id").and_then(Value::as_i64).unwrap_or(0);
-            format!("node_{id}")
-        })
+        .unwrap_or("node_0");
+    RuntimeNodeTag::from_existing(legacy_tag)
 }
 
-pub(in crate::daed_product) fn push_unique(values: &mut Vec<String>, value: String) {
+pub(in crate::daed_product) fn push_unique(
+    values: &mut Vec<RuntimeNodeTag>,
+    value: RuntimeNodeTag,
+) {
     if !values.iter().any(|seen| seen == &value) {
         values.push(value);
     }

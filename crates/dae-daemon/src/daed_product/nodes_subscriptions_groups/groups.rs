@@ -573,7 +573,7 @@ fn ensure_fixed_group_runtime_node_limit(
     validate_fixed_group_runtime_node_tags(&tags)
 }
 
-fn validate_fixed_group_runtime_node_tags(tags: &[String]) -> io::Result<()> {
+fn validate_fixed_group_runtime_node_tags(tags: &[RuntimeNodeTag]) -> io::Result<()> {
     if tags.len() <= 1 {
         return Ok(());
     }
@@ -586,7 +586,10 @@ fn validate_fixed_group_runtime_node_tags(tags: &[String]) -> io::Result<()> {
     ))
 }
 
-fn fixed_group_runtime_node_tags(conn: &Connection, group_id: i64) -> io::Result<Vec<String>> {
+fn fixed_group_runtime_node_tags(
+    conn: &Connection,
+    group_id: i64,
+) -> io::Result<Vec<RuntimeNodeTag>> {
     let mut tags = Vec::new();
     for node in group_nodes_value(conn, group_id)? {
         push_unique(&mut tags, runtime_node_tag(&node));

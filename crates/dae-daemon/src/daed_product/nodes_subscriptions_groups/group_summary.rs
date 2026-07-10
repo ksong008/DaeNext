@@ -9,7 +9,7 @@ struct GroupCandidateRow {
 
 #[derive(Clone)]
 struct RuntimeGroupSelectionMatcher {
-    selected_node_tag: Option<String>,
+    selected_node_tag: Option<RuntimeNodeTag>,
     selected_link_hash: Option<String>,
 }
 
@@ -40,7 +40,7 @@ impl GroupMaterializedCandidateSummary {
 
     fn push_unique(
         &mut self,
-        seen_tags: &mut HashSet<String>,
+        seen_tags: &mut HashSet<RuntimeNodeTag>,
         candidate: GroupCandidateRow,
         sample_limit: usize,
     ) {
@@ -89,7 +89,7 @@ impl RuntimeGroupSelectionMatcher {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_owned);
+            .map(RuntimeNodeTag::from_existing);
         let selected_link_hash = snapshot
             .and_then(|value| value.get("selectedLinkHash"))
             .and_then(Value::as_str)
@@ -106,8 +106,8 @@ impl RuntimeGroupSelectionMatcher {
     }
 
     fn matches_node(&self, node: &Value) -> bool {
-        if let Some(selected_node_tag) = self.selected_node_tag.as_deref()
-            && runtime_node_tag(node) == selected_node_tag
+        if let Some(selected_node_tag) = self.selected_node_tag.as_ref()
+            && runtime_node_tag(node) == *selected_node_tag
         {
             return true;
         }
@@ -132,7 +132,7 @@ pub(super) fn group_materialized_candidate_summary_with_runtime_selection(
     runtime_selector: Option<&Value>,
 ) -> io::Result<GroupMaterializedCandidateSummary> {
     let mut summary = GroupMaterializedCandidateSummary::new(runtime_selector);
-    let mut seen_tags = HashSet::<String>::new();
+    let mut seen_tags = HashSet::<RuntimeNodeTag>::new();
 
     let mut direct_stmt = conn
         .prepare(
@@ -186,7 +186,7 @@ fn push_subscription_materialized_candidates(
     subscription_id: i64,
     name_filter_regex: Option<&str>,
     sample_limit: usize,
-    seen_tags: &mut HashSet<String>,
+    seen_tags: &mut HashSet<RuntimeNodeTag>,
     summary: &mut GroupMaterializedCandidateSummary,
 ) -> io::Result<()> {
     let filter = compile_name_filter(name_filter_regex)?;

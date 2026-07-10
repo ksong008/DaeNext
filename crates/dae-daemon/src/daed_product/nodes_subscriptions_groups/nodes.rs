@@ -488,17 +488,13 @@ pub(crate) fn decode_percent_escapes(value: &str) -> String {
 }
 
 pub(crate) fn node_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let id = row.get::<_, i64>(0)?;
     let subscription_id: Option<i64> = row.get(6)?;
     let name = row.get::<_, String>(2)?;
     let tag = row.get::<_, Option<String>>(5)?;
-    let runtime_tag = tag
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(name.as_str())
-        .to_owned();
+    let runtime_tag = RuntimeNodeTag::from_node_id(id).into_string();
     Ok(json!({
-        "id": row.get::<_, i64>(0)?,
+        "id": id,
         "link": row.get::<_, String>(1)?,
         "name": decode_node_label(&name),
         "address": row.get::<_, String>(3)?,
