@@ -2,6 +2,9 @@ use super::support::FreshProductState;
 use super::*;
 use std::net::{Ipv4Addr, TcpListener};
 
+mod bundle_roundtrip;
+mod refresh_compatibility;
+
 #[test]
 fn cross_subscription_same_display_name_uses_unique_runtime_identity() {
     let fixture = FreshProductState::new("cross-subscription-runtime-identity");
