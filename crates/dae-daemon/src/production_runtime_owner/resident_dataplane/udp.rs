@@ -110,6 +110,9 @@ mod reply;
 pub(super) use self::reply::clear_udp_reply_socket_cache;
 use self::reply::*;
 #[cfg(test)]
+#[path = "udp/tests/chain_execution.rs"]
+mod chain_execution_tests;
+#[cfg(test)]
 mod tests;
 
 fn resident_xhttp_uses_h3(proxy: &ResidentProxyPlan) -> bool {
