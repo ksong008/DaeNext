@@ -47,6 +47,7 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         "goroutines": process.thread_count,
         "productHttp": app.http_metrics.snapshot(),
         "productAuth": app.auth_runtime.snapshot(),
+        "productGeodataUpdate": app.geodata_update_runtime.as_ref().map(|runtime| runtime.snapshot()).unwrap_or(Value::Null),
         "runtime": runtime,
         "samples": traffic.samples,
     })
@@ -90,6 +91,7 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
         "cgroupMemory": cgroup_memory,
         "goroutines": process.thread_count,
         "productAuth": app.auth_runtime.snapshot(),
+        "productGeodataUpdate": app.geodata_update_runtime.as_ref().map(|runtime| runtime.snapshot()).unwrap_or(Value::Null),
         "reloadCount": runtime_delta.reload_count,
         "samples": traffic.samples,
     })

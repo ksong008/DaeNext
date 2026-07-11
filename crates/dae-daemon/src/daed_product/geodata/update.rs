@@ -1,22 +1,32 @@
 use super::file::{advise_file_dontneed, summarize_geodata_file};
 use super::http::{fetch_geodata_latest_release, fetch_geodata_url_to_file};
 use super::source::geodata_source;
-use super::status::{geodata_dir, update_geodata_resource_status_cache};
+use super::status::update_geodata_resource_status_cache;
 use super::transaction::{
     PreparedGeodataGeneration, commit_geodata_generation, recover_geodata_transaction,
     runtime_external_input_version_if_running,
 };
 use super::types::{GeodataKind, GeodataRelease, GeodataSourceMode};
+use super::update_admission::ProductGeodataUpdateLease;
 use super::*;
 
 pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
-    let _update_lease = app.geodata_updates.acquire(kind)?;
-    let dir = geodata_dir(app);
+    let context = ProductGeodataUpdateContext::from_app(app);
+    let update_lease = context.updates.acquire(kind)?;
+    update_geodata_with_lease(&context, kind, update_lease)
+}
+
+pub(super) fn update_geodata_with_lease(
+    context: &ProductGeodataUpdateContext,
+    kind: GeodataKind,
+    _update_lease: ProductGeodataUpdateLease,
+) -> io::Result<Value> {
+    let dir = context.dir.clone();
     fs::create_dir_all(&dir)?;
-    recover_geodata_transaction(&dir, &app.state, kind)?;
-    let source = geodata_source(&app.state, kind)?;
+    recover_geodata_transaction(&dir, &context.state, kind)?;
+    let source = geodata_source(&context.state, kind)?;
     let proxy_config = if source.use_proxy {
-        Some(product_default_proxy_config(&app.state)?)
+        Some(product_default_proxy_config(&context.state)?)
     } else {
         None
     };
@@ -28,8 +38,8 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
             direct_geodata_release(kind, &source.url, proxy_config.as_ref())
         }
     };
-    let tmp_path = app
-        .geodata_updates
+    let tmp_path = context
+        .updates
         .reserve_staging_path(&dir, kind, "download")?;
     let download =
         match fetch_geodata_url_to_file(&release.download_url, &tmp_path, proxy_config.as_ref()) {
@@ -63,7 +73,7 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
     let version = release
         .version
         .unwrap_or_else(|| geodata_sha256_version(&download.sha256));
-    let external_input_version_before = match runtime_external_input_version_if_running(app) {
+    let external_input_version_before = match runtime_external_input_version_if_running(context) {
         Ok(version) => version,
         Err(error) => {
             let _ = fs::remove_file(&tmp_path);
@@ -71,8 +81,8 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
         }
     };
     let committed = commit_geodata_generation(
-        &app.geodata_updates,
-        &app.state,
+        &context.updates,
+        &context.state,
         &dir,
         kind,
         PreparedGeodataGeneration {
@@ -86,7 +96,7 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
     let path = dir.join(kind.file_name());
     let _ = advise_file_dontneed(&path);
     let status = committed.status;
-    update_geodata_resource_status_cache(app, kind, status.clone());
+    update_geodata_resource_status_cache(context, kind, status.clone());
     let mut response_object = serde_json::Map::new();
     response_object.insert(kind.response_key().to_owned(), status);
     response_object.insert("updated".to_owned(), json!(kind.response_key()));

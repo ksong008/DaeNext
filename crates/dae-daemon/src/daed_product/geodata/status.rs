@@ -88,7 +88,7 @@ fn geodata_resource_status_cached(app: &AppState, dir: &Path, kind: GeodataKind)
         };
         if identity_before == identity_after {
             set_geodata_resource_status_cache_entry(
-                app,
+                &app.geodata_status_cache,
                 kind,
                 GeodataStatusCacheEntry::new(identity_after, value.clone()),
             );
@@ -227,19 +227,12 @@ pub(super) fn is_valid_geodata_release_version(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
-fn set_geodata_resource_status_cache(app: &AppState, dir: &Path, kind: GeodataKind, value: Value) {
-    let Ok(entry) = GeodataStatusCacheEntry::capture(dir, kind, value) else {
-        return;
-    };
-    set_geodata_resource_status_cache_entry(app, kind, entry);
-}
-
 fn set_geodata_resource_status_cache_entry(
-    app: &AppState,
+    status_cache: &Arc<Mutex<GeodataStatusCache>>,
     kind: GeodataKind,
     entry: GeodataStatusCacheEntry,
 ) {
-    let Ok(mut cache) = app.geodata_status_cache.lock() else {
+    let Ok(mut cache) = status_cache.lock() else {
         return;
     };
     match kind {
@@ -249,10 +242,12 @@ fn set_geodata_resource_status_cache_entry(
 }
 
 pub(super) fn update_geodata_resource_status_cache(
-    app: &AppState,
+    context: &ProductGeodataUpdateContext,
     kind: GeodataKind,
     value: Value,
 ) {
-    let dir = geodata_dir(app);
-    set_geodata_resource_status_cache(app, &dir, kind, value);
+    let Ok(entry) = GeodataStatusCacheEntry::capture(&context.dir, kind, value) else {
+        return;
+    };
+    set_geodata_resource_status_cache_entry(&context.status_cache, kind, entry);
 }
