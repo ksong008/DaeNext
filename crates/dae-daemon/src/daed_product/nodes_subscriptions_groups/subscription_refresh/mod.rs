@@ -2,6 +2,7 @@ use super::*;
 
 mod content;
 mod http;
+mod node_stage;
 mod node_sync;
 mod source;
 
@@ -11,6 +12,7 @@ pub(crate) use self::http::{
     decode_chunked_body, decode_chunked_body_with_limit, http_response_body_with_limit,
     read_subscription_http_response_with_limit,
 };
+#[cfg(test)]
 pub(crate) use self::node_sync::replace_subscription_nodes;
 #[cfg(test)]
 pub(crate) use self::source::fetch_subscription_content;
@@ -99,16 +101,16 @@ pub(in crate::daed_product) fn apply_subscription_refresh_result(
     fetched_at: &str,
     links: &[String],
 ) -> io::Result<(bool, Vec<Value>)> {
+    let prepared_nodes = node_stage::prepare_subscription_nodes(links);
     let _guard = subscription_write_guard()?;
     let mut conn = open_state_connection(state)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sqlite_io_error)?;
     ensure_subscription_exists(&tx, id)?;
-    let before_nodes = subscription_runtime_node_fingerprint(&tx, id)?;
-    let node_import_result = replace_subscription_nodes(&tx, id, links)?;
-    let after_nodes = subscription_runtime_node_fingerprint(&tx, id)?;
-    let runtime_input_changed = before_nodes != after_nodes;
+    let sync_result = node_sync::replace_prepared_subscription_nodes(&tx, id, &prepared_nodes)?;
+    let runtime_input_changed = sync_result.runtime_input_changed;
+    let node_import_result = sync_result.items;
     tx.execute(
         "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
         params![
@@ -163,35 +165,6 @@ fn ensure_subscription_exists(conn: &Connection, id: i64) -> io::Result<()> {
     .map_err(sqlite_io_error)?
     .map(|_| ())
     .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "subscription not found"))
-}
-
-fn subscription_runtime_node_fingerprint(
-    conn: &Connection,
-    subscription_id: i64,
-) -> io::Result<Vec<(String, String, String, String)>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT link, name, address, protocol
-             FROM nodes
-             WHERE subscription_id = ?1
-             ORDER BY name, link, address, protocol",
-        )
-        .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map(params![subscription_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })
-        .map_err(sqlite_io_error)?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row.map_err(sqlite_io_error)?);
-    }
-    Ok(out)
 }
 
 fn subscription_http_body_limit() -> usize {
