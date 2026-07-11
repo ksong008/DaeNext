@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use dae_datapath::{ACTIVE_TCP_LAN_FILTER_PREF, ACTIVE_TCP_LAN_HOST_IFACE};
 use dae_ebpf_support::{
     AttachBackend, BpfDaeParam, DaeParamInput, NativeBackendAdmissionEvidence,
-    NativeBackendRuntimeDecision, NativeBackendRuntimeRequest, TcAttachLayer, build_dae_param,
-    native_backend_admission_report, native_backend_runtime_decision,
+    NativeBackendRuntimeDecision, NativeBackendRuntimeRequest, RuntimeMapProfile, TcAttachLayer,
+    build_dae_param, native_backend_admission_report, native_backend_runtime_decision,
 };
 #[cfg(feature = "native-ebpf")]
 use dae_ebpf_support::{
@@ -32,6 +32,8 @@ pub(super) const NATIVE_PARAM_OBJECT_IDENTITY: &str = "memory:native-ebpf-param"
 
 mod types;
 pub(in crate::production_runtime_owner) use self::types::*;
+mod map_profile;
+use self::map_profile::*;
 mod attach_backend;
 mod attach_flow;
 mod map_cleanup;

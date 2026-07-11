@@ -276,6 +276,7 @@ fn try_load_pname_core_object(
         param,
         pin_root,
         true,
+        input.map_profile.profile,
     )
     .map_err(|err| format!("pname core enhanced object load failed: {err}"))?;
     preload_pname_core_cgroup_programs(&mut loaded)
@@ -323,6 +324,7 @@ fn load_default_native_object(
         default_pname_param(input.param),
         default_pin_root,
         false,
+        input.map_profile.profile,
     )
 }
 
@@ -333,6 +335,7 @@ fn load_embedded_native_object(
     param: BpfDaeParam,
     pin_root: &Path,
     target_btf_required: bool,
+    map_profile: RuntimeMapProfile,
 ) -> Result<dae_ebpf_support::AyaUserspaceLoadedObject, String> {
     std::fs::create_dir_all(pin_root)
         .map_err(|err| format!("native eBPF pin root create failed: {err}"))?;
@@ -344,7 +347,7 @@ fn load_embedded_native_object(
             map_pin_path: Some(pin_root),
             allow_unsupported_maps: true,
             allowed_unsupported_map_names: dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
-            max_entries_overrides: &[],
+            max_entries_overrides: map_profile.max_entries_overrides(),
             prepin_lpm_array_map: true,
             target_btf_required,
         },

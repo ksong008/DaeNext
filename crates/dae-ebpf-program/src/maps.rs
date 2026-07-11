@@ -5,8 +5,7 @@ use aya_ebpf::{
         bpf_map_def,
         bpf_map_type::{
             BPF_MAP_TYPE_ARRAY, BPF_MAP_TYPE_ARRAY_OF_MAPS, BPF_MAP_TYPE_HASH,
-            BPF_MAP_TYPE_LPM_TRIE, BPF_MAP_TYPE_LRU_HASH, BPF_MAP_TYPE_SOCKHASH,
-            BPF_MAP_TYPE_SOCKMAP,
+            BPF_MAP_TYPE_LPM_TRIE, BPF_MAP_TYPE_LRU_HASH, BPF_MAP_TYPE_SOCKMAP,
         },
     },
     macros::{btf_map, map},
@@ -16,7 +15,7 @@ use crate::abi::{
     BpfDomainRouting, BpfLpmKey, BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname,
     BpfRedirectEntry, BpfRedirectTuple, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState,
     MAX_COOKIE_PID_PNAME_MAPPING_NUM, MAX_DOMAIN_ROUTING_NUM, MAX_DST_MAPPING_NUM, MAX_LPM_NUM,
-    MAX_LPM_SIZE, MAX_MATCH_SET_LEN, MAX_TGID_PNAME_MAPPING_NUM,
+    MAX_LPM_SIZE, MAX_MATCH_SET_LEN,
 };
 
 const BPF_F_NO_PREALLOC: u32 = 1;
@@ -119,16 +118,6 @@ static REDIRECT_TRACK: RawMap = RawMap::new(
     PIN_NONE,
 );
 
-#[map(name = "tgid_pname_map")]
-static TGID_PNAME_MAP: RawMap = RawMap::new(
-    BPF_MAP_TYPE_LRU_HASH,
-    size_of::<u32>(),
-    size_of::<[u32; 4]>(),
-    MAX_TGID_PNAME_MAPPING_NUM,
-    0,
-    PIN_BY_NAME,
-);
-
 #[map(name = "routing_tuples_map")]
 static ROUTING_TUPLES_MAP: RawMap = RawMap::new(
     BPF_MAP_TYPE_LRU_HASH,
@@ -137,16 +126,6 @@ static ROUTING_TUPLES_MAP: RawMap = RawMap::new(
     MAX_DST_MAPPING_NUM,
     0,
     PIN_BY_NAME,
-);
-
-#[map(name = "fast_sock")]
-static FAST_SOCK: RawMap = RawMap::new(
-    BPF_MAP_TYPE_SOCKHASH,
-    size_of::<BpfTuplesKey>(),
-    size_of::<u64>(),
-    65_535,
-    0,
-    PIN_NONE,
 );
 
 #[map(name = "unused_lpm_type")]
@@ -227,11 +206,6 @@ pub(crate) fn listen_socket_map_ptr() -> *mut c_void {
 #[inline(always)]
 pub(crate) fn redirect_track_map_ptr() -> *mut c_void {
     map_ptr(&REDIRECT_TRACK)
-}
-
-#[inline(always)]
-pub(crate) fn tgid_pname_map_ptr() -> *mut c_void {
-    map_ptr(&TGID_PNAME_MAP)
 }
 
 #[inline(always)]

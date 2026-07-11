@@ -86,6 +86,7 @@ pub(in crate::production_runtime_owner) struct NativeAttachOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner) struct NativeEbpfLoadInput {
     pub param: BpfDaeParam,
+    pub(super) map_profile: NativeMapProfileSelection,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -40,6 +40,7 @@ pub(crate) fn prepare_native_param_object(
         task_struct_mm_offset: 0,
         mm_struct_arg_start_offset: 0,
     });
+    let map_profile = selected_native_map_profile();
     let selected_param_object = PathBuf::from(NATIVE_PARAM_OBJECT_IDENTITY);
     NativeParamObjectPreparation {
         selected_param_object: selected_param_object.clone(),
@@ -54,6 +55,12 @@ pub(crate) fn prepare_native_param_object(
             "materialized_object": false,
             "param_delivery": "aya-set-global",
             "param_global_set": true,
+            "map_profile": {
+                "name": map_profile.profile.name(),
+                "source": map_profile.source,
+                "invalidValue": map_profile.invalid_value.as_deref(),
+                "maxEntriesOverrides": map_profile.profile.max_entries_overrides(),
+            },
             "param": {
                 "tproxy_port": param.tproxy_port,
                 "control_plane_pid": param.control_plane_pid,
@@ -66,7 +73,7 @@ pub(crate) fn prepare_native_param_object(
             },
             "location": Value::Null,
         }),
-        load_input: Some(NativeEbpfLoadInput { param }),
+        load_input: Some(NativeEbpfLoadInput { param, map_profile }),
     }
 }
 

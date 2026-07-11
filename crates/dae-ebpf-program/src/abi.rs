@@ -194,7 +194,6 @@ pub const MAX_MATCH_SET_LEN: u32 = 32 * 32;
 pub const MAX_LPM_NUM: u32 = MAX_MATCH_SET_LEN + 8;
 pub const MAX_LPM_SIZE: u32 = 2_048_000;
 pub const MAX_DST_MAPPING_NUM: u32 = 65_536 * 2;
-pub const MAX_TGID_PNAME_MAPPING_NUM: u32 = 8_192;
 pub const MAX_COOKIE_PID_PNAME_MAPPING_NUM: u32 = 65_536;
 pub const MAX_DOMAIN_ROUTING_NUM: u32 = 65_536;
 pub const TPROXY_MARK: u32 = 0x0800_0000;

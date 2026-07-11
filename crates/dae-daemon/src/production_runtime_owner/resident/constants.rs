@@ -14,11 +14,9 @@ pub(super) const COOKIE_PID_MAP_NAME: &str = "cookie_pid_map";
 pub(super) const DOMAIN_ROUTING_MAP_NAME: &str = "domain_routing_map";
 pub(super) const LPM_ARRAY_MAP_NAME: &str = "lpm_array_map";
 pub(super) const ROUTING_TUPLES_MAP_NAME: &str = "routing_tuples_map";
-pub(super) const TGID_PNAME_MAP_NAME: &str = "tgid_pname_map";
-pub(super) const RESIDENT_REUSABLE_MAP_NAMES: [&str; 4] = [
+pub(super) const RESIDENT_REUSABLE_MAP_NAMES: [&str; 3] = [
     ROUTING_TUPLES_MAP_NAME,
     COOKIE_PID_MAP_NAME,
-    TGID_PNAME_MAP_NAME,
     LPM_ARRAY_MAP_NAME,
 ];
 
