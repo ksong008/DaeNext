@@ -131,3 +131,92 @@ fn subscription_field_save_is_atomic() {
     assert_eq!(subscription["cronEnable"], json!(true));
     assert_eq!(subscription["useProxy"], json!(false));
 }
+
+#[test]
+fn large_subscription_refresh_keeps_concurrent_reads_available_when_enabled() {
+    if std::env::var_os("DAE_RUN_SUBSCRIPTION_PRESSURE_FIXTURE").is_none() {
+        return;
+    }
+
+    let fixture = FreshProductState::new("subscription-refresh-pressure");
+    seed_subscription(&fixture);
+    let links = (0..30_000)
+        .map(|index| format!("socks://127.0.0.1:{}#node-{index}", 10_000 + index))
+        .collect::<Vec<_>>();
+    let state = fixture.state().to_path_buf();
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let read_errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let read_count = Arc::new(AtomicU64::new(0));
+    let mut readers = Vec::new();
+    for _ in 0..4 {
+        let state = state.clone();
+        let done = Arc::clone(&done);
+        let read_errors = Arc::clone(&read_errors);
+        let read_count = Arc::clone(&read_count);
+        readers.push(thread::spawn(move || {
+            while !done.load(Ordering::Acquire) {
+                let result = open_state_connection(&state).and_then(|conn| {
+                    conn.query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get::<_, i64>(0))
+                        .map_err(sqlite_io_error)
+                });
+                match result {
+                    Ok(_) => {
+                        read_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(err) => {
+                        read_errors.lock().unwrap().push(err.to_string());
+                        break;
+                    }
+                }
+            }
+        }));
+    }
+    let write_errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut writers = Vec::new();
+    for index in 0..8 {
+        let state = state.clone();
+        let write_errors = Arc::clone(&write_errors);
+        writers.push(thread::spawn(move || {
+            thread::sleep(Duration::from_millis(10));
+            let result = open_state_connection(&state).and_then(|conn| {
+                conn.execute(
+                    "INSERT INTO configs(name, global, selected, version) VALUES(?1, 'global {}', 0, 0)",
+                    params![format!("pressure-writer-{index}")],
+                )
+                .map(|_| ())
+                .map_err(sqlite_io_error)
+            });
+            if let Err(err) = result {
+                write_errors.lock().unwrap().push(err.to_string());
+            }
+        }));
+    }
+
+    let started = Instant::now();
+    let (_, results) =
+        apply_subscription_refresh_result(&state, 7, "pressure-time", &links).unwrap();
+    let elapsed = started.elapsed();
+    done.store(true, Ordering::Release);
+    for reader in readers {
+        reader.join().unwrap();
+    }
+    for writer in writers {
+        writer.join().unwrap();
+    }
+
+    assert_eq!(results.len(), links.len());
+    assert_eq!(
+        count_nodes_for_subscription(&fixture.connection(), 7).unwrap(),
+        30_000
+    );
+    assert!(read_errors.lock().unwrap().is_empty());
+    assert!(write_errors.lock().unwrap().is_empty());
+    assert!(read_count.load(Ordering::Relaxed) > 0);
+    eprintln!(
+        "subscription_pressure nodes={} elapsed_ms={} concurrent_reads={} concurrent_writes={}",
+        links.len(),
+        elapsed.as_millis(),
+        read_count.load(Ordering::Relaxed),
+        8
+    );
+}

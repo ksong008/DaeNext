@@ -1,10 +1,25 @@
 use super::*;
 
+#[cfg(test)]
 pub(crate) fn replace_subscription_nodes(
     conn: &Connection,
     subscription_id: i64,
     links: &[String],
 ) -> io::Result<Vec<Value>> {
+    let prepared = super::node_stage::prepare_subscription_nodes(links);
+    replace_prepared_subscription_nodes(conn, subscription_id, &prepared).map(|result| result.items)
+}
+
+pub(super) struct SubscriptionNodeSyncResult {
+    pub(super) runtime_input_changed: bool,
+    pub(super) items: Vec<Value>,
+}
+
+pub(super) fn replace_prepared_subscription_nodes(
+    conn: &Connection,
+    subscription_id: i64,
+    candidates: &[super::node_stage::PreparedSubscriptionNode],
+) -> io::Result<SubscriptionNodeSyncResult> {
     let existing_nodes = existing_subscription_nodes(conn, subscription_id)?;
     let preserved_ids = preserved_subscription_node_ids(conn, subscription_id)?;
     let mut existing_name_counts = HashMap::<String, usize>::new();
@@ -39,22 +54,16 @@ pub(crate) fn replace_subscription_nodes(
         preserved_by_key.insert(node.stable_key.clone(), node.clone());
     }
 
-    let mut candidates = Vec::<(String, ParsedNodeLink)>::new();
     let mut incoming_name_counts = HashMap::<String, usize>::new();
     let mut incoming_key_counts = HashMap::<StableNodeKey, usize>::new();
-    for link in links {
-        let parsed = parse_node_link(link.as_str(), None);
-        let stored_link = parsed
-            .normalized_link
-            .clone()
-            .unwrap_or_else(|| link.clone());
+    for candidate in candidates {
+        let parsed = &candidate.parsed;
         *incoming_name_counts
             .entry(parsed.display_name.clone())
             .or_default() += 1;
         *incoming_key_counts
             .entry(parsed.stable_key.clone())
             .or_default() += 1;
-        candidates.push((stored_link, parsed));
     }
 
     let mut reusable_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
@@ -92,28 +101,37 @@ pub(crate) fn replace_subscription_nodes(
         .chain(reusable_by_key.values())
         .map(|node| node.id)
         .collect::<HashSet<_>>();
+    let mut live_links = existing_nodes
+        .iter()
+        .map(|node| node.link.clone())
+        .collect::<HashSet<_>>();
+    let mut runtime_input_changed = false;
 
     for node in existing_nodes
         .iter()
         .filter(|node| !reusable_ids.contains(&node.id) && !preserved_ids.contains(&node.id))
     {
-        conn.execute(
-            "DELETE FROM group_nodes WHERE node_id = ?1",
-            params![node.id],
-        )
-        .map_err(sqlite_io_error)?;
-        conn.execute(
-            "DELETE FROM node_latency_results WHERE node_id = ?1",
-            params![node.id],
-        )
-        .map_err(sqlite_io_error)?;
-        conn.execute("DELETE FROM nodes WHERE id = ?1", params![node.id])
+        conn.prepare_cached("DELETE FROM group_nodes WHERE node_id = ?1")
+            .map_err(sqlite_io_error)?
+            .execute(params![node.id])
             .map_err(sqlite_io_error)?;
+        conn.prepare_cached("DELETE FROM node_latency_results WHERE node_id = ?1")
+            .map_err(sqlite_io_error)?
+            .execute(params![node.id])
+            .map_err(sqlite_io_error)?;
+        conn.prepare_cached("DELETE FROM nodes WHERE id = ?1")
+            .map_err(sqlite_io_error)?
+            .execute(params![node.id])
+            .map_err(sqlite_io_error)?;
+        live_links.remove(&node.link);
+        runtime_input_changed = true;
     }
 
     let mut out = Vec::new();
     let mut reused_nodes = HashSet::<i64>::new();
-    for (link, parsed) in candidates {
+    for candidate in candidates {
+        let link = &candidate.stored_link;
+        let parsed = &candidate.parsed;
         if let Some(preserved) = reusable_by_key
             .get(&parsed.stable_key)
             .or_else(|| reusable_by_name.get(&parsed.display_name))
@@ -127,7 +145,7 @@ pub(crate) fn replace_subscription_nodes(
                 }));
                 continue;
             }
-            match conn.execute(
+            match conn.prepare_cached(
                 "UPDATE nodes
                          SET link = ?1,
                              name = ?2,
@@ -136,31 +154,44 @@ pub(crate) fn replace_subscription_nodes(
                              tag = NULL,
                              subscription_id = ?5
                          WHERE id = ?6",
-                params![
+            ) {
+                Ok(mut statement) => match statement.execute(params![
                     link,
                     parsed.display_name,
                     parsed.address,
                     parsed.protocol,
                     subscription_id,
                     preserved.id
-                ],
-            ) {
-                Ok(_) => {
-                    if subscription_node_probe_target_changed(preserved, &parsed) {
-                        conn.execute(
-                            "DELETE FROM node_latency_results WHERE node_id = ?1",
-                            params![preserved.id],
-                        )
-                        .map_err(sqlite_io_error)?;
+                ]) {
+                    Ok(_) => {
+                        if subscription_node_probe_target_changed(preserved, &parsed) {
+                            conn.prepare_cached(
+                                "DELETE FROM node_latency_results WHERE node_id = ?1",
+                            )
+                            .map_err(sqlite_io_error)?
+                            .execute(params![preserved.id])
+                            .map_err(sqlite_io_error)?;
+                        }
+                        bump_group_versions_for_node(conn, preserved.id)?;
+                        live_links.remove(&preserved.link);
+                        live_links.insert(link.clone());
+                        runtime_input_changed = true;
+                        out.push(json!({
+                            "link": link,
+                            "error": Value::Null,
+                            "node": {"id": preserved.id}
+                        }));
+                        continue;
                     }
-                    bump_group_versions_for_node(conn, preserved.id)?;
-                    out.push(json!({
-                        "link": link,
-                        "error": Value::Null,
-                        "node": {"id": preserved.id}
-                    }));
-                    continue;
-                }
+                    Err(err) => {
+                        out.push(json!({
+                            "link": link,
+                            "error": err.to_string(),
+                            "node": Value::Null
+                        }));
+                        continue;
+                    }
+                },
                 Err(err) => {
                     out.push(json!({
                         "link": link,
@@ -172,7 +203,7 @@ pub(crate) fn replace_subscription_nodes(
             }
         }
 
-        if subscription_node_link_exists(conn, subscription_id, &link)? {
+        if live_links.contains(link) {
             out.push(json!({
                 "link": link,
                 "error": "node duplicated",
@@ -180,18 +211,20 @@ pub(crate) fn replace_subscription_nodes(
             }));
             continue;
         }
-        match conn.execute(
+        match conn.prepare_cached(
             "INSERT INTO nodes(link, name, address, protocol, tag, subscription_id) VALUES(?1, ?2, ?3, ?4, NULL, ?5)",
-            params![
+        ) {
+            Ok(mut statement) => match statement.execute(params![
                 link,
                 parsed.display_name,
                 parsed.address,
                 parsed.protocol,
                 subscription_id
-            ],
-        ) {
+            ]) {
             Ok(_) => {
                 let id = conn.last_insert_rowid();
+                live_links.insert(link.clone());
+                runtime_input_changed = true;
                 out.push(json!({
                     "link": link,
                     "error": Value::Null,
@@ -203,10 +236,21 @@ pub(crate) fn replace_subscription_nodes(
                 "error": err.to_string(),
                 "node": Value::Null
             })),
+        },
+            Err(err) => out.push(json!({
+                "link": link,
+                "error": err.to_string(),
+                "node": Value::Null
+            })),
         }
     }
-    bump_group_versions_for_subscription(conn, subscription_id)?;
-    Ok(out)
+    if runtime_input_changed {
+        bump_group_versions_for_subscription(conn, subscription_id)?;
+    }
+    Ok(SubscriptionNodeSyncResult {
+        runtime_input_changed,
+        items: out,
+    })
 }
 
 #[derive(Clone)]
@@ -292,20 +336,6 @@ pub(crate) fn preserved_subscription_node_ids(
         out.insert(row.map_err(sqlite_io_error)?);
     }
     Ok(out)
-}
-
-pub(crate) fn subscription_node_link_exists(
-    conn: &Connection,
-    subscription_id: i64,
-    link: &str,
-) -> io::Result<bool> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM nodes WHERE subscription_id = ?1 AND link = ?2",
-        params![subscription_id, link],
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|count| count > 0)
-    .map_err(sqlite_io_error)
 }
 
 pub(crate) fn bump_group_versions_for_node(conn: &Connection, node_id: i64) -> io::Result<()> {
