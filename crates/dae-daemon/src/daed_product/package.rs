@@ -315,7 +315,8 @@ RuntimeDirectoryMode=0700
 ExecStartPre=/usr/bin/daed validate -c /etc/daed/
 ExecStart=/usr/bin/daed run -c /etc/daed/
 ExecReload=/usr/bin/daed reload --timeout 60s
-Restart=on-abnormal
+Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
