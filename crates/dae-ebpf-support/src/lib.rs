@@ -123,7 +123,7 @@ pub use loader::{
 };
 pub use map_diff::{RuntimeMapUpdateDiffReport, apply_runtime_map_update_diff};
 pub use maps::{
-    MapSpec, RuntimeMapContract, RuntimeMapRole, map_catalog, pinned_reuse_maps,
+    MapSpec, RuntimeMapContract, RuntimeMapProfile, RuntimeMapRole, map_catalog, pinned_reuse_maps,
     runtime_map_contract,
 };
 pub use param::{DaeParamInput, build_dae_param, htons};

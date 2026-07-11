@@ -30,15 +30,6 @@
     },
     {
       "flags": 0,
-      "key_size": 40,
-      "max_entries": 65535,
-      "name": "fast_sock",
-      "pinning": "PinNone",
-      "type": "SockHash",
-      "value_size": 8
-    },
-    {
-      "flags": 0,
       "key_size": 4,
       "max_entries": 4,
       "name": "listen_socket_map",
@@ -93,15 +84,6 @@
     },
     {
       "flags": 0,
-      "key_size": 4,
-      "max_entries": 8192,
-      "name": "tgid_pname_map",
-      "pinning": "PinByName",
-      "type": "LRUHash",
-      "value_size": 16
-    },
-    {
-      "flags": 0,
       "key_size": 40,
       "max_entries": 131072,
       "name": "udp_conn_state_map",
@@ -122,8 +104,7 @@
   "name": "fixture-bpf-map-catalog",
   "pinned_reuse": [
     "cookie_pid_map",
-    "routing_tuples_map",
-    "tgid_pname_map"
+    "routing_tuples_map"
   ],
   "source": [
     "control/kern/tproxy.c",

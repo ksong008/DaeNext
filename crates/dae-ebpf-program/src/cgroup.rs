@@ -38,14 +38,6 @@ unsafe fn update_map_elem_by_cookie(ctx: *mut c_void) {
     let val_ptr = ptr::addr_of!(val).cast::<c_void>();
     let _ =
         unsafe { helpers::bpf_map_update_elem(maps::cookie_pid_map_ptr(), key, val_ptr, BPF_ANY) };
-    let _ = unsafe {
-        helpers::bpf_map_update_elem(
-            maps::tgid_pname_map_ptr(),
-            ptr::addr_of!(val.pid).cast::<c_void>(),
-            val.pname.as_ptr().cast::<c_void>(),
-            BPF_ANY,
-        )
-    };
 }
 
 #[inline(always)]

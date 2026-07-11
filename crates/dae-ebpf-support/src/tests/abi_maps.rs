@@ -124,6 +124,55 @@ pub(super) fn map_catalog_matches_golden_fixture() {
 }
 
 #[test]
+pub(super) fn runtime_map_profiles_are_ordered_and_cover_only_catalogued_maps() {
+    assert_eq!(RuntimeMapProfile::default(), RuntimeMapProfile::Balanced);
+    assert_eq!(
+        RuntimeMapProfile::parse("low_memory"),
+        Some(RuntimeMapProfile::LowMemory)
+    );
+    assert_eq!(
+        RuntimeMapProfile::parse("standard"),
+        Some(RuntimeMapProfile::Balanced)
+    );
+    assert_eq!(
+        RuntimeMapProfile::parse("high-performance"),
+        Some(RuntimeMapProfile::HighPerformance)
+    );
+    assert_eq!(RuntimeMapProfile::parse("invalid"), None);
+
+    let low = RuntimeMapProfile::LowMemory.max_entries_overrides();
+    let balanced = RuntimeMapProfile::Balanced.max_entries_overrides();
+    let high = RuntimeMapProfile::HighPerformance.max_entries_overrides();
+    assert_eq!(low.len(), balanced.len());
+    assert_eq!(balanced.len(), high.len());
+    for (name, low_capacity) in low {
+        let balanced_capacity = profile_capacity(balanced, name);
+        let high_capacity = profile_capacity(high, name);
+        let catalog_capacity = map_catalog()
+            .iter()
+            .find(|spec| spec.name == *name)
+            .map(|spec| spec.max_entries)
+            .unwrap_or_else(|| panic!("profile map {name} is absent from the map catalog"));
+        assert!(0 < *low_capacity && *low_capacity <= balanced_capacity);
+        assert!(balanced_capacity <= high_capacity);
+        assert_eq!(high_capacity, catalog_capacity);
+    }
+    assert!(!map_catalog().iter().any(|spec| spec.name == "fast_sock"));
+    assert!(
+        !map_catalog()
+            .iter()
+            .any(|spec| spec.name == "tgid_pname_map")
+    );
+}
+
+fn profile_capacity(profile: &[(&str, u32)], name: &str) -> u32 {
+    profile
+        .iter()
+        .find_map(|(candidate, capacity)| (*candidate == name).then_some(*capacity))
+        .unwrap_or_else(|| panic!("map profile is missing {name}"))
+}
+
+#[test]
 pub(super) fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explicit() {
     let abi = bpf_abi_contract();
     assert_eq!(abi.dae_param_size, size_of::<BpfDaeParam>());

@@ -9,6 +9,9 @@ pub struct MapSpec {
     pub pinning: &'static str,
 }
 
+mod profile;
+pub use profile::*;
+
 impl MapSpec {
     pub fn role(self) -> RuntimeMapRole {
         RuntimeMapRole::for_map_name(self.name)
@@ -37,7 +40,7 @@ impl RuntimeMapRole {
     pub const fn for_map_name(name: &str) -> Self {
         match name.as_bytes() {
             b".rodata" => Self::ParamRodata,
-            b"cookie_pid_map" | b"routing_tuples_map" | b"tgid_pname_map" => Self::PinnedReuse,
+            b"cookie_pid_map" | b"routing_tuples_map" => Self::PinnedReuse,
             b"listen_socket_map" => Self::SocketHandoff,
             b"routing_map" => Self::Routing,
             b"outbound_connectivity_map" => Self::Connectivity,
@@ -77,9 +80,9 @@ pub fn runtime_map_contract() -> Vec<RuntimeMapContract> {
         .collect()
 }
 
-const PINNED_REUSE_MAPS: [&str; 3] = ["cookie_pid_map", "routing_tuples_map", "tgid_pname_map"];
+const PINNED_REUSE_MAPS: [&str; 2] = ["cookie_pid_map", "routing_tuples_map"];
 
-const MAP_CATALOG: [MapSpec; 13] = [
+const MAP_CATALOG: [MapSpec; 11] = [
     MapSpec {
         name: ".rodata",
         map_type: "Array",
@@ -104,15 +107,6 @@ const MAP_CATALOG: [MapSpec; 13] = [
         key_size: 16,
         value_size: 128,
         max_entries: 65536,
-        flags: 0,
-        pinning: "PinNone",
-    },
-    MapSpec {
-        name: "fast_sock",
-        map_type: "SockHash",
-        key_size: 40,
-        value_size: 8,
-        max_entries: 65535,
         flags: 0,
         pinning: "PinNone",
     },
@@ -167,15 +161,6 @@ const MAP_CATALOG: [MapSpec; 13] = [
         key_size: 40,
         value_size: 36,
         max_entries: 131072,
-        flags: 0,
-        pinning: "PinByName",
-    },
-    MapSpec {
-        name: "tgid_pname_map",
-        map_type: "LRUHash",
-        key_size: 4,
-        value_size: 16,
-        max_entries: 8192,
         flags: 0,
         pinning: "PinByName",
     },
