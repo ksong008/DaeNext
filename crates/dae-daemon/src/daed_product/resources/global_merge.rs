@@ -1,63 +1,6 @@
 use super::*;
 pub(crate) fn default_global_value() -> Value {
-    let mut value = json!({
-        "logLevel": "",
-        "tproxyPort": 0,
-        "allowInsecure": false,
-        "checkInterval": "",
-        "checkTolerance": "",
-        "lanInterface": [],
-        "wanInterface": [],
-        "udpCheckDns": [],
-        "tcpCheckUrl": [],
-        "fallbackResolver": "",
-        "dialMode": "",
-        "tcpCheckHttpMethod": "",
-        "udpEndpointPoolSize": 0,
-        "disableWaitingNetwork": false,
-        "autoConfigKernelParameter": false,
-        "autoConfigFirewallRule": false,
-        "sniffingTimeout": "",
-        "tlsImplementation": "",
-        "utlsImitate": "",
-        "tlsFragment": false,
-        "tlsFragmentLength": "",
-        "tlsFragmentInterval": "",
-        "tproxyPortProtect": false,
-        "soMarkFromDae": 0,
-        "pprofPort": 0,
-        "enableLocalTcpFastRedirect": false,
-        "mptcp": false,
-        "bandwidthMaxTx": "",
-        "bandwidthMaxRx": "",
-        "udphopInterval": "",
-    });
-    if let Some(map) = value.as_object_mut() {
-        for key in [
-            "residentUdpSessionLimit",
-            "residentUdpSessionQueueDepth",
-            "residentTcpFlowStackBytes",
-            "residentEventQueueDepth",
-            "residentManualProbeConcurrency",
-            "residentHealthCheckConcurrency",
-            "httpQueue",
-            "httpWorkers",
-            "httpWorkerStackBytes",
-            "allocatorIdleReclaimPressureThresholdBytes",
-            "allocatorIdleReclaimMaxTrafficRateBytesPerSecond",
-        ] {
-            map.insert(key.to_owned(), json!(0));
-        }
-        map.insert("allocatorIdleReclaimEnabled".to_owned(), json!(false));
-        for key in [
-            "allocatorIdleReclaimSampleInterval",
-            "allocatorIdleReclaimMinInterval",
-            "allocatorIdleReclaimLowTrafficDuration",
-        ] {
-            map.insert(key.to_owned(), json!(""));
-        }
-    }
-    value
+    json!({})
 }
 
 pub(crate) fn merge_global_json_value(target: &mut Value, source: &Value) {
