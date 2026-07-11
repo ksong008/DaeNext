@@ -12,6 +12,8 @@ mod config_directory;
 #[cfg(test)]
 mod config_roundtrip;
 #[cfg(test)]
+mod dae_file_import;
+#[cfg(test)]
 mod default_resources;
 #[cfg(test)]
 mod logs;

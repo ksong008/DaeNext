@@ -57,30 +57,34 @@ pub(in crate::daed_product) fn api_put_dae_config_file(
         .get("namePrefix")
         .and_then(Value::as_str)
         .unwrap_or(DEFAULT_IMPORTED_CONFIG_NAME_PREFIX);
-    let import_body = json!({
-        "configName": format!("{name_prefix}-{IMPORTED_CONFIG_NAME_SUFFIX}"),
-        "global": content,
-        "dnsName": format!("{name_prefix}-{IMPORTED_DNS_NAME_SUFFIX}"),
-        "dns": "",
-        "routingName": format!("{name_prefix}-{IMPORTED_ROUTING_NAME_SUFFIX}"),
-        "routing": "",
-        "groupName": format!("{name_prefix}-{IMPORTED_GROUP_NAME_SUFFIX}"),
-        "policy": DEFAULT_PRODUCT_GROUP_POLICY,
-        "policyParams": [],
-        "mode": DEFAULT_PRODUCT_MODE
-    });
-    match ensure_default_resources(&app.state, &import_body) {
-        Ok(response) => {
+    match import_dae_file(&app.state, content, name_prefix, user) {
+        Ok(outcome) => {
             let _ = append_log_for_config(
                 &app.config_dir,
                 &app.state,
                 "info",
                 "dae config file imported by Rust daed",
             );
-            let _ = save_json_storage(&app.state, user.id, &user.json_storage);
             HttpResponse::json(
                 200,
-                json!({"imported": true, "defaults": response, "warnings": []}),
+                json!({
+                    "imported": true,
+                    "defaults": {
+                        "configId": outcome.config_id,
+                        "dnsId": outcome.dns_id,
+                        "routingId": outcome.routing_id,
+                        "groupId": outcome.group_ids.first(),
+                    },
+                    "resources": {
+                        "nodeIds": outcome.node_ids,
+                        "groupIds": outcome.group_ids,
+                    },
+                    "warnings": outcome.warnings.into_iter().map(|message| json!({
+                        "level": "warn",
+                        "code": "dae_file_import_warning",
+                        "message": message,
+                    })).collect::<Vec<_>>(),
+                }),
             )
         }
         Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
@@ -88,24 +92,31 @@ pub(in crate::daed_product) fn api_put_dae_config_file(
 }
 
 pub(in crate::daed_product) fn api_preview_dae_config_file(
-    app: &AppState,
+    _app: &AppState,
     request: &HttpRequest,
-    user: &UserRecord,
+    _user: &UserRecord,
 ) -> HttpResponse {
-    let body = json_body(request).unwrap_or_else(|_| json!({}));
+    let body = match json_body(request) {
+        Ok(body) => body,
+        Err(err) => return HttpResponse::json(400, json!({"error": err})),
+    };
     let content = body.get("content").and_then(Value::as_str).unwrap_or("");
-    match export_bundle(&app.state, user) {
-        Ok(bundle) => HttpResponse::json(
+    let name_prefix = body
+        .get("namePrefix")
+        .and_then(Value::as_str)
+        .unwrap_or(DEFAULT_IMPORTED_CONFIG_NAME_PREFIX);
+    match preview_dae_file(content, name_prefix) {
+        Ok(preview) => HttpResponse::json(
             200,
             json!({
-                "bundle": bundle,
-                "warnings": [{
-                    "level": "info",
-                    "code": "rust_daed_local_preview",
-                    "message": format!("Rust daed local preview accepted {} bytes", content.len())
-                }]
+                "bundle": preview.bundle,
+                "warnings": preview.warnings.into_iter().map(|message| json!({
+                    "level": "warn",
+                    "code": "dae_file_import_warning",
+                    "message": message,
+                })).collect::<Vec<_>>(),
             }),
         ),
-        Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
+        Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
     }
 }
