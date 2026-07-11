@@ -9,6 +9,27 @@ pub fn marshal_config(config: &Config, indent_space: usize) -> Result<String, Co
     Ok(marshaller.out)
 }
 
+pub fn marshal_global_section(global: &Global, indent_space: usize) -> Result<String, ConfigError> {
+    let mut marshaller = Marshaller::new(indent_space);
+    marshaller.section("global", 0, |this| this.marshal_global(global))?;
+    Ok(marshaller.out)
+}
+
+pub fn marshal_routing_section(
+    routing: &Routing,
+    indent_space: usize,
+) -> Result<String, ConfigError> {
+    let mut marshaller = Marshaller::new(indent_space);
+    marshaller.section("routing", 0, |this| this.marshal_routing(routing, 1))?;
+    Ok(marshaller.out)
+}
+
+pub fn marshal_dns_section(dns: &Dns, indent_space: usize) -> Result<String, ConfigError> {
+    let mut marshaller = Marshaller::new(indent_space);
+    marshaller.section("dns", 0, |this| this.marshal_dns(dns))?;
+    Ok(marshaller.out)
+}
+
 struct Marshaller {
     indent_space: usize,
     out: String,
@@ -390,6 +411,24 @@ mod tests {
         let text = marshal_config(&config, 2).unwrap();
         let sections = parse_config(&text).unwrap();
         assert!(sections.iter().any(|section| section.name == "routing"));
+    }
+
+    #[test]
+    fn individual_sections_rebuild_the_same_typed_config() {
+        let tree = TempTree::new();
+        tree.write_mode("example.dae", include_str!("../../../example.dae"), 0o640);
+        let merged = merge_config_file(tree.path("example.dae")).unwrap();
+        let config = build_config(&merged.sections).unwrap();
+        let text = format!(
+            "{}{}{}",
+            marshal_global_section(&config.global, 2).unwrap(),
+            marshal_routing_section(&config.routing, 2).unwrap(),
+            marshal_dns_section(&config.dns, 2).unwrap(),
+        );
+        let rebuilt = build_config(&parse_config(&text).unwrap()).unwrap();
+        assert_eq!(rebuilt.global, config.global);
+        assert_eq!(rebuilt.routing, config.routing);
+        assert_eq!(rebuilt.dns, config.dns);
     }
 
     fn without_annotations(mut config: Config) -> Config {
