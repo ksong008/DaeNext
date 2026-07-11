@@ -49,9 +49,6 @@ pub(crate) fn refresh_subscription_from_remote(
             let links = subscription_links_from_content(&content);
             let (runtime_input_changed, node_import_result) =
                 apply_subscription_refresh_result(state, id, &fetched_at, &links)?;
-            if runtime_input_changed {
-                bump_runtime_external_input_version(state)?;
-            }
             Ok(json!({
                 "link": source.link,
                 "fetched": true,
@@ -96,7 +93,7 @@ fn subscription_source_by_id(state: &Path, id: i64) -> io::Result<SubscriptionSo
     .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "subscription not found"))
 }
 
-fn apply_subscription_refresh_result(
+pub(in crate::daed_product) fn apply_subscription_refresh_result(
     state: &Path,
     id: i64,
     fetched_at: &str,
@@ -122,6 +119,9 @@ fn apply_subscription_refresh_result(
         ],
     )
     .map_err(sqlite_io_error)?;
+    if runtime_input_changed {
+        bump_runtime_external_input_version_with_connection(&tx)?;
+    }
     tx.commit().map_err(sqlite_io_error)?;
     Ok((runtime_input_changed, node_import_result))
 }

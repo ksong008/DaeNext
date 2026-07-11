@@ -202,6 +202,12 @@ pub(in crate::daed_product) fn bump_runtime_external_input_version(
 ) -> io::Result<i64> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
+    bump_runtime_external_input_version_with_connection(&conn)
+}
+
+pub(in crate::daed_product) fn bump_runtime_external_input_version_with_connection(
+    conn: &Connection,
+) -> io::Result<i64> {
     conn.execute(
         "INSERT INTO daed_product_metadata(key, value)
          VALUES(?1, '1')
@@ -209,7 +215,7 @@ pub(in crate::daed_product) fn bump_runtime_external_input_version(
         params![RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY],
     )
     .map_err(sqlite_io_error)?;
-    current_runtime_external_input_version(&conn)
+    current_runtime_external_input_version(conn)
 }
 
 pub(in crate::daed_product) fn mark_runtime_process_stopped(state: &Path) -> io::Result<()> {
