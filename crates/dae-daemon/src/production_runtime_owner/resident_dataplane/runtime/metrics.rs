@@ -8,6 +8,14 @@ pub(crate) struct ResidentDataplaneMetrics {
     tcp_admission_maximum_active: AtomicU64,
     tcp_admission_accepted_total: AtomicU64,
     tcp_admission_wait_cycles: AtomicU64,
+    health_rounds_active: AtomicU64,
+    health_rounds_maximum_active: AtomicU64,
+    health_rounds_started_total: AtomicU64,
+    health_rounds_completed_total: AtomicU64,
+    health_rounds_cancelled_total: AtomicU64,
+    health_resuscitation_queued: AtomicU64,
+    health_resuscitation_queue_full: AtomicU64,
+    health_resuscitation_disconnected: AtomicU64,
     pub(super) active_udp_sessions: AtomicU64,
     udp_ingress_packets: AtomicU64,
     udp_ingress_drain_batches: AtomicU64,
@@ -51,6 +59,47 @@ impl ResidentDataplaneMetrics {
 
     pub(super) fn tcp_admission_waited(&self) {
         self.tcp_admission_wait_cycles
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn health_round_started(&self) {
+        let active = self
+            .health_rounds_active
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.health_rounds_maximum_active
+            .fetch_max(active, Ordering::Relaxed);
+        self.health_rounds_started_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn health_round_finished(&self, cancelled: bool) {
+        let _ = self.health_rounds_active.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |active| Some(active.saturating_sub(1)),
+        );
+        if cancelled {
+            self.health_rounds_cancelled_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.health_rounds_completed_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn health_resuscitation_queued(&self) {
+        self.health_resuscitation_queued
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn health_resuscitation_queue_full(&self) {
+        self.health_resuscitation_queue_full
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn health_resuscitation_disconnected(&self) {
+        self.health_resuscitation_disconnected
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -124,6 +173,14 @@ impl ResidentDataplaneMetrics {
             "tcpAdmissionMaximumActive": self.tcp_admission_maximum_active.load(Ordering::Relaxed),
             "tcpAdmissionAcceptedTotal": self.tcp_admission_accepted_total.load(Ordering::Relaxed),
             "tcpAdmissionWaitCycles": self.tcp_admission_wait_cycles.load(Ordering::Relaxed),
+            "healthRoundsActive": self.health_rounds_active.load(Ordering::Relaxed),
+            "healthRoundsMaximumActive": self.health_rounds_maximum_active.load(Ordering::Relaxed),
+            "healthRoundsStartedTotal": self.health_rounds_started_total.load(Ordering::Relaxed),
+            "healthRoundsCompletedTotal": self.health_rounds_completed_total.load(Ordering::Relaxed),
+            "healthRoundsCancelledTotal": self.health_rounds_cancelled_total.load(Ordering::Relaxed),
+            "healthResuscitationQueued": self.health_resuscitation_queued.load(Ordering::Relaxed),
+            "healthResuscitationQueueFull": self.health_resuscitation_queue_full.load(Ordering::Relaxed),
+            "healthResuscitationDisconnected": self.health_resuscitation_disconnected.load(Ordering::Relaxed),
             "activeUdpSessions": self.active_udp_sessions.load(Ordering::Relaxed),
             "udpIngressPackets": self.udp_ingress_packets.load(Ordering::Relaxed),
             "udpIngressDrainBatches": self.udp_ingress_drain_batches.load(Ordering::Relaxed),

@@ -380,6 +380,12 @@ pub(crate) fn resident_product_log_level_policy_is_explicit_by_event_class() {
     assert!(resident_event_hidden_from_product_log(
         "resident_health_checker_started"
     ));
+    assert!(resident_event_hidden_from_product_log(
+        "resident_health_scheduler_started"
+    ));
+    assert!(resident_event_hidden_from_product_log(
+        "resident_health_scheduler_stopped"
+    ));
 
     for event_name in [
         "tcp_async_runtime_build_failed",

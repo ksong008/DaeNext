@@ -191,6 +191,17 @@ pub(crate) fn start_resident_dataplane_workers(
         .filter(|group| group.needs_background_checks())
         .cloned()
         .collect::<Vec<_>>();
+    let health_group_count = health_groups.len();
+    let health_check_concurrency = resource_config.health_check_concurrency.value();
+    let health_runtime_config =
+        ResidentHealthRuntimeConfig::detect(health_group_count, health_check_concurrency);
+    let health_scheduler_report = resident_health_scheduler_value(
+        health_group_count,
+        health_check_concurrency,
+        health_runtime_config,
+    );
+    let (health_resuscitation, health_resuscitation_rx) =
+        resident_health_resuscitation_channel(Arc::clone(&metrics));
     let udp_proxy_groups = Arc::clone(&proxy_groups);
     let dns_domain_routing = domain_routing_map_id.map(|map_id| {
         Arc::new(dns::ResidentDnsDomainRouting::new(
@@ -319,6 +330,32 @@ pub(crate) fn start_resident_dataplane_workers(
             },
         );
     }
+    if !health_groups.is_empty() {
+        let stop = owner.stop_handle();
+        let health_proxy_groups = Arc::clone(&proxy_groups);
+        let event_file = owner.event_file();
+        let event_lock = owner.event_lock();
+        let metrics = owner.metrics();
+        owner.spawn_thread(
+            "health-check-scheduler",
+            "health-check-scheduler",
+            move || {
+                resident_health_scheduler_loop(
+                    health_groups,
+                    health_proxy_groups,
+                    health_resuscitation_rx,
+                    stop,
+                    event_file,
+                    event_lock,
+                    metrics,
+                    health_check_concurrency,
+                    health_runtime_config,
+                )
+            },
+        );
+    } else {
+        drop(health_resuscitation_rx);
+    }
     {
         let stop = owner.stop_handle();
         let udp_proxy_groups = Arc::clone(&udp_proxy_groups);
@@ -328,7 +365,6 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
         let active_sessions = owner.udp_sessions_active();
-        let health_check_concurrency = resource_config.health_check_concurrency.value();
         let dns_fast_path_concurrency = resource_config.dns_fast_path_concurrency.value();
         owner.spawn_thread("udp-session-manager", "udp-session-manager", move || {
             resident_udp_loop(
@@ -347,7 +383,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 active_sessions,
                 udp_session_limit,
                 udp_session_queue_depth,
-                health_check_concurrency,
+                health_resuscitation,
                 dns_fast_path_concurrency,
             )
         });
@@ -369,23 +405,6 @@ pub(crate) fn start_resident_dataplane_workers(
             )
         });
     }
-    for health_group in &health_groups {
-        let stop = owner.stop_handle();
-        let health_group = Arc::clone(health_group);
-        let event_file = owner.event_file();
-        let event_lock = owner.event_lock();
-        let health_check_concurrency = resource_config.health_check_concurrency.value();
-        owner.spawn_thread("health-check-loop", "health-check", move || {
-            resident_group_health_check_loop(
-                health_group,
-                stop,
-                event_file,
-                event_lock,
-                health_check_concurrency,
-            )
-        });
-    }
-
     let default_proxy_utls = proxy.utls_fingerprint.as_ref().map(|fingerprint| {
         json!({
             "source": fingerprint.source,
@@ -488,8 +507,21 @@ pub(crate) fn start_resident_dataplane_workers(
     start_map.insert("proxy_count".to_owned(), json!(tcp_router.proxy_count()));
     start_map.insert(
         "health_check_worker_count".to_owned(),
-        json!(health_groups.len()),
+        json!(if health_group_count > 0 {
+            health_runtime_config.os_thread_count()
+        } else {
+            0
+        }),
     );
+    start_map.insert(
+        "health_check_scheduler_count".to_owned(),
+        json!(if health_group_count > 0 { 1 } else { 0 }),
+    );
+    start_map.insert(
+        "health_check_group_count".to_owned(),
+        json!(health_group_count),
+    );
+    start_map.insert("health_check_scheduler".to_owned(), health_scheduler_report);
     start_map.insert(
         "manual_probe_plan_count".to_owned(),
         json!(manual_probe_plan_count),

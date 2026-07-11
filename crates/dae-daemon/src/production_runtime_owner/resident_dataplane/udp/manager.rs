@@ -19,7 +19,6 @@ use super::*;
 
 mod dns_fast_path;
 mod ingress;
-mod resuscitation;
 mod router;
 mod sniff;
 use self::dns_fast_path::{
@@ -27,7 +26,6 @@ use self::dns_fast_path::{
     resident_udp_dns_fast_path_can_bypass_missing_tuple,
 };
 use self::ingress::recv_udp_batch_with_original_dst_async;
-use self::resuscitation::ResidentUdpResuscitator;
 use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
 use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
 
@@ -62,7 +60,7 @@ pub(super) fn run_resident_udp_session_manager(
     active_sessions: Arc<AtomicUsize>,
     session_limit: usize,
     session_queue_depth: usize,
-    health_check_concurrency: usize,
+    health_resuscitation: ResidentHealthResuscitationHandle,
     dns_fast_path_concurrency: usize,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -96,7 +94,7 @@ pub(super) fn run_resident_udp_session_manager(
         active_sessions,
         session_limit.max(1),
         session_queue_depth.max(1),
-        health_check_concurrency.max(1),
+        health_resuscitation,
         dns_fast_path_concurrency.max(1),
     ));
 }
@@ -117,7 +115,7 @@ async fn run_resident_udp_session_manager_async(
     active_sessions: Arc<AtomicUsize>,
     session_limit: usize,
     session_queue_depth: usize,
-    health_check_concurrency: usize,
+    health_resuscitation: ResidentHealthResuscitationHandle,
     dns_fast_path_concurrency: usize,
 ) {
     if let Err(err) = socket.set_nonblocking(true) {
@@ -139,13 +137,6 @@ async fn run_resident_udp_session_manager_async(
             return;
         }
     };
-    let resuscitator = ResidentUdpResuscitator::start(
-        Arc::clone(&proxy_groups),
-        Arc::clone(&stop),
-        event_file.clone(),
-        Arc::clone(&event_lock),
-        health_check_concurrency,
-    );
     let router = match ResidentUdpRouter::new(
         proxy_groups,
         default_outbound,
@@ -153,7 +144,7 @@ async fn run_resident_udp_session_manager_async(
         routing_matcher,
         dial_mode,
         so_mark_from_dae,
-        resuscitator.handle(),
+        health_resuscitation,
     ) {
         Ok(router) => router,
         Err(err) => {
@@ -162,7 +153,6 @@ async fn run_resident_udp_session_manager_async(
                 &event_lock,
                 json!({"event": "udp_session_manager_start_failed", "error": err}),
             );
-            resuscitator.stop();
             return;
         }
     };
@@ -320,7 +310,6 @@ async fn run_resident_udp_session_manager_async(
             },
         }),
     );
-    resuscitator.stop();
 }
 
 fn handle_manager_packet(

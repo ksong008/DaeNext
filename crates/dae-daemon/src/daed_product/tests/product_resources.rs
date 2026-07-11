@@ -621,6 +621,21 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         defaults["residentDataplane"]["udpSessions"]["queueDepth"]["default"],
         json!(128)
     );
+    assert!(
+        defaults["residentDataplane"]["healthCheck"]["scheduler"]["runtime"]
+            ["maximumWorkerThreads"]
+            .as_u64()
+            .is_some()
+    );
+    assert!(
+        defaults["residentDataplane"]["healthCheck"]["scheduler"]["resuscitationQueueDepth"]
+            .as_u64()
+            .is_some()
+    );
+    assert_eq!(
+        defaults["residentDataplane"]["healthCheck"]["scheduler"]["selectorState"],
+        json!("shared Arc<ResidentProxyGroupPlan>")
+    );
 
     let manifest = product_package_manifest();
     assert_eq!(

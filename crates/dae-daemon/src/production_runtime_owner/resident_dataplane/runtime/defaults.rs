@@ -158,6 +158,7 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "min": RESIDENT_HEALTH_CHECK_CONCURRENCY_MIN,
                 "max": RESIDENT_HEALTH_CHECK_CONCURRENCY_MAX,
             },
+            "scheduler": resident_health_scheduler_contract(),
         },
         "dnsUpstreamResolver": {
             "refreshSeconds": {
