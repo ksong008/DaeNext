@@ -239,6 +239,7 @@ struct AppState {
     latency_jobs: Arc<LatencyJobManager>,
     http_metrics: Arc<ProductHttpMetrics>,
     auth_runtime: Arc<ProductAuthRuntime>,
+    geodata_updates: Arc<geodata::ProductGeodataUpdateCoordinator>,
     geodata_status_cache: Arc<Mutex<GeodataStatusCache>>,
 }
 
