@@ -120,9 +120,13 @@ fn first_min_selected_candidate<'a>(
     network_types: &[NetworkType],
 ) -> Option<RuntimeSelectedCandidate<'a>> {
     for network_type in network_types {
-        let alive_set = selector.alive_set(*network_type)?;
+        let Some(alive_set) = selector.alive_set(*network_type) else {
+            continue;
+        };
         let alive_candidate_count = Some(alive_set.alive_count());
-        let (index, latency_ms) = alive_set.get_min_latency()?;
+        let Some((index, latency_ms)) = alive_set.get_min_latency() else {
+            continue;
+        };
         let candidate = group.candidates.get(index)?;
         let checked_at_unix = selector
             .dialers
@@ -220,6 +224,52 @@ mod tests {
         assert_eq!(snapshot["selectedNodeTag"], json!("node_b"));
         assert_eq!(snapshot["selectedNetworkType"], json!("tcp4"));
         assert_eq!(snapshot["selectedLatencyMs"], json!(30));
+        assert_eq!(snapshot["aliveCandidateCount"], json!(2));
+    }
+
+    #[test]
+    fn min_group_selector_snapshot_uses_next_network_type_when_primary_is_dead() {
+        let config = parse_test_config(
+            r#"
+            global {
+                lan_interface: daerust0
+            }
+            node {
+                node_a: 'socks5://127.0.0.1:1080#node_a'
+                node_b: 'socks5://127.0.0.1:1081#node_b'
+            }
+            group {
+                proxy {
+                    filter: name(node_a, node_b)
+                    policy: min
+                }
+            }
+            routing {
+                l4proto(tcp) -> proxy
+                fallback: direct
+            }
+            "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = test_proxy_group(&plan);
+        group
+            .record_check_result("node_a", NetworkType::TCP4, None, 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, None, 2)
+            .unwrap();
+        group
+            .record_check_result("node_a", NetworkType::TCP6, Some(70), 3)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP6, Some(20), 4)
+            .unwrap();
+
+        let snapshot = resident_group_selector_snapshot(group);
+
+        assert_eq!(snapshot["selectedNodeTag"], json!("node_b"));
+        assert_eq!(snapshot["selectedNetworkType"], json!("tcp6"));
+        assert_eq!(snapshot["selectedLatencyMs"], json!(20));
         assert_eq!(snapshot["aliveCandidateCount"], json!(2));
     }
 
