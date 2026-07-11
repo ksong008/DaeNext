@@ -65,6 +65,7 @@ base64.workspace = true
 blake2.workspace = true
 bytes.workspace = true
 fastrand.workspace = true
+flate2.workspace = true
 foreign-types.workspace = true
 getrandom.workspace = true
 h2.workspace = true
