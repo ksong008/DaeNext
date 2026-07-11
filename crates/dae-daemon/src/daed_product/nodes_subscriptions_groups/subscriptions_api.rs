@@ -104,11 +104,11 @@ pub(crate) fn create_subscription(
         });
     HttpResponse::json(
         201,
-        json!({
-            "link": link,
-            "subscription": {"id": id},
-            "nodeImportResult": import_report["nodeImportResult"].clone()
-        }),
+        subscription_import_result::subscription_import_response_value(
+            id,
+            link,
+            import_report["nodeImportResult"].clone(),
+        ),
     )
 }
 
