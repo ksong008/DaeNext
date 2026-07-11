@@ -1,12 +1,14 @@
 use super::super::*;
+use super::persistence::LatencyPersistenceQueue;
+#[cfg(test)]
+use super::persistence::{NODE_LATENCY_DB_WRITE_BATCH_SIZE, write_node_latency_results};
 use super::*;
-
-const NODE_LATENCY_DB_WRITE_BATCH_SIZE: usize = 128;
 
 #[derive(Debug, Default)]
 pub(crate) struct LatencyJobManager {
     next_id: AtomicU64,
     current: Mutex<Option<LatencyJobRecord>>,
+    persistence: LatencyPersistenceQueue,
 }
 
 #[derive(Clone, Debug)]
@@ -21,6 +23,7 @@ pub(crate) struct LatencyJobRecord {
     started_at: Option<String>,
     finished_at: Option<String>,
     message: Option<String>,
+    persist_pending: usize,
 }
 
 impl LatencyJobManager {
@@ -49,6 +52,7 @@ impl LatencyJobManager {
             started_at: None,
             finished_at: None,
             message: None,
+            persist_pending: self.persistence.pending_count(),
         };
         *current = Some(job.clone());
         Ok((job, true))
@@ -72,13 +76,21 @@ impl LatencyJobManager {
     }
 
     fn mark_finished(&self, id: u64, completed: usize, succeeded: usize, failed: usize) {
+        let persist_pending = self.persistence.pending_count();
         self.update_job(id, |job| {
             job.status = "finished";
             job.completed = completed;
             job.succeeded = succeeded;
             job.failed = failed;
             job.finished_at = Some(now_text());
-            job.message = Some("manual latency probe finished".to_owned());
+            job.persist_pending = persist_pending;
+            job.message = Some(if persist_pending == 0 {
+                "manual latency probe finished".to_owned()
+            } else {
+                format!(
+                    "manual latency probe finished; {persist_pending} result(s) pending persistence"
+                )
+            });
         });
     }
 
@@ -98,10 +110,30 @@ impl LatencyJobManager {
     }
 
     fn mark_failed(&self, id: u64, message: String) {
+        let persist_pending = self.persistence.pending_count();
         self.update_job(id, |job| {
             job.status = "failed";
             job.finished_at = Some(now_text());
             job.message = Some(message);
+            job.persist_pending = persist_pending;
+        });
+    }
+
+    fn queue_and_flush_latency_results(&self, id: u64, state: &Path, results: &[NodeLatencyWrite]) {
+        let pending = match self.persistence.queue(results) {
+            Ok(_) => self.persistence.flush(state).pending,
+            Err(_) => self.persistence.pending_count(),
+        };
+        self.update_job(id, |job| job.persist_pending = pending);
+    }
+
+    fn flush_pending_latency_results(&self, id: u64, state: &Path) {
+        let report = self.persistence.flush(state);
+        self.update_job(id, |job| {
+            job.persist_pending = report.pending;
+            if let Some(error) = report.error {
+                job.message = Some(format!("manual latency probe persistence pending: {error}"));
+            }
         });
     }
 
@@ -133,6 +165,7 @@ impl LatencyJobRecord {
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "message": self.message,
+            "persistPending": self.persist_pending,
         })
     }
 }
@@ -270,9 +303,10 @@ fn run_node_latency_job_inner(
     jobs: &LatencyJobManager,
     nodes: &[(i64, String, String)],
 ) -> io::Result<(usize, usize, usize)> {
-    let mut conn = open_state_connection(state)?;
+    let conn = open_state_connection(state)?;
     let mut completed = 0usize;
     let mut succeeded = 0usize;
+    jobs.flush_pending_latency_results(job_id, state);
 
     if let Some(handle) = runtime.node_latency_probe_handle() {
         let generation = handle.probe_generation();
@@ -286,7 +320,6 @@ fn run_node_latency_job_inner(
                 continue;
             }
             let link_chunk = latency_probe_unique_links(&chunk_nodes);
-            let mut write_error = None;
             let mut emitted_snapshots = Vec::<Value>::new();
             handle.probe_node_latencies_streaming_without_group_update(
                 &link_chunk,
@@ -294,9 +327,6 @@ fn run_node_latency_job_inner(
                     if let Some(generation) = generation
                         && runtime.current_probe_generation() != Some(generation)
                     {
-                        return;
-                    }
-                    if write_error.is_some() {
                         return;
                     }
                     emitted_snapshots.extend_from_slice(runtime_snapshots);
@@ -307,28 +337,24 @@ fn run_node_latency_job_inner(
                     if results.is_empty() {
                         return;
                     }
-                    match write_node_latency_results(&mut conn, &results) {
-                        Ok((written, alive)) => {
-                            if written == 0 {
-                                return;
-                            }
-                            handle.apply_latency_probe_snapshots_to_groups(runtime_snapshots);
-                            completed = completed.saturating_add(written);
-                            succeeded = succeeded.saturating_add(alive);
-                            jobs.mark_progress(
-                                job_id,
-                                completed,
-                                succeeded,
-                                completed.saturating_sub(succeeded),
-                            );
-                        }
-                        Err(err) => write_error = Some(err),
-                    }
+                    let (result_count, alive) = apply_and_persist_runtime_latency_results(
+                        jobs,
+                        job_id,
+                        state,
+                        runtime_snapshots,
+                        &results,
+                        |snapshots| handle.apply_latency_probe_snapshots_to_groups(snapshots),
+                    );
+                    completed = completed.saturating_add(result_count);
+                    succeeded = succeeded.saturating_add(alive);
+                    jobs.mark_progress(
+                        job_id,
+                        completed,
+                        succeeded,
+                        completed.saturating_sub(succeeded),
+                    );
                 },
             );
-            if let Some(err) = write_error {
-                return Err(err);
-            }
             if let Some(generation) = generation
                 && runtime.current_probe_generation() != Some(generation)
             {
@@ -343,10 +369,11 @@ fn run_node_latency_job_inner(
                     continue;
                 }
                 let results = node_latency_results_for_runtime_snapshots(&chunk_nodes, &failures);
-                let (written, alive) = write_node_latency_results(&mut conn, &results)?;
-                if written != 0 {
-                    completed = completed.saturating_add(written);
+                if !results.is_empty() {
+                    let alive = results.iter().filter(|result| result.alive).count();
+                    completed = completed.saturating_add(results.len());
                     succeeded = succeeded.saturating_add(alive);
+                    jobs.queue_and_flush_latency_results(job_id, state, &results);
                     jobs.mark_progress(
                         job_id,
                         completed,
@@ -360,10 +387,11 @@ fn run_node_latency_job_inner(
         let nodes = current_latency_probe_nodes(&conn, nodes)?;
         let tested_at = now_text();
         let results = native_probe_unavailable_results(&nodes, &tested_at);
-        let (written, alive) = write_node_latency_results(&mut conn, &results)?;
-        if written != 0 {
-            completed = written;
+        if !results.is_empty() {
+            let alive = results.iter().filter(|result| result.alive).count();
+            completed = results.len();
             succeeded = alive;
+            jobs.queue_and_flush_latency_results(job_id, state, &results);
             jobs.mark_progress(
                 job_id,
                 completed,
@@ -373,13 +401,31 @@ fn run_node_latency_job_inner(
         }
     }
 
-    append_log_for_config(
+    jobs.flush_pending_latency_results(job_id, state);
+    let _ = append_log_for_config(
         config_dir,
         state,
         "info",
         "node latency probe updated by Rust daed",
-    )?;
+    );
     Ok((completed, succeeded, completed.saturating_sub(succeeded)))
+}
+
+fn apply_and_persist_runtime_latency_results(
+    jobs: &LatencyJobManager,
+    job_id: u64,
+    state: &Path,
+    runtime_snapshots: &[Value],
+    results: &[NodeLatencyWrite],
+    apply_selector: impl FnOnce(&[Value]),
+) -> (usize, usize) {
+    if results.is_empty() {
+        return (0, 0);
+    }
+    apply_selector(runtime_snapshots);
+    let alive = results.iter().filter(|result| result.alive).count();
+    jobs.queue_and_flush_latency_results(job_id, state, results);
+    (results.len(), alive)
 }
 
 pub(crate) fn latency_probe_link_chunks(
@@ -446,43 +492,6 @@ pub(crate) fn node_latency_results_for_runtime_snapshots_only(
     runtime_node_latency_results_for_nodes(nodes, runtime_snapshots).0
 }
 
-fn write_node_latency_results(
-    conn: &mut Connection,
-    results: &[NodeLatencyWrite],
-) -> io::Result<(usize, usize)> {
-    let mut written = 0_usize;
-    let mut alive = 0_usize;
-    for chunk in results.chunks(NODE_LATENCY_DB_WRITE_BATCH_SIZE) {
-        let (chunk_written, chunk_alive) = write_node_latency_results_chunk(conn, chunk)?;
-        written = written.saturating_add(chunk_written);
-        alive = alive.saturating_add(chunk_alive);
-        if chunk_written != 0 {
-            thread::yield_now();
-        }
-    }
-    Ok((written, alive))
-}
-
-fn write_node_latency_results_chunk(
-    conn: &mut Connection,
-    results: &[NodeLatencyWrite],
-) -> io::Result<(usize, usize)> {
-    let tx = conn.transaction().map_err(sqlite_io_error)?;
-    let mut written = 0_usize;
-    let mut alive = 0_usize;
-    for result in results {
-        if node_latency_result_target_exists(&tx, result.node_id, &result.node_link)? {
-            store_node_latency_result(&tx, result)?;
-            written = written.saturating_add(1);
-            if result.alive {
-                alive = alive.saturating_add(1);
-            }
-        }
-    }
-    tx.commit().map_err(sqlite_io_error)?;
-    Ok((written, alive))
-}
-
 pub(crate) fn current_node_latency_job_value(jobs: &LatencyJobManager) -> Value {
     json!({"job": jobs.current_value()})
 }
@@ -547,21 +556,6 @@ fn latency_probe_node_identity_exists(conn: &Connection, id: i64, link: &str) ->
     .map_err(sqlite_io_error)
 }
 
-fn node_latency_result_target_exists(
-    conn: &Connection,
-    node_id: i64,
-    node_link: &str,
-) -> io::Result<bool> {
-    conn.query_row(
-        "SELECT 1 FROM nodes WHERE id = ?1 AND link = ?2",
-        params![node_id, node_link],
-        |_| Ok(()),
-    )
-    .optional()
-    .map(|value| value.is_some())
-    .map_err(sqlite_io_error)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,6 +593,46 @@ mod tests {
 
         assert_eq!(panic_payload_message(&literal), literal);
         assert_eq!(panic_payload_message(&owned), owned);
+    }
+
+    #[test]
+    fn selector_application_survives_latency_persistence_failure() {
+        let (dir, state) = temp_state("selector-before-persistence");
+        let conn = open_state_connection(&state).unwrap();
+        insert_latency_probe_node(&conn, 1, "socks://127.0.0.1:1080#one");
+        conn.execute_batch(
+            "CREATE TRIGGER reject_latency_persistence
+             BEFORE INSERT ON node_latency_results
+             BEGIN
+                 SELECT RAISE(ABORT, 'injected latency persistence failure');
+             END;",
+        )
+        .unwrap();
+        drop(conn);
+        let jobs = LatencyJobManager::default();
+        let applied = std::sync::atomic::AtomicBool::new(false);
+        let results = vec![NodeLatencyWrite {
+            node_id: 1,
+            node_link: "socks://127.0.0.1:1080#one".to_owned(),
+            latency_ms: Some(9),
+            alive: true,
+            tested_at: "now".to_owned(),
+            message: None,
+        }];
+
+        let counts = apply_and_persist_runtime_latency_results(
+            &jobs,
+            1,
+            &state,
+            &[json!({"alive": true, "latencyMs": 9})],
+            &results,
+            |_| applied.store(true, Ordering::Release),
+        );
+
+        assert_eq!(counts, (1, 1));
+        assert!(applied.load(Ordering::Acquire));
+        assert_eq!(jobs.persistence.pending_count(), 1);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
