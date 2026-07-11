@@ -82,10 +82,10 @@ pub(crate) struct ResidentTcpCheckTarget {
 }
 
 impl ResidentTcpCheckTarget {
-    pub(in crate::production_runtime_owner::resident_dataplane) fn network_type_for_record(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn network_type_hint(
         &self,
-    ) -> NetworkType {
-        self.network_type.unwrap_or(NetworkType::TCP4)
+    ) -> Option<NetworkType> {
+        self.network_type
     }
 }
 
@@ -437,7 +437,9 @@ impl ResidentProxyGroupPlan {
     fn tcp_check_network_types(&self) -> Vec<NetworkType> {
         let mut network_types = Vec::new();
         for target in &self.tcp_check.targets {
-            push_unique_network_type(&mut network_types, target.network_type_for_record());
+            if let Some(network_type) = target.network_type_hint() {
+                push_unique_network_type(&mut network_types, network_type);
+            }
         }
         network_types
     }
@@ -445,10 +447,9 @@ impl ResidentProxyGroupPlan {
     fn udp_check_network_types(&self) -> Vec<NetworkType> {
         let mut network_types = Vec::new();
         for target in &self.udp_check.targets {
-            push_unique_network_type(
-                &mut network_types,
-                target.network_type_hint().unwrap_or(NetworkType::DNS_UDP4),
-            );
+            if let Some(network_type) = target.network_type_hint() {
+                push_unique_network_type(&mut network_types, network_type);
+            }
         }
         network_types
     }

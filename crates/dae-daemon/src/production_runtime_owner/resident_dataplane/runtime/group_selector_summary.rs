@@ -155,10 +155,9 @@ fn first_alive_count(selector: &DialerGroup, network_types: &[NetworkType]) -> O
 fn runtime_group_tcp_network_types(group: &plan::ResidentProxyGroupPlan) -> Vec<NetworkType> {
     let mut network_types = Vec::new();
     for target in &group.tcp_check.targets {
-        push_unique_runtime_group_network_type(
-            &mut network_types,
-            target.network_type_for_record(),
-        );
+        if let Some(network_type) = target.network_type_hint() {
+            push_unique_runtime_group_network_type(&mut network_types, network_type);
+        }
     }
     if network_types.is_empty() {
         network_types.push(RUNTIME_GROUP_SELECTOR_DEFAULT_NETWORK_TYPE);

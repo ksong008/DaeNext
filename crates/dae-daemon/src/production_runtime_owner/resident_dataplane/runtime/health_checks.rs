@@ -245,9 +245,10 @@ async fn run_resident_candidate_health_check_until_stopped(
         if stop.load(Ordering::Relaxed) {
             return HealthCheckRoundStatus::Cancelled;
         }
-        let _ = group.record_check_result(
+        record_resident_candidate_health_result(
+            group,
             &candidate.node_tag,
-            tcp_target.network_type_for_record(),
+            tcp_target.network_type_hint(),
             latency_ms,
             checked_at,
         );
@@ -268,17 +269,13 @@ async fn run_resident_candidate_health_check_until_stopped(
         }
         let (network_type, udp_latency_ms) = match udp_probe {
             Ok((latency_ms, target)) => (
-                plan::resident_udp_check_network_type(target),
+                Some(plan::resident_udp_check_network_type(target)),
                 Some(latency_ms),
             ),
-            Err(_) => (
-                udp_target
-                    .network_type_hint()
-                    .unwrap_or(NetworkType::DNS_UDP4),
-                None,
-            ),
+            Err((network_type, _)) => (network_type, None),
         };
-        let _ = group.record_check_result(
+        record_resident_candidate_health_result(
+            group,
             &candidate.node_tag,
             network_type,
             udp_latency_ms,
@@ -286,6 +283,20 @@ async fn run_resident_candidate_health_check_until_stopped(
         );
     }
     HealthCheckRoundStatus::Completed
+}
+
+fn record_resident_candidate_health_result(
+    group: &plan::ResidentProxyGroupPlan,
+    node_tag: &str,
+    network_type: Option<NetworkType>,
+    latency_ms: Option<i64>,
+    checked_at_unix: i64,
+) -> bool {
+    let Some(network_type) = network_type else {
+        return false;
+    };
+    let _ = group.record_check_result(node_tag, network_type, latency_ms, checked_at_unix);
+    true
 }
 
 async fn wait_until_stopped_async(stop: Arc<AtomicBool>) {
@@ -320,7 +331,7 @@ pub(crate) async fn probe_resident_candidate_tcp_latency_snapshot(
     let graph_id = candidate.proxy.graph_id.as_str();
     let link_hash = candidate.link_hash.as_str();
     let redacted_source = candidate.redacted_link_source.as_str();
-    let network_type = probe.network_type.string_without_dns();
+    let network_type = probe.network_type.map(NetworkType::string_without_dns);
     json!({
         "name": display_name,
         "displayName": display_name,
@@ -522,7 +533,7 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentTcpProbeResult {
-    pub(in crate::production_runtime_owner::resident_dataplane) network_type: NetworkType,
+    pub(in crate::production_runtime_owner::resident_dataplane) network_type: Option<NetworkType>,
     pub(in crate::production_runtime_owner::resident_dataplane) latency_ms: Option<i64>,
     pub(in crate::production_runtime_owner::resident_dataplane) message: Option<String>,
 }
@@ -531,7 +542,7 @@ pub(crate) struct ResidentTcpProbeResult {
 struct ResidentTcpTargetProbeResult {
     index: usize,
     target: String,
-    network_type: NetworkType,
+    network_type: Option<NetworkType>,
     latency_ms: Option<i64>,
     message: Option<String>,
 }
@@ -542,7 +553,7 @@ pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
     let targets = &candidate.tcp_check.targets;
     if targets.len() <= 1 {
         let target = candidate.tcp_check.primary_target();
-        let network_type = target.network_type_for_record();
+        let network_type = target.network_type_hint();
         return match probe_resident_candidate_tcp_target_endpoint_async(candidate, target).await {
             Ok(latency_ms) => ResidentTcpProbeResult {
                 network_type,
@@ -561,7 +572,7 @@ pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
     for (index, target) in targets.iter().cloned().enumerate() {
         let candidate = candidate.clone();
         handles.spawn(async move {
-            let network_type = target.network_type_for_record();
+            let network_type = target.network_type_hint();
             let target_display = target.target.clone();
             match probe_resident_candidate_tcp_target_endpoint_async(&candidate, &target).await {
                 Ok(latency_ms) => ResidentTcpTargetProbeResult {
@@ -590,10 +601,7 @@ pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
     }
 
     preferred_tcp_probe_result(&results).unwrap_or_else(|| {
-        let network_type = candidate
-            .tcp_check
-            .primary_target()
-            .network_type_for_record();
+        let network_type = candidate.tcp_check.primary_target().network_type_hint();
         ResidentTcpProbeResult {
             network_type,
             latency_ms: None,
@@ -681,15 +689,20 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
 async fn probe_resident_candidate_udp_target_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
     target: &plan::ResidentUdpCheckTarget,
-) -> Result<(i64, SocketAddr), String> {
+) -> Result<(i64, SocketAddr), (Option<NetworkType>, String)> {
     let started = Instant::now();
-    let resolved = target.resolve().await?;
+    let resolved = target
+        .resolve()
+        .await
+        .map_err(|err| (target.network_type_hint(), err))?;
+    let network_type = plan::resident_udp_check_network_type(resolved);
     probe_resident_proxy_dns_udp_async(
         &candidate.proxy,
         resolved,
         &candidate.udp_check.lookup_host,
     )
-    .await?;
+    .await
+    .map_err(|err| (Some(network_type), err))?;
     Ok((elapsed_millis(started.elapsed()), resolved))
 }
 
@@ -722,6 +735,49 @@ pub(crate) fn sleep_until_stopped(stop: &AtomicBool, duration: Duration) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostname_check_target_does_not_invent_ipv4_family() {
+        let target = plan::ResidentTcpCheckTarget {
+            target: "health.example:80".to_owned(),
+            network_type: None,
+        };
+        assert_eq!(target.network_type_hint(), None);
+    }
+
+    #[test]
+    fn health_result_without_attempted_family_is_not_recorded() {
+        let config = parse_test_config(
+            r#"
+            global {
+                lan_interface: daerust0
+                tcp_check_url: 'http://health.example'
+            }
+            node {
+                node_a: 'socks5://127.0.0.1:1080#node_a'
+            }
+            group {
+                proxy {
+                    filter: name(node_a)
+                    policy: min
+                }
+            }
+            routing {
+                l4proto(tcp) -> proxy
+                fallback: direct
+            }
+            "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+
+        assert!(!record_resident_candidate_health_result(
+            group, "node_a", None, None, 10,
+        ));
+        let snapshot = group.latency_snapshots().pop().unwrap();
+        assert_eq!(snapshot.checked_at_unix, 0);
+        assert!(!snapshot.alive);
+    }
 
     #[test]
     fn resident_health_check_round_cancelled_before_probe_does_not_seed_latency_state() {
@@ -829,21 +885,21 @@ mod tests {
             ResidentTcpTargetProbeResult {
                 index: 0,
                 target: "192.0.2.1:80".to_owned(),
-                network_type: NetworkType::TCP4,
+                network_type: Some(NetworkType::TCP4),
                 latency_ms: Some(90),
                 message: None,
             },
             ResidentTcpTargetProbeResult {
                 index: 1,
                 target: "[2001:db8::1]:80".to_owned(),
-                network_type: NetworkType::TCP6,
+                network_type: Some(NetworkType::TCP6),
                 latency_ms: Some(30),
                 message: None,
             },
         ])
         .unwrap();
 
-        assert_eq!(result.network_type, NetworkType::TCP6);
+        assert_eq!(result.network_type, Some(NetworkType::TCP6));
         assert_eq!(result.latency_ms, Some(30));
         assert_eq!(result.message, None);
     }
@@ -854,21 +910,21 @@ mod tests {
             ResidentTcpTargetProbeResult {
                 index: 0,
                 target: "192.0.2.1:80".to_owned(),
-                network_type: NetworkType::TCP4,
+                network_type: Some(NetworkType::TCP4),
                 latency_ms: None,
                 message: Some("timeout".to_owned()),
             },
             ResidentTcpTargetProbeResult {
                 index: 1,
                 target: "[2001:db8::1]:80".to_owned(),
-                network_type: NetworkType::TCP6,
+                network_type: Some(NetworkType::TCP6),
                 latency_ms: Some(42),
                 message: None,
             },
         ])
         .unwrap();
 
-        assert_eq!(result.network_type, NetworkType::TCP6);
+        assert_eq!(result.network_type, Some(NetworkType::TCP6));
         assert_eq!(result.latency_ms, Some(42));
         assert_eq!(result.message, None);
     }
@@ -879,27 +935,46 @@ mod tests {
             ResidentTcpTargetProbeResult {
                 index: 0,
                 target: "192.0.2.1:80".to_owned(),
-                network_type: NetworkType::TCP4,
+                network_type: Some(NetworkType::TCP4),
                 latency_ms: None,
                 message: Some("connect failed".to_owned()),
             },
             ResidentTcpTargetProbeResult {
                 index: 1,
                 target: "[2001:db8::1]:80".to_owned(),
-                network_type: NetworkType::TCP6,
+                network_type: Some(NetworkType::TCP6),
                 latency_ms: None,
                 message: Some("timeout".to_owned()),
             },
         ])
         .unwrap();
 
-        assert_eq!(result.network_type, NetworkType::TCP4);
+        assert_eq!(result.network_type, Some(NetworkType::TCP4));
         assert_eq!(result.latency_ms, None);
         assert_eq!(
             result.message.as_deref(),
             Some(
                 "all TCP check targets failed: 192.0.2.1:80: connect failed; [2001:db8::1]:80: timeout"
             )
+        );
+    }
+
+    #[test]
+    fn failed_hostname_probe_preserves_unknown_family() {
+        let result = preferred_tcp_probe_result(&[ResidentTcpTargetProbeResult {
+            index: 0,
+            target: "health.example:80".to_owned(),
+            network_type: None,
+            latency_ms: None,
+            message: Some("resolve failed".to_owned()),
+        }])
+        .unwrap();
+
+        assert_eq!(result.network_type, None);
+        assert_eq!(result.latency_ms, None);
+        assert_eq!(
+            result.message.as_deref(),
+            Some("health.example:80: resolve failed")
         );
     }
 
