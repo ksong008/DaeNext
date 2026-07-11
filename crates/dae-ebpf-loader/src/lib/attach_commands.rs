@@ -90,6 +90,16 @@ pub(crate) fn run_tc_attach_pin(options: TcAttachPinOptions) -> LoaderOutput {
             "priority": report.priority,
             "handle": report.handle,
             "tcx_order": report.tcx_order.as_str(),
+            "tcx_anchor": report.tcx_anchor.as_ref().map(|anchor| json!({
+                "relation": anchor.relation.as_str(),
+                "program_id": anchor.program_id,
+            })),
+            "tcx_pre_query_revision": report.tcx_pre_query_revision,
+            "tcx_pre_program_order": report.tcx_pre_program_order.iter().map(|entry| json!({
+                "id": entry.id,
+                "name": entry.name,
+                "tag": entry.tag,
+            })).collect::<Vec<_>>(),
             "tcx_query_revision": report.tcx_query_revision,
             "tcx_order_verified": report.tcx_order_verified,
             "tcx_program_order": report.tcx_program_order.iter().map(|entry| json!({

@@ -120,6 +120,17 @@ impl NativeEbpfRuntimeState {
                 })
             })
             .collect::<Vec<_>>();
+        let tcx_pre_program_order = report
+            .tcx_pre_program_order
+            .iter()
+            .map(|entry| {
+                json!({
+                    "id": entry.id,
+                    "name": entry.name,
+                    "tag": entry.tag,
+                })
+            })
+            .collect::<Vec<_>>();
         Ok(json!({
             "requested_backend": report.requested_backend.as_str(),
             "backend": report.backend.as_str(),
@@ -134,6 +145,12 @@ impl NativeEbpfRuntimeState {
             "priority": report.priority,
             "handle": report.handle,
             "tcx_order": report.tcx_order.as_str(),
+            "tcx_anchor": report.tcx_anchor.as_ref().map(|anchor| json!({
+                "relation": anchor.relation.as_str(),
+                "program_id": anchor.program_id,
+            })),
+            "tcx_pre_query_revision": report.tcx_pre_query_revision,
+            "tcx_pre_program_order": tcx_pre_program_order,
             "tcx_query_revision": report.tcx_query_revision,
             "tcx_program_order": tcx_program_order,
             "tcx_query_error": report.tcx_query_error,
