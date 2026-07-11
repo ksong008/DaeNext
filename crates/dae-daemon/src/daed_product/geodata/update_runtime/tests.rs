@@ -203,6 +203,7 @@ impl GeodataUpdateRuntimeFixture {
             api_only: true,
             control_socket: self.dir.join("control.sock"),
             runtime: Arc::new(ProductRuntimeManager::new()),
+            runtime_sampler: None,
             latency_jobs: Arc::new(LatencyJobManager::default()),
             http_metrics: Arc::new(ProductHttpMetrics::default()),
             auth_runtime: product_test_auth_runtime(),

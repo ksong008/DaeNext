@@ -62,6 +62,12 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             return DaedProductOutput::error(format!("start authentication runtime failed: {err}"));
         }
     };
+    let runtime_sampler = match ProductRuntimeSampler::start(Arc::downgrade(&runtime)) {
+        Ok(sampler) => sampler,
+        Err(err) => {
+            return DaedProductOutput::error(format!("start runtime sampler failed: {err}"));
+        }
+    };
     let mut app = AppState {
         config_dir: options.config_dir,
         state: options.state,
@@ -69,6 +75,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         api_only: options.api_only,
         control_socket: options.control_socket,
         runtime,
+        runtime_sampler: Some(runtime_sampler),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         auth_runtime,

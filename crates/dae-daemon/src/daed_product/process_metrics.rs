@@ -21,11 +21,36 @@ pub(super) struct ProcCpuSample {
     pub(super) observed_at: Instant,
 }
 
-pub(super) static LAST_PROC_CPU_SAMPLE: OnceLock<Mutex<Option<ProcCpuSample>>> = OnceLock::new();
+#[derive(Debug, Default)]
+pub(super) struct ProcessCpuTracker {
+    previous: Option<ProcCpuSample>,
+}
 
-pub(super) fn current_process_metrics() -> ProcessMetrics {
+impl ProcessCpuTracker {
+    pub(super) fn sample(&mut self) -> io::Result<ProcessMetrics> {
+        let mut metrics = process_status_metrics()?;
+        let stat = fs::read_to_string("/proc/self/stat")?;
+        let total_ticks = proc_stat_total_cpu_ticks(&stat)?;
+        let observed_at = Instant::now();
+        metrics.cpu_usage_percent =
+            process_cpu_usage_percent_from_samples(&stat, total_ticks, observed_at, self.previous)?;
+        self.previous = Some(ProcCpuSample {
+            total_ticks,
+            observed_at,
+        });
+        Ok(metrics)
+    }
+}
+
+pub(super) fn process_metrics_lifetime_snapshot() -> ProcessMetrics {
     let mut metrics = process_status_metrics().unwrap_or_default();
-    metrics.cpu_usage_percent = current_process_cpu_usage_percent().unwrap_or(0.0);
+    let usage = fs::read_to_string("/proc/self/stat")
+        .and_then(|stat| {
+            let total_ticks = proc_stat_total_cpu_ticks(&stat)?;
+            process_lifetime_cpu_usage_percent(&stat, total_ticks)
+        })
+        .unwrap_or(0.0);
+    metrics.cpu_usage_percent = round_percent(usage);
     metrics
 }
 
@@ -67,16 +92,16 @@ pub(super) fn proc_status_kib_value(value: &str) -> u64 {
         .unwrap_or(0)
 }
 
-pub(super) fn current_process_cpu_usage_percent() -> io::Result<f64> {
-    let stat = fs::read_to_string("/proc/self/stat")?;
-    let total_ticks = proc_stat_total_cpu_ticks(&stat)?;
-    let now = Instant::now();
-    let lock = LAST_PROC_CPU_SAMPLE.get_or_init(|| Mutex::new(None));
-    let mut guard = lock
-        .lock()
-        .map_err(|_| io::Error::other("process cpu sample lock poisoned"))?;
-    let usage = if let Some(previous) = *guard {
-        let elapsed = now.duration_since(previous.observed_at).as_secs_f64();
+pub(super) fn process_cpu_usage_percent_from_samples(
+    stat: &str,
+    total_ticks: u64,
+    observed_at: Instant,
+    previous: Option<ProcCpuSample>,
+) -> io::Result<f64> {
+    let usage = if let Some(previous) = previous {
+        let elapsed = observed_at
+            .saturating_duration_since(previous.observed_at)
+            .as_secs_f64();
         if elapsed > 0.0 {
             let delta_ticks = total_ticks.saturating_sub(previous.total_ticks) as f64;
             cpu_ticks_to_percent(delta_ticks, elapsed)
@@ -84,12 +109,8 @@ pub(super) fn current_process_cpu_usage_percent() -> io::Result<f64> {
             0.0
         }
     } else {
-        process_lifetime_cpu_usage_percent(&stat, total_ticks).unwrap_or(0.0)
+        process_lifetime_cpu_usage_percent(stat, total_ticks).unwrap_or(0.0)
     };
-    *guard = Some(ProcCpuSample {
-        total_ticks,
-        observed_at: now,
-    });
     Ok(round_percent(usage))
 }
 

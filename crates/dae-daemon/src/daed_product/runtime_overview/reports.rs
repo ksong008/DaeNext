@@ -7,22 +7,23 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
     let max_points = query_usize(request, "maxPoints")
         .unwrap_or(120)
         .clamp(1, 1_000);
-    let traffic = resident_runtime_traffic_stats(&runtime, window_sec, max_points);
-    let process = current_process_metrics();
+    let sampled = runtime_sample_view_for_app(app, window_sec, max_points);
+    let traffic = sampled.traffic;
+    let process = sampled.process;
     let allocator_stats = allocator_stats_snapshot();
     let allocator_live_heap = allocator_stats.map(|stats| stats.allocated);
     let cgroup_memory = cgroup_memory_snapshot_json();
     json!({
-        "updatedAt": now_text(),
+        "updatedAt": iso8601_utc(sampled.sampled_at),
         "uploadRate": traffic.upload_rate.to_string(),
         "downloadRate": traffic.download_rate.to_string(),
         "uploadTotal": traffic.upload_total.to_string(),
         "downloadTotal": traffic.download_total.to_string(),
         "activeConnections": traffic.active_connections,
         "udpSessions": traffic.udp_sessions,
-        "udpTaskQueues": 0,
-        "udpTaskDropTotal": "0",
-        "packetSnifferSessions": 0,
+        "udpTaskQueues": Value::Null,
+        "udpTaskDropTotal": Value::Null,
+        "packetSnifferSessions": Value::Null,
         "cpuUsagePercent": process.cpu_usage_percent,
         "rssBytes": process.rss_bytes.to_string(),
         "rssAnonBytes": process.anonymous_rss_bytes.to_string(),
@@ -48,8 +49,9 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         "productHttp": app.http_metrics.snapshot(),
         "productLogWriter": product_log_runtime_snapshot(&app.config_dir),
         "productAuth": app.auth_runtime.snapshot(),
-        "productLogWriter": product_log_runtime_snapshot(&app.config_dir),
         "productGeodataUpdate": app.geodata_update_runtime.as_ref().map(|runtime| runtime.snapshot()).unwrap_or(Value::Null),
+        "runtimeSampler": app.runtime_sampler.as_ref().map(|sampler| sampler.snapshot()).unwrap_or(Value::Null),
+        "runtimeSampleCount": sampled.sample_count,
         "runtime": runtime,
         "samples": traffic.samples,
     })
@@ -63,16 +65,13 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
     let max_points = query_usize(request, "maxPoints")
         .unwrap_or(120)
         .clamp(1, 1_000);
-    let traffic = resident_runtime_traffic_stats_from_metrics(
-        runtime_delta.resident_dataplane_metrics.as_ref(),
-        window_sec,
-        max_points,
-    );
-    let process = current_process_metrics();
+    let sampled = runtime_sample_view_for_app(app, window_sec, max_points);
+    let traffic = sampled.traffic;
+    let process = sampled.process;
     let allocator_live_heap = allocator_live_heap_bytes();
     let cgroup_memory = cgroup_memory_snapshot_json();
     json!({
-        "updatedAt": now_text(),
+        "updatedAt": iso8601_utc(sampled.sampled_at),
         "uploadRate": traffic.upload_rate.to_string(),
         "downloadRate": traffic.download_rate.to_string(),
         "uploadTotal": traffic.upload_total.to_string(),
@@ -93,7 +92,10 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
         "cgroupMemory": cgroup_memory,
         "goroutines": process.thread_count,
         "productAuth": app.auth_runtime.snapshot(),
+        "productLogWriter": product_log_runtime_snapshot(&app.config_dir),
         "productGeodataUpdate": app.geodata_update_runtime.as_ref().map(|runtime| runtime.snapshot()).unwrap_or(Value::Null),
+        "runtimeSampler": app.runtime_sampler.as_ref().map(|sampler| sampler.snapshot()).unwrap_or(Value::Null),
+        "runtimeSampleCount": sampled.sample_count,
         "reloadCount": runtime_delta.reload_count,
         "samples": traffic.samples,
     })
