@@ -137,7 +137,7 @@ pub(super) fn replace_prepared_subscription_nodes(
             .or_else(|| reusable_by_name.get(&parsed.display_name))
             && reused_nodes.insert(preserved.id)
         {
-            if !subscription_node_changed(preserved, &link, &parsed) {
+            if !subscription_node_changed(preserved, link, parsed) {
                 out.push(json!({
                     "link": link,
                     "error": Value::Null,
@@ -164,7 +164,7 @@ pub(super) fn replace_prepared_subscription_nodes(
                     preserved.id
                 ]) {
                     Ok(_) => {
-                        if subscription_node_probe_target_changed(preserved, &parsed) {
+                        if subscription_node_probe_target_changed(preserved, parsed) {
                             conn.prepare_cached(
                                 "DELETE FROM node_latency_results WHERE node_id = ?1",
                             )
