@@ -2,8 +2,9 @@ use serde_json::{Value, json};
 
 use super::super::{link_hash, redacted_link_source};
 use super::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentUtlsFingerprintPlan,
-    ResidentXhttpHttpVersion, ResidentXhttpMode, ResidentXhttpSettingsPlan,
+    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentUdpChainAdmission,
+    ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
+    ResidentXhttpSettingsPlan, resident_udp_chain_admission,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,6 +32,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     verification_policy: String,
     utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
     chain_parent_count: usize,
+    udp_chain_admission: ResidentUdpChainAdmission,
     mark: u32,
     mptcp: bool,
 }
@@ -67,6 +69,7 @@ impl ResidentExecutableGraphDescriptor {
             verification_policy: graph_verification_policy(proxy),
             utls_fingerprint: proxy.utls_fingerprint.clone(),
             chain_parent_count: chain_parent_count(proxy),
+            udp_chain_admission: resident_udp_chain_admission(proxy),
             mark: proxy.mark,
             mptcp: proxy.mptcp,
         }
@@ -338,12 +341,19 @@ impl ResidentExecutableGraphDescriptor {
     }
 
     fn packet_session_manager_value(&self) -> Value {
+        let unsupported_reason = self
+            .udp_chain_admission
+            .unsupported_reason()
+            .map(Value::from)
+            .unwrap_or(Value::Null);
         json!({
             "schemaVersion": 1,
-            "status": "admitted",
+            "status": self.udp_chain_admission.status(),
             "manager": "resident-udp-session-manager",
             "graphId": self.graph_id,
             "packetSemantics": self.packet_semantics,
+            "chainCarrier": self.udp_chain_admission.carrier(),
+            "unsupportedReason": unsupported_reason,
             "keyFields": [
                 "graphId",
                 "outbound",

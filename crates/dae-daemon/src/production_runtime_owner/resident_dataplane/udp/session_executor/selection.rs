@@ -15,6 +15,9 @@ impl UdpSessionExecutor {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet(
         proxy: &ResidentProxyPlan,
     ) -> Self {
+        if let Some(reason) = resident_udp_chain_admission(proxy).unsupported_reason() {
+            return Self::fail_closed(reason);
+        }
         match &proxy.handler {
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
                 cipher,
