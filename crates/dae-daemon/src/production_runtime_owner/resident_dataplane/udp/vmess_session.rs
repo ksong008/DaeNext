@@ -684,7 +684,8 @@ async fn read_vmess_grpc_payload(underlay: &mut VmessAeadUdpUnderlay) -> Result<
     if encrypted_writer.is_none() {
         return Err("VMess gRPC encrypted response writer is not initialized".to_owned());
     }
-    let started = Instant::now();
+    let response_deadline = time::sleep(RESIDENT_UDP_RESPONSE_TIMEOUT);
+    tokio::pin!(response_deadline);
     loop {
         if let Some(payload) = pending_plain.pop_front() {
             return Ok(payload);
@@ -706,11 +707,12 @@ async fn read_vmess_grpc_payload(underlay: &mut VmessAeadUdpUnderlay) -> Result<
         if disconnected {
             return Err("VMess gRPC response decoder disconnected".to_owned());
         }
-        if started.elapsed() > RESIDENT_UDP_RESPONSE_TIMEOUT {
-            return Err("read VMess gRPC UDP response timeout".to_owned());
-        }
-        match time::timeout(RESIDENT_IDLE_SLEEP, recv_stream.data()).await {
-            Ok(Some(Ok(bytes))) => {
+        let decrypted = decrypted_rx
+            .as_mut()
+            .ok_or_else(|| "VMess gRPC decoder is not initialized".to_owned())?;
+        tokio::select! {
+            data = recv_stream.data() => match data {
+            Some(Ok(bytes)) => {
                 recv_stream
                     .flow_control()
                     .release_capacity(bytes.len())
@@ -730,14 +732,22 @@ async fn read_vmess_grpc_payload(underlay: &mut VmessAeadUdpUnderlay) -> Result<
                     }
                 }
             }
-            Ok(Some(Err(err))) => return Err(format!("read VMess gRPC response data: {err}")),
-            Ok(None) => {
+            Some(Err(err)) => return Err(format!("read VMess gRPC response data: {err}")),
+            None => {
                 if let Some(writer) = encrypted_writer.as_mut() {
                     let _ = writer.shutdown().await;
                 }
                 return Err("VMess gRPC response stream closed".to_owned());
             }
-            Err(_) => {}
+            },
+            decoded = decrypted.recv() => match decoded {
+                Some(Ok(payload)) => return Ok(payload),
+                Some(Err(err)) => return Err(err),
+                None => return Err("VMess gRPC response decoder disconnected".to_owned()),
+            },
+            _ = &mut response_deadline => {
+                return Err("read VMess gRPC UDP response timeout".to_owned());
+            }
         }
     }
 }

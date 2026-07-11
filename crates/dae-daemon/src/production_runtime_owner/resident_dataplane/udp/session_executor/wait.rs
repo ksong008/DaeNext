@@ -23,4 +23,24 @@ impl UdpSessionExecutor {
         };
         Ok(response.map(|response| ("udp_packet_finished", response)))
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn wait_response_with_timeout(
+        &mut self,
+        timeout: Duration,
+        label: &str,
+    ) -> Result<(&'static str, UdpExchangeResult), String> {
+        let deadline = time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(time::Instant::now());
+            if remaining.is_zero() {
+                return Err(format!("{label} timeout"));
+            }
+            match time::timeout(remaining, self.wait_response()).await {
+                Ok(Ok(Some(response))) => return Ok(response),
+                Ok(Ok(None)) => continue,
+                Ok(Err(err)) => return Err(err),
+                Err(_) => return Err(format!("{label} timeout")),
+            }
+        }
+    }
 }

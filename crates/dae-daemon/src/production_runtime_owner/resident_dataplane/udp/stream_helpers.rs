@@ -112,27 +112,20 @@ pub(super) async fn read_async_tls_plain_exact(
     mut out: &mut [u8],
     label: &str,
 ) -> Result<(), String> {
-    let started = Instant::now();
-    while !out.is_empty() {
-        if started.elapsed() > RESIDENT_UDP_RESPONSE_TIMEOUT {
-            return Err(format!("{label}: timeout"));
-        }
-        match time::timeout(RESIDENT_IDLE_SLEEP, client.read_plain(out)).await {
-            Ok(Ok(0)) => {}
-            Ok(Ok(read)) => {
-                let tmp = out;
-                out = &mut tmp[read..];
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        while !out.is_empty() {
+            match read_udp_stream_once(client, out, UdpStreamReadMode::Wait, label).await? {
+                Some(read) => {
+                    let tmp = out;
+                    out = &mut tmp[read..];
+                }
+                None => continue,
             }
-            Ok(Err(err))
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) => {}
-            Ok(Err(err)) => return Err(format!("{label}: {err}")),
-            Err(_) => {}
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|_| format!("{label}: timeout"))?
 }
 
 #[cfg(test)]

@@ -133,16 +133,13 @@ async fn execute_forced_dns_proxy_payload(
     if response.reply_forwarded {
         return Ok((event, response.into_independent_datagram()));
     }
-    let started = Instant::now();
-    loop {
-        if started.elapsed() >= RESIDENT_UDP_RESPONSE_TIMEOUT {
-            return Err("receive proxied DNS UDP response timeout".to_owned());
-        }
-        match executor.poll_response().await? {
-            Some((event, response)) => return Ok((event, response.into_independent_datagram())),
-            None => time::sleep(RESIDENT_IDLE_SLEEP).await,
-        }
-    }
+    executor
+        .wait_response_with_timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            "receive proxied DNS UDP response",
+        )
+        .await
+        .map(|(event, response)| (event, response.into_independent_datagram()))
 }
 
 #[cfg(test)]

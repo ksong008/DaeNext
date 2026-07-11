@@ -1,4 +1,3 @@
-use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::sync::{

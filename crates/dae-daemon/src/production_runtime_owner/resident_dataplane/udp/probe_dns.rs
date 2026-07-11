@@ -114,11 +114,11 @@ async fn resident_proxy_udp_bridge_loop(
                     Err(err) => record_resident_proxy_udp_bridge_error(&last_error, err),
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP), if last_peer.is_some() => {
+            response = executor.wait_response(), if last_peer.is_some() => {
                 let Some(peer) = last_peer else {
                     continue;
                 };
-                match executor.poll_response().await {
+                match response {
                     Ok(Some((_, response))) => {
                         if let Err(err) =
                             send_resident_proxy_udp_bridge_response(&socket, peer, response).await
@@ -250,16 +250,10 @@ fn udp_probe_hex_encode(payload: &[u8]) -> String {
 async fn wait_for_udp_probe_response(
     executor: &mut UdpSessionExecutor,
 ) -> Result<UdpExchangeResult, String> {
-    let started = Instant::now();
-    loop {
-        if let Some((_, response)) = executor.poll_response().await? {
-            return Ok(response);
-        }
-        if started.elapsed() >= RESIDENT_UDP_RESPONSE_TIMEOUT {
-            return Err("receive UDP probe response timeout".to_owned());
-        }
-        time::sleep(RESIDENT_IDLE_SLEEP).await;
-    }
+    executor
+        .wait_response_with_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, "receive UDP probe response")
+        .await
+        .map(|(_, response)| response)
 }
 
 pub(crate) async fn probe_resident_proxy_dns_udp_async(
