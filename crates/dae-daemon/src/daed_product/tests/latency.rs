@@ -170,7 +170,7 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
         enqueue_node_latency_job(&state, &dir, Arc::clone(&runtime), Arc::clone(&jobs), &[])
             .unwrap();
 
-    assert!(value["items"].as_array().is_some());
+    assert_eq!(value["items"].as_array().map(Vec::len), Some(0));
     assert_eq!(value["job"]["total"].as_u64(), Some(2));
     assert_eq!(value["job"]["completed"].as_u64(), Some(0));
     assert_eq!(value["job"]["status"].as_str(), Some("queued"));
@@ -207,6 +207,26 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
     assert!(reclaim_after > reclaim_before);
 
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn latency_job_cancellation_is_scoped_to_the_expected_job() {
+    let jobs = LatencyJobManager::default();
+    let (job, should_spawn) = jobs.start_or_current(3).unwrap();
+    assert!(should_spawn);
+    let job_id = job.to_value()["id"].as_u64().unwrap();
+
+    let mismatch = cancel_node_latency_job_value(&jobs, job_id.saturating_add(1)).unwrap_err();
+    assert!(mismatch.to_string().contains("does not match"));
+    assert_eq!(jobs.current_value()["status"].as_str(), Some("queued"));
+
+    let cancelled = cancel_node_latency_job_value(&jobs, job_id).unwrap();
+    assert_eq!(cancelled["job"]["id"].as_u64(), Some(job_id));
+    assert_eq!(cancelled["job"]["status"].as_str(), Some("cancelling"));
+
+    let (same_job, should_spawn) = jobs.start_or_current(9).unwrap();
+    assert!(!should_spawn);
+    assert_eq!(same_job.to_value()["id"].as_u64(), Some(job_id));
 }
 
 #[test]

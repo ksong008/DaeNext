@@ -320,7 +320,7 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
         Some(&token),
     );
     let latency = json_body(&latency);
-    assert_eq!(latency["items"][0]["id"].as_i64().unwrap(), node_id);
+    assert_eq!(latency["items"].as_array().map(Vec::len), Some(0));
     let job_id = latency["job"]["id"].as_u64().unwrap();
     assert!(matches!(
         latency["job"]["status"].as_str(),
@@ -343,6 +343,23 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
     ));
     assert_eq!(latency_job["job"]["id"].as_u64().unwrap(), job_id);
     assert_eq!(latency_job["job"]["status"].as_str(), Some("finished"));
+    let stale_cancel = http_request(
+        port,
+        "DELETE",
+        "/api/nodes/latencies/job",
+        Some(&format!(r#"{{"id":{}}}"#, job_id.saturating_add(1))),
+        Some(&token),
+    );
+    assert!(stale_cancel.contains("409 Conflict"), "{stale_cancel}");
+    let terminal_cancel = json_body(&http_request(
+        port,
+        "DELETE",
+        "/api/nodes/latencies/job",
+        Some(&format!(r#"{{"id":{job_id}}}"#)),
+        Some(&token),
+    ));
+    assert_eq!(terminal_cancel["job"]["id"].as_u64(), Some(job_id));
+    assert_eq!(terminal_cancel["job"]["status"].as_str(), Some("finished"));
 
     let settings = http_request(
         port,

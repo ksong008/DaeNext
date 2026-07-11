@@ -98,6 +98,7 @@ pub(super) fn handle_api_request(
                 ("GET", "/nodes/latencies") => api_get_node_latencies(app),
                 ("POST", "/nodes/latencies") => api_test_node_latencies(app, request),
                 ("GET", "/nodes/latencies/job") => api_get_node_latency_job(app),
+                ("DELETE", "/nodes/latencies/job") => api_cancel_node_latency_job(app, request),
                 _ if api_path == "/configs"
                     || api_path.starts_with("/configs/")
                     || api_path == "/dns"
