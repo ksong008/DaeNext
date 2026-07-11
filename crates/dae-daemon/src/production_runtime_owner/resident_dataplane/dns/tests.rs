@@ -485,6 +485,107 @@ fn dns_upstream_candidates_keep_multiple_resolved_targets_generic() {
     assert_eq!(proxy.node_tag, "node_b");
 }
 
+#[tokio::test]
+async fn tcp_udp_exhausts_udp_targets_before_starting_tcp_phase() {
+    let live = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let live_target = live.local_addr().unwrap();
+    let unavailable_target =
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), live_target.port());
+    let server = tokio::spawn(async move {
+        let mut request = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+        let (read, peer) = live.recv_from(&mut request).await.unwrap();
+        let response = dns_pressure_response_for_query(
+            &request[..read],
+            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 44)),
+            60,
+        );
+        live.send_to(&response, peer).await.unwrap();
+    });
+    let resolved_addrs = Arc::new(OnceCell::new());
+    resolved_addrs
+        .set(vec![unavailable_target, live_target])
+        .unwrap();
+    let upstream = ResidentDnsUpstream {
+        index: 1,
+        tag: "multi-address".to_owned(),
+        target: ResidentDnsUpstreamTarget {
+            authority: format!("resolver.fixture.invalid:{}", live_target.port()),
+            host: "resolver.fixture.invalid".to_owned(),
+            port: live_target.port(),
+            literal_addr: None,
+            fallback_resolver: test_fallback_resolver(),
+            resolver_mark: 0,
+            resolved_addrs,
+        },
+        scheme: ResidentDnsUpstreamScheme::TcpUdp,
+        path: String::new(),
+    };
+
+    let response = transport::forward_dns_to_upstream_async(
+        &upstream,
+        QUERY,
+        &ResidentDnsPlan::asis(0),
+        &Arc::new(ResidentDnsForwarderCache::default()),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert_eq!(&response[0..2], &QUERY[0..2]);
+}
+
+#[tokio::test]
+async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
+    let tcp = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let target = tcp.local_addr().unwrap();
+    let udp = tokio::net::UdpSocket::bind(target).await.unwrap();
+    let udp_server = tokio::spawn(async move {
+        let mut request = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+        let (read, peer) = udp.recv_from(&mut request).await.unwrap();
+        let mut response = dns_pressure_response_for_query(
+            &request[..read],
+            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 45)),
+            60,
+        );
+        response[2] |= 0x02;
+        udp.send_to(&response, peer).await.unwrap();
+    });
+    let tcp_server = tokio::spawn(async move {
+        let (mut stream, _) = tcp.accept().await.unwrap();
+        let request_len = stream.read_u16().await.unwrap() as usize;
+        let mut request = vec![0_u8; request_len];
+        stream.read_exact(&mut request).await.unwrap();
+        let response =
+            dns_pressure_response_for_query(&request, IpAddr::V4(Ipv4Addr::new(192, 0, 2, 46)), 60);
+        stream.write_u16(response.len() as u16).await.unwrap();
+        stream.write_all(&response).await.unwrap();
+    });
+    let upstream = parse_dns_upstream(
+        1,
+        "mixed",
+        &format!("tcp+udp://{target}"),
+        test_fallback_resolver(),
+        0,
+    )
+    .unwrap();
+
+    let response = transport::forward_dns_to_upstream_async(
+        &upstream,
+        QUERY,
+        &ResidentDnsPlan::asis(0),
+        &Arc::new(ResidentDnsForwarderCache::default()),
+    )
+    .await
+    .unwrap();
+    udp_server.await.unwrap();
+    tcp_server.await.unwrap();
+    assert_eq!(&response[0..2], &QUERY[0..2]);
+    assert_eq!(response[2] & 0x02, 0);
+}
+
 #[test]
 fn dns_upstream_targets_use_matching_family_as_selector_fallback_tie_breaker() {
     let config = dns_upstream_routing_config_with_group(
