@@ -37,8 +37,11 @@ use serde_json::json;
 use tokio::time;
 
 use super::super::PRODUCTION_NETNS;
+#[cfg(test)]
+use super::super::udp_io::UdpOriginalDstRecvError;
 use super::super::udp_io::{
-    UdpOriginalDstPacket, UdpPayloadPool, try_recv_udp_with_original_dst_from_pool,
+    UDP_RECV_DEFAULT_CAPACITY, UdpOriginalDstPacket, UdpPayloadPool,
+    try_recv_udp_with_original_dst_from_pool,
 };
 use super::client::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name, open_async_resident_tls_client,

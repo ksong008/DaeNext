@@ -18,6 +18,7 @@ use super::super::plan::resident_data_udp_network_type;
 use super::*;
 
 mod dns_fast_path;
+mod ingress;
 mod resuscitation;
 mod router;
 mod sniff;
@@ -25,6 +26,7 @@ use self::dns_fast_path::{
     minimal_resident_dns_routing_result, resident_udp_dns_fast_path_applies,
     resident_udp_dns_fast_path_can_bypass_missing_tuple,
 };
+use self::ingress::recv_udp_batch_with_original_dst_async;
 use self::resuscitation::ResidentUdpResuscitator;
 use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
 use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
@@ -220,25 +222,41 @@ async fn run_resident_udp_session_manager_async(
                     let _ = (&mut entry.handle).await;
                 }
             }
-            packet = recv_udp_with_original_dst_async(&socket, &payload_pool) => {
-                match packet {
-                    Ok(packet) => handle_manager_packet(
-                        packet,
-                        &router,
-                        &dns,
-                        &event_file,
-                        &event_lock,
-                        &metrics,
-                        &active_sessions,
-                        &mut sessions,
-                        &mut direct_sessions,
-                        &mut sniffers,
-                        &dns_fast_path_permits,
-                        &cleanup_tx,
-                        &direct_cleanup_tx,
-                        session_limit,
-                        session_queue_depth,
-                    ),
+            batch = recv_udp_batch_with_original_dst_async(
+                &socket,
+                &payload_pool,
+                session_queue_depth,
+            ) => {
+                match batch {
+                    Ok(batch) => {
+                        metrics.record_udp_ingress_batch(
+                            batch.packets.len(),
+                            batch.truncated,
+                            batch.budget_hit,
+                        );
+                        for packet in batch.packets {
+                            handle_manager_packet(
+                                packet,
+                                &router,
+                                &dns,
+                                &event_file,
+                                &event_lock,
+                                &metrics,
+                                &active_sessions,
+                                &mut sessions,
+                                &mut direct_sessions,
+                                &mut sniffers,
+                                &dns_fast_path_permits,
+                                &cleanup_tx,
+                                &direct_cleanup_tx,
+                                session_limit,
+                                session_queue_depth,
+                            );
+                        }
+                        if batch.budget_hit {
+                            tokio::task::yield_now().await;
+                        }
+                    }
                     Err(err) => {
                         if !stop.load(Ordering::Relaxed) {
                             append_event(
@@ -851,35 +869,6 @@ async fn execute_forced_dns_proxy_datagram(
             None => time::sleep(RESIDENT_IDLE_SLEEP).await,
         }
     }
-}
-
-async fn recv_udp_with_original_dst_async(
-    socket: &AsyncFd<UdpSocket>,
-    payload_pool: &UdpPayloadPool,
-) -> Result<UdpOriginalDstPacket, String> {
-    loop {
-        let mut guard = socket
-            .readable()
-            .await
-            .map_err(|err| format!("await UDP socket readiness: {err}"))?;
-        match guard.try_io(|inner| {
-            match try_recv_udp_with_original_dst_from_pool(inner.get_ref(), 2048, payload_pool) {
-                Ok(packet) => Ok(packet),
-                Err(err) if is_udp_would_block(&err) => {
-                    Err(io::Error::from(io::ErrorKind::WouldBlock))
-                }
-                Err(err) => Err(io::Error::other(err)),
-            }
-        }) {
-            Ok(Ok(packet)) => return Ok(packet),
-            Ok(Err(err)) => return Err(err.to_string()),
-            Err(_) => continue,
-        }
-    }
-}
-
-fn is_udp_would_block(err: &str) -> bool {
-    err.contains("WouldBlock") || err.contains("Resource temporarily unavailable")
 }
 
 fn append_udp_route_selection_failed(

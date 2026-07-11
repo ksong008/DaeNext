@@ -80,10 +80,14 @@ fn udp_session_key_emits_display_and_redacted_identity() {
 }
 
 #[test]
-fn udp_would_block_classifier_accepts_platform_messages() {
-    assert!(is_udp_would_block("operation would block: WouldBlock"));
-    assert!(is_udp_would_block("Resource temporarily unavailable"));
-    assert!(!is_udp_would_block("permission denied"));
+fn udp_would_block_classifier_uses_typed_io_errors() {
+    assert!(
+        UdpOriginalDstRecvError::Io(io::Error::from(io::ErrorKind::WouldBlock)).is_would_block()
+    );
+    assert!(
+        !UdpOriginalDstRecvError::Io(io::Error::from(io::ErrorKind::PermissionDenied))
+            .is_would_block()
+    );
 }
 
 #[test]
