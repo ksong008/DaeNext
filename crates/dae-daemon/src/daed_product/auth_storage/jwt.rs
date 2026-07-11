@@ -68,7 +68,7 @@ pub(crate) fn verify_token(state: &Path, token: &str) -> io::Result<Option<UserR
     if exp <= unix_now() {
         return Ok(None);
     }
-    load_user_by_id(state, user.id)
+    Ok(Some(user))
 }
 
 pub(crate) fn decode_jwt_part(part: &str) -> io::Result<Value> {

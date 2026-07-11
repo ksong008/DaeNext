@@ -244,6 +244,47 @@ pub(crate) fn jwt_roundtrip_uses_user_secret() {
 }
 
 #[test]
+pub(crate) fn valid_jwt_verification_loads_the_user_once() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    let token = create_user(&state, "admin", "abc12345").unwrap();
+
+    reset_user_query_count_for_current_thread();
+    let user = verify_token(&state, &token).unwrap().unwrap();
+
+    assert_eq!(user.username, "admin");
+    assert_eq!(user_query_count_for_current_thread(), 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn username_change_invalidates_the_old_subject_and_new_login_succeeds() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    let old_token = create_user(&state, "admin", "abc12345").unwrap();
+    let app = product_test_app(&dir, &state);
+    let mut headers = HashMap::new();
+    headers.insert("authorization".to_owned(), format!("Bearer {old_token}"));
+    let request = HttpRequest {
+        method: "PATCH".to_owned(),
+        path: "/api/user/me".to_owned(),
+        query: HashMap::new(),
+        headers,
+        body: br#"{"username":"operator"}"#.to_vec(),
+    };
+
+    let response = route_request(&app, &request);
+    assert_eq!(response.status, 200);
+    assert!(verify_token(&state, &old_token).unwrap().is_none());
+    let new_token = issue_token(&state, "operator", "abc12345").unwrap();
+    assert_eq!(
+        verify_token(&state, &new_token).unwrap().unwrap().username,
+        "operator"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn initial_user_creation_is_single_winner_under_concurrency() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
