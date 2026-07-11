@@ -13,6 +13,7 @@ impl ResidentDnsForwarderCache {
             mark,
             target: None,
             selection: ResidentDnsForwarderSelectionKey::Unrouted,
+            transport: ResidentDnsForwarderTransport::Quic,
         };
         let forwarder = Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
             upstream: upstream.clone(),
@@ -33,7 +34,13 @@ impl ResidentDnsForwarderCache {
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<AsyncMutex<ResidentDnsQuicForwarder>>, String> {
-        let key = routed_dns_forwarder_key(upstream, target, mark, selection);
+        let key = routed_dns_forwarder_key(
+            upstream,
+            target,
+            mark,
+            selection,
+            ResidentDnsForwarderTransport::Quic,
+        );
         let forwarder = Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
             upstream: upstream.clone(),
             mark,
@@ -60,6 +67,7 @@ impl ResidentDnsForwarderCache {
             mark,
             target: Some(target),
             selection: ResidentDnsForwarderSelectionKey::from_selection(selection),
+            transport: ResidentDnsForwarderTransport::Udp,
         };
         let shard_count = super::udp_multiplex::dns_udp_forwarder_shard_count();
         let forwarder = Arc::new(ResidentDnsUdpForwarder {
@@ -82,7 +90,13 @@ impl ResidentDnsForwarderCache {
         proxy: Arc<ResidentProxyPlan>,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
-        let key = routed_dns_forwarder_key(upstream, target, proxy.mark, selection);
+        let key = routed_dns_forwarder_key(
+            upstream,
+            target,
+            proxy.mark,
+            selection,
+            ResidentDnsForwarderTransport::ProxyUdp,
+        );
         let forwarder = Arc::new(ResidentProxyDnsUdpForwarder::new(proxy, target));
         self.get_or_insert_proxy_udp_forwarder(key, forwarder)
     }
@@ -94,7 +108,13 @@ impl ResidentDnsForwarderCache {
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<ResidentDnsTcpForwarder>, String> {
-        let key = routed_dns_forwarder_key(upstream, target, mark, selection);
+        let key = routed_dns_forwarder_key(
+            upstream,
+            target,
+            mark,
+            selection,
+            ResidentDnsForwarderTransport::Tcp,
+        );
         let forwarder = Arc::new(ResidentDnsTcpForwarder {
             upstream: upstream.clone(),
             target,
@@ -112,7 +132,13 @@ impl ResidentDnsForwarderCache {
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<ResidentDnsTlsForwarder>, String> {
-        let key = routed_dns_forwarder_key(upstream, target, mark, selection);
+        let key = routed_dns_forwarder_key(
+            upstream,
+            target,
+            mark,
+            selection,
+            ResidentDnsForwarderTransport::Tls,
+        );
         let forwarder = Arc::new(ResidentDnsTlsForwarder {
             upstream: upstream.clone(),
             target,
@@ -130,7 +156,13 @@ impl ResidentDnsForwarderCache {
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<ResidentDnsHttpsForwarder>, String> {
-        let key = routed_dns_forwarder_key(upstream, target, mark, selection);
+        let key = routed_dns_forwarder_key(
+            upstream,
+            target,
+            mark,
+            selection,
+            ResidentDnsForwarderTransport::Https,
+        );
         let forwarder = Arc::new(ResidentDnsHttpsForwarder {
             upstream: upstream.clone(),
             target,
@@ -152,7 +184,13 @@ impl ResidentDnsForwarderCache {
         mark: u32,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<AsyncMutex<ResidentDnsH3Forwarder>>, String> {
-        let key = routed_dns_forwarder_key(upstream, target, mark, selection);
+        let key = routed_dns_forwarder_key(
+            upstream,
+            target,
+            mark,
+            selection,
+            ResidentDnsForwarderTransport::Http3,
+        );
         let forwarder = Arc::new(AsyncMutex::new(ResidentDnsH3Forwarder {
             upstream: upstream.clone(),
             target,
@@ -398,6 +436,7 @@ fn routed_dns_forwarder_key(
     target: SocketAddr,
     mark: u32,
     selection: &ResidentDnsUpstreamSelection,
+    transport: ResidentDnsForwarderTransport,
 ) -> ResidentDnsForwarderKey {
     ResidentDnsForwarderKey {
         scheme: upstream.scheme,
@@ -406,6 +445,7 @@ fn routed_dns_forwarder_key(
         mark,
         target: Some(target),
         selection: ResidentDnsForwarderSelectionKey::from_selection(selection),
+        transport,
     }
 }
 
@@ -419,4 +459,32 @@ fn evict_oldest_dns_forwarder(state: &mut ResidentDnsForwarderCacheState) {
         return;
     };
     state.entries.remove(&oldest_key);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tcp_udp_upstream_caches_udp_and_tcp_forwarders_separately() {
+        let cache = ResidentDnsForwarderCache::default();
+        let upstream = parse_dns_upstream(
+            0,
+            "mixed",
+            "tcp+udp://127.0.0.1:53",
+            "127.0.0.1:53".parse().unwrap(),
+            0,
+        )
+        .unwrap();
+        let target = "127.0.0.1:53".parse().unwrap();
+        let selection = ResidentDnsUpstreamSelection::Direct { mark: 0 };
+
+        cache
+            .udp_forwarder(&upstream, target, 0, &selection)
+            .unwrap();
+        cache
+            .tcp_forwarder(&upstream, target, 0, &selection)
+            .unwrap();
+        assert_eq!(cache.len(), 2);
+    }
 }
