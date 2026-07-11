@@ -825,7 +825,9 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     assert!(unit.contains("ExecStart=/usr/bin/daed run -c /etc/daed/"));
     assert!(unit.contains("ExecReload=/usr/bin/daed reload --timeout 60s"));
     assert!(!unit.contains("TimeoutReloadSec="));
-    assert!(unit.contains("Restart=on-abnormal"));
+    assert!(unit.contains("Restart=on-failure"));
+    assert!(unit.contains("RestartSec=5s"));
+    assert!(!unit.contains("Restart=on-abnormal"));
     assert!(!unit.contains("Environment="));
     assert!(!unit.contains("MALLOC_CONF"));
     assert!(!unit.contains("ALLOCATOR_IDLE_RECLAIM"));
