@@ -42,6 +42,8 @@ pub(crate) fn prepare_native_param_object(
         mm_struct_arg_start_offset: 0,
     });
     param.udp_state_idle_timeout_ns = map_profile.profile.udp_state_idle_timeout_ns();
+    let redirect_generation =
+        redirect_runtime_generation(param.control_plane_pid, param.dae0_ifindex);
     let selected_param_object = PathBuf::from(NATIVE_PARAM_OBJECT_IDENTITY);
     NativeParamObjectPreparation {
         selected_param_object: selected_param_object.clone(),
@@ -63,6 +65,9 @@ pub(crate) fn prepare_native_param_object(
                 "maxEntriesOverrides": map_profile.profile.max_entries_overrides(),
                 "udpStateIdleTimeoutNs": param.udp_state_idle_timeout_ns.to_string(),
                 "udpStateSaturationPolicy": "fail-closed",
+                "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
+                "redirectTrackGeneration": redirect_generation.to_string(),
+                "redirectTrackMigration": "fresh-unpinned-map-per-runtime",
             },
             "param": {
                 "tproxy_port": param.tproxy_port,
@@ -76,6 +81,8 @@ pub(crate) fn prepare_native_param_object(
                 "abi_version": param.abi_version,
                 "udp_state_saturation_policy": param.udp_state_saturation_policy,
                 "udp_state_idle_timeout_ns": param.udp_state_idle_timeout_ns.to_string(),
+                "redirect_track_abi_version": REDIRECT_TRACK_ABI_VERSION,
+                "redirect_track_generation": redirect_generation.to_string(),
             },
             "location": Value::Null,
         }),

@@ -116,14 +116,50 @@ pub struct BpfRedirectEntry {
     pub dmac: [u8; 6],
     pub from_wan: u8,
     pub link_layer: u8,
-    pub padding: [u8; 2],
+    pub abi_version: u8,
+    pub padding: u8,
+}
+
+impl BpfRedirectEntry {
+    pub const fn zeroed() -> Self {
+        Self {
+            ifindex: 0,
+            smac: [0; 6],
+            dmac: [0; 6],
+            from_wan: 0,
+            link_layer: 0,
+            abi_version: 0,
+            padding: 0,
+        }
+    }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct BpfRedirectTuple {
+pub struct BpfRedirectKey {
     pub sip: BpfIpBytes,
     pub dip: BpfIpBytes,
+    pub sport: u16,
+    pub dport: u16,
+    pub l4proto: u8,
+    pub abi_version: u8,
+    pub padding: [u8; 2],
+    pub generation: u64,
+}
+
+impl BpfRedirectKey {
+    pub const fn zeroed() -> Self {
+        Self {
+            sip: BpfIpBytes::zeroed(),
+            dip: BpfIpBytes::zeroed(),
+            sport: 0,
+            dport: 0,
+            l4proto: 0,
+            abi_version: 0,
+            padding: [0; 2],
+            generation: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -218,6 +254,7 @@ pub const TPROXY_MARK: u32 = 0x0800_0000;
 pub const BPF_DAE_PARAM_ABI_VERSION: u32 = 2;
 pub const UDP_STATE_SATURATION_POLICY_FAIL_CLOSED: u32 = 0;
 pub const UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT: u64 = 300_000_000_000;
+pub const REDIRECT_TRACK_ABI_VERSION: u8 = 2;
 pub const LINK_HDR_LEN_ETHERNET: u32 = 14;
 
 #[unsafe(no_mangle)]
@@ -266,6 +303,14 @@ pub fn param_udp_state_idle_timeout_ns() -> u64 {
 #[inline(always)]
 pub fn param_udp_state_saturation_policy() -> u32 {
     unsafe { core::ptr::addr_of!(PARAM.udp_state_saturation_policy).read_volatile() }
+}
+
+#[inline(always)]
+pub fn param_redirect_generation() -> u64 {
+    let control_plane_pid =
+        unsafe { core::ptr::addr_of!(PARAM.control_plane_pid).read_volatile() } as u64;
+    let dae0_ifindex = unsafe { core::ptr::addr_of!(PARAM.dae0_ifindex).read_volatile() } as u64;
+    (control_plane_pid << 32) | dae0_ifindex
 }
 
 #[inline(always)]

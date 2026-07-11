@@ -212,6 +212,10 @@
       "name": "bpfRedirectEntry",
       "offsets": [
         {
+          "field": "abi_version",
+          "offset": 18
+        },
+        {
           "field": "dmac",
           "offset": 10
         },
@@ -235,8 +239,8 @@
       "size": 20
     },
     {
-      "align": 1,
-      "name": "bpfRedirectTuple",
+      "align": 8,
+      "name": "bpfRedirectKey",
       "offsets": [
         {
           "field": "dip",
@@ -245,9 +249,29 @@
         {
           "field": "sip",
           "offset": 0
+        },
+        {
+          "field": "sport",
+          "offset": 32
+        },
+        {
+          "field": "dport",
+          "offset": 34
+        },
+        {
+          "field": "l4proto",
+          "offset": 36
+        },
+        {
+          "field": "abi_version",
+          "offset": 37
+        },
+        {
+          "field": "generation",
+          "offset": 40
         }
       ],
-      "size": 32
+      "size": 48
     },
     {
       "align": 4,
@@ -362,6 +386,7 @@
       "size": 56
     }
   ],
+  "redirect_track_abi_version": 2,
   "task_comm_len": 16,
   "tproxy_mark": 134217728
 }

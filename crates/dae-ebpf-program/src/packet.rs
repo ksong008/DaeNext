@@ -2,7 +2,7 @@ use core::{ffi::c_void, mem, ptr};
 
 use aya_ebpf::bindings::__sk_buff;
 
-use crate::abi::{BpfIpBytes, BpfRedirectTuple, BpfTuplesKey};
+use crate::abi::{BpfIpBytes, BpfTuplesKey};
 use crate::helpers;
 
 pub const ETH_HLEN: u32 = 14;
@@ -480,83 +480,5 @@ pub unsafe fn build_sock_tuple(info: *const ParsedPacket, tuple: *mut BpfSockTup
             (*tuple).ipv6.dport = (*info).dport;
             mem::size_of::<BpfSockTupleIpv6>() as u32
         }
-    }
-}
-
-#[inline(always)]
-pub unsafe fn redirect_tuple_from_forward_packet(
-    info: *const ParsedPacket,
-    tuple: *mut BpfRedirectTuple,
-) {
-    unsafe {
-        ptr::write(
-            tuple,
-            BpfRedirectTuple {
-                sip: BpfIpBytes::zeroed(),
-                dip: BpfIpBytes::zeroed(),
-            },
-        );
-        if (*info).is_ipv4 != 0 {
-            copy4(
-                ptr::addr_of_mut!((*tuple).sip.u6_addr8[12]),
-                ptr::addr_of!((*info).sip.u6_addr8[12]),
-            );
-            copy4(
-                ptr::addr_of_mut!((*tuple).dip.u6_addr8[12]),
-                ptr::addr_of!((*info).dip.u6_addr8[12]),
-            );
-        } else {
-            copy_ip(ptr::addr_of_mut!((*tuple).sip), ptr::addr_of!((*info).sip));
-            copy_ip(ptr::addr_of_mut!((*tuple).dip), ptr::addr_of!((*info).dip));
-        }
-    }
-}
-
-#[inline(always)]
-pub unsafe fn redirect_tuple_from_return_packet(
-    skb: *mut __sk_buff,
-    tuple: *mut BpfRedirectTuple,
-) -> bool {
-    unsafe {
-        ptr::write(
-            tuple,
-            BpfRedirectTuple {
-                sip: BpfIpBytes::zeroed(),
-                dip: BpfIpBytes::zeroed(),
-            },
-        );
-    }
-    let network_offset = ETH_HLEN;
-    let proto = unsafe { (*skb).protocol };
-    if proto == ETH_P_IP_NETWORK {
-        unsafe {
-            load_bytes(
-                skb,
-                network_offset + IPV4_DADDR_OFFSET as u32,
-                ptr::addr_of_mut!((*tuple).sip.u6_addr8[12]).cast::<c_void>(),
-                4,
-            ) && load_bytes(
-                skb,
-                network_offset + IPV4_SADDR_OFFSET as u32,
-                ptr::addr_of_mut!((*tuple).dip.u6_addr8[12]).cast::<c_void>(),
-                4,
-            )
-        }
-    } else if proto == ETH_P_IPV6_NETWORK {
-        unsafe {
-            load_bytes(
-                skb,
-                network_offset + IPV6_DADDR_OFFSET as u32,
-                ptr::addr_of_mut!((*tuple).sip.u6_addr8).cast::<c_void>(),
-                16,
-            ) && load_bytes(
-                skb,
-                network_offset + IPV6_SADDR_OFFSET as u32,
-                ptr::addr_of_mut!((*tuple).dip.u6_addr8).cast::<c_void>(),
-                16,
-            )
-        }
-    } else {
-        false
     }
 }

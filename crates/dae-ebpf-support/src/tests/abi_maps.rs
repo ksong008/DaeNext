@@ -11,6 +11,10 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
         fixture["max_match_set_len"]["value"].as_u64().unwrap() as usize
     );
     assert_eq!(TPROXY_MARK, fixture["tproxy_mark"].as_u64().unwrap() as u32);
+    assert_eq!(
+        REDIRECT_TRACK_ABI_VERSION,
+        fixture["redirect_track_abi_version"].as_u64().unwrap() as u8
+    );
 
     assert_layout::<BpfDaeParam>(&fixture, "bpfDaeParam", 48, 8);
     assert_offset(
@@ -79,7 +83,31 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
         "link_layer",
         offset_of!(BpfRedirectEntry, link_layer),
     );
-    assert_layout::<BpfRedirectTuple>(&fixture, "bpfRedirectTuple", 32, 1);
+    assert_offset(
+        &fixture,
+        "bpfRedirectEntry",
+        "abi_version",
+        offset_of!(BpfRedirectEntry, abi_version),
+    );
+    assert_layout::<BpfRedirectKey>(&fixture, "bpfRedirectKey", 48, 8);
+    assert_offset(
+        &fixture,
+        "bpfRedirectKey",
+        "sport",
+        offset_of!(BpfRedirectKey, sport),
+    );
+    assert_offset(
+        &fixture,
+        "bpfRedirectKey",
+        "l4proto",
+        offset_of!(BpfRedirectKey, l4proto),
+    );
+    assert_offset(
+        &fixture,
+        "bpfRedirectKey",
+        "generation",
+        offset_of!(BpfRedirectKey, generation),
+    );
     assert_layout::<BpfRoutingResult>(&fixture, "bpfRoutingResult", 36, 4);
     assert_offset(
         &fixture,
@@ -208,6 +236,7 @@ pub(super) fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explici
     let abi = bpf_abi_contract();
     assert_eq!(abi.dae_param_size, size_of::<BpfDaeParam>());
     assert_eq!(abi.dae_param_abi_version, BPF_DAE_PARAM_ABI_VERSION);
+    assert_eq!(abi.redirect_track_abi_version, REDIRECT_TRACK_ABI_VERSION);
     assert_eq!(abi.task_comm_len, TASK_COMM_LEN);
     assert_eq!(abi.max_match_set_len, MAX_MATCH_SET_LEN);
     assert_eq!(abi.tproxy_mark, TPROXY_MARK);
@@ -243,8 +272,27 @@ pub(super) fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explici
     assert_eq!(lpm_array.role, RuntimeMapRole::InnerMapCatalog);
     assert!(!lpm_array.reusable_pin);
     assert!(lpm_array.spec.pinned_by_name());
+    let redirect_track = maps
+        .iter()
+        .find(|entry| entry.spec.name == "redirect_track")
+        .unwrap();
+    assert_eq!(redirect_track.role, RuntimeMapRole::Tracking);
+    assert!(!redirect_track.reusable_pin);
+    assert!(!redirect_track.spec.pinned_by_name());
+    assert_eq!(
+        redirect_track.spec.key_size,
+        size_of::<BpfRedirectKey>() as u32
+    );
     assert_eq!(MAP_USAGE_WARNING_RATIO, 0.70);
     assert_eq!(MAP_USAGE_PRESSURE_RATIO, 0.90);
+}
+
+#[test]
+pub(super) fn redirect_generation_changes_with_process_or_runtime_interface_identity() {
+    let baseline = redirect_runtime_generation(11, 22);
+    assert_ne!(baseline, redirect_runtime_generation(12, 22));
+    assert_ne!(baseline, redirect_runtime_generation(11, 23));
+    assert_eq!(baseline, (11_u64 << 32) | 22);
 }
 
 #[test]

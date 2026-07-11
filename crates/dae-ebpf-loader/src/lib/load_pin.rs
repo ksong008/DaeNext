@@ -19,6 +19,8 @@ pub(super) fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
         mm_struct_arg_start_offset: 0,
     });
     let map_pin_root = options.pin_root.join("maps");
+    let redirect_generation =
+        dae_ebpf_support::redirect_runtime_generation(param.control_plane_pid, param.dae0_ifindex);
     let mut loaded = match load_aya_userspace_object_bytes(AyaUserspaceBytesLoaderOptions {
         object_label: EMBEDDED_OBJECT_LABEL,
         object_data: embedded_native_aya_object(),
@@ -71,6 +73,8 @@ pub(super) fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
                 "abi_version": param.abi_version,
                 "udp_state_saturation_policy": param.udp_state_saturation_policy,
                 "udp_state_idle_timeout_ns": param.udp_state_idle_timeout_ns.to_string(),
+                "redirect_track_abi_version": dae_ebpf_support::REDIRECT_TRACK_ABI_VERSION,
+                "redirect_track_generation": redirect_generation.to_string(),
             },
             "native_runtime_pinning_ready": true,
         })
