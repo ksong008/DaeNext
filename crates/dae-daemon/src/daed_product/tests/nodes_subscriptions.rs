@@ -1,6 +1,112 @@
 use super::*;
 
 #[test]
+pub(crate) fn subscription_http_request_formats_authority_and_accepts_compression() {
+    let ipv4 = url::Url::parse("http://127.0.0.1:18080/list").unwrap();
+    let ipv4_request = subscription_http_request(&ipv4).unwrap();
+    assert!(ipv4_request.contains("\r\nHost: 127.0.0.1:18080\r\n"));
+    assert!(ipv4_request.contains("\r\nAccept-Encoding: gzip, br\r\n"));
+
+    let ipv6 = url::Url::parse("http://[2001:db8::1]:18080/list").unwrap();
+    let ipv6_request = subscription_http_request(&ipv6).unwrap();
+    assert!(ipv6_request.contains("\r\nHost: [2001:db8::1]:18080\r\n"));
+}
+
+#[test]
+pub(crate) fn subscription_http_response_decodes_gzip_and_brotli_with_limits() {
+    let content = b"socks://127.0.0.1:1080#compressed";
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gzip.write_all(content).unwrap();
+    let gzip = gzip.finish().unwrap();
+    let mut gzip_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+        gzip.len()
+    )
+    .into_bytes();
+    gzip_response.extend_from_slice(&gzip);
+    assert_eq!(
+        http_response_body_with_limit(&gzip_response, 1024).unwrap(),
+        String::from_utf8_lossy(content)
+    );
+
+    let mut brotli = Vec::new();
+    {
+        let mut writer = brotli::CompressorWriter::new(&mut brotli, 4096, 5, 22);
+        writer.write_all(content).unwrap();
+    }
+    let mut brotli_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: {}\r\n\r\n",
+        brotli.len()
+    )
+    .into_bytes();
+    brotli_response.extend_from_slice(&brotli);
+    assert_eq!(
+        http_response_body_with_limit(&brotli_response, 1024).unwrap(),
+        String::from_utf8_lossy(content)
+    );
+
+    assert!(http_response_body_with_limit(&gzip_response, 8).is_err());
+}
+
+#[test]
+pub(crate) fn subscription_http_fetch_follows_bounded_relative_redirects() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let mut requests = Vec::new();
+        for index in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while find_subsequence(&request, b"\r\n\r\n").is_none() {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            requests.push(String::from_utf8(request).unwrap());
+            if index == 0 {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .unwrap();
+            } else {
+                let body = b"socks://127.0.0.1:1080#redirected";
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                stream.write_all(body).unwrap();
+            }
+        }
+        requests
+    });
+
+    let fetched =
+        fetch_subscription_content(Path::new("/tmp"), None, &format!("http://{address}/start"))
+            .unwrap();
+    assert_eq!(fetched, "socks://127.0.0.1:1080#redirected");
+    let requests = server.join().unwrap();
+    assert!(requests[0].starts_with("GET /start HTTP/1.1\r\n"));
+    assert!(requests[1].starts_with("GET /final HTTP/1.1\r\n"));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.contains(&format!("\r\nHost: {address}\r\n")))
+    );
+}
+
+#[test]
 pub(crate) fn subscription_http_body_limit_is_enforced_without_preallocating_limit() {
     let body = b"vmess://small-node#ok\n";
     let mut response = Vec::from(&b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"[..]);

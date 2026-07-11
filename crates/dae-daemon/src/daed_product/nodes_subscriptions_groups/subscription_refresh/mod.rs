@@ -10,7 +10,7 @@ pub(crate) use self::content::subscription_links_from_content;
 #[cfg(test)]
 pub(crate) use self::http::{
     decode_chunked_body, decode_chunked_body_with_limit, http_response_body_with_limit,
-    read_subscription_http_response_with_limit,
+    read_subscription_http_response_with_limit, subscription_http_request,
 };
 #[cfg(test)]
 pub(crate) use self::node_sync::replace_subscription_nodes;
