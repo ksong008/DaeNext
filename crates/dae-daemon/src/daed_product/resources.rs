@@ -1,6 +1,8 @@
 use super::*;
 mod sections;
 pub(super) use self::sections::*;
+mod selection;
+pub(super) use self::selection::*;
 mod global_render;
 pub(super) use self::global_render::*;
 mod global_merge;
