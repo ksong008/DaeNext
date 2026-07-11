@@ -5,6 +5,8 @@ use std::sync::Mutex;
 
 use dae_dns::{DnsCacheEntry, DnsCacheKey, DnsCacheStore, DnsPacketView, DnsResponseCachePlan};
 use dae_routing::RoutingMatcher;
+#[cfg(test)]
+use dae_runtime_control::DomainRoutingStateEntry;
 use dae_runtime_control::{
     DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingOwner, ip_to_key,
 };
@@ -13,6 +15,8 @@ use super::{TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS, unix_now};
 
 mod maintenance;
 mod reload;
+#[cfg(test)]
+mod tests;
 pub(in crate::production_runtime_owner) use self::maintenance::ResidentDnsDomainRoutingMaintenanceHandle;
 #[cfg(test)]
 pub(super) use self::reload::build_resident_dns_domain_routing_update_plan_from_entry;
@@ -24,7 +28,7 @@ const TCP_SNIFF_OWNER_PREFIX: &str = "tcp-sniff";
 
 #[cfg(test)]
 type ResidentDomainRoutingMapApply =
-    for<'event> fn(&mut DomainRoutingOwner, u32, DomainRoutingDnsEvent<'event>) -> io::Result<()>;
+    fn(u32, &[DomainRoutingStateEntry], &[DomainRoutingIpKey]) -> io::Result<()>;
 
 #[derive(Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsDomainRouting {
@@ -33,7 +37,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsDo
     state: Mutex<ResidentDnsDomainRoutingState>,
     maintenance: maintenance::ResidentDnsDomainRoutingMaintenanceSignal,
     #[cfg(test)]
-    test_apply_event: Option<ResidentDomainRoutingMapApply>,
+    test_apply_map: Option<ResidentDomainRoutingMapApply>,
 }
 
 #[derive(Debug)]
@@ -82,7 +86,7 @@ impl ResidentDnsDomainRouting {
             }),
             maintenance: maintenance::ResidentDnsDomainRoutingMaintenanceSignal::default(),
             #[cfg(test)]
-            test_apply_event: None,
+            test_apply_map: None,
         }
     }
 
@@ -104,15 +108,43 @@ impl ResidentDnsDomainRouting {
         else {
             return Ok(());
         };
-        self.apply_event(
-            &mut state.owner,
-            DomainRoutingDnsEvent::from_keys(
+        let capacity_eviction = state
+            .cache
+            .capacity_eviction_key_for_insert(&plan.key)
+            .map(|key| {
+                let entry = state.cache.remove_capacity_eviction(&key).ok_or_else(|| {
+                    "resident DNS domain routing capacity eviction disappeared".to_owned()
+                })?;
+                Ok::<_, String>((key, entry))
+            })
+            .transpose()?;
+        let apply_result = if let Some((_, evicted)) = capacity_eviction.as_ref() {
+            let mut events = Vec::with_capacity(2);
+            if !evicted.route_owner_key.is_empty() {
+                events.push(DomainRoutingDnsEvent::remove(&evicted.route_owner_key));
+            }
+            events.push(DomainRoutingDnsEvent::from_keys(
                 &plan.entry.route_owner_key,
                 &plan.entry.domain_bitmap,
                 plan.ips.iter().copied(),
-            ),
-        )
-        .map_err(|err| format!("apply resident DNS domain routing response: {err}"))?;
+            ));
+            self.apply_events(&mut state.owner, events)
+        } else {
+            self.apply_event(
+                &mut state.owner,
+                DomainRoutingDnsEvent::from_keys(
+                    &plan.entry.route_owner_key,
+                    &plan.entry.domain_bitmap,
+                    plan.ips.iter().copied(),
+                ),
+            )
+        };
+        if let Err(err) = apply_result {
+            if let Some((key, entry)) = capacity_eviction {
+                state.cache.restore_capacity_eviction(key, entry);
+            }
+            return Err(format!("apply resident DNS domain routing response: {err}"));
+        }
         state
             .cache
             .insert_without_route_owner_key(now_unix, plan.key, plan.entry);
@@ -237,22 +269,38 @@ impl ResidentDnsDomainRouting {
         event: DomainRoutingDnsEvent<'_>,
     ) -> io::Result<()> {
         #[cfg(test)]
-        if let Some(apply_event) = self.test_apply_event {
-            return apply_event(owner, self.map_id, event);
+        if let Some(apply_map) = self.test_apply_map {
+            return owner
+                .apply_dns_event_with(self.map_id, event, apply_map)
+                .map(|_| ());
         }
         owner.apply_dns_event_by_id(self.map_id, event).map(|_| ())
+    }
+
+    fn apply_events<'event>(
+        &self,
+        owner: &mut DomainRoutingOwner,
+        events: impl IntoIterator<Item = DomainRoutingDnsEvent<'event>>,
+    ) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(apply_map) = self.test_apply_map {
+            return owner
+                .apply_dns_events_with(self.map_id, events, apply_map)
+                .map(|_| ());
+        }
+        owner
+            .apply_dns_events_by_id(self.map_id, events)
+            .map(|_| ())
     }
 }
 
 #[cfg(test)]
 fn apply_resident_domain_routing_event_in_memory(
-    owner: &mut DomainRoutingOwner,
-    map_id: u32,
-    event: DomainRoutingDnsEvent<'_>,
+    _: u32,
+    _: &[DomainRoutingStateEntry],
+    _: &[DomainRoutingIpKey],
 ) -> io::Result<()> {
-    owner
-        .apply_dns_event_with(map_id, event, |_, _, _| Ok(()))
-        .map(|_| ())
+    Ok(())
 }
 
 pub(super) fn build_resident_dns_domain_routing_update_plan(

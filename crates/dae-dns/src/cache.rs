@@ -262,6 +262,24 @@ impl DnsCacheStore {
         self.entries.remove(key)
     }
 
+    pub fn capacity_eviction_key_for_insert(&self, key: &DnsCacheKey) -> Option<DnsCacheKey> {
+        if self.entries.contains_key(key) || self.entries.len() < self.capacity {
+            return None;
+        }
+        self.entries.oldest_key()
+    }
+
+    pub fn remove_capacity_eviction(&mut self, key: &DnsCacheKey) -> Option<DnsCacheEntry> {
+        let entry = self.entries.remove(key)?;
+        self.stats.remove_callback_total = self.stats.remove_callback_total.saturating_add(1);
+        Some(entry)
+    }
+
+    pub fn restore_capacity_eviction(&mut self, key: DnsCacheKey, entry: DnsCacheEntry) {
+        self.entries.insert(key, entry);
+        self.stats.remove_callback_total = self.stats.remove_callback_total.saturating_sub(1);
+    }
+
     pub fn remove_packet_question(
         &mut self,
         question: &DnsPacketQuestionView<'_>,
@@ -511,6 +529,28 @@ mod tests {
         assert!(store.contains_key(&key));
         assert_eq!(store.next_expiry_unix(), Some(now - 1));
         assert_eq!(store.stats().expired_removal_total, 0);
+        assert_eq!(store.stats().remove_callback_total, 0);
+    }
+
+    #[test]
+    fn capacity_eviction_can_be_committed_or_rolled_back() {
+        let now = 1_700_000_000_i64;
+        let first = DnsCacheKey::new("first.example.", 1, 1);
+        let second = DnsCacheKey::new("second.example.", 1, 1);
+        let mut store = DnsCacheStore::new(1);
+        store.insert(now, first.clone(), DnsCacheEntry::new(now + 60, now + 60));
+
+        let candidate = store
+            .capacity_eviction_key_for_insert(&second)
+            .expect("full cache must select an eviction candidate");
+        assert_eq!(candidate, first);
+        assert!(store.contains_key(&first));
+        let removed = store.remove_capacity_eviction(&candidate).unwrap();
+        assert!(!store.contains_key(&first));
+        assert_eq!(store.stats().remove_callback_total, 1);
+
+        store.restore_capacity_eviction(candidate, removed);
+        assert!(store.contains_key(&first));
         assert_eq!(store.stats().remove_callback_total, 0);
     }
 }
