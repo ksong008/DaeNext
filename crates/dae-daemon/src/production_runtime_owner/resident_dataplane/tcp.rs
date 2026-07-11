@@ -110,6 +110,7 @@ use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::runtime;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time;
 
 mod shadowsocks_stream;
@@ -144,6 +145,10 @@ mod proxy_fetch;
 pub(super) use self::proxy_fetch::*;
 mod accept_loop;
 pub(super) use self::accept_loop::*;
+mod admission;
+use self::admission::*;
+mod executor;
+pub(super) use self::executor::*;
 mod vless_handlers;
 use self::vless_handlers::*;
 mod proxy_dispatch;

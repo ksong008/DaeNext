@@ -2,7 +2,10 @@ use super::*;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentRuntimeResourceConfig {
+    pub(crate) tcp_runtime_profile: ResidentTcpRuntimeProfileSelection,
     pub(crate) tcp_flow_stack_bytes: EffectiveResidentUsize,
+    pub(crate) tcp_runtime_workers: EffectiveResidentUsize,
+    pub(crate) tcp_connection_limit: EffectiveResidentUsize,
     pub(crate) udp_session_limit: EffectiveResidentUsize,
     pub(crate) udp_session_queue_depth: EffectiveResidentUsize,
     pub(crate) udp_socket_buffer_bytes: EffectiveResidentUsize,
@@ -17,7 +20,17 @@ pub(crate) struct ResidentRuntimeResourceConfig {
 impl ResidentRuntimeResourceConfig {
     pub(crate) fn from_config(config: &Config) -> Self {
         let global = &config.global;
+        let tcp_runtime_profile = ResidentTcpRuntimeProfileSelection::selected();
+        let available_parallelism = std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(1);
+        let tcp_runtime_workers_default = tcp_runtime_profile
+            .profile
+            .tcp_runtime_workers_default(available_parallelism);
+        let tcp_connection_limit_default =
+            tcp_runtime_profile.profile.tcp_connection_limit_default();
         Self {
+            tcp_runtime_profile,
             tcp_flow_stack_bytes: effective_resident_usize(
                 "resident_tcp_flow_stack_bytes",
                 Some(RESIDENT_TCP_FLOW_STACK_BYTES_ENV),
@@ -26,6 +39,24 @@ impl ResidentRuntimeResourceConfig {
                 RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
                 RESIDENT_TCP_FLOW_STACK_BYTES_MIN,
                 RESIDENT_TCP_FLOW_STACK_BYTES_MAX,
+            ),
+            tcp_runtime_workers: effective_resident_usize(
+                "resident_tcp_runtime_workers",
+                Some(RESIDENT_TCP_RUNTIME_WORKERS_ENV),
+                None,
+                global.resident_tcp_runtime_workers,
+                tcp_runtime_workers_default,
+                RESIDENT_TCP_RUNTIME_WORKERS_MIN,
+                RESIDENT_TCP_RUNTIME_WORKERS_MAX,
+            ),
+            tcp_connection_limit: effective_resident_usize(
+                "resident_tcp_connection_limit",
+                Some(RESIDENT_TCP_CONNECTION_LIMIT_ENV),
+                None,
+                global.resident_tcp_connection_limit,
+                tcp_connection_limit_default,
+                RESIDENT_TCP_CONNECTION_LIMIT_MIN,
+                RESIDENT_TCP_CONNECTION_LIMIT_MAX,
             ),
             udp_session_limit: effective_resident_usize(
                 "resident_udp_session_limit",
@@ -116,6 +147,13 @@ impl ResidentRuntimeResourceConfig {
             "schemaVersion": 1,
             "tcpFlow": {
                 "stackBytes": self.tcp_flow_stack_bytes.json(),
+                "stackScope": "resident TCP runtime OS threads; Tokio tasks do not receive per-flow stacks",
+            },
+            "tcpRuntime": {
+                "profile": self.tcp_runtime_profile.json(),
+                "workers": self.tcp_runtime_workers.json(),
+                "connectionLimit": self.tcp_connection_limit.json(),
+                "admission": "active-flow semaphore before accept; excess connections remain in the kernel listen backlog",
             },
             "udpSessions": {
                 "limit": self.udp_session_limit.json(),

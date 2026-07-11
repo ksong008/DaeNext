@@ -18,8 +18,14 @@ pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "RESIDENT_TCP_FLOW_ST
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_LEGACY_ENV: &str =
     "DAE_RESIDENT_TCP_FLOW_STACK_BYTES";
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
-pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MIN: usize = 128 * 1024;
+pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MIN: usize = 512 * 1024;
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
+pub(crate) const RESIDENT_TCP_RUNTIME_WORKERS_ENV: &str = "RESIDENT_TCP_RUNTIME_WORKERS";
+pub(crate) const RESIDENT_TCP_RUNTIME_WORKERS_MIN: usize = 1;
+pub(crate) const RESIDENT_TCP_RUNTIME_WORKERS_MAX: usize = 64;
+pub(crate) const RESIDENT_TCP_CONNECTION_LIMIT_ENV: &str = "RESIDENT_TCP_CONNECTION_LIMIT";
+pub(crate) const RESIDENT_TCP_CONNECTION_LIMIT_MIN: usize = 16;
+pub(crate) const RESIDENT_TCP_CONNECTION_LIMIT_MAX: usize = 65_536;
 pub(crate) const RESIDENT_UDP_SESSION_LIMIT_ENV: &str = "RESIDENT_UDP_SESSION_LIMIT";
 pub(crate) const RESIDENT_UDP_SESSION_LIMIT_LEGACY_ENV: &str = "DAE_RESIDENT_UDP_PACKET_WORKERS";
 pub(crate) const RESIDENT_UDP_SESSION_LIMIT_DEFAULT: usize = 512;
@@ -75,6 +81,25 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "default": RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
                 "min": RESIDENT_TCP_FLOW_STACK_BYTES_MIN,
                 "max": RESIDENT_TCP_FLOW_STACK_BYTES_MAX,
+            },
+            "stackScope": "resident TCP runtime OS threads; Tokio tasks do not receive per-flow stacks",
+        },
+        "tcpRuntime": {
+            "profile": resident_tcp_runtime_profile_contract(),
+            "workers": {
+                "configKey": "resident_tcp_runtime_workers",
+                "env": RESIDENT_TCP_RUNTIME_WORKERS_ENV,
+                "defaultPolicy": "available_parallelism clamped by the selected resident runtime profile",
+                "min": RESIDENT_TCP_RUNTIME_WORKERS_MIN,
+                "max": RESIDENT_TCP_RUNTIME_WORKERS_MAX,
+            },
+            "connectionLimit": {
+                "configKey": "resident_tcp_connection_limit",
+                "env": RESIDENT_TCP_CONNECTION_LIMIT_ENV,
+                "defaultPolicy": "selected resident runtime profile",
+                "min": RESIDENT_TCP_CONNECTION_LIMIT_MIN,
+                "max": RESIDENT_TCP_CONNECTION_LIMIT_MAX,
+                "backpressure": "kernel TCP listen backlog; no unbounded user-space flow queue",
             },
         },
         "udpSessions": {

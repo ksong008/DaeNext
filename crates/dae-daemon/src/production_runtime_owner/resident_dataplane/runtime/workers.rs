@@ -289,6 +289,11 @@ pub(crate) fn start_resident_dataplane_workers(
         None => None,
     };
     let tcp_flow_stack_bytes = resource_config.tcp_flow_stack_bytes.value();
+    let tcp_runtime_config = ResidentTcpRuntimeConfig::new(
+        resource_config.tcp_runtime_workers.value(),
+        resource_config.tcp_connection_limit.value(),
+        tcp_flow_stack_bytes,
+    );
     let udp_session_limit = resource_config.udp_session_limit.value();
     let udp_session_queue_depth = resource_config.udp_session_queue_depth.value();
     {
@@ -297,17 +302,22 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
-        owner.spawn_thread("tcp-accept-loop", "tcp-accept", move || {
-            resident_tcp_accept_loop(
-                tcp_listener,
-                tcp_router,
-                stop,
-                event_file,
-                event_lock,
-                metrics,
-                tcp_flow_stack_bytes,
-            )
-        });
+        owner.spawn_thread_with_stack(
+            "tcp-accept-loop",
+            "tcp-accept",
+            tcp_flow_stack_bytes,
+            move || {
+                resident_tcp_accept_loop(
+                    tcp_listener,
+                    tcp_router,
+                    stop,
+                    event_file,
+                    event_lock,
+                    metrics,
+                    tcp_runtime_config,
+                )
+            },
+        );
     }
     {
         let stop = owner.stop_handle();
@@ -413,6 +423,15 @@ pub(crate) fn start_resident_dataplane_workers(
     start_map.insert(
         "tcp_flow_stack_bytes_env".to_owned(),
         json!(RESIDENT_TCP_FLOW_STACK_BYTES_ENV),
+    );
+    start_map.insert("tcp_runtime".to_owned(), tcp_runtime_config.json());
+    start_map.insert(
+        "tcp_runtime_workers_env".to_owned(),
+        json!(RESIDENT_TCP_RUNTIME_WORKERS_ENV),
+    );
+    start_map.insert(
+        "tcp_connection_limit_env".to_owned(),
+        json!(RESIDENT_TCP_CONNECTION_LIMIT_ENV),
     );
     start_map.insert("udp_session_limit".to_owned(), json!(udp_session_limit));
     start_map.insert(

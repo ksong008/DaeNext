@@ -606,6 +606,18 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         "RESIDENT_TCP_FLOW_STACK_BYTES"
     );
     assert_eq!(
+        defaults["residentDataplane"]["tcpRuntime"]["profile"]["default"],
+        json!("balanced")
+    );
+    assert_eq!(
+        defaults["residentDataplane"]["tcpRuntime"]["workers"]["env"],
+        json!("RESIDENT_TCP_RUNTIME_WORKERS")
+    );
+    assert_eq!(
+        defaults["residentDataplane"]["tcpRuntime"]["connectionLimit"]["env"],
+        json!("RESIDENT_TCP_CONNECTION_LIMIT")
+    );
+    assert_eq!(
         defaults["residentDataplane"]["udpSessions"]["queueDepth"]["default"],
         json!(128)
     );
@@ -818,6 +830,8 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
         "residentUdpSessionLimit": 128,
         "residentUdpSessionQueueDepth": 64,
         "residentTcpFlowStackBytes": 1048576,
+        "residentTcpRuntimeWorkers": 3,
+        "residentTcpConnectionLimit": 768,
         "residentEventQueueDepth": 8192,
         "residentManualProbeConcurrency": 12,
         "residentHealthCheckConcurrency": 4,
@@ -838,6 +852,8 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
     assert!(rendered.contains("wan_interface:'auto,eth0'"));
     assert!(rendered.contains("enable_local_tcp_fast_redirect:'true'"));
     assert!(rendered.contains("resident_udp_session_limit:'128'"));
+    assert!(rendered.contains("resident_tcp_runtime_workers:'3'"));
+    assert!(rendered.contains("resident_tcp_connection_limit:'768'"));
     assert!(rendered.contains("resident_health_check_concurrency:'4'"));
     assert!(rendered.contains("http_queue:'512'"));
     assert!(rendered.contains("allocator_idle_reclaim_sample_interval:'2m'"));
@@ -856,6 +872,8 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
     assert!(config.global.disable_waiting_network);
     assert!(config.global.enable_local_tcp_fast_redirect);
     assert_eq!(config.global.resident_udp_session_limit, Some(128));
+    assert_eq!(config.global.resident_tcp_runtime_workers, Some(3));
+    assert_eq!(config.global.resident_tcp_connection_limit, Some(768));
     assert_eq!(config.global.resident_health_check_concurrency, Some(4));
     assert_eq!(config.global.http_queue, Some(512));
     assert_eq!(

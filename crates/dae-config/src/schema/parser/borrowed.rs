@@ -77,6 +77,12 @@ pub(crate) fn parse_global(section: &Section) -> Result<Global, String> {
             "resident_tcp_flow_stack_bytes" => {
                 global.resident_tcp_flow_stack_bytes = Some(decode_param(param, "uint64")?)
             }
+            "resident_tcp_runtime_workers" => {
+                global.resident_tcp_runtime_workers = Some(decode_param(param, "uint64")?)
+            }
+            "resident_tcp_connection_limit" => {
+                global.resident_tcp_connection_limit = Some(decode_param(param, "uint64")?)
+            }
             "resident_dns_upstream_refresh_seconds" => {
                 global.resident_dns_upstream_refresh_seconds = Some(decode_param(param, "uint64")?)
             }

@@ -7,7 +7,7 @@ pub(crate) fn resident_tcp_accept_loop(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
-    flow_stack_bytes: usize,
+    runtime_config: ResidentTcpRuntimeConfig,
 ) {
     if let Err(err) = listener.set_nonblocking(true) {
         append_event(
@@ -17,11 +17,7 @@ pub(crate) fn resident_tcp_accept_loop(
         );
         return;
     }
-    let runtime = match runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-    {
+    let runtime = match build_resident_tcp_runtime(runtime_config) {
         Ok(runtime) => runtime,
         Err(err) => {
             append_event(
@@ -39,7 +35,7 @@ pub(crate) fn resident_tcp_accept_loop(
         event_file,
         event_lock,
         metrics,
-        flow_stack_bytes,
+        runtime_config,
     ));
 }
 
@@ -50,7 +46,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
-    flow_stack_bytes: usize,
+    runtime_config: ResidentTcpRuntimeConfig,
 ) {
     let listener = match TokioTcpListener::from_std(listener) {
         Ok(listener) => listener,
@@ -63,18 +59,41 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             return;
         }
     };
+    let admission =
+        ResidentTcpAdmission::new(runtime_config.connection_limit, Arc::clone(&metrics));
     let mut event = json!({
             "event": "tcp_worker_started",
             "proxy_count": router.proxy_count(),
             "dial_mode": router.dial_mode_name(),
-            "flowStackBytes": flow_stack_bytes,
+            "flowStackBytes": runtime_config.worker_stack_bytes,
+            "flowStackScope": "resident TCP runtime OS threads; not Tokio task stacks",
+            "runtime": runtime_config.json(),
     });
     append_tcp_execution_fields(&mut event, "async-accept-direct");
     event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
     append_event(&event_file, &event_lock, event);
     while !stop.load(Ordering::Relaxed) {
+        let permit = match time::timeout(RESIDENT_TCP_ACCEPT_SLEEP, admission.acquire()).await {
+            Err(_) => {
+                admission.record_capacity_wait();
+                continue;
+            }
+            Ok(Ok(permit)) => permit,
+            Ok(Err(err)) => {
+                append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({"event": "tcp_admission_failed", "error": err}),
+                );
+                break;
+            }
+        };
+        if stop.load(Ordering::Relaxed) {
+            drop(permit);
+            break;
+        }
         match time::timeout(RESIDENT_TCP_ACCEPT_SLEEP, listener.accept()).await {
-            Err(_) => {}
+            Err(_) => drop(permit),
             Ok(Ok((stream, peer))) => {
                 spawn_async_tcp_flow(
                     stream,
@@ -84,9 +103,11 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                     event_file.clone(),
                     Arc::clone(&event_lock),
                     Arc::clone(&metrics),
+                    admission.admitted(permit),
                 );
             }
             Ok(Err(err)) => {
+                drop(permit);
                 append_event(
                     &event_file,
                     &event_lock,
@@ -104,7 +125,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_async_tcp_flow(
+fn spawn_async_tcp_flow(
     stream: TokioTcpStream,
     peer: SocketAddr,
     router: Arc<ResidentTcpRouter>,
@@ -112,8 +133,10 @@ pub(crate) fn spawn_async_tcp_flow(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    admission: ResidentTcpAdmissionGuard,
 ) {
     tokio::spawn(async move {
+        let _admission = admission;
         match handle_tcp_connection_async_or_handoff(
             stream,
             peer,

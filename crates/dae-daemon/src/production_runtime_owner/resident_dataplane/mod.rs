@@ -27,7 +27,7 @@ pub(crate) use self::events::{
 use self::events::{append_event, path_string};
 use self::plan::{build_resident_dataplane_plan, build_resident_dataplane_plan_with_geodata};
 use self::probe::*;
-use self::tcp::{ResidentTcpRouter, resident_tcp_accept_loop};
+use self::tcp::{ResidentTcpRouter, ResidentTcpRuntimeConfig, resident_tcp_accept_loop};
 use self::udp::{
     probe_resident_proxy_dns_udp_async, probe_resident_proxy_udp_async, resident_udp_loop,
     resident_udp_proxy_handler_name,
@@ -87,6 +87,9 @@ pub(crate) use self::socket_buffers::*;
 #[path = "runtime/resources.rs"]
 mod resources;
 use self::resources::*;
+#[path = "runtime/tcp_profile.rs"]
+mod tcp_profile;
+use self::tcp_profile::*;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 pub(super) use self::health_checks::*;

@@ -120,6 +120,16 @@ impl Marshaller {
             1,
         );
         self.optional_leaf(
+            "resident_tcp_runtime_workers",
+            global.resident_tcp_runtime_workers,
+            1,
+        );
+        self.optional_leaf(
+            "resident_tcp_connection_limit",
+            global.resident_tcp_connection_limit,
+            1,
+        );
+        self.optional_leaf(
             "resident_dns_upstream_refresh_seconds",
             global.resident_dns_upstream_refresh_seconds,
             1,

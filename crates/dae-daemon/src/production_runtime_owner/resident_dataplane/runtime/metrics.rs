@@ -4,6 +4,10 @@ pub(crate) struct ResidentDataplaneMetrics {
     pub(super) upload_total: AtomicU64,
     pub(super) download_total: AtomicU64,
     pub(super) active_tcp_connections: AtomicU64,
+    tcp_admission_active: AtomicU64,
+    tcp_admission_maximum_active: AtomicU64,
+    tcp_admission_accepted_total: AtomicU64,
+    tcp_admission_wait_cycles: AtomicU64,
     pub(super) active_udp_sessions: AtomicU64,
     udp_ingress_packets: AtomicU64,
     udp_ingress_drain_batches: AtomicU64,
@@ -24,6 +28,30 @@ impl ResidentDataplaneMetrics {
 
     pub(super) fn tcp_closed(&self) {
         self.active_tcp_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn tcp_admitted(&self) {
+        let active = self
+            .tcp_admission_active
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.tcp_admission_maximum_active
+            .fetch_max(active, Ordering::Relaxed);
+        self.tcp_admission_accepted_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn tcp_admission_released(&self) {
+        let _ = self.tcp_admission_active.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |active| Some(active.saturating_sub(1)),
+        );
+    }
+
+    pub(super) fn tcp_admission_waited(&self) {
+        self.tcp_admission_wait_cycles
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(super) fn udp_opened(&self) {
@@ -92,6 +120,10 @@ impl ResidentDataplaneMetrics {
             "uploadTotal": self.upload_total.load(Ordering::Relaxed),
             "downloadTotal": self.download_total.load(Ordering::Relaxed),
             "activeTcpConnections": self.active_tcp_connections.load(Ordering::Relaxed),
+            "tcpAdmissionActive": self.tcp_admission_active.load(Ordering::Relaxed),
+            "tcpAdmissionMaximumActive": self.tcp_admission_maximum_active.load(Ordering::Relaxed),
+            "tcpAdmissionAcceptedTotal": self.tcp_admission_accepted_total.load(Ordering::Relaxed),
+            "tcpAdmissionWaitCycles": self.tcp_admission_wait_cycles.load(Ordering::Relaxed),
             "activeUdpSessions": self.active_udp_sessions.load(Ordering::Relaxed),
             "udpIngressPackets": self.udp_ingress_packets.load(Ordering::Relaxed),
             "udpIngressDrainBatches": self.udp_ingress_drain_batches.load(Ordering::Relaxed),

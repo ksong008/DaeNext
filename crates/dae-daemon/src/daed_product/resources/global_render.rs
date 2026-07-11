@@ -343,6 +343,25 @@ pub(crate) fn render_global_config_text(source: &Value) -> String {
         &mut lines,
         &normalized,
         source,
+        "residentTcpRuntimeWorkers",
+        "resident_tcp_runtime_workers",
+        &["residentTcpRuntimeWorkers", "resident_tcp_runtime_workers"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "residentTcpConnectionLimit",
+        "resident_tcp_connection_limit",
+        &[
+            "residentTcpConnectionLimit",
+            "resident_tcp_connection_limit",
+        ],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
         "residentDnsUpstreamRefreshSeconds",
         "resident_dns_upstream_refresh_seconds",
         &[
