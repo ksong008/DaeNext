@@ -57,7 +57,7 @@
     },
     {
       "flags": 0,
-      "key_size": 32,
+      "key_size": 48,
       "max_entries": 65536,
       "name": "redirect_track",
       "pinning": "PinNone",

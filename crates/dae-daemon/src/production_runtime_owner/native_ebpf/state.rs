@@ -92,6 +92,9 @@ impl NativeEbpfRuntimeState {
         #[cfg(feature = "native-ebpf")]
         {
             let profile = self.load_input.as_ref().map(|input| &input.map_profile);
+            let redirect_generation = self.load_input.as_ref().map(|input| {
+                redirect_runtime_generation(input.param.control_plane_pid, input.param.dae0_ifindex)
+            });
             let udp_state_capacity = self.loaded.as_ref().and_then(|loaded| {
                 loaded
                     .report
@@ -121,6 +124,9 @@ impl NativeEbpfRuntimeState {
                     "udpStateCapacity": udp_state_capacity,
                     "udpStateIdleTimeoutNs": profile.map(|selection| selection.profile.udp_state_idle_timeout_ns().to_string()),
                     "udpStateSaturationPolicy": "fail-closed",
+                    "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
+                    "redirectTrackGeneration": redirect_generation.map(|generation| generation.to_string()),
+                    "redirectTrackMigration": "fresh-unpinned-map-per-runtime",
                     "udpStateMetrics": metrics,
                 }),
                 Some(Err(error)) => json!({
@@ -129,11 +135,15 @@ impl NativeEbpfRuntimeState {
                     "mapProfile": profile.map(|selection| selection.profile.name()),
                     "udpStateCapacity": udp_state_capacity,
                     "udpStateSaturationPolicy": "fail-closed",
+                    "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
+                    "redirectTrackGeneration": redirect_generation.map(|generation| generation.to_string()),
                 }),
                 None => json!({
                     "status": "unavailable",
                     "mapProfile": profile.map(|selection| selection.profile.name()),
                     "udpStateSaturationPolicy": "fail-closed",
+                    "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
+                    "redirectTrackGeneration": redirect_generation.map(|generation| generation.to_string()),
                 }),
             }
         }

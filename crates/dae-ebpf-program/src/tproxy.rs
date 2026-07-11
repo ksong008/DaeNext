@@ -2,12 +2,15 @@ use core::{ffi::c_void, ptr};
 
 use aya_ebpf::bindings::{__sk_buff, bpf_sock};
 
-use crate::abi::{BpfRedirectEntry, BpfRedirectTuple, BpfTuplesKey, BpfUdpConnState, TPROXY_MARK};
+use crate::abi::{
+    BpfRedirectEntry, BpfRedirectKey, BpfTuplesKey, BpfUdpConnState, REDIRECT_TRACK_ABI_VERSION,
+    TPROXY_MARK,
+};
 use crate::packet::{
     self, BpfSockTuple, ETH_HLEN, ETH_PROTO_OFFSET, ETH_SRC_OFFSET, IPPROTO_ICMPV6, IPPROTO_TCP,
     IPPROTO_UDP, NDP_REDIRECT, ParsedPacket,
 };
-use crate::{helpers, maps, routing, udp_state};
+use crate::{helpers, maps, redirect_key, routing, udp_state};
 
 const TC_ACT_UNSPEC: i32 = -1;
 const TCX_NEXT: i32 = TC_ACT_UNSPEC;
@@ -159,7 +162,7 @@ unsafe fn prep_redirect_to_control_plane(
     info: *const ParsedPacket,
     key: *const BpfTuplesKey,
     from_wan: bool,
-    redirect_tuple: *mut BpfRedirectTuple,
+    redirect_track_key: *mut BpfRedirectKey,
     redirect_entry: *mut BpfRedirectEntry,
 ) -> bool {
     let skb_void = skb.cast::<c_void>();
@@ -191,7 +194,7 @@ unsafe fn prep_redirect_to_control_plane(
     };
 
     unsafe {
-        packet::redirect_tuple_from_forward_packet(info, redirect_tuple);
+        redirect_key::from_forward_tuple(key, redirect_track_key);
         ptr::addr_of_mut!((*redirect_entry).ifindex).write((*skb).ifindex);
         packet::copy_mac(
             (*redirect_entry).smac.as_mut_ptr(),
@@ -204,10 +207,11 @@ unsafe fn prep_redirect_to_control_plane(
         ptr::addr_of_mut!((*redirect_entry).from_wan).write(from_wan as u8);
         ptr::addr_of_mut!((*redirect_entry).link_layer)
             .write(redirect_link_layer_for_header_len(link_h_len));
-        ptr::addr_of_mut!((*redirect_entry).padding).write([0; 2]);
+        ptr::addr_of_mut!((*redirect_entry).abi_version).write(REDIRECT_TRACK_ABI_VERSION);
+        ptr::addr_of_mut!((*redirect_entry).padding).write(0);
         if helpers::bpf_map_update_elem(
             maps::redirect_track_map_ptr(),
-            redirect_tuple.cast::<c_void>(),
+            redirect_track_key.cast::<c_void>(),
             redirect_entry.cast::<c_void>(),
             BPF_ANY,
         ) != 0
@@ -230,7 +234,6 @@ unsafe fn prep_redirect_to_control_plane(
             0
         };
     }
-    let _ = key;
     true
 }
 
@@ -241,7 +244,7 @@ unsafe fn redirect_to_control_plane(
     info: *const ParsedPacket,
     key: *const BpfTuplesKey,
     from_wan: bool,
-    redirect_tuple: *mut BpfRedirectTuple,
+    redirect_track_key: *mut BpfRedirectKey,
     redirect_entry: *mut BpfRedirectEntry,
 ) -> i32 {
     if !unsafe {
@@ -251,7 +254,7 @@ unsafe fn redirect_to_control_plane(
             info,
             key,
             from_wan,
-            redirect_tuple,
+            redirect_track_key,
             redirect_entry,
         )
     } {
@@ -287,22 +290,28 @@ pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {
 
 #[inline(always)]
 pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
-    let mut tuple = BpfRedirectTuple {
-        sip: crate::abi::BpfIpBytes::zeroed(),
-        dip: crate::abi::BpfIpBytes::zeroed(),
-    };
-    if !unsafe { packet::redirect_tuple_from_return_packet(skb, ptr::addr_of_mut!(tuple)) } {
+    let mut info = ParsedPacket::zeroed();
+    if unsafe { packet::parse_transport(skb, ETH_HLEN, ptr::addr_of_mut!(info)) } != 0 {
         return TC_ACT_OK;
+    }
+    let mut tuple = BpfTuplesKey::zeroed();
+    let mut redirect_track_key = BpfRedirectKey::zeroed();
+    unsafe {
+        packet::build_tuples(ptr::addr_of!(info), ptr::addr_of_mut!(tuple));
+        redirect_key::from_return_tuple(
+            ptr::addr_of!(tuple),
+            ptr::addr_of_mut!(redirect_track_key),
+        );
     }
 
     let entry = unsafe {
         helpers::bpf_map_lookup_elem(
             maps::redirect_track_map_ptr(),
-            ptr::addr_of!(tuple).cast::<c_void>(),
+            ptr::addr_of!(redirect_track_key).cast::<c_void>(),
         )
     }
     .cast::<BpfRedirectEntry>();
-    if entry.is_null() {
+    if entry.is_null() || unsafe { (*entry).abi_version } != REDIRECT_TRACK_ABI_VERSION {
         return TC_ACT_OK;
     }
 
@@ -353,14 +362,9 @@ mod tests {
     use super::*;
 
     fn redirect_entry(link_layer: u8) -> BpfRedirectEntry {
-        BpfRedirectEntry {
-            ifindex: 0,
-            smac: [0; 6],
-            dmac: [0; 6],
-            from_wan: 0,
-            link_layer,
-            padding: [0; 2],
-        }
+        let mut entry = BpfRedirectEntry::zeroed();
+        entry.link_layer = link_layer;
+        entry
     }
 
     #[test]
@@ -488,18 +492,8 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
             current_dae_netns_tcp_state(skb, ptr::addr_of!(info), sock_tuple.as_mut_ptr())
         } && state != BPF_TCP_LISTEN
         {
-            let mut redirect_tuple = BpfRedirectTuple {
-                sip: crate::abi::BpfIpBytes::zeroed(),
-                dip: crate::abi::BpfIpBytes::zeroed(),
-            };
-            let mut redirect_entry = BpfRedirectEntry {
-                ifindex: 0,
-                smac: [0; 6],
-                dmac: [0; 6],
-                from_wan: 0,
-                link_layer: 0,
-                padding: [0; 2],
-            };
+            let mut redirect_track_key = BpfRedirectKey::zeroed();
+            let mut redirect_entry = BpfRedirectEntry::zeroed();
             return unsafe {
                 redirect_to_control_plane(
                     skb,
@@ -507,7 +501,7 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
                     ptr::addr_of!(info),
                     ptr::addr_of!(key),
                     false,
-                    ptr::addr_of_mut!(redirect_tuple),
+                    ptr::addr_of_mut!(redirect_track_key),
                     ptr::addr_of_mut!(redirect_entry),
                 )
             };
@@ -576,18 +570,8 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         return TC_ACT_SHOT;
     }
 
-    let mut redirect_tuple = BpfRedirectTuple {
-        sip: crate::abi::BpfIpBytes::zeroed(),
-        dip: crate::abi::BpfIpBytes::zeroed(),
-    };
-    let mut redirect_entry = BpfRedirectEntry {
-        ifindex: 0,
-        smac: [0; 6],
-        dmac: [0; 6],
-        from_wan: 0,
-        link_layer: 0,
-        padding: [0; 2],
-    };
+    let mut redirect_track_key = BpfRedirectKey::zeroed();
+    let mut redirect_entry = BpfRedirectEntry::zeroed();
     unsafe {
         redirect_to_control_plane(
             skb,
@@ -595,7 +579,7 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
             ptr::addr_of!(info),
             ptr::addr_of!(key),
             false,
-            ptr::addr_of_mut!(redirect_tuple),
+            ptr::addr_of_mut!(redirect_track_key),
             ptr::addr_of_mut!(redirect_entry),
         )
     }
@@ -695,18 +679,8 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
         return TC_ACT_SHOT;
     }
 
-    let mut redirect_tuple = BpfRedirectTuple {
-        sip: crate::abi::BpfIpBytes::zeroed(),
-        dip: crate::abi::BpfIpBytes::zeroed(),
-    };
-    let mut redirect_entry = BpfRedirectEntry {
-        ifindex: 0,
-        smac: [0; 6],
-        dmac: [0; 6],
-        from_wan: 0,
-        link_layer: 0,
-        padding: [0; 2],
-    };
+    let mut redirect_track_key = BpfRedirectKey::zeroed();
+    let mut redirect_entry = BpfRedirectEntry::zeroed();
     unsafe {
         redirect_to_control_plane(
             skb,
@@ -714,7 +688,7 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
             ptr::addr_of!(info),
             ptr::addr_of!(key),
             true,
-            ptr::addr_of_mut!(redirect_tuple),
+            ptr::addr_of_mut!(redirect_track_key),
             ptr::addr_of_mut!(redirect_entry),
         )
     }

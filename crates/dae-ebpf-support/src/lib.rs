@@ -44,11 +44,11 @@ mod tests;
 pub use abi::{
     BASIC_FEATURE_VERSION, BPF_DAE_PARAM_ABI_VERSION, BPF_LOOP_FEATURE_VERSION,
     BPF_TIMER_FEATURE_VERSION, BpfAbiContract, BpfDaeParam, BpfDomainRouting, BpfIpBytes,
-    BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname, BpfRedirectEntry, BpfRedirectTuple,
+    BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname, BpfRedirectEntry, BpfRedirectKey,
     BpfRoutingResult, BpfTuplesKey, BpfUdpConnState, BpfUdpStateMetrics, CHECKSUM_FEATURE_VERSION,
-    LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE, MAX_MATCH_SET_LEN, SK_ASSIGN_FEATURE_VERSION,
-    TASK_COMM_LEN, TPROXY_MARK, UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT,
-    UDP_STATE_SATURATION_POLICY_FAIL_CLOSED, bpf_abi_contract,
+    LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE, MAX_MATCH_SET_LEN, REDIRECT_TRACK_ABI_VERSION,
+    SK_ASSIGN_FEATURE_VERSION, TASK_COMM_LEN, TPROXY_MARK, UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT,
+    UDP_STATE_SATURATION_POLICY_FAIL_CLOSED, bpf_abi_contract, redirect_runtime_generation,
 };
 pub use admission::{
     NativeBackendAdmissionCheck, NativeBackendAdmissionEvidence, NativeBackendAdmissionReport,

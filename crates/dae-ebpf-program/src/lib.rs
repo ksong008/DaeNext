@@ -19,6 +19,8 @@ pub mod packet;
 #[cfg(feature = "tproxy-program")]
 pub mod programs;
 #[cfg(feature = "tproxy-program")]
+pub mod redirect_key;
+#[cfg(feature = "tproxy-program")]
 pub mod routing;
 #[cfg(feature = "tproxy-program")]
 pub mod tproxy;

@@ -14,7 +14,7 @@ use aya_ebpf::{
 
 use crate::abi::{
     BpfDomainRouting, BpfLpmKey, BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname,
-    BpfRedirectEntry, BpfRedirectTuple, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState,
+    BpfRedirectEntry, BpfRedirectKey, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState,
     BpfUdpStateMetrics, MAX_COOKIE_PID_PNAME_MAPPING_NUM, MAX_DOMAIN_ROUTING_NUM,
     MAX_DST_MAPPING_NUM, MAX_LPM_NUM, MAX_LPM_SIZE, MAX_MATCH_SET_LEN,
 };
@@ -112,7 +112,7 @@ static LISTEN_SOCKET_MAP: RawMap = RawMap::new(
 #[map(name = "redirect_track")]
 static REDIRECT_TRACK: RawMap = RawMap::new(
     BPF_MAP_TYPE_LRU_HASH,
-    size_of::<BpfRedirectTuple>(),
+    size_of::<BpfRedirectKey>(),
     size_of::<BpfRedirectEntry>(),
     65_536,
     0,

@@ -16,6 +16,8 @@ pub(crate) fn write_param_image(
         task_struct_mm_offset: 0,
         mm_struct_arg_start_offset: 0,
     });
+    let redirect_generation =
+        dae_ebpf_support::redirect_runtime_generation(param.control_plane_pid, param.dae0_ifindex);
     match write_param_aware_object(&options.source_object, param_object, param) {
         Ok(report) => json!({
             "status": "pass",
@@ -36,6 +38,8 @@ pub(crate) fn write_param_image(
                 "abi_version": param.abi_version,
                 "udp_state_saturation_policy": param.udp_state_saturation_policy,
                 "udp_state_idle_timeout_ns": param.udp_state_idle_timeout_ns.to_string(),
+                "redirect_track_abi_version": dae_ebpf_support::REDIRECT_TRACK_ABI_VERSION,
+                "redirect_track_generation": redirect_generation.to_string(),
             },
             "location": {
                 "symbol": report.location.symbol,

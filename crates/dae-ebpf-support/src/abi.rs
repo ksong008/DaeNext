@@ -56,7 +56,8 @@ pub struct BpfRedirectEntry {
     pub dmac: [u8; 6],
     pub from_wan: u8,
     pub link_layer: u8,
-    pub padding: [u8; 2],
+    pub abi_version: u8,
+    pub padding: u8,
 }
 
 #[repr(C)]
@@ -67,9 +68,15 @@ pub struct BpfIpBytes {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BpfRedirectTuple {
+pub struct BpfRedirectKey {
     pub sip: BpfIpBytes,
     pub dip: BpfIpBytes,
+    pub sport: u16,
+    pub dport: u16,
+    pub l4proto: u8,
+    pub abi_version: u8,
+    pub padding: [u8; 2],
+    pub generation: u64,
 }
 
 #[repr(C)]
@@ -128,6 +135,7 @@ pub const TPROXY_MARK: u32 = 0x0800_0000;
 pub const BPF_DAE_PARAM_ABI_VERSION: u32 = 2;
 pub const UDP_STATE_SATURATION_POLICY_FAIL_CLOSED: u32 = 0;
 pub const UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT: u64 = 300_000_000_000;
+pub const REDIRECT_TRACK_ABI_VERSION: u8 = 2;
 pub const LINK_HDR_LEN_NONE: u32 = 0;
 pub const LINK_HDR_LEN_ETHERNET: u32 = 14;
 
@@ -141,6 +149,7 @@ pub const BPF_LOOP_FEATURE_VERSION: super::kernel::Version = super::kernel::Vers
 pub struct BpfAbiContract {
     pub dae_param_size: usize,
     pub dae_param_abi_version: u32,
+    pub redirect_track_abi_version: u8,
     pub task_comm_len: usize,
     pub max_match_set_len: usize,
     pub tproxy_mark: u32,
@@ -152,10 +161,15 @@ pub const fn bpf_abi_contract() -> BpfAbiContract {
     BpfAbiContract {
         dae_param_size: core::mem::size_of::<BpfDaeParam>(),
         dae_param_abi_version: BPF_DAE_PARAM_ABI_VERSION,
+        redirect_track_abi_version: REDIRECT_TRACK_ABI_VERSION,
         task_comm_len: TASK_COMM_LEN,
         max_match_set_len: MAX_MATCH_SET_LEN,
         tproxy_mark: TPROXY_MARK,
         link_hdr_len_none: LINK_HDR_LEN_NONE,
         link_hdr_len_ethernet: LINK_HDR_LEN_ETHERNET,
     }
+}
+
+pub const fn redirect_runtime_generation(control_plane_pid: u32, dae0_ifindex: u32) -> u64 {
+    ((control_plane_pid as u64) << 32) | dae0_ifindex as u64
 }
