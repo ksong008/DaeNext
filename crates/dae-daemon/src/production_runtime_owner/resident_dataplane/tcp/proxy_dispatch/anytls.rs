@@ -160,19 +160,21 @@ pub(crate) async fn relay_tcp_over_anytls_async(
     let mut stats = DirectTcpRelayStats::default();
     let mut inbound_closed = false;
     let mut proxy_closed = false;
-    let mut inbound_close_started = None;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    let local_close_drain_deadline = resident_relay_idle_deadline(ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT);
+    tokio::pin!(idle_deadline);
+    tokio::pin!(local_close_drain_deadline);
+    let mut local_close_drain_active = false;
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
                 match read {
                     Ok(0) => {
                         inbound_closed = true;
-                        if inbound_close_started.is_none() {
-                            inbound_close_started = Some(Instant::now());
-                        }
                         let _ = write_anytls_frame(
                             client,
                             anytls_contract::CMD_FIN,
@@ -181,7 +183,12 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                             "write AnyTLS FIN",
                         )
                         .await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        reset_resident_relay_idle_deadline(
+                            local_close_drain_deadline.as_mut(),
+                            ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT,
+                        );
+                        local_close_drain_active = true;
                     }
                     Ok(read) => {
                         write_anytls_frame(
@@ -194,13 +201,10 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                         .await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
-                        if inbound_close_started.is_none() {
-                            inbound_close_started = Some(Instant::now());
-                        }
                         let _ = write_anytls_frame(
                             client,
                             anytls_contract::CMD_FIN,
@@ -209,7 +213,12 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                             "write AnyTLS FIN after client close",
                         )
                         .await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        reset_resident_relay_idle_deadline(
+                            local_close_drain_deadline.as_mut(),
+                            ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT,
+                        );
+                        local_close_drain_active = true;
                     }
                     Err(err) => return Err(format!("read inbound TCP for AnyTLS relay: {err}")),
                 }
@@ -228,18 +237,17 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                             stats.direct_to_client += frame.data.len();
                             metrics.add_download(frame.data.len());
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     cmd if cmd == anytls_contract::CMD_FIN && frame.sid == sid => {
                         proxy_closed = true;
                         let _ = inbound.shutdown().await;
-                        last_activity = Instant::now();
                     }
                     anytls_contract::CMD_WASTE
                     | anytls_contract::CMD_SERVER_SETTINGS
                     | anytls_contract::CMD_UPDATE_PADDING
                     | anytls_contract::CMD_HEART_RESPONSE => {
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     cmd if cmd == anytls_contract::CMD_ALERT => {
                         return Err(format!("AnyTLS alert frame: sid={} len={}", frame.sid, frame.data.len()));
@@ -253,18 +261,9 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                     }
                 }
             }
-            _ = time::sleep(Duration::from_millis(100)) => {
-                if inbound_closed && proxy_closed {
-                    break;
-                }
-                if let Some(started) = inbound_close_started
-                    && started.elapsed() >= ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT
-                {
-                    break;
-                }
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err("resident AnyTLS relay idle timeout".to_owned());
-                }
+            _ = &mut local_close_drain_deadline, if local_close_drain_active => break,
+            _ = &mut idle_deadline => {
+                return Err("resident AnyTLS relay idle timeout".to_owned());
             }
         }
 
