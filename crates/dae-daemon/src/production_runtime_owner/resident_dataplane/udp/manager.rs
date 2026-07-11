@@ -186,6 +186,8 @@ async fn run_resident_udp_session_manager_async(
                 "runtime": "tokio-current-thread",
                 "sessionLimit": session_limit,
                 "perSessionQueueDepth": session_queue_depth,
+                "replyQueueDepth": session_queue_depth,
+                "replySocketCacheCapacity": session_limit,
                 "keyFields": [
                     "graphIdentityHash",
                     "outbound",
@@ -201,6 +203,9 @@ async fn run_resident_udp_session_manager_async(
     let mut direct_sessions: HashMap<UdpDirectSessionKey, UdpDirectSessionEntry> = HashMap::new();
     let mut sniffers: HashMap<UdpSniffKey, UdpPendingSniffer> = HashMap::new();
     let dns_fast_path_permits = Arc::new(Semaphore::new(dns_fast_path_concurrency));
+    let reply_dispatcher =
+        UdpReplyDispatcher::start(session_queue_depth, session_limit, Arc::clone(&metrics));
+    let udp_reply = reply_dispatcher.handle();
     let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<UdpSessionKey>(session_limit);
     let (direct_cleanup_tx, mut direct_cleanup_rx) =
         mpsc::channel::<UdpDirectSessionKey>(session_limit);
@@ -242,6 +247,7 @@ async fn run_resident_udp_session_manager_async(
                                 &event_file,
                                 &event_lock,
                                 &metrics,
+                                &udp_reply,
                                 &active_sessions,
                                 &mut sessions,
                                 &mut direct_sessions,
@@ -297,6 +303,8 @@ async fn run_resident_udp_session_manager_async(
             }
         }
     }
+    drop(udp_reply);
+    let reply_shutdown = reply_dispatcher.shutdown().await;
     append_event(
         &event_file,
         &event_lock,
@@ -306,6 +314,10 @@ async fn run_resident_udp_session_manager_async(
             "timed_out_sessions": timed_out,
             "panicked_sessions": panicked,
             "active_sessions": active_sessions.load(Ordering::Relaxed),
+            "reply_dispatcher": match reply_shutdown {
+                Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
+                Err(err) => json!({"status": "fail", "error": err.to_string()}),
+            },
         }),
     );
     resuscitator.stop();
@@ -318,6 +330,7 @@ fn handle_manager_packet(
     event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
     metrics: &Arc<ResidentDataplaneMetrics>,
+    udp_reply: &UdpReplyHandle,
     active_sessions: &Arc<AtomicUsize>,
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
     direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
@@ -366,6 +379,7 @@ fn handle_manager_packet(
             event_file,
             event_lock,
             metrics,
+            udp_reply,
             active_sessions,
             sessions,
             direct_sessions,
@@ -387,6 +401,7 @@ fn forward_manager_packet(
     event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
     metrics: &Arc<ResidentDataplaneMetrics>,
+    udp_reply: &UdpReplyHandle,
     active_sessions: &Arc<AtomicUsize>,
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
     direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
@@ -433,6 +448,7 @@ fn forward_manager_packet(
                 Arc::clone(dns),
                 Arc::clone(dns_fast_path_permits),
                 Arc::clone(metrics),
+                udp_reply.clone(),
             );
             return;
         }
@@ -445,6 +461,7 @@ fn forward_manager_packet(
                 event_file,
                 event_lock,
                 metrics,
+                udp_reply,
                 active_sessions,
                 direct_sessions,
                 direct_cleanup_tx,
@@ -519,6 +536,7 @@ fn forward_manager_packet(
                 event_file.to_path_buf(),
                 Arc::clone(event_lock),
                 Arc::clone(metrics),
+                udp_reply.clone(),
             );
         } else {
             spawn_resident_dns_datagram_handler(
@@ -527,6 +545,7 @@ fn forward_manager_packet(
                 Arc::clone(dns),
                 Arc::clone(dns_fast_path_permits),
                 Arc::clone(metrics),
+                udp_reply.clone(),
             );
         }
         return;
@@ -572,6 +591,7 @@ fn forward_manager_packet(
             event_file: event_file.to_path_buf(),
             event_lock: Arc::clone(event_lock),
             metrics: Arc::clone(metrics),
+            udp_reply: udp_reply.clone(),
             active_sessions: Arc::clone(active_sessions),
         };
         let actor_key = key.clone();
@@ -651,6 +671,7 @@ fn forward_direct_manager_packet(
     event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
     metrics: &Arc<ResidentDataplaneMetrics>,
+    udp_reply: &UdpReplyHandle,
     active_sessions: &Arc<AtomicUsize>,
     direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
     direct_cleanup_tx: &mpsc::Sender<UdpDirectSessionKey>,
@@ -698,6 +719,7 @@ fn forward_direct_manager_packet(
             event_file: event_file.to_path_buf(),
             event_lock: Arc::clone(event_lock),
             metrics: Arc::clone(metrics),
+            udp_reply: udp_reply.clone(),
             active_sessions: Arc::clone(active_sessions),
         };
         let actor_key = key.clone();
@@ -766,13 +788,21 @@ fn spawn_resident_dns_datagram_handler(
     dns: Arc<ResidentDnsPlan>,
     permits: Arc<Semaphore>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    udp_reply: UdpReplyHandle,
 ) {
     let Ok(permit) = permits.try_acquire_owned() else {
         metrics.add_upload(packet.payload.len());
-        if let Ok(response) = build_dns_server_failure_response(&packet.payload)
-            && send_udp_reply(original_dst, packet.peer, &response).is_ok()
-        {
-            metrics.add_download(response.len());
+        if let Ok(response) = build_dns_server_failure_response(&packet.payload) {
+            let response_len = response.len();
+            tokio::spawn(async move {
+                if udp_reply
+                    .send(original_dst, packet.peer, response)
+                    .await
+                    .is_ok()
+                {
+                    metrics.add_download(response_len);
+                }
+            });
         }
         return;
     };
@@ -791,8 +821,13 @@ fn spawn_resident_dns_datagram_handler(
                 Err(_) => return,
             },
         };
-        if send_udp_reply(original_dst, packet.peer, &response).is_ok() {
-            metrics.add_download(response.len());
+        let response_len = response.len();
+        if udp_reply
+            .send(original_dst, packet.peer, response)
+            .await
+            .is_ok()
+        {
+            metrics.add_download(response_len);
         }
     });
 }
@@ -807,13 +842,21 @@ fn spawn_forced_resident_dns_proxy_datagram_handler(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    udp_reply: UdpReplyHandle,
 ) {
     let Ok(permit) = permits.try_acquire_owned() else {
         metrics.add_upload(packet.payload.len());
-        if let Ok(response) = build_dns_server_failure_response(&packet.payload)
-            && send_udp_reply(original_dst, packet.peer, &response).is_ok()
-        {
-            metrics.add_download(response.len());
+        if let Ok(response) = build_dns_server_failure_response(&packet.payload) {
+            let response_len = response.len();
+            tokio::spawn(async move {
+                if udp_reply
+                    .send(original_dst, packet.peer, response)
+                    .await
+                    .is_ok()
+                {
+                    metrics.add_download(response_len);
+                }
+            });
         }
         return;
     };
@@ -847,8 +890,10 @@ fn spawn_forced_resident_dns_proxy_datagram_handler(
             event_file,
             event_lock,
             metrics,
+            &udp_reply,
             exchange,
-        );
+        )
+        .await;
     });
 }
 

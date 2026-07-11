@@ -9,6 +9,12 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_ingress_drain_batches: AtomicU64,
     udp_ingress_drain_budget_hits: AtomicU64,
     udp_ingress_truncated: AtomicU64,
+    udp_reply_queued: AtomicU64,
+    udp_reply_queue_full: AtomicU64,
+    udp_reply_sent: AtomicU64,
+    udp_reply_send_would_block: AtomicU64,
+    udp_reply_socket_recreated: AtomicU64,
+    udp_reply_failed: AtomicU64,
 }
 
 impl ResidentDataplaneMetrics {
@@ -55,6 +61,32 @@ impl ResidentDataplaneMetrics {
         }
     }
 
+    pub(super) fn udp_reply_queued(&self) {
+        self.udp_reply_queued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_reply_queue_full(&self) {
+        self.udp_reply_queue_full.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_reply_sent(&self) {
+        self.udp_reply_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_reply_send_would_block(&self) {
+        self.udp_reply_send_would_block
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_reply_socket_recreated(&self) {
+        self.udp_reply_socket_recreated
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_reply_failed(&self) {
+        self.udp_reply_failed.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(super) fn snapshot(&self) -> Value {
         json!({
             "uploadTotal": self.upload_total.load(Ordering::Relaxed),
@@ -65,6 +97,12 @@ impl ResidentDataplaneMetrics {
             "udpIngressDrainBatches": self.udp_ingress_drain_batches.load(Ordering::Relaxed),
             "udpIngressDrainBudgetHits": self.udp_ingress_drain_budget_hits.load(Ordering::Relaxed),
             "udpIngressTruncated": self.udp_ingress_truncated.load(Ordering::Relaxed),
+            "udpReplyQueued": self.udp_reply_queued.load(Ordering::Relaxed),
+            "udpReplyQueueFull": self.udp_reply_queue_full.load(Ordering::Relaxed),
+            "udpReplySent": self.udp_reply_sent.load(Ordering::Relaxed),
+            "udpReplySendWouldBlock": self.udp_reply_send_would_block.load(Ordering::Relaxed),
+            "udpReplySocketRecreated": self.udp_reply_socket_recreated.load(Ordering::Relaxed),
+            "udpReplyFailed": self.udp_reply_failed.load(Ordering::Relaxed),
         })
     }
 }

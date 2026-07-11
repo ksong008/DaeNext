@@ -29,6 +29,7 @@ pub(super) struct UdpSessionActorContext {
     pub(super) event_file: PathBuf,
     pub(super) event_lock: Arc<Mutex<()>>,
     pub(super) metrics: Arc<ResidentDataplaneMetrics>,
+    pub(super) udp_reply: UdpReplyHandle,
     pub(super) active_sessions: Arc<AtomicUsize>,
 }
 
@@ -132,8 +133,10 @@ async fn run_udp_session_actor(
                     context.event_file.clone(),
                     Arc::clone(&context.event_lock),
                     Arc::clone(&context.metrics),
+                    &context.udp_reply,
                     exchange,
-                );
+                )
+                .await;
                 if execute_timed_out {
                     stop_reason = "execute-timeout".to_owned();
                     break;
@@ -192,8 +195,10 @@ async fn drain_udp_session_responses(
                     context.event_file.clone(),
                     Arc::clone(&context.event_lock),
                     Arc::clone(&context.metrics),
+                    &context.udp_reply,
                     Err(err.clone()),
-                );
+                )
+                .await;
                 return Err(format!("upstream-read-failed: {err}"));
             }
         };
@@ -204,8 +209,10 @@ async fn drain_udp_session_responses(
             context.event_file.clone(),
             Arc::clone(&context.event_lock),
             Arc::clone(&context.metrics),
+            &context.udp_reply,
             Ok(exchange),
-        );
+        )
+        .await;
     }
     Ok(())
 }
