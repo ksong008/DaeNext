@@ -45,13 +45,20 @@ impl ShadowsocksAeadDatagramSession {
         let Some(response) = self.relay.poll_response("Shadowsocks")? else {
             return Ok(None);
         };
-        let decoded = decode_shadowsocks_udp_packet(&self.cipher, &self.password, &response)
+        self.decode_response(&response).map(Some)
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<UdpExchangeResult, String> {
+        let response = self.relay.wait_response("Shadowsocks").await?;
+        self.decode_response(&response)
+    }
+
+    fn decode_response(&self, response: &[u8]) -> Result<UdpExchangeResult, String> {
+        let decoded = decode_shadowsocks_udp_packet(&self.cipher, &self.password, response)
             .map_err(|err| format!("decode Shadowsocks UDP packet: {err}"))?;
-        Ok(Some(
-            UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
-                .with_session_executor("tokio-datagram-relay")
-                .with_underlay_reuse("udp-socket-reused"),
-        ))
+        Ok(UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
+            .with_session_executor("tokio-datagram-relay")
+            .with_underlay_reuse("udp-socket-reused"))
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {
@@ -128,6 +135,15 @@ impl Shadowsocks2022DatagramSession {
         let Some(response) = self.relay.poll_response("Shadowsocks 2022")? else {
             return Ok(None);
         };
+        self.decode_response(&response).map(Some)
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<UdpExchangeResult, String> {
+        let response = self.relay.wait_response("Shadowsocks 2022").await?;
+        self.decode_response(&response)
+    }
+
+    fn decode_response(&mut self, response: &[u8]) -> Result<UdpExchangeResult, String> {
         let codec = self
             .codec
             .as_mut()
@@ -135,11 +151,11 @@ impl Shadowsocks2022DatagramSession {
         let decoded = codec
             .decode_server_packet(&response, ss2022_udp_unix_timestamp_now())
             .map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
-        Ok(Some(
+        Ok(
             UdpExchangeResult::new(decoded.payload, "udp-datagram-aead-2022")
                 .with_session_executor("tokio-datagram-relay")
                 .with_underlay_reuse("udp-socket-and-codec-session-reused"),
-        ))
+        )
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {

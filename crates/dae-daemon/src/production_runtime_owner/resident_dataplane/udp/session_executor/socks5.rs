@@ -31,13 +31,22 @@ impl Socks5UdpAssociateSession {
             Some(response) => response,
             None => return Ok(None),
         };
-        let decoded = udp_packet::unwrap(&response)
+        self.decode_response(&response).map(Some)
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<UdpExchangeResult, String> {
+        let response = self.relay.wait_response("SOCKS5").await?;
+        self.decode_response(&response)
+    }
+
+    fn decode_response(&self, response: &[u8]) -> Result<UdpExchangeResult, String> {
+        let decoded = udp_packet::unwrap(response)
             .map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;
-        Ok(Some(
+        Ok(
             UdpExchangeResult::new(decoded.payload, "socks5-udp-associate")
                 .with_session_executor("tokio-socks5-udp-associate")
                 .with_underlay_reuse("tcp-control-and-udp-relay-reused"),
-        ))
+        )
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {

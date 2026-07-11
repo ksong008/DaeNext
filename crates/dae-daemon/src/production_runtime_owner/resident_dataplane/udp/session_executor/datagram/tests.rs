@@ -100,3 +100,31 @@ async fn successful_first_candidate_does_not_emit_duplicate_datagram() {
     );
     assert_eq!(relay.selected_index, 0);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn awaited_response_blocks_until_the_socket_is_readable() {
+    let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let relay_socket = open_test_sender();
+    let relay_addr = relay_socket.local_addr().unwrap();
+    let mut relay = DatagramRelay {
+        socket: Some(relay_socket),
+        remote_candidates: vec![upstream.local_addr().unwrap()],
+        selected_index: 0,
+        response_buf: Vec::new(),
+    };
+
+    assert!(
+        time::timeout(TEST_NO_DATAGRAM_TIMEOUT, relay.wait_response("test"))
+            .await
+            .is_err()
+    );
+
+    upstream.send_to(b"response", relay_addr).await.unwrap();
+    let response = time::timeout(TEST_RECEIVE_TIMEOUT, relay.wait_response("test"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response, b"response");
+}

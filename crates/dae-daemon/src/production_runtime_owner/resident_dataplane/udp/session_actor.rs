@@ -7,6 +7,9 @@ use crate::production_runtime_owner::resident_dataplane::unix_now_secs;
 
 use super::*;
 
+mod response;
+use self::response::{drain_udp_session_responses, wait_and_record_udp_session_response};
+
 pub(super) struct ManagedUdpPacket {
     pub(super) packet: UdpOriginalDstPacket,
     pub(super) original_dst: SocketAddr,
@@ -147,12 +150,16 @@ async fn run_udp_session_actor(
                         break;
                     }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP), if executor.is_some() => {
-                if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref())
-                    && let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
-                        stop_reason = err;
-                        break;
-                    }
+            response = wait_and_record_udp_session_response(
+                &key,
+                &context,
+                &mut executor,
+                session_proxy.as_ref(),
+            ), if executor.is_some() && session_proxy.is_some() => {
+                if let Err(err) = response {
+                    stop_reason = err;
+                    break;
+                }
             }
             _ = &mut idle_timer => {
                 stop_reason = "idle-timeout".to_owned();
@@ -175,46 +182,6 @@ async fn run_udp_session_actor(
         }),
     );
     let _ = cleanup_tx.send(key).await;
-}
-
-async fn drain_udp_session_responses(
-    key: &UdpSessionKey,
-    context: &UdpSessionActorContext,
-    executor: &mut UdpSessionExecutor,
-    proxy: &Arc<ResidentProxyPlan>,
-) -> Result<(), String> {
-    for _ in 0..16 {
-        let exchange = match executor.poll_response().await {
-            Ok(Some(exchange)) => exchange,
-            Ok(None) => return Ok(()),
-            Err(err) => {
-                record_udp_session_response_result(
-                    proxy,
-                    key.peer(),
-                    key.original_destination(),
-                    context.event_file.clone(),
-                    Arc::clone(&context.event_lock),
-                    Arc::clone(&context.metrics),
-                    &context.udp_reply,
-                    Err(err.clone()),
-                )
-                .await;
-                return Err(format!("upstream-read-failed: {err}"));
-            }
-        };
-        record_udp_session_response_result(
-            proxy,
-            key.peer(),
-            key.original_destination(),
-            context.event_file.clone(),
-            Arc::clone(&context.event_lock),
-            Arc::clone(&context.metrics),
-            &context.udp_reply,
-            Ok(exchange),
-        )
-        .await;
-    }
-    Ok(())
 }
 
 pub(super) struct UdpManagedSessionGuard {

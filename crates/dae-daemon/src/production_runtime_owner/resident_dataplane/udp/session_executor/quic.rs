@@ -74,22 +74,40 @@ impl Hysteria2QuicDatagramSession {
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        let connection = match self.connection.as_ref() {
-            Some(connection) => connection,
-            None => return Ok(None),
+        let response = {
+            let connection = match self.connection.as_ref() {
+                Some(connection) => connection,
+                None => return Ok(None),
+            };
+            let read = connection.read_datagram();
+            tokio::pin!(read);
+            poll_fn(|cx| match read.as_mut().poll(cx) {
+                Poll::Ready(response) => Poll::Ready(Some(response)),
+                Poll::Pending => Poll::Ready(None),
+            })
+            .await
         };
-        let read = connection.read_datagram();
-        tokio::pin!(read);
-        let response = poll_fn(|cx| match read.as_mut().poll(cx) {
-            Poll::Ready(response) => Poll::Ready(Some(response)),
-            Poll::Pending => Poll::Ready(None),
-        })
-        .await;
         let Some(response) = response else {
             return Ok(None);
         };
         let response = response.map_err(|err| format!("read Hysteria2 UDP datagram: {err}"))?;
-        let parsed = parse_hysteria2_udp_message(&response)?;
+        self.decode_response(&response)
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        let connection = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| "Hysteria2 QUIC connection is not initialized".to_owned())?;
+        let response = connection
+            .read_datagram()
+            .await
+            .map_err(|err| format!("read Hysteria2 UDP datagram: {err}"))?;
+        self.decode_response(&response)
+    }
+
+    fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
+        let parsed = parse_hysteria2_udp_message(response)?;
         let Some(payload) = self.fragments.push(
             parsed.packet_id,
             parsed.frag_id,
@@ -221,22 +239,40 @@ impl TuicQuicDatagramSession {
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        let connection = match self.connection.as_ref() {
-            Some(connection) => connection,
-            None => return Ok(None),
+        let response = {
+            let connection = match self.connection.as_ref() {
+                Some(connection) => connection,
+                None => return Ok(None),
+            };
+            let read = connection.read_datagram();
+            tokio::pin!(read);
+            poll_fn(|cx| match read.as_mut().poll(cx) {
+                Poll::Ready(response) => Poll::Ready(Some(response)),
+                Poll::Pending => Poll::Ready(None),
+            })
+            .await
         };
-        let read = connection.read_datagram();
-        tokio::pin!(read);
-        let response = poll_fn(|cx| match read.as_mut().poll(cx) {
-            Poll::Ready(response) => Poll::Ready(Some(response)),
-            Poll::Pending => Poll::Ready(None),
-        })
-        .await;
         let Some(response) = response else {
             return Ok(None);
         };
         let response = response.map_err(|err| format!("read TUIC UDP datagram: {err}"))?;
-        let parsed = parse_tuic_packet_frame(&response)?;
+        self.decode_response(&response)
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        let connection = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| "TUIC QUIC connection is not initialized".to_owned())?;
+        let response = connection
+            .read_datagram()
+            .await
+            .map_err(|err| format!("read TUIC UDP datagram: {err}"))?;
+        self.decode_response(&response)
+    }
+
+    fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
+        let parsed = parse_tuic_packet_frame(response)?;
         let Some(payload) = self.fragments.push(
             parsed.packet_id,
             parsed.frag_id,
