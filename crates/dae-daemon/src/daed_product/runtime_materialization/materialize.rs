@@ -10,18 +10,18 @@ pub(in crate::daed_product) fn build_runtime_config_from_content(
 #[derive(Clone, Debug)]
 pub(in crate::daed_product) struct RuntimeMaterializationPlan {
     pub(in crate::daed_product) content: String,
-    generated_at: String,
-    config_id: i64,
-    config_version: i64,
-    dns_id: i64,
-    dns_version: i64,
-    routing_id: i64,
-    routing_version: i64,
-    group_version_sum: i64,
-    group_ids: String,
-    external_input_version: i64,
-    group_count: usize,
-    node_count: usize,
+    pub(in crate::daed_product) generated_at: String,
+    pub(in crate::daed_product) config_id: i64,
+    pub(in crate::daed_product) config_version: i64,
+    pub(in crate::daed_product) dns_id: i64,
+    pub(in crate::daed_product) dns_version: i64,
+    pub(in crate::daed_product) routing_id: i64,
+    pub(in crate::daed_product) routing_version: i64,
+    pub(in crate::daed_product) group_version_sum: i64,
+    pub(in crate::daed_product) group_ids: String,
+    pub(in crate::daed_product) external_input_version: i64,
+    pub(in crate::daed_product) group_count: usize,
+    pub(in crate::daed_product) node_count: usize,
 }
 
 pub(in crate::daed_product) fn materialize_runtime(

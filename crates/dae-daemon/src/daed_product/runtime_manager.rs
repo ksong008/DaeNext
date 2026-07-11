@@ -1,10 +1,13 @@
 use super::*;
 
+mod apply_state;
 mod cleanup;
 mod instance;
 mod recovery;
 mod summary;
 
+pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
+use apply_state::RuntimeApplyState;
 use cleanup::{
     cleanup_report_error, cleanup_runtime_instance, cleanup_runtime_instance_with_reclaim,
     cleanup_start_blocker_from_report, ensure_cleanup_allows_start_for_inner,
@@ -12,11 +15,13 @@ use cleanup::{
 };
 #[cfg(test)]
 pub(super) use instance::resident_dataplane_admission_detail;
-#[cfg(test)]
-pub(super) use instance::start_product_runtime_instance;
 pub(super) use instance::{
     product_runtime_fake_start_enabled, runtime_started_at_after_success,
     start_product_runtime_instance_with_dns_reload_snapshot,
+};
+#[cfg(test)]
+pub(super) use instance::{
+    start_product_runtime_instance, with_product_runtime_fake_start_override,
 };
 use recovery::ProductRuntimeInterfaceRecoverySupervisor;
 #[cfg(test)]
@@ -48,6 +53,7 @@ pub(super) struct ProductRuntimeState {
     pub(super) lifecycle_epoch: u64,
     pub(super) traffic_carry: RuntimeTrafficCarry,
     pub(super) cleanup: RuntimeCleanupState,
+    pub(super) apply: RuntimeApplyState,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -687,6 +693,7 @@ impl ProductRuntimeManager {
                     map.insert("stopCount".to_owned(), json!(inner.stop_count));
                     map.insert("lastReport".to_owned(), json!(inner.last_report.clone()));
                     map.insert("cleanup".to_owned(), inner.cleanup.summary());
+                    map.insert("apply".to_owned(), inner.apply.summary());
                 }
                 summary
             }
@@ -704,6 +711,7 @@ impl ProductRuntimeManager {
                 "stopCount": inner.stop_count,
                 "lastReport": inner.last_report,
                 "cleanup": inner.cleanup.summary(),
+                "apply": inner.apply.summary(),
             }),
             None => json!({
                 "running": false,
@@ -724,6 +732,7 @@ impl ProductRuntimeManager {
                 "stopCount": inner.stop_count,
                 "lastReport": inner.last_report,
                 "cleanup": inner.cleanup.summary(),
+                "apply": inner.apply.summary(),
             }),
         }
     }

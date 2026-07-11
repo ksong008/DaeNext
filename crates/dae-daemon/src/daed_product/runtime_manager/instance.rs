@@ -1,5 +1,25 @@
 use super::*;
 
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static PRODUCT_RUNTIME_FAKE_START_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+struct ProductRuntimeFakeStartOverrideGuard {
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl Drop for ProductRuntimeFakeStartOverrideGuard {
+    fn drop(&mut self) {
+        PRODUCT_RUNTIME_FAKE_START_OVERRIDE.with(|value| value.set(self.previous));
+    }
+}
+
 pub(in crate::daed_product) fn runtime_started_at_after_success(
     previous_runtime_was_running: bool,
     previous_runtime_started_at: Option<String>,
@@ -79,6 +99,10 @@ pub(in crate::daed_product) fn start_product_runtime_instance_with_dns_reload_sn
 }
 
 pub(in crate::daed_product) fn product_runtime_fake_start_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = PRODUCT_RUNTIME_FAKE_START_OVERRIDE.with(Cell::get) {
+        return enabled;
+    }
     std::env::var(PRODUCT_RUNTIME_FAKE_START_ENV)
         .or_else(|_| std::env::var(PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV))
         .map(|value| {
@@ -88,6 +112,16 @@ pub(in crate::daed_product) fn product_runtime_fake_start_enabled() -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+pub(in crate::daed_product) fn with_product_runtime_fake_start_override<T>(
+    enabled: bool,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous = PRODUCT_RUNTIME_FAKE_START_OVERRIDE.with(|value| value.replace(Some(enabled)));
+    let _guard = ProductRuntimeFakeStartOverrideGuard { previous };
+    operation()
 }
 
 pub(in crate::daed_product) fn resident_dataplane_admission_detail(state: &Value) -> String {
