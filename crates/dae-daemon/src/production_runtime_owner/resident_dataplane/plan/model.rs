@@ -130,6 +130,23 @@ impl ResidentProxyPlan {
         }
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_xhttp_xmux_runtime_generation(
+        &mut self,
+        runtime_generation: u64,
+    ) {
+        if let Some(xmux) = &mut self.xhttp_xmux {
+            xmux.apply_runtime_generation(runtime_generation);
+        }
+        if let Some(download) = &mut self.xhttp_download
+            && let Some(xmux) = &mut download.xmux
+        {
+            xmux.apply_runtime_generation(runtime_generation);
+        }
+        if let Some(parent) = self.chain_parent.as_mut() {
+            Arc::make_mut(parent).apply_xhttp_xmux_runtime_generation(runtime_generation);
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn apply_effective_so_mark_from_dae(
         &mut self,
     ) {

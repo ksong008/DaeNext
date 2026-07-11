@@ -409,6 +409,16 @@ pub(crate) struct ResidentProxyGroupPlan {
 }
 
 impl ResidentProxyGroupPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_xhttp_xmux_runtime_generation(
+        &mut self,
+        runtime_generation: u64,
+    ) {
+        for candidate in &mut self.candidates {
+            Arc::make_mut(&mut candidate.proxy)
+                .apply_xhttp_xmux_runtime_generation(runtime_generation);
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn group_policy_name(
         &self,
     ) -> &'static str {

@@ -53,13 +53,15 @@ impl ResidentDataplaneRuntime {
     }
 
     pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {
+        let reload_generation = self.owner.reload_generation();
         if let Some(maintenance) = self.domain_routing_maintenance.take() {
             maintenance.stop();
         }
         steps.push(self.owner.shutdown());
-        let xmux = tcp::clear_xhttp_xmux_managers();
+        let xmux = tcp::clear_xhttp_xmux_managers(reload_generation);
         steps.push(json!({
             "name": "clear-resident-xhttp-xmux-managers",
+            "reloadGeneration": reload_generation,
             "status": if xmux.h2.locked_managers == 0 && xmux.h3.locked_managers == 0 {
                 "pass"
             } else {

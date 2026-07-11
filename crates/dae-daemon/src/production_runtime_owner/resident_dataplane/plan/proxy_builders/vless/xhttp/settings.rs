@@ -465,6 +465,7 @@ fn resident_xhttp_xmux_plan(
         node_tag,
     )?;
     let plan = ResidentXhttpXmuxPlan {
+        runtime_generation: 0,
         max_concurrency: optional_xhttp_range(
             object.get("maxConcurrency"),
             &format!("{field}.maxConcurrency"),

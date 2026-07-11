@@ -11,6 +11,9 @@ pub(super) use self::h2_manager::select_xhttp_h2_xmux_client;
 mod h3_manager;
 pub(super) use self::h3_manager::select_xhttp_h3_xmux_client;
 
+mod lifecycle;
+use self::lifecycle::{XhttpXmuxManagerHandle, XhttpXmuxManagerLifecycle, XhttpXmuxOpeningLease};
+
 mod state_signal;
 use self::state_signal::{XhttpXmuxStateSignal, XhttpXmuxStateWait};
 
@@ -125,6 +128,10 @@ impl XhttpXmuxKey {
             mptcp,
         }
     }
+
+    fn runtime_generation(&self) -> u64 {
+        self.xmux.runtime_generation
+    }
 }
 
 impl XhttpXmuxClientLease {
@@ -171,10 +178,10 @@ pub(super) fn note_xhttp_xmux_request(xmux_lease: Option<&XhttpXmuxClientLease>)
     }
 }
 
-pub(crate) fn clear_xhttp_xmux_managers() -> XhttpXmuxClearReport {
+pub(crate) fn clear_xhttp_xmux_managers(runtime_generation: u64) -> XhttpXmuxClearReport {
     XhttpXmuxClearReport {
-        h2: h2_manager::clear_xhttp_h2_xmux_managers(),
-        h3: h3_manager::clear_xhttp_h3_xmux_managers(),
+        h2: h2_manager::clear_xhttp_h2_xmux_managers(runtime_generation),
+        h3: h3_manager::clear_xhttp_h3_xmux_managers(runtime_generation),
     }
 }
 

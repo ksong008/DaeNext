@@ -45,7 +45,11 @@ pub(crate) fn start_resident_dataplane_workers(
     let tcp_dial_mode = plan.tcp_dial_mode;
     let sniffing_timeout = plan.sniffing_timeout;
     let dns_plan = plan.dns;
-    let proxy_groups = plan.proxies;
+    let mut proxy_groups = plan.proxies;
+    let reload_generation = RESIDENT_RELOAD_GENERATION.fetch_add(1, Ordering::Relaxed);
+    for group in proxy_groups.values_mut() {
+        group.apply_xhttp_xmux_runtime_generation(reload_generation);
+    }
     let Some(default_outbound) = default_outbound else {
         return (
             json!({
@@ -161,7 +165,6 @@ pub(crate) fn start_resident_dataplane_workers(
         .map(ResidentDnsBindListener::report)
         .unwrap_or_else(disabled_dns_bind_listener_report);
 
-    let reload_generation = RESIDENT_RELOAD_GENERATION.fetch_add(1, Ordering::Relaxed);
     let resource_config = ResidentRuntimeResourceConfig::from_config(config);
     apply_resident_udp_socket_buffer_tuning(&udp_socket);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());

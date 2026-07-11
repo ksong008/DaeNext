@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 static XHTTP_XMUX_H2_MANAGERS: OnceLock<
-    Mutex<HashMap<XhttpXmuxKey, Arc<tokio::sync::Mutex<XhttpXmuxH2Manager>>>>,
+    Mutex<HashMap<XhttpXmuxKey, XhttpXmuxManagerHandle<XhttpXmuxH2Manager>>>,
 > = OnceLock::new();
 
 struct XhttpXmuxH2ClientEntry {
@@ -17,35 +17,39 @@ struct XhttpXmuxH2ClientEntry {
     left_usage: i32,
 }
 
+struct PendingXhttpH2Sender(Option<XhttpH2EndpointSender>);
+
 struct XhttpXmuxH2Manager {
     config: ResidentXhttpXmuxPlan,
     concurrency: i32,
     connections: i32,
-    opening: usize,
     clients: Vec<XhttpXmuxH2ClientEntry>,
-    state_signal: XhttpXmuxStateSignal,
+    lifecycle: Arc<XhttpXmuxManagerLifecycle>,
 }
 
 enum XhttpXmuxH2SelectAction {
     Selected(XhttpXmuxH2SelectedClient),
-    OpenNew,
+    OpenNew(XhttpXmuxOpeningLease),
     WaitForState(XhttpXmuxStateWait),
+    Closed,
 }
 
 impl XhttpXmuxH2Manager {
-    fn new(config: ResidentXhttpXmuxPlan) -> Self {
+    fn new(config: ResidentXhttpXmuxPlan, lifecycle: Arc<XhttpXmuxManagerLifecycle>) -> Self {
         let config = config.official_normalized();
         Self {
             concurrency: ResidentXhttpXmuxPlan::sample_range(config.max_concurrency),
             connections: ResidentXhttpXmuxPlan::sample_range(config.max_connections),
-            opening: 0,
             config,
             clients: Vec::new(),
-            state_signal: XhttpXmuxStateSignal::new(),
+            lifecycle,
         }
     }
 
     fn select_or_reserve_new(&mut self) -> XhttpXmuxH2SelectAction {
+        if self.lifecycle.is_closing() {
+            return XhttpXmuxH2SelectAction::Closed;
+        }
         self.prune();
 
         let reusable_len = self.reusable_len();
@@ -54,10 +58,9 @@ impl XhttpXmuxH2Manager {
         }
 
         if self.connections > 0
-            && reusable_len.saturating_add(self.opening) < self.connections as usize
+            && reusable_len.saturating_add(self.lifecycle.opening()) < self.connections as usize
         {
-            self.opening = self.opening.saturating_add(1);
-            return XhttpXmuxH2SelectAction::OpenNew;
+            return self.reserve_opening();
         }
 
         let candidates = self
@@ -89,29 +92,42 @@ impl XhttpXmuxH2Manager {
             sender: client.sender.clone(),
             lease: XhttpXmuxClientLease::open(Arc::clone(&client.usage)),
         };
-        self.state_signal.notify();
+        self.lifecycle.notify();
         XhttpXmuxH2SelectAction::Selected(selected)
     }
 
     fn reserve_new_or_wait(&mut self, reusable_len: usize) -> XhttpXmuxH2SelectAction {
-        if self.connections > 0
-            && reusable_len.saturating_add(self.opening) >= self.connections as usize
+        let opening = self.lifecycle.opening();
+        if self.connections > 0 && reusable_len.saturating_add(opening) >= self.connections as usize
         {
             return XhttpXmuxH2SelectAction::WaitForState(self.state_waiter());
         }
-        if self.opening == 0 || self.connections > 0 {
-            self.opening = self.opening.saturating_add(1);
-            XhttpXmuxH2SelectAction::OpenNew
+        if opening == 0 || self.connections > 0 {
+            self.reserve_opening()
         } else {
             XhttpXmuxH2SelectAction::WaitForState(self.state_waiter())
         }
     }
 
+    fn reserve_opening(&self) -> XhttpXmuxH2SelectAction {
+        self.lifecycle
+            .reserve_opening()
+            .map(XhttpXmuxH2SelectAction::OpenNew)
+            .unwrap_or(XhttpXmuxH2SelectAction::Closed)
+    }
+
     fn complete_new_client(
         &mut self,
-        sender: XhttpH2EndpointSender,
+        mut sender: XhttpH2EndpointSender,
+        opening: &XhttpXmuxOpeningLease,
     ) -> Result<XhttpXmuxH2SelectedClient, String> {
-        self.finish_opening();
+        if !opening.is_current() || self.lifecycle.is_closing() {
+            abort_new_h2_sender(&mut sender);
+            return Err(format!(
+                "resident xHTTP H2 xmux manager generation {} closed during open",
+                self.lifecycle.generation()
+            ));
+        }
         let mut left_usage = -1;
         let sampled_left_usage = ResidentXhttpXmuxPlan::sample_range(self.config.c_max_reuse_times);
         if sampled_left_usage > 0 {
@@ -134,7 +150,7 @@ impl XhttpXmuxH2Manager {
             open_usage: AtomicI32::new(0),
             left_requests: AtomicI32::new(left_requests),
             unreusable_at,
-            state_signal: self.state_signal.clone(),
+            state_signal: self.lifecycle.signal(),
         });
         self.clients.push(XhttpXmuxH2ClientEntry {
             sender: sender.sender.clone(),
@@ -148,11 +164,6 @@ impl XhttpXmuxH2Manager {
             sender: sender.sender,
             lease: XhttpXmuxClientLease::open(usage),
         })
-    }
-
-    fn finish_opening(&mut self) {
-        self.opening = self.opening.saturating_sub(1);
-        self.state_signal.notify();
     }
 
     fn prune(&mut self) {
@@ -181,7 +192,7 @@ impl XhttpXmuxH2Manager {
             }
         }
         if changed {
-            self.state_signal.notify();
+            self.lifecycle.notify();
         }
     }
 
@@ -208,22 +219,54 @@ impl XhttpXmuxH2Manager {
             .iter()
             .filter_map(|client| client.usage.unreusable_at)
             .min();
-        self.state_signal.waiter(deadline)
+        self.lifecycle.waiter(deadline)
     }
 
     fn force_close(&mut self) -> usize {
-        self.opening = 0;
+        self.lifecycle.close();
         let mut closed = 0_usize;
         for client in self.clients.drain(..) {
             client.connection_task.abort();
             closed = closed.saturating_add(1);
         }
-        self.state_signal.notify();
+        self.lifecycle.notify();
         closed
     }
 }
 
-pub(super) fn clear_xhttp_h2_xmux_managers() -> XhttpXmuxManagerClearReport {
+impl Drop for XhttpXmuxH2Manager {
+    fn drop(&mut self) {
+        let _ = self.force_close();
+    }
+}
+
+fn abort_new_h2_sender(sender: &mut XhttpH2EndpointSender) {
+    if let Some(connection_task) = sender.connection_task.take() {
+        connection_task.abort();
+    }
+}
+
+impl PendingXhttpH2Sender {
+    fn new(sender: XhttpH2EndpointSender) -> Self {
+        Self(Some(sender))
+    }
+
+    fn take(&mut self) -> XhttpH2EndpointSender {
+        self.0
+            .take()
+            .expect("pending xHTTP H2 sender must be present")
+    }
+}
+
+impl Drop for PendingXhttpH2Sender {
+    fn drop(&mut self) {
+        if let Some(sender) = &mut self.0 {
+            abort_new_h2_sender(sender);
+        }
+    }
+}
+
+pub(super) fn clear_xhttp_h2_xmux_managers(runtime_generation: u64) -> XhttpXmuxManagerClearReport {
     let Some(managers) = XHTTP_XMUX_H2_MANAGERS.get() else {
         return XhttpXmuxManagerClearReport::default();
     };
@@ -233,24 +276,38 @@ pub(super) fn clear_xhttp_h2_xmux_managers() -> XhttpXmuxManagerClearReport {
             ..XhttpXmuxManagerClearReport::default()
         };
     };
-    let drained = std::mem::take(&mut *managers);
+    let keys = managers
+        .keys()
+        .filter(|key| key.runtime_generation() == runtime_generation)
+        .cloned()
+        .collect::<Vec<_>>();
+    let drained = keys
+        .into_iter()
+        .filter_map(|key| managers.remove(&key))
+        .collect::<Vec<_>>();
     drop(managers);
 
     let mut report = XhttpXmuxManagerClearReport {
         managers: drained.len(),
         ..XhttpXmuxManagerClearReport::default()
     };
-    for manager in drained.into_values() {
-        match manager.try_lock() {
-            Ok(mut manager) => {
-                report.clients = report.clients.saturating_add(manager.force_close());
-            }
-            Err(_) => {
-                report.locked_managers = report.locked_managers.saturating_add(1);
-            }
-        }
+    for manager in &drained {
+        manager.lifecycle.close();
+    }
+    for manager in drained {
+        let (clients, deferred) = close_xhttp_h2_manager(&manager);
+        report.clients = report.clients.saturating_add(clients);
+        report.locked_managers = report.locked_managers.saturating_add(usize::from(deferred));
     }
     report
+}
+
+fn close_xhttp_h2_manager(manager: &XhttpXmuxManagerHandle<XhttpXmuxH2Manager>) -> (usize, bool) {
+    manager.lifecycle.close();
+    match manager.manager.try_lock() {
+        Ok(mut state) => (state.force_close(), false),
+        Err(_) => (0, true),
+    }
 }
 
 pub(in super::super) async fn select_xhttp_h2_xmux_client<F, Fut>(
@@ -262,39 +319,61 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<XhttpH2EndpointSender, String>>,
 {
-    let manager =
-        {
-            let mut managers = XHTTP_XMUX_H2_MANAGERS
-                .get_or_init(|| Mutex::new(HashMap::new()))
-                .lock()
-                .map_err(|_| "resident xHTTP H2 xmux manager lock poisoned".to_owned())?;
-            Arc::clone(managers.entry(key).or_insert_with(|| {
-                Arc::new(tokio::sync::Mutex::new(XhttpXmuxH2Manager::new(xmux)))
-            }))
-        };
+    let manager = {
+        let mut managers = XHTTP_XMUX_H2_MANAGERS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| "resident xHTTP H2 xmux manager lock poisoned".to_owned())?;
+        managers
+            .entry(key)
+            .or_insert_with(|| {
+                XhttpXmuxManagerHandle::new(|lifecycle| XhttpXmuxH2Manager::new(xmux, lifecycle))
+            })
+            .clone()
+    };
     let mut new_sender = Some(new_sender);
     loop {
+        if manager.lifecycle.is_closing() {
+            return Err(format!(
+                "resident xHTTP H2 xmux manager generation {} is closing",
+                manager.lifecycle.generation()
+            ));
+        }
         let action = {
-            let mut manager = manager.lock().await;
+            let mut manager = manager.manager.lock().await;
             manager.select_or_reserve_new()
         };
         match action {
-            XhttpXmuxH2SelectAction::Selected(selected) => return Ok(selected),
-            XhttpXmuxH2SelectAction::OpenNew => {
+            XhttpXmuxH2SelectAction::Selected(selected) => {
+                if manager.lifecycle.is_closing() {
+                    return Err(format!(
+                        "resident xHTTP H2 xmux manager generation {} closed during selection",
+                        manager.lifecycle.generation()
+                    ));
+                }
+                return Ok(selected);
+            }
+            XhttpXmuxH2SelectAction::OpenNew(opening) => {
                 let Some(new_sender) = new_sender.take() else {
                     return Err("resident xHTTP H2 xmux new sender was already consumed".to_owned());
                 };
-                let sender = new_sender().await;
-                let mut manager = manager.lock().await;
-                return match sender {
-                    Ok(sender) => manager.complete_new_client(sender),
-                    Err(err) => {
-                        manager.finish_opening();
-                        Err(err)
-                    }
+                let mut sender = match new_sender().await {
+                    Ok(sender) => PendingXhttpH2Sender::new(sender),
+                    Err(err) => return Err(err),
                 };
+                let mut state = manager.manager.lock().await;
+                return state.complete_new_client(sender.take(), &opening);
             }
             XhttpXmuxH2SelectAction::WaitForState(waiter) => waiter.wait().await,
+            XhttpXmuxH2SelectAction::Closed => {
+                return Err(format!(
+                    "resident xHTTP H2 xmux manager generation {} is closed",
+                    manager.lifecycle.generation()
+                ));
+            }
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

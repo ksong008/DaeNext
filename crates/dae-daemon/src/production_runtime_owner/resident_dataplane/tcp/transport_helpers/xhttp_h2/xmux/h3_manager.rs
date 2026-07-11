@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 static XHTTP_XMUX_H3_MANAGERS: OnceLock<
-    Mutex<HashMap<XhttpXmuxKey, Arc<tokio::sync::Mutex<XhttpXmuxH3Manager>>>>,
+    Mutex<HashMap<XhttpXmuxKey, XhttpXmuxManagerHandle<XhttpXmuxH3Manager>>>,
 > = OnceLock::new();
 
 struct XhttpXmuxH3ClientEntry {
@@ -17,35 +17,39 @@ struct XhttpXmuxH3ClientEntry {
     left_usage: i32,
 }
 
+struct PendingXhttpH3Client(Option<XhttpH3EndpointClient>);
+
 struct XhttpXmuxH3Manager {
     config: ResidentXhttpXmuxPlan,
     concurrency: i32,
     connections: i32,
-    opening: usize,
     clients: Vec<XhttpXmuxH3ClientEntry>,
-    state_signal: XhttpXmuxStateSignal,
+    lifecycle: Arc<XhttpXmuxManagerLifecycle>,
 }
 
 enum XhttpXmuxH3SelectAction {
     Selected(XhttpXmuxH3SelectedClient),
-    OpenNew,
+    OpenNew(XhttpXmuxOpeningLease),
     WaitForState(XhttpXmuxStateWait),
+    Closed,
 }
 
 impl XhttpXmuxH3Manager {
-    fn new(config: ResidentXhttpXmuxPlan) -> Self {
+    fn new(config: ResidentXhttpXmuxPlan, lifecycle: Arc<XhttpXmuxManagerLifecycle>) -> Self {
         let config = config.official_normalized();
         Self {
             concurrency: ResidentXhttpXmuxPlan::sample_range(config.max_concurrency),
             connections: ResidentXhttpXmuxPlan::sample_range(config.max_connections),
-            opening: 0,
             config,
             clients: Vec::new(),
-            state_signal: XhttpXmuxStateSignal::new(),
+            lifecycle,
         }
     }
 
     fn select_or_reserve_new(&mut self) -> XhttpXmuxH3SelectAction {
+        if self.lifecycle.is_closing() {
+            return XhttpXmuxH3SelectAction::Closed;
+        }
         self.prune();
 
         let reusable_len = self.reusable_len();
@@ -54,10 +58,9 @@ impl XhttpXmuxH3Manager {
         }
 
         if self.connections > 0
-            && reusable_len.saturating_add(self.opening) < self.connections as usize
+            && reusable_len.saturating_add(self.lifecycle.opening()) < self.connections as usize
         {
-            self.opening = self.opening.saturating_add(1);
-            return XhttpXmuxH3SelectAction::OpenNew;
+            return self.reserve_opening();
         }
 
         let candidates = self
@@ -89,29 +92,42 @@ impl XhttpXmuxH3Manager {
             client: client.client.clone(),
             lease: XhttpXmuxClientLease::open(Arc::clone(&client.usage)),
         };
-        self.state_signal.notify();
+        self.lifecycle.notify();
         XhttpXmuxH3SelectAction::Selected(selected)
     }
 
     fn reserve_new_or_wait(&mut self, reusable_len: usize) -> XhttpXmuxH3SelectAction {
-        if self.connections > 0
-            && reusable_len.saturating_add(self.opening) >= self.connections as usize
+        let opening = self.lifecycle.opening();
+        if self.connections > 0 && reusable_len.saturating_add(opening) >= self.connections as usize
         {
             return XhttpXmuxH3SelectAction::WaitForState(self.state_waiter());
         }
-        if self.opening == 0 || self.connections > 0 {
-            self.opening = self.opening.saturating_add(1);
-            XhttpXmuxH3SelectAction::OpenNew
+        if opening == 0 || self.connections > 0 {
+            self.reserve_opening()
         } else {
             XhttpXmuxH3SelectAction::WaitForState(self.state_waiter())
         }
     }
 
+    fn reserve_opening(&self) -> XhttpXmuxH3SelectAction {
+        self.lifecycle
+            .reserve_opening()
+            .map(XhttpXmuxH3SelectAction::OpenNew)
+            .unwrap_or(XhttpXmuxH3SelectAction::Closed)
+    }
+
     fn complete_new_client(
         &mut self,
-        client: XhttpH3EndpointClient,
+        mut client: XhttpH3EndpointClient,
+        opening: &XhttpXmuxOpeningLease,
     ) -> Result<XhttpXmuxH3SelectedClient, String> {
-        self.finish_opening();
+        if !opening.is_current() || self.lifecycle.is_closing() {
+            abort_new_h3_client(&mut client);
+            return Err(format!(
+                "resident xHTTP H3 xmux manager generation {} closed during open",
+                self.lifecycle.generation()
+            ));
+        }
         let mut left_usage = -1;
         let sampled_left_usage = ResidentXhttpXmuxPlan::sample_range(self.config.c_max_reuse_times);
         if sampled_left_usage > 0 {
@@ -134,7 +150,7 @@ impl XhttpXmuxH3Manager {
             open_usage: AtomicI32::new(0),
             left_requests: AtomicI32::new(left_requests),
             unreusable_at,
-            state_signal: self.state_signal.clone(),
+            state_signal: self.lifecycle.signal(),
         });
         self.clients.push(XhttpXmuxH3ClientEntry {
             client: client.client.clone(),
@@ -148,11 +164,6 @@ impl XhttpXmuxH3Manager {
             client: client.client,
             lease: XhttpXmuxClientLease::open(usage),
         })
-    }
-
-    fn finish_opening(&mut self) {
-        self.opening = self.opening.saturating_sub(1);
-        self.state_signal.notify();
     }
 
     fn prune(&mut self) {
@@ -183,7 +194,7 @@ impl XhttpXmuxH3Manager {
             }
         }
         if changed {
-            self.state_signal.notify();
+            self.lifecycle.notify();
         }
     }
 
@@ -210,11 +221,11 @@ impl XhttpXmuxH3Manager {
             .iter()
             .filter_map(|client| client.usage.unreusable_at)
             .min();
-        self.state_signal.waiter(deadline)
+        self.lifecycle.waiter(deadline)
     }
 
     fn force_close(&mut self) -> usize {
-        self.opening = 0;
+        self.lifecycle.close();
         let mut closed = 0_usize;
         for client in self.clients.drain(..) {
             client
@@ -222,12 +233,44 @@ impl XhttpXmuxH3Manager {
                 .abort_with_reason(b"resident xhttp h3 xmux runtime cleanup");
             closed = closed.saturating_add(1);
         }
-        self.state_signal.notify();
+        self.lifecycle.notify();
         closed
     }
 }
 
-pub(super) fn clear_xhttp_h3_xmux_managers() -> XhttpXmuxManagerClearReport {
+impl Drop for XhttpXmuxH3Manager {
+    fn drop(&mut self) {
+        let _ = self.force_close();
+    }
+}
+
+fn abort_new_h3_client(client: &mut XhttpH3EndpointClient) {
+    if let Some(connection) = client.connection.take() {
+        connection.abort_with_reason(b"resident xhttp h3 xmux generation closed");
+    }
+}
+
+impl PendingXhttpH3Client {
+    fn new(client: XhttpH3EndpointClient) -> Self {
+        Self(Some(client))
+    }
+
+    fn take(&mut self) -> XhttpH3EndpointClient {
+        self.0
+            .take()
+            .expect("pending xHTTP H3 client must be present")
+    }
+}
+
+impl Drop for PendingXhttpH3Client {
+    fn drop(&mut self) {
+        if let Some(client) = &mut self.0 {
+            abort_new_h3_client(client);
+        }
+    }
+}
+
+pub(super) fn clear_xhttp_h3_xmux_managers(runtime_generation: u64) -> XhttpXmuxManagerClearReport {
     let Some(managers) = XHTTP_XMUX_H3_MANAGERS.get() else {
         return XhttpXmuxManagerClearReport::default();
     };
@@ -237,24 +280,38 @@ pub(super) fn clear_xhttp_h3_xmux_managers() -> XhttpXmuxManagerClearReport {
             ..XhttpXmuxManagerClearReport::default()
         };
     };
-    let drained = std::mem::take(&mut *managers);
+    let keys = managers
+        .keys()
+        .filter(|key| key.runtime_generation() == runtime_generation)
+        .cloned()
+        .collect::<Vec<_>>();
+    let drained = keys
+        .into_iter()
+        .filter_map(|key| managers.remove(&key))
+        .collect::<Vec<_>>();
     drop(managers);
 
     let mut report = XhttpXmuxManagerClearReport {
         managers: drained.len(),
         ..XhttpXmuxManagerClearReport::default()
     };
-    for manager in drained.into_values() {
-        match manager.try_lock() {
-            Ok(mut manager) => {
-                report.clients = report.clients.saturating_add(manager.force_close());
-            }
-            Err(_) => {
-                report.locked_managers = report.locked_managers.saturating_add(1);
-            }
-        }
+    for manager in &drained {
+        manager.lifecycle.close();
+    }
+    for manager in drained {
+        let (clients, deferred) = close_xhttp_h3_manager(&manager);
+        report.clients = report.clients.saturating_add(clients);
+        report.locked_managers = report.locked_managers.saturating_add(usize::from(deferred));
     }
     report
+}
+
+fn close_xhttp_h3_manager(manager: &XhttpXmuxManagerHandle<XhttpXmuxH3Manager>) -> (usize, bool) {
+    manager.lifecycle.close();
+    match manager.manager.try_lock() {
+        Ok(mut state) => (state.force_close(), false),
+        Err(_) => (0, true),
+    }
 }
 
 pub(in super::super) async fn select_xhttp_h3_xmux_client<F, Fut>(
@@ -266,39 +323,61 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<XhttpH3EndpointClient, String>>,
 {
-    let manager =
-        {
-            let mut managers = XHTTP_XMUX_H3_MANAGERS
-                .get_or_init(|| Mutex::new(HashMap::new()))
-                .lock()
-                .map_err(|_| "resident xHTTP H3 xmux manager lock poisoned".to_owned())?;
-            Arc::clone(managers.entry(key).or_insert_with(|| {
-                Arc::new(tokio::sync::Mutex::new(XhttpXmuxH3Manager::new(xmux)))
-            }))
-        };
+    let manager = {
+        let mut managers = XHTTP_XMUX_H3_MANAGERS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| "resident xHTTP H3 xmux manager lock poisoned".to_owned())?;
+        managers
+            .entry(key)
+            .or_insert_with(|| {
+                XhttpXmuxManagerHandle::new(|lifecycle| XhttpXmuxH3Manager::new(xmux, lifecycle))
+            })
+            .clone()
+    };
     let mut new_client = Some(new_client);
     loop {
+        if manager.lifecycle.is_closing() {
+            return Err(format!(
+                "resident xHTTP H3 xmux manager generation {} is closing",
+                manager.lifecycle.generation()
+            ));
+        }
         let action = {
-            let mut manager = manager.lock().await;
+            let mut manager = manager.manager.lock().await;
             manager.select_or_reserve_new()
         };
         match action {
-            XhttpXmuxH3SelectAction::Selected(selected) => return Ok(selected),
-            XhttpXmuxH3SelectAction::OpenNew => {
+            XhttpXmuxH3SelectAction::Selected(selected) => {
+                if manager.lifecycle.is_closing() {
+                    return Err(format!(
+                        "resident xHTTP H3 xmux manager generation {} closed during selection",
+                        manager.lifecycle.generation()
+                    ));
+                }
+                return Ok(selected);
+            }
+            XhttpXmuxH3SelectAction::OpenNew(opening) => {
                 let Some(new_client) = new_client.take() else {
                     return Err("resident xHTTP H3 xmux new client was already consumed".to_owned());
                 };
-                let client = new_client().await;
-                let mut manager = manager.lock().await;
-                return match client {
-                    Ok(client) => manager.complete_new_client(client),
-                    Err(err) => {
-                        manager.finish_opening();
-                        Err(err)
-                    }
+                let mut client = match new_client().await {
+                    Ok(client) => PendingXhttpH3Client::new(client),
+                    Err(err) => return Err(err),
                 };
+                let mut state = manager.manager.lock().await;
+                return state.complete_new_client(client.take(), &opening);
             }
             XhttpXmuxH3SelectAction::WaitForState(waiter) => waiter.wait().await,
+            XhttpXmuxH3SelectAction::Closed => {
+                return Err(format!(
+                    "resident xHTTP H3 xmux manager generation {} is closed",
+                    manager.lifecycle.generation()
+                ));
+            }
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
