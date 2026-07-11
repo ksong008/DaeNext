@@ -1,7 +1,6 @@
 use std::io::{self, ErrorKind};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
 
 use dae_datapath::{
     TcpDirectDialOptions, TcpDirectDialReport, tcp_direct_connect_finish, tcp_direct_connect_start,
@@ -14,7 +13,8 @@ use tokio::time;
 use super::ResidentStopSignal;
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT, ResidentDataplaneMetrics,
-    SharedResidentStopSignal, resolve_socket_addr_candidates, try_socket_addr_candidates,
+    SharedResidentStopSignal, reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
+    resolve_socket_addr_candidates, try_socket_addr_candidates,
 };
 
 #[derive(Debug)]
@@ -139,17 +139,20 @@ pub(super) async fn relay_tcp_direct_async(
 
     let mut inbound_closed = false;
     let mut direct_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
     let mut direct_buf = [0_u8; 16 * 1024];
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             read = inbound.read(&mut inbound_buf), if !inbound_closed && !direct_closed => {
                 match read {
                     Ok(0) => {
                         inbound_closed = true;
                         let _ = direct.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(read) => {
                         direct
@@ -158,7 +161,7 @@ pub(super) async fn relay_tcp_direct_async(
                             .map_err(|err| format!("write client payload to direct TCP: {err}"))?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read inbound TCP for direct relay: {err}")),
                 }
@@ -168,7 +171,7 @@ pub(super) async fn relay_tcp_direct_async(
                     Ok(0) => {
                         direct_closed = true;
                         let _ = inbound.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(read) => {
                         inbound
@@ -177,15 +180,13 @@ pub(super) async fn relay_tcp_direct_async(
                             .map_err(|err| format!("write direct TCP payload to client: {err}"))?;
                         stats.direct_to_client += read;
                         metrics.add_download(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read direct TCP: {err}")),
                 }
             }
-            _ = time::sleep(Duration::from_millis(100)) => {
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err("resident direct TCP relay idle timeout".to_owned());
-                }
+            _ = &mut idle_deadline => {
+                return Err("resident direct TCP relay idle timeout".to_owned());
             }
         }
 
@@ -292,5 +293,38 @@ mod tests {
         assert_eq!(&response, b"WORLD");
         stop.store(true, Ordering::Relaxed);
         upstream_done.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resident_direct_async_relay_stops_without_timer_polling() {
+        let inbound_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let inbound_client = TcpStream::connect(inbound_listener.local_addr().unwrap()).unwrap();
+        let (inbound, _) = inbound_listener.accept().unwrap();
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let direct = TcpStream::connect(upstream_listener.local_addr().unwrap()).unwrap();
+        let (upstream_peer, _) = upstream_listener.accept().unwrap();
+        inbound.set_nonblocking(true).unwrap();
+        direct.set_nonblocking(true).unwrap();
+        let mut inbound = TokioTcpStream::from_std(inbound).unwrap();
+        let mut direct = TokioTcpStream::from_std(direct).unwrap();
+        let stop = ResidentStopSignal::shared();
+        let metrics = ResidentDataplaneMetrics::default();
+        let relay =
+            relay_tcp_direct_async(&mut inbound, &mut direct, Arc::clone(&stop), &[], &metrics);
+        tokio::pin!(relay);
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut relay)
+                .await
+                .is_err()
+        );
+        stop.store(true, Ordering::Relaxed);
+        let stats = tokio::time::timeout(Duration::from_millis(50), &mut relay)
+            .await
+            .expect("direct relay did not observe stop broadcast")
+            .unwrap();
+        assert_eq!(stats, DirectTcpRelayStats::default());
+        drop((inbound_client, upstream_peer));
     }
 }

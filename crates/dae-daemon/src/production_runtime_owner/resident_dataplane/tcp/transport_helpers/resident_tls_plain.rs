@@ -14,14 +14,17 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
     let mut stats = DirectTcpRelayStats::default();
     let mut inbound_closed = false;
     let mut proxy_closed = false;
-    let mut last_activity = Instant::now();
     let mut pending_client_flush_bytes = 0_usize;
     let mut pending_client_flush_deadline = None;
     let mut inbound_buf = [0_u8; 16 * 1024];
     let mut proxy_buf = [0_u8; 16 * 1024];
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
 
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
                 match read {
                     Ok(0) => {
@@ -33,7 +36,7 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
                         .await?;
                         inbound_closed = true;
                         client.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(read) => {
                         client
@@ -54,7 +57,7 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
                         }
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         flush_pending_tls_plain(
@@ -65,7 +68,7 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
                         .await?;
                         inbound_closed = true;
                         client.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read inbound TCP for proxy TLS relay: {err}")),
                 }
@@ -75,7 +78,7 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
                     Ok(0) => {
                         proxy_closed = true;
                         let _ = inbound.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(read) => {
                         if let Err(err) = inbound.write_all(&proxy_buf[..read]).await {
@@ -86,12 +89,12 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
                         }
                         stats.direct_to_client += read;
                         metrics.add_download(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_tls_plain_close_error(&err) => {
                         proxy_closed = true;
                         let _ = inbound.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read proxy TLS plaintext: {err}")),
                 }
@@ -103,12 +106,10 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
                     &mut pending_client_flush_deadline,
                 )
                 .await?;
-                last_activity = Instant::now();
+                reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
             }
-            _ = time::sleep(Duration::from_millis(100)) => {
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err("resident proxy TLS relay idle timeout".to_owned());
-                }
+            _ = &mut idle_deadline => {
+                return Err("resident proxy TLS relay idle timeout".to_owned());
             }
         }
 

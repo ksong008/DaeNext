@@ -13,7 +13,10 @@ use std::sync::{Arc, Mutex, atomic::Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use super::{ResidentStopSignal, SharedResidentStopSignal};
+use super::{
+    ResidentStopSignal, SharedResidentStopSignal, reset_resident_relay_idle_deadline,
+    resident_relay_idle_deadline,
+};
 
 use bytes::Bytes;
 use dae_core_types::OutboundIndex;
