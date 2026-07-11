@@ -60,7 +60,8 @@ pub use self::memory_bench::{
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use self::resolver::{
     ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl,
-    resolve_host_with_configured_fallback_dns, select_first_socket_addr,
+    resolve_host_with_configured_fallback_dns, resolve_socket_addr_candidates,
+    try_socket_addr_candidates,
 };
 
 #[path = "runtime/defaults.rs"]

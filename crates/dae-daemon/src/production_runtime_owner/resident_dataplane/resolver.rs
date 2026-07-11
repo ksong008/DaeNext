@@ -9,6 +9,11 @@ use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::tcp::set_socket_mark;
 use super::udp::encode_dns_qname;
 
+mod candidates;
+pub(in crate::production_runtime_owner::resident_dataplane) use candidates::{
+    resolve_socket_addr_candidates, try_socket_addr_candidates,
+};
+
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
 const DNS_QCLASS_IN: u16 = 1;
