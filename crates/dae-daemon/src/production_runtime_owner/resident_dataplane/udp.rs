@@ -12,10 +12,9 @@ use dae_datapath::TcpDialMode;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 use dae_outbound::{
     anytls::{contract as anytls_contract, link as anytls_link},
-    hysteria2::{authenticate_hysteria2_connection, build_hysteria2_runtime_client_config},
+    hysteria2::authenticate_hysteria2_connection,
     juicity::{
-        authenticate_juicity_connection, build_juicity_runtime_client_config,
-        decode_stream_packet_frame, seal_stream_packet_frame,
+        authenticate_juicity_connection, decode_stream_packet_frame, seal_stream_packet_frame,
     },
     shadowsocks::{
         Ss2022UdpCodec, decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
@@ -27,7 +26,7 @@ use dae_outbound::{
     },
     socks5::{Socks5Address, udp_packet},
     trojan::packet as trojan_packet,
-    tuic::{authenticate_tuic_connection, build_tuic_runtime_client_config},
+    tuic::authenticate_tuic_connection,
     vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,
     vmess,
@@ -61,14 +60,14 @@ use super::plan::{
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,
-    XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts, XhttpStreamUploadClient,
-    XhttpUploadClient, close_xhttp_download_client, close_xhttp_stream_upload_client,
-    close_xhttp_upload_client, collect_vmess_grpc_decrypted,
+    ResidentConnectedQuicEndpoint, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
+    XhttpStreamUploadClient, XhttpUploadClient, close_xhttp_download_client,
+    close_xhttp_stream_upload_client, close_xhttp_upload_client, collect_vmess_grpc_decrypted,
     decode_vmess_grpc_response_stream_async, open_grpc_h2_stream, open_h2_body_stream,
-    open_marked_hysteria2_quic_endpoint_for_remote, open_marked_quic_endpoint_for_remote,
-    open_xhttp_packet_up_parts, open_xhttp_stream_parts, poll_xhttp_download_data,
-    resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async, send_grpc_hunk,
-    send_h2_data, send_h2_data_with_context, send_xhttp_packet_up_request, send_xhttp_stream_data,
+    open_hysteria2_quic_connection_candidates_async, open_juicity_quic_connection_candidates_async,
+    open_tuic_quic_connection_candidates_async, open_xhttp_packet_up_parts,
+    open_xhttp_stream_parts, poll_xhttp_download_data, send_grpc_hunk, send_h2_data,
+    send_h2_data_with_context, send_xhttp_packet_up_request, send_xhttp_stream_data,
     set_socket_mark,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};

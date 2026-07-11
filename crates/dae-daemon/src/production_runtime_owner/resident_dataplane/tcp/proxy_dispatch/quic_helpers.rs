@@ -1,6 +1,8 @@
 use super::*;
 
-use crate::production_runtime_owner::resident_dataplane::select_first_socket_addr;
+use crate::production_runtime_owner::resident_dataplane::{
+    resolve_socket_addr_candidates, try_socket_addr_candidates,
+};
 
 use std::fmt;
 use std::future::Future;
@@ -328,32 +330,72 @@ fn salamander_hash(key: &[u8], salt: &[u8; HYSTERIA2_SALAMANDER_SALT_LEN]) -> [u
     hash
 }
 
-pub(crate) async fn resolve_proxy_udp_addr_async(
+pub(crate) async fn resolve_proxy_udp_addr_candidates_async(
     proxy: &ResidentProxyPlan,
-) -> Result<SocketAddr, String> {
+) -> Result<Vec<SocketAddr>, String> {
     let target = format!("{}:{}", proxy.server_host, proxy.server_port);
-    let addrs = tokio::net::lookup_host(target.as_str())
-        .await
-        .map_err(|err| format!("resolve QUIC endpoint {target}: {err}"))?;
-    select_first_socket_addr(addrs)
-        .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
+    resolve_socket_addr_candidates(&target, RESIDENT_CONNECT_TIMEOUT, "resolve QUIC endpoint").await
 }
 
-pub(crate) async fn resolve_hysteria2_quic_remote_async(
+pub(crate) async fn resolve_hysteria2_quic_remote_candidates_async(
     proxy: &ResidentProxyPlan,
     port_hop_ports: &[u16],
-) -> Result<SocketAddr, String> {
+) -> Result<Vec<SocketAddr>, String> {
     let selected_port = if port_hop_ports.is_empty() {
         proxy.server_port
     } else {
         port_hop_ports[fastrand::usize(..port_hop_ports.len())]
     };
     let target = format!("{}:{selected_port}", proxy.server_host);
-    let addrs = tokio::net::lookup_host(target.as_str())
-        .await
-        .map_err(|err| format!("resolve Hysteria2 QUIC endpoint {target}: {err}"))?;
-    select_first_socket_addr(addrs)
-        .ok_or_else(|| format!("resolve Hysteria2 QUIC endpoint {target}: no address"))
+    resolve_socket_addr_candidates(
+        &target,
+        RESIDENT_CONNECT_TIMEOUT,
+        "resolve Hysteria2 QUIC endpoint",
+    )
+    .await
+}
+
+pub(crate) async fn connect_quic_endpoint_candidates_async<F>(
+    candidates: &[SocketAddr],
+    server_name: &str,
+    timeout: Duration,
+    context: &str,
+    mut endpoint_for_remote: F,
+) -> Result<(SocketAddr, quinn::Endpoint, quinn::Connection), String>
+where
+    F: FnMut(SocketAddr) -> Result<quinn::Endpoint, String>,
+{
+    let (remote, (endpoint, connection)) =
+        try_socket_addr_candidates(candidates, context, |remote| {
+            let endpoint = endpoint_for_remote(remote);
+            let server_name = server_name.to_owned();
+            async move {
+                let endpoint = endpoint?;
+                let connecting = match endpoint.connect(remote, &server_name) {
+                    Ok(connecting) => connecting,
+                    Err(err) => {
+                        endpoint.close(0_u32.into(), b"resolved candidate connect failed");
+                        endpoint.wait_idle().await;
+                        return Err(format!("start QUIC connect: {err}"));
+                    }
+                };
+                match time::timeout(timeout, connecting).await {
+                    Ok(Ok(connection)) => Ok((endpoint, connection)),
+                    Ok(Err(err)) => {
+                        endpoint.close(0_u32.into(), b"resolved candidate connect failed");
+                        endpoint.wait_idle().await;
+                        Err(format!("await QUIC connect: {err}"))
+                    }
+                    Err(_) => {
+                        endpoint.close(0_u32.into(), b"resolved candidate connect timeout");
+                        endpoint.wait_idle().await;
+                        Err("QUIC connect timeout".to_owned())
+                    }
+                }
+            }
+        })
+        .await?;
+    Ok((remote, endpoint, connection))
 }
 
 pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {

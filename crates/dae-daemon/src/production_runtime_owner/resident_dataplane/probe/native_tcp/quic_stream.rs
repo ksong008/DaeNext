@@ -4,23 +4,18 @@ use std::task::{Context, Poll};
 
 use dae_outbound::{
     hysteria2::{
-        authenticate_hysteria2_connection, build_hysteria2_runtime_client_config,
-        read_hysteria2_tcp_response, write_hysteria2_tcp_request,
+        authenticate_hysteria2_connection, read_hysteria2_tcp_response, write_hysteria2_tcp_request,
     },
-    juicity::{
-        JuicityAuthStream, authenticate_juicity_connection, build_juicity_runtime_client_config,
-        write_juicity_tcp_request,
-    },
-    tuic::{
-        authenticate_tuic_connection, build_tuic_runtime_client_config, write_tuic_connect_request,
-    },
+    juicity::{JuicityAuthStream, authenticate_juicity_connection, write_juicity_tcp_request},
+    tuic::{authenticate_tuic_connection, write_tuic_connect_request},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use super::super::super::RESIDENT_CONNECT_TIMEOUT;
 use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::super::super::tcp::{
-    open_marked_hysteria2_quic_endpoint_for_remote, open_marked_quic_endpoint_for_remote,
-    resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async,
+    ResidentConnectedQuicEndpoint, open_hysteria2_quic_connection_candidates_async,
+    open_juicity_quic_connection_candidates_async, open_tuic_quic_connection_candidates_async,
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
@@ -40,30 +35,21 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
             obfs,
             port_hop_ports,
         } => {
-            let remote = resolve_hysteria2_quic_remote_async(&selection.proxy, &port_hop_ports)
-                .await
-                .map_err(NativeTcpProbeError::Open)?;
-            let mut endpoint =
-                open_marked_hysteria2_quic_endpoint_for_remote(selection.mark, &obfs, remote)
-                    .map_err(NativeTcpProbeError::Open)?;
-            endpoint.set_default_client_config(
-                build_hysteria2_runtime_client_config(allow_insecure, pin_sha256).map_err(
-                    |err| {
-                        NativeTcpProbeError::Open(format!(
-                            "build native Hysteria2 QUIC client config: {err}"
-                        ))
-                    },
-                )?,
-            );
-            let connection = endpoint
-                .connect(remote, &selection.proxy.server_name)
-                .map_err(|err| {
-                    NativeTcpProbeError::Open(format!("connect native Hysteria2 endpoint: {err}"))
-                })?
-                .await
-                .map_err(|err| {
-                    NativeTcpProbeError::Open(format!("await native Hysteria2 connect: {err}"))
-                })?;
+            let ResidentConnectedQuicEndpoint {
+                endpoint,
+                connection,
+                ..
+            } = open_hysteria2_quic_connection_candidates_async(
+                &selection.proxy,
+                selection.mark,
+                &obfs,
+                &port_hop_ports,
+                allow_insecure,
+                &pin_sha256,
+                RESIDENT_CONNECT_TIMEOUT,
+            )
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
             let auth_report = authenticate_hysteria2_connection(connection.clone(), &auth, max_rx)
                 .await
                 .map_err(|err| {
@@ -109,25 +95,19 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
             alpn,
             allow_insecure,
         } => {
-            let remote = resolve_proxy_udp_addr_async(&selection.proxy)
-                .await
-                .map_err(NativeTcpProbeError::Open)?;
-            let mut endpoint = open_marked_quic_endpoint_for_remote(selection.mark, remote)
-                .map_err(NativeTcpProbeError::Open)?;
-            endpoint.set_default_client_config(
-                build_tuic_runtime_client_config(&alpn, allow_insecure).map_err(|err| {
-                    NativeTcpProbeError::Open(format!("build native TUIC client config: {err}"))
-                })?,
-            );
-            let connection = endpoint
-                .connect(remote, &selection.proxy.server_name)
-                .map_err(|err| {
-                    NativeTcpProbeError::Open(format!("connect native TUIC endpoint: {err}"))
-                })?
-                .await
-                .map_err(|err| {
-                    NativeTcpProbeError::Open(format!("await native TUIC connect: {err}"))
-                })?;
+            let ResidentConnectedQuicEndpoint {
+                endpoint,
+                connection,
+                ..
+            } = open_tuic_quic_connection_candidates_async(
+                &selection.proxy,
+                selection.mark,
+                &alpn,
+                allow_insecure,
+                RESIDENT_CONNECT_TIMEOUT,
+            )
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
             authenticate_tuic_connection(&connection, &uuid, &password)
                 .await
                 .map_err(|err| {
@@ -151,28 +131,19 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
             allow_insecure,
             pinned_certchain_sha256,
         } => {
-            let remote = resolve_proxy_udp_addr_async(&selection.proxy)
-                .await
-                .map_err(NativeTcpProbeError::Open)?;
-            let mut endpoint = open_marked_quic_endpoint_for_remote(selection.mark, remote)
-                .map_err(NativeTcpProbeError::Open)?;
-            endpoint.set_default_client_config(
-                build_juicity_runtime_client_config(allow_insecure, &pinned_certchain_sha256)
-                    .map_err(|err| {
-                        NativeTcpProbeError::Open(format!(
-                            "build native Juicity client config: {err}"
-                        ))
-                    })?,
-            );
-            let connection = endpoint
-                .connect(remote, &selection.proxy.server_name)
-                .map_err(|err| {
-                    NativeTcpProbeError::Open(format!("connect native Juicity endpoint: {err}"))
-                })?
-                .await
-                .map_err(|err| {
-                    NativeTcpProbeError::Open(format!("await native Juicity connect: {err}"))
-                })?;
+            let ResidentConnectedQuicEndpoint {
+                endpoint,
+                connection,
+                ..
+            } = open_juicity_quic_connection_candidates_async(
+                &selection.proxy,
+                selection.mark,
+                allow_insecure,
+                &pinned_certchain_sha256,
+                RESIDENT_CONNECT_TIMEOUT,
+            )
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
             let (_, auth_stream) = authenticate_juicity_connection(&connection, &uuid, &password)
                 .await
                 .map_err(|err| {

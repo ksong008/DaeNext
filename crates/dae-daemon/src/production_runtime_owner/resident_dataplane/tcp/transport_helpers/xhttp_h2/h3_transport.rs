@@ -4,7 +4,7 @@ use super::xmux::{
     select_xhttp_h3_xmux_client,
 };
 use super::*;
-use crate::production_runtime_owner::resident_dataplane::select_first_socket_addr;
+use crate::production_runtime_owner::resident_dataplane::resolve_socket_addr_candidates;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -85,16 +85,20 @@ async fn open_xhttp_h3_connection(
     endpoint: &ResidentXhttpEndpointPlan,
     mark: u32,
 ) -> Result<XhttpH3Connection, String> {
-    let remote = resolve_xhttp_endpoint_udp_addr_async(endpoint).await?;
-    let mut quic_endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
-    quic_endpoint.set_default_client_config(build_xhttp_h3_client_config(endpoint)?);
-    let connecting = quic_endpoint
-        .connect(remote, &endpoint.server_name)
-        .map_err(|err| format!("connect xHTTP H3 QUIC endpoint: {err}"))?;
-    let connection = time::timeout(RESIDENT_CONNECT_TIMEOUT, connecting)
-        .await
-        .map_err(|_| "xHTTP H3 QUIC connect timeout".to_owned())?
-        .map_err(|err| format!("await xHTTP H3 QUIC connect: {err}"))?;
+    let candidates = resolve_xhttp_endpoint_udp_addr_candidates_async(endpoint).await?;
+    let client_config = build_xhttp_h3_client_config(endpoint)?;
+    let (_, quic_endpoint, connection) = connect_quic_endpoint_candidates_async(
+        &candidates,
+        &endpoint.server_name,
+        RESIDENT_CONNECT_TIMEOUT,
+        "connect xHTTP H3 QUIC endpoint",
+        |remote| {
+            let mut quic_endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
+            quic_endpoint.set_default_client_config(client_config.clone());
+            Ok(quic_endpoint)
+        },
+    )
+    .await?;
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let (mut driver, client) =
         time::timeout(RESIDENT_CONNECT_TIMEOUT, h3::client::new(h3_connection))
@@ -112,15 +116,16 @@ async fn open_xhttp_h3_connection(
     })
 }
 
-async fn resolve_xhttp_endpoint_udp_addr_async(
+async fn resolve_xhttp_endpoint_udp_addr_candidates_async(
     endpoint: &ResidentXhttpEndpointPlan,
-) -> Result<SocketAddr, String> {
+) -> Result<Vec<SocketAddr>, String> {
     let target = format!("{}:{}", endpoint.server_host, endpoint.server_port);
-    let addrs = tokio::net::lookup_host(target.as_str())
-        .await
-        .map_err(|err| format!("resolve xHTTP H3 endpoint {target}: {err}"))?;
-    select_first_socket_addr(addrs)
-        .ok_or_else(|| format!("resolve xHTTP H3 endpoint {target}: no address"))
+    resolve_socket_addr_candidates(
+        &target,
+        RESIDENT_CONNECT_TIMEOUT,
+        "resolve xHTTP H3 endpoint",
+    )
+    .await
 }
 
 impl XhttpH3Connection {
