@@ -454,12 +454,7 @@ fn geodata_http_body(base_url: &url::Url, mut response: Vec<u8>) -> io::Result<G
                 format!("geodata fetch returned HTTP {status} without Location"),
             )
         })?;
-        let next = base_url.join(location.trim()).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid geodata redirect location: {err}"),
-            )
-        })?;
+        let next = geodata_redirect_url(base_url, location)?;
         return Ok(GeodataHttpResult::Redirect(next));
     }
     if !(200..300).contains(&status) {
@@ -510,12 +505,7 @@ fn geodata_http_body_to_file<R: Read>(
                 format!("geodata fetch returned HTTP {status} without Location"),
             )
         })?;
-        let next = base_url.join(location.trim()).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid geodata redirect location: {err}"),
-            )
-        })?;
+        let next = geodata_redirect_url(base_url, location)?;
         return Ok(GeodataHttpFileResult::Redirect(next));
     }
     if !(200..300).contains(&status) {
@@ -544,6 +534,28 @@ fn geodata_http_body_to_file<R: Read>(
         bytes,
         sha256: hex_encode(&hasher.finalize()),
     }))
+}
+
+fn geodata_redirect_url(base_url: &url::Url, location: &str) -> io::Result<url::Url> {
+    let next = base_url.join(location.trim()).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid geodata redirect location: {err}"),
+        )
+    })?;
+    if base_url.scheme() == "https" && next.scheme() == "http" {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "geodata HTTPS to HTTP redirect downgrade is not allowed",
+        ));
+    }
+    if !matches!(next.scheme(), "http" | "https") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unsupported geodata redirect scheme: {}", next.scheme()),
+        ));
+    }
+    Ok(next)
 }
 
 fn geodata_content_length(headers: &str) -> io::Result<Option<u64>> {
