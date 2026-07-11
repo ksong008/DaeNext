@@ -1,12 +1,15 @@
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::try_socket_addr_candidates;
 
 #[derive(Default)]
 pub(super) struct DatagramRelay {
     socket: Option<tokio::net::UdpSocket>,
-    remote: Option<SocketAddr>,
+    remote_candidates: Vec<SocketAddr>,
+    selected_index: usize,
     response_buf: Vec<u8>,
 }
 
@@ -18,18 +21,70 @@ impl DatagramRelay {
         label: &str,
     ) -> Result<(), String> {
         self.ensure_open(proxy).await?;
-        let remote = self
-            .remote
-            .ok_or_else(|| format!("{label} UDP relay remote is not initialized"))?;
+        self.send_packet(request, proxy.mark, label).await
+    }
+
+    pub(super) async fn open_candidates(
+        &mut self,
+        candidates: Vec<SocketAddr>,
+        mark: u32,
+        label: &str,
+    ) -> Result<(), String> {
+        self.socket = None;
+        self.remote_candidates = candidates;
+        self.selected_index = 0;
+        self.select_open_candidate(0, mark, label).await
+    }
+
+    pub(super) async fn send_packet(
+        &mut self,
+        request: &[u8],
+        mark: u32,
+        label: &str,
+    ) -> Result<(), String> {
+        if self.socket.is_none() || self.remote_candidates.is_empty() {
+            return Err(format!("{label} UDP relay is not initialized"));
+        }
+        let remote = self.remote_candidates[self.selected_index];
         let socket = self
             .socket
             .as_ref()
             .ok_or_else(|| format!("{label} UDP relay socket is not initialized"))?;
-        socket
-            .send_to(request, remote)
-            .await
-            .map_err(|err| format!("send {label} UDP datagram: {err}"))?;
-        Ok(())
+        match socket.send_to(request, remote).await {
+            Ok(_) => Ok(()),
+            Err(first_err) => {
+                self.socket = None;
+                let next = self.selected_index.saturating_add(1);
+                if next >= self.remote_candidates.len() {
+                    return Err(format!(
+                        "send {label} UDP datagram to {remote}: {first_err}"
+                    ));
+                }
+                let remaining = &self.remote_candidates[next..];
+                let context = format!(
+                    "send {label} UDP datagram after candidate {remote} failed: {first_err}"
+                );
+                let (selected, socket) =
+                    try_socket_addr_candidates(remaining, &context, |candidate| async move {
+                        let socket = open_marked_tokio_udp_socket(candidate, mark).await?;
+                        socket
+                            .send_to(request, candidate)
+                            .await
+                            .map_err(|err| format!("send {label} UDP datagram: {err}"))?;
+                        Ok(socket)
+                    })
+                    .await?;
+                self.selected_index = next
+                    + remaining
+                        .iter()
+                        .position(|candidate| *candidate == selected)
+                        .ok_or_else(|| {
+                            format!("{label} UDP relay selected an unknown address candidate")
+                        })?;
+                self.socket = Some(socket);
+                Ok(())
+            }
+        }
     }
 
     pub(super) fn poll_response(&mut self, label: &str) -> Result<Option<Vec<u8>>, String> {
@@ -56,12 +111,57 @@ impl DatagramRelay {
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
-        if self.socket.is_some() && self.remote.is_some() {
+        if self.socket.is_some() && !self.remote_candidates.is_empty() {
             return Ok(());
         }
-        let remote = resolve_proxy_udp_socket_addr_async(proxy).await?;
-        self.socket = Some(open_marked_tokio_udp_socket(remote, proxy.mark).await?);
-        self.remote = Some(remote);
+        let candidates = resolve_proxy_udp_socket_addr_candidates_async(proxy).await?;
+        self.open_candidates(candidates, proxy.mark, "proxy").await
+    }
+
+    pub(super) fn is_open(&self) -> bool {
+        self.socket.is_some() && !self.remote_candidates.is_empty()
+    }
+
+    async fn select_open_candidate(
+        &mut self,
+        start_index: usize,
+        mark: u32,
+        label: &str,
+    ) -> Result<(), String> {
+        self.select_open_candidate_with(start_index, mark, label, |remote, mark| {
+            open_marked_tokio_udp_socket(remote, mark)
+        })
+        .await
+    }
+
+    async fn select_open_candidate_with<F, Fut>(
+        &mut self,
+        start_index: usize,
+        mark: u32,
+        label: &str,
+        mut open: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(SocketAddr, u32) -> Fut,
+        Fut: Future<Output = Result<tokio::net::UdpSocket, String>>,
+    {
+        let remaining = self
+            .remote_candidates
+            .get(start_index..)
+            .ok_or_else(|| format!("open {label} UDP relay: no address candidates remain"))?;
+        let (selected, socket) =
+            try_socket_addr_candidates(remaining, &format!("open {label} UDP relay"), |remote| {
+                open(remote, mark)
+            })
+            .await?;
+        self.selected_index = start_index
+            + remaining
+                .iter()
+                .position(|candidate| *candidate == selected)
+                .ok_or_else(|| {
+                    format!("{label} UDP relay selected an unknown address candidate")
+                })?;
+        self.socket = Some(socket);
         Ok(())
     }
 }
@@ -85,3 +185,6 @@ pub(super) async fn open_marked_tokio_udp_socket(
     tokio::net::UdpSocket::from_std(socket)
         .map_err(|err| format!("adopt UDP relay socket into tokio: {err}"))
 }
+
+#[cfg(test)]
+mod tests;

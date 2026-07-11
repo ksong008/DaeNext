@@ -1,26 +1,27 @@
 use super::*;
 
-use crate::production_runtime_owner::resident_dataplane::select_first_socket_addr;
+use crate::production_runtime_owner::resident_dataplane::resolve_socket_addr_candidates;
 
 pub(super) fn proxy_server_authority(proxy: &ResidentProxyPlan) -> String {
     format!("{}:{}", proxy.server_host, proxy.server_port)
 }
 
-pub(super) async fn resolve_proxy_udp_socket_addr_async(
+pub(super) async fn resolve_proxy_udp_socket_addr_candidates_async(
     proxy: &ResidentProxyPlan,
-) -> Result<SocketAddr, String> {
+) -> Result<Vec<SocketAddr>, String> {
     let authority = proxy_server_authority(proxy);
-    let addrs = tokio::net::lookup_host(authority.as_str())
-        .await
-        .map_err(|err| format!("resolve UDP proxy {authority}: {err}"))?;
-    select_first_socket_addr(addrs)
-        .ok_or_else(|| format!("resolve UDP proxy {authority}: no address"))
+    resolve_socket_addr_candidates(
+        &authority,
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        "resolve UDP proxy",
+    )
+    .await
 }
 
-pub(super) async fn socks5_udp_relay_addr_async(
-    proxy: &ResidentProxyPlan,
+pub(super) async fn socks5_udp_relay_addr_candidates_async(
     bind: &str,
-) -> Result<SocketAddr, String> {
+    control_peer: SocketAddr,
+) -> Result<Vec<SocketAddr>, String> {
     let parsed =
         Socks5Address::parse(bind).map_err(|err| format!("parse SOCKS5 UDP bind: {err}"))?;
     let port = parsed.port();
@@ -28,16 +29,16 @@ pub(super) async fn socks5_udp_relay_addr_async(
         return Err("SOCKS5 UDP associate returned port 0".to_owned());
     }
     let host = parsed.host();
-    let authority = if host == "0.0.0.0" || host == "::" || host.is_empty() {
-        format!("{}:{port}", proxy.server_host)
-    } else {
-        parsed.authority()
-    };
-    let addrs = tokio::net::lookup_host(authority.as_str())
-        .await
-        .map_err(|err| format!("resolve SOCKS5 UDP relay {authority}: {err}"))?;
-    select_first_socket_addr(addrs)
-        .ok_or_else(|| format!("resolve SOCKS5 UDP relay {authority}: no address"))
+    if host == "0.0.0.0" || host == "::" || host.is_empty() {
+        return Ok(vec![SocketAddr::new(control_peer.ip(), port)]);
+    }
+    let authority = parsed.authority();
+    resolve_socket_addr_candidates(
+        &authority,
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        "resolve SOCKS5 UDP relay",
+    )
+    .await
 }
 
 pub(super) async fn write_async_tls_plain_all(
@@ -133,3 +134,6 @@ pub(super) async fn read_async_tls_plain_exact(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
