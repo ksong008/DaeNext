@@ -229,12 +229,17 @@ pub(crate) fn append_log_fields_for_config_with_policy(
     let Some(level) = normalize_log_level_name(level) else {
         return Ok(());
     };
+    if let Some(runtime) = product_log_runtime_for(config_dir) {
+        return runtime.append(level, message, fields, respect_runtime_log_level);
+    }
     if respect_runtime_log_level {
         let runtime_level = current_runtime_log_level(state)?;
         if !log_level_enabled(&level, &runtime_level) {
             return Ok(());
         }
     }
+    #[cfg(test)]
+    observe_log_settings_read(state);
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let (max_entries, max_bytes) = log_settings_tuple(&conn)?;

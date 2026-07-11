@@ -13,3 +13,9 @@ mod scan_cursor;
 pub(super) use self::scan_cursor::*;
 mod runtime_sse;
 pub(super) use self::runtime_sse::*;
+mod writer_runtime;
+pub(super) use self::writer_runtime::*;
+#[cfg(test)]
+mod test_observer;
+#[cfg(test)]
+pub(super) use self::test_observer::*;

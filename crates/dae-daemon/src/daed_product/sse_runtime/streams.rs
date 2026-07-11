@@ -74,14 +74,39 @@ pub(super) async fn stream_log_events_async(
     let mut last_heartbeat = Instant::now();
     let mut interval = tokio::time::interval(LOG_STREAM_POLL_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut log_updates = product_log_update_receiver(&app.config_dir);
     loop {
-        tokio::select! {
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    return Ok(());
-                }
+        if let Some(updates) = log_updates.as_mut() {
+            enum LogStreamWake {
+                Stop,
+                Update(Result<(), tokio::sync::watch::error::RecvError>),
+                Poll,
             }
-            _ = interval.tick() => {}
+            let wake = tokio::select! {
+                changed = stop.changed() => {
+                    if changed.is_err() || *stop.borrow() {
+                        LogStreamWake::Stop
+                    } else {
+                        LogStreamWake::Poll
+                    }
+                }
+                changed = updates.changed() => LogStreamWake::Update(changed),
+                _ = interval.tick() => LogStreamWake::Poll,
+            };
+            match wake {
+                LogStreamWake::Stop => return Ok(()),
+                LogStreamWake::Update(Err(_)) => log_updates = None,
+                LogStreamWake::Update(Ok(())) | LogStreamWake::Poll => {}
+            }
+        } else {
+            tokio::select! {
+                changed = stop.changed() => {
+                    if changed.is_err() || *stop.borrow() {
+                        return Ok(());
+                    }
+                }
+                _ = interval.tick() => {}
+            }
         }
         let current_last_id = cached_last_log_id(&log_file)?;
         if current_last_id < last_seen_id {
