@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use aya::maps::{Map, MapData, MapType, RingBuf};
 use aya::programs::{
-    CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, Program, ProgramError,
+    CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, Program, ProgramError, ProgramId,
     SchedClassifier, TcAttachType,
     links::FdLink,
     tc::{self, NlOptions, SchedClassifierLinkId, TcAttachOptions},
@@ -30,6 +30,8 @@ mod trace;
 pub use self::trace::*;
 mod tc_attach;
 pub use self::tc_attach::*;
+mod tcx_order;
+use self::tcx_order::*;
 mod cgroup;
 pub use self::cgroup::*;
 mod cgroup_preflight;

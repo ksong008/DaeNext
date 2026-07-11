@@ -114,40 +114,52 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
         backend,
         link_id,
         backend_switch_error,
+        tcx_anchor,
+        tcx_pre_query_revision,
+        tcx_pre_program_order,
         tcx_query_revision,
         tcx_program_order,
         tcx_query_error,
         tcx_order_verified,
         tcx_order_error,
     ) = match backend {
-        AttachBackend::TcNetlink => (
-            AttachBackend::TcNetlink,
-            attach_loaded_aya_sched_classifier(
+        AttachBackend::TcNetlink => {
+            let attached = attach_loaded_aya_sched_classifier(
                 classifier,
                 spec,
                 attach_type,
                 AttachBackend::TcNetlink,
-            )?,
-            None,
-            None,
-            Vec::new(),
-            None,
-            false,
-            None,
-        ),
+            )?;
+            (
+                AttachBackend::TcNetlink,
+                attached.link_id,
+                None,
+                None,
+                None,
+                Vec::new(),
+                None,
+                Vec::new(),
+                None,
+                false,
+                None,
+            )
+        }
         AttachBackend::Tcx => match attach_loaded_aya_sched_classifier(
             classifier,
             spec,
             attach_type,
             AttachBackend::Tcx,
         ) {
-            Ok(link_id) => match query_tcx_program_order(&spec.target.iface, attach_type) {
+            Ok(attached) => match query_tcx_program_order(&spec.target.iface, attach_type) {
                 Ok((revision, program_order)) => {
                     match verify_tcx_program_order(program_id, spec.tcx_order, &program_order) {
                         Ok(()) => (
                             AttachBackend::Tcx,
-                            link_id,
+                            attached.link_id,
                             None,
+                            attached.tcx_anchor,
+                            attached.tcx_pre_query_revision,
+                            attached.tcx_pre_program_order,
                             Some(revision),
                             program_order,
                             None,
@@ -155,12 +167,12 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                             None,
                         ),
                         Err(order_err) => {
-                            classifier.detach(link_id).map_err(|detach_err| {
+                            classifier.detach(attached.link_id).map_err(|detach_err| {
                                 format!(
                                     "aya tcx order verification failed after attach: {order_err}; tcx detach before tc-netlink backend switch failed: {detach_err:?}"
                                 )
                             })?;
-                            let link_id = attach_loaded_aya_sched_classifier(
+                            let fallback = attach_loaded_aya_sched_classifier(
                                 classifier,
                                 spec,
                                 attach_type,
@@ -173,8 +185,11 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                             })?;
                             (
                                 AttachBackend::TcNetlink,
-                                link_id,
+                                fallback.link_id,
                                 Some(format!("tcx order verification failed: {order_err}")),
+                                attached.tcx_anchor,
+                                attached.tcx_pre_query_revision,
+                                attached.tcx_pre_program_order,
                                 Some(revision),
                                 program_order,
                                 None,
@@ -185,12 +200,12 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                     }
                 }
                 Err(query_err) => {
-                    classifier.detach(link_id).map_err(|detach_err| {
+                    classifier.detach(attached.link_id).map_err(|detach_err| {
                         format!(
                             "aya tcx query failed after attach: {query_err}; tcx detach before tc-netlink backend switch failed: {detach_err:?}"
                         )
                     })?;
-                    let link_id = attach_loaded_aya_sched_classifier(
+                    let fallback = attach_loaded_aya_sched_classifier(
                         classifier,
                         spec,
                         attach_type,
@@ -203,8 +218,11 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                     })?;
                     (
                         AttachBackend::TcNetlink,
-                        link_id,
+                        fallback.link_id,
                         Some(format!("tcx query failed after attach: {query_err}")),
+                        attached.tcx_anchor,
+                        attached.tcx_pre_query_revision,
+                        attached.tcx_pre_program_order,
                         None,
                         Vec::new(),
                         Some(query_err),
@@ -214,7 +232,7 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                 }
             },
             Err(tcx_err) => {
-                let link_id = attach_loaded_aya_sched_classifier(
+                let fallback = attach_loaded_aya_sched_classifier(
                     classifier,
                     spec,
                     attach_type,
@@ -227,8 +245,11 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                 })?;
                 (
                     AttachBackend::TcNetlink,
-                    link_id,
+                    fallback.link_id,
                     Some(tcx_err),
+                    None,
+                    None,
+                    Vec::new(),
                     None,
                     Vec::new(),
                     None,
@@ -255,6 +276,9 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
             priority: spec.priority,
             handle: spec.handle,
             tcx_order: spec.tcx_order,
+            tcx_anchor,
+            tcx_pre_query_revision,
+            tcx_pre_program_order,
             tcx_query_revision,
             tcx_program_order,
             tcx_query_error,
@@ -377,6 +401,9 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
         priority: spec.priority,
         handle: spec.handle,
         tcx_order: spec.tcx_order,
+        tcx_anchor: attach_result.tcx_anchor,
+        tcx_pre_query_revision: attach_result.tcx_pre_query_revision,
+        tcx_pre_program_order: attach_result.tcx_pre_program_order,
         tcx_query_revision: attach_result.tcx_query_revision,
         tcx_program_order: attach_result.tcx_program_order,
         tcx_order_verified: attach_result.tcx_order_verified,
@@ -391,6 +418,9 @@ pub(super) struct PinnedClassifierAttachResult {
     pub(super) link_id: SchedClassifierLinkId,
     pub(super) backend_switch_used: bool,
     pub(super) backend_switch_error: Option<String>,
+    pub(super) tcx_anchor: Option<AyaTcxAttachAnchor>,
+    pub(super) tcx_pre_query_revision: Option<u64>,
+    pub(super) tcx_pre_program_order: Vec<AyaTcxProgramOrderEntry>,
     pub(super) tcx_query_revision: Option<u64>,
     pub(super) tcx_program_order: Vec<AyaTcxProgramOrderEntry>,
     pub(super) tcx_order_verified: bool,
@@ -403,13 +433,16 @@ pub(super) fn attach_pinned_classifier_once(
     backend: AttachBackend,
     program_id: Option<u32>,
 ) -> Result<PinnedClassifierAttachResult, String> {
-    let link_id = attach_loaded_aya_sched_classifier(classifier, spec, attach_type, backend)?;
+    let attached = attach_loaded_aya_sched_classifier(classifier, spec, attach_type, backend)?;
     if backend != AttachBackend::Tcx {
         return Ok(PinnedClassifierAttachResult {
             backend,
-            link_id,
+            link_id: attached.link_id,
             backend_switch_used: false,
             backend_switch_error: None,
+            tcx_anchor: None,
+            tcx_pre_query_revision: None,
+            tcx_pre_program_order: Vec::new(),
             tcx_query_revision: None,
             tcx_program_order: Vec::new(),
             tcx_order_verified: false,
@@ -419,7 +452,7 @@ pub(super) fn attach_pinned_classifier_once(
     let (revision, program_order) = match query_tcx_program_order(&spec.target.iface, attach_type) {
         Ok(value) => value,
         Err(query_err) => {
-            classifier.detach(link_id).map_err(|detach_err| {
+            classifier.detach(attached.link_id).map_err(|detach_err| {
                 format!(
                     "aya tcx query failed after attach-pin: {query_err}; tcx detach failed: {detach_err:?}"
                 )
@@ -428,7 +461,7 @@ pub(super) fn attach_pinned_classifier_once(
         }
     };
     if let Err(order_err) = verify_tcx_program_order(program_id, spec.tcx_order, &program_order) {
-        classifier.detach(link_id).map_err(|detach_err| {
+        classifier.detach(attached.link_id).map_err(|detach_err| {
             format!(
                 "aya tcx order verification failed after attach-pin: {order_err}; tcx detach failed: {detach_err:?}"
             )
@@ -438,13 +471,23 @@ pub(super) fn attach_pinned_classifier_once(
 
     Ok(PinnedClassifierAttachResult {
         backend,
-        link_id,
+        link_id: attached.link_id,
         backend_switch_used: false,
         backend_switch_error: None,
+        tcx_anchor: attached.tcx_anchor,
+        tcx_pre_query_revision: attached.tcx_pre_query_revision,
+        tcx_pre_program_order: attached.tcx_pre_program_order,
         tcx_query_revision: Some(revision),
         tcx_program_order: program_order,
         tcx_order_verified: true,
     })
+}
+
+pub(super) struct LoadedClassifierAttachResult {
+    pub(super) link_id: SchedClassifierLinkId,
+    pub(super) tcx_anchor: Option<AyaTcxAttachAnchor>,
+    pub(super) tcx_pre_query_revision: Option<u64>,
+    pub(super) tcx_pre_program_order: Vec<AyaTcxProgramOrderEntry>,
 }
 
 pub(super) fn attach_loaded_aya_sched_classifier(
@@ -452,29 +495,47 @@ pub(super) fn attach_loaded_aya_sched_classifier(
     spec: &TcNativeAttachSpec,
     attach_type: TcAttachType,
     backend: AttachBackend,
-) -> Result<SchedClassifierLinkId, String> {
-    let attach_options = match backend {
-        AttachBackend::TcNetlink => TcAttachOptions::Netlink(NlOptions {
-            priority: spec.priority,
-            handle: spec.handle,
-        }),
+) -> Result<LoadedClassifierAttachResult, String> {
+    let (attach_options, tcx_anchor, tcx_pre_query_revision, tcx_pre_program_order) = match backend
+    {
+        AttachBackend::TcNetlink => (
+            TcAttachOptions::Netlink(NlOptions {
+                priority: spec.priority,
+                handle: spec.handle,
+            }),
+            None,
+            None,
+            Vec::new(),
+        ),
         // TCX multi-prog ordering is not a numeric TC priority equivalent.
-        // Resident same-interface WAN/LAN ordering must be controlled by attach
-        // order or explicit anchors, while tc-netlink backend switch keeps priority.
-        AttachBackend::Tcx => TcAttachOptions::TcxOrder(match spec.tcx_order {
-            TcxAttachOrder::First => LinkOrder::first(),
-            TcxAttachOrder::Last => LinkOrder::last(),
-        }),
+        // Anchor to the currently observed edge by program id, then verify the
+        // resulting order after attach. tc-netlink fallback keeps priority/handle.
+        AttachBackend::Tcx => {
+            let preparation =
+                prepare_tcx_attach_order(&spec.target.iface, attach_type, spec.tcx_order)?;
+            (
+                TcAttachOptions::TcxOrder(preparation.order),
+                preparation.anchor,
+                Some(preparation.query_revision),
+                preparation.program_order,
+            )
+        }
         _ => unreachable!(),
     };
-    classifier
+    let link_id = classifier
         .attach_with_options(&spec.target.iface, attach_type, attach_options)
         .map_err(|err| {
             format!(
                 "aya sched classifier {} attach failed: {err:?}",
                 backend.as_str()
             )
-        })
+        })?;
+    Ok(LoadedClassifierAttachResult {
+        link_id,
+        tcx_anchor,
+        tcx_pre_query_revision,
+        tcx_pre_program_order,
+    })
 }
 
 pub(super) fn query_tcx_program_order(

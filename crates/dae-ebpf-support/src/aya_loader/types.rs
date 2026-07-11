@@ -231,6 +231,27 @@ pub struct AyaTcxProgramOrderEntry {
     pub tag: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TcxAnchorRelation {
+    Before,
+    After,
+}
+
+impl TcxAnchorRelation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::After => "after",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaTcxAttachAnchor {
+    pub relation: TcxAnchorRelation,
+    pub program_id: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AyaTcAttachDetachReport {
     pub requested_backend: AttachBackend,
@@ -246,6 +267,9 @@ pub struct AyaTcAttachDetachReport {
     pub priority: u16,
     pub handle: u32,
     pub tcx_order: TcxAttachOrder,
+    pub tcx_anchor: Option<AyaTcxAttachAnchor>,
+    pub tcx_pre_query_revision: Option<u64>,
+    pub tcx_pre_program_order: Vec<AyaTcxProgramOrderEntry>,
     pub tcx_query_revision: Option<u64>,
     pub tcx_program_order: Vec<AyaTcxProgramOrderEntry>,
     pub tcx_query_error: Option<String>,
@@ -282,6 +306,9 @@ pub struct PinnedTcAttachReport {
     pub priority: u16,
     pub handle: u32,
     pub tcx_order: TcxAttachOrder,
+    pub tcx_anchor: Option<AyaTcxAttachAnchor>,
+    pub tcx_pre_query_revision: Option<u64>,
+    pub tcx_pre_program_order: Vec<AyaTcxProgramOrderEntry>,
     pub tcx_query_revision: Option<u64>,
     pub tcx_program_order: Vec<AyaTcxProgramOrderEntry>,
     pub tcx_order_verified: bool,
