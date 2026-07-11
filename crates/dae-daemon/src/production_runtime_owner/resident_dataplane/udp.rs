@@ -60,7 +60,7 @@ use super::plan::{
     SharedResidentProxyGroupMap, resident_udp_chain_admission,
 };
 use super::tcp::{
-    AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,
+    AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,
     ResidentConnectedQuicEndpoint, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
     XhttpStreamUploadClient, XhttpUploadClient, close_xhttp_download_client,
     close_xhttp_stream_upload_client, close_xhttp_upload_client, collect_vmess_grpc_decrypted,

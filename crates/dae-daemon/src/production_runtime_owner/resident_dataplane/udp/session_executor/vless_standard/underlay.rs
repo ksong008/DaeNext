@@ -42,7 +42,7 @@ pub(super) enum VlessStandardUdpUnderlay {
     },
     GrpcTls {
         send_stream: h2::SendStream<Bytes>,
-        recv_stream: h2::RecvStream,
+        response: GrpcH2Response,
         connection_task: tokio::task::JoinHandle<()>,
         response_buf: GrpcHunkReadBuffer,
         tls_underlay: &'static str,
@@ -169,11 +169,11 @@ impl VlessStandardUdpUnderlay {
             VlessStandardUdpWrapperKind::GrpcTls => {
                 let client = open_async_resident_tls_client(proxy).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
-                let (send_stream, recv_stream, connection_task) =
+                let (send_stream, response, connection_task) =
                     open_grpc_h2_stream(client, proxy, initial_packet).await?;
                 Ok(Self::GrpcTls {
                     send_stream,
-                    recv_stream,
+                    response,
                     connection_task,
                     response_buf: GrpcHunkReadBuffer::default(),
                     tls_underlay,
@@ -376,7 +376,7 @@ async fn read_vless_grpc_payload(
     mode: UdpStreamReadMode,
 ) -> Result<Option<Vec<u8>>, String> {
     let VlessStandardUdpUnderlay::GrpcTls {
-        recv_stream,
+        response,
         response_buf,
         ..
     } = underlay
@@ -391,20 +391,16 @@ async fn read_vless_grpc_payload(
             return Ok(Some(payload));
         }
         let data = if mode.waits_for_readiness() {
-            Some(recv_stream.data().await)
+            Some(response.next_data().await)
         } else {
-            poll_future_once(recv_stream.data()).await
+            poll_future_once(response.next_data()).await
         };
         match data {
-            Some(Some(Ok(bytes))) => {
-                recv_stream
-                    .flow_control()
-                    .release_capacity(bytes.len())
-                    .map_err(|err| format!("release VLESS gRPC response capacity: {err}"))?;
+            Some(Ok(Some(bytes))) => {
                 response_buf.extend_from_slice(&bytes);
             }
-            Some(Some(Err(err))) => return Err(format!("read VLESS gRPC response data: {err}")),
-            Some(None) => return Err("VLESS gRPC response stream closed".to_owned()),
+            Some(Err(err)) => return Err(err),
+            Some(Ok(None)) => return Err("VLESS gRPC response stream closed".to_owned()),
             None => return Ok(None),
         }
     }

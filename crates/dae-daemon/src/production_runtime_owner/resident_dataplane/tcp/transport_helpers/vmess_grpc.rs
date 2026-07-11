@@ -2,7 +2,7 @@ use super::*;
 pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     send_stream: &mut h2::SendStream<Bytes>,
-    recv_stream: &mut h2::RecvStream,
+    response: &mut GrpcH2Response,
     stop: SharedResidentStopSignal,
     session: VMessAeadTcpClientSessionStart,
     mut stats: DirectTcpRelayStats,
@@ -55,13 +55,9 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                     Err(err) => return Err(format!("read inbound TCP for VMess gRPC relay: {err}")),
                 }
             }
-            data = recv_stream.data(), if !response_closed => {
+            data = response.next_data(), if !response_closed => {
                 match data {
-                    Some(Ok(bytes)) => {
-                        recv_stream
-                            .flow_control()
-                            .release_capacity(bytes.len())
-                            .map_err(|err| format!("release VMess gRPC HTTP/2 response capacity: {err}"))?;
+                    Ok(Some(bytes)) => {
                         response_buf.extend_from_slice(&bytes);
                         while let Some(payload) = response_buf.pop_payload()? {
                             if !payload.is_empty() {
@@ -73,8 +69,8 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                         }
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
-                    Some(Err(err)) => return Err(format!("read VMess gRPC HTTP/2 response data: {err}")),
-                    None => {
+                    Err(err) => return Err(err),
+                    Ok(None) => {
                         response_closed = true;
                         let _ = encrypted_writer.shutdown().await;
                         if !response_buf.is_empty() {

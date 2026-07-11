@@ -1,4 +1,8 @@
 use super::*;
+
+mod open_stream;
+pub(crate) use self::open_stream::*;
+
 pub(crate) fn grpc_authority(proxy: &ResidentProxyPlan) -> String {
     if proxy.stream_host.is_empty() {
         proxy.server_name.clone()
@@ -144,3 +148,6 @@ impl GrpcHunkReadBuffer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
