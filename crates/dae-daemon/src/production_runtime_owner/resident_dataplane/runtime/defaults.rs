@@ -38,6 +38,11 @@ pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_ENV: &str =
 pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_DEFAULT: usize = 512;
 pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN: usize = 16;
 pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_MAX: usize = 4096;
+pub(crate) const RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_ENV: &str =
+    "RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS";
+pub(crate) const RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_DEFAULT: usize = 60;
+pub(crate) const RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MIN: usize = 1;
+pub(crate) const RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MAX: usize = 3600;
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_ENV: &str = "RESIDENT_EVENT_QUEUE_DEPTH";
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_DEFAULT: usize = 4096;
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_MIN: usize = 64;
@@ -129,7 +134,27 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "max": RESIDENT_HEALTH_CHECK_CONCURRENCY_MAX,
             },
         },
+        "dnsUpstreamResolver": {
+            "refreshSeconds": {
+                "env": RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_ENV,
+                "default": RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_DEFAULT,
+                "min": RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MIN,
+                "max": RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MAX,
+            },
+        },
     })
+}
+
+pub(crate) fn resident_dns_upstream_refresh_interval() -> Duration {
+    let seconds = std::env::var(RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_DEFAULT)
+        .clamp(
+            RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MIN,
+            RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MAX,
+        );
+    Duration::from_secs(seconds as u64)
 }
 
 pub(crate) fn resident_manual_latency_probe_concurrency_default() -> usize {

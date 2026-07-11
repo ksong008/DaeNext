@@ -404,6 +404,7 @@ async fn forward_dns_tcp_to_proxy_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn forward_dns_udp_retries_after_timeout() {
@@ -565,8 +566,6 @@ mod tests {
             stream.write_all(&payload).await.unwrap();
         });
 
-        let resolved_addrs = Arc::new(OnceCell::new());
-        resolved_addrs.set(vec![closed, server_addr]).unwrap();
         let upstream = ResidentDnsUpstream {
             index: 0,
             tag: "test".to_owned(),
@@ -577,11 +576,16 @@ mod tests {
                 literal_addr: None,
                 fallback_resolver: "127.0.0.1:53".parse().unwrap(),
                 resolver_mark: 0,
-                resolved_addrs,
+                resolved_addrs: Arc::default(),
             },
             scheme: ResidentDnsUpstreamScheme::Tcp,
             path: String::new(),
         };
+        upstream
+            .target
+            .resolved_addrs
+            .seed(vec![closed, server_addr], Duration::from_secs(60))
+            .await;
 
         let plan = ResidentDnsPlan::asis(0);
         let forwarders = Arc::new(ResidentDnsForwarderCache::default());

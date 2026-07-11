@@ -136,6 +136,7 @@ fn global_outline() -> Value {
             leaf("ResidentUdpSessionLimit", "resident_udp_session_limit", "uint64", None, Some("Optional resident UDP session ceiling. Leave empty to use the product default or compatibility environment override."), false, false),
             leaf("ResidentUdpSessionQueueDepth", "resident_udp_session_queue_depth", "uint64", None, Some("Optional bounded queue depth per resident UDP session."), false, false),
             leaf("ResidentTcpFlowStackBytes", "resident_tcp_flow_stack_bytes", "uint64", None, Some("Optional stack size for resident TCP flow worker threads."), false, false),
+            leaf("ResidentDnsUpstreamRefreshSeconds", "resident_dns_upstream_refresh_seconds", "uint64", None, Some("Optional maximum refresh interval for DNS upstream hostname addresses."), false, false),
             leaf("ResidentEventQueueDepth", "resident_event_queue_depth", "uint64", None, Some("Optional resident event writer queue depth."), false, false),
             leaf("ResidentManualProbeConcurrency", "resident_manual_probe_concurrency", "uint64", None, Some("Optional maximum parallel manual latency probes per batch."), false, false),
             leaf("ResidentTcpProbeTimeoutMs", "resident_tcp_probe_timeout_ms", "uint64", None, Some("Optional TCP latency probe timeout in milliseconds."), false, false),

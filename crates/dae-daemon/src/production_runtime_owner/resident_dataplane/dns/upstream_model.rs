@@ -1,5 +1,9 @@
 use super::transport::udp_multiplex::ResidentDnsUdpMultiplexHandle;
 use super::*;
+use std::time::Duration;
+
+mod target_cache;
+use target_cache::ResidentDnsResolvedTargetCache;
 
 #[derive(Clone, Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsRequestAction {
@@ -48,10 +52,30 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fallback_resolver: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) resolver_mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) resolved_addrs:
-        Arc<OnceCell<Vec<SocketAddr>>>,
+        Arc<ResidentDnsResolvedTargetCache>,
 }
 
 impl ResidentDnsUpstreamTarget {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn new(
+        authority: String,
+        host: String,
+        port: u16,
+        literal_addr: Option<SocketAddr>,
+        fallback_resolver: SocketAddr,
+        resolver_mark: u32,
+        refresh_interval: Duration,
+    ) -> Self {
+        Self {
+            authority,
+            host,
+            port,
+            literal_addr,
+            fallback_resolver,
+            resolver_mark,
+            resolved_addrs: Arc::new(ResidentDnsResolvedTargetCache::new(refresh_interval)),
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn resolve_addrs(
         &self,
     ) -> Result<Vec<SocketAddr>, String> {
@@ -59,18 +83,18 @@ impl ResidentDnsUpstreamTarget {
             return Ok(vec![addr]);
         }
         self.resolved_addrs
-            .get_or_try_init(|| async {
-                resolve_host_addrs_with_configured_fallback_dns(
+            .resolve(|refresh_interval| async move {
+                resolve_host_addrs_with_configured_fallback_dns_ttl(
                     &self.host,
                     self.port,
                     self.fallback_resolver,
                     self.resolver_mark,
                     "resolve DNS upstream",
+                    refresh_interval,
                 )
                 .await
             })
             .await
-            .cloned()
     }
 }
 

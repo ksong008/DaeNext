@@ -26,7 +26,7 @@ use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio::sync::{Mutex as AsyncMutex, OnceCell, Semaphore};
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio::time;
 
 #[cfg(test)]
@@ -42,7 +42,6 @@ use super::plan::build_resident_dataplane_plan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{ResidentProxyPlan, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
-use super::resolve_host_addrs_with_configured_fallback_dns;
 use super::tcp::{exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_tcp_stream_async};
 use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
 use super::udp::{
@@ -51,6 +50,7 @@ use super::udp::{
 use super::{
     RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, apply_resident_udp_socket_buffer_tuning,
 };
+use super::{ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl};
 
 mod cache;
 mod domain_routing;

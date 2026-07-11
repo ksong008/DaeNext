@@ -194,6 +194,17 @@ pub(crate) fn merge_global_json_value(target: &mut Value, source: &Value) {
     );
     set_global_u64(
         target,
+        "residentDnsUpstreamRefreshSeconds",
+        json_u64(
+            source,
+            &[
+                "residentDnsUpstreamRefreshSeconds",
+                "resident_dns_upstream_refresh_seconds",
+            ],
+        ),
+    );
+    set_global_u64(
+        target,
         "residentEventQueueDepth",
         json_u64(
             source,
@@ -470,6 +481,11 @@ pub(crate) fn merge_global_directives(target: &mut Value, directives: &HashMap<S
         target,
         "residentTcpFlowStackBytes",
         directive_u64(directives, "resident_tcp_flow_stack_bytes"),
+    );
+    set_global_u64(
+        target,
+        "residentDnsUpstreamRefreshSeconds",
+        directive_u64(directives, "resident_dns_upstream_refresh_seconds"),
     );
     set_global_u64(
         target,

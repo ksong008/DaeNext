@@ -120,6 +120,11 @@ impl Marshaller {
             1,
         );
         self.optional_leaf(
+            "resident_dns_upstream_refresh_seconds",
+            global.resident_dns_upstream_refresh_seconds,
+            1,
+        );
+        self.optional_leaf(
             "resident_event_queue_depth",
             global.resident_event_queue_depth,
             1,

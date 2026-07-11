@@ -240,6 +240,12 @@
             "type": "uint64"
           },
           {
+            "desc": "Optional maximum refresh interval for DNS upstream hostname addresses.",
+            "mapping": "resident_dns_upstream_refresh_seconds",
+            "name": "ResidentDnsUpstreamRefreshSeconds",
+            "type": "uint64"
+          },
+          {
             "desc": "Optional resident event writer queue depth.",
             "mapping": "resident_event_queue_depth",
             "name": "ResidentEventQueueDepth",

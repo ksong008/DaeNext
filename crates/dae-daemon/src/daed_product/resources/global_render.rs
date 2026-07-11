@@ -343,6 +343,17 @@ pub(crate) fn render_global_config_text(source: &Value) -> String {
         &mut lines,
         &normalized,
         source,
+        "residentDnsUpstreamRefreshSeconds",
+        "resident_dns_upstream_refresh_seconds",
+        &[
+            "residentDnsUpstreamRefreshSeconds",
+            "resident_dns_upstream_refresh_seconds",
+        ],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
         "residentEventQueueDepth",
         "resident_event_queue_depth",
         &["residentEventQueueDepth", "resident_event_queue_depth"],
