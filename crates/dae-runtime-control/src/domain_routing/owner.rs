@@ -137,6 +137,8 @@ impl DomainRoutingOwner {
 
         let plan = self.tracker.plan_owner_update(owner_key, &snapshot);
         if plan.updates.is_empty() && plan.deletes.is_empty() {
+            self.tracker
+                .apply_owner_snapshot_owned(owner_key, snapshot);
             return Ok(DomainRoutingOwnerApplyReport {
                 map_id,
                 map_id_changed: false,
