@@ -10,7 +10,7 @@ use boring::ssl::{
 use dae_outbound::shared_transport::{
     TlsFragmentOptions, UTLS_ALPN_POLICY_RANDOMIZED_ALPN, UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN,
     UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE,
-    UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM, fragment_tls_write,
+    UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM,
 };
 use dae_outbound::vless::contract::is_xtls_rprx_vision_flow;
 use rustls::client::RealityConfig;

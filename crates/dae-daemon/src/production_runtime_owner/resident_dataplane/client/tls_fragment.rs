@@ -1,4 +1,7 @@
 use super::*;
+use dae_outbound::shared_transport::{TlsFragmentPlan, TlsFragmentPlanner};
+use std::future::Future;
+use std::time::Duration;
 
 pub(in crate::production_runtime_owner::resident_dataplane) enum AsyncResidentTcpStream {
     Plain(TokioTcpStream),
@@ -79,27 +82,94 @@ impl AsyncTlsFragmentingTcpStream {
 
 pub(in crate::production_runtime_owner::resident_dataplane) struct AsyncTlsFragmentingWriter<S> {
     inner: S,
-    options: TlsFragmentOptions,
-    pending: Vec<u8>,
+    planner: TlsFragmentPlanner,
+    pending_plan: Option<TlsFragmentPlan>,
+    pending_segment: usize,
     pending_offset: usize,
+    pending_delay: Option<Pin<Box<time::Sleep>>>,
+    pending_delay_complete: bool,
 }
 
 impl<S> AsyncTlsFragmentingWriter<S> {
     fn new(inner: S, options: TlsFragmentOptions) -> Self {
         Self {
             inner,
-            options,
-            pending: Vec::new(),
+            planner: TlsFragmentPlanner::new(options),
+            pending_plan: None,
+            pending_segment: 0,
             pending_offset: 0,
+            pending_delay: None,
+            pending_delay_complete: false,
         }
+    }
+
+    fn queue_plan(&mut self, plan: TlsFragmentPlan) {
+        if plan.is_empty() {
+            return;
+        }
+        debug_assert!(self.pending_plan.is_none());
+        self.pending_plan = Some(plan);
+        self.pending_segment = 0;
+        self.pending_offset = 0;
+        self.pending_delay = None;
+        self.pending_delay_complete = false;
+    }
+
+    fn clear_pending(&mut self) {
+        self.pending_plan = None;
+        self.pending_segment = 0;
+        self.pending_offset = 0;
+        self.pending_delay = None;
+        self.pending_delay_complete = false;
     }
 }
 
 impl<S: AsyncWrite + Unpin> AsyncTlsFragmentingWriter<S> {
     fn poll_flush_pending(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        while self.pending_offset < self.pending.len() {
-            let chunk = &self.pending[self.pending_offset..];
-            match Pin::new(&mut self.inner).poll_write(cx, chunk) {
+        loop {
+            let Some(plan) = self.pending_plan.as_ref() else {
+                return Poll::Ready(Ok(()));
+            };
+            let Some(segment) = plan.segments().get(self.pending_segment).copied() else {
+                self.clear_pending();
+                continue;
+            };
+
+            if !self.pending_delay_complete {
+                if segment.delay_before_ms == 0 {
+                    self.pending_delay_complete = true;
+                } else {
+                    if self.pending_delay.is_none() {
+                        self.pending_delay = Some(Box::pin(time::sleep(Duration::from_millis(
+                            segment.delay_before_ms,
+                        ))));
+                    }
+                    let delay = self
+                        .pending_delay
+                        .as_mut()
+                        .expect("a delayed TLS fragment segment has a Tokio deadline");
+                    if delay.as_mut().poll(cx).is_pending() {
+                        return Poll::Pending;
+                    }
+                    self.pending_delay = None;
+                    self.pending_delay_complete = true;
+                }
+            }
+
+            let pending_offset = self.pending_offset;
+            let write_result = {
+                let Self {
+                    inner,
+                    pending_plan,
+                    ..
+                } = self;
+                let bytes = &pending_plan
+                    .as_ref()
+                    .expect("pending TLS fragment plan remains present while writing")
+                    .bytes()[pending_offset..segment.end];
+                Pin::new(inner).poll_write(cx, bytes)
+            };
+            match write_result {
                 Poll::Ready(Ok(0)) => {
                     return Poll::Ready(Err(std::io::Error::new(
                         std::io::ErrorKind::WriteZero,
@@ -108,14 +178,27 @@ impl<S: AsyncWrite + Unpin> AsyncTlsFragmentingWriter<S> {
                 }
                 Poll::Ready(Ok(written)) => {
                     self.pending_offset += written;
+                    if self.pending_offset == segment.end {
+                        self.pending_segment += 1;
+                        self.pending_delay = None;
+                        self.pending_delay_complete = false;
+                    }
                 }
                 Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
                 Poll::Pending => return Poll::Pending,
             }
         }
-        self.pending.clear();
-        self.pending_offset = 0;
-        Poll::Ready(Ok(()))
+    }
+
+    fn poll_finish_output(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.poll_flush_pending(cx) {
+            Poll::Ready(Ok(())) => {}
+            other => return other,
+        }
+
+        let incomplete = self.planner.finish_incomplete();
+        self.queue_plan(incomplete);
+        self.poll_flush_pending(cx)
     }
 }
 
@@ -143,11 +226,15 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for AsyncTlsFragmentingWriter<S> {
             Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
             Poll::Pending => return Poll::Pending,
         }
+        if self.planner.is_passthrough() {
+            return Pin::new(&mut self.inner).poll_write(cx, buf);
+        }
 
-        let fragmented = fragment_tls_write(buf, &self.options)
+        let plan = self
+            .planner
+            .push(buf)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
-        self.pending = fragmented.bytes;
-        self.pending_offset = 0;
+        self.queue_plan(plan);
 
         match self.poll_flush_pending(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(buf.len())),
@@ -157,14 +244,14 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for AsyncTlsFragmentingWriter<S> {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match self.poll_flush_pending(cx) {
+        match self.poll_finish_output(cx) {
             Poll::Ready(Ok(())) => Pin::new(&mut self.inner).poll_flush(cx),
             other => other,
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match self.poll_flush_pending(cx) {
+        match self.poll_finish_output(cx) {
             Poll::Ready(Ok(())) => Pin::new(&mut self.inner).poll_shutdown(cx),
             other => other,
         }
