@@ -15,7 +15,7 @@ use tokio::time;
 
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT, ResidentDataplaneMetrics,
-    select_first_socket_addr,
+    resolve_socket_addr_candidates, try_socket_addr_candidates,
 };
 
 #[derive(Debug)]
@@ -36,31 +36,13 @@ pub(super) async fn open_direct_tcp_connection_async(
     mark: u32,
     mptcp: bool,
 ) -> Result<DirectTcpConnection, String> {
-    let target = resolve_direct_tcp_target_async(&dial_target).await?;
+    let targets = resolve_direct_tcp_targets_async(&dial_target).await?;
     let opts = TcpDirectDialOptions {
         mark,
         mptcp,
         timeout: RESIDENT_CONNECT_TIMEOUT,
     };
-    let connected = if mptcp {
-        match connect_direct_tcp_attempt_async(target, &opts, true).await {
-            Ok(mut connected) => {
-                connected.report.mptcp_tcp_retry_used = false;
-                Ok(connected)
-            }
-            Err(first_err) => match connect_direct_tcp_attempt_async(target, &opts, false).await {
-                Ok(mut connected) => {
-                    connected.report.mptcp_socket_attempted = true;
-                    connected.report.mptcp_tcp_retry_used = true;
-                    Ok(connected)
-                }
-                Err(_) => Err(first_err),
-            },
-        }
-    } else {
-        connect_direct_tcp_attempt_async(target, &opts, false).await
-    }
-    .map_err(|err| format!("connect direct TCP {target}: {err}"))?;
+    let (target, connected) = connect_direct_tcp_candidates_async(&targets, &opts, mptcp).await?;
     connected
         .stream
         .set_nonblocking(true)
@@ -74,6 +56,45 @@ pub(super) async fn open_direct_tcp_connection_async(
         report: connected.report,
         target,
     })
+}
+
+async fn connect_direct_tcp_candidates_async(
+    targets: &[SocketAddr],
+    opts: &TcpDirectDialOptions,
+    mptcp: bool,
+) -> Result<(SocketAddr, dae_datapath::TcpDirectConnection), String> {
+    try_socket_addr_candidates(targets, "connect direct TCP", |target| {
+        connect_direct_tcp_candidate_async(target, opts, mptcp)
+    })
+    .await
+}
+
+async fn connect_direct_tcp_candidate_async(
+    target: SocketAddr,
+    opts: &TcpDirectDialOptions,
+    mptcp: bool,
+) -> Result<dae_datapath::TcpDirectConnection, String> {
+    if !mptcp {
+        return connect_direct_tcp_attempt_async(target, opts, false)
+            .await
+            .map_err(|err| err.to_string());
+    }
+    match connect_direct_tcp_attempt_async(target, opts, true).await {
+        Ok(mut connected) => {
+            connected.report.mptcp_tcp_retry_used = false;
+            Ok(connected)
+        }
+        Err(mptcp_err) => match connect_direct_tcp_attempt_async(target, opts, false).await {
+            Ok(mut connected) => {
+                connected.report.mptcp_socket_attempted = true;
+                connected.report.mptcp_tcp_retry_used = true;
+                Ok(connected)
+            }
+            Err(tcp_err) => Err(format!(
+                "MPTCP attempt failed ({mptcp_err}); TCP retry failed ({tcp_err})"
+            )),
+        },
+    }
 }
 
 async fn connect_direct_tcp_attempt_async(
@@ -91,15 +112,13 @@ async fn connect_direct_tcp_attempt_async(
     tcp_direct_connect_finish(stream, state)
 }
 
-async fn resolve_direct_tcp_target_async(dial_target: &str) -> Result<SocketAddr, String> {
-    if let Ok(addr) = dial_target.parse::<SocketAddr>() {
-        return Ok(addr);
-    }
-    let addrs = tokio::net::lookup_host(dial_target)
-        .await
-        .map_err(|err| format!("resolve direct TCP target {dial_target}: {err}"))?;
-    select_first_socket_addr(addrs)
-        .ok_or_else(|| format!("resolve direct TCP target {dial_target} returned no IP address"))
+async fn resolve_direct_tcp_targets_async(dial_target: &str) -> Result<Vec<SocketAddr>, String> {
+    resolve_socket_addr_candidates(
+        dial_target,
+        RESIDENT_CONNECT_TIMEOUT,
+        "resolve direct TCP target",
+    )
+    .await
 }
 
 pub(super) async fn relay_tcp_direct_async(
@@ -182,7 +201,7 @@ pub(super) async fn relay_tcp_direct_async(
 mod tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{IpAddr, TcpListener};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -206,6 +225,28 @@ mod tests {
         assert!(!connection.report.requested_mptcp);
         assert!(connection.report.so_mark_applied);
         assert_eq!(connection.report.peer_addr, addr.to_string());
+        drop(connection);
+        let _ = listener.accept().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn direct_tcp_falls_back_to_later_resolved_address() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let available = listener.local_addr().unwrap();
+        let unavailable =
+            SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), available.port());
+        let opts = TcpDirectDialOptions {
+            mark: 0,
+            mptcp: false,
+            timeout: Duration::from_secs(1),
+        };
+
+        let (selected, connection) =
+            connect_direct_tcp_candidates_async(&[unavailable, available], &opts, false)
+                .await
+                .unwrap();
+
+        assert_eq!(selected, available);
         drop(connection);
         let _ = listener.accept().unwrap();
     }
