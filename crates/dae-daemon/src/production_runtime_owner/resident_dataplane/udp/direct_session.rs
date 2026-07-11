@@ -16,6 +16,7 @@ const UDP_DIRECT_PROTOCOL: &str = "direct";
 const UDP_DIRECT_SESSION_EXECUTOR: &str = "tokio-direct-udp";
 const UDP_DIRECT_UNDERLAY_REUSE: &str = "udp-socket-reused";
 const UDP_DIRECT_RESPONSE_CAPACITY: usize = 64 * 1024;
+const UDP_DIRECT_RESPONSE_DRAIN_BUDGET: usize = 16;
 
 #[derive(Clone, Debug)]
 pub(super) struct UdpDirectSessionKey {
@@ -226,12 +227,18 @@ async fn run_udp_direct_session_actor(
                         break;
                     }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP), if session.is_some() => {
+            readiness = wait_direct_udp_session_response(session.as_ref()), if session.is_some() => {
+                if let Err(err) = readiness {
+                    stop_reason = err;
+                    break;
+                }
                 if let Some(session) = session.as_mut()
-                    && let Err(err) = drain_direct_udp_session_responses(&key, &context, session).await {
-                        stop_reason = err;
-                        break;
-                    }
+                    && let Err(err) =
+                        drain_direct_udp_session_responses(&key, &context, session).await
+                {
+                    stop_reason = err;
+                    break;
+                }
             }
             _ = &mut idle_timer => {
                 stop_reason = "idle-timeout".to_owned();
@@ -253,13 +260,22 @@ async fn run_udp_direct_session_actor(
     let _ = cleanup_tx.send(key).await;
 }
 
+async fn wait_direct_udp_session_response(
+    session: Option<&DirectUdpSession>,
+) -> Result<(), String> {
+    match session {
+        Some(session) => session.wait_readable().await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn drain_direct_udp_session_responses(
     key: &UdpDirectSessionKey,
     context: &UdpDirectSessionActorContext,
     session: &mut DirectUdpSession,
 ) -> Result<(), String> {
-    for _ in 0..16 {
-        let Some((upstream_peer, response)) = session.poll_response()? else {
+    for _ in 0..UDP_DIRECT_RESPONSE_DRAIN_BUDGET {
+        let Some((upstream_peer, response)) = session.try_recv_response()? else {
             return Ok(());
         };
         let response_len = response.len();
@@ -326,7 +342,14 @@ impl DirectUdpSession {
         Ok(())
     }
 
-    fn poll_response(&mut self) -> Result<Option<(SocketAddr, Vec<u8>)>, String> {
+    async fn wait_readable(&self) -> Result<(), String> {
+        self.socket
+            .readable()
+            .await
+            .map_err(|err| format!("await direct UDP response readiness: {err}"))
+    }
+
+    fn try_recv_response(&mut self) -> Result<Option<(SocketAddr, Vec<u8>)>, String> {
         if self.response_buf.len() < UDP_DIRECT_RESPONSE_CAPACITY {
             self.response_buf.resize(UDP_DIRECT_RESPONSE_CAPACITY, 0);
         }
@@ -457,18 +480,31 @@ mod tests {
 
         let mut session = DirectUdpSession::open(upstream_addr, 0).await.unwrap();
         session.send(b"ping", upstream_addr).await.unwrap();
-        let mut got = None;
-        for _ in 0..50 {
-            if let Some((peer, payload)) = session.poll_response().unwrap() {
-                got = Some((peer, payload));
-                break;
-            }
-            time::sleep(Duration::from_millis(10)).await;
-        }
-        let (peer, payload) = got.expect("direct UDP response");
+        time::timeout(Duration::from_secs(1), session.wait_readable())
+            .await
+            .expect("direct UDP response readiness timeout")
+            .unwrap();
+        let (peer, payload) = session
+            .try_recv_response()
+            .unwrap()
+            .expect("direct UDP response");
         assert_eq!(peer, upstream_addr);
         assert_eq!(payload, b"pong");
         server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn direct_udp_session_waits_for_socket_readiness_without_polling() {
+        let upstream = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let session = DirectUdpSession::open(upstream_addr, 0).await.unwrap();
+
+        assert!(
+            time::timeout(Duration::from_millis(20), session.wait_readable())
+                .await
+                .is_err(),
+            "an idle direct UDP socket must remain pending"
+        );
     }
 
     #[test]
