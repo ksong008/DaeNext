@@ -10,26 +10,29 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
 ) -> Result<DirectTcpRelayStats, String> {
     let mut inbound_closed = false;
     let mut response_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
     let mut response_buf = GrpcHunkReadBuffer::default();
     let mut vless_response_stripper =
         strip_vless_response_header.then(VlessResponseStripper::default);
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             read = inbound.read(&mut inbound_buf), if !inbound_closed => {
                 match read {
                     Ok(0) => {
                         inbound_closed = true;
                         send_h2_data(send_stream, Bytes::new(), true).await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(read) => {
                         send_grpc_hunk(send_stream, &inbound_buf[..read], false).await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
@@ -61,7 +64,7 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
                                 metrics.add_download(payload.len());
                             }
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Some(Err(err)) => return Err(format!("read gRPC HTTP/2 response data: {err}")),
                     None => {
@@ -69,15 +72,14 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
                         if !response_buf.is_empty() {
                             return Err("gRPC response stream ended with partial hunk".to_owned());
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
-                if (inbound_closed && response_closed) || last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    break;
-                }
-            }
+            _ = &mut idle_deadline => break,
+        }
+        if inbound_closed && response_closed {
+            break;
         }
     }
     Ok(stats)
