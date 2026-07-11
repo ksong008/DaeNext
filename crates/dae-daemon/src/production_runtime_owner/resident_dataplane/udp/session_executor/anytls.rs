@@ -1,10 +1,4 @@
 use super::*;
-use std::future::poll_fn;
-use std::io::ErrorKind;
-use std::pin::Pin;
-use std::task::Poll;
-use tokio::io::{AsyncRead, ReadBuf};
-
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct AnyTlsPacketStreamSession {
     auth: String,
     client: Option<AsyncResidentTlsClient>,
@@ -94,38 +88,41 @@ impl AnyTlsPacketStreamSession {
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::ReadyOnly).await
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::Wait).await
+    }
+
+    async fn read_response(
+        &mut self,
+        mode: UdpStreamReadMode,
+    ) -> Result<Option<UdpExchangeResult>, String> {
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
         }
+        if self.client.is_none() && mode.waits_for_readiness() {
+            return std::future::pending().await;
+        }
+        let mut buf = [0_u8; 2048];
         let Some(client) = self.client.as_mut() else {
             return Ok(None);
         };
-        let mut buf = [0_u8; 2048];
-        let mut read_buf = ReadBuf::new(&mut buf);
-        let read = poll_fn(
-            |cx| match Pin::new(&mut *client).poll_read(cx, &mut read_buf) {
-                Poll::Ready(Ok(())) => Poll::Ready(Ok(Some(read_buf.filled().len()))),
-                Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
-                Poll::Pending => Poll::Ready(Ok(None)),
-            },
+        match read_udp_stream_once(
+            client,
+            &mut buf,
+            mode,
+            "read AnyTLS UDP packet stream plaintext",
         )
-        .await;
-        match read {
-            Ok(Some(0)) | Ok(None) => Ok(None),
-            Ok(Some(read)) => {
+        .await?
+        {
+            None => Ok(None),
+            Some(read) => {
                 self.response_plaintext.extend_from_slice(&buf[..read]);
                 self.try_pop_response_payload()
                     .map(|payload| payload.map(|payload| self.response_result(payload)))
             }
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) =>
-            {
-                Ok(None)
-            }
-            Err(err) => Err(format!("read AnyTLS UDP packet stream plaintext: {err}")),
         }
     }
 
