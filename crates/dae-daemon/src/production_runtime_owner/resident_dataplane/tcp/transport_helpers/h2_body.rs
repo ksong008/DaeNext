@@ -139,11 +139,14 @@ pub(crate) async fn relay_tcp_over_deferred_h2_body(
     context: &str,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut inbound_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = BytesMut::with_capacity(H2_UPLOAD_READ_CHUNK);
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             response = &mut response_task => {
                 let mut recv_stream = response
                     .map_err(|err| format!("join {context} HTTP/2 response task: {err}"))??;
@@ -165,30 +168,28 @@ pub(crate) async fn relay_tcp_over_deferred_h2_body(
                     Ok(None) => {
                         inbound_closed = true;
                         send_h2_data_with_context(send_stream, Bytes::new(), true, context).await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(Some(chunk)) => {
                         let read = chunk.len();
                         send_h2_data_with_context(send_stream, chunk, false, context).await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
                         send_h2_data_with_context(send_stream, Bytes::new(), true, context).await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read inbound TCP for {context} relay: {err}")),
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
-                if inbound_closed && last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    break;
-                }
-            }
+            _ = &mut idle_deadline, if inbound_closed => break,
         }
     }
+    response_task.abort();
+    let _ = response_task.await;
     Ok(stats)
 }
 
@@ -205,31 +206,34 @@ async fn relay_tcp_over_ready_h2_body(
     mut inbound_closed: bool,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut response_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = BytesMut::with_capacity(H2_UPLOAD_READ_CHUNK);
     let mut vless_response_stripper =
         strip_vless_response_header.then(VlessResponseStripper::default);
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             read = read_h2_upload_chunk(inbound, &mut inbound_buf), if !inbound_closed => {
                 match read {
                     Ok(None) => {
                         inbound_closed = true;
                         send_h2_data_with_context(send_stream, Bytes::new(), true, context).await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(Some(chunk)) => {
                         let read = chunk.len();
                         send_h2_data_with_context(send_stream, chunk, false, context).await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
                         send_h2_data_with_context(send_stream, Bytes::new(), true, context).await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read inbound TCP for {context} relay: {err}")),
                 }
@@ -254,20 +258,19 @@ async fn relay_tcp_over_ready_h2_body(
                             stats.direct_to_client += payload.len();
                             metrics.add_download(payload.len());
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Some(Err(err)) => return Err(format!("read {context} HTTP/2 response data: {err}")),
                     None => {
                         response_closed = true;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
-                if (inbound_closed && response_closed) || last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    break;
-                }
-            }
+            _ = &mut idle_deadline => break,
+        }
+        if inbound_closed && response_closed {
+            break;
         }
     }
     Ok(stats)

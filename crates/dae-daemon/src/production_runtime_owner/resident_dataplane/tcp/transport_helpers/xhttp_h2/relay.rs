@@ -3,8 +3,6 @@ use super::client_io::{
 };
 use super::*;
 use bytes::{Bytes, BytesMut};
-use std::sync::atomic::Ordering;
-use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const XHTTP_UPLOAD_READ_CHUNK: usize = 16 * 1024;
@@ -22,17 +20,20 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
 ) -> Result<DirectTcpRelayStats, String> {
     let mut inbound_closed = false;
     let mut response_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = BytesMut::with_capacity(XHTTP_UPLOAD_READ_CHUNK);
     let mut response_stripper = VlessResponseStripper::default();
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             read = read_xhttp_upload_chunk(inbound, &mut inbound_buf), if !inbound_closed => {
                 match read {
                     Ok(None) => {
                         inbound_closed = true;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(Some(chunk)) => {
                         let read = chunk.len();
@@ -46,11 +47,11 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
                         seq = seq.saturating_add(1);
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read inbound TCP for xHTTP relay: {err}")),
                 }
@@ -67,23 +68,20 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
                             stats.direct_to_client += payload.len();
                             metrics.add_download(payload.len());
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     None => {
                         response_closed = true;
                         let _ = inbound.shutdown().await;
-                        last_activity = Instant::now();
                     }
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
-                if response_closed {
-                    break;
-                }
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err("resident xHTTP relay idle timeout".to_owned());
-                }
+            _ = &mut idle_deadline => {
+                return Err("resident xHTTP relay idle timeout".to_owned());
             }
+        }
+        if response_closed {
+            break;
         }
     }
     Ok(stats)
@@ -100,30 +98,33 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
 ) -> Result<DirectTcpRelayStats, String> {
     let mut inbound_closed = false;
     let mut response_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = BytesMut::with_capacity(XHTTP_UPLOAD_READ_CHUNK);
     let mut response_stripper = VlessResponseStripper::default();
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             read = read_xhttp_upload_chunk(inbound, &mut inbound_buf), if !inbound_closed => {
                 match read {
                     Ok(None) => {
                         send_xhttp_stream_data(upload, Bytes::new(), true).await?;
                         inbound_closed = true;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(Some(chunk)) => {
                         let read = chunk.len();
                         send_xhttp_stream_data(upload, chunk, false).await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         send_xhttp_stream_data(upload, Bytes::new(), true).await?;
                         inbound_closed = true;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read inbound TCP for xHTTP stream relay: {err}")),
                 }
@@ -140,23 +141,20 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
                             stats.direct_to_client += payload.len();
                             metrics.add_download(payload.len());
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     None => {
                         response_closed = true;
                         let _ = inbound.shutdown().await;
-                        last_activity = Instant::now();
                     }
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
-                if response_closed {
-                    break;
-                }
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err("resident xHTTP stream relay idle timeout".to_owned());
-                }
+            _ = &mut idle_deadline => {
+                return Err("resident xHTTP stream relay idle timeout".to_owned());
             }
+        }
+        if response_closed {
+            break;
         }
     }
     Ok(stats)
