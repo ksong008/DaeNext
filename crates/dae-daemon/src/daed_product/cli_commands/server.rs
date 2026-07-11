@@ -12,6 +12,12 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     if let Err(err) = ensure_state_schema(&options.state) {
         return DaedProductOutput::error(format!("init state failed: {err}"));
     }
+    let geodata_dir = geodata_dir_for_web_root(&options.web_root);
+    if let Err(err) = recover_geodata_transactions(&geodata_dir, &options.state) {
+        return DaedProductOutput::error(format!(
+            "recover interrupted geodata update failed: {err}"
+        ));
+    }
     if let Err(err) = initialize_log_store(&options.config_dir, &options.state) {
         return DaedProductOutput::error(format!("init log store failed: {err}"));
     }
