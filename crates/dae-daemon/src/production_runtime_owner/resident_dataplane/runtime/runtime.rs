@@ -6,6 +6,8 @@ pub(crate) struct ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) manual_probe_plans:
         BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
     pub(in crate::production_runtime_owner) dns_reload_handle: dns::ResidentDnsReloadHandle,
+    pub(in crate::production_runtime_owner) domain_routing_maintenance:
+        Option<dns::ResidentDnsDomainRoutingMaintenanceHandle>,
 }
 
 impl ResidentDataplaneRuntime {
@@ -51,6 +53,9 @@ impl ResidentDataplaneRuntime {
     }
 
     pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {
+        if let Some(maintenance) = self.domain_routing_maintenance.take() {
+            maintenance.stop();
+        }
         steps.push(self.owner.shutdown());
         let xmux = tcp::clear_xhttp_xmux_managers();
         steps.push(json!({

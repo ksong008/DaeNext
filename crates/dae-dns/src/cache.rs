@@ -198,10 +198,36 @@ impl DnsCacheStore {
     }
 
     pub fn sweep(&mut self, now_unix: i64) -> Vec<DnsCacheEntry> {
+        self.sweep_entries(now_unix)
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect()
+    }
+
+    pub fn sweep_entries(&mut self, now_unix: i64) -> Vec<(DnsCacheKey, DnsCacheEntry)> {
         let removed = self.entries.remove_expired_entries(now_unix);
         self.stats.expired_removal_total += removed.len() as u64;
         self.stats.remove_callback_total += removed.len() as u64;
         removed
+    }
+
+    pub fn next_expiry_unix(&self) -> Option<i64> {
+        self.entries.next_expiry_unix()
+    }
+
+    pub fn restore_swept_entries(
+        &mut self,
+        entries: impl IntoIterator<Item = (DnsCacheKey, DnsCacheEntry)>,
+    ) {
+        let mut restored = 0_u64;
+        for (key, entry) in entries {
+            self.entries.insert(key, entry);
+            restored = restored.saturating_add(1);
+        }
+        self.stats.expired_removal_total =
+            self.stats.expired_removal_total.saturating_sub(restored);
+        self.stats.remove_callback_total =
+            self.stats.remove_callback_total.saturating_sub(restored);
     }
 
     pub fn snapshot_live_entries(&mut self, now_unix: i64) -> Vec<(DnsCacheKey, DnsCacheEntry)> {
@@ -241,6 +267,17 @@ impl DnsCacheStore {
         question: &DnsPacketQuestionView<'_>,
     ) -> Result<Option<DnsCacheEntry>, DnsError> {
         self.entries.remove_packet_question(question)
+    }
+
+    pub fn remove_packet_question_entry(
+        &mut self,
+        question: &DnsPacketQuestionView<'_>,
+    ) -> Result<Option<(DnsCacheKey, DnsCacheEntry)>, DnsError> {
+        self.entries.remove_packet_question_entry(question)
+    }
+
+    pub fn restore_removed_entry(&mut self, key: DnsCacheKey, entry: DnsCacheEntry) {
+        self.entries.insert(key, entry);
     }
 
     pub fn stats(&self) -> &DnsCacheStats {
@@ -456,5 +493,24 @@ mod tests {
             vec!["a.example.", "z.example."]
         );
         assert!(!store.contains_key(&DnsCacheKey::new("expired.example.", 1, 1)));
+    }
+
+    #[test]
+    fn swept_entries_can_be_restored_without_advancing_removal_stats() {
+        let now = 1_700_000_000_i64;
+        let key = DnsCacheKey::new("retry.example.", 1, 1);
+        let mut store = DnsCacheStore::new(8);
+        store.insert(now, key.clone(), DnsCacheEntry::new(now - 1, now - 1));
+
+        let swept = store.sweep_entries(now);
+        assert_eq!(swept.len(), 1);
+        assert_eq!(store.stats().expired_removal_total, 1);
+        assert_eq!(store.stats().remove_callback_total, 1);
+        store.restore_swept_entries(swept);
+
+        assert!(store.contains_key(&key));
+        assert_eq!(store.next_expiry_unix(), Some(now - 1));
+        assert_eq!(store.stats().expired_removal_total, 0);
+        assert_eq!(store.stats().remove_callback_total, 0);
     }
 }

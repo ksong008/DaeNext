@@ -76,19 +76,15 @@ impl ResidentDnsDomainRouting {
                 report.skipped_unmatched_entries += 1;
                 continue;
             };
-            state
-                .owner
-                .apply_dns_event_by_id(
-                    self.map_id,
-                    DomainRoutingDnsEvent::from_keys(
-                        &plan.entry.route_owner_key,
-                        &plan.entry.domain_bitmap,
-                        plan.ips.iter().copied(),
-                    ),
-                )
-                .map_err(|err| {
-                    format!("restore resident DNS response domain routing owner: {err}")
-                })?;
+            self.apply_event(
+                &mut state.owner,
+                DomainRoutingDnsEvent::from_keys(
+                    &plan.entry.route_owner_key,
+                    &plan.entry.domain_bitmap,
+                    plan.ips.iter().copied(),
+                ),
+            )
+            .map_err(|err| format!("restore resident DNS response domain routing owner: {err}"))?;
             state
                 .cache
                 .insert_without_route_owner_key(now_unix, plan.key, plan.entry);
@@ -110,13 +106,11 @@ impl ResidentDnsDomainRouting {
                 report.skipped_unmatched_entries += 1;
                 continue;
             };
-            state
-                .owner
-                .apply_dns_event_by_id(
-                    self.map_id,
-                    DomainRoutingDnsEvent::from_keys(&plan.owner_key, &plan.bitmap, [plan.ip]),
-                )
-                .map_err(|err| format!("restore resident TCP sniff domain routing owner: {err}"))?;
+            self.apply_event(
+                &mut state.owner,
+                DomainRoutingDnsEvent::from_keys(&plan.owner_key, &plan.bitmap, [plan.ip]),
+            )
+            .map_err(|err| format!("restore resident TCP sniff domain routing owner: {err}"))?;
             let owner_key = plan.owner_key;
             state.sniff_owners.insert(
                 owner_key.clone(),
@@ -129,6 +123,8 @@ impl ResidentDnsDomainRouting {
             );
             report.sniffed_domain_entries += 1;
         }
+        drop(state);
+        self.maintenance.notify_deadline_changed();
         Ok(report)
     }
 }
@@ -160,4 +156,39 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) fn build_reside
         entry,
         ips,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_snapshot_skips_entries_that_expired_while_reloading() {
+        let matcher = RoutingMatcher::from_typed_sets(Vec::new(), Vec::new(), Vec::new()).unwrap();
+        let mut domain_routing = ResidentDnsDomainRouting::new(1, matcher);
+        domain_routing.test_apply_event = Some(apply_resident_domain_routing_event_in_memory);
+        let now_unix = unix_now();
+        let key = DnsCacheKey::new("expired.example", 1, 1);
+        let mut entry = DnsCacheEntry::new(now_unix, now_unix);
+        entry.route_owner_key = key.to_string();
+        entry.ips.push("192.0.2.40".parse().unwrap());
+        let snapshot = ResidentDnsDomainRoutingReloadSnapshot {
+            accepted_responses: vec![(key, entry)],
+            sniffed_domains: vec![ResidentSniffDomainOwner {
+                owner_key: "tcp-sniff|expired.example|192.0.2.41".to_owned(),
+                domain: "expired.example".to_owned(),
+                ip: "192.0.2.41".parse().unwrap(),
+                deadline_unix: now_unix,
+            }],
+        };
+
+        let report = domain_routing.restore_reload_snapshot(&snapshot).unwrap();
+        assert_eq!(report.skipped_expired_entries, 2);
+        assert_eq!(report.accepted_response_entries, 0);
+        assert_eq!(report.sniffed_domain_entries, 0);
+        let state = domain_routing.state.lock().unwrap();
+        assert!(state.cache.is_empty());
+        assert!(state.sniff_owners.is_empty());
+        assert_eq!(state.owner.tracker().owner_count(), 0);
+    }
 }
