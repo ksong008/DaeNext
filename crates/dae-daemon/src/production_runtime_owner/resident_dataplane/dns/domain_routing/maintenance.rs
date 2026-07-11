@@ -197,7 +197,7 @@ mod tests {
     ) -> Arc<ResidentDnsDomainRouting> {
         let matcher = RoutingMatcher::from_typed_sets(Vec::new(), Vec::new(), Vec::new()).unwrap();
         let mut domain_routing = ResidentDnsDomainRouting::new(1, matcher);
-        domain_routing.test_apply_event = Some(apply_event);
+        domain_routing.test_apply_map = Some(apply_event);
         Arc::new(domain_routing)
     }
 
@@ -214,12 +214,15 @@ mod tests {
         let owner_key = key.to_string();
         let ip = ip_to_key("192.0.2.30".parse().unwrap());
         let mut state = domain_routing.state.lock().unwrap();
-        apply_resident_domain_routing_event_in_memory(
-            &mut state.owner,
-            domain_routing.map_id,
-            DomainRoutingDnsEvent::from_keys(&owner_key, &[1], [ip]),
-        )
-        .unwrap();
+        state
+            .owner
+            .apply_dns_event_with(
+                domain_routing.map_id,
+                DomainRoutingDnsEvent::from_keys(&owner_key, &[1], [ip]),
+                |_, _, _| Ok(()),
+            )
+            .map(|_| ())
+            .unwrap();
         let mut entry = DnsCacheEntry::new(deadline_unix, deadline_unix);
         entry.route_owner_key = owner_key;
         entry.ips.push("192.0.2.30".parse().unwrap());
@@ -302,9 +305,9 @@ mod tests {
     #[test]
     fn failed_expiry_removal_keeps_cache_and_owner_for_retry() {
         fn reject_map_update(
-            _: &mut DomainRoutingOwner,
             _: u32,
-            _: DomainRoutingDnsEvent<'_>,
+            _: &[DomainRoutingStateEntry],
+            _: &[DomainRoutingIpKey],
         ) -> io::Result<()> {
             Err(io::Error::other("injected domain routing map failure"))
         }

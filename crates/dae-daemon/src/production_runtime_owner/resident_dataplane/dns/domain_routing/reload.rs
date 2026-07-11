@@ -166,7 +166,7 @@ mod tests {
     fn restore_snapshot_skips_entries_that_expired_while_reloading() {
         let matcher = RoutingMatcher::from_typed_sets(Vec::new(), Vec::new(), Vec::new()).unwrap();
         let mut domain_routing = ResidentDnsDomainRouting::new(1, matcher);
-        domain_routing.test_apply_event = Some(apply_resident_domain_routing_event_in_memory);
+        domain_routing.test_apply_map = Some(apply_resident_domain_routing_event_in_memory);
         let now_unix = unix_now();
         let key = DnsCacheKey::new("expired.example", 1, 1);
         let mut entry = DnsCacheEntry::new(now_unix, now_unix);
