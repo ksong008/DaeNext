@@ -14,17 +14,29 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
         .map_err(|err| format!("read VMess AEAD response header: {err}"))?;
     let _response_header_len = response.response_header_len;
     let mut inbound_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    let close_drain_deadline =
+        resident_relay_idle_deadline(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
+    tokio::pin!(close_drain_deadline);
+    let mut close_drain_active = false;
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
                 match inbound_read {
                     Ok(0) => {
                         inbound_closed = true;
                         let _ = proxy.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        reset_resident_relay_idle_deadline(
+                            close_drain_deadline.as_mut(),
+                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                        );
+                        close_drain_active = true;
                     }
                     Ok(read) => {
                         let encrypted = upload_codec
@@ -36,12 +48,17 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
                             .map_err(|err| format!("write VMess upload chunk: {err}"))?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
                         let _ = proxy.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        reset_resident_relay_idle_deadline(
+                            close_drain_deadline.as_mut(),
+                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                        );
+                        close_drain_active = true;
                     }
                     Err(err) => return Err(format!("read inbound TCP for VMess upload: {err}")),
                 }
@@ -57,7 +74,13 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
                             stats.direct_to_client += plain.len();
                             metrics.add_download(plain.len());
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        if close_drain_active {
+                            reset_resident_relay_idle_deadline(
+                                close_drain_deadline.as_mut(),
+                                RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                            );
+                        }
                     }
                     Err(err) => {
                         let message = err.to_string();
@@ -68,13 +91,9 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
                     }
                 }
             }
-            _ = time::sleep(Duration::from_millis(100)) => {
-                if inbound_closed {
-                    break;
-                }
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err("resident VMess relay idle timeout".to_owned());
-                }
+            _ = &mut close_drain_deadline, if close_drain_active => break,
+            _ = &mut idle_deadline => {
+                return Err("resident VMess relay idle timeout".to_owned());
             }
         }
     }
@@ -99,17 +118,29 @@ pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
     };
     let _response_header_len = response.response_header_len;
     let mut inbound_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    let close_drain_deadline =
+        resident_relay_idle_deadline(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
+    tokio::pin!(close_drain_deadline);
+    let mut close_drain_active = false;
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
                 match inbound_read {
                     Ok(0) => {
                         inbound_closed = true;
                         let _ = proxy.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        reset_resident_relay_idle_deadline(
+                            close_drain_deadline.as_mut(),
+                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                        );
+                        close_drain_active = true;
                     }
                     Ok(read) => {
                         let encrypted = upload_codec
@@ -123,12 +154,17 @@ pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
                         .await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
                         let _ = proxy.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        reset_resident_relay_idle_deadline(
+                            close_drain_deadline.as_mut(),
+                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                        );
+                        close_drain_active = true;
                     }
                     Err(err) => {
                         return Err(format!("read inbound TCP for VMess WebSocket upload: {err}"));
@@ -146,7 +182,13 @@ pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
                             stats.direct_to_client += plain.len();
                             metrics.add_download(plain.len());
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        if close_drain_active {
+                            reset_resident_relay_idle_deadline(
+                                close_drain_deadline.as_mut(),
+                                RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                            );
+                        }
                     }
                     Err(err) => {
                         if is_graceful_vmess_response_message(&err) {
@@ -156,13 +198,9 @@ pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
                     }
                 }
             }
-            _ = time::sleep(Duration::from_millis(100)) => {
-                if inbound_closed {
-                    break;
-                }
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err("resident VMess WebSocket relay idle timeout".to_owned());
-                }
+            _ = &mut close_drain_deadline, if close_drain_active => break,
+            _ = &mut idle_deadline => {
+                return Err("resident VMess WebSocket relay idle timeout".to_owned());
             }
         }
     }
