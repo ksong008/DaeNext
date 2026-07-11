@@ -297,21 +297,17 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
-        owner.register_thread(
-            "tcp-accept-loop",
-            "tcp-accept",
-            thread::spawn(move || {
-                resident_tcp_accept_loop(
-                    tcp_listener,
-                    tcp_router,
-                    stop,
-                    event_file,
-                    event_lock,
-                    metrics,
-                    tcp_flow_stack_bytes,
-                )
-            }),
-        );
+        owner.spawn_thread("tcp-accept-loop", "tcp-accept", move || {
+            resident_tcp_accept_loop(
+                tcp_listener,
+                tcp_router,
+                stop,
+                event_file,
+                event_lock,
+                metrics,
+                tcp_flow_stack_bytes,
+            )
+        });
     }
     {
         let stop = owner.stop_handle();
@@ -324,31 +320,27 @@ pub(crate) fn start_resident_dataplane_workers(
         let active_sessions = owner.udp_sessions_active();
         let health_check_concurrency = resource_config.health_check_concurrency.value();
         let dns_fast_path_concurrency = resource_config.dns_fast_path_concurrency.value();
-        owner.register_thread(
-            "udp-session-manager",
-            "udp-session-manager",
-            thread::spawn(move || {
-                resident_udp_loop(
-                    udp_socket,
-                    udp_proxy_groups,
-                    default_outbound,
-                    routing_tuple_map_id,
-                    routing_matcher,
-                    udp_dial_mode,
-                    udp_so_mark_from_dae,
-                    dns,
-                    stop,
-                    event_file,
-                    event_lock,
-                    metrics,
-                    active_sessions,
-                    udp_session_limit,
-                    udp_session_queue_depth,
-                    health_check_concurrency,
-                    dns_fast_path_concurrency,
-                )
-            }),
-        );
+        owner.spawn_thread("udp-session-manager", "udp-session-manager", move || {
+            resident_udp_loop(
+                udp_socket,
+                udp_proxy_groups,
+                default_outbound,
+                routing_tuple_map_id,
+                routing_matcher,
+                udp_dial_mode,
+                udp_so_mark_from_dae,
+                dns,
+                stop,
+                event_file,
+                event_lock,
+                metrics,
+                active_sessions,
+                udp_session_limit,
+                udp_session_queue_depth,
+                health_check_concurrency,
+                dns_fast_path_concurrency,
+            )
+        });
     }
     if let Some(dns_bind_listener) = dns_bind_listener {
         let stop = owner.stop_handle();
@@ -356,20 +348,16 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
-        owner.register_thread(
-            "dns-bind-listener",
-            "dns-bind-listener",
-            thread::spawn(move || {
-                resident_dns_bind_listener_loop(
-                    dns_bind_listener,
-                    dns,
-                    stop,
-                    event_file,
-                    event_lock,
-                    metrics,
-                )
-            }),
-        );
+        owner.spawn_thread("dns-bind-listener", "dns-bind-listener", move || {
+            resident_dns_bind_listener_loop(
+                dns_bind_listener,
+                dns,
+                stop,
+                event_file,
+                event_lock,
+                metrics,
+            )
+        });
     }
     for health_group in &health_groups {
         let stop = owner.stop_handle();
@@ -377,19 +365,15 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let health_check_concurrency = resource_config.health_check_concurrency.value();
-        owner.register_thread(
-            "health-check-loop",
-            "health-check",
-            thread::spawn(move || {
-                resident_group_health_check_loop(
-                    health_group,
-                    stop,
-                    event_file,
-                    event_lock,
-                    health_check_concurrency,
-                )
-            }),
-        );
+        owner.spawn_thread("health-check-loop", "health-check", move || {
+            resident_group_health_check_loop(
+                health_group,
+                stop,
+                event_file,
+                event_lock,
+                health_check_concurrency,
+            )
+        });
     }
 
     let default_proxy_utls = proxy.utls_fingerprint.as_ref().map(|fingerprint| {

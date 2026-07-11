@@ -1,8 +1,9 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -12,6 +13,10 @@ use super::{
     prune_resident_event_log_file_direct,
 };
 
+mod control;
+
+use self::control::{deadline_after, send_command_until};
+
 const RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
 static ACTIVE_EVENT_WRITER: OnceLock<Mutex<Option<ResidentEventWriterHandle>>> = OnceLock::new();
@@ -20,6 +25,7 @@ static ACTIVE_EVENT_WRITER: OnceLock<Mutex<Option<ResidentEventWriterHandle>>> =
 pub(crate) struct ResidentEventWriterRuntime {
     handle: ResidentEventWriterHandle,
     thread: Option<JoinHandle<()>>,
+    completion: Option<Receiver<ResidentEventWriterExit>>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +51,12 @@ enum ResidentEventWriterCommand {
 
 type ResidentEventWriterAck = SyncSender<Result<(), String>>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResidentEventWriterExit {
+    Completed,
+    Panicked,
+}
+
 impl ResidentEventWriterRuntime {
     pub(crate) fn start(path: PathBuf, lock: Arc<Mutex<()>>, queue_capacity: usize) -> Self {
         let queue_capacity = queue_capacity.max(1);
@@ -60,10 +72,20 @@ impl ResidentEventWriterRuntime {
             inner: Arc::clone(&inner),
         };
         let thread_inner = Arc::clone(&inner);
-        let thread = thread::spawn(move || run_event_writer(thread_inner, receiver));
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let thread = thread::spawn(move || {
+            let exit = match catch_unwind(AssertUnwindSafe(|| {
+                run_event_writer(thread_inner, receiver)
+            })) {
+                Ok(()) => ResidentEventWriterExit::Completed,
+                Err(_) => ResidentEventWriterExit::Panicked,
+            };
+            let _ = completion_tx.send(exit);
+        });
         let runtime = Self {
             handle: handle.clone(),
             thread: Some(thread),
+            completion: Some(completion_rx),
         };
         set_active_resident_event_writer(Some(handle));
         runtime
@@ -81,22 +103,77 @@ impl ResidentEventWriterRuntime {
         self.handle.prune()
     }
 
+    #[cfg(test)]
     pub(crate) fn shutdown(&mut self) -> Value {
+        self.shutdown_until(deadline_after(RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT))
+    }
+
+    pub(crate) fn shutdown_until(&mut self, deadline: Instant) -> Value {
         clear_active_resident_event_writer(&self.handle.inner.path);
-        let stop_result = self.handle.control(ResidentEventWriterCommand::Stop);
-        let thread_joined = self
-            .thread
-            .take()
-            .map(|thread| thread.join().is_ok())
-            .unwrap_or(true);
+        if self.thread.is_none() {
+            return json!({
+                "schemaVersion": 1,
+                "owner": "resident-event-writer",
+                "status": "pass",
+                "stopError": Value::Null,
+                "threadJoined": true,
+                "threadTimedOut": false,
+                "threadPanicked": false,
+                "alreadyStopped": true,
+                "metrics": self.metrics_snapshot(),
+            });
+        }
+        let stop_result = self
+            .handle
+            .control_until(ResidentEventWriterCommand::Stop, deadline);
+        let thread_exit = self.wait_for_completion_until(deadline);
+        let thread_joined = thread_exit.is_some();
+        let thread_panicked = thread_exit == Some(ResidentEventWriterExit::Panicked);
+        let thread_timed_out = !thread_joined;
         json!({
             "schemaVersion": 1,
             "owner": "resident-event-writer",
-            "status": if stop_result.is_ok() && thread_joined { "pass" } else { "fail" },
+            "status": if stop_result.is_ok() && thread_joined && !thread_panicked { "pass" } else { "fail" },
             "stopError": stop_result.err().map(|err| err.to_string()),
             "threadJoined": thread_joined,
+            "threadTimedOut": thread_timed_out,
+            "threadPanicked": thread_panicked,
+            "alreadyStopped": false,
             "metrics": self.metrics_snapshot(),
         })
+    }
+
+    fn wait_for_completion_until(&mut self, deadline: Instant) -> Option<ResidentEventWriterExit> {
+        let mut reported_exit = None;
+        loop {
+            if reported_exit.is_none() {
+                reported_exit = self.completion.as_ref().and_then(|completion| {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        completion.try_recv().ok()
+                    } else {
+                        completion.recv_timeout(remaining).ok()
+                    }
+                });
+            }
+            let thread_finished = self.thread.as_ref().is_none_or(JoinHandle::is_finished);
+            if thread_finished {
+                let join_panicked = self
+                    .thread
+                    .take()
+                    .is_some_and(|thread| thread.join().is_err());
+                self.completion.take();
+                return Some(if join_panicked {
+                    ResidentEventWriterExit::Panicked
+                } else {
+                    reported_exit.unwrap_or(ResidentEventWriterExit::Completed)
+                });
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::yield_now();
+        }
     }
 }
 
@@ -114,11 +191,11 @@ impl ResidentEventWriterHandle {
             Err(TrySendError::Full(ResidentEventWriterCommand::Event(event)))
                 if block_on_full_queue =>
             {
-                if let Err(err) = self
-                    .inner
-                    .sender
-                    .send(ResidentEventWriterCommand::Event(event))
-                {
+                if let Err(err) = send_command_until(
+                    &self.inner.sender,
+                    ResidentEventWriterCommand::Event(event),
+                    deadline_after(RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT),
+                ) {
                     self.inner.metrics.command_rejected();
                     self.inner
                         .metrics
@@ -156,32 +233,6 @@ impl ResidentEventWriterHandle {
 
     pub(crate) fn prune(&self) -> std::io::Result<()> {
         self.control(ResidentEventWriterCommand::Prune)
-    }
-
-    fn control(
-        &self,
-        build: impl FnOnce(ResidentEventWriterAck) -> ResidentEventWriterCommand,
-    ) -> std::io::Result<()> {
-        let (ack_tx, ack_rx) = mpsc::sync_channel(1);
-        self.inner.metrics.command_enqueued();
-        if let Err(err) = self.inner.sender.send(build(ack_tx)) {
-            self.inner.metrics.command_rejected();
-            let message = format!("send resident event writer control command: {err}");
-            self.inner.metrics.record_error(message.clone());
-            return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, message));
-        }
-        match ack_rx.recv_timeout(RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(err)) => Err(std::io::Error::other(err)),
-            Err(RecvTimeoutError::Timeout) => Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "resident event writer control command timed out",
-            )),
-            Err(RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "resident event writer control acknowledgement disconnected",
-            )),
-        }
     }
 }
 
@@ -275,54 +326,4 @@ fn run_event_writer(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::sync::mpsc;
-
-    #[test]
-    fn resident_event_writer_drops_datapath_errors_when_queue_is_full() {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        sender
-            .send(ResidentEventWriterCommand::Event(ResidentEvent::new(
-                json!({"event": "tcp_worker_started"}),
-            )))
-            .unwrap();
-        let metrics = Arc::new(ResidentEventWriterMetrics::new(1));
-        let handle = ResidentEventWriterHandle {
-            inner: Arc::new(ResidentEventWriterInner {
-                path: std::env::temp_dir().join(format!(
-                    "resident-event-writer-drop-test-{}",
-                    std::process::id()
-                )),
-                lock: Arc::new(Mutex::new(())),
-                sender,
-                metrics: Arc::clone(&metrics),
-            }),
-        };
-
-        handle.submit(ResidentEvent::new(json!({
-            "event": "udp_exchange_failed",
-            "error": "sample",
-        })));
-
-        drop(receiver);
-        let snapshot = metrics.snapshot();
-        assert_eq!(snapshot["droppedCount"], json!(1));
-        assert_eq!(snapshot["droppedByClass"]["error"], json!(1));
-        assert_eq!(snapshot["lastWriteError"], Value::Null);
-    }
-
-    #[test]
-    fn resident_event_full_queue_blocking_policy_is_lifecycle_only() {
-        assert!(ResidentEvent::new(json!({"event": "tcp_worker_started"})).block_on_full_queue());
-        assert!(
-            ResidentEvent::new(json!({"event": "runtime_reload_finished"})).block_on_full_queue()
-        );
-        assert!(ResidentEvent::new(json!({"event": "resident_fatal_error"})).block_on_full_queue());
-        assert!(
-            !ResidentEvent::new(json!({"event": "tcp_connection_failed"})).block_on_full_queue()
-        );
-        assert!(!ResidentEvent::new(json!({"event": "udp_exchange_failed"})).block_on_full_queue());
-    }
-}
+mod tests;

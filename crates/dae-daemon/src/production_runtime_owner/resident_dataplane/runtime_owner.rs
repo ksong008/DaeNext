@@ -1,6 +1,10 @@
 use super::*;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::mpsc::{self, Receiver};
 
-const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
+mod shutdown;
+
+use self::shutdown::shutdown_resident_runtime_owner;
 
 pub(crate) struct ResidentRuntimeOwner {
     stop: Arc<AtomicBool>,
@@ -26,7 +30,14 @@ pub(crate) struct ResidentManualProbeHandle {
 struct ResidentRuntimeTask {
     name: &'static str,
     kind: &'static str,
-    handle: JoinHandle<()>,
+    handle: Option<JoinHandle<()>>,
+    completion: Option<Receiver<ResidentRuntimeTaskExit>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResidentRuntimeTaskExit {
+    Completed,
+    Panicked,
 }
 
 impl std::fmt::Debug for ResidentRuntimeOwner {
@@ -112,7 +123,32 @@ impl ResidentRuntimeOwner {
         kind: &'static str,
         handle: JoinHandle<()>,
     ) {
-        self.tasks.push(ResidentRuntimeTask { name, kind, handle });
+        self.tasks.push(ResidentRuntimeTask {
+            name,
+            kind,
+            handle: Some(handle),
+            completion: None,
+        });
+    }
+
+    pub(crate) fn spawn_thread<F>(&mut self, name: &'static str, kind: &'static str, run: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let handle = thread::spawn(move || {
+            let exit = match catch_unwind(AssertUnwindSafe(run)) {
+                Ok(()) => ResidentRuntimeTaskExit::Completed,
+                Err(_) => ResidentRuntimeTaskExit::Panicked,
+            };
+            let _ = completion_tx.send(exit);
+        });
+        self.tasks.push(ResidentRuntimeTask {
+            name,
+            kind,
+            handle: Some(handle),
+            completion: Some(completion_rx),
+        });
     }
 
     pub(crate) fn task_registry_value(&self) -> Value {
@@ -130,7 +166,7 @@ impl ResidentRuntimeOwner {
                 json!({
                     "name": task.name,
                     "kind": task.kind,
-                    "joinPolicy": "join-on-owner-shutdown",
+                    "joinPolicy": "bounded-join-on-owner-shutdown",
                 })
             }).collect::<Vec<_>>(),
         })
@@ -159,95 +195,12 @@ impl ResidentRuntimeOwner {
     }
 
     pub(crate) fn shutdown(&mut self) -> Value {
-        let started = Instant::now();
-        self.stop.store(true, Ordering::Relaxed);
-        let task_count_started = self.tasks.len();
-        let mut task_count_joined = 0_usize;
-        let mut task_count_panicked = 0_usize;
-        let mut task_count_join_exceeded_grace = 0_usize;
-        let mut task_results = Vec::with_capacity(task_count_started);
+        shutdown_resident_runtime_owner(self, shutdown::RESIDENT_RUNTIME_TASK_JOIN_GRACE)
+    }
 
-        for task in self.tasks.drain(..) {
-            let ResidentRuntimeTask { name, kind, handle } = task;
-            let join_started = Instant::now();
-            match handle.join() {
-                Ok(()) => {
-                    task_count_joined += 1;
-                    let join_elapsed_ns =
-                        join_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-                    let join_exceeded_grace =
-                        join_elapsed_ns > duration_nanos(RESIDENT_RUNTIME_TASK_JOIN_GRACE);
-                    if join_exceeded_grace {
-                        task_count_join_exceeded_grace += 1;
-                    }
-                    task_results.push(json!({
-                        "name": name,
-                        "kind": kind,
-                        "status": "joined",
-                        "join_elapsed_ns": join_elapsed_ns,
-                        "join_elapsed_ms": join_elapsed_ns / 1_000_000,
-                        "join_grace_ms": duration_millis(RESIDENT_RUNTIME_TASK_JOIN_GRACE),
-                        "join_exceeded_grace": join_exceeded_grace,
-                    }));
-                }
-                Err(_) => {
-                    task_count_panicked += 1;
-                    let join_elapsed_ns =
-                        join_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-                    let join_exceeded_grace =
-                        join_elapsed_ns > duration_nanos(RESIDENT_RUNTIME_TASK_JOIN_GRACE);
-                    if join_exceeded_grace {
-                        task_count_join_exceeded_grace += 1;
-                    }
-                    task_results.push(json!({
-                        "name": name,
-                        "kind": kind,
-                        "status": "panicked",
-                        "join_elapsed_ns": join_elapsed_ns,
-                        "join_elapsed_ms": join_elapsed_ns / 1_000_000,
-                        "join_grace_ms": duration_millis(RESIDENT_RUNTIME_TASK_JOIN_GRACE),
-                        "join_exceeded_grace": join_exceeded_grace,
-                    }));
-                }
-            }
-        }
-
-        let metrics = self.metrics.snapshot();
-        let active_tcp = metrics["activeTcpConnections"].as_u64().unwrap_or(0);
-        let active_udp = metrics["activeUdpSessions"].as_u64().unwrap_or(0);
-        let legacy_udp_active = self.udp_sessions_active.load(Ordering::Relaxed);
-        let event_writer = self.event_writer.shutdown();
-        let shutdown_elapsed_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        json!({
-            "name": "stop-resident-dataplane-runtime",
-            "status": if task_count_panicked == 0 && event_writer["status"].as_str() == Some("pass") { "pass" } else { "fail" },
-            "owner": "resident-runtime-owner",
-            "reload_generation": self.reload_generation,
-            "reloadGeneration": self.reload_generation,
-            "task_count_started": task_count_started,
-            "task_count_joined": task_count_joined,
-            "task_count_timed_out": 0,
-            "task_count_aborted": 0,
-            "task_count_panicked": task_count_panicked,
-            "task_count_join_exceeded_grace": task_count_join_exceeded_grace,
-            "join_grace_ms": duration_millis(RESIDENT_RUNTIME_TASK_JOIN_GRACE),
-            "joined_worker_threads": task_count_joined,
-            "panicked_worker_threads": task_count_panicked,
-            "active_tcp_connections_at_shutdown": active_tcp,
-            "active_udp_sessions_at_shutdown": active_udp,
-            "udp_sessions_active_at_shutdown": legacy_udp_active,
-            "runtime_handle_owner": "resident-runtime-owner",
-            "manual_probe_runtime_available": true,
-            "manual_probe_runtime_persistent": false,
-            "manual_probe_runtime_stopped": true,
-            "event_writer": event_writer,
-            "shutdown_elapsed_ns": shutdown_elapsed_ns,
-            "shutdown_elapsed_ms": shutdown_elapsed_ns / 1_000_000,
-            "event_file": Value::Null,
-            "event_file_status": "disabled",
-            "event_log": "product-log-sink",
-            "tasks": task_results,
-        })
+    #[cfg(test)]
+    fn shutdown_with_grace(&mut self, grace: Duration) -> Value {
+        shutdown_resident_runtime_owner(self, grace)
     }
 
     fn runtime_owner_value(&self) -> Value {
@@ -275,10 +228,6 @@ impl ResidentRuntimeOwner {
             "error": Value::Null,
         })
     }
-}
-
-fn duration_nanos(duration: Duration) -> u64 {
-    duration.as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
 fn duration_millis(duration: Duration) -> u64 {
@@ -639,11 +588,7 @@ mod tests {
             Arc::clone(&udp_sessions_active),
             ResidentRuntimeResourceConfig::from_config(&config),
         );
-        owner.register_thread(
-            "test-worker",
-            "runtime-lifecycle-test",
-            thread::spawn(|| {}),
-        );
+        owner.spawn_thread("test-worker", "runtime-lifecycle-test", || {});
         let registry = owner.task_registry_value();
         assert_eq!(registry["owner"], "resident-runtime-owner");
         assert_eq!(registry["runtimeHandle"]["owner"], "resident-runtime-owner");
