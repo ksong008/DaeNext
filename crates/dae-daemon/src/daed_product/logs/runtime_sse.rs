@@ -91,30 +91,3 @@ pub(crate) fn sse_response_events(events: &[(&str, Value)], retry_ms: Option<u64
         .push(("X-Accel-Buffering".to_owned(), "no".to_owned()));
     response
 }
-
-pub(crate) fn write_sse_stream_headers(
-    stream: &mut TcpStream,
-    request: &HttpRequest,
-) -> io::Result<()> {
-    write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n",
-    )?;
-    write_cors_headers(stream, request)?;
-    write!(stream, "\r\n")
-}
-
-pub(crate) fn write_sse_stream_event(
-    stream: &mut TcpStream,
-    event: &str,
-    payload: &Value,
-) -> io::Result<()> {
-    let data = serde_json::to_string(payload)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    writeln!(stream, "event: {event}")?;
-    for line in data.lines() {
-        writeln!(stream, "data: {line}")?;
-    }
-    writeln!(stream)?;
-    stream.flush()
-}

@@ -75,7 +75,8 @@ fn authenticated_http_geodata_update_releases_the_general_worker_before_download
     metrics.opened();
 
     let started = Instant::now();
-    let result = handle_stream(server_stream, Arc::clone(&app), Arc::clone(&metrics)).unwrap();
+    let result =
+        handle_stream(server_stream, Arc::clone(&app), Arc::clone(&metrics), None).unwrap();
     assert!(matches!(result, ProductHttpConnectionResult::Detached));
     assert!(started.elapsed() < Duration::from_secs(1));
     fixture.wait_until_download_started();
