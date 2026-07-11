@@ -74,8 +74,11 @@ pub(crate) async fn open_proxy_tcp_stream_async_with_flow(
     mark: u32,
     mptcp: bool,
 ) -> Result<TokioTcpStream, String> {
+    if let Some(parent) = proxy.chain_parent.as_deref() {
+        return open_proxy_tcp_stream_through_parent_async(proxy, parent).await;
+    }
     let protocol = &proxy.protocol;
-    let target = format!("{}:{}", proxy.server_host, proxy.server_port);
+    let target = authority_from_host_port(proxy.server_host.as_str(), proxy.server_port);
     let connected = open_direct_tcp_connection_async(target.clone(), mark, mptcp)
         .await
         .map_err(|err| format!("connect {protocol} server {target}: {err}"))?;

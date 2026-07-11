@@ -2,73 +2,8 @@ use super::*;
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_plain_proxy_tcp_stream_async(
     selection: &TcpProxySelection,
 ) -> Result<TokioTcpStream, String> {
-    let proxy = selection.proxy.as_ref();
-    if let Some(parent) = proxy.chain_parent.as_deref() {
-        return open_plain_proxy_tcp_stream_through_parent_async(proxy, parent).await;
-    }
-    let target = format!("{}:{}", proxy.server_host, proxy.server_port);
-    let connection =
-        open_direct_tcp_connection_async(target, selection.mark, selection.mptcp).await?;
-    TokioTcpStream::from_std(connection.stream)
-        .map_err(|err| format!("adopt async proxy TCP stream: {err}"))
-}
-
-pub(super) async fn open_plain_proxy_tcp_stream_through_parent_async(
-    proxy: &ResidentProxyPlan,
-    parent: &ResidentProxyPlan,
-) -> Result<TokioTcpStream, String> {
-    let mut parent_chain = Vec::new();
-    let mut current = Some(parent);
-    while let Some(parent) = current {
-        parent_chain.push(parent);
-        current = parent.chain_parent.as_deref();
-    }
-    let first_parent = parent_chain
-        .first()
-        .ok_or_else(|| "resident chain has no parent".to_owned())?;
-    let parent_target = format!("{}:{}", first_parent.server_host, first_parent.server_port);
-    let connection =
-        open_direct_tcp_connection_async(parent_target, first_parent.mark, first_parent.mptcp)
-            .await?;
-    let mut stream = TokioTcpStream::from_std(connection.stream)
-        .map_err(|err| format!("adopt async parent proxy TCP stream: {err}"))?;
-    for window in parent_chain.windows(2) {
-        let current_parent = window[0];
-        let next_parent = window[1];
-        let next_target = format!("{}:{}", next_parent.server_host, next_parent.server_port);
-        connect_plain_parent_to_target_async(&mut stream, current_parent, &next_target).await?;
-    }
-    let final_parent = parent_chain
-        .last()
-        .ok_or_else(|| "resident chain has no final parent".to_owned())?;
-    let final_target = format!("{}:{}", proxy.server_host, proxy.server_port);
-    connect_plain_parent_to_target_async(&mut stream, final_parent, &final_target).await?;
-    Ok(stream)
-}
-
-async fn connect_plain_parent_to_target_async(
-    stream: &mut TokioTcpStream,
-    parent: &ResidentProxyPlan,
-    target: &str,
-) -> Result<(), String> {
-    match &parent.handler {
-        ResidentProxyProtocolPlan::Socks5Tcp { username, password } => {
-            socks5_connect_async(stream, target, username, password).await?;
-        }
-        ResidentProxyProtocolPlan::HttpProxyTcp {
-            username, password, ..
-        } if parent.tls == "none" => {
-            http_proxy_connect_plain_async(stream, target, username, password, false, "", "")
-                .await?;
-        }
-        _ => {
-            return Err(format!(
-                "resident chain parent {} is not backed by a plain parent CONNECT executor",
-                parent.protocol
-            ));
-        }
-    }
-    Ok(())
+    open_proxy_tcp_stream_async_with_flow(selection.proxy.as_ref(), selection.mark, selection.mptcp)
+        .await
 }
 
 pub(crate) async fn read_http_head_and_leftover_from_async_stream<S>(

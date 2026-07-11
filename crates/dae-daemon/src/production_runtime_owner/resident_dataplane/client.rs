@@ -30,12 +30,15 @@ use super::plan::{
     ResidentProxyPlan, ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan,
     ResidentXhttpEndpointPlan,
 };
+use super::resolver::authority_from_host_port;
 
 mod types;
 pub(super) use self::types::*;
 mod async_client;
 mod open_client;
 pub(super) use self::open_client::*;
+mod parent_transport;
+use self::parent_transport::*;
 mod config;
 use self::config::*;
 mod reality_boring;
