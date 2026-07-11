@@ -148,6 +148,20 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: Option<SocketAddr>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) selection:
         ResidentDnsForwarderSelectionKey,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) transport:
+        ResidentDnsForwarderTransport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsForwarderTransport
+{
+    Quic,
+    Udp,
+    ProxyUdp,
+    Tcp,
+    Tls,
+    Https,
+    Http3,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
