@@ -62,7 +62,14 @@ pub(in crate::daed_product) fn apply_runtime_generation(
     let snapshot = match runtime.snapshot_for_apply() {
         Ok(snapshot) => snapshot,
         Err(err) => {
-            record_apply_failure(runtime, &generation, "snapshot", &err, "not-required", false);
+            record_apply_failure(
+                runtime,
+                &generation,
+                "snapshot",
+                &err,
+                "not-required",
+                false,
+            );
             return Err(err);
         }
     };

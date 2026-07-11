@@ -212,24 +212,6 @@ pub(in crate::daed_product) fn bump_runtime_external_input_version(
     current_runtime_external_input_version(&conn)
 }
 
-pub(in crate::daed_product) fn mark_system_stopped(state: &Path) -> io::Result<()> {
-    ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    let updated = conn
-        .execute("UPDATE systems SET running = 0", [])
-        .map_err(sqlite_io_error)?;
-    if updated == 0 {
-        conn.execute(
-            "INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids)
-             VALUES(0, 0, 0, 0, 0, '')",
-            [],
-        )
-        .map_err(sqlite_io_error)?;
-    }
-    set_metadata(state, "runtime_running", "false")?;
-    Ok(())
-}
-
 pub(in crate::daed_product) fn mark_runtime_process_stopped(state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
     set_metadata(state, "runtime_running", "false")

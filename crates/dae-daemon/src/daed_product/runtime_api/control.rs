@@ -107,11 +107,8 @@ pub(in crate::daed_product) fn api_runtime_reload(
 }
 
 pub(in crate::daed_product) fn api_runtime_stop(app: &AppState) -> HttpResponse {
-    match app.runtime.stop() {
+    match stop_runtime_and_persist(&app.state, &app.runtime) {
         Ok(mut report) => {
-            if let Err(err) = mark_system_stopped(&app.state) {
-                return HttpResponse::json(500, json!({"error": err.to_string()}));
-            }
             let mut fields = BTreeMap::new();
             fields.insert(
                 "was_running".to_owned(),

@@ -4,6 +4,7 @@ mod apply_state;
 mod cleanup;
 mod instance;
 mod recovery;
+mod stop;
 mod summary;
 
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
@@ -544,117 +545,6 @@ fn reload_product_runtime_with_config_content(
 }
 
 impl ProductRuntimeManager {
-    pub(super) fn stop(&self) -> Result<Value, String> {
-        let stop_started = Instant::now();
-        let _lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
-        let (stopped_runtime, was_running, cleanup_epoch) = {
-            let mut inner = self
-                .inner
-                .lock()
-                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-            inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
-            let was_running = inner.runtime.is_some();
-            let stopped_runtime = inner.runtime.take();
-            if was_running {
-                let cleanup_epoch = inner.lifecycle_epoch;
-                inner.cleanup.begin(cleanup_epoch, "background-stop");
-            }
-            inner.config = None;
-            inner.config_content = None;
-            inner.traffic_carry = RuntimeTrafficCarry::default();
-            inner.runtime_started_at = None;
-            inner.stop_count += 1;
-            inner.last_transition_at = Some(now_text());
-            inner.last_report = None;
-            inner.last_error = None;
-            (stopped_runtime, was_running, inner.lifecycle_epoch)
-        };
-        if was_running {
-            spawn_background_cleanup(Arc::clone(&self.inner), cleanup_epoch, stopped_runtime);
-        } else {
-            drop(stopped_runtime);
-        }
-        let stop_elapsed_ns = stop_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        Ok(json!({
-            "stopped": true,
-            "wasRunning": was_running,
-            "runtimeControl": "resident-production-runtime-manager",
-            "fakeRuntime": product_runtime_fake_start_enabled(),
-            "allocatorReclaim": Value::Null,
-            "stopElapsedNs": stop_elapsed_ns,
-            "stopElapsedMs": stop_elapsed_ns / 1_000_000,
-            "cleanupStarted": was_running,
-            "cleanupEpoch": if was_running { json!(cleanup_epoch) } else { Value::Null },
-            "cleanupMode": if was_running { json!("background-stop") } else { Value::Null },
-            "cleanupReport": Value::Null,
-        }))
-    }
-
-    pub(super) fn stop_and_wait_for_cleanup(&self, cleanup_mode: &str) -> Result<Value, String> {
-        let stop_started = Instant::now();
-        let _lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
-        let (stopped_runtime, was_running, cleanup_epoch) = {
-            let mut inner = self
-                .inner
-                .lock()
-                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-            inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
-            let was_running = inner.runtime.is_some();
-            let stopped_runtime = inner.runtime.take();
-            if was_running {
-                let cleanup_epoch = inner.lifecycle_epoch;
-                inner.cleanup.begin(cleanup_epoch, cleanup_mode);
-            }
-            inner.config = None;
-            inner.config_content = None;
-            inner.traffic_carry = RuntimeTrafficCarry::default();
-            inner.runtime_started_at = None;
-            inner.stop_count += 1;
-            inner.last_transition_at = Some(now_text());
-            inner.last_report = None;
-            inner.last_error = None;
-            (stopped_runtime, was_running, inner.lifecycle_epoch)
-        };
-
-        let cleanup_report = if was_running {
-            let cleanup_report = cleanup_runtime_instance_with_reclaim(
-                stopped_runtime,
-                AllocatorReclaimReason::StopRuntime,
-            );
-            let mut inner = self
-                .inner
-                .lock()
-                .map_err(|_| "product runtime manager lock poisoned after cleanup".to_owned())?;
-            if inner.cleanup.epoch == cleanup_epoch {
-                inner.cleanup.finish(cleanup_report.clone());
-            }
-            cleanup_report
-        } else {
-            drop(stopped_runtime);
-            None
-        };
-        let stop_elapsed_ns = stop_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        Ok(json!({
-            "stopped": true,
-            "wasRunning": was_running,
-            "runtimeControl": "resident-production-runtime-manager",
-            "fakeRuntime": product_runtime_fake_start_enabled(),
-            "allocatorReclaim": Value::Null,
-            "stopElapsedNs": stop_elapsed_ns,
-            "stopElapsedMs": stop_elapsed_ns / 1_000_000,
-            "cleanupStarted": was_running,
-            "cleanupEpoch": if was_running { json!(cleanup_epoch) } else { Value::Null },
-            "cleanupMode": if was_running { json!(cleanup_mode) } else { Value::Null },
-            "cleanupReport": cleanup_report,
-        }))
-    }
-
     #[cfg(test)]
     pub(super) fn wait_for_cleanup_idle(&self, timeout: Duration) -> bool {
         cleanup::wait_for_cleanup_idle_for_inner(&self.inner, timeout)
