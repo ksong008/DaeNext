@@ -474,7 +474,7 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
         port,
         "POST",
         "/api/user/me/dae-config-file/preview",
-        Some(r#"{"content":"global {}"}"#),
+        Some(r#"{"content":"global {}\nrouting { fallback: direct }\ndns {}"}"#),
         Some(&token),
     );
     assert!(preview.contains("\"bundle\""), "{preview}");

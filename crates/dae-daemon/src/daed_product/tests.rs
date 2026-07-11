@@ -1,5 +1,7 @@
 use super::*;
 #[cfg(test)]
+mod bundle_import;
+#[cfg(test)]
 mod latency;
 #[cfg(test)]
 mod node_identity;

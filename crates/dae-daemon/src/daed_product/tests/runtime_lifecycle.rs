@@ -843,6 +843,8 @@ pub(crate) fn running_bundle_import_marks_existing_selected_resources_modified()
                 VALUES(1, 'routing', 'routing { fallback: egress }', 1, 0);
             INSERT INTO groups(id, name, policy, version)
                 VALUES(1, 'egress', 'random', 0);
+            INSERT INTO users(id, username, password_hash, jwt_secret, json_storage)
+                VALUES(1, 'tester', '', '', '{}');
         "#,
     )
     .unwrap();
