@@ -7,7 +7,11 @@ pub(super) fn api_auth_status(app: &AppState) -> HttpResponse {
     }
 }
 
-pub(super) fn api_create_user(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_create_user(
+    app: &AppState,
+    request: &HttpRequest,
+    context: ProductHttpRequestContext,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -20,13 +24,22 @@ pub(super) fn api_create_user(app: &AppState, request: &HttpRequest) -> HttpResp
             return HttpResponse::json(400, json!({"error": "username and password are required"}));
         }
     };
-    match create_user(&app.state, username, password) {
-        Ok(token) => HttpResponse::json(201, json!({"token": token})),
-        Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
-    }
+    let state = app.state.clone();
+    let username_owned = username.to_owned();
+    let password = password.to_owned();
+    execute_auth_request(app, context, username, move || {
+        ProductAuthJobOutcome::neutral(match create_user(&state, &username_owned, &password) {
+            Ok(token) => HttpResponse::json(201, json!({"token": token})),
+            Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
+        })
+    })
 }
 
-pub(super) fn api_issue_token(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_issue_token(
+    app: &AppState,
+    request: &HttpRequest,
+    context: ProductHttpRequestContext,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -39,10 +52,26 @@ pub(super) fn api_issue_token(app: &AppState, request: &HttpRequest) -> HttpResp
             return HttpResponse::json(400, json!({"error": "username and password are required"}));
         }
     };
-    match issue_token(&app.state, username, password) {
-        Ok(token) => HttpResponse::json(200, json!({"token": token})),
-        Err(err) => HttpResponse::json(401, json!({"error": err.to_string()})),
-    }
+    let state = app.state.clone();
+    let username_owned = username.to_owned();
+    let password = password.to_owned();
+    execute_auth_request(app, context, username, move || {
+        match issue_token(&state, &username_owned, &password) {
+            Ok(token) => {
+                ProductAuthJobOutcome::success(HttpResponse::json(200, json!({"token": token})))
+            }
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                ProductAuthJobOutcome::credential_failure(HttpResponse::json(
+                    401,
+                    json!({"error": err.to_string()}),
+                ))
+            }
+            Err(err) => ProductAuthJobOutcome::neutral(HttpResponse::json(
+                401,
+                json!({"error": err.to_string()}),
+            )),
+        }
+    })
 }
 
 pub(super) fn api_patch_user(
@@ -118,7 +147,8 @@ fn patched_optional_user_field(
 pub(super) fn api_update_password(
     app: &AppState,
     request: &HttpRequest,
-    mut user: UserRecord,
+    user: UserRecord,
+    context: ProductHttpRequestContext,
 ) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
@@ -135,30 +165,98 @@ pub(super) fn api_update_password(
             );
         }
     };
+    let state = app.state.clone();
+    let username = user.username.clone();
+    let current = current.to_owned();
+    let new_password = new_password.to_owned();
+    execute_auth_request(app, context, &username, move || {
+        update_password_auth_job(&state, user, &current, &new_password)
+    })
+}
+
+fn update_password_auth_job(
+    state: &Path,
+    mut user: UserRecord,
+    current: &str,
+    new_password: &str,
+) -> ProductAuthJobOutcome {
     if !verify_password_hash(&user.password_hash, user.jwt_secret.as_bytes(), current) {
-        return HttpResponse::json(400, json!({"error": "incorrect password"}));
+        return ProductAuthJobOutcome::credential_failure(HttpResponse::json(
+            400,
+            json!({"error": "incorrect password"}),
+        ));
     }
     if let Err(err) = validate_password_strength(new_password) {
-        return HttpResponse::json(400, json!({"error": err}));
+        return ProductAuthJobOutcome::neutral(HttpResponse::json(400, json!({"error": err})));
     }
     let secret = match random_secret_hex() {
         Ok(secret) => secret,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+        Err(err) => {
+            return ProductAuthJobOutcome::neutral(HttpResponse::json(
+                500,
+                json!({"error": err.to_string()}),
+            ));
+        }
     };
     let password_hash = hash_password(secret.as_bytes(), new_password);
-    let conn = match open_state_connection(&app.state) {
+    let conn = match open_state_connection(state) {
         Ok(conn) => conn,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+        Err(err) => {
+            return ProductAuthJobOutcome::neutral(HttpResponse::json(
+                500,
+                json!({"error": err.to_string()}),
+            ));
+        }
     };
     if let Err(err) = conn.execute(
         "UPDATE users SET password_hash = ?1, jwt_secret = ?2 WHERE id = ?3",
         params![password_hash, secret, user.id],
     ) {
-        return HttpResponse::json(400, json!({"error": err.to_string()}));
+        return ProductAuthJobOutcome::neutral(HttpResponse::json(
+            400,
+            json!({"error": err.to_string()}),
+        ));
     }
     user.jwt_secret = secret;
     match signed_token(&user) {
-        Ok(token) => HttpResponse::json(200, json!({"token": token})),
-        Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
+        Ok(token) => {
+            ProductAuthJobOutcome::success(HttpResponse::json(200, json!({"token": token})))
+        }
+        Err(err) => ProductAuthJobOutcome::neutral(HttpResponse::json(
+            500,
+            json!({"error": err.to_string()}),
+        )),
+    }
+}
+
+fn execute_auth_request<F>(
+    app: &AppState,
+    context: ProductHttpRequestContext,
+    username: &str,
+    action: F,
+) -> HttpResponse
+where
+    F: FnOnce() -> ProductAuthJobOutcome + Send + 'static,
+{
+    match app.auth_runtime.execute(context.peer_ip, username, action) {
+        Ok(response) => response,
+        Err(ProductAuthExecutionError::Busy { retry_after }) => {
+            let retry_after_seconds = retry_after.as_secs().max(1);
+            let mut response = HttpResponse::json(
+                429,
+                json!({"error": "authentication is temporarily busy; retry later"}),
+            );
+            response
+                .extra_headers
+                .push(("Retry-After".to_owned(), retry_after_seconds.to_string()));
+            response
+        }
+        Err(ProductAuthExecutionError::Unavailable) => HttpResponse::json(
+            503,
+            json!({"error": "authentication service is unavailable"}),
+        ),
+        Err(ProductAuthExecutionError::TimedOut) => {
+            HttpResponse::json(503, json!({"error": "authentication service timed out"}))
+        }
     }
 }

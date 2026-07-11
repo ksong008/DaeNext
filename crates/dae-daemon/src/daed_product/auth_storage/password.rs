@@ -4,14 +4,62 @@ const ARGON2ID_HASH_PREFIX: &str = "$argon2id$";
 const PASSWORD_MIN_LEN: usize = 8;
 
 pub(crate) fn hash_password(salt: &[u8], password: &str) -> String {
+    #[cfg(test)]
+    record_password_execution_thread(password);
     hash_password_argon2id(salt, password)
 }
 
 pub(crate) fn verify_password_hash(stored_hash: &str, salt: &[u8], password: &str) -> bool {
+    #[cfg(test)]
+    record_password_execution_thread(password);
     if stored_hash.starts_with(ARGON2ID_HASH_PREFIX) {
         return verify_argon2id_password_hash(stored_hash, password);
     }
     hash_password_legacy_shake256(salt, password) == stored_hash
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct PasswordExecutionProbe {
+    password: String,
+    threads: Vec<String>,
+}
+
+#[cfg(test)]
+static PASSWORD_EXECUTION_PROBE: OnceLock<Mutex<Option<PasswordExecutionProbe>>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn begin_password_execution_probe(password: &str) {
+    let probe = PASSWORD_EXECUTION_PROBE.get_or_init(|| Mutex::new(None));
+    *probe.lock().expect("password execution probe lock") = Some(PasswordExecutionProbe {
+        password: password.to_owned(),
+        threads: Vec::new(),
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn finish_password_execution_probe() -> Vec<String> {
+    PASSWORD_EXECUTION_PROBE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .expect("password execution probe lock")
+        .take()
+        .map(|probe| probe.threads)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+fn record_password_execution_thread(password: &str) {
+    let probe = PASSWORD_EXECUTION_PROBE.get_or_init(|| Mutex::new(None));
+    let Ok(mut probe) = probe.lock() else {
+        return;
+    };
+    let Some(probe) = probe.as_mut().filter(|probe| probe.password == password) else {
+        return;
+    };
+    probe
+        .threads
+        .push(thread::current().name().unwrap_or("unnamed").to_owned());
 }
 
 pub(crate) fn password_hash_needs_migration(stored_hash: &str) -> bool {

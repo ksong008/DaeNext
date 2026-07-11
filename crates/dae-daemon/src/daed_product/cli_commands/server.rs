@@ -43,6 +43,13 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             }
         }
     }
+    let http_config = ProductHttpWorkerConfig::from_config(runtime.current_config().as_ref());
+    let auth_runtime = match ProductAuthRuntime::start_for_http_config(http_config) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return DaedProductOutput::error(format!("start authentication runtime failed: {err}"));
+        }
+    };
     let subscription_scheduler = match start_subscription_scheduler(
         options.state.clone(),
         options.config_dir.clone(),
@@ -62,6 +69,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         runtime,
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        auth_runtime,
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     };
     let server_result = serve_forever(&options.listen, app, startup_started_at);

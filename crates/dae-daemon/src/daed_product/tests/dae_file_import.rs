@@ -228,6 +228,7 @@ fn dae_config_file_api_reports_the_resources_it_imported() {
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        auth_runtime: product_test_auth_runtime(),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     };
     let content = complete_dae_file(18_080, 18_081, "first");

@@ -46,6 +46,7 @@ pub(super) fn serve_forever(
         config.worker_stack_bytes.to_string(),
     );
     http_fields.insert("sources".to_owned(), config.sources_json().to_string());
+    http_fields.extend(app.auth_runtime.startup_fields());
     let _ = append_startup_step_completed_for_config(
         &app.config_dir,
         &app.state,
@@ -156,6 +157,9 @@ pub(super) fn handle_stream(
     app: Arc<AppState>,
     metrics: Arc<ProductHttpMetrics>,
 ) -> io::Result<ProductHttpConnectionResult> {
+    let context = ProductHttpRequestContext {
+        peer_ip: stream.peer_addr().ok().map(|peer| peer.ip()),
+    };
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
         Err(err) => {
@@ -188,7 +192,7 @@ pub(super) fn handle_stream(
         };
         return detach_sse_stream(stream, app, metrics, request);
     }
-    let response = route_request(&app, &request);
+    let response = route_request_with_context(&app, &request, context);
     write_http_response_for_request(&mut stream, &request, &response, head_only)?;
     Ok(ProductHttpConnectionResult::Closed)
 }

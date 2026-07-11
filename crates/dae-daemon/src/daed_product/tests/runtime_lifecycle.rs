@@ -27,6 +27,7 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        auth_runtime: product_test_auth_runtime(),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     };
     set_metadata(&state, "runtime_log_level", "info").unwrap();
@@ -369,6 +370,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        auth_runtime: product_test_auth_runtime(),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     };
     let request = HttpRequest {

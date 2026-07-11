@@ -1,8 +1,17 @@
 use super::*;
 
+#[cfg(test)]
 pub(in crate::daed_product) fn route_request(
     app: &AppState,
     request: &HttpRequest,
+) -> HttpResponse {
+    route_request_with_context(app, request, ProductHttpRequestContext::default())
+}
+
+pub(in crate::daed_product) fn route_request_with_context(
+    app: &AppState,
+    request: &HttpRequest,
+    context: ProductHttpRequestContext,
 ) -> HttpResponse {
     if request.method == "OPTIONS" {
         return HttpResponse::empty(204);
@@ -12,7 +21,7 @@ pub(in crate::daed_product) fn route_request(
     }
     if let Some(api_path) = request.path.strip_prefix("/api") {
         let api_path = if api_path.is_empty() { "/" } else { api_path };
-        return handle_api_request(app, request, api_path);
+        return handle_api_request(app, request, api_path, context);
     }
     if app.api_only {
         return HttpResponse::json(
@@ -27,12 +36,13 @@ pub(super) fn handle_api_request(
     app: &AppState,
     request: &HttpRequest,
     api_path: &str,
+    context: ProductHttpRequestContext,
 ) -> HttpResponse {
     match (request.method.as_str(), api_path) {
         ("GET", "/health") => handle_health(request),
         ("GET", "/auth/status") => api_auth_status(app),
-        ("POST", "/auth/users") => api_create_user(app, request),
-        ("POST", "/auth/token") => api_issue_token(app, request),
+        ("POST", "/auth/users") => api_create_user(app, request, context),
+        ("POST", "/auth/token") => api_issue_token(app, request, context),
         _ => {
             let user = match authenticate_request(app, request) {
                 Ok(Some(user)) => user,
@@ -46,7 +56,7 @@ pub(super) fn handle_api_request(
             match (request.method.as_str(), api_path) {
                 ("GET", "/user/me") => HttpResponse::json(200, user_resource(&user)),
                 ("PATCH", "/user/me") => api_patch_user(app, request, user),
-                ("POST", "/user/me/password") => api_update_password(app, request, user),
+                ("POST", "/user/me/password") => api_update_password(app, request, user, context),
                 ("GET", "/user/me/storage") => api_get_storage(request, user),
                 ("PUT", "/user/me/storage") => api_set_storage(app, request, user),
                 ("DELETE", "/user/me/storage") => api_delete_storage(app, request, user),

@@ -15,5 +15,7 @@ use self::auth_user::{
 use self::collections::*;
 use self::general::*;
 use self::resources::*;
+#[cfg(test)]
 pub(super) use self::router::route_request;
+pub(super) use self::router::route_request_with_context;
 use self::storage::*;

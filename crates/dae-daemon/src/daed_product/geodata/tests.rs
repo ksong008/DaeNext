@@ -125,6 +125,7 @@ fn geodata_status_reuses_cached_values_after_first_read() {
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        auth_runtime: product_test_auth_runtime(),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     };
 
