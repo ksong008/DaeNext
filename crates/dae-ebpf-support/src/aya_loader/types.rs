@@ -303,3 +303,28 @@ pub struct AyaCgroupAttachDetachReport {
     pub detached: bool,
     pub link_lifetime_owned_by_backend: bool,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaCgroupProgramIdentity {
+    pub id: u32,
+    pub name: Option<String>,
+    pub tag: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaCgroupAttachPreflightLine {
+    pub role: crate::DaeCgroupAttachRole,
+    pub attach_type: u32,
+    pub attach_flags: u32,
+    pub revision: u64,
+    pub compatible: bool,
+    pub existing_programs: Vec<AyaCgroupProgramIdentity>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaCgroupAttachPreflightReport {
+    pub cgroup_path: PathBuf,
+    pub requested_attach_mode: &'static str,
+    pub compatible: bool,
+    pub lines: Vec<AyaCgroupAttachPreflightLine>,
+}

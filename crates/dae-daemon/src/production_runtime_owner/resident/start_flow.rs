@@ -10,15 +10,13 @@ pub(super) fn start_with_options(
     latency_seed: &[Value],
     dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> Result<ResidentProductionRuntime, String> {
-    if options.execute {
-        cleanup_stale_production_owner_after_crash(&lan_ifaces);
-    }
     let mut checks = preflight_checks(&options);
     checks.extend(resident_interface_validation_checks(
         &lan_ifaces,
         &wan_ifaces,
     ));
     checks.extend(resident_kernel_feature_checks(&lan_ifaces, &wan_ifaces));
+    checks.push(resident_cgroup_preflight_check(&options, &wan_ifaces));
     let blockers = checks
         .iter()
         .filter(|check| check["status"].as_str() != Some("pass"))
@@ -29,6 +27,9 @@ pub(super) fn start_with_options(
             "resident production runtime preflight failed: {}",
             blockers.join("; ")
         ));
+    }
+    if options.execute {
+        cleanup_stale_production_owner_after_crash(&lan_ifaces);
     }
 
     let before_pin_snapshot = bpf_dae_snapshot();

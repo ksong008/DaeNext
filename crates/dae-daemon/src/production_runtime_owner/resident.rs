@@ -17,7 +17,8 @@ use super::command::{
 #[cfg(feature = "native-ebpf")]
 use super::native_ebpf::EMBEDDED_NATIVE_OBJECT_IDENTITY;
 use super::native_ebpf::{
-    NativeEbpfRuntimeState, NativeParamObjectPreparation, prepare_native_param_object,
+    NativeEbpfRuntimeState, NativeParamObjectPreparation, native_cgroup_attach_preflight,
+    prepare_native_param_object,
 };
 use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};

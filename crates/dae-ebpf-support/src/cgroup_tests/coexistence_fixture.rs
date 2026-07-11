@@ -99,6 +99,15 @@ fn cgroup_empty_multi_single_coexistence_fixture_is_env_gated_and_cleans_up() {
     let empty = run_bpftool(["cgroup", "show"], [fixture.empty()]);
     assert!(empty.status.success(), "{}", empty.stderr);
     assert!(empty.stdout.trim().is_empty(), "{}", empty.stdout);
+    let empty_snapshot =
+        query_cgroup_attachments(fixture.empty(), &dae_cgroup_attach_matrix()).unwrap();
+    assert!(empty_snapshot.compatible_with_multiple_attach());
+    assert!(
+        empty_snapshot
+            .queries
+            .iter()
+            .all(|query| query.program_ids.is_empty())
+    );
 
     let mut multi_first = load_fixture_object(&fixture.object, &fixture.pin_roots[0]);
     let mut multi_second = load_fixture_object(&fixture.object, &fixture.pin_roots[1]);
@@ -120,6 +129,19 @@ fn cgroup_empty_multi_single_coexistence_fixture_is_env_gated_and_cleans_up() {
         "{}",
         multi_show.stdout
     );
+    let multi_snapshot =
+        query_cgroup_attachments(fixture.multi(), &dae_cgroup_attach_matrix()).unwrap();
+    assert!(multi_snapshot.compatible_with_multiple_attach());
+    let sock_create = multi_snapshot
+        .queries
+        .iter()
+        .find(|query| query.role == DaeCgroupAttachRole::SockCreate)
+        .unwrap();
+    assert_eq!(sock_create.program_ids.len(), 2);
+    assert_ne!(
+        sock_create.attach_flags & CGROUP_ATTACH_FLAG_ALLOW_MULTIPLE,
+        0
+    );
     assert_bpftool_success(detach_command(fixture.multi(), &multi_second_pin));
     assert_bpftool_success(detach_command(fixture.multi(), &multi_first_pin));
 
@@ -130,6 +152,19 @@ fn cgroup_empty_multi_single_coexistence_fixture_is_env_gated_and_cleans_up() {
     pin_sock_create(&mut single_first, &single_first_pin);
     pin_sock_create(&mut single_second, &single_second_pin);
     assert_bpftool_success(attach_command(fixture.single(), &single_first_pin, false));
+    let single_snapshot =
+        query_cgroup_attachments(fixture.single(), &dae_cgroup_attach_matrix()).unwrap();
+    assert!(!single_snapshot.compatible_with_multiple_attach());
+    let sock_create = single_snapshot
+        .queries
+        .iter()
+        .find(|query| query.role == DaeCgroupAttachRole::SockCreate)
+        .unwrap();
+    assert_eq!(sock_create.program_ids.len(), 1);
+    assert_eq!(
+        sock_create.attach_flags & CGROUP_ATTACH_FLAG_ALLOW_MULTIPLE,
+        0
+    );
     let incompatible = attach_command(fixture.single(), &single_second_pin, true);
     assert!(!incompatible.status.success(), "{}", incompatible.stdout);
     assert!(!incompatible.stderr.trim().is_empty());

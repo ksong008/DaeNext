@@ -77,11 +77,10 @@ fn dae_cgroup_attach_matrix_matches_native_attachcgroup_order() {
         15,
         DaeCgroupProgramKind::SockAddr,
     );
-    assert!(
-        matrix
-            .iter()
-            .all(|line| line.attach_mode == "single" && line.link_lifetime_owned_by_backend)
-    );
+    assert!(matrix.iter().all(
+        |line| line.attach_mode == CGROUP_ATTACH_MODE_MULTI_COMPATIBLE
+            && line.link_lifetime_owned_by_backend
+    ));
 }
 
 #[test]
@@ -149,7 +148,11 @@ fn aya_cgroup_attach_detach_smoke_is_env_gated() {
         assert_eq!(report.program_name, line.program_name);
         assert_eq!(report.section, line.section);
         assert_eq!(report.program_kind, line.aya_program_kind);
-        assert_eq!(report.attach_mode, "single");
+        assert_ne!(report.attach_mode, "single");
+        assert!(
+            report.attach_mode == CGROUP_ATTACH_MODE_BPF_LINK_MULTI
+                || report.attach_mode == CGROUP_ATTACH_MODE_ALLOW_MULTIPLE
+        );
         assert!(report.loaded);
         assert!(report.attached);
         assert!(report.detached);
