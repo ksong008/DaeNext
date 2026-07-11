@@ -58,63 +58,61 @@ pub(super) fn api_patch_user(
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
-    if let Some(username) = body.get("username").and_then(Value::as_str) {
-        if let Err(err) = conn.execute(
-            "UPDATE users SET username = ?1 WHERE id = ?2",
-            params![username, user.id],
-        ) {
-            return HttpResponse::json(400, json!({"error": err.to_string()}));
+    match apply_user_profile_update(&conn, &body, &mut user) {
+        Ok(()) => HttpResponse::json(200, user_resource(&user)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            HttpResponse::json(404, json!({"error": err.to_string()}))
         }
-        user.username = username.to_owned();
+        Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
     }
+}
+
+pub(in crate::daed_product) fn apply_user_profile_update(
+    conn: &Connection,
+    body: &Value,
+    user: &mut UserRecord,
+) -> io::Result<()> {
+    let username = body
+        .get("username")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| user.username.clone());
+    let name = patched_optional_user_field(body, "name", "clearName", user.name.clone());
+    let avatar = patched_optional_user_field(body, "avatar", "clearAvatar", user.avatar.clone());
+    let updated = conn
+        .execute(
+            "UPDATE users SET username = ?1, name = ?2, avatar = ?3 WHERE id = ?4",
+            params![username, name, avatar, user.id],
+        )
+        .map_err(sqlite_io_error)?;
+    if updated == 0 {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "user not found"));
+    }
+    user.username = username;
+    user.name = name;
+    user.avatar = avatar;
+    Ok(())
+}
+
+fn patched_optional_user_field(
+    body: &Value,
+    value_key: &str,
+    clear_key: &str,
+    current: Option<String>,
+) -> Option<String> {
     if body
-        .get("clearName")
+        .get(clear_key)
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        if let Err(err) = conn.execute(
-            "UPDATE users SET name = NULL WHERE id = ?1",
-            params![user.id],
-        ) {
-            return HttpResponse::json(400, json!({"error": err.to_string()}));
-        }
-        user.name = None;
-    } else if body.get("name").is_some() {
-        let value = body.get("name").and_then(Value::as_str).map(str::to_owned);
-        if let Err(err) = conn.execute(
-            "UPDATE users SET name = ?1 WHERE id = ?2",
-            params![value, user.id],
-        ) {
-            return HttpResponse::json(400, json!({"error": err.to_string()}));
-        }
-        user.name = value;
-    }
-    if body
-        .get("clearAvatar")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        if let Err(err) = conn.execute(
-            "UPDATE users SET avatar = NULL WHERE id = ?1",
-            params![user.id],
-        ) {
-            return HttpResponse::json(400, json!({"error": err.to_string()}));
-        }
-        user.avatar = None;
-    } else if body.get("avatar").is_some() {
-        let value = body
-            .get("avatar")
+        None
+    } else if body.get(value_key).is_some() {
+        body.get(value_key)
             .and_then(Value::as_str)
-            .map(str::to_owned);
-        if let Err(err) = conn.execute(
-            "UPDATE users SET avatar = ?1 WHERE id = ?2",
-            params![value, user.id],
-        ) {
-            return HttpResponse::json(400, json!({"error": err.to_string()}));
-        }
-        user.avatar = value;
+            .map(str::to_owned)
+    } else {
+        current
     }
-    HttpResponse::json(200, user_resource(&user))
 }
 
 pub(super) fn api_update_password(
