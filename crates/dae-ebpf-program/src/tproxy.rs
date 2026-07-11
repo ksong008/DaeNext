@@ -82,6 +82,11 @@ fn udp_state_unavailable_action() -> i32 {
 }
 
 #[inline(always)]
+fn physical_wan_control_plane_passthrough_action() -> i32 {
+    chain_next()
+}
+
+#[inline(always)]
 const fn udp_state_unavailable_action_for_policy(policy: u32) -> i32 {
     match policy {
         crate::abi::UDP_STATE_SATURATION_POLICY_FAIL_CLOSED => TC_ACT_SHOT,
@@ -396,6 +401,16 @@ mod tests {
     }
 
     #[test]
+    fn physical_wan_control_plane_passthrough_continues_the_chain() {
+        assert_eq!(
+            physical_wan_control_plane_passthrough_action(),
+            chain_next()
+        );
+        assert_ne!(physical_wan_control_plane_passthrough_action(), TC_ACT_OK);
+        assert_ne!(physical_wan_control_plane_passthrough_action(), TC_ACT_SHOT);
+    }
+
+    #[test]
     fn l3_wan_egress_return_path_records_and_strips_temporary_mac_header() {
         let l2 = redirect_entry(REDIRECT_LINK_LAYER_L2);
         let l3 = redirect_entry(REDIRECT_LINK_LAYER_L3);
@@ -607,7 +622,7 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
 
     let pid_pname = routing::pid_pname_for_packet(skb);
     if routing::pid_is_control_plane(skb, pid_pname) {
-        return TC_ACT_OK;
+        return physical_wan_control_plane_passthrough_action();
     }
 
     let outbound: u8;
