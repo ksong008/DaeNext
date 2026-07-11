@@ -344,6 +344,7 @@ impl ResidentXhttpMode {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentXhttpXmuxPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) runtime_generation: u64,
     pub(in crate::production_runtime_owner::resident_dataplane) max_concurrency: Option<(i32, i32)>,
     pub(in crate::production_runtime_owner::resident_dataplane) max_connections: Option<(i32, i32)>,
     pub(in crate::production_runtime_owner::resident_dataplane) c_max_reuse_times:
@@ -358,6 +359,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentXhttp
 impl ResidentXhttpXmuxPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn official_default() -> Self {
         Self {
+            runtime_generation: 0,
             max_concurrency: Some((1, 1)),
             max_connections: None,
             c_max_reuse_times: None,
@@ -379,11 +381,21 @@ impl ResidentXhttpXmuxPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn official_normalized(
         self,
     ) -> Self {
-        if self.is_official_zero_value() {
+        let runtime_generation = self.runtime_generation;
+        let mut normalized = if self.is_official_zero_value() {
             Self::official_default()
         } else {
             self
-        }
+        };
+        normalized.runtime_generation = runtime_generation;
+        normalized
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
+        &mut self,
+        runtime_generation: u64,
+    ) {
+        self.runtime_generation = runtime_generation;
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn validate_official(
@@ -529,5 +541,28 @@ impl ResidentRealityUnderlayPlan {
     pub(super) fn compact_allocations(&mut self) {
         self.short_id.shrink_to_fit();
         compact_string(&mut self.spider_x);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn official_xmux_normalization_preserves_runtime_generation() {
+        let mut xmux = ResidentXhttpXmuxPlan {
+            runtime_generation: 0,
+            max_concurrency: None,
+            max_connections: None,
+            c_max_reuse_times: None,
+            h_max_request_times: None,
+            h_max_reusable_secs: None,
+            h_keep_alive_period: 0,
+        };
+        xmux.apply_runtime_generation(42);
+
+        let normalized = xmux.official_normalized();
+        assert_eq!(normalized.runtime_generation, 42);
+        assert_eq!(normalized.max_concurrency, Some((1, 1)));
     }
 }
