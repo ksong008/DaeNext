@@ -363,12 +363,19 @@ fn handle_udp_multiplex_response(
     let Ok(response_id) = dns_packet_id(response) else {
         return;
     };
+    let Some(pending_request) = pending.get(&response_id) else {
+        return;
+    };
+    let Ok(restored_response) =
+        validate_and_restore_udp_multiplex_response(pending_request, response)
+    else {
+        return;
+    };
     let Some(pending_request) = pending.remove(&response_id) else {
         return;
     };
     id_allocator.release(response_id);
-    let result = validate_and_restore_udp_multiplex_response(&pending_request, response);
-    let _ = pending_request.response.send(result);
+    let _ = pending_request.response.send(Ok(restored_response));
 }
 
 fn validate_and_restore_udp_multiplex_response(
@@ -642,6 +649,46 @@ mod tests {
         assert!(
             validate_and_restore_udp_multiplex_response(&pending, &different_response).is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn mismatched_late_response_does_not_remove_reused_pending_id() {
+        let mut allocator = UdpRequestIdAllocator::default();
+        let upstream_id = allocator
+            .allocate(DNS_UDP_MULTIPLEX_PENDING_CAPACITY)
+            .unwrap();
+        let original_id = 0x4141;
+        let expected_query =
+            build_dns_query_packet(original_id, "current.example", DNS_QTYPE_A).unwrap();
+        let expected_view = DnsPacketView::parse(&expected_query).unwrap();
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        let mut pending = HashMap::from([(
+            upstream_id,
+            PendingUdpRequest {
+                upstream_id,
+                original_id,
+                generation: 2,
+                deadline: time::Instant::now() + dns_udp_forward_attempt_timeout(),
+                questions: pending_dns_questions(&expected_view),
+                response,
+            },
+        )]);
+        let stale_query =
+            build_dns_query_packet(upstream_id, "stale.example", DNS_QTYPE_A).unwrap();
+        let stale_response = dns_a_response_for_query(&stale_query, [192, 0, 2, 1]);
+
+        handle_udp_multiplex_response(&mut pending, &mut allocator, &stale_response);
+        assert!(pending.contains_key(&upstream_id));
+        assert!(allocator.is_occupied(upstream_id));
+
+        let mut current_query = expected_query.clone();
+        rewrite_dns_packet_id_in_place(&mut current_query, upstream_id);
+        let current_response = dns_a_response_for_query(&current_query, [192, 0, 2, 2]);
+        handle_udp_multiplex_response(&mut pending, &mut allocator, &current_response);
+        assert!(!pending.contains_key(&upstream_id));
+        assert!(!allocator.is_occupied(upstream_id));
+        let restored = receiver.await.unwrap().unwrap();
+        assert_eq!(&restored[0..2], &original_id.to_be_bytes());
     }
 
     #[tokio::test]
