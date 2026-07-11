@@ -143,7 +143,7 @@ const MAP_CATALOG: [MapSpec; 12] = [
         name: "redirect_track",
         map_type: "LRUHash",
         key_size: 48,
-        value_size: 20,
+        value_size: 24,
         max_entries: 65536,
         flags: 0,
         pinning: "PinNone",

@@ -57,7 +57,8 @@ pub struct BpfRedirectEntry {
     pub from_wan: u8,
     pub link_layer: u8,
     pub abi_version: u8,
-    pub padding: u8,
+    pub vlan_metadata: u8,
+    pub vlan_tci: [u16; 2],
 }
 
 #[repr(C)]
@@ -135,7 +136,7 @@ pub const TPROXY_MARK: u32 = 0x0800_0000;
 pub const BPF_DAE_PARAM_ABI_VERSION: u32 = 2;
 pub const UDP_STATE_SATURATION_POLICY_FAIL_CLOSED: u32 = 0;
 pub const UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT: u64 = 300_000_000_000;
-pub const REDIRECT_TRACK_ABI_VERSION: u8 = 2;
+pub const REDIRECT_TRACK_ABI_VERSION: u8 = 3;
 pub const LINK_HDR_LEN_NONE: u32 = 0;
 pub const LINK_HDR_LEN_ETHERNET: u32 = 14;
 

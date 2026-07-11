@@ -148,6 +148,9 @@ fn packet_level_golden_parses_single_vlan_and_qinq_transport_headers() {
         &ethernet_with_vlans(&[(0x8100, 100)], 0x0800, &ipv4_udp),
     );
     assert_ipv4_transport(&report, IPPROTO_UDP, 12_345, 53);
+    assert_eq!(report.parsed.vlan_depth, 1);
+    assert_eq!(report.parsed.vlan_protocols[0], 0x8100_u16.to_be());
+    assert_eq!(report.parsed.vlan_tci[0], 100);
 
     let ipv6_tcp = ipv6(IPPROTO_TCP, &tcp_header(12_345, 443, 0x02), 0);
     let report = parse_kernel_program_packet(
@@ -156,6 +159,12 @@ fn packet_level_golden_parses_single_vlan_and_qinq_transport_headers() {
         &ethernet_with_vlans(&[(0x88a8, 200), (0x8100, 100)], 0x86dd, &ipv6_tcp),
     );
     assert_ipv6_transport(&report, IPPROTO_TCP, 12_345, 443);
+    assert_eq!(report.parsed.vlan_depth, 2);
+    assert_eq!(
+        report.parsed.vlan_protocols,
+        [0x88a8_u16.to_be(), 0x8100_u16.to_be()]
+    );
+    assert_eq!(report.parsed.vlan_tci, [200, 100]);
 }
 
 #[test]
@@ -172,6 +181,12 @@ fn packet_level_golden_bounds_accelerated_and_inline_vlan_depth() {
         &ethernet_with_vlans(&[(0x8100, 100)], 0x0800, &ipv4_udp),
     );
     assert_ipv4_transport(&report, IPPROTO_UDP, 12_345, 53);
+    assert_eq!(report.parsed.vlan_depth, 2);
+    assert_eq!(
+        report.parsed.vlan_protocols,
+        [0x88a8_u16.to_be(), 0x8100_u16.to_be()]
+    );
+    assert_eq!(report.parsed.vlan_tci, [200, 100]);
 
     let report = parse_kernel_program_packet_with_vlan(
         ETH_HLEN,
