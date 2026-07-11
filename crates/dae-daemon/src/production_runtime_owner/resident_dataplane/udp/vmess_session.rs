@@ -166,22 +166,37 @@ impl VmessAeadUdpOverTcpSession {
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::ReadyOnly).await
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::Wait).await
+    }
+
+    async fn read_response(
+        &mut self,
+        mode: UdpStreamReadMode,
+    ) -> Result<Option<UdpExchangeResult>, String> {
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
+        }
+        if self.underlay.is_none() && mode.waits_for_readiness() {
+            return std::future::pending().await;
         }
         let Some(underlay) = self.underlay.as_mut() else {
             return Ok(None);
         };
         if underlay.is_grpc() {
-            return Ok(None);
+            return if mode.waits_for_readiness() {
+                std::future::pending().await
+            } else {
+                Ok(None)
+            };
         }
         let mut buf = [0_u8; 8192];
-        let Some(read) = poll_vmess_underlay_plaintext(underlay, &mut buf).await? else {
+        let Some(read) = read_vmess_underlay_plaintext(underlay, &mut buf, mode).await? else {
             return Ok(None);
         };
-        if read == 0 {
-            return Ok(None);
-        }
         self.response_plaintext.extend_from_slice(&buf[..read]);
         self.try_pop_response_payload()
             .map(|payload| payload.map(|payload| self.response_result(payload)))
@@ -369,9 +384,10 @@ impl VmessAeadUdpOverTcpSession {
     }
 }
 
-async fn poll_vmess_underlay_plaintext(
+async fn read_vmess_underlay_plaintext(
     underlay: &mut VmessAeadUdpUnderlay,
     out: &mut [u8],
+    mode: UdpStreamReadMode,
 ) -> Result<Option<usize>, String> {
     let mut read_buf = ReadBuf::new(out);
     poll_fn(|cx| {
@@ -398,11 +414,12 @@ async fn poll_vmess_underlay_plaintext(
                 ));
             }
         };
-        match poll_result {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(Some(read_buf.filled().len()))),
-            Poll::Ready(Err(err)) => Poll::Ready(Err(format!("read VMess UDP underlay: {err}"))),
-            Poll::Pending => Poll::Ready(Ok(None)),
-        }
+        map_udp_stream_read_poll(
+            mode,
+            poll_result,
+            read_buf.filled().len(),
+            "read VMess UDP underlay",
+        )
     })
     .await
 }

@@ -104,6 +104,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::descriptor
 use self::descriptors::*;
 mod stream_helpers;
 use self::stream_helpers::*;
+mod stream_read;
+use self::stream_read::*;
 mod quic_helpers;
 use self::quic_helpers::*;
 mod vless_xudp;
