@@ -21,7 +21,6 @@ pub(super) fn replace_prepared_subscription_nodes(
     candidates: &[super::node_stage::PreparedSubscriptionNode],
 ) -> io::Result<SubscriptionNodeSyncResult> {
     let existing_nodes = existing_subscription_nodes(conn, subscription_id)?;
-    let preserved_ids = preserved_subscription_node_ids(conn, subscription_id)?;
     let mut existing_name_counts = HashMap::<String, usize>::new();
     let mut existing_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
     let mut existing_key_counts = HashMap::<StableNodeKey, usize>::new();
@@ -36,24 +35,6 @@ pub(super) fn replace_prepared_subscription_nodes(
             .or_default() += 1;
         existing_by_key.insert(node.stable_key.clone(), node.clone());
     }
-    let mut preserved_name_counts = HashMap::<String, usize>::new();
-    let mut preserved_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
-    let mut preserved_key_counts = HashMap::<StableNodeKey, usize>::new();
-    let mut preserved_by_key = HashMap::<StableNodeKey, ExistingSubscriptionNode>::new();
-    for node in existing_nodes
-        .iter()
-        .filter(|node| preserved_ids.contains(&node.id))
-    {
-        *preserved_name_counts
-            .entry(node.display_name.clone())
-            .or_default() += 1;
-        preserved_by_name.insert(node.display_name.clone(), node.clone());
-        *preserved_key_counts
-            .entry(node.stable_key.clone())
-            .or_default() += 1;
-        preserved_by_key.insert(node.stable_key.clone(), node.clone());
-    }
-
     let mut incoming_name_counts = HashMap::<String, usize>::new();
     let mut incoming_key_counts = HashMap::<StableNodeKey, usize>::new();
     for candidate in candidates {
@@ -71,11 +52,7 @@ pub(super) fn replace_prepared_subscription_nodes(
         if *incoming_count != 1 {
             continue;
         }
-        if preserved_name_counts.get(name).copied().unwrap_or(0) == 1 {
-            if let Some(node) = preserved_by_name.get(name) {
-                reusable_by_name.insert(name.clone(), node.clone());
-            }
-        } else if existing_name_counts.get(name).copied().unwrap_or(0) == 1
+        if existing_name_counts.get(name).copied().unwrap_or(0) == 1
             && let Some(node) = existing_by_name.get(name)
         {
             reusable_by_name.insert(name.clone(), node.clone());
@@ -86,11 +63,7 @@ pub(super) fn replace_prepared_subscription_nodes(
         if *incoming_count != 1 {
             continue;
         }
-        if preserved_key_counts.get(stable_key).copied().unwrap_or(0) == 1 {
-            if let Some(node) = preserved_by_key.get(stable_key) {
-                reusable_by_key.insert(stable_key.clone(), node.clone());
-            }
-        } else if existing_key_counts.get(stable_key).copied().unwrap_or(0) == 1
+        if existing_key_counts.get(stable_key).copied().unwrap_or(0) == 1
             && let Some(node) = existing_by_key.get(stable_key)
         {
             reusable_by_key.insert(stable_key.clone(), node.clone());
@@ -109,8 +82,9 @@ pub(super) fn replace_prepared_subscription_nodes(
 
     for node in existing_nodes
         .iter()
-        .filter(|node| !reusable_ids.contains(&node.id) && !preserved_ids.contains(&node.id))
+        .filter(|node| !reusable_ids.contains(&node.id))
     {
+        bump_group_versions_for_node(conn, node.id)?;
         conn.prepare_cached("DELETE FROM group_nodes WHERE node_id = ?1")
             .map_err(sqlite_io_error)?
             .execute(params![node.id])
@@ -312,28 +286,6 @@ pub(crate) fn existing_subscription_nodes(
     let mut out = Vec::new();
     for row in rows {
         out.push(row.map_err(sqlite_io_error)?);
-    }
-    Ok(out)
-}
-
-pub(crate) fn preserved_subscription_node_ids(
-    conn: &Connection,
-    subscription_id: i64,
-) -> io::Result<HashSet<i64>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT DISTINCT n.id
-             FROM nodes n
-             JOIN group_nodes gn ON gn.node_id = n.id
-             WHERE n.subscription_id = ?1",
-        )
-        .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map(params![subscription_id], |row| row.get::<_, i64>(0))
-        .map_err(sqlite_io_error)?;
-    let mut out = HashSet::new();
-    for row in rows {
-        out.insert(row.map_err(sqlite_io_error)?);
     }
     Ok(out)
 }

@@ -850,7 +850,17 @@ pub(crate) fn apply_group_node_ids(
     for id in ids {
         if add {
             conn.execute(
-                "INSERT OR IGNORE INTO group_nodes(group_id, node_id) VALUES(?1, ?2)",
+                "INSERT INTO group_nodes(
+                    group_id, node_id, binding_mode, source_subscription_id
+                 )
+                 SELECT ?1, id,
+                        CASE WHEN subscription_id IS NULL THEN 'manual' ELSE 'subscription' END,
+                        subscription_id
+                 FROM nodes
+                 WHERE id = ?2
+                 ON CONFLICT(group_id, node_id) DO UPDATE SET
+                    binding_mode = excluded.binding_mode,
+                    source_subscription_id = excluded.source_subscription_id",
                 params![group_id, id],
             )
         } else {
