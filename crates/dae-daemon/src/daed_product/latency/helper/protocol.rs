@@ -1,0 +1,88 @@
+use serde::{Deserialize, Serialize};
+
+use super::*;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct LatencyProbeHelperConfig {
+    pub(super) source: String,
+    pub(super) content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct LatencyProbeHelperRequest {
+    #[serde(rename = "schemaVersion")]
+    pub(super) schema_version: u64,
+    pub(super) scope: String,
+    #[serde(rename = "reloadGeneration")]
+    pub(super) reload_generation: u64,
+    #[serde(rename = "requestedLinks")]
+    pub(super) requested_links: Vec<String>,
+    pub(super) config: LatencyProbeHelperConfig,
+    pub(super) concurrency: usize,
+}
+
+pub(crate) fn latency_probe_helper_response_from_request(input: &[u8]) -> Result<Value, String> {
+    let request = latency_probe_helper_request_from_input(input)?;
+    let config = build_runtime_config_from_content(&request.config.content)?;
+    let snapshots = crate::production_runtime_owner::run_resident_manual_latency_probe_helper(
+        &config,
+        &request.requested_links,
+        request.reload_generation,
+        request.concurrency.max(1),
+    );
+    Ok(json!({
+        "schemaVersion": 1,
+        "scope": "manual-latency-probe",
+        "reloadGeneration": request.reload_generation,
+        "snapshots": snapshots,
+        "errors": [],
+    }))
+}
+
+pub(crate) fn latency_probe_helper_response_lines_from_request<W: Write>(
+    input: &[u8],
+    mut writer: W,
+) -> Result<(), String> {
+    let request = latency_probe_helper_request_from_input(input)?;
+    let config = build_runtime_config_from_content(&request.config.content)?;
+    crate::production_runtime_owner::run_resident_manual_latency_probe_helper_streaming(
+        &config,
+        &request.requested_links,
+        request.reload_generation,
+        request.concurrency.max(1),
+        |snapshot| {
+            serde_json::to_writer(&mut writer, &snapshot)
+                .map_err(|err| format!("write latency probe helper stream snapshot: {err}"))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|err| format!("write latency probe helper stream newline: {err}"))?;
+            writer
+                .flush()
+                .map_err(|err| format!("flush latency probe helper stream: {err}"))?;
+            Ok(())
+        },
+    )
+}
+
+fn latency_probe_helper_request_from_input(
+    input: &[u8],
+) -> Result<LatencyProbeHelperRequest, String> {
+    if input.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
+        return Err(format!(
+            "latency probe helper stdin exceeds {} bytes",
+            LATENCY_PROBE_HELPER_MAX_IO_BYTES
+        ));
+    }
+    let request: LatencyProbeHelperRequest = serde_json::from_slice(input)
+        .map_err(|err| format!("parse latency probe helper request: {err}"))?;
+    if request.schema_version != 1 {
+        return Err("unsupported latency probe helper request schemaVersion".to_owned());
+    }
+    if request.scope != "manual-latency-probe" {
+        return Err("unsupported latency probe helper request scope".to_owned());
+    }
+    if request.config.source != "current-runtime-config" {
+        return Err("unsupported latency probe helper config source".to_owned());
+    }
+    Ok(request)
+}
