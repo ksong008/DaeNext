@@ -143,7 +143,12 @@ pub(super) fn write_http_rejected(mut stream: TcpStream) -> io::Result<()> {
         503,
         json!({"error": "daed HTTP worker queue is full; retry later"}),
     );
-    write_http_response(&mut stream, &response, false)
+    write_http_response_with_timeout(
+        &mut stream,
+        &response,
+        false,
+        PRODUCT_HTTP_REJECT_WRITE_TIMEOUT,
+    )
 }
 
 pub(super) fn handle_stream(
@@ -151,7 +156,6 @@ pub(super) fn handle_stream(
     app: Arc<AppState>,
     metrics: Arc<ProductHttpMetrics>,
 ) -> io::Result<ProductHttpConnectionResult> {
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
         Err(err) => {

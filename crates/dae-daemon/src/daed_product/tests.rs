@@ -6,6 +6,8 @@ mod bundle_import;
 #[cfg(test)]
 mod group_summary_batch;
 #[cfg(test)]
+mod http_request_policy;
+#[cfg(test)]
 mod latency;
 #[cfg(test)]
 mod node_identity;
