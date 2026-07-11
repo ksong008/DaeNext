@@ -94,6 +94,11 @@ fn read_ne_u16(bytes: &[u8], offset: usize) -> u16 {
 }
 
 #[inline(always)]
+fn read_be_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+#[inline(always)]
 fn read_ne_u32(bytes: &[u8], offset: usize) -> u32 {
     u32::from_ne_bytes([
         bytes[offset],
@@ -243,6 +248,9 @@ unsafe fn parse_ipv4(skb: *mut __sk_buff, network_offset: u32, out: *mut ParsedP
             ip.as_ptr().add(IPV4_DADDR_OFFSET),
         );
     }
+    if read_be_u16(&ip, 6) & 0x1fff != 0 {
+        return 1;
+    }
     unsafe { parse_l4(skb, network_offset + ihl, out) }
 }
 
@@ -279,12 +287,31 @@ unsafe fn parse_ipv6(skb: *mut __sk_buff, network_offset: u32, out: *mut ParsedP
         if nexthdr == IPPROTO_NONE || !is_ipv6_extension_header(nexthdr) {
             break;
         }
-        let mut ext = [0u8; 2];
-        if !unsafe { load_bytes(skb, offset, ext.as_mut_ptr().cast::<c_void>(), 2) } {
-            return -1;
+        if nexthdr == IPPROTO_FRAGMENT {
+            let mut fragment = [0u8; 8];
+            if !unsafe {
+                load_bytes(
+                    skb,
+                    offset,
+                    fragment.as_mut_ptr().cast::<c_void>(),
+                    fragment.len() as u32,
+                )
+            } {
+                return -1;
+            }
+            nexthdr = fragment[0];
+            offset += fragment.len() as u32;
+            if read_be_u16(&fragment, 2) & 0xfff8 != 0 {
+                return 1;
+            }
+        } else {
+            let mut ext = [0u8; 2];
+            if !unsafe { load_bytes(skb, offset, ext.as_mut_ptr().cast::<c_void>(), 2) } {
+                return -1;
+            }
+            nexthdr = ext[0];
+            offset += ipv6_optlen(ext[1]);
         }
-        nexthdr = ext[0];
-        offset += ipv6_optlen(ext[1]);
         i += 1;
     }
     if is_ipv6_extension_header(nexthdr) {

@@ -8,7 +8,7 @@ pub const NDP_REDIRECT: u8 = 137;
 
 const IPPROTO_HOPOPTS: u8 = 0;
 const IPPROTO_ROUTING: u8 = 43;
-const IPPROTO_FRAGMENT: u8 = 44;
+pub const IPPROTO_FRAGMENT: u8 = 44;
 const IPPROTO_NONE: u8 = 59;
 const IPPROTO_DSTOPTS: u8 = 60;
 const IPV4_MIN_HEADER_LEN: usize = 20;
@@ -92,6 +92,14 @@ pub fn packet_level_golden_cases() -> Vec<KernelPacketGoldenCase> {
             KernelPacketParseDisposition::Parsed,
         ),
         (
+            "ipv4_non_initial_fragment_pass",
+            KernelPacketParseDisposition::ChainNextNoDrop,
+        ),
+        (
+            "ipv6_non_initial_fragment_pass",
+            KernelPacketParseDisposition::ChainNextNoDrop,
+        ),
+        (
             "ipv6_icmpv6_ndp_redirect",
             KernelPacketParseDisposition::Parsed,
         ),
@@ -161,6 +169,9 @@ fn parse_ipv4(
     parsed.dip[10] = 0xff;
     parsed.dip[11] = 0xff;
     parsed.dip[12..16].copy_from_slice(&ip[16..20]);
+    if read_be_u16(ip, 6) & 0x1fff != 0 {
+        return chain_next(parsed);
+    }
     parse_l4(packet, network_offset + ihl, parsed)
 }
 
@@ -184,11 +195,22 @@ fn parse_ipv6(
         if nexthdr == IPPROTO_NONE || !is_ipv6_extension_header(nexthdr) {
             break;
         }
-        let Some(ext) = packet.get(offset..offset + 2) else {
-            return fault(parsed);
-        };
-        nexthdr = ext[0];
-        offset += ipv6_optlen(ext[1]) as usize;
+        if nexthdr == IPPROTO_FRAGMENT {
+            let Some(fragment) = packet.get(offset..offset + 8) else {
+                return fault(parsed);
+            };
+            nexthdr = fragment[0];
+            offset += fragment.len();
+            if read_be_u16(fragment, 2) & 0xfff8 != 0 {
+                return chain_next(parsed);
+            }
+        } else {
+            let Some(ext) = packet.get(offset..offset + 2) else {
+                return fault(parsed);
+            };
+            nexthdr = ext[0];
+            offset += ipv6_optlen(ext[1]) as usize;
+        }
         i += 1;
     }
     if is_ipv6_extension_header(nexthdr) {
@@ -234,6 +256,10 @@ fn parse_l4(
 
 fn read_ne_u16(bytes: &[u8], offset: usize) -> u16 {
     u16::from_ne_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn read_be_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
 }
 
 fn is_ipv6_extension_header(nexthdr: u8) -> bool {
