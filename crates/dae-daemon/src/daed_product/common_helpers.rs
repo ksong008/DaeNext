@@ -109,6 +109,19 @@ pub(super) fn create_user(state: &Path, username: &str, password: &str) -> io::R
     validate_password_strength(password)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+        .map_err(sqlite_io_error)?;
+    if count > 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a user already exists",
+        ));
+    }
+    drop(conn);
+    let secret = random_secret_hex()?;
+    let password_hash = hash_password(secret.as_bytes(), password);
     let mut conn = open_state_connection(state)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -122,8 +135,6 @@ pub(super) fn create_user(state: &Path, username: &str, password: &str) -> io::R
             "a user already exists",
         ));
     }
-    let secret = random_secret_hex()?;
-    let password_hash = hash_password(secret.as_bytes(), password);
     tx.execute(
         "INSERT INTO users(username, password_hash, jwt_secret, json_storage) VALUES(?1, ?2, ?3, '{}')",
         params![username, password_hash, secret],

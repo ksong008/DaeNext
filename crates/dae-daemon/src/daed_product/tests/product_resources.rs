@@ -313,6 +313,130 @@ pub(crate) fn initial_user_creation_is_single_winner_under_concurrency() {
 }
 
 #[test]
+pub(crate) fn http_auth_argon2_runs_only_on_dedicated_auth_workers() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let app = product_test_app(&dir, &state);
+    let password = format!("Fixture9{}", fastrand::u64(..));
+    begin_password_execution_probe(&password);
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/auth/users".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({
+            "username": "admin",
+            "password": password,
+        }))
+        .unwrap(),
+    };
+
+    let response = route_request(&app, &request);
+    let threads = finish_password_execution_probe();
+
+    assert_eq!(response.status, 201);
+    assert!(!threads.is_empty());
+    assert!(
+        threads.iter().all(|name| name.starts_with("daed-auth-")),
+        "Argon2 ran outside dedicated auth workers: {threads:?}"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn http_auth_credential_failures_back_off_source_and_username() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    create_user(&state, "admin", "abc12345").unwrap();
+    let app = product_test_app(&dir, &state);
+    let context = ProductHttpRequestContext {
+        peer_ip: Some(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+    };
+    let login_request = |username: &str, password: &str| HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/auth/token".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({
+            "username": username,
+            "password": password,
+        }))
+        .unwrap(),
+    };
+
+    let failed = route_request_with_context(&app, &login_request("admin", "wrong12345"), context);
+    assert_eq!(failed.status, 401);
+    for request in [
+        login_request("admin", "abc12345"),
+        login_request("different-user", "abc12345"),
+    ] {
+        let limited = route_request_with_context(&app, &request, context);
+        assert_eq!(limited.status, 429);
+        assert_eq!(
+            limited
+                .extra_headers
+                .iter()
+                .find(|(name, _)| name == "Retry-After")
+                .map(|(_, value)| value.as_str()),
+            Some("1")
+        );
+    }
+    let other_source = ProductHttpRequestContext {
+        peer_ip: Some(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+    };
+    assert_eq!(
+        route_request_with_context(&app, &login_request("admin", "abc12345"), other_source,).status,
+        429,
+        "username backoff must apply independently of source"
+    );
+
+    thread::sleep(Duration::from_millis(120));
+    assert_eq!(
+        route_request_with_context(&app, &login_request("admin", "abc12345"), context,).status,
+        200
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn http_auth_waiter_saturation_returns_429_without_running_argon2() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let app = product_test_app(&dir, &state);
+    let runtime = Arc::clone(&app.auth_runtime);
+    let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+    let holder = thread::spawn(move || {
+        runtime.execute(None, "holder", move || {
+            started_sender.send(()).unwrap();
+            release_receiver.recv().unwrap();
+            ProductAuthJobOutcome::neutral(HttpResponse::json(200, json!({})))
+        })
+    });
+    started_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/auth/users".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"username":"admin","password":"abc12345"}"#.to_vec(),
+    };
+
+    let started_at = Instant::now();
+    let response = route_request(&app, &request);
+
+    assert_eq!(response.status, 429);
+    assert!(started_at.elapsed() < Duration::from_millis(100));
+    release_sender.send(()).unwrap();
+    assert_eq!(holder.join().unwrap().unwrap().status, 200);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn legacy_password_hash_migrates_to_argon2id_after_successful_login() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
@@ -484,6 +608,7 @@ fn product_test_app(dir: &Path, state: &Path) -> AppState {
         runtime: Arc::new(ProductRuntimeManager::new()),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        auth_runtime: product_test_auth_runtime(),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     }
 }
@@ -640,6 +765,12 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         defaults["http"]["profile"]["lowMemory"]["queueDefault"],
         json!(PRODUCT_HTTP_LOW_MEMORY_QUEUE_DEFAULT)
     );
+    assert_eq!(
+        defaults["http"]["auth"]["scope"],
+        json!("AppState-owned bounded Argon2 worker runtime")
+    );
+    assert_eq!(defaults["http"]["auth"]["lowMemory"]["workers"], json!(1));
+    assert_eq!(defaults["http"]["auth"]["perUsernameLimit"], json!(1));
     assert_eq!(
         defaults["residentDataplane"]["tcpFlow"]["stackBytes"]["env"]
             .as_str()

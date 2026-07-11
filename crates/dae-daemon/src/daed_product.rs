@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, BufRead, BufWriter, Read, Seek, SeekFrom, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -238,6 +238,7 @@ struct AppState {
     runtime: Arc<ProductRuntimeManager>,
     latency_jobs: Arc<LatencyJobManager>,
     http_metrics: Arc<ProductHttpMetrics>,
+    auth_runtime: Arc<ProductAuthRuntime>,
     geodata_status_cache: Arc<Mutex<GeodataStatusCache>>,
 }
 
@@ -594,6 +595,7 @@ fn product_runtime_defaults() -> Value {
                 "min": PRODUCT_HTTP_WORKER_STACK_BYTES_MIN,
                 "max": PRODUCT_HTTP_WORKER_STACK_BYTES_MAX,
             },
+            "auth": product_auth_defaults_json(),
         },
         "residentDataplane": resident_runtime_defaults_contract(),
     })
@@ -647,6 +649,11 @@ struct HttpRequest {
     query: HashMap<String, Vec<String>>,
     headers: HashMap<String, String>,
     body: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ProductHttpRequestContext {
+    peer_ip: Option<IpAddr>,
 }
 
 #[derive(Debug)]
@@ -732,6 +739,8 @@ mod common_helpers;
 use self::common_helpers::*;
 mod auth_storage;
 use self::auth_storage::*;
+mod auth_runtime;
+use self::auth_runtime::*;
 mod http_request;
 use self::http_request::*;
 mod http_io;

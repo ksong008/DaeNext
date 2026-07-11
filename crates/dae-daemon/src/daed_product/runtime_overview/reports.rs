@@ -46,6 +46,7 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         "resourcePools": resource_pool_policy_json(),
         "goroutines": process.thread_count,
         "productHttp": app.http_metrics.snapshot(),
+        "productAuth": app.auth_runtime.snapshot(),
         "runtime": runtime,
         "samples": traffic.samples,
     })
@@ -88,6 +89,7 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
         "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
         "cgroupMemory": cgroup_memory,
         "goroutines": process.thread_count,
+        "productAuth": app.auth_runtime.snapshot(),
         "reloadCount": runtime_delta.reload_count,
         "samples": traffic.samples,
     })
