@@ -4,6 +4,11 @@ mod admission;
 use self::admission::*;
 mod config;
 use self::config::*;
+mod group_selection_events;
+use self::group_selection_events::RuntimeGroupSelectionEventTracker;
+pub(in crate::daed_product) use self::group_selection_events::{
+    RUNTIME_GROUP_SELECTION_EVENT, initial_group_selection_event,
+};
 mod stream_io;
 use self::stream_io::*;
 mod streams;
