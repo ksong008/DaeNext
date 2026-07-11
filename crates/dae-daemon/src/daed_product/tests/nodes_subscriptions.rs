@@ -1255,8 +1255,8 @@ pub(crate) fn state_schema_removes_dangling_group_and_latency_references() {
     .unwrap();
     drop(conn);
 
-    ensure_state_schema(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
+    apply_state_schema(&conn).unwrap();
     for table in ["group_nodes", "group_subscriptions", "node_latency_results"] {
         let sql = format!("SELECT COUNT(*) FROM {table}");
         let count: i64 = conn.query_row(&sql, [], |row| row.get(0)).unwrap();

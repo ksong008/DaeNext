@@ -75,6 +75,41 @@ pub(crate) fn state_connections_wait_briefly_for_sqlite_busy_locks() {
 }
 
 #[test]
+pub(crate) fn current_state_schema_checks_do_not_enter_a_write_transaction() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let mut writer = open_state_connection(&state).unwrap();
+    let tx = writer
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    tx.execute(
+        "INSERT INTO configs(name, global, selected, version) VALUES('writer', 'global {}', 0, 0)",
+        [],
+    )
+    .unwrap();
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let state_for_thread = state.clone();
+    let handle = thread::spawn(move || {
+        let _ = sender.send(ensure_state_schema(&state_for_thread));
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("current schema check should not wait for the writer")
+        .unwrap();
+    tx.rollback().unwrap();
+    handle.join().unwrap();
+
+    let conn = open_state_connection(&state).unwrap();
+    let journal_mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn section_summary_lists_keep_only_lightweight_fields() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
