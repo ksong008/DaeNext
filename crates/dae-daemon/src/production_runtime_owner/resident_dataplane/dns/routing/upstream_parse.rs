@@ -1,4 +1,8 @@
 use super::*;
+use std::time::Duration;
+
+#[cfg(test)]
+use crate::production_runtime_owner::resident_dataplane::resident_dns_upstream_refresh_interval;
 
 pub(super) fn parse_dns_fallback_resolver(config: &Config) -> Result<SocketAddr, String> {
     config
@@ -13,12 +17,31 @@ pub(super) fn parse_dns_fallback_resolver(config: &Config) -> Result<SocketAddr,
         })
 }
 
+#[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane::dns) fn parse_dns_upstream(
     index: u8,
     tag: &str,
     link: &str,
     fallback_resolver: SocketAddr,
     resolver_mark: u32,
+) -> Result<ResidentDnsUpstream, String> {
+    parse_dns_upstream_with_refresh_interval(
+        index,
+        tag,
+        link,
+        fallback_resolver,
+        resolver_mark,
+        resident_dns_upstream_refresh_interval(),
+    )
+}
+
+pub(super) fn parse_dns_upstream_with_refresh_interval(
+    index: u8,
+    tag: &str,
+    link: &str,
+    fallback_resolver: SocketAddr,
+    resolver_mark: u32,
+    refresh_interval: Duration,
 ) -> Result<ResidentDnsUpstream, String> {
     let (scheme, rest) = link
         .split_once("://")
@@ -43,6 +66,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) fn parse_dns_up
         scheme.default_port(),
         fallback_resolver,
         resolver_mark,
+        refresh_interval,
     )?;
     Ok(ResidentDnsUpstream {
         index,
@@ -85,6 +109,7 @@ fn parse_dns_upstream_authority(
     default_port: u16,
     fallback_resolver: SocketAddr,
     resolver_mark: u32,
+    refresh_interval: Duration,
 ) -> Result<ResidentDnsUpstreamTarget, String> {
     let authority = authority.trim();
     if authority.is_empty() {
@@ -92,15 +117,15 @@ fn parse_dns_upstream_authority(
     }
     let (authority, host, port, literal_addr) =
         dns_upstream_authority_with_default_port(authority, default_port)?;
-    Ok(ResidentDnsUpstreamTarget {
+    Ok(ResidentDnsUpstreamTarget::new(
         authority,
         host,
         port,
         literal_addr,
         fallback_resolver,
         resolver_mark,
-        resolved_addrs: Arc::new(OnceCell::new()),
-    })
+        refresh_interval,
+    ))
 }
 
 fn dns_upstream_authority_with_default_port(

@@ -55,6 +55,7 @@ global {
   resident_udp_session_limit:'256'
   resident_udp_session_queue_depth:'64'
   resident_tcp_flow_stack_bytes:'1048576'
+  resident_dns_upstream_refresh_seconds:'45'
   resident_event_queue_depth:'8192'
   resident_manual_probe_concurrency:'12'
   resident_tcp_probe_timeout_ms:'5000'

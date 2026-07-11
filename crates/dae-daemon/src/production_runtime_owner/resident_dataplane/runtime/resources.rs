@@ -7,6 +7,7 @@ pub(crate) struct ResidentRuntimeResourceConfig {
     pub(crate) udp_session_queue_depth: EffectiveResidentUsize,
     pub(crate) udp_socket_buffer_bytes: EffectiveResidentUsize,
     pub(crate) dns_fast_path_concurrency: EffectiveResidentUsize,
+    pub(crate) dns_upstream_refresh_seconds: EffectiveResidentUsize,
     pub(crate) event_queue_depth: EffectiveResidentUsize,
     pub(crate) manual_probe_concurrency: EffectiveResidentUsize,
     pub(crate) tcp_probe_timeout_ms: EffectiveResidentUsize,
@@ -62,6 +63,15 @@ impl ResidentRuntimeResourceConfig {
                 RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN,
                 RESIDENT_DNS_FAST_PATH_CONCURRENCY_MAX,
             ),
+            dns_upstream_refresh_seconds: effective_resident_usize(
+                "resident_dns_upstream_refresh_seconds",
+                Some(RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_ENV),
+                None,
+                global.resident_dns_upstream_refresh_seconds,
+                RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_DEFAULT,
+                RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MIN,
+                RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MAX,
+            ),
             event_queue_depth: effective_resident_usize(
                 "resident_event_queue_depth",
                 Some(RESIDENT_EVENT_QUEUE_DEPTH_ENV),
@@ -115,6 +125,9 @@ impl ResidentRuntimeResourceConfig {
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),
             },
+            "dnsUpstreamResolver": {
+                "refreshSeconds": self.dns_upstream_refresh_seconds.json(),
+            },
             "eventWriter": {
                 "queueDepth": self.event_queue_depth.json(),
                 "filePersistence": "disabled",
@@ -132,6 +145,15 @@ impl ResidentRuntimeResourceConfig {
     pub(crate) fn tcp_probe_timeout(&self) -> Duration {
         Duration::from_millis(
             self.tcp_probe_timeout_ms
+                .value()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        )
+    }
+
+    pub(crate) fn dns_upstream_refresh_interval(&self) -> Duration {
+        Duration::from_secs(
+            self.dns_upstream_refresh_seconds
                 .value()
                 .try_into()
                 .unwrap_or(u64::MAX),

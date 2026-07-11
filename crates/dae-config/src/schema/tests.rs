@@ -91,6 +91,7 @@ global {
   resident_udp_session_limit: "128"
   resident_udp_session_queue_depth: "64"
   resident_tcp_flow_stack_bytes: "1048576"
+  resident_dns_upstream_refresh_seconds: "45"
   resident_event_queue_depth: "8192"
   resident_manual_probe_concurrency: "16"
   resident_tcp_probe_timeout_ms: "2500"
@@ -117,6 +118,7 @@ routing {
     assert_eq!(global.resident_udp_session_limit, Some(128));
     assert_eq!(global.resident_udp_session_queue_depth, Some(64));
     assert_eq!(global.resident_tcp_flow_stack_bytes, Some(1_048_576));
+    assert_eq!(global.resident_dns_upstream_refresh_seconds, Some(45));
     assert_eq!(global.resident_event_queue_depth, Some(8192));
     assert_eq!(global.resident_manual_probe_concurrency, Some(16));
     assert_eq!(global.resident_tcp_probe_timeout_ms, Some(2500));

@@ -503,10 +503,6 @@ async fn tcp_udp_exhausts_udp_targets_before_starting_tcp_phase() {
         );
         live.send_to(&response, peer).await.unwrap();
     });
-    let resolved_addrs = Arc::new(OnceCell::new());
-    resolved_addrs
-        .set(vec![unavailable_target, live_target])
-        .unwrap();
     let upstream = ResidentDnsUpstream {
         index: 1,
         tag: "multi-address".to_owned(),
@@ -517,11 +513,19 @@ async fn tcp_udp_exhausts_udp_targets_before_starting_tcp_phase() {
             literal_addr: None,
             fallback_resolver: test_fallback_resolver(),
             resolver_mark: 0,
-            resolved_addrs,
+            resolved_addrs: Arc::default(),
         },
         scheme: ResidentDnsUpstreamScheme::TcpUdp,
         path: String::new(),
     };
+    upstream
+        .target
+        .resolved_addrs
+        .seed(
+            vec![unavailable_target, live_target],
+            Duration::from_secs(60),
+        )
+        .await;
 
     let response = transport::forward_dns_to_upstream_async(
         &upstream,

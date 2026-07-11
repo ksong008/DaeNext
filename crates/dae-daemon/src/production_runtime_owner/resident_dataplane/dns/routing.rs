@@ -1,4 +1,5 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::ResidentRuntimeResourceConfig;
 
 mod actions;
 mod qtype;
@@ -11,13 +12,16 @@ use actions::{
     response_index_for_function,
 };
 use qtype::{grouped_params, parse_dns_qtype};
-use upstream_parse::parse_dns_fallback_resolver;
+#[cfg(test)]
 pub(super) use upstream_parse::parse_dns_upstream;
 use upstream_parse::split_keyable_link;
+use upstream_parse::{parse_dns_fallback_resolver, parse_dns_upstream_with_refresh_interval};
 
 pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstreams, String> {
     let fallback_resolver = parse_dns_fallback_resolver(config)?;
     let resolver_mark = effective_so_mark_from_dae(config.global.so_mark_from_dae);
+    let refresh_interval =
+        ResidentRuntimeResourceConfig::from_config(config).dns_upstream_refresh_interval();
     let mut by_tag = BTreeMap::new();
     let mut tag_to_index = BTreeMap::new();
     let mut request_actions = Vec::new();
@@ -33,8 +37,14 @@ pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstream
         if by_tag.contains_key(&tag) {
             return Err(format!("duplicated DNS upstream tag {tag:?}"));
         }
-        let upstream =
-            parse_dns_upstream(index as u8, &tag, &link, fallback_resolver, resolver_mark)?;
+        let upstream = parse_dns_upstream_with_refresh_interval(
+            index as u8,
+            &tag,
+            &link,
+            fallback_resolver,
+            resolver_mark,
+            refresh_interval,
+        )?;
         tag_to_index.insert(tag.clone(), index as u8);
         request_actions.push(ResidentDnsRequestAction::Upstream(upstream.clone()));
         response_actions.push(ResidentDnsResponseAction::Upstream(upstream.clone()));

@@ -672,7 +672,7 @@ mod tests {
                     DNS_DEFAULT_PORT,
                 ),
                 resolver_mark: 0,
-                resolved_addrs: Arc::new(OnceCell::new()),
+                resolved_addrs: Arc::default(),
             },
             scheme: ResidentDnsUpstreamScheme::Https,
             path: H2_DOH_TEST_PATH.to_owned(),

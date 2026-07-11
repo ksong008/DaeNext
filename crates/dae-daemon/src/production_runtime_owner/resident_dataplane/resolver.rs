@@ -1,5 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
+use std::time::Duration;
 
 use dae_dns::{DnsPacketView, validate_dns_packet_response_for_request_fast};
 use tokio::time;
@@ -12,6 +13,18 @@ const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
 const DNS_QCLASS_IN: u16 = 1;
 const DNS_BOOTSTRAP_RESPONSE_READ_LIMIT: usize = 4096;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResolvedHostAddrs {
+    pub(in crate::production_runtime_owner::resident_dataplane) addrs: Vec<SocketAddr>,
+    pub(in crate::production_runtime_owner::resident_dataplane) valid_for: Duration,
+}
+
+#[derive(Debug, Default)]
+struct FallbackDnsAnswers {
+    ips: Vec<IpAddr>,
+    min_ttl: Option<u32>,
+}
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_host_with_configured_fallback_dns(
     host: &str,
@@ -40,26 +53,34 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_hos
     }
 }
 
-pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_host_addrs_with_configured_fallback_dns(
+pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_host_addrs_with_configured_fallback_dns_ttl(
     host: &str,
     port: u16,
     fallback_resolver: SocketAddr,
     mark: u32,
     context: &str,
-) -> Result<Vec<SocketAddr>, String> {
+    refresh_interval: Duration,
+) -> Result<ResolvedHostAddrs, String> {
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return Ok(vec![SocketAddr::new(ip, port)]);
+        return Ok(ResolvedHostAddrs {
+            addrs: vec![SocketAddr::new(ip, port)],
+            valid_for: refresh_interval,
+        });
     }
 
     let authority = authority_from_host_port(host, port);
     match resolve_host_addrs_with_system_dns(&authority).await {
-        Ok(addrs) => Ok(addrs),
+        Ok(addrs) => Ok(ResolvedHostAddrs {
+            addrs,
+            valid_for: refresh_interval,
+        }),
         Err(system_err) => resolve_host_addrs_with_fallback_dns(
             host,
             port,
             fallback_resolver,
             mark,
             context,
+            refresh_interval,
         )
         .await
         .map_err(|fallback_err| {
@@ -116,8 +137,10 @@ async fn resolve_host_with_fallback_dns(
     let mut failures = Vec::new();
     for qtype in [DNS_QTYPE_A, DNS_QTYPE_AAAA] {
         match resolve_host_qtype_with_fallback_dns(host, fallback_resolver, mark, qtype).await {
-            Ok(Some(ip)) => return Ok(SocketAddr::new(ip, port)),
-            Ok(None) => {}
+            Ok(answers) if !answers.ips.is_empty() => {
+                return Ok(SocketAddr::new(answers.ips[0], port));
+            }
+            Ok(_) => {}
             Err(err) => failures.push(err),
         }
     }
@@ -138,23 +161,39 @@ async fn resolve_host_addrs_with_fallback_dns(
     fallback_resolver: SocketAddr,
     mark: u32,
     context: &str,
-) -> Result<Vec<SocketAddr>, String> {
+    refresh_interval: Duration,
+) -> Result<ResolvedHostAddrs, String> {
     let (a_result, aaaa_result) = tokio::join!(
         resolve_host_qtype_with_fallback_dns(host, fallback_resolver, mark, DNS_QTYPE_A),
         resolve_host_qtype_with_fallback_dns(host, fallback_resolver, mark, DNS_QTYPE_AAAA),
     );
     let mut failures = Vec::new();
-    let mut addrs = Vec::new();
+    let mut ips = Vec::new();
+    let mut min_ttl = None::<u32>;
     for result in [a_result, aaaa_result] {
         match result {
-            Ok(Some(ip)) => addrs.push(SocketAddr::new(ip, port)),
-            Ok(None) => {}
+            Ok(answers) => {
+                for ip in answers.ips {
+                    if !ips.contains(&ip) {
+                        ips.push(ip);
+                    }
+                }
+                if let Some(ttl) = answers.min_ttl {
+                    min_ttl = Some(min_ttl.map_or(ttl, |current| current.min(ttl)));
+                }
+            }
             Err(err) => failures.push(err),
         }
     }
-    let addrs = unique_socket_addrs(addrs);
+    let addrs = ips
+        .into_iter()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect::<Vec<_>>();
     if !addrs.is_empty() {
-        return Ok(addrs);
+        return Ok(ResolvedHostAddrs {
+            addrs,
+            valid_for: resolved_host_valid_for(min_ttl, refresh_interval),
+        });
     }
 
     let mut message = format!(
@@ -165,6 +204,13 @@ async fn resolve_host_addrs_with_fallback_dns(
         message.push_str(&failures.join("; "));
     }
     Err(message)
+}
+
+fn resolved_host_valid_for(min_ttl: Option<u32>, refresh_interval: Duration) -> Duration {
+    min_ttl
+        .map(|ttl| Duration::from_secs(ttl as u64))
+        .unwrap_or(refresh_interval)
+        .min(refresh_interval)
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) fn authority_from_host_port(
@@ -183,7 +229,7 @@ async fn resolve_host_qtype_with_fallback_dns(
     fallback_resolver: SocketAddr,
     mark: u32,
     qtype: u16,
-) -> Result<Option<IpAddr>, String> {
+) -> Result<FallbackDnsAnswers, String> {
     let request = build_dns_query_packet(fastrand::u16(..), host, qtype)?;
     let request_view = DnsPacketView::parse(&request)
         .map_err(|err| format!("parse fallback resolver request: {err}"))?;
@@ -192,16 +238,24 @@ async fn resolve_host_qtype_with_fallback_dns(
         .map_err(|err| format!("parse fallback resolver response: {err}"))?;
     validate_dns_packet_response_for_request_fast(&request_view, Some(&response_view), true)
         .map_err(|err| format!("validate fallback resolver response: {err:?}"))?;
+    let mut resolved = FallbackDnsAnswers::default();
     for answer in response_view.answers() {
         let answer = answer.map_err(|err| format!("read fallback resolver answer: {err}"))?;
         if answer.qtype() != qtype {
             continue;
         }
         if let Some(ip) = answer.ip() {
-            return Ok(Some(ip));
+            if !resolved.ips.contains(&ip) {
+                resolved.ips.push(ip);
+            }
+            resolved.min_ttl = Some(
+                resolved
+                    .min_ttl
+                    .map_or(answer.ttl(), |ttl| ttl.min(answer.ttl())),
+            );
         }
     }
-    Ok(None)
+    Ok(resolved)
 }
 
 async fn send_fallback_dns_query(
@@ -275,6 +329,44 @@ mod tests {
         assert_eq!(select_first_socket_addr([ipv4, ipv6]), Some(ipv4));
         assert_eq!(select_first_socket_addr([ipv6, ipv4]), Some(ipv6));
         assert_eq!(select_first_socket_addr([ipv4]), Some(ipv4));
+    }
+
+    #[test]
+    fn fallback_ttl_is_bounded_by_answers_and_configured_refresh() {
+        assert_eq!(
+            resolved_host_valid_for(Some(15), Duration::from_secs(60)),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            resolved_host_valid_for(Some(120), Duration::from_secs(30)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            resolved_host_valid_for(Some(0), Duration::from_secs(30)),
+            Duration::ZERO
+        );
+        assert_eq!(
+            resolved_host_valid_for(None, Duration::from_secs(45)),
+            Duration::from_secs(45)
+        );
+    }
+
+    #[tokio::test]
+    async fn literal_target_uses_configured_refresh_interval() {
+        let refresh_interval = Duration::from_secs(45);
+        let resolved = resolve_host_addrs_with_configured_fallback_dns_ttl(
+            "192.0.2.20",
+            53,
+            TEST_UNREACHABLE_FALLBACK_RESOLVER.parse().unwrap(),
+            0,
+            "resolve literal test upstream",
+            refresh_interval,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resolved.valid_for, refresh_interval);
+        assert_eq!(resolved.addrs, vec!["192.0.2.20:53".parse().unwrap()]);
     }
 
     #[tokio::test]
@@ -372,7 +464,8 @@ mod tests {
                 .await
                 .unwrap();
 
-        assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))));
+        assert_eq!(resolved.ips, vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))]);
+        assert_eq!(resolved.min_ttl, Some(60));
         server.await.unwrap();
     }
 
@@ -430,17 +523,19 @@ mod tests {
             resolver,
             0,
             "resolve test",
+            Duration::from_secs(60),
         )
         .await
         .unwrap();
 
         assert_eq!(
-            resolved,
-            vec![
+            resolved.addrs.as_slice(),
+            &[
                 SocketAddr::new(IpAddr::V4(expected_v4), 443),
                 SocketAddr::new(IpAddr::V6(expected_v6), 443),
             ]
         );
+        assert_eq!(resolved.valid_for, Duration::from_secs(60));
         let seen = server.await.unwrap();
         assert!(seen.contains(&DNS_QTYPE_A));
         assert!(seen.contains(&DNS_QTYPE_AAAA));
