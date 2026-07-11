@@ -2,7 +2,9 @@ use super::transport::udp_multiplex::ResidentDnsUdpMultiplexHandle;
 use super::*;
 use std::time::Duration;
 
+mod h2_recovery;
 mod target_cache;
+pub(in crate::production_runtime_owner::resident_dataplane::dns) use h2_recovery::ResidentDnsH2Recovery;
 use target_cache::ResidentDnsResolvedTargetCache;
 
 #[derive(Clone, Debug)]
@@ -266,8 +268,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2:
         AsyncMutex<Option<ResidentDnsH2Forwarder>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_open_lock: AsyncMutex<()>,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_disabled:
-        std::sync::atomic::AtomicBool,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_recovery:
+        Mutex<ResidentDnsH2Recovery>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsH2Forwarder {
