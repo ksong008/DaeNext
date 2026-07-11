@@ -144,6 +144,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) entries:
         BTreeMap<ResidentDnsForwarderKey, ResidentDnsForwarderEntry>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) lru:
+        BTreeSet<(u64, ResidentDnsForwarderKey)>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) next_tick: u64,
 }
 
