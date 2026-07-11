@@ -1,10 +1,10 @@
 use super::*;
 
 #[derive(Clone)]
-struct GroupCandidateRow {
-    node: Value,
-    latency_ms: Option<i64>,
-    alive: bool,
+pub(super) struct GroupCandidateRow {
+    pub(super) node: Value,
+    pub(super) latency_ms: Option<i64>,
+    pub(super) alive: bool,
 }
 
 #[derive(Clone)]
@@ -25,7 +25,7 @@ pub(super) struct GroupMaterializedCandidateSummary {
 }
 
 impl GroupMaterializedCandidateSummary {
-    fn new(runtime_selector: Option<&Value>) -> Self {
+    pub(super) fn new(runtime_selector: Option<&Value>) -> Self {
         Self {
             count: 0,
             sample_nodes: Vec::new(),
@@ -38,7 +38,7 @@ impl GroupMaterializedCandidateSummary {
         }
     }
 
-    fn push_unique(
+    pub(super) fn push_unique(
         &mut self,
         seen_tags: &mut HashSet<RuntimeNodeTag>,
         candidate: GroupCandidateRow,
@@ -123,99 +123,4 @@ impl RuntimeGroupSelectionMatcher {
         }
         false
     }
-}
-
-pub(super) fn group_materialized_candidate_summary_with_runtime_selection(
-    conn: &Connection,
-    group_id: i64,
-    sample_limit: usize,
-    runtime_selector: Option<&Value>,
-) -> io::Result<GroupMaterializedCandidateSummary> {
-    let mut summary = GroupMaterializedCandidateSummary::new(runtime_selector);
-    let mut seen_tags = HashSet::<RuntimeNodeTag>::new();
-
-    let mut direct_stmt = conn
-        .prepare(
-            "SELECT n.id, n.link, n.name, n.address, n.protocol, n.tag, n.subscription_id,
-                    l.latency_ms, COALESCE(l.alive, 0)
-             FROM nodes n
-             JOIN group_nodes gn ON gn.node_id = n.id
-             LEFT JOIN node_latency_results l ON l.node_id = n.id
-             WHERE gn.group_id = ?1
-             ORDER BY n.id",
-        )
-        .map_err(sqlite_io_error)?;
-    let direct_rows = direct_stmt
-        .query_map(params![group_id], group_candidate_row_value)
-        .map_err(sqlite_io_error)?;
-    for row in direct_rows {
-        summary.push_unique(&mut seen_tags, row.map_err(sqlite_io_error)?, sample_limit);
-    }
-
-    let mut subscription_stmt = conn
-        .prepare(
-            "SELECT s.id, gs.name_filter_regex
-             FROM subscriptions s
-             JOIN group_subscriptions gs ON gs.subscription_id = s.id
-             WHERE gs.group_id = ?1
-             ORDER BY s.id",
-        )
-        .map_err(sqlite_io_error)?;
-    let subscription_rows = subscription_stmt
-        .query_map(params![group_id], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
-        })
-        .map_err(sqlite_io_error)?;
-    for row in subscription_rows {
-        let (subscription_id, name_filter_regex) = row.map_err(sqlite_io_error)?;
-        push_subscription_materialized_candidates(
-            conn,
-            subscription_id,
-            name_filter_regex.as_deref(),
-            sample_limit,
-            &mut seen_tags,
-            &mut summary,
-        )?;
-    }
-
-    Ok(summary)
-}
-
-fn push_subscription_materialized_candidates(
-    conn: &Connection,
-    subscription_id: i64,
-    name_filter_regex: Option<&str>,
-    sample_limit: usize,
-    seen_tags: &mut HashSet<RuntimeNodeTag>,
-    summary: &mut GroupMaterializedCandidateSummary,
-) -> io::Result<()> {
-    let filter = compile_name_filter(name_filter_regex)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT n.id, n.link, n.name, n.address, n.protocol, n.tag, n.subscription_id,
-                    l.latency_ms, COALESCE(l.alive, 0)
-             FROM nodes n
-             LEFT JOIN node_latency_results l ON l.node_id = n.id
-             WHERE n.subscription_id = ?1
-             ORDER BY n.id",
-        )
-        .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map(params![subscription_id], group_candidate_row_value)
-        .map_err(sqlite_io_error)?;
-    for row in rows {
-        let candidate = row.map_err(sqlite_io_error)?;
-        if node_matches_name_filter(&candidate.node, filter.as_ref()) {
-            summary.push_unique(seen_tags, candidate, sample_limit);
-        }
-    }
-    Ok(())
-}
-
-fn group_candidate_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupCandidateRow> {
-    Ok(GroupCandidateRow {
-        node: node_row_value(row)?,
-        latency_ms: row.get::<_, Option<i64>>(7)?,
-        alive: row.get::<_, i64>(8)? != 0,
-    })
 }
