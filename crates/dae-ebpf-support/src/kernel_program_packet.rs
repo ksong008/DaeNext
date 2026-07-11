@@ -1,6 +1,8 @@
 pub const ETH_HLEN: u32 = 14;
 pub const ETH_P_IP_NETWORK: u16 = u16::to_be(0x0800);
 pub const ETH_P_IPV6_NETWORK: u16 = u16::to_be(0x86dd);
+pub const ETH_P_8021Q_NETWORK: u16 = u16::to_be(0x8100);
+pub const ETH_P_8021AD_NETWORK: u16 = u16::to_be(0x88a8);
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 pub const IPPROTO_ICMPV6: u8 = 58;
@@ -14,6 +16,14 @@ const IPPROTO_DSTOPTS: u8 = 60;
 const IPV4_MIN_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
 const IPV6_MAX_EXTENSIONS: u8 = 8;
+const VLAN_HLEN: usize = 4;
+const VLAN_MAX_DEPTH: u8 = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelPacketVlanMetadata {
+    pub protocol: u16,
+    pub tci: u16,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelPacketParseDisposition {
@@ -99,6 +109,8 @@ pub fn packet_level_golden_cases() -> Vec<KernelPacketGoldenCase> {
             "ipv6_non_initial_fragment_pass",
             KernelPacketParseDisposition::ChainNextNoDrop,
         ),
+        ("single_vlan_ipv4", KernelPacketParseDisposition::Parsed),
+        ("qinq_ipv6", KernelPacketParseDisposition::Parsed),
         (
             "ipv6_icmpv6_ndp_redirect",
             KernelPacketParseDisposition::Parsed,
@@ -129,8 +141,26 @@ pub fn parse_kernel_program_packet(
     skb_protocol: u16,
     packet: &[u8],
 ) -> KernelPacketParseReport {
+    parse_kernel_program_packet_with_vlan(link_h_len, skb_protocol, None, packet)
+}
+
+pub fn parse_kernel_program_packet_with_vlan(
+    link_h_len: u32,
+    skb_protocol: u16,
+    accelerated_vlan: Option<KernelPacketVlanMetadata>,
+    packet: &[u8],
+) -> KernelPacketParseReport {
     let mut parsed = KernelPacketParsed::zeroed(skb_protocol);
     let mut network_offset = 0usize;
+    let mut vlan_depth = if let Some(vlan) = accelerated_vlan {
+        let protocol = vlan.protocol.to_be();
+        if !is_vlan_protocol(protocol) {
+            return chain_next(parsed);
+        }
+        1
+    } else {
+        0
+    };
     if link_h_len == ETH_HLEN {
         let Some(eth) = packet.get(0..ETH_HLEN as usize) else {
             return fault(parsed);
@@ -139,6 +169,18 @@ pub fn parse_kernel_program_packet(
         parsed.eth_src.copy_from_slice(&eth[6..12]);
         parsed.h_proto = read_ne_u16(eth, 12);
         network_offset = ETH_HLEN as usize;
+    }
+
+    while is_vlan_protocol(parsed.h_proto) {
+        if vlan_depth >= VLAN_MAX_DEPTH {
+            return chain_next(parsed);
+        }
+        let Some(vlan) = packet.get(network_offset..network_offset + VLAN_HLEN) else {
+            return fault(parsed);
+        };
+        parsed.h_proto = read_ne_u16(vlan, 2);
+        network_offset += VLAN_HLEN;
+        vlan_depth += 1;
     }
 
     match parsed.h_proto {
@@ -267,6 +309,10 @@ fn is_ipv6_extension_header(nexthdr: u8) -> bool {
         nexthdr,
         IPPROTO_HOPOPTS | IPPROTO_ROUTING | IPPROTO_FRAGMENT | IPPROTO_DSTOPTS
     )
+}
+
+fn is_vlan_protocol(proto: u16) -> bool {
+    proto == ETH_P_8021Q_NETWORK || proto == ETH_P_8021AD_NETWORK
 }
 
 fn ipv6_optlen(hdr_ext_len: u8) -> u32 {

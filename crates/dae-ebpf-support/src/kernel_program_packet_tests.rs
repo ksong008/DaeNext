@@ -140,6 +140,77 @@ fn packet_level_golden_faults_truncated_ipv6_fragment_header_without_drop() {
 }
 
 #[test]
+fn packet_level_golden_parses_single_vlan_and_qinq_transport_headers() {
+    let ipv4_udp = ipv4(IPPROTO_UDP, &udp_header(12_345, 53), 0);
+    let report = parse_kernel_program_packet(
+        ETH_HLEN,
+        0,
+        &ethernet_with_vlans(&[(0x8100, 100)], 0x0800, &ipv4_udp),
+    );
+    assert_ipv4_transport(&report, IPPROTO_UDP, 12_345, 53);
+
+    let ipv6_tcp = ipv6(IPPROTO_TCP, &tcp_header(12_345, 443, 0x02), 0);
+    let report = parse_kernel_program_packet(
+        ETH_HLEN,
+        0,
+        &ethernet_with_vlans(&[(0x88a8, 200), (0x8100, 100)], 0x86dd, &ipv6_tcp),
+    );
+    assert_ipv6_transport(&report, IPPROTO_TCP, 12_345, 443);
+}
+
+#[test]
+fn packet_level_golden_bounds_accelerated_and_inline_vlan_depth() {
+    let ipv4_udp = ipv4(IPPROTO_UDP, &udp_header(12_345, 53), 0);
+    let metadata = KernelPacketVlanMetadata {
+        protocol: 0x88a8,
+        tci: 200,
+    };
+    let report = parse_kernel_program_packet_with_vlan(
+        ETH_HLEN,
+        0,
+        Some(metadata),
+        &ethernet_with_vlans(&[(0x8100, 100)], 0x0800, &ipv4_udp),
+    );
+    assert_ipv4_transport(&report, IPPROTO_UDP, 12_345, 53);
+
+    let report = parse_kernel_program_packet_with_vlan(
+        ETH_HLEN,
+        0,
+        Some(metadata),
+        &ethernet_with_vlans(&[(0x88a8, 300), (0x8100, 100)], 0x0800, &ipv4_udp),
+    );
+    assert_eq!(
+        report.disposition,
+        KernelPacketParseDisposition::ChainNextNoDrop
+    );
+
+    let report = parse_kernel_program_packet(
+        ETH_HLEN,
+        0,
+        &ethernet_with_vlans(
+            &[(0x88a8, 300), (0x88a8, 200), (0x8100, 100)],
+            0x0800,
+            &ipv4_udp,
+        ),
+    );
+    assert_eq!(
+        report.disposition,
+        KernelPacketParseDisposition::ChainNextNoDrop
+    );
+}
+
+#[test]
+fn packet_level_golden_faults_truncated_vlan_header_without_drop() {
+    let mut frame = ethernet_with_proto(0x8100, &[]);
+    frame.extend_from_slice(&[0, 100, 0]);
+    let report = parse_kernel_program_packet(ETH_HLEN, 0, &frame);
+    assert_eq!(
+        report.disposition,
+        KernelPacketParseDisposition::FaultNoDrop
+    );
+}
+
+#[test]
 fn packet_level_golden_passes_unsupported_and_faults_truncated_without_drop() {
     let report = parse_kernel_program_packet(ETH_HLEN, 0, &ethernet_with_proto(0x0806, &[]));
     assert_eq!(
@@ -200,6 +271,18 @@ fn ethernet_with_proto(ethertype: u16, payload: &[u8]) -> Vec<u8> {
         0x02, 0x00, 0x00, 0x00, 0x00, 0x02, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x01,
     ];
     frame.extend_from_slice(&ethertype.to_be_bytes());
+    frame.extend_from_slice(payload);
+    frame
+}
+
+fn ethernet_with_vlans(vlans: &[(u16, u16)], ethertype: u16, payload: &[u8]) -> Vec<u8> {
+    let outer_proto = vlans.first().map_or(ethertype, |(proto, _)| *proto);
+    let mut frame = ethernet_with_proto(outer_proto, &[]);
+    for (index, (_, tci)) in vlans.iter().enumerate() {
+        let inner_proto = vlans.get(index + 1).map_or(ethertype, |(proto, _)| *proto);
+        frame.extend_from_slice(&tci.to_be_bytes());
+        frame.extend_from_slice(&inner_proto.to_be_bytes());
+    }
     frame.extend_from_slice(payload);
     frame
 }

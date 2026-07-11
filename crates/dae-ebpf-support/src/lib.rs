@@ -106,9 +106,10 @@ pub use kernel_program::{
     trace_kernel_program_coverage,
 };
 pub use kernel_program_packet::{
-    ETH_HLEN, ETH_P_IP_NETWORK, ETH_P_IPV6_NETWORK, IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP,
-    KernelPacketGoldenCase, KernelPacketParseDisposition, KernelPacketParseReport,
-    KernelPacketParsed, NDP_REDIRECT, packet_level_golden_cases, parse_kernel_program_packet,
+    ETH_HLEN, ETH_P_8021AD_NETWORK, ETH_P_8021Q_NETWORK, ETH_P_IP_NETWORK, ETH_P_IPV6_NETWORK,
+    IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP, KernelPacketGoldenCase, KernelPacketParseDisposition,
+    KernelPacketParseReport, KernelPacketParsed, KernelPacketVlanMetadata, NDP_REDIRECT,
+    packet_level_golden_cases, parse_kernel_program_packet, parse_kernel_program_packet_with_vlan,
 };
 pub use kernel_program_trace::{
     TRACE_CORE_SIDELOAD_DISABLED_REASON, TraceConfigRewriteContract, TraceCoreSideloadGateReport,
