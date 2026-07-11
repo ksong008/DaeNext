@@ -28,8 +28,7 @@
     "pin_root": "/sys/fs/bpf",
     "pinned_reuse_maps": [
       "cookie_pid_map",
-      "routing_tuples_map",
-      "tgid_pname_map"
+      "routing_tuples_map"
     ],
     "tproxy_port_big_endian": 14640
   },
