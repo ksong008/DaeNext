@@ -53,42 +53,14 @@ pub(super) fn api_delete_storage(
 pub(super) fn api_default_resources(
     app: &AppState,
     request: &HttpRequest,
-    mut user: UserRecord,
+    user: UserRecord,
 ) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    match ensure_default_resources(&app.state, &body) {
-        Ok(response) => {
-            let paths = vec![
-                "defaultConfigID".to_owned(),
-                "defaultRoutingID".to_owned(),
-                "defaultDNSID".to_owned(),
-                "defaultGroupID".to_owned(),
-                "mode".to_owned(),
-            ];
-            let values = vec![
-                response["defaultConfigID"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_owned(),
-                response["defaultRoutingID"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_owned(),
-                response["defaultDNSID"].as_str().unwrap_or("").to_owned(),
-                response["defaultGroupID"].as_str().unwrap_or("").to_owned(),
-                response["mode"].as_str().unwrap_or("").to_owned(),
-            ];
-            if let Err(err) = set_json_storage(&mut user.json_storage, &paths, &values) {
-                return HttpResponse::json(400, json!({"error": err}));
-            }
-            if let Err(err) = save_json_storage(&app.state, user.id, &user.json_storage) {
-                return HttpResponse::json(500, json!({"error": err.to_string()}));
-            }
-            HttpResponse::json(200, response)
-        }
+    match ensure_default_resources_for_user(&app.state, &body, &user) {
+        Ok(response) => HttpResponse::json(200, response),
         Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
     }
 }

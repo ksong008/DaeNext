@@ -1,7 +1,67 @@
 use super::*;
+#[cfg(test)]
 pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
     ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
+    let mut conn = open_state_connection(state)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_io_error)?;
+    let response = ensure_default_resources_with_connection(&tx, body)?;
+    tx.commit().map_err(sqlite_io_error)?;
+    Ok(response)
+}
+
+pub(crate) fn ensure_default_resources_for_user(
+    state: &Path,
+    body: &Value,
+    user: &UserRecord,
+) -> io::Result<Value> {
+    ensure_state_schema(state)?;
+    let mut conn = open_state_connection(state)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_io_error)?;
+    let response = ensure_default_resources_with_connection(&tx, body)?;
+    let paths = vec![
+        "defaultConfigID".to_owned(),
+        "defaultRoutingID".to_owned(),
+        "defaultDNSID".to_owned(),
+        "defaultGroupID".to_owned(),
+        "mode".to_owned(),
+    ];
+    let values = vec![
+        response["defaultConfigID"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+        response["defaultRoutingID"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+        response["defaultDNSID"].as_str().unwrap_or("").to_owned(),
+        response["defaultGroupID"].as_str().unwrap_or("").to_owned(),
+        response["mode"].as_str().unwrap_or("").to_owned(),
+    ];
+    let mut storage = user.json_storage.clone();
+    set_json_storage(&mut storage, &paths, &values)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let updated = tx
+        .execute(
+            "UPDATE users SET json_storage = ?1 WHERE id = ?2",
+            params![storage, user.id],
+        )
+        .map_err(sqlite_io_error)?;
+    if updated != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "default resource user no longer exists",
+        ));
+    }
+    tx.commit().map_err(sqlite_io_error)?;
+    Ok(response)
+}
+
+fn ensure_default_resources_with_connection(conn: &Connection, body: &Value) -> io::Result<Value> {
     let config_name = body
         .get("configName")
         .and_then(Value::as_str)
@@ -44,7 +104,7 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         .unwrap_or("")
         .to_owned();
     let config = upsert_named_resource(
-        &conn,
+        conn,
         "configs",
         "global",
         config_name,
@@ -53,7 +113,7 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         "0, 0",
     )?;
     let dns = upsert_named_resource(
-        &conn,
+        conn,
         "dns",
         "dns",
         dns_name,
@@ -62,7 +122,7 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         "0, 0",
     )?;
     let routing = upsert_named_resource(
-        &conn,
+        conn,
         "routings",
         "routing",
         routing_name,
@@ -70,10 +130,10 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         "selected, version",
         "0, 0",
     )?;
-    ensure_section_selected_if_missing(&conn, SectionKind::Config, config.id)?;
-    ensure_section_selected_if_missing(&conn, SectionKind::Dns, dns.id)?;
-    ensure_section_selected_if_missing(&conn, SectionKind::Routing, routing.id)?;
-    let group = ensure_default_group(&conn, group_name, policy)?;
+    ensure_section_selected_if_missing(conn, SectionKind::Config, config.id)?;
+    ensure_section_selected_if_missing(conn, SectionKind::Dns, dns.id)?;
+    ensure_section_selected_if_missing(conn, SectionKind::Routing, routing.id)?;
+    let group = ensure_default_group(conn, group_name, policy)?;
     let group_id = group.as_ref().map(|group| group.id);
     let mut group_changed = false;
     if let Some(group) = group.as_ref()
@@ -82,7 +142,7 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
         let group_id = group.id;
         if let Some(params_value) = body.get("policyParams").and_then(Value::as_array) {
             let desired = desired_policy_params(params_value);
-            if group_policy_param_pairs(&conn, group_id)? != desired {
+            if group_policy_param_pairs(conn, group_id)? != desired {
                 conn.execute(
                     "DELETE FROM group_policy_params WHERE group_id = ?1",
                     params![group_id],
@@ -102,14 +162,14 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
             let desired = integer_array(body, "nodeIds")
                 .into_iter()
                 .collect::<BTreeSet<_>>();
-            if group_node_id_set(&conn, group_id)? != desired {
+            if group_node_id_set(conn, group_id)? != desired {
                 conn.execute(
                     "DELETE FROM group_nodes WHERE group_id = ?1",
                     params![group_id],
                 )
                 .map_err(sqlite_io_error)?;
                 let desired_ids = desired.iter().copied().collect::<Vec<_>>();
-                apply_group_node_ids(&conn, group_id, &desired_ids, true)?;
+                apply_group_node_ids(conn, group_id, &desired_ids, true)?;
                 group_changed = true;
             }
         }
@@ -125,14 +185,14 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
                 .iter()
                 .map(|id| (*id, name_filter_regex.clone()))
                 .collect::<BTreeSet<_>>();
-            if group_subscription_binding_set(&conn, group_id)? != desired {
+            if group_subscription_binding_set(conn, group_id)? != desired {
                 conn.execute(
                     "DELETE FROM group_subscriptions WHERE group_id = ?1",
                     params![group_id],
                 )
                 .map_err(sqlite_io_error)?;
                 apply_group_subscription_ids(
-                    &conn,
+                    conn,
                     group_id,
                     &ids,
                     name_filter_regex.as_deref(),
