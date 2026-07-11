@@ -23,6 +23,7 @@ const UDP_DATAGRAM_RESPONSE_CAPACITY: usize = 64 * 1024;
 mod datagram;
 mod dispatch;
 mod selection;
+mod wait;
 use self::datagram::*;
 
 mod anytls;

@@ -110,6 +110,20 @@ impl DatagramRelay {
         }
     }
 
+    pub(super) async fn wait_response(&mut self, label: &str) -> Result<Vec<u8>, String> {
+        let Some(socket) = self.socket.as_ref() else {
+            return Err(format!("{label} UDP relay socket is not initialized"));
+        };
+        if self.response_buf.len() < UDP_DATAGRAM_RESPONSE_CAPACITY {
+            self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
+        }
+        let (read, _) = socket
+            .recv_from(&mut self.response_buf)
+            .await
+            .map_err(|err| format!("receive {label} UDP datagram: {err}"))?;
+        Ok(self.response_buf[..read].to_vec())
+    }
+
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
         if self.socket.is_some() && !self.remote_candidates.is_empty() {
             return Ok(());
