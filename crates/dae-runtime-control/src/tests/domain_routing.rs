@@ -351,6 +351,87 @@ pub(super) fn domain_routing_owner_tracks_an_owner_when_the_kernel_delta_is_empt
 }
 
 #[test]
+pub(super) fn domain_routing_owner_batch_commits_all_events_or_none() {
+    let mut owner = DomainRoutingOwner::default();
+    let first_ip = parse_ip_key("192.0.2.91").unwrap();
+    let second_ip = parse_ip_key("192.0.2.92").unwrap();
+    owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::from_keys("owner-a", &[0x1], [first_ip]),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+
+    let error = owner
+        .apply_dns_events_with(
+            77,
+            [
+                DomainRoutingDnsEvent::remove("owner-a"),
+                DomainRoutingDnsEvent::from_keys("owner-b", &[0x2], [second_ip]),
+            ],
+            |_, updates, deletes| {
+                assert_eq!(updates.len(), 1);
+                assert_eq!(updates[0].key, second_ip);
+                assert_eq!(deletes, &[first_ip]);
+                Err(std::io::Error::other("injected batch map failure"))
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.to_string(), "injected batch map failure");
+    assert_eq!(owner.tracker().owner_count(), 1);
+    assert_eq!(owner.tracker().view("failed").owners, vec!["owner-a"]);
+
+    let report = owner
+        .apply_dns_events_with(
+            77,
+            [
+                DomainRoutingDnsEvent::remove("owner-a"),
+                DomainRoutingDnsEvent::from_keys("owner-b", &[0x2], [second_ip]),
+            ],
+            |_, updates, deletes| {
+                assert_eq!(updates.len(), 1);
+                assert_eq!(updates[0].key, second_ip);
+                assert_eq!(deletes, &[first_ip]);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(!report.skipped);
+    assert_eq!(owner.tracker().owner_count(), 1);
+    assert_eq!(owner.tracker().view("committed").owners, vec!["owner-b"]);
+}
+
+#[test]
+pub(super) fn domain_routing_owner_batch_tracks_no_delta_owner_replacement() {
+    let mut owner = DomainRoutingOwner::default();
+    let ip = parse_ip_key("192.0.2.93").unwrap();
+    owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::from_keys("owner-a", &[0x1], [ip]),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+
+    let report = owner
+        .apply_dns_events_with(
+            77,
+            [
+                DomainRoutingDnsEvent::remove("owner-a"),
+                DomainRoutingDnsEvent::from_keys("owner-b", &[0x1], [ip]),
+            ],
+            |_, _, _| panic!("unchanged merged state must not rewrite the kernel map"),
+        )
+        .unwrap();
+
+    assert!(report.skipped);
+    assert_eq!(owner.tracker().owner_count(), 1);
+    assert_eq!(owner.tracker().ip_count(), 1);
+    assert_eq!(owner.tracker().view("replaced").owners, vec!["owner-b"]);
+}
+
+#[test]
 pub(super) fn domain_routing_owner_removes_only_the_departing_owner_bitmap() {
     let mut owner = DomainRoutingOwner::default();
     let shared_ip = parse_ip_key("192.0.2.1").unwrap();
