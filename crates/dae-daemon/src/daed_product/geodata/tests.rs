@@ -5,10 +5,13 @@ use super::source::{
     GeodataSourceUrlUpdate, geodata_source, geodata_source_status, reset_geodata_source_url,
     set_geodata_source_url, set_geodata_source_use_proxy, update_geodata_source_settings,
 };
-use super::status::geodata_status_for_dir;
+use super::status::{
+    geodata_status_for_dir, geodata_status_parse_count, reset_geodata_status_parse_count,
+};
 use super::types::{GEOIP_FILE, GEOSITE_FILE, GeodataSourceMode};
 use super::*;
 
+mod status_cache;
 mod update;
 
 #[test]
@@ -84,66 +87,6 @@ fn geodata_status_reports_counts_from_actual_files() {
     assert_eq!(status["geoip"]["version"], json!("202606182327"));
     assert_eq!(status["geoip"]["categoryCount"], json!(2));
     assert_eq!(status["geoip"]["cidrCount"], json!(3));
-
-    let _ = fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn geodata_status_reuses_cached_values_after_first_read() {
-    let dir =
-        std::env::temp_dir().join(format!("daed-product-geodata-cache-{}", fastrand::u64(..)));
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join(GEOSITE_FILE),
-        message([field_message(
-            1,
-            message([
-                field_string(1, "geosite:cached"),
-                field_message(2, message([field_string(2, "cached.example")])),
-            ]),
-        )]),
-    )
-    .unwrap();
-    fs::write(
-        dir.join(GEOIP_FILE),
-        message([field_message(
-            1,
-            message([
-                field_string(1, "geoip:cached"),
-                field_message(
-                    2,
-                    message([field_bytes(1, &[10, 0, 0, 0]), field_varint(2, 8)]),
-                ),
-            ]),
-        )]),
-    )
-    .unwrap();
-    let app = AppState {
-        config_dir: dir.clone(),
-        state: dir.join("daed.db"),
-        web_root: dir.join("web"),
-        api_only: true,
-        control_socket: dir.join("control.sock"),
-        runtime: Arc::new(ProductRuntimeManager::new()),
-        latency_jobs: Arc::new(LatencyJobManager::default()),
-        http_metrics: Arc::new(ProductHttpMetrics::default()),
-        auth_runtime: product_test_auth_runtime(),
-        geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
-        geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
-    };
-
-    let first = geodata_status(&app).unwrap();
-    assert_eq!(first["geosite"]["ruleCount"], json!(1));
-    assert_eq!(first["geoip"]["cidrCount"], json!(1));
-
-    fs::remove_file(dir.join(GEOSITE_FILE)).unwrap();
-    fs::remove_file(dir.join(GEOIP_FILE)).unwrap();
-
-    let cached = geodata_status(&app).unwrap();
-    assert_eq!(cached["geosite"]["available"], json!(true));
-    assert_eq!(cached["geosite"]["ruleCount"], json!(1));
-    assert_eq!(cached["geoip"]["available"], json!(true));
-    assert_eq!(cached["geoip"]["cidrCount"], json!(1));
 
     let _ = fs::remove_dir_all(&dir);
 }

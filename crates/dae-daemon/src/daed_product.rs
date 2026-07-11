@@ -245,8 +245,8 @@ struct AppState {
 
 #[derive(Debug, Default)]
 struct GeodataStatusCache {
-    geosite: Option<Value>,
-    geoip: Option<Value>,
+    geosite: Option<geodata::GeodataStatusCacheEntry>,
+    geoip: Option<geodata::GeodataStatusCacheEntry>,
 }
 
 #[derive(Debug, Default)]
