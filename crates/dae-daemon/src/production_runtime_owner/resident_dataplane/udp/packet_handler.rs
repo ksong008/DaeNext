@@ -127,7 +127,7 @@ fn resident_dns_udp_result(response: Vec<u8>) -> UdpExchangeResult {
         .with_underlay_reuse("not-required-independent-datagram")
 }
 
-pub(super) fn record_udp_exchange_result(
+pub(super) async fn record_udp_exchange_result(
     proxy: &ResidentProxyPlan,
     packet: UdpOriginalDstPacket,
     original_dst: SocketAddr,
@@ -135,6 +135,7 @@ pub(super) fn record_udp_exchange_result(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    udp_reply: &UdpReplyHandle,
     exchange: Result<(&'static str, UdpExchangeResult), String>,
 ) {
     record_udp_session_exchange_result(
@@ -147,12 +148,14 @@ pub(super) fn record_udp_exchange_result(
         event_file,
         event_lock,
         metrics,
+        udp_reply,
         exchange,
         UdpExchangeSessionScope::ManagedSession,
-    );
+    )
+    .await;
 }
 
-pub(super) fn record_udp_dns_datagram_exchange_result(
+pub(super) async fn record_udp_dns_datagram_exchange_result(
     proxy: &ResidentProxyPlan,
     packet: UdpOriginalDstPacket,
     original_dst: SocketAddr,
@@ -160,6 +163,7 @@ pub(super) fn record_udp_dns_datagram_exchange_result(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    udp_reply: &UdpReplyHandle,
     exchange: Result<(&'static str, UdpExchangeResult), String>,
 ) {
     record_udp_session_exchange_result(
@@ -172,18 +176,21 @@ pub(super) fn record_udp_dns_datagram_exchange_result(
         event_file,
         event_lock,
         metrics,
+        udp_reply,
         exchange,
         UdpExchangeSessionScope::IndependentDatagram,
-    );
+    )
+    .await;
 }
 
-pub(super) fn record_udp_session_response_result(
+pub(super) async fn record_udp_session_response_result(
     proxy: &ResidentProxyPlan,
     peer: SocketAddr,
     original_dst: SocketAddr,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    udp_reply: &UdpReplyHandle,
     exchange: Result<(&'static str, UdpExchangeResult), String>,
 ) {
     record_udp_session_exchange_result(
@@ -196,12 +203,14 @@ pub(super) fn record_udp_session_response_result(
         event_file,
         event_lock,
         metrics,
+        udp_reply,
         exchange,
         UdpExchangeSessionScope::ManagedSession,
-    );
+    )
+    .await;
 }
 
-fn record_udp_session_exchange_result(
+async fn record_udp_session_exchange_result(
     proxy: &ResidentProxyPlan,
     peer: SocketAddr,
     original_dst: SocketAddr,
@@ -211,6 +220,7 @@ fn record_udp_session_exchange_result(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    udp_reply: &UdpReplyHandle,
     exchange: Result<(&'static str, UdpExchangeResult), String>,
     session_scope: UdpExchangeSessionScope,
 ) {
@@ -218,17 +228,23 @@ fn record_udp_session_exchange_result(
         metrics.add_upload(request_len);
     }
     match exchange {
-        Ok((event, response)) => {
+        Ok((event, mut response)) => {
+            let response_len = response.payload.len();
             if response.reply_forwarded {
-                if let Err(err) = send_udp_reply(original_dst, peer, &response.payload) {
-                    append_event(
-                        &event_file,
-                        &event_lock,
-                        json!({"event": "udp_reply_failed", "peer": resident_socket_addr_display(peer), "original_dst": resident_socket_addr_display(original_dst), "error": err}),
-                    );
+                if let Err(err) = udp_reply
+                    .send(original_dst, peer, std::mem::take(&mut response.payload))
+                    .await
+                {
+                    if err.should_log() {
+                        append_event(
+                            &event_file,
+                            &event_lock,
+                            json!({"event": "udp_reply_failed", "peer": resident_socket_addr_display(peer), "original_dst": resident_socket_addr_display(original_dst), "error": err.to_string()}),
+                        );
+                    }
                     return;
                 }
-                metrics.add_download(response.payload.len());
+                metrics.add_download(response_len);
             }
             let handler = resident_udp_proxy_handler_name(proxy);
             let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
@@ -246,10 +262,7 @@ fn record_udp_session_exchange_result(
             );
             if let Some(map) = event_json.as_object_mut() {
                 map.insert("request_len".to_owned(), Value::from(request_len));
-                map.insert(
-                    "response_len".to_owned(),
-                    Value::from(response.payload.len()),
-                );
+                map.insert("response_len".to_owned(), Value::from(response_len));
                 map.insert(
                     "reply_forwarded".to_owned(),
                     Value::from(response.reply_forwarded),

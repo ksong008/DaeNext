@@ -115,6 +115,7 @@ pub(super) struct UdpDirectSessionActorContext {
     pub(super) event_file: PathBuf,
     pub(super) event_lock: Arc<Mutex<()>>,
     pub(super) metrics: Arc<ResidentDataplaneMetrics>,
+    pub(super) udp_reply: UdpReplyHandle,
     pub(super) active_sessions: Arc<AtomicUsize>,
 }
 
@@ -261,23 +262,30 @@ async fn drain_direct_udp_session_responses(
         let Some((upstream_peer, response)) = session.poll_response()? else {
             return Ok(());
         };
-        match send_udp_reply(upstream_peer, key.peer(), &response) {
+        let response_len = response.len();
+        match context
+            .udp_reply
+            .send(upstream_peer, key.peer(), response)
+            .await
+        {
             Ok(()) => {
-                context.metrics.add_download(response.len());
-                append_udp_direct_packet_finished(context, key, upstream_peer, response.len());
+                context.metrics.add_download(response_len);
+                append_udp_direct_packet_finished(context, key, upstream_peer, response_len);
             }
             Err(err) => {
-                append_event(
-                    &context.event_file,
-                    &context.event_lock,
-                    json!({
-                        "event": "udp_reply_failed",
-                        "peer": resident_socket_addr_display(key.peer()),
-                        "original_dst": resident_socket_addr_display(key.original_destination()),
-                        "upstream_peer": resident_socket_addr_display(upstream_peer),
-                        "error": err,
-                    }),
-                );
+                if err.should_log() {
+                    append_event(
+                        &context.event_file,
+                        &context.event_lock,
+                        json!({
+                            "event": "udp_reply_failed",
+                            "peer": resident_socket_addr_display(key.peer()),
+                            "original_dst": resident_socket_addr_display(key.original_destination()),
+                            "upstream_peer": resident_socket_addr_display(upstream_peer),
+                            "error": err.to_string(),
+                        }),
+                    );
+                }
                 return Err(format!("direct-reply-failed: {err}"));
             }
         }

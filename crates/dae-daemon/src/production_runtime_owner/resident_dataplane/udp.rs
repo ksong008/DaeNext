@@ -110,8 +110,8 @@ use self::quic_helpers::*;
 mod vless_xudp;
 use self::vless_xudp::*;
 mod reply;
-pub(super) use self::reply::clear_udp_reply_socket_cache;
 use self::reply::*;
+use self::reply::{UdpReplyDispatcher, UdpReplyHandle};
 #[cfg(test)]
 #[path = "udp/tests/chain_execution.rs"]
 mod chain_execution_tests;

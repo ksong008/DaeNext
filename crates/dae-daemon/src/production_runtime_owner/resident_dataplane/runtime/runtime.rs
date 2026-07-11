@@ -71,11 +71,12 @@ impl ResidentDataplaneRuntime {
                 "lockedManagers": xmux.h3.locked_managers,
             },
         }));
-        let udp_reply_sockets = udp::clear_udp_reply_socket_cache();
         steps.push(json!({
             "name": "clear-resident-udp-reply-socket-cache",
             "status": "pass",
-            "sockets": udp_reply_sockets,
+            "sockets": 0,
+            "ownership": "udp-session-manager",
+            "cleanup": "reply dispatcher stopped and joined with UDP manager",
         }));
         let tls_caches = client::clear_resident_tls_config_caches();
         steps.push(json!({
