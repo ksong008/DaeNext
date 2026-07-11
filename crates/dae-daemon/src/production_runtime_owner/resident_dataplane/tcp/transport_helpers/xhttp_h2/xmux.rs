@@ -11,6 +11,9 @@ pub(super) use self::h2_manager::select_xhttp_h2_xmux_client;
 mod h3_manager;
 pub(super) use self::h3_manager::select_xhttp_h3_xmux_client;
 
+mod state_signal;
+use self::state_signal::{XhttpXmuxStateSignal, XhttpXmuxStateWait};
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct XhttpXmuxKey {
     origin: String,
@@ -32,6 +35,7 @@ pub(super) struct XhttpXmuxUsage {
     pub(super) open_usage: AtomicI32,
     pub(super) left_requests: AtomicI32,
     pub(super) unreusable_at: Option<Instant>,
+    state_signal: XhttpXmuxStateSignal,
 }
 
 #[derive(Clone)]
@@ -136,13 +140,16 @@ impl XhttpXmuxClientLease {
     }
 
     pub(super) fn note_request(&self) -> i32 {
-        self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1
+        let left = self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1;
+        self.usage.state_signal.notify();
+        left
     }
 }
 
 impl XhttpXmuxRequestHandle {
     pub(super) fn use_for_packet_up_post(&self) -> bool {
         let left = self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1;
+        self.usage.state_signal.notify();
         left > 0
             && self
                 .usage
@@ -154,6 +161,7 @@ impl XhttpXmuxRequestHandle {
 impl Drop for XhttpXmuxClientLease {
     fn drop(&mut self) {
         self.usage.open_usage.fetch_sub(1, Ordering::AcqRel);
+        self.usage.state_signal.notify();
     }
 }
 
@@ -193,6 +201,7 @@ mod tests {
             open_usage: AtomicI32::new(0),
             left_requests: AtomicI32::new(left_requests),
             unreusable_at,
+            state_signal: XhttpXmuxStateSignal::new(),
         })
     }
 

@@ -23,12 +23,13 @@ struct XhttpXmuxH2Manager {
     connections: i32,
     opening: usize,
     clients: Vec<XhttpXmuxH2ClientEntry>,
+    state_signal: XhttpXmuxStateSignal,
 }
 
 enum XhttpXmuxH2SelectAction {
     Selected(XhttpXmuxH2SelectedClient),
     OpenNew,
-    WaitForOpening,
+    WaitForState(XhttpXmuxStateWait),
 }
 
 impl XhttpXmuxH2Manager {
@@ -40,6 +41,7 @@ impl XhttpXmuxH2Manager {
             opening: 0,
             config,
             clients: Vec::new(),
+            state_signal: XhttpXmuxStateSignal::new(),
         }
     }
 
@@ -83,23 +85,25 @@ impl XhttpXmuxH2Manager {
         if client.left_usage > 0 {
             client.left_usage -= 1;
         }
-        XhttpXmuxH2SelectAction::Selected(XhttpXmuxH2SelectedClient {
+        let selected = XhttpXmuxH2SelectedClient {
             sender: client.sender.clone(),
             lease: XhttpXmuxClientLease::open(Arc::clone(&client.usage)),
-        })
+        };
+        self.state_signal.notify();
+        XhttpXmuxH2SelectAction::Selected(selected)
     }
 
     fn reserve_new_or_wait(&mut self, reusable_len: usize) -> XhttpXmuxH2SelectAction {
         if self.connections > 0
             && reusable_len.saturating_add(self.opening) >= self.connections as usize
         {
-            return XhttpXmuxH2SelectAction::WaitForOpening;
+            return XhttpXmuxH2SelectAction::WaitForState(self.state_waiter());
         }
         if self.opening == 0 || self.connections > 0 {
             self.opening = self.opening.saturating_add(1);
             XhttpXmuxH2SelectAction::OpenNew
         } else {
-            XhttpXmuxH2SelectAction::WaitForOpening
+            XhttpXmuxH2SelectAction::WaitForState(self.state_waiter())
         }
     }
 
@@ -130,6 +134,7 @@ impl XhttpXmuxH2Manager {
             open_usage: AtomicI32::new(0),
             left_requests: AtomicI32::new(left_requests),
             unreusable_at,
+            state_signal: self.state_signal.clone(),
         });
         self.clients.push(XhttpXmuxH2ClientEntry {
             sender: sender.sender.clone(),
@@ -147,11 +152,13 @@ impl XhttpXmuxH2Manager {
 
     fn finish_opening(&mut self) {
         self.opening = self.opening.saturating_sub(1);
+        self.state_signal.notify();
     }
 
     fn prune(&mut self) {
         let now = Instant::now();
         let mut index = 0;
+        let mut changed = false;
         while index < self.clients.len() {
             let should_retire = {
                 let client = &self.clients[index];
@@ -165,12 +172,16 @@ impl XhttpXmuxH2Manager {
             };
             if should_retire {
                 let client = self.clients.swap_remove(index);
+                changed = true;
                 if client.usage.open_usage.load(Ordering::Acquire) <= 0 {
                     client.connection_task.abort();
                 }
             } else {
                 index += 1;
             }
+        }
+        if changed {
+            self.state_signal.notify();
         }
     }
 
@@ -191,6 +202,15 @@ impl XhttpXmuxH2Manager {
                 .is_none_or(|deadline| Instant::now() <= deadline)
     }
 
+    fn state_waiter(&self) -> XhttpXmuxStateWait {
+        let deadline = self
+            .clients
+            .iter()
+            .filter_map(|client| client.usage.unreusable_at)
+            .min();
+        self.state_signal.waiter(deadline)
+    }
+
     fn force_close(&mut self) -> usize {
         self.opening = 0;
         let mut closed = 0_usize;
@@ -198,6 +218,7 @@ impl XhttpXmuxH2Manager {
             client.connection_task.abort();
             closed = closed.saturating_add(1);
         }
+        self.state_signal.notify();
         closed
     }
 }
@@ -273,9 +294,7 @@ where
                     }
                 };
             }
-            XhttpXmuxH2SelectAction::WaitForOpening => {
-                tokio::time::sleep(RESIDENT_IDLE_SLEEP).await;
-            }
+            XhttpXmuxH2SelectAction::WaitForState(waiter) => waiter.wait().await,
         }
     }
 }
