@@ -1,3 +1,4 @@
+use crate::kernel_program_packet::IPPROTO_FRAGMENT;
 use crate::*;
 
 #[test]
@@ -96,6 +97,49 @@ fn packet_level_golden_parses_ipv6_tcp_udp_extensions_and_ndp_redirect() {
 }
 
 #[test]
+fn packet_level_golden_only_parses_transport_headers_from_initial_fragments() {
+    let udp = udp_header(12_345, 53);
+
+    let initial_ipv4 = ipv4_fragment(IPPROTO_UDP, &udp, 0, true);
+    let report = parse_kernel_program_packet(ETH_HLEN, 0, &ethernet(initial_ipv4));
+    assert_ipv4_transport(&report, IPPROTO_UDP, 12_345, 53);
+
+    let non_initial_ipv4 = ipv4_fragment(IPPROTO_UDP, &udp, 1, false);
+    let report = parse_kernel_program_packet(ETH_HLEN, 0, &ethernet(non_initial_ipv4));
+    assert_eq!(
+        report.disposition,
+        KernelPacketParseDisposition::ChainNextNoDrop
+    );
+    assert_eq!((report.parsed.sport, report.parsed.dport), (0, 0));
+
+    let initial_ipv6 = ipv6_fragment(IPPROTO_UDP, &udp, 0, true);
+    let report = parse_kernel_program_packet(ETH_HLEN, 0, &ethernet_ipv6(initial_ipv6));
+    assert_ipv6_transport(&report, IPPROTO_UDP, 12_345, 53);
+
+    let non_initial_ipv6 = ipv6_fragment(IPPROTO_UDP, &udp, 1, false);
+    let report = parse_kernel_program_packet(ETH_HLEN, 0, &ethernet_ipv6(non_initial_ipv6));
+    assert_eq!(
+        report.disposition,
+        KernelPacketParseDisposition::ChainNextNoDrop
+    );
+    assert_eq!((report.parsed.sport, report.parsed.dport), (0, 0));
+}
+
+#[test]
+fn packet_level_golden_faults_truncated_ipv6_fragment_header_without_drop() {
+    let report = parse_kernel_program_packet(
+        ETH_HLEN,
+        0,
+        &ethernet_ipv6(ipv6(IPPROTO_FRAGMENT, &[IPPROTO_UDP, 0, 0], 0)),
+    );
+    assert_eq!(
+        report.disposition,
+        KernelPacketParseDisposition::FaultNoDrop
+    );
+    assert_eq!((report.parsed.sport, report.parsed.dport), (0, 0));
+}
+
+#[test]
 fn packet_level_golden_passes_unsupported_and_faults_truncated_without_drop() {
     let report = parse_kernel_program_packet(ETH_HLEN, 0, &ethernet_with_proto(0x0806, &[]));
     assert_eq!(
@@ -173,6 +217,13 @@ fn ipv4(proto: u8, payload: &[u8], tos: u8) -> Vec<u8> {
     packet
 }
 
+fn ipv4_fragment(proto: u8, payload: &[u8], fragment_offset: u16, more_fragments: bool) -> Vec<u8> {
+    let mut packet = ipv4(proto, payload, 0);
+    let fragment_field = (fragment_offset & 0x1fff) | if more_fragments { 0x2000 } else { 0 };
+    packet[6..8].copy_from_slice(&fragment_field.to_be_bytes());
+    packet
+}
+
 fn ipv6(nexthdr: u8, payload: &[u8], traffic_class: u8) -> Vec<u8> {
     let mut packet = vec![0u8; 40];
     packet[0] = 0x60 | (traffic_class >> 4);
@@ -184,6 +235,22 @@ fn ipv6(nexthdr: u8, payload: &[u8], traffic_class: u8) -> Vec<u8> {
     packet[24..40].copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
     packet.extend_from_slice(payload);
     packet
+}
+
+fn ipv6_fragment(
+    transport_protocol: u8,
+    payload: &[u8],
+    fragment_offset: u16,
+    more_fragments: bool,
+) -> Vec<u8> {
+    let mut fragment = [0u8; 8];
+    fragment[0] = transport_protocol;
+    let fragment_field = ((fragment_offset & 0x1fff) << 3) | u16::from(more_fragments);
+    fragment[2..4].copy_from_slice(&fragment_field.to_be_bytes());
+    fragment[4..8].copy_from_slice(&0x1234_5678_u32.to_be_bytes());
+    let mut body = fragment.to_vec();
+    body.extend_from_slice(payload);
+    ipv6(IPPROTO_FRAGMENT, &body, 0)
 }
 
 fn tcp_header(sport: u16, dport: u16, flags: u8) -> [u8; 20] {

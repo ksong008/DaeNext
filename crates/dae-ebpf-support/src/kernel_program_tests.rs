@@ -336,12 +336,22 @@ fn kernel_program_production_admission_gate_can_admit_only_after_full_evidence()
 #[test]
 fn kernel_program_parity_evidence_queue_names_packet_and_map_admission_gap() {
     let packet = packet_level_golden_evidence_queue();
-    assert_eq!(packet.len(), 11);
+    assert_eq!(packet.len(), packet_level_golden_cases().len());
     assert!(packet.iter().all(|line| line.check
         == KernelProgramParityCheck::PacketLevelGoldenParity
         && line.status == KernelProgramParityEvidenceStatus::Passed
         && line.required_before_production_admission));
     assert!(packet.iter().any(|line| line.item == "l2_ipv6_udp"));
+    assert!(
+        packet
+            .iter()
+            .any(|line| line.item == "ipv4_non_initial_fragment_pass")
+    );
+    assert!(
+        packet
+            .iter()
+            .any(|line| line.item == "ipv6_non_initial_fragment_pass")
+    );
     assert!(
         packet
             .iter()
