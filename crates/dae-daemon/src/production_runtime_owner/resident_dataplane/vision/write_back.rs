@@ -2,7 +2,7 @@ use super::*;
 pub(crate) async fn write_pending_after_vision_mode_async(
     pending: &mut Vec<u8>,
     client: &mut AsyncVlessTlsClient,
-    stop: &AtomicBool,
+    stop: &ResidentStopSignal,
     mode: VisionUplinkMode,
 ) -> Result<bool, String> {
     match mode {

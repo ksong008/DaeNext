@@ -1,9 +1,6 @@
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -13,6 +10,8 @@ use dae_outbound::{
     vless::{contract::is_xtls_rprx_vision_flow, packet},
     vmess::VMessMetadata,
 };
+
+use super::super::super::{ResidentStopSignal, SharedResidentStopSignal};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::time;
 
@@ -101,7 +100,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                     .await
                     .map_err(NativeTcpProbeError::Open)?;
             let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-            let stop = Arc::new(AtomicBool::new(false));
+            let stop = ResidentStopSignal::shared();
             let relay_stop = Arc::clone(&stop);
             let metrics = ResidentDataplaneMetrics::default();
             let task = tokio::spawn(async move {
@@ -131,7 +130,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
             let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-            let stop = Arc::new(AtomicBool::new(false));
+            let stop = ResidentStopSignal::shared();
             let relay_stop = Arc::clone(&stop);
             let metrics = ResidentDataplaneMetrics::default();
             let task = tokio::spawn(async move {
@@ -167,7 +166,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         .await
         .map_err(NativeTcpProbeError::Open)?;
         let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = ResidentStopSignal::shared();
         let relay_stop = Arc::clone(&stop);
         let metrics = ResidentDataplaneMetrics::default();
         let task = tokio::spawn(async move {
@@ -196,7 +195,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         .map_err(NativeTcpProbeError::Open)?;
     if is_xtls_rprx_vision_flow(&selection.proxy.flow) {
         let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = ResidentStopSignal::shared();
         let relay_stop = Arc::clone(&stop);
         let flow = selection.proxy.flow.clone();
         let metrics = ResidentDataplaneMetrics::default();
@@ -244,7 +243,7 @@ async fn open_vless_meek_native_tcp_tunnel(
     };
     let proxy = Arc::clone(&selection.proxy);
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let task = tokio::spawn(async move {
@@ -267,7 +266,7 @@ async fn relay_tcp_over_vless_meek_native_async(
     proxy: Arc<ResidentProxyPlan>,
     options: MeekRoundTripOptions,
     first_payload: Vec<u8>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<(), String> {
     let mut stripper = VlessResponseStripper::default();
@@ -353,7 +352,7 @@ async fn open_vless_mux_native_tcp_tunnel(
         .map_err(NativeTcpProbeError::Open)?;
 
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let task = tokio::spawn(async move {
@@ -376,7 +375,7 @@ async fn open_vless_xhttp_native_tcp_tunnel(
     request: Vec<u8>,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let task = match selection.proxy.xhttp_mode {

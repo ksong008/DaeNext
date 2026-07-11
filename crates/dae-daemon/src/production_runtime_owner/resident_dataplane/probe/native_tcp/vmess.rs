@@ -1,10 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 use dae_outbound::{shared_transport::HttpUpgradeOptions, vmess::aead_tcp_client_session_start};
 use tokio::io::AsyncWriteExt;
+
+use super::super::super::ResidentStopSignal;
 
 use super::super::super::client::open_async_resident_tls_client_with_flow;
 use super::super::super::direct::DirectTcpRelayStats;
@@ -42,7 +41,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let stats = DirectTcpRelayStats::default();

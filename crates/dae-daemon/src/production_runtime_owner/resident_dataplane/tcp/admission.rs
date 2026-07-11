@@ -20,6 +20,9 @@ impl ResidentTcpAdmission {
     }
 
     pub(super) async fn acquire(&self) -> Result<OwnedSemaphorePermit, String> {
+        if self.permits.available_permits() == 0 {
+            self.metrics.tcp_admission_waited();
+        }
         Arc::clone(&self.permits)
             .acquire_owned()
             .await
@@ -28,10 +31,6 @@ impl ResidentTcpAdmission {
 
     pub(super) fn admitted(&self, permit: OwnedSemaphorePermit) -> ResidentTcpAdmissionGuard {
         ResidentTcpAdmissionGuard::new(permit, Arc::clone(&self.metrics))
-    }
-
-    pub(super) fn record_capacity_wait(&self) {
-        self.metrics.tcp_admission_waited();
     }
 }
 
@@ -68,6 +67,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(metrics.snapshot()["tcpAdmissionActive"], 2);
+        assert_eq!(metrics.snapshot()["tcpAdmissionWaitCycles"], 1);
 
         drop(first);
         let third = time::timeout(Duration::from_secs(1), admission.acquire())

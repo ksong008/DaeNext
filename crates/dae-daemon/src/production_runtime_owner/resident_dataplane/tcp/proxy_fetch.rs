@@ -126,7 +126,7 @@ where
         domain: sniff_domain,
         error: None,
     };
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let handler_stop = Arc::clone(&stop);
     let handler_metrics = Arc::clone(&metrics);

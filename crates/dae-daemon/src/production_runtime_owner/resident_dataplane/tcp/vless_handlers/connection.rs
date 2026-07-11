@@ -4,7 +4,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
@@ -165,7 +165,7 @@ pub(crate) async fn handle_vless_plain_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
@@ -216,7 +216,7 @@ pub(crate) async fn handle_vless_plain_tcp_connection_async(
 pub(crate) async fn relay_tcp_over_vless_plain_async(
     inbound: &mut TokioTcpStream,
     proxy: &mut TokioTcpStream,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     initial_payload: &[u8],
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
@@ -308,7 +308,7 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
@@ -370,7 +370,7 @@ fn resident_mux_stream_id(original_dst: SocketAddr) -> [u8; 2] {
 pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncVlessTlsClient,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     mux_id: [u8; 2],
     initial_payload: &[u8],
     metrics: &ResidentDataplaneMetrics,
@@ -566,7 +566,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
@@ -638,7 +638,7 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
@@ -706,7 +706,7 @@ pub(crate) async fn handle_vless_meek_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {

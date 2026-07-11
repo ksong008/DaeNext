@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -70,6 +70,9 @@ pub(crate) use self::defaults::*;
 #[path = "runtime/runtime.rs"]
 mod runtime;
 pub(super) use self::runtime::*;
+#[path = "runtime/stop_signal.rs"]
+mod stop_signal;
+pub(crate) use self::stop_signal::*;
 #[path = "runtime/group_selector_summary.rs"]
 mod group_selector_summary;
 pub(super) use self::group_selector_summary::*;

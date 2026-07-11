@@ -1,6 +1,5 @@
 use super::*;
 pub(crate) const VLESS_RESPONSE_VERSION: u8 = 0;
-pub(crate) const RESIDENT_TCP_ACCEPT_SLEEP: Duration = Duration::from_millis(20);
 pub(crate) const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
 pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);

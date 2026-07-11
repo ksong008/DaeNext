@@ -3,7 +3,7 @@ use super::*;
 pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_tls_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     target: &str,
     cipher: &str,
     password: &str,

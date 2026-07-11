@@ -2,7 +2,7 @@ use super::*;
 pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncVlessTlsClient,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     initial_payload_len: usize,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
@@ -93,7 +93,7 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
 pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncResidentTlsClient,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut stats = DirectTcpRelayStats::default();

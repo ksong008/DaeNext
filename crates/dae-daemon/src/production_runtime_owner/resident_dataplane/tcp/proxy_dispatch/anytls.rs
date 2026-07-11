@@ -5,7 +5,7 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     auth: &str,
@@ -153,7 +153,7 @@ pub(crate) async fn wait_anytls_synack(
 pub(crate) async fn relay_tcp_over_anytls_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncResidentTlsClient,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sid: u32,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {

@@ -16,7 +16,7 @@ impl HealthCheckRoundStatus {
 
 pub(super) async fn run_resident_group_health_check_round_async(
     group: Arc<plan::ResidentProxyGroupPlan>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     concurrency: usize,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
@@ -42,7 +42,7 @@ async fn run_resident_group_health_checks_concurrent_async(
     group: Arc<plan::ResidentProxyGroupPlan>,
     candidates: &[plan::ResidentProxyProbePlan],
     concurrency: usize,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -77,14 +77,14 @@ pub(crate) async fn run_resident_group_health_checks_async(
     group: &plan::ResidentProxyGroupPlan,
     candidates: &[plan::ResidentProxyProbePlan],
 ) {
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let _ = run_resident_group_health_checks_until_stopped(group, candidates, stop).await;
 }
 
 async fn run_resident_group_health_checks_until_stopped(
     group: &plan::ResidentProxyGroupPlan,
     candidates: &[plan::ResidentProxyProbePlan],
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
 ) -> HealthCheckRoundStatus {
     for candidate in candidates {
         if stop.load(Ordering::Relaxed) {
@@ -103,7 +103,7 @@ async fn run_resident_group_health_checks_until_stopped(
 async fn run_resident_candidate_health_check_until_stopped(
     group: &plan::ResidentProxyGroupPlan,
     candidate: &plan::ResidentProxyProbePlan,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -178,7 +178,7 @@ fn record_resident_candidate_health_result(
     true
 }
 
-async fn wait_until_stopped_async(stop: Arc<AtomicBool>) {
+async fn wait_until_stopped_async(stop: SharedResidentStopSignal) {
     while !stop.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -671,7 +671,8 @@ mod tests {
         let candidates = group.probe_candidates();
         assert!(!candidates.is_empty());
 
-        let stop = Arc::new(AtomicBool::new(true));
+        let stop = ResidentStopSignal::shared();
+        stop.store(true, Ordering::Relaxed);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()

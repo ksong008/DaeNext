@@ -6,7 +6,7 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
@@ -94,7 +94,7 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
 pub(crate) async fn relay_tcp_shadowsocksr_stream_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
     encoder: &mut ShadowsocksRStreamEncoder,
     decoder: &mut ShadowsocksRStreamDecoder,

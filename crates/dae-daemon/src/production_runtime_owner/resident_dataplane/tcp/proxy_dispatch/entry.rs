@@ -4,7 +4,7 @@ pub(crate) async fn handle_frame_tls_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {

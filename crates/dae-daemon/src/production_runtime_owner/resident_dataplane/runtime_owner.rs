@@ -7,7 +7,7 @@ use self::shutdown::shutdown_resident_runtime_owner;
 use self::task::*;
 
 pub(crate) struct ResidentRuntimeOwner {
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     tasks: Vec<ResidentRuntimeTask>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
@@ -54,7 +54,7 @@ impl ResidentRuntimeOwner {
             resource_config.event_queue_depth.value(),
         );
         Self {
-            stop: Arc::new(AtomicBool::new(false)),
+            stop: ResidentStopSignal::shared(),
             tasks: Vec::new(),
             event_file,
             event_lock,
@@ -66,7 +66,7 @@ impl ResidentRuntimeOwner {
         }
     }
 
-    pub(crate) fn stop_handle(&self) -> Arc<AtomicBool> {
+    pub(crate) fn stop_handle(&self) -> SharedResidentStopSignal {
         Arc::clone(&self.stop)
     }
 

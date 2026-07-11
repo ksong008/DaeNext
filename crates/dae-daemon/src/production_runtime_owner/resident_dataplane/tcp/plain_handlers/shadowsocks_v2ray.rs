@@ -5,7 +5,7 @@ pub(crate) async fn handle_shadowsocks_v2ray_plugin_tls_ws_proxy_tcp_connection_
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,

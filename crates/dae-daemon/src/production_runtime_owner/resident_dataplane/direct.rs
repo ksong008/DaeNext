@@ -1,9 +1,6 @@
 use std::io::{self, ErrorKind};
 use std::net::{SocketAddr, TcpStream};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use dae_datapath::{
@@ -13,9 +10,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::time;
 
+#[cfg(test)]
+use super::ResidentStopSignal;
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT, ResidentDataplaneMetrics,
-    resolve_socket_addr_candidates, try_socket_addr_candidates,
+    SharedResidentStopSignal, resolve_socket_addr_candidates, try_socket_addr_candidates,
 };
 
 #[derive(Debug)]
@@ -124,7 +123,7 @@ async fn resolve_direct_tcp_targets_async(dial_target: &str) -> Result<Vec<Socke
 pub(super) async fn relay_tcp_direct_async(
     inbound: &mut TokioTcpStream,
     direct: &mut TokioTcpStream,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     initial_payload: &[u8],
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
@@ -202,10 +201,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::{IpAddr, TcpListener};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
+    use std::sync::{Arc, atomic::Ordering};
     use std::thread;
     use std::time::Duration;
 
@@ -273,7 +269,7 @@ mod tests {
 
         let mut inbound = TokioTcpStream::from_std(inbound).unwrap();
         let mut direct = TokioTcpStream::from_std(direct).unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = ResidentStopSignal::shared();
         let metrics = ResidentDataplaneMetrics::default();
         let stats = relay_tcp_direct_async(
             &mut inbound,

@@ -42,7 +42,7 @@ impl Drop for ResidentHealthRoundGuard {
 
 pub(super) async fn run_resident_health_group_schedule(
     group: Arc<plan::ResidentProxyGroupPlan>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     mut stop_rx: watch::Receiver<bool>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
@@ -95,7 +95,7 @@ pub(super) async fn run_resident_health_group_schedule(
 pub(super) async fn run_resident_health_resuscitation_dispatcher(
     proxy_groups: SharedResidentProxyGroupMap,
     mut receiver: Receiver<ResidentHealthResuscitationRequest>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     mut stop_rx: watch::Receiver<bool>,
     metrics: Arc<ResidentDataplaneMetrics>,
     concurrency: usize,
@@ -127,7 +127,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
 }
 
 pub(super) async fn run_resident_health_stop_monitor(
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     stop_tx: watch::Sender<bool>,
 ) {
     while !stop.load(Ordering::Relaxed) {
@@ -138,7 +138,7 @@ pub(super) async fn run_resident_health_stop_monitor(
 
 async fn run_resident_health_round(
     group: Arc<plan::ResidentProxyGroupPlan>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     metrics: Arc<ResidentDataplaneMetrics>,
     concurrency: usize,
 ) -> HealthCheckRoundStatus {

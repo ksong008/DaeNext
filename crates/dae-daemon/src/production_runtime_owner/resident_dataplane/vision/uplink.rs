@@ -5,7 +5,7 @@ use super::*;
 pub(crate) async fn drain_vision_uplink_async(
     pending: &mut Vec<u8>,
     client: &mut AsyncVlessTlsClient,
-    stop: &AtomicBool,
+    stop: &ResidentStopSignal,
     user_uuid: [u8; 16],
     uuid_sent: &mut bool,
     first_block: &mut bool,
