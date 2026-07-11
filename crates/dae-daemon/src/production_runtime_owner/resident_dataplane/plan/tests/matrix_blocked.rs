@@ -214,7 +214,19 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     assert_eq!(mux_graph["packetSemantics"], "multiplexed-stream");
     assert_eq!(
         mux_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
-        "resident-shared-mux-stream"
+        "resident-vless-mux-framing"
+    );
+    assert_eq!(
+        mux_graph["runtimeComponents"]["streamWrapperFactory"]["runtimeLimits"]["carrierScope"],
+        "per-flow-tls-carrier"
+    );
+    assert_eq!(
+        mux_graph["runtimeComponents"]["streamWrapperFactory"]["runtimeLimits"]["logicalStreamsPerCarrier"],
+        1
+    );
+    assert_eq!(
+        mux_graph["runtimeComponents"]["streamWrapperFactory"]["runtimeLimits"]["crossFlowCarrierReuse"],
+        false
     );
 
     let tls_fragment_config = parse_config(

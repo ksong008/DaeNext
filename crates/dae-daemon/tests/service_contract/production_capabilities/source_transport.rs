@@ -389,6 +389,30 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .as_bool()
             .unwrap()
     );
+    assert!(
+        report["stream_wrapper_runtime_limits_visible"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["stream_wrapper_capability_typed_report"]["runtime_limits_visible"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["stream_wrapper_full_fidelity_and_pooling_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["stream_wrapper_capability_typed_report"]["full_fidelity_and_pooling_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["stream_wrapper_capability_typed_report"]["status"],
+        "scoped"
+    );
     assert_eq!(
         report["stream_wrapper_capability_report_schema"]
             .as_str()

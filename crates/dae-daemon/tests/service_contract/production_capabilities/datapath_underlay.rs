@@ -143,6 +143,22 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .unwrap(),
         0
     );
+    assert_eq!(
+        report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["supported_fingerprints"],
+        45
+    );
+    assert_eq!(
+        report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["exact_fixtures"],
+        16
+    );
+    assert_eq!(
+        report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["family_approximations"],
+        25
+    );
+    assert_eq!(
+        report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["randomized"],
+        4
+    );
     let template_modes = report["outbound_fingerprint_underlay_typed_report"]["template_modes"]
         .as_array()
         .unwrap();

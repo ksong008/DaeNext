@@ -7,6 +7,9 @@ use super::{
     ResidentXhttpSettingsPlan, resident_udp_chain_admission,
 };
 
+mod runtime_limits;
+use self::runtime_limits::*;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecutableGraphDescriptor
 {
@@ -33,6 +36,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
     chain_parent_count: usize,
     udp_chain_admission: ResidentUdpChainAdmission,
+    quic_per_flow: bool,
     mark: u32,
     mptcp: bool,
 }
@@ -70,6 +74,7 @@ impl ResidentExecutableGraphDescriptor {
             utls_fingerprint: proxy.utls_fingerprint.clone(),
             chain_parent_count: chain_parent_count(proxy),
             udp_chain_admission: resident_udp_chain_admission(proxy),
+            quic_per_flow: is_quic_handler(&proxy.handler),
             mark: proxy.mark,
             mptcp: proxy.mptcp,
         }
@@ -184,6 +189,8 @@ impl ResidentExecutableGraphDescriptor {
                 "randomized": fingerprint.randomized,
                 "alpnPolicy": &fingerprint.alpn_policy,
                 "defaultAlpn": &fingerprint.default_alpn,
+                "templateMode": fingerprint_template_mode_label(fingerprint),
+                "fullUtlsParityDeclared": false,
             })
         });
         let reality_with_fingerprint =
@@ -226,6 +233,7 @@ impl ResidentExecutableGraphDescriptor {
             "alpn": self.alpn,
             "flow": self.flow,
             "fingerprint": fingerprint,
+            "quicLifecycle": quic_lifecycle_value(self.quic_per_flow),
             "unsupportedReason": unsupported_reason,
         })
     }
@@ -241,7 +249,7 @@ impl ResidentExecutableGraphDescriptor {
             "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
             "h2" => ("admitted", "resident-http2-body-stream", Value::Null),
             "meek" => ("admitted", "resident-meek-polling", Value::Null),
-            "mux" => ("admitted", "resident-shared-mux-stream", Value::Null),
+            "mux" => ("admitted", "resident-vless-mux-framing", Value::Null),
             "xhttp" => (
                 "admitted",
                 self.xhttp_http_version().provider_for_mode(self.xhttp_mode),
@@ -271,6 +279,7 @@ impl ResidentExecutableGraphDescriptor {
                 "path": self.stream_path,
             },
             "protocolFraming": self.protocol_framing,
+            "runtimeLimits": stream_wrapper_runtime_limits_value(&self.stream_wrapper),
             "xhttpMode": if self.stream_wrapper == "xhttp" {
                 json!(self.xhttp_mode.as_str())
             } else {
@@ -334,9 +343,9 @@ impl ResidentExecutableGraphDescriptor {
             "cleanupPolicy": "drop-on-graph-diff-or-runtime-stop",
             "sharedProviderCaches": [
                 "tls-client-config",
-                "fingerprint-aware-tls-connector",
-                "quic-client-config"
+                "fingerprint-aware-tls-connector"
             ],
+            "perFlowProviders": per_flow_provider_labels(self.quic_per_flow),
         })
     }
 

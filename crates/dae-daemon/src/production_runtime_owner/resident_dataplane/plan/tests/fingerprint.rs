@@ -74,10 +74,41 @@ pub(super) fn resident_dataplane_plan_carries_generic_link_fingerprint() {
     assert!(plan.enabled);
     assert_eq!(proxy.node_tag, "vless_live");
     assert_eq!(proxy.flow, XTLS_RPRX_VISION);
+    let graph = proxy.executable_graph_value();
+    assert_eq!(
+        graph["runtimeComponents"]["underlayFactory"]["fingerprint"]["templateMode"],
+        "ExactFixture"
+    );
+    assert_eq!(
+        graph["runtimeComponents"]["underlayFactory"]["fingerprint"]["fullUtlsParityDeclared"],
+        false
+    );
     let utls = proxy.utls_fingerprint.unwrap();
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "safari_16_0");
     assert_eq!(utls.family, "safari");
+}
+
+#[test]
+pub(super) fn resident_dataplane_graph_reports_non_exact_fingerprint_modes() {
+    for (fingerprint, expected_mode) in [
+        ("chrome_58", "FamilyApproximation"),
+        ("randomized", "Randomized"),
+    ] {
+        let proxy = default_proxy_for_source("", vless_vision_fixture_url(fingerprint));
+        let graph = proxy.executable_graph_value();
+
+        assert_eq!(
+            graph["runtimeComponents"]["underlayFactory"]["fingerprint"]["templateMode"],
+            expected_mode,
+            "{fingerprint}"
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["underlayFactory"]["fingerprint"]["fullUtlsParityDeclared"],
+            false,
+            "{fingerprint}"
+        );
+    }
 }
 
 #[test]
