@@ -174,6 +174,7 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
     assert_eq!(value["job"]["total"].as_u64(), Some(2));
     assert_eq!(value["job"]["completed"].as_u64(), Some(0));
     assert_eq!(value["job"]["status"].as_str(), Some("queued"));
+    assert_eq!(value["job"]["persistPending"].as_u64(), Some(0));
 
     let mut current = current_node_latency_job_value(&jobs);
     for _ in 0..50 {
@@ -193,6 +194,7 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
     );
     assert_eq!(current["job"]["total"].as_u64(), Some(2));
     assert_eq!(current["job"]["completed"].as_u64(), Some(2));
+    assert_eq!(current["job"]["persistPending"].as_u64(), Some(0));
     assert_eq!(
         list_stored_node_latencies_value(&state).unwrap()["items"]
             .as_array()

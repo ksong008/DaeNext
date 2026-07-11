@@ -1,5 +1,6 @@
 mod helper;
 mod jobs;
+mod persistence;
 mod runtime_snapshots;
 mod storage;
 
