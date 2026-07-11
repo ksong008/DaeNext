@@ -136,10 +136,6 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let conn = match open_state_connection(state) {
-        Ok(conn) => conn,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    };
     let link = body.get("link").and_then(Value::as_str);
     let tag_present = body.get("tag").is_some();
     let tag = body.get("tag").and_then(Value::as_str);
@@ -157,7 +153,19 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
         .get("useProxy")
         .and_then(Value::as_bool)
         .map(|value| value as i64);
-    if let Err(err) = conn.execute(
+    let _guard = match subscription_write_guard() {
+        Ok(guard) => guard,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    let mut conn = match open_state_connection(state) {
+        Ok(conn) => conn,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    let tx = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(tx) => tx,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    let updated = match tx.execute(
         "UPDATE subscriptions
          SET link = COALESCE(?1, link),
              tag = CASE WHEN ?2 THEN ?3 ELSE tag END,
@@ -177,8 +185,17 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
             id
         ],
     ) {
-        return HttpResponse::json(400, json!({"error": err.to_string()}));
+        Ok(updated) => updated,
+        Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
+    };
+    if updated == 0 {
+        return HttpResponse::json(404, json!({"error": "subscription not found"}));
     }
+    if let Err(err) = tx.commit() {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
+    drop(conn);
+    drop(_guard);
     get_subscription(state, id)
 }
 
@@ -349,12 +366,12 @@ pub(crate) fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
         let removed = tx
             .execute("DELETE FROM subscriptions WHERE id = ?1", params![id])
             .map_err(sqlite_io_error)?;
+        if removed > 0 {
+            bump_runtime_external_input_version_with_connection(&tx)?;
+        }
         tx.commit().map_err(sqlite_io_error)?;
         removed
     };
-    if removed > 0 {
-        let _ = bump_runtime_external_input_version(state)?;
-    }
     Ok(removed)
 }
 
