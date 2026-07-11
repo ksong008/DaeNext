@@ -58,6 +58,42 @@ impl DomainRoutingTracker {
         }
     }
 
+    pub(super) fn plan_transition(&self, next: &Self) -> DomainRoutingSyncPlan {
+        let mut affected = self
+            .ips
+            .keys()
+            .chain(next.ips.keys())
+            .copied()
+            .collect::<Vec<_>>();
+        affected.sort_unstable();
+        affected.dedup();
+
+        let mut updates = Vec::new();
+        let mut deletes = Vec::new();
+        for key in affected {
+            match (self.ips.get(&key), next.ips.get(&key)) {
+                (Some(current), Some(next)) if current.merged != next.merged => {
+                    updates.push(DomainRoutingStateEntry {
+                        key,
+                        bitmap: next.merged,
+                    });
+                }
+                (None, Some(next)) => updates.push(DomainRoutingStateEntry {
+                    key,
+                    bitmap: next.merged,
+                }),
+                (Some(_), None) => deletes.push(key),
+                _ => {}
+            }
+        }
+        DomainRoutingSyncPlan {
+            updates,
+            deletes,
+            owner_count: next.owners.len(),
+            ip_count: next.ips.len(),
+        }
+    }
+
     pub fn apply_owner_update(
         &mut self,
         owner_key: &str,
