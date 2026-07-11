@@ -5,6 +5,10 @@ pub(crate) struct ResidentDataplaneMetrics {
     pub(super) download_total: AtomicU64,
     pub(super) active_tcp_connections: AtomicU64,
     pub(super) active_udp_sessions: AtomicU64,
+    udp_ingress_packets: AtomicU64,
+    udp_ingress_drain_batches: AtomicU64,
+    udp_ingress_drain_budget_hits: AtomicU64,
+    udp_ingress_truncated: AtomicU64,
 }
 
 impl ResidentDataplaneMetrics {
@@ -33,12 +37,34 @@ impl ResidentDataplaneMetrics {
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
+    pub(super) fn record_udp_ingress_batch(
+        &self,
+        packets: usize,
+        truncated: usize,
+        budget_hit: bool,
+    ) {
+        self.udp_ingress_packets
+            .fetch_add(packets as u64, Ordering::Relaxed);
+        self.udp_ingress_truncated
+            .fetch_add(truncated as u64, Ordering::Relaxed);
+        self.udp_ingress_drain_batches
+            .fetch_add(1, Ordering::Relaxed);
+        if budget_hit {
+            self.udp_ingress_drain_budget_hits
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     pub(super) fn snapshot(&self) -> Value {
         json!({
             "uploadTotal": self.upload_total.load(Ordering::Relaxed),
             "downloadTotal": self.download_total.load(Ordering::Relaxed),
             "activeTcpConnections": self.active_tcp_connections.load(Ordering::Relaxed),
             "activeUdpSessions": self.active_udp_sessions.load(Ordering::Relaxed),
+            "udpIngressPackets": self.udp_ingress_packets.load(Ordering::Relaxed),
+            "udpIngressDrainBatches": self.udp_ingress_drain_batches.load(Ordering::Relaxed),
+            "udpIngressDrainBudgetHits": self.udp_ingress_drain_budget_hits.load(Ordering::Relaxed),
+            "udpIngressTruncated": self.udp_ingress_truncated.load(Ordering::Relaxed),
         })
     }
 }
