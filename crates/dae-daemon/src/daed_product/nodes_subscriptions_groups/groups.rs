@@ -106,6 +106,12 @@ fn runtime_selection_field(runtime_selection: Option<&Value>, field: &str) -> Va
 
 pub(crate) fn list_groups_value(state: &Path) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
+    list_groups_value_with_connection(&conn)
+}
+
+pub(in crate::daed_product) fn list_groups_value_with_connection(
+    conn: &Connection,
+) -> io::Result<Value> {
     let mut stmt = conn
         .prepare("SELECT id FROM groups ORDER BY id")
         .map_err(sqlite_io_error)?;
@@ -118,7 +124,7 @@ pub(crate) fn list_groups_value(state: &Path) -> io::Result<Value> {
     }
     let mut items = Vec::new();
     for id in ids {
-        if let Some(group) = get_group_value_with_conn(&conn, id)? {
+        if let Some(group) = get_group_value_with_conn(conn, id)? {
             items.push(group);
         }
     }

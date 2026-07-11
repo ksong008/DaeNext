@@ -2,7 +2,20 @@ use super::*;
 
 pub(in crate::daed_product) fn api_get_bundle(app: &AppState, user: &UserRecord) -> HttpResponse {
     match export_bundle(&app.state, user) {
-        Ok(value) => HttpResponse::json(200, value),
+        Ok(value) => {
+            let response = HttpResponse::json(200, value);
+            if response.body.len() <= MAX_BUNDLE_BODY_BYTES {
+                response
+            } else {
+                HttpResponse::json(
+                    413,
+                    json!({
+                        "error": "exported bundle exceeds the supported round-trip size",
+                        "maxBytes": MAX_BUNDLE_BODY_BYTES,
+                    }),
+                )
+            }
+        }
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }

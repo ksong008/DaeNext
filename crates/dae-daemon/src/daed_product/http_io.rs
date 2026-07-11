@@ -71,10 +71,10 @@ pub(super) fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpReques
             ));
         }
         buffer.extend_from_slice(&temp[..read]);
-        if buffer.len() > MAX_BODY_BYTES + 8192 {
+        if buffer.len() > MAX_HTTP_HEADER_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "request is too large",
+                "request headers are too large",
             ));
         }
         if let Some(index) = find_subsequence(&buffer, b"\r\n\r\n") {
@@ -108,7 +108,8 @@ pub(super) fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpReques
         .get("content-length")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0);
-    if content_length > MAX_BODY_BYTES {
+    let body_limit = request_body_limit(&method, &raw_path);
+    if content_length > body_limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "body is too large",
@@ -133,6 +134,18 @@ pub(super) fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpReques
         headers,
         body,
     })
+}
+
+fn request_body_limit(method: &str, raw_path: &str) -> usize {
+    let path = raw_path
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(raw_path);
+    if method == "PUT" && path == DAE_BUNDLE_IMPORT_PATH {
+        MAX_BUNDLE_BODY_BYTES
+    } else {
+        MAX_BODY_BYTES
+    }
 }
 
 pub(super) fn write_http_response(

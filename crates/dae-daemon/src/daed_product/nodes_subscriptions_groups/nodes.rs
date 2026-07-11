@@ -47,12 +47,26 @@ pub(crate) fn list_nodes_value(state: &Path, subscription_id: Option<i64>) -> io
     list_nodes_by_scope(state, scope)
 }
 
+#[cfg(test)]
 pub(crate) fn list_all_nodes_value(state: &Path) -> io::Result<Value> {
     list_nodes_by_scope(state, NodeListScope::All)
 }
 
 pub(crate) fn list_nodes_by_scope(state: &Path, scope: NodeListScope) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
+    list_nodes_by_scope_with_connection(&conn, scope)
+}
+
+pub(in crate::daed_product) fn list_all_nodes_value_with_connection(
+    conn: &Connection,
+) -> io::Result<Value> {
+    list_nodes_by_scope_with_connection(conn, NodeListScope::All)
+}
+
+fn list_nodes_by_scope_with_connection(
+    conn: &Connection,
+    scope: NodeListScope,
+) -> io::Result<Value> {
     let mut items = Vec::new();
     match scope {
         NodeListScope::Independent => {
