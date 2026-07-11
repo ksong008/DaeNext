@@ -59,101 +59,27 @@ pub(super) fn mime_for_path(path: &Path) -> &'static str {
     }
 }
 
-pub(super) fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
-    let mut buffer = Vec::new();
-    let mut temp = [0_u8; 4096];
-    let header_end = loop {
-        let read = stream.read(&mut temp)?;
-        if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "connection closed",
-            ));
-        }
-        buffer.extend_from_slice(&temp[..read]);
-        if buffer.len() > MAX_HTTP_HEADER_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "request headers are too large",
-            ));
-        }
-        if let Some(index) = find_subsequence(&buffer, b"\r\n\r\n") {
-            break index + 4;
-        }
-    };
-    let headers_text = String::from_utf8_lossy(&buffer[..header_end]);
-    let mut lines = headers_text.split("\r\n");
-    let request_line = lines
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request line"))?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing method"))?
-        .to_owned();
-    let raw_path = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing path"))?;
-    let raw_path = raw_path.to_owned();
-    let mut headers = HashMap::new();
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-        if let Some((key, value)) = line.split_once(':') {
-            headers.insert(key.trim().to_ascii_lowercase(), value.trim().to_owned());
-        }
-    }
-    let content_length = headers
-        .get("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    let body_limit = request_body_limit(&method, &raw_path);
-    if content_length > body_limit {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "body is too large",
-        ));
-    }
-    while buffer.len() < header_end + content_length {
-        let read = stream.read(&mut temp)?;
-        if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "body truncated",
-            ));
-        }
-        buffer.extend_from_slice(&temp[..read]);
-    }
-    let body = buffer[header_end..header_end + content_length].to_vec();
-    let (path, query) = split_path_query(&raw_path);
-    Ok(HttpRequest {
-        method,
-        path,
-        query,
-        headers,
-        body,
-    })
-}
-
-fn request_body_limit(method: &str, raw_path: &str) -> usize {
-    let path = raw_path
-        .split_once('?')
-        .map(|(path, _)| path)
-        .unwrap_or(raw_path);
-    if method == "PUT" && path == DAE_BUNDLE_IMPORT_PATH {
-        MAX_BUNDLE_BODY_BYTES
-    } else {
-        MAX_BODY_BYTES
-    }
-}
-
 pub(super) fn write_http_response(
     stream: &mut TcpStream,
     response: &HttpResponse,
     head_only: bool,
 ) -> io::Result<()> {
-    write_http_response_with_origin(stream, None, response, head_only)
+    write_http_response_with_origin_and_timeout(
+        stream,
+        None,
+        response,
+        head_only,
+        PRODUCT_HTTP_RESPONSE_WRITE_TIMEOUT,
+    )
+}
+
+pub(in crate::daed_product) fn write_http_response_with_timeout(
+    stream: &mut TcpStream,
+    response: &HttpResponse,
+    head_only: bool,
+    timeout: Duration,
+) -> io::Result<()> {
+    write_http_response_with_origin_and_timeout(stream, None, response, head_only, timeout)
 }
 
 pub(super) fn write_http_response_for_request(
@@ -162,11 +88,12 @@ pub(super) fn write_http_response_for_request(
     response: &HttpResponse,
     head_only: bool,
 ) -> io::Result<()> {
-    write_http_response_with_origin(
+    write_http_response_with_origin_and_timeout(
         stream,
         request.headers.get("origin").map(String::as_str),
         response,
         head_only,
+        PRODUCT_HTTP_RESPONSE_WRITE_TIMEOUT,
     )
 }
 
@@ -183,15 +110,17 @@ pub(in crate::daed_product) fn write_cors_headers(
     Ok(())
 }
 
-fn write_http_response_with_origin(
+fn write_http_response_with_origin_and_timeout(
     stream: &mut TcpStream,
     origin: Option<&str>,
     response: &HttpResponse,
     head_only: bool,
+    timeout: Duration,
 ) -> io::Result<()> {
+    let mut head = Vec::with_capacity(512);
     let reason = status_reason(response.status);
     write!(
-        stream,
+        head,
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
         response.status,
         reason,
@@ -200,18 +129,57 @@ fn write_http_response_with_origin(
     )?;
     if let Some(origin) = origin.and_then(allowed_cors_origin_value) {
         write!(
-            stream,
+            head,
             "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\nAccess-Control-Max-Age: 300\r\n",
         )?;
     }
     for (key, value) in &response.extra_headers {
-        write!(stream, "{key}: {value}\r\n")?;
+        write!(head, "{key}: {value}\r\n")?;
     }
-    write!(stream, "\r\n")?;
+    write!(head, "\r\n")?;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    write_all_with_deadline(stream, &head, deadline)?;
     if !head_only {
-        stream.write_all(&response.body)?;
+        write_all_with_deadline(stream, &response.body, deadline)?;
     }
+    stream.set_write_timeout(Some(socket_timeout_until(
+        deadline,
+        "HTTP response write deadline exceeded",
+    )?))?;
     stream.flush()
+}
+
+fn write_all_with_deadline(
+    stream: &mut TcpStream,
+    mut bytes: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    while !bytes.is_empty() {
+        stream.set_write_timeout(Some(socket_timeout_until(
+            deadline,
+            "HTTP response write deadline exceeded",
+        )?))?;
+        match stream.write(bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write HTTP response",
+                ));
+            }
+            Ok(written) => bytes = &bytes[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if is_socket_timeout(&error) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "HTTP response write deadline exceeded",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 pub(in crate::daed_product) fn allowed_cors_origin(request: &HttpRequest) -> Option<&str> {
@@ -487,8 +455,10 @@ pub(super) fn status_reason(status: u16) -> &'static str {
         401 => "Unauthorized",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        429 => "Too Many Requests",
         500 => "Internal Server Error",
-        _ => "OK",
+        503 => "Service Unavailable",
+        _ => "Unknown Status",
     }
 }
 

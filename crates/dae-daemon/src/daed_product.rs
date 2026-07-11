@@ -66,6 +66,15 @@ const LEGACY_IMPORT_STATE_STORE: &str = crate::service_contract::DAED_LEGACY_IMP
 const MAX_BODY_BYTES: usize = 1 << 20;
 const MAX_BUNDLE_BODY_BYTES: usize = 16 << 20;
 const MAX_HTTP_HEADER_BYTES: usize = 64 << 10;
+const MAX_HTTP_HEADER_COUNT: usize = 128;
+const PRODUCT_HTTP_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const PRODUCT_HTTP_HEADER_RATE_GRACE: Duration = Duration::from_secs(2);
+const PRODUCT_HTTP_HEADER_MIN_BYTES_PER_SECOND: usize = 64;
+const PRODUCT_HTTP_BODY_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const PRODUCT_HTTP_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const PRODUCT_HTTP_BUNDLE_BODY_READ_TIMEOUT: Duration = Duration::from_secs(300);
+const PRODUCT_HTTP_RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+const PRODUCT_HTTP_REJECT_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 const DAE_BUNDLE_IMPORT_PATH: &str = "/api/user/me/dae-bundle";
 const TOKEN_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 const STATE_DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -723,6 +732,8 @@ mod common_helpers;
 use self::common_helpers::*;
 mod auth_storage;
 use self::auth_storage::*;
+mod http_request;
+use self::http_request::*;
 mod http_io;
 use self::http_io::*;
 #[cfg(test)]
