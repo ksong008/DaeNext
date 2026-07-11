@@ -19,7 +19,6 @@ use super::super::super::plan::{
     ResidentProxySelection, effective_so_mark_from_dae, resident_data_udp_network_type,
     resident_udp_check_network_type,
 };
-use super::resuscitation::ResidentUdpResuscitatorHandle;
 use super::*;
 
 const BPF_L4_UDP: u8 = 17;
@@ -32,7 +31,7 @@ pub(super) struct ResidentUdpRouter {
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
     so_mark_from_dae: u32,
-    resuscitator: Option<ResidentUdpResuscitatorHandle>,
+    resuscitator: Option<ResidentHealthResuscitationHandle>,
 }
 
 impl ResidentUdpRouter {
@@ -43,7 +42,7 @@ impl ResidentUdpRouter {
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         so_mark_from_dae: u32,
-        resuscitator: ResidentUdpResuscitatorHandle,
+        resuscitator: ResidentHealthResuscitationHandle,
     ) -> Result<Self, String> {
         let routing_tuple_map_id = routing_tuple_map_id.ok_or_else(|| {
             "resident UDP router needs routing_tuples_map id for compatible per-packet outbound selection"
@@ -116,7 +115,7 @@ impl ResidentUdpRouter {
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         so_mark_from_dae: u32,
-        resuscitator: Option<ResidentUdpResuscitatorHandle>,
+        resuscitator: Option<ResidentHealthResuscitationHandle>,
     ) -> Result<Self, String> {
         if proxy_groups.is_empty() {
             return Err("resident UDP router needs at least one proxy outbound".to_owned());

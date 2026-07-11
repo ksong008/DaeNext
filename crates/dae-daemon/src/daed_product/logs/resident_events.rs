@@ -30,6 +30,8 @@ pub(crate) fn resident_event_hidden_from_product_log(event_name: &str) -> bool {
             | "tcp_worker_stopped"
             | "udp_session_manager_started"
             | "udp_session_manager_stopped"
+            | "resident_health_scheduler_started"
+            | "resident_health_scheduler_stopped"
             | "resident_health_checker_started"
     )
 }

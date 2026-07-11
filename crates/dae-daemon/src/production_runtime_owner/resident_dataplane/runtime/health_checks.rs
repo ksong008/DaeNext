@@ -1,116 +1,22 @@
 use super::*;
 use crate::allocator::{AllocatorReclaimReason, allocator_reclaim};
-use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 
-const RESIDENT_HEALTH_INITIAL_JITTER_CEILING: Duration = Duration::from_secs(5);
-
-pub(crate) fn resident_group_health_check_loop(
-    group: Arc<plan::ResidentProxyGroupPlan>,
-    stop: Arc<AtomicBool>,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    concurrency: usize,
-) {
-    let interval = group.check_interval();
-    let concurrency = concurrency.max(1);
-    let initial_jitter =
-        resident_health_initial_jitter(&group.group_name, group.candidate_count(), interval);
-    append_event(
-        &event_file,
-        &event_lock,
-        json!({
-            "event": "resident_health_checker_started",
-            "group": group.group_name,
-            "group_policy": group.group_policy_name(),
-            "candidate_count": group.candidate_count(),
-            "admitted_candidate_count": group.admitted_candidate_count(),
-            "check_interval": format!("{interval:?}"),
-            "concurrency": concurrency,
-            "initial_jitter": format!("{initial_jitter:?}"),
-            "probe": "tokio-proxy-tcp-and-dns-udp-check",
-            "tcp_probe_executor": "tokio-proxy-tcp-probe",
-            "udp_probe_executor": "tokio-proxy-packet-dns-probe",
-            "tcp_check_target": group.tcp_check.target.clone(),
-            "udp_check_target": group.udp_check.target.authority().to_owned(),
-        }),
-    );
-    if !initial_jitter.is_zero() && sleep_until_stopped(&stop, initial_jitter) {
-        return;
-    }
-    if run_resident_group_health_check_round(
-        Arc::clone(&group),
-        Arc::clone(&stop),
-        &event_file,
-        &event_lock,
-        concurrency,
-    )
-    .is_cancelled()
-    {
-        return;
-    }
-    loop {
-        if interval.is_zero() || sleep_until_stopped(&stop, interval) {
-            return;
-        }
-        if stop.load(Ordering::Relaxed) {
-            return;
-        }
-        if run_resident_group_health_check_round(
-            Arc::clone(&group),
-            Arc::clone(&stop),
-            &event_file,
-            &event_lock,
-            concurrency,
-        )
-        .is_cancelled()
-        {
-            return;
-        }
-    }
-}
-
-fn resident_health_initial_jitter(
-    group_name: &str,
-    candidate_count: usize,
-    interval: Duration,
-) -> Duration {
-    if interval.is_zero() {
-        return Duration::ZERO;
-    }
-    let interval_ms = duration_millis_i64(interval).max(0) as u64;
-    let ceiling_ms = duration_millis_i64(RESIDENT_HEALTH_INITIAL_JITTER_CEILING).max(0) as u64;
-    let window_ms = (interval_ms / 4).min(ceiling_ms);
-    if window_ms == 0 {
-        return Duration::ZERO;
-    }
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    group_name.hash(&mut hasher);
-    candidate_count.hash(&mut hasher);
-    Duration::from_millis(hasher.finish() % (window_ms + 1))
-}
-
-fn duration_millis_i64(duration: Duration) -> i64 {
-    duration.as_millis().min(i64::MAX as u128) as i64
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HealthCheckRoundStatus {
+pub(super) enum HealthCheckRoundStatus {
     Completed,
     Cancelled,
 }
 
 impl HealthCheckRoundStatus {
-    fn is_cancelled(self) -> bool {
+    pub(super) fn is_cancelled(self) -> bool {
         matches!(self, Self::Cancelled)
     }
 }
 
-fn run_resident_group_health_check_round(
+pub(super) async fn run_resident_group_health_check_round_async(
     group: Arc<plan::ResidentProxyGroupPlan>,
     stop: Arc<AtomicBool>,
-    event_file: &Path,
-    event_lock: &Mutex<()>,
     concurrency: usize,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
@@ -120,43 +26,16 @@ fn run_resident_group_health_check_round(
     if candidates.is_empty() {
         return HealthCheckRoundStatus::Completed;
     }
-    let runtime = match build_transient_probe_runtime("resident group health probe") {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            append_event(
-                event_file,
-                event_lock,
-                json!({"event": "resident_health_checker_runtime_failed", "error": err}),
-            );
-            return HealthCheckRoundStatus::Completed;
-        }
-    };
-    let status = runtime.block_on(run_resident_group_health_checks_concurrent_async(
+    let status = run_resident_group_health_checks_concurrent_async(
         group,
         &candidates,
-        concurrency,
+        concurrency.max(1),
         stop,
-    ));
-    drop(runtime);
+    )
+    .await;
     drop(candidates);
     let _ = allocator_reclaim(AllocatorReclaimReason::GroupHealthProbe);
     status
-}
-
-pub(crate) fn run_resident_group_resuscitation_check(
-    group: Arc<plan::ResidentProxyGroupPlan>,
-    stop: Arc<AtomicBool>,
-    event_file: &Path,
-    event_lock: &Mutex<()>,
-    concurrency: usize,
-) {
-    let _ = run_resident_group_health_check_round(
-        group,
-        stop,
-        event_file,
-        event_lock,
-        concurrency.max(1),
-    );
 }
 
 async fn run_resident_group_health_checks_concurrent_async(
@@ -717,21 +596,6 @@ pub(crate) fn unix_now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn sleep_until_stopped(stop: &AtomicBool, duration: Duration) -> bool {
-    if duration.is_zero() {
-        return stop.load(Ordering::Relaxed);
-    }
-    let started = Instant::now();
-    while !stop.load(Ordering::Relaxed) {
-        let elapsed = started.elapsed();
-        if elapsed >= duration {
-            return false;
-        }
-        thread::sleep((duration - elapsed).min(Duration::from_millis(100)));
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -975,24 +839,6 @@ mod tests {
         assert_eq!(
             result.message.as_deref(),
             Some("health.example:80: resolve failed")
-        );
-    }
-
-    #[test]
-    fn resident_health_initial_jitter_is_stable_and_bounded() {
-        let interval = Duration::from_secs(30);
-        let first = resident_health_initial_jitter("proxy", 3, interval);
-        let second = resident_health_initial_jitter("proxy", 3, interval);
-        assert_eq!(first, second);
-        assert!(first <= RESIDENT_HEALTH_INITIAL_JITTER_CEILING);
-        assert!(first <= interval / 4);
-    }
-
-    #[test]
-    fn resident_health_initial_jitter_is_disabled_for_zero_interval() {
-        assert_eq!(
-            resident_health_initial_jitter("proxy", 3, Duration::ZERO),
-            Duration::ZERO
         );
     }
 

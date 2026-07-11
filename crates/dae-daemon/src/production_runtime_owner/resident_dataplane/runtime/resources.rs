@@ -176,6 +176,7 @@ impl ResidentRuntimeResourceConfig {
             },
             "healthCheck": {
                 "concurrency": self.health_check_concurrency.json(),
+                "scheduler": resident_health_scheduler_contract(),
             },
         })
     }

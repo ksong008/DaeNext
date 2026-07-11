@@ -93,6 +93,9 @@ use self::tcp_profile::*;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 pub(super) use self::health_checks::*;
+#[path = "runtime/health_scheduler.rs"]
+mod health_scheduler;
+pub(super) use self::health_scheduler::*;
 #[path = "runtime/remote_strategy_live_tests.rs"]
 mod remote_strategy_live_tests;
 pub(crate) use self::remote_strategy_live_tests::*;
