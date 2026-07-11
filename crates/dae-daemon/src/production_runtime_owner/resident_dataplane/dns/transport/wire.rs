@@ -1,5 +1,8 @@
 use super::super::*;
 
+mod chunked;
+use self::chunked::{decode_http_chunked_body, decode_http_chunked_body_with_consumed};
+
 pub(super) async fn open_dns_tcp_stream_async(
     upstream: &ResidentDnsUpstream,
     target: SocketAddr,
@@ -226,17 +229,23 @@ where
             Ok(raw)
         }
         Http1ResponseBodyBoundary::Chunked => {
-            while decode_http_chunked_body(&raw[body_start..]).is_err() {
-                let read = stream
-                    .read(&mut buf)
-                    .await
-                    .map_err(|err| format!("read chunked HTTP response body: {err}"))?;
-                if read == 0 {
-                    break;
+            let consumed = loop {
+                match decode_http_chunked_body_with_consumed(&raw[body_start..]) {
+                    Ok((_, consumed)) => break consumed,
+                    Err(err) if err.is_incomplete() => {
+                        let read = stream
+                            .read(&mut buf)
+                            .await
+                            .map_err(|err| format!("read chunked HTTP response body: {err}"))?;
+                        if read == 0 {
+                            return Err(err.to_string());
+                        }
+                        append_http_response_bytes(&mut raw, &buf[..read], limit)?;
+                    }
+                    Err(err) => return Err(err.to_string()),
                 }
-                append_http_response_bytes(&mut raw, &buf[..read], limit)?;
-            }
-            let _ = decode_http_chunked_body(&raw[body_start..])?;
+            };
+            raw.truncate(body_start + consumed);
             Ok(raw)
         }
         Http1ResponseBodyBoundary::CloseDelimited => {
@@ -353,38 +362,6 @@ fn find_http_header_end(raw: &[u8]) -> Option<usize> {
     raw.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
-fn decode_http_chunked_body(raw: &[u8]) -> Result<Vec<u8>, String> {
-    let mut offset = 0_usize;
-    let mut out = Vec::new();
-    loop {
-        let line_end = raw[offset..]
-            .windows(2)
-            .position(|window| window == b"\r\n")
-            .map(|index| offset + index)
-            .ok_or_else(|| "chunked DoH body has no chunk-size line end".to_owned())?;
-        let line = std::str::from_utf8(&raw[offset..line_end])
-            .map_err(|err| format!("chunked DoH size line is not UTF-8: {err}"))?;
-        let size_hex = line.split(';').next().unwrap_or_default().trim();
-        let size = usize::from_str_radix(size_hex, 16)
-            .map_err(|err| format!("parse chunked DoH size {size_hex:?}: {err}"))?;
-        offset = line_end + 2;
-        if size == 0 {
-            return Ok(out);
-        }
-        let end = offset
-            .checked_add(size)
-            .ok_or_else(|| "chunked DoH body size overflow".to_owned())?;
-        if raw.len() < end + 2 {
-            return Err("chunked DoH body is truncated".to_owned());
-        }
-        out.extend_from_slice(&raw[offset..end]);
-        if &raw[end..end + 2] != b"\r\n" {
-            return Err("chunked DoH chunk missing trailing CRLF".to_owned());
-        }
-        offset = end + 2;
-    }
-}
-
 pub(super) fn restore_dns_response_id(request: &[u8], response: &[u8]) -> Result<Vec<u8>, String> {
     if request.len() < 2 {
         return Err("DNS request is too short to restore response id".to_owned());
@@ -407,7 +384,10 @@ mod tests {
     use std::io;
     use std::pin::Pin;
     use std::task::{Context, Poll};
+    use std::time::Duration;
     use tokio::io::ReadBuf;
+
+    const CHUNKED_TRAILER_TEST_PENDING_WINDOW: Duration = Duration::from_millis(25);
 
     struct UnexpectedEofReader {
         bytes: &'static [u8],
@@ -458,5 +438,30 @@ mod tests {
             .unwrap_err();
 
         assert!(err.contains("missing TLS close_notify"));
+    }
+
+    #[tokio::test]
+    async fn reusable_http1_reader_waits_for_complete_chunk_trailers() {
+        let (mut reader, mut writer) = tokio::io::duplex(1024);
+        let mut read_task = tokio::spawn(async move {
+            read_http1_response_message_capped_async(&mut reader, 1024).await
+        });
+        let response_prefix =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\ndns\r\n0\r\n";
+        writer.write_all(response_prefix).await.unwrap();
+
+        assert!(
+            time::timeout(CHUNKED_TRAILER_TEST_PENDING_WINDOW, &mut read_task)
+                .await
+                .is_err(),
+            "reader returned before the chunked trailer section was terminated"
+        );
+
+        let trailers = b"X-Fixture: complete\r\n\r\n";
+        writer.write_all(trailers).await.unwrap();
+        let response = read_task.await.unwrap().unwrap();
+        let mut expected = response_prefix.to_vec();
+        expected.extend_from_slice(trailers);
+        assert_eq!(response, expected);
     }
 }
