@@ -11,19 +11,19 @@ use tokio::net::{
 use tokio::sync::Semaphore;
 use tokio::time;
 
+use super::dns::{
+    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
+    build_dns_server_failure_response, handle_resident_dns_local_trace_async,
+    read_dns_tcp_payload_async, write_dns_tcp_payload_async,
+};
 #[cfg(test)]
 use super::dns::{
     DNS_TRANSPORT_OUTCOME_SUCCESS, DNS_TRANSPORT_ROUTE_DIRECT, DNS_TRANSPORT_TARGET_FAMILY_IPV4,
     DNS_TRANSPORT_TARGET_FAMILY_IPV6,
 };
-use super::dns::{
-    ResidentDnsPlan, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
-    build_dns_server_failure_response, handle_resident_dns_local_trace_async,
-    read_dns_tcp_payload_async, write_dns_tcp_payload_async,
-};
 use super::*;
 
-const DNS_BIND_READ_LIMIT: usize = 4096;
+const DNS_BIND_READ_LIMIT: usize = DNS_MAX_UDP_MESSAGE_SIZE;
 const DNS_BIND_UDP_MAX_INFLIGHT: usize = 128;
 const DNS_BIND_TCP_MAX_INFLIGHT: usize = 128;
 const DNS_BIND_TCP_IO_TIMEOUT: std::time::Duration = RESIDENT_UDP_RESPONSE_TIMEOUT;

@@ -606,6 +606,8 @@ async fn open_connected_dns_udp_socket(
 mod tests {
     use super::*;
 
+    const LEGACY_DNS_RESPONSE_READ_LIMIT: usize = 4096;
+
     #[test]
     fn udp_request_id_allocator_enforces_capacity_and_releases_ids() {
         let mut allocator = UdpRequestIdAllocator::default();
@@ -802,6 +804,28 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn udp_multiplex_preserves_response_larger_than_legacy_buffer() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut request = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+            let (read, peer) = upstream.recv_from(&mut request).await.unwrap();
+            let response = large_dns_response_for_query(&request[..read]);
+            assert!(response.len() > LEGACY_DNS_RESPONSE_READ_LIMIT);
+            upstream.send_to(&response, peer).await.unwrap();
+        });
+        let handle = open_udp_multiplex_handle(target, 0).await.unwrap();
+        let query = build_dns_query_packet(0x5151, "large.example", DNS_QTYPE_A).unwrap();
+        let response = handle.exchange(&query).await.unwrap();
+
+        assert!(response.len() > LEGACY_DNS_RESPONSE_READ_LIMIT);
+        assert_eq!(&response[0..2], &0x5151_u16.to_be_bytes());
+        server.await.unwrap();
+    }
+
     fn dns_a_response_for_query(query: &[u8], address: [u8; 4]) -> Vec<u8> {
         let view = DnsPacketView::parse(query).unwrap();
         let mut response = Vec::new();
@@ -818,6 +842,28 @@ mod tests {
         response.extend_from_slice(&60_u32.to_be_bytes());
         response.extend_from_slice(&4_u16.to_be_bytes());
         response.extend_from_slice(&address);
+        response
+    }
+
+    fn large_dns_response_for_query(query: &[u8]) -> Vec<u8> {
+        const FIXTURE_RDATA_LEN: usize = 5000;
+        const FIXTURE_PRIVATE_QTYPE: u16 = 65_280;
+
+        let view = DnsPacketView::parse(query).unwrap();
+        let mut response = Vec::new();
+        response.extend_from_slice(&query[0..2]);
+        response.extend_from_slice(&0x8180_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&query[12..view.answer_offset()]);
+        response.extend_from_slice(&0xc00c_u16.to_be_bytes());
+        response.extend_from_slice(&FIXTURE_PRIVATE_QTYPE.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&60_u32.to_be_bytes());
+        response.extend_from_slice(&(FIXTURE_RDATA_LEN as u16).to_be_bytes());
+        response.resize(response.len() + FIXTURE_RDATA_LEN, 0x5a);
         response
     }
 }
