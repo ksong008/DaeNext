@@ -9,6 +9,8 @@ use super::status::geodata_status_for_dir;
 use super::types::{GEOIP_FILE, GEOSITE_FILE, GeodataSourceMode};
 use super::*;
 
+mod update;
+
 #[test]
 fn geodata_status_reports_counts_from_actual_files() {
     let dir = std::env::temp_dir().join(format!("daed-product-geodata-{}", fastrand::u64(..)));
@@ -126,6 +128,7 @@ fn geodata_status_reuses_cached_values_after_first_read() {
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         auth_runtime: product_test_auth_runtime(),
+        geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     };
 

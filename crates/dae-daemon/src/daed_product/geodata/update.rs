@@ -9,6 +9,7 @@ use super::types::{GeodataKind, GeodataRelease, GeodataSourceMode};
 use super::*;
 
 pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
+    let _update_lease = app.geodata_updates.acquire(kind)?;
     let dir = geodata_dir(app);
     fs::create_dir_all(&dir)?;
     let source = geodata_source(&app.state, kind)?;
@@ -26,12 +27,9 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
         }
     };
     let path = dir.join(kind.file_name());
-    let tmp_path = dir.join(format!(
-        ".{}.tmp.{}.{}",
-        kind.file_name(),
-        std::process::id(),
-        unix_now()
-    ));
+    let tmp_path = app
+        .geodata_updates
+        .reserve_staging_path(&dir, kind, "download")?;
     let download =
         match fetch_geodata_url_to_file(&release.download_url, &tmp_path, proxy_config.as_ref()) {
             Ok(download) => download,

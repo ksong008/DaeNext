@@ -70,6 +70,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         auth_runtime,
+        geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     };
     let server_result = serve_forever(&options.listen, app, startup_started_at);

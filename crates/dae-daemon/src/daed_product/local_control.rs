@@ -329,6 +329,7 @@ mod tests {
             latency_jobs: Arc::new(LatencyJobManager::default()),
             http_metrics: Arc::new(ProductHttpMetrics::default()),
             auth_runtime: product_test_auth_runtime(),
+            geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
             geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         };
 

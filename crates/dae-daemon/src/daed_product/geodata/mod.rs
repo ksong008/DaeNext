@@ -9,11 +9,13 @@ mod tests;
 mod time;
 mod types;
 mod update;
+mod update_admission;
 
 use source::{GeodataSourceUrlUpdate, geodata_sources_status, update_geodata_source_settings};
 pub(in crate::daed_product) use status::geodata_status;
 pub(in crate::daed_product) use types::GeodataKind;
 use update::update_geodata;
+pub(in crate::daed_product) use update_admission::ProductGeodataUpdateCoordinator;
 
 pub(in crate::daed_product) fn api_geodata_status(app: &AppState) -> HttpResponse {
     match geodata_status(app) {
@@ -78,6 +80,13 @@ pub(in crate::daed_product) fn api_update_geodata(
 ) -> HttpResponse {
     let response = match update_geodata(app, kind) {
         Ok(status) => HttpResponse::json(200, status),
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => HttpResponse::json(
+            409,
+            json!({
+                "error": err.to_string(),
+                "kind": kind.response_key(),
+            }),
+        ),
         Err(err) => HttpResponse::json(
             500,
             json!({
