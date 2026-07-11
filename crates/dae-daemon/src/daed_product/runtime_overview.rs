@@ -1,6 +1,8 @@
 use super::*;
 mod traffic_stats;
 pub(super) use self::traffic_stats::*;
+mod sampler;
+pub(super) use self::sampler::*;
 mod query;
 pub(super) use self::query::*;
 mod interfaces;

@@ -236,6 +236,7 @@ struct AppState {
     api_only: bool,
     control_socket: PathBuf,
     runtime: Arc<ProductRuntimeManager>,
+    runtime_sampler: Option<Arc<ProductRuntimeSampler>>,
     latency_jobs: Arc<LatencyJobManager>,
     http_metrics: Arc<ProductHttpMetrics>,
     auth_runtime: Arc<ProductAuthRuntime>,

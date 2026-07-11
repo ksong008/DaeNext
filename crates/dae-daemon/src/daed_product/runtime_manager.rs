@@ -262,7 +262,6 @@ pub(super) struct RuntimeStartOutcome {
 #[derive(Debug, Default)]
 pub(super) struct RuntimeOverviewDeltaState {
     pub(super) reload_count: u64,
-    pub(super) resident_dataplane_metrics: Option<Value>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -646,18 +645,8 @@ impl ProductRuntimeManager {
         let Ok(inner) = self.inner.lock() else {
             return RuntimeOverviewDeltaState::default();
         };
-        let resident_dataplane_metrics = match inner.runtime.as_ref() {
-            Some(ProductRuntimeInstance::Resident(runtime)) => runtime
-                .resident_dataplane_metrics_snapshot()
-                .map(|mut metrics| {
-                    inner.traffic_carry.apply_to_metrics(&mut metrics);
-                    metrics
-                }),
-            Some(ProductRuntimeInstance::Fake(_)) | None => None,
-        };
         RuntimeOverviewDeltaState {
             reload_count: inner.reload_count,
-            resident_dataplane_metrics,
         }
     }
 

@@ -606,6 +606,7 @@ fn product_test_app(dir: &Path, state: &Path) -> AppState {
         api_only: true,
         control_socket: dir.join("control.sock"),
         runtime: Arc::new(ProductRuntimeManager::new()),
+        runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         auth_runtime: product_test_auth_runtime(),
@@ -1164,46 +1165,92 @@ fn runtime_traffic_stats_ignore_legacy_event_file_without_live_metrics() {
 
 #[test]
 fn runtime_traffic_stats_prefer_live_resident_metrics() {
-    *LAST_RUNTIME_TRAFFIC_TOTAL_SAMPLE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap() = None;
-    RUNTIME_TRAFFIC_RATE_SAMPLES
-        .get_or_init(|| Mutex::new(VecDeque::new()))
-        .lock()
-        .unwrap()
-        .clear();
-
-    let runtime = json!({
-        "residentDataplane": {
-            "metrics": {
-                "uploadTotal": 100,
-                "downloadTotal": 200,
-                "activeTcpConnections": 3,
-                "activeUdpSessions": 2
-            }
-        }
+    let first_metrics = json!({
+        "uploadTotal": 100,
+        "downloadTotal": 200,
+        "activeTcpConnections": 3,
+        "activeUdpSessions": 2
     });
-    let first = resident_runtime_traffic_stats(&runtime, 60, 10);
+    let first_at = Instant::now();
+    let (first, reset) = runtime_traffic_observation(&first_metrics, 100, first_at, None);
+    assert!(!reset);
     assert_eq!(first.upload_total, 100);
     assert_eq!(first.download_total, 200);
     assert_eq!(first.active_connections, 3);
     assert_eq!(first.udp_sessions, 2);
 
-    thread::sleep(Duration::from_millis(10));
-    let runtime = json!({
-        "residentDataplane": {
-            "metrics": {
-                "uploadTotal": 300,
-                "downloadTotal": 500,
-                "activeTcpConnections": 1,
-                "activeUdpSessions": 0
-            }
-        }
+    let second_metrics = json!({
+        "uploadTotal": 300,
+        "downloadTotal": 500,
+        "activeTcpConnections": 1,
+        "activeUdpSessions": 0
     });
-    let second = resident_runtime_traffic_stats(&runtime, 60, 10);
-    assert!(second.upload_rate > 0);
-    assert!(second.download_rate > 0);
+    let (second, reset) = runtime_traffic_observation(
+        &second_metrics,
+        101,
+        first_at + Duration::from_secs(1),
+        Some(RuntimeTrafficTotalSample {
+            upload_total: first.upload_total,
+            download_total: first.download_total,
+            observed_at: first_at,
+        }),
+    );
+    assert!(!reset);
+    assert_eq!(second.upload_rate, 200);
+    assert_eq!(second.download_rate, 300);
     assert_eq!(second.active_connections, 1);
-    assert!(!second.samples.is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn runtime_overview_reads_fixed_sampler_state_without_legacy_zero_claims() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-runtime-sampler-overview-{}",
+        fastrand::u64(..)
+    ));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let mut app = product_test_app(&dir, &state);
+    app.runtime_sampler = Some(ProductRuntimeSampler::start(Arc::downgrade(&app.runtime)).unwrap());
+
+    let narrow = runtime_overview_report(
+        &app,
+        &HttpRequest {
+            method: "GET".to_owned(),
+            path: "/api/runtime/overview".to_owned(),
+            query: HashMap::from([
+                ("windowSec".to_owned(), vec!["60".to_owned()]),
+                ("maxPoints".to_owned(), vec!["1".to_owned()]),
+            ]),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        },
+    );
+    let broad = runtime_overview_report(
+        &app,
+        &HttpRequest {
+            method: "GET".to_owned(),
+            path: "/api/runtime/overview".to_owned(),
+            query: HashMap::from([
+                ("windowSec".to_owned(), vec!["3600".to_owned()]),
+                ("maxPoints".to_owned(), vec!["1000".to_owned()]),
+            ]),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        },
+    );
+
+    assert_eq!(narrow["runtimeSampleCount"], broad["runtimeSampleCount"]);
+    assert_eq!(narrow["udpTaskQueues"], Value::Null);
+    assert_eq!(narrow["udpTaskDropTotal"], Value::Null);
+    assert_eq!(narrow["packetSnifferSessions"], Value::Null);
+    assert_eq!(narrow["runtimeSampler"]["intervalMillis"], json!(1_000));
+    assert!(
+        narrow["runtimeSampler"]["historyLength"]
+            .as_u64()
+            .is_some_and(|length| length >= 1)
+    );
+
+    drop(app);
+    fs::remove_dir_all(dir).unwrap();
 }
