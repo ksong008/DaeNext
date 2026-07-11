@@ -133,6 +133,81 @@ fn subscription_field_save_is_atomic() {
 }
 
 #[test]
+fn removed_subscription_nodes_invalidate_live_group_bindings() {
+    let fixture = FreshProductState::new("subscription-live-group-binding");
+    seed_subscription(&fixture);
+    apply_subscription_refresh_result(
+        fixture.state(),
+        7,
+        "first-refresh",
+        &["socks://127.0.0.1:1080#live-node".to_owned()],
+    )
+    .unwrap();
+    let conn = fixture.connection();
+    let node_id: i64 = conn
+        .query_row(
+            "SELECT id FROM nodes WHERE subscription_id = 7",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, 'live-group', 'min', 0)",
+        [],
+    )
+    .unwrap();
+    apply_group_node_ids(&conn, 9, &[node_id], true).unwrap();
+    conn.execute(
+        "INSERT INTO node_latency_results(
+            node_id, latency_ms, alive, tested_at, message, updated_at
+         ) VALUES(?1, 12, 1, 'now', NULL, 'now')",
+        params![node_id],
+    )
+    .unwrap();
+    let binding: (String, Option<i64>) = conn
+        .query_row(
+            "SELECT binding_mode, source_subscription_id
+             FROM group_nodes WHERE group_id = 9 AND node_id = ?1",
+            params![node_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(binding, ("subscription".to_owned(), Some(7)));
+    drop(conn);
+
+    let (changed, _) =
+        apply_subscription_refresh_result(fixture.state(), 7, "second-refresh", &[]).unwrap();
+    assert!(changed);
+    let conn = fixture.connection();
+    assert_eq!(count_nodes_for_subscription(&conn, 7).unwrap(), 0);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM group_nodes WHERE group_id = 9",
+            [],
+            |row| { row.get::<_, i64>(0) }
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![node_id],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn large_subscription_refresh_keeps_concurrent_reads_available_when_enabled() {
     if std::env::var_os("DAE_RUN_SUBSCRIPTION_PRESSURE_FIXTURE").is_none() {
         return;

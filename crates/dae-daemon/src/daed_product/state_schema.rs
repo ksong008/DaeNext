@@ -124,6 +124,8 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
         CREATE TABLE IF NOT EXISTS group_nodes (
             group_id INTEGER NOT NULL,
             node_id INTEGER NOT NULL,
+            binding_mode TEXT NOT NULL DEFAULT 'manual',
+            source_subscription_id INTEGER NULL,
             PRIMARY KEY(group_id, node_id)
         );
         CREATE INDEX IF NOT EXISTS idx_group_nodes_node_id ON group_nodes(node_id);
@@ -219,6 +221,31 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
         "running_external_input_version",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    ensure_table_column(
+        conn,
+        "group_nodes",
+        "binding_mode",
+        "TEXT NOT NULL DEFAULT 'manual'",
+    )?;
+    ensure_table_column(
+        conn,
+        "group_nodes",
+        "source_subscription_id",
+        "INTEGER NULL",
+    )?;
+    conn.execute(
+        "UPDATE group_nodes
+         SET binding_mode = 'subscription',
+             source_subscription_id = (
+                 SELECT n.subscription_id FROM nodes n WHERE n.id = group_nodes.node_id
+             )
+         WHERE EXISTS (
+             SELECT 1 FROM nodes n
+             WHERE n.id = group_nodes.node_id AND n.subscription_id IS NOT NULL
+         )",
+        [],
+    )
+    .map_err(sqlite_io_error)?;
     migrate_legacy_geodata_reload_pending(conn)?;
     conn.pragma_update(None, "user_version", STATE_SCHEMA_VERSION)
         .map_err(sqlite_io_error)?;

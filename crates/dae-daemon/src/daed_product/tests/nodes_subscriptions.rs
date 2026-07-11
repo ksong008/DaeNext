@@ -247,7 +247,7 @@ pub(crate) fn subscription_file_and_http_file_fallback_follow_config_dir_scope()
 }
 
 #[test]
-pub(crate) fn subscription_schema_adds_use_proxy_to_existing_tables() {
+pub(crate) fn subscription_schema_migrates_proxy_and_live_group_binding_fields() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     if let Some(parent) = state.parent() {
@@ -268,6 +268,32 @@ pub(crate) fn subscription_schema_adds_use_proxy_to_existing_tables() {
         );
         INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
         VALUES(7, 'now', 'https://subscription.invalid/list', 'imported', '', 'legacy');
+        CREATE TABLE nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            link TEXT NOT NULL,
+            name TEXT NOT NULL,
+            address TEXT NOT NULL,
+            protocol TEXT NOT NULL,
+            tag TEXT UNIQUE,
+            subscription_id INTEGER NULL
+        );
+        CREATE TABLE groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            policy TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 0,
+            system_id INTEGER NULL
+        );
+        CREATE TABLE group_nodes (
+            group_id INTEGER NOT NULL,
+            node_id INTEGER NOT NULL,
+            PRIMARY KEY(group_id, node_id)
+        );
+        INSERT INTO nodes(id, link, name, address, protocol, subscription_id)
+        VALUES(11, 'socks://127.0.0.1:1080#legacy', 'legacy', '127.0.0.1', 'socks', 7);
+        INSERT INTO groups(id, name, policy, version)
+        VALUES(9, 'legacy-group', 'min', 0);
+        INSERT INTO group_nodes(group_id, node_id) VALUES(9, 11);
         "#,
     )
     .unwrap();
@@ -290,6 +316,15 @@ pub(crate) fn subscription_schema_adds_use_proxy_to_existing_tables() {
         )
         .unwrap();
     assert_eq!(use_proxy, 0);
+    let binding: (String, Option<i64>) = conn
+        .query_row(
+            "SELECT binding_mode, source_subscription_id FROM group_nodes
+             WHERE group_id = 9 AND node_id = 11",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(binding, ("subscription".to_owned(), Some(7)));
     fs::remove_dir_all(dir).unwrap();
 }
 

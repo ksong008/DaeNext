@@ -79,7 +79,9 @@ fn replace_node_bindings(
             ))
         })?;
         tx.execute(
-            "INSERT INTO group_nodes(group_id, node_id) VALUES(?1, ?2)",
+            "INSERT INTO group_nodes(
+                group_id, node_id, binding_mode, source_subscription_id
+             ) VALUES(?1, ?2, 'manual', NULL)",
             params![group_id, node_id],
         )
         .map_err(sqlite_io_error)?;
