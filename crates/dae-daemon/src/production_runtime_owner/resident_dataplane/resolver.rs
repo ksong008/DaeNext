@@ -167,7 +167,10 @@ async fn resolve_host_addrs_with_fallback_dns(
     Err(message)
 }
 
-fn authority_from_host_port(host: &str, port: u16) -> String {
+pub(in crate::production_runtime_owner::resident_dataplane) fn authority_from_host_port(
+    host: &str,
+    port: u16,
+) -> String {
     if host.parse::<Ipv6Addr>().is_ok() {
         format!("[{host}]:{port}")
     } else {
