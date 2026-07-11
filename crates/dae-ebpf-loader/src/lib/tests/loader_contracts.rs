@@ -18,7 +18,15 @@ pub(super) fn contract_declares_loader_only_scope() {
         "rust-aya-loader"
     );
     assert!(json["rust_aya_loader_object_supported"].as_bool().unwrap());
-    assert_eq!(json["maps"].as_array().unwrap().len(), 13);
+    let maps = json["maps"].as_array().unwrap();
+    let expected_maps = dae_ebpf_support::map_catalog();
+    assert_eq!(maps.len(), expected_maps.len());
+    assert_eq!(
+        maps.iter()
+            .map(|map| map["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        expected_maps.iter().map(|map| map.name).collect::<Vec<_>>()
+    );
     assert_eq!(json["tc_programs"].as_array().unwrap().len(), 6);
     assert_eq!(json["cgroup_programs"].as_array().unwrap().len(), 6);
     assert_eq!(
