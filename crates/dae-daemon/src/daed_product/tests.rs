@@ -24,6 +24,8 @@ mod nodes_subscriptions;
 #[cfg(test)]
 mod product_resources;
 #[cfg(test)]
+mod profile_selection;
+#[cfg(test)]
 mod runtime_config;
 #[cfg(test)]
 mod runtime_generation;
