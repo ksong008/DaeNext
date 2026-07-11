@@ -17,6 +17,10 @@ pub(super) async fn stream_runtime_events_async(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     write_sse_event(stream, "runtime.overview", &first).await?;
+    let mut group_selection_events = RuntimeGroupSelectionEventTracker::default();
+    if let Some(event) = group_selection_events.observe_app(app) {
+        write_sse_event(stream, RUNTIME_GROUP_SELECTION_EVENT, &event).await?;
+    }
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     interval.tick().await;
@@ -40,6 +44,9 @@ pub(super) async fn stream_runtime_events_async(
             write_sse_event(stream, "runtime.overview", &full).await?;
         } else {
             write_sse_event(stream, "runtime.overview.delta", &delta).await?;
+        }
+        if let Some(event) = group_selection_events.observe_app(app) {
+            write_sse_event(stream, RUNTIME_GROUP_SELECTION_EVENT, &event).await?;
         }
     }
 }

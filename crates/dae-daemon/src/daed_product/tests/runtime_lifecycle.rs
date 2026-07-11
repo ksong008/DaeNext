@@ -486,6 +486,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     let body = String::from_utf8(response.body).unwrap();
     assert!(body.contains("retry: 3000"));
     assert!(body.contains("event: runtime.overview\n"));
+    assert!(body.contains("event: runtime.group-selection\n"));
     assert!(body.contains("event: runtime.overview.delta\n"));
     assert!(body.contains("\"heapLiveBytes\""));
     assert!(!body.contains("\"heapAllocBytes\""));

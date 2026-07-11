@@ -5,11 +5,13 @@ pub(in crate::daed_product) fn api_runtime_events(
     request: &HttpRequest,
 ) -> HttpResponse {
     let full = runtime_overview_report(app, request);
+    let group_selection = initial_group_selection_event(app);
     thread::sleep(Duration::from_millis(200));
     let delta = runtime_overview_delta_report(app, request);
     sse_response_events(
         &[
             ("runtime.overview", full),
+            (RUNTIME_GROUP_SELECTION_EVENT, group_selection),
             ("runtime.overview.delta", delta),
         ],
         Some(LOG_STREAM_RETRY_MS),
