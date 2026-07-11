@@ -1,6 +1,5 @@
 use super::*;
 use std::future::poll_fn;
-use std::io::ErrorKind;
 use std::pin::Pin;
 use std::task::Poll;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -239,10 +238,21 @@ impl VlessStandardUdpUnderlay {
     }
 
     pub(super) async fn poll_response_chunk(&mut self) -> Result<Option<Vec<u8>>, String> {
+        self.read_response_chunk(UdpStreamReadMode::ReadyOnly).await
+    }
+
+    pub(super) async fn wait_response_chunk(&mut self) -> Result<Option<Vec<u8>>, String> {
+        self.read_response_chunk(UdpStreamReadMode::Wait).await
+    }
+
+    async fn read_response_chunk(
+        &mut self,
+        mode: UdpStreamReadMode,
+    ) -> Result<Option<Vec<u8>>, String> {
         match self {
-            Self::GrpcTls { .. } => poll_vless_grpc_payload(self).await,
-            Self::H2Tls { recv_stream, .. } => poll_vless_h2_payload(recv_stream).await,
-            _ => poll_vless_standard_stream_underlay(self).await,
+            Self::GrpcTls { .. } => read_vless_grpc_payload(self, mode).await,
+            Self::H2Tls { recv_stream, .. } => read_vless_h2_payload(recv_stream, mode).await,
+            _ => read_vless_standard_stream_underlay(self, mode).await,
         }
     }
 
@@ -320,8 +330,9 @@ impl VlessStandardUdpUnderlay {
     }
 }
 
-async fn poll_vless_standard_stream_underlay(
+async fn read_vless_standard_stream_underlay(
     underlay: &mut VlessStandardUdpUnderlay,
+    mode: UdpStreamReadMode,
 ) -> Result<Option<Vec<u8>>, String> {
     let mut out = [0_u8; 8192];
     let mut read_buf = ReadBuf::new(&mut out);
@@ -349,30 +360,20 @@ async fn poll_vless_standard_stream_underlay(
                 ));
             }
         };
-        match poll_result {
-            Poll::Ready(Ok(())) => {
-                let filled = read_buf.filled();
-                Poll::Ready(Ok((!filled.is_empty()).then(|| filled.to_vec())))
-            }
-            Poll::Ready(Err(err))
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) =>
-            {
-                Poll::Ready(Ok(None))
-            }
-            Poll::Ready(Err(err)) => {
-                Poll::Ready(Err(format!("read VLESS standard UDP underlay: {err}")))
-            }
-            Poll::Pending => Poll::Ready(Ok(None)),
-        }
+        map_udp_stream_read_poll(
+            mode,
+            poll_result,
+            read_buf.filled().len(),
+            "read VLESS standard UDP underlay",
+        )
     })
     .await
+    .map(|read| read.map(|read| out[..read].to_vec()))
 }
 
-async fn poll_vless_grpc_payload(
+async fn read_vless_grpc_payload(
     underlay: &mut VlessStandardUdpUnderlay,
+    mode: UdpStreamReadMode,
 ) -> Result<Option<Vec<u8>>, String> {
     let VlessStandardUdpUnderlay::GrpcTls {
         recv_stream,
@@ -389,35 +390,46 @@ async fn poll_vless_grpc_payload(
             }
             return Ok(Some(payload));
         }
-        match time::timeout(RESIDENT_IDLE_SLEEP, recv_stream.data()).await {
-            Ok(Some(Ok(bytes))) => {
+        let data = if mode.waits_for_readiness() {
+            Some(recv_stream.data().await)
+        } else {
+            poll_future_once(recv_stream.data()).await
+        };
+        match data {
+            Some(Some(Ok(bytes))) => {
                 recv_stream
                     .flow_control()
                     .release_capacity(bytes.len())
                     .map_err(|err| format!("release VLESS gRPC response capacity: {err}"))?;
                 response_buf.extend_from_slice(&bytes);
             }
-            Ok(Some(Err(err))) => return Err(format!("read VLESS gRPC response data: {err}")),
-            Ok(None) => return Err("VLESS gRPC response stream closed".to_owned()),
-            Err(_) => return Ok(None),
+            Some(Some(Err(err))) => return Err(format!("read VLESS gRPC response data: {err}")),
+            Some(None) => return Err("VLESS gRPC response stream closed".to_owned()),
+            None => return Ok(None),
         }
     }
 }
 
-async fn poll_vless_h2_payload(
+async fn read_vless_h2_payload(
     recv_stream: &mut h2::RecvStream,
+    mode: UdpStreamReadMode,
 ) -> Result<Option<Vec<u8>>, String> {
-    match time::timeout(RESIDENT_IDLE_SLEEP, recv_stream.data()).await {
-        Ok(Some(Ok(bytes))) => {
+    let data = if mode.waits_for_readiness() {
+        Some(recv_stream.data().await)
+    } else {
+        poll_future_once(recv_stream.data()).await
+    };
+    match data {
+        Some(Some(Ok(bytes))) => {
             recv_stream
                 .flow_control()
                 .release_capacity(bytes.len())
                 .map_err(|err| format!("release VLESS H2 UDP response capacity: {err}"))?;
             Ok((!bytes.is_empty()).then(|| bytes.to_vec()))
         }
-        Ok(Some(Err(err))) => Err(format!("read VLESS H2 UDP response data: {err}")),
-        Ok(None) => Err("VLESS H2 UDP response stream closed".to_owned()),
-        Err(_) => Ok(None),
+        Some(Some(Err(err))) => Err(format!("read VLESS H2 UDP response data: {err}")),
+        Some(None) => Err("VLESS H2 UDP response stream closed".to_owned()),
+        None => Ok(None),
     }
 }
 

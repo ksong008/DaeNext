@@ -1,4 +1,4 @@
-use std::future::poll_fn;
+use std::future::{Future, poll_fn};
 use std::io;
 use std::pin::Pin;
 use std::task::Poll;
@@ -61,6 +61,18 @@ pub(super) fn map_udp_stream_read_poll(
         Poll::Pending if mode.waits_for_readiness() => Poll::Pending,
         Poll::Pending => Poll::Ready(Ok(None)),
     }
+}
+
+pub(super) async fn poll_future_once<F>(future: F) -> Option<F::Output>
+where
+    F: Future,
+{
+    tokio::pin!(future);
+    poll_fn(|cx| match future.as_mut().poll(cx) {
+        Poll::Ready(value) => Poll::Ready(Some(value)),
+        Poll::Pending => Poll::Ready(None),
+    })
+    .await
 }
 
 #[cfg(test)]

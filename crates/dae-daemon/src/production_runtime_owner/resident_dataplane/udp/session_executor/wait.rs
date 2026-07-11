@@ -11,18 +11,9 @@ impl UdpSessionExecutor {
             Self::Hysteria2(session) => session.wait_response().await?,
             Self::Tuic(session) => session.wait_response().await?,
             Self::VlessVision(session) => session.wait_response().await?,
-            Self::VlessStandard(session) => {
-                time::sleep(RESIDENT_IDLE_SLEEP).await;
-                session.poll_response().await?
-            }
-            Self::VlessXhttpH2(session) => {
-                time::sleep(RESIDENT_IDLE_SLEEP).await;
-                session.poll_response().await?
-            }
-            Self::VlessXhttpH3(session) => {
-                time::sleep(RESIDENT_IDLE_SLEEP).await;
-                session.poll_response().await?
-            }
+            Self::VlessStandard(session) => session.wait_response().await?,
+            Self::VlessXhttpH2(session) => session.wait_response().await?,
+            Self::VlessXhttpH3(session) => session.wait_response().await?,
             Self::Trojan(session) => session.wait_response().await?,
             Self::AnyTls(session) => session.wait_response().await?,
             Self::VmessAead(session) => session.wait_response().await?,

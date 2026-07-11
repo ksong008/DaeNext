@@ -117,13 +117,31 @@ impl VlessStandardUdpOverStreamSession {
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::ReadyOnly).await
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::Wait).await
+    }
+
+    async fn read_response(
+        &mut self,
+        mode: UdpStreamReadMode,
+    ) -> Result<Option<UdpExchangeResult>, String> {
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
+        }
+        if self.underlay.is_none() && mode.waits_for_readiness() {
+            return std::future::pending().await;
         }
         let Some(underlay) = self.underlay.as_mut() else {
             return Ok(None);
         };
-        let Some(chunk) = underlay.poll_response_chunk().await? else {
+        let chunk = match mode {
+            UdpStreamReadMode::ReadyOnly => underlay.poll_response_chunk().await?,
+            UdpStreamReadMode::Wait => underlay.wait_response_chunk().await?,
+        };
+        let Some(chunk) = chunk else {
             return Ok(None);
         };
         if chunk.is_empty() {
