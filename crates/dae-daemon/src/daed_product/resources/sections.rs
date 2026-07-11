@@ -231,7 +231,10 @@ pub(crate) fn create_section(
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or(kind.default_name());
-    let value = section_request_value(kind, &body);
+    let value = match validated_section_request_value(kind, &body) {
+        Ok(value) => value,
+        Err(err) => return HttpResponse::json(400, json!({"error": err})),
+    };
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -258,6 +261,16 @@ pub(crate) fn update_section(
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
+    let requested_value = if body.get(kind.request_value_key()).is_some()
+        || (kind == SectionKind::Config && body.get("parsedGlobal").is_some())
+    {
+        match validated_section_request_value(kind, &body) {
+            Ok(value) => Some(value),
+            Err(err) => return HttpResponse::json(400, json!({"error": err})),
+        }
+    } else {
+        None
+    };
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -271,10 +284,7 @@ pub(crate) fn update_section(
             return HttpResponse::json(400, json!({"error": err.to_string()}));
         }
     }
-    if body.get(kind.request_value_key()).is_some()
-        || (kind == SectionKind::Config && body.get("parsedGlobal").is_some())
-    {
-        let value = section_request_value(kind, &body);
+    if let Some(value) = requested_value {
         let sql = format!(
             "UPDATE {} SET {} = ?1, version = version + 1 WHERE id = ?2",
             kind.table(),
@@ -345,6 +355,16 @@ pub(crate) fn section_request_value(kind: SectionKind, body: &Value) -> String {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .unwrap_or_default()
+}
+
+fn validated_section_request_value(kind: SectionKind, body: &Value) -> Result<String, String> {
+    let value = section_request_value(kind, body);
+    if kind == SectionKind::Config {
+        let complete = format!("{value}\nrouting {{ fallback: direct }}\n");
+        build_runtime_config_from_content(&complete)
+            .map_err(|err| format!("invalid rendered global config: {err}"))?;
+    }
+    Ok(value)
 }
 
 pub(crate) fn section_resource(

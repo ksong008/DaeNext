@@ -484,16 +484,16 @@ pub(crate) fn render_global_config_text(source: &Value) -> String {
 pub(crate) fn push_global_string_field(
     lines: &mut Vec<String>,
     normalized: &Value,
-    source: &Value,
+    _source: &Value,
     json_key: &str,
     config_key: &str,
-    aliases: &[&str],
+    _aliases: &[&str],
 ) {
     let value = normalized
         .get(json_key)
         .and_then(Value::as_str)
         .unwrap_or("");
-    if global_source_has_key(source, aliases) || !value.is_empty() {
+    if !value.is_empty() {
         lines.push(format!("{config_key}:{}", dae_string_literal(value)));
     }
 }
@@ -501,10 +501,10 @@ pub(crate) fn push_global_string_field(
 pub(crate) fn push_global_array_field(
     lines: &mut Vec<String>,
     normalized: &Value,
-    source: &Value,
+    _source: &Value,
     json_key: &str,
     config_key: &str,
-    aliases: &[&str],
+    _aliases: &[&str],
 ) {
     let values = normalized
         .get(json_key)
@@ -518,7 +518,7 @@ pub(crate) fn push_global_array_field(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if global_source_has_key(source, aliases) || !values.is_empty() {
+    if !values.is_empty() {
         lines.push(format!(
             "{config_key}:{}",
             dae_string_literal(&values.join(","))
