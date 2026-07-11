@@ -27,8 +27,8 @@ impl ResidentDnsRuntimeCache {
         let mut entries = state
             .entries
             .iter()
-            .filter(|(_, entry)| entry.cache_expires_at() > now_unix)
-            .map(|(key, entry)| (key.clone(), entry.clone()))
+            .filter(|(_, stored)| stored.entry.cache_expires_at() > now_unix)
+            .map(|(key, stored)| (key.clone(), stored.entry.clone()))
             .collect::<Vec<_>>();
         entries.sort_by(|(left, _), (right, _)| left.cmp(right));
         Ok(ResidentDnsRuntimeCacheSnapshot { entries })
@@ -55,7 +55,7 @@ impl ResidentDnsRuntimeCache {
             if !state.entries.contains_key(key) {
                 evict_entries(&mut state, now_unix);
             }
-            state.entries.insert(key.clone(), entry.clone());
+            insert_cache_entry(&mut state, key.clone(), entry.clone());
             restored += 1;
         }
         Ok(restored)

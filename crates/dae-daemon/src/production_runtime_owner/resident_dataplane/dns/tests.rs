@@ -1214,9 +1214,11 @@ fn resident_dns_response_cache_removes_all_scoped_siblings_for_base_key() {
             .unwrap();
     }
     assert_eq!(cache.entry_len(), 2);
+    assert_eq!(cache.deadline_len(), 2);
     let removed = cache.remove_base_key(&base).unwrap();
     assert_eq!(removed.len(), 2);
     assert_eq!(cache.entry_len(), 0);
+    assert_eq!(cache.deadline_len(), 0);
 }
 
 #[tokio::test]
@@ -1931,7 +1933,44 @@ fn resident_dns_runtime_cache_sweeps_expired_entries_on_write_window() {
         .unwrap();
 
     assert_eq!(cache.entry_len(), 1);
+    assert_eq!(cache.deadline_len(), 1);
     assert_eq!(cache.stats().expired_removal_total, 1);
+}
+
+#[test]
+fn resident_dns_runtime_cache_replacement_updates_deadline_index() {
+    let cache = ResidentDnsRuntimeCache::default();
+    let now = 1_700_000_000_i64;
+    let key = ResidentDnsResponseCacheKey::new(
+        DnsCacheKey::new("replacement.example.", DNS_QTYPE_A, 1),
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "127.0.0.1:53".parse().unwrap(),
+        },
+    );
+    cache
+        .insert_response(now, key.clone(), DnsCacheEntry::new(now + 1, now + 1))
+        .unwrap();
+    cache
+        .insert_response(now, key, DnsCacheEntry::new(now + 300, now + 300))
+        .unwrap();
+
+    assert_eq!(cache.entry_len(), 1);
+    assert_eq!(cache.deadline_len(), 1);
+    cache
+        .insert_response(
+            now + 120,
+            ResidentDnsResponseCacheKey::new(
+                DnsCacheKey::new("second.example.", DNS_QTYPE_A, 1),
+                ResidentDnsResponseCacheScope::AsIs {
+                    original_dst: "127.0.0.1:53".parse().unwrap(),
+                },
+            ),
+            DnsCacheEntry::new(now + 300, now + 300),
+        )
+        .unwrap();
+
+    assert_eq!(cache.entry_len(), 2);
+    assert_eq!(cache.deadline_len(), 2);
 }
 
 #[test]
