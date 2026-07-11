@@ -1,174 +1,7 @@
 use super::super::*;
-use super::persistence::LatencyPersistenceQueue;
 #[cfg(test)]
 use super::persistence::{NODE_LATENCY_DB_WRITE_BATCH_SIZE, write_node_latency_results};
 use super::*;
-
-#[derive(Debug, Default)]
-pub(crate) struct LatencyJobManager {
-    next_id: AtomicU64,
-    current: Mutex<Option<LatencyJobRecord>>,
-    persistence: LatencyPersistenceQueue,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct LatencyJobRecord {
-    id: u64,
-    status: &'static str,
-    total: usize,
-    completed: usize,
-    succeeded: usize,
-    failed: usize,
-    queued_at: String,
-    started_at: Option<String>,
-    finished_at: Option<String>,
-    message: Option<String>,
-    persist_pending: usize,
-}
-
-impl LatencyJobManager {
-    pub(crate) fn start_or_current(&self, total: usize) -> io::Result<(LatencyJobRecord, bool)> {
-        let mut current = self
-            .current
-            .lock()
-            .map_err(|_| io::Error::other("latency job manager lock poisoned"))?;
-        if let Some(job) = current.as_ref()
-            && matches!(job.status, "queued" | "running")
-        {
-            return Ok((job.clone(), false));
-        }
-        let id = self
-            .next_id
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1);
-        let job = LatencyJobRecord {
-            id,
-            status: "queued",
-            total,
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            queued_at: now_text(),
-            started_at: None,
-            finished_at: None,
-            message: None,
-            persist_pending: self.persistence.pending_count(),
-        };
-        *current = Some(job.clone());
-        Ok((job, true))
-    }
-
-    pub(crate) fn current_value(&self) -> Value {
-        self.current
-            .lock()
-            .ok()
-            .and_then(|current| current.clone())
-            .map(|job| job.to_value())
-            .unwrap_or(Value::Null)
-    }
-
-    fn mark_running(&self, id: u64) {
-        self.update_job(id, |job| {
-            job.status = "running";
-            job.started_at = Some(now_text());
-            job.message = Some("manual latency probe running".to_owned());
-        });
-    }
-
-    fn mark_finished(&self, id: u64, completed: usize, succeeded: usize, failed: usize) {
-        let persist_pending = self.persistence.pending_count();
-        self.update_job(id, |job| {
-            job.status = "finished";
-            job.completed = completed;
-            job.succeeded = succeeded;
-            job.failed = failed;
-            job.finished_at = Some(now_text());
-            job.persist_pending = persist_pending;
-            job.message = Some(if persist_pending == 0 {
-                "manual latency probe finished".to_owned()
-            } else {
-                format!(
-                    "manual latency probe finished; {persist_pending} result(s) pending persistence"
-                )
-            });
-        });
-    }
-
-    fn mark_progress(&self, id: u64, completed: usize, succeeded: usize, failed: usize) {
-        self.update_job(id, |job| {
-            if job.is_active() {
-                job.status = "running";
-                job.completed = completed.min(job.total);
-                job.succeeded = succeeded.min(job.completed);
-                job.failed = failed.min(job.completed.saturating_sub(job.succeeded));
-                job.message = Some(format!(
-                    "manual latency probe running ({}/{})",
-                    job.completed, job.total
-                ));
-            }
-        });
-    }
-
-    fn mark_failed(&self, id: u64, message: String) {
-        let persist_pending = self.persistence.pending_count();
-        self.update_job(id, |job| {
-            job.status = "failed";
-            job.finished_at = Some(now_text());
-            job.message = Some(message);
-            job.persist_pending = persist_pending;
-        });
-    }
-
-    fn queue_and_flush_latency_results(&self, id: u64, state: &Path, results: &[NodeLatencyWrite]) {
-        let pending = match self.persistence.queue(results) {
-            Ok(_) => self.persistence.flush(state).pending,
-            Err(_) => self.persistence.pending_count(),
-        };
-        self.update_job(id, |job| job.persist_pending = pending);
-    }
-
-    fn flush_pending_latency_results(&self, id: u64, state: &Path) {
-        let report = self.persistence.flush(state);
-        self.update_job(id, |job| {
-            job.persist_pending = report.pending;
-            if let Some(error) = report.error {
-                job.message = Some(format!("manual latency probe persistence pending: {error}"));
-            }
-        });
-    }
-
-    fn update_job(&self, id: u64, update: impl FnOnce(&mut LatencyJobRecord)) {
-        let Ok(mut current) = self.current.lock() else {
-            return;
-        };
-        let Some(job) = current.as_mut().filter(|job| job.id == id) else {
-            return;
-        };
-        update(job);
-    }
-}
-
-impl LatencyJobRecord {
-    fn is_active(&self) -> bool {
-        matches!(self.status, "queued" | "running")
-    }
-
-    pub(crate) fn to_value(&self) -> Value {
-        json!({
-            "id": self.id,
-            "status": self.status,
-            "total": self.total,
-            "completed": self.completed,
-            "succeeded": self.succeeded,
-            "failed": self.failed,
-            "queuedAt": self.queued_at,
-            "startedAt": self.started_at,
-            "finishedAt": self.finished_at,
-            "message": self.message,
-            "persistPending": self.persist_pending,
-        })
-    }
-}
 
 pub(crate) fn list_stored_node_latencies_value(state: &Path) -> io::Result<Value> {
     ensure_state_schema(state)?;
@@ -223,18 +56,20 @@ pub(crate) fn enqueue_node_latency_job(
     let nodes = latency_probe_nodes_for_ids(&conn, ids)?;
     drop(conn);
     let (job, should_spawn) = jobs.start_or_current(nodes.len())?;
-    let mut value = list_stored_node_latencies_value(state)?;
-    value["job"] = job.to_value();
+    let value = json!({"items": [], "job": job.to_value()});
     if should_spawn {
+        let job_id = job.id();
+        let cancellation = job.cancellation();
         let state = state.to_path_buf();
         let config_dir = config_dir.to_path_buf();
         let runtime_for_thread = Arc::clone(&runtime);
         let jobs_for_thread = Arc::clone(&jobs);
         let spawn_result = thread::Builder::new()
-            .name(format!("daed-latency-job-{}", job.id))
+            .name(format!("daed-latency-job-{job_id}"))
             .spawn(move || {
                 run_node_latency_job(
-                    job.id,
+                    job_id,
+                    cancellation,
                     state,
                     config_dir,
                     runtime_for_thread,
@@ -243,7 +78,7 @@ pub(crate) fn enqueue_node_latency_job(
                 );
             });
         if let Err(err) = spawn_result {
-            jobs.mark_failed(job.id, format!("spawn manual latency probe job: {err}"));
+            jobs.mark_failed(job_id, format!("spawn manual latency probe job: {err}"));
             return Err(io::Error::other(format!(
                 "spawn manual latency probe job: {err}"
             )));
@@ -252,21 +87,57 @@ pub(crate) fn enqueue_node_latency_job(
     Ok(value)
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LatencyJobRunOutcome {
+    completed: usize,
+    succeeded: usize,
+    cancelled: bool,
+}
+
+impl LatencyJobRunOutcome {
+    fn failed(self) -> usize {
+        self.completed.saturating_sub(self.succeeded)
+    }
+}
+
 fn run_node_latency_job(
     job_id: u64,
+    cancellation: LatencyJobCancellation,
     state: PathBuf,
     config_dir: PathBuf,
     runtime: Arc<ProductRuntimeManager>,
     jobs: Arc<LatencyJobManager>,
     nodes: Vec<(i64, String, String)>,
 ) {
+    debug_assert_eq!(cancellation.job_id(), job_id);
     jobs.mark_running(job_id);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_node_latency_job_inner(job_id, &state, &config_dir, &runtime, &jobs, &nodes)
+        run_node_latency_job_inner(
+            job_id,
+            &cancellation,
+            &state,
+            &config_dir,
+            &runtime,
+            &jobs,
+            &nodes,
+        )
     }));
     match result {
-        Ok(Ok((completed, succeeded, failed))) => {
-            jobs.mark_finished(job_id, completed, succeeded, failed);
+        Ok(Ok(outcome)) if outcome.cancelled || cancellation.is_requested() => {
+            jobs.mark_cancelled(
+                job_id,
+                outcome.completed,
+                outcome.succeeded,
+                outcome.failed(),
+            );
+        }
+        Ok(Ok(outcome)) => {
+            jobs.mark_finished(
+                job_id,
+                outcome.completed,
+                outcome.succeeded,
+                outcome.failed(),
+            );
         }
         Ok(Err(err)) => jobs.mark_failed(job_id, err.to_string()),
         Err(payload) => jobs.mark_failed(
@@ -297,16 +168,25 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 fn run_node_latency_job_inner(
     job_id: u64,
+    cancellation: &LatencyJobCancellation,
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
     jobs: &LatencyJobManager,
     nodes: &[(i64, String, String)],
-) -> io::Result<(usize, usize, usize)> {
+) -> io::Result<LatencyJobRunOutcome> {
     let conn = open_state_connection(state)?;
     let mut completed = 0usize;
     let mut succeeded = 0usize;
     jobs.flush_pending_latency_results(job_id, state);
+
+    if cancellation.is_requested() {
+        return Ok(LatencyJobRunOutcome {
+            completed,
+            succeeded,
+            cancelled: true,
+        });
+    }
 
     if let Some(handle) = runtime.node_latency_probe_handle() {
         let generation = handle.probe_generation();
@@ -314,6 +194,9 @@ fn run_node_latency_job_inner(
             .probe_batch_size(latency_probe_unique_link_count(nodes))
             .max(1);
         for link_chunk in latency_probe_link_chunks(nodes, chunk_size) {
+            if cancellation.is_requested() {
+                break;
+            }
             let chunk_nodes = latency_probe_nodes_for_links(nodes, &link_chunk);
             let chunk_nodes = current_latency_probe_nodes(&conn, &chunk_nodes)?;
             if chunk_nodes.is_empty() {
@@ -321,9 +204,13 @@ fn run_node_latency_job_inner(
             }
             let link_chunk = latency_probe_unique_links(&chunk_nodes);
             let mut emitted_snapshots = Vec::<Value>::new();
-            handle.probe_node_latencies_streaming_without_group_update(
+            let probe_cancelled = handle.probe_node_latencies_streaming_without_group_update(
                 &link_chunk,
+                || cancellation.is_requested(),
                 |runtime_snapshots| {
+                    if cancellation.is_requested() {
+                        return;
+                    }
                     if let Some(generation) = generation
                         && runtime.current_probe_generation() != Some(generation)
                     {
@@ -340,6 +227,7 @@ fn run_node_latency_job_inner(
                     let (result_count, alive) = apply_and_persist_runtime_latency_results(
                         jobs,
                         job_id,
+                        cancellation,
                         state,
                         runtime_snapshots,
                         &results,
@@ -355,9 +243,15 @@ fn run_node_latency_job_inner(
                     );
                 },
             );
+            if probe_cancelled || cancellation.is_requested() {
+                break;
+            }
             if let Some(generation) = generation
                 && runtime.current_probe_generation() != Some(generation)
             {
+                if cancellation.is_requested() {
+                    break;
+                }
                 let failures = latency_probe_failure_snapshots_for_unseen_links(
                     &link_chunk,
                     generation,
@@ -369,7 +263,7 @@ fn run_node_latency_job_inner(
                     continue;
                 }
                 let results = node_latency_results_for_runtime_snapshots(&chunk_nodes, &failures);
-                if !results.is_empty() {
+                if !results.is_empty() && !cancellation.is_requested() {
                     let alive = results.iter().filter(|result| result.alive).count();
                     completed = completed.saturating_add(results.len());
                     succeeded = succeeded.saturating_add(alive);
@@ -383,11 +277,11 @@ fn run_node_latency_job_inner(
                 }
             }
         }
-    } else if !nodes.is_empty() {
+    } else if !nodes.is_empty() && !cancellation.is_requested() {
         let nodes = current_latency_probe_nodes(&conn, nodes)?;
         let tested_at = now_text();
         let results = native_probe_unavailable_results(&nodes, &tested_at);
-        if !results.is_empty() {
+        if !results.is_empty() && !cancellation.is_requested() {
             let alive = results.iter().filter(|result| result.alive).count();
             completed = results.len();
             succeeded = alive;
@@ -402,24 +296,32 @@ fn run_node_latency_job_inner(
     }
 
     jobs.flush_pending_latency_results(job_id, state);
-    let _ = append_log_for_config(
-        config_dir,
-        state,
-        "info",
-        "node latency probe updated by Rust daed",
-    );
-    Ok((completed, succeeded, completed.saturating_sub(succeeded)))
+    let cancelled = cancellation.is_requested();
+    if !cancelled {
+        let _ = append_log_for_config(
+            config_dir,
+            state,
+            "info",
+            "node latency probe updated by Rust daed",
+        );
+    }
+    Ok(LatencyJobRunOutcome {
+        completed,
+        succeeded,
+        cancelled,
+    })
 }
 
 fn apply_and_persist_runtime_latency_results(
     jobs: &LatencyJobManager,
     job_id: u64,
+    cancellation: &LatencyJobCancellation,
     state: &Path,
     runtime_snapshots: &[Value],
     results: &[NodeLatencyWrite],
     apply_selector: impl FnOnce(&[Value]),
 ) -> (usize, usize) {
-    if results.is_empty() {
+    if results.is_empty() || cancellation.is_requested() {
         return (0, 0);
     }
     apply_selector(runtime_snapshots);
@@ -623,6 +525,7 @@ mod tests {
         let counts = apply_and_persist_runtime_latency_results(
             &jobs,
             1,
+            &LatencyJobCancellation::new(1),
             &state,
             &[json!({"alive": true, "latencyMs": 9})],
             &results,
@@ -632,6 +535,46 @@ mod tests {
         assert_eq!(counts, (1, 1));
         assert!(applied.load(Ordering::Acquire));
         assert_eq!(jobs.persistence.pending_count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cancelled_latency_job_does_not_apply_or_persist_new_results() {
+        let (dir, state) = temp_state("cancelled-before-apply");
+        let conn = open_state_connection(&state).unwrap();
+        insert_latency_probe_node(&conn, 1, "socks://127.0.0.1:1080#one");
+        drop(conn);
+        let jobs = LatencyJobManager::default();
+        let (job, _) = jobs.start_or_current(1).unwrap();
+        let cancellation = job.cancellation();
+        jobs.request_cancel(job.id()).unwrap();
+        let applied = std::sync::atomic::AtomicBool::new(false);
+        let results = vec![NodeLatencyWrite {
+            node_id: 1,
+            node_link: "socks://127.0.0.1:1080#one".to_owned(),
+            latency_ms: Some(9),
+            alive: true,
+            tested_at: "now".to_owned(),
+            message: None,
+        }];
+
+        let counts = apply_and_persist_runtime_latency_results(
+            &jobs,
+            job.id(),
+            &cancellation,
+            &state,
+            &[json!({"alive": true, "latencyMs": 9})],
+            &results,
+            |_| applied.store(true, Ordering::Release),
+        );
+
+        assert_eq!(counts, (0, 0));
+        assert!(!applied.load(Ordering::Acquire));
+        assert_eq!(jobs.persistence.pending_count(), 0);
+        assert_eq!(
+            list_stored_node_latencies_value(&state).unwrap()["items"][0]["testedAt"].as_str(),
+            Some("")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

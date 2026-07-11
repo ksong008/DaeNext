@@ -23,7 +23,7 @@ pub(super) fn product_openapi_skeleton() -> Value {
             "/api/subscriptions": {"get": {"summary": "list subscriptions"}, "post": {"summary": "import subscription"}, "delete": {"summary": "delete subscriptions"}},
             "/api/groups": {"get": {"summary": "list groups"}, "post": {"summary": "create group"}},
             "/api/nodes/latencies": {"get": {"summary": "list latency results"}, "post": {"summary": "enqueue latency test"}},
-            "/api/nodes/latencies/job": {"get": {"summary": "current latency test job"}},
+            "/api/nodes/latencies/job": {"get": {"summary": "current latency test job"}, "delete": {"summary": "cancel latency test job"}},
             "/api/runtime/reload": {"post": {"summary": "materialize and apply runtime state"}},
             "/api/runtime/stop": {"post": {"summary": "stop runtime owner state"}},
             "/api/runtime/overview": {"get": {"summary": "runtime overview"}},

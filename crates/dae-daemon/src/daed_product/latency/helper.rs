@@ -31,17 +31,28 @@ pub(crate) struct LatencyProbeHelperStreamError {
     pub(crate) message: String,
 }
 
-pub(crate) fn run_latency_probe_helper_streaming<F>(
+#[derive(Debug)]
+pub(crate) enum LatencyProbeHelperStreamOutcome {
+    Completed,
+    Cancelled,
+}
+
+pub(crate) fn run_latency_probe_helper_streaming<F, C>(
     config_content: &str,
     reload_generation: u64,
     concurrency: usize,
     tcp_probe_timeout: Duration,
     links: &[String],
+    mut should_cancel: C,
     mut on_snapshot: F,
-) -> Result<Vec<Value>, LatencyProbeHelperStreamError>
+) -> Result<LatencyProbeHelperStreamOutcome, LatencyProbeHelperStreamError>
 where
     F: FnMut(&Value),
+    C: FnMut() -> bool,
 {
+    if should_cancel() {
+        return Ok(LatencyProbeHelperStreamOutcome::Cancelled);
+    }
     let current_exe = std::env::current_exe().map_err(|err| LatencyProbeHelperStreamError {
         snapshots: Vec::new(),
         message: format!("resolve latency probe helper executable: {err}"),
@@ -125,6 +136,7 @@ where
     let mut streamed_bytes = 0usize;
     let timeout = latency_probe_helper_timeout(concurrency, links.len(), tcp_probe_timeout);
     let started = Instant::now();
+    let mut cancelled = false;
     let status = loop {
         drain_latency_probe_helper_lines(
             &line_rx,
@@ -137,6 +149,10 @@ where
             snapshots: snapshots.clone(),
             message,
         })?;
+        if should_cancel() {
+            cancelled = true;
+            break process.terminate_and_wait();
+        }
         match process
             .child_mut()
             .try_wait()
@@ -168,6 +184,10 @@ where
     })?;
     let stderr = process.join_readers();
 
+    if cancelled {
+        return Ok(LatencyProbeHelperStreamOutcome::Cancelled);
+    }
+
     let Some(status) = status else {
         return Err(LatencyProbeHelperStreamError {
             snapshots,
@@ -194,7 +214,7 @@ where
             ),
         });
     }
-    Ok(snapshots)
+    Ok(LatencyProbeHelperStreamOutcome::Completed)
 }
 
 pub(crate) fn latency_probe_helper_parent_chunk_size(

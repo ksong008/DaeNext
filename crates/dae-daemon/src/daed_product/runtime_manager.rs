@@ -132,13 +132,15 @@ pub(super) enum ProductRuntimeProbeHandle {
 }
 
 impl ProductRuntimeProbeHandle {
-    pub(super) fn probe_node_latencies_streaming_without_group_update<F>(
+    pub(super) fn probe_node_latencies_streaming_without_group_update<F, C>(
         &self,
         links: &[String],
+        mut should_cancel: C,
         mut on_snapshots: F,
-    ) -> Vec<Value>
+    ) -> bool
     where
         F: FnMut(&[Value]),
+        C: FnMut() -> bool,
     {
         match self {
             Self::Resident {
@@ -152,9 +154,11 @@ impl ProductRuntimeProbeHandle {
                         handle.probe_concurrency(),
                         handle.probe_timeout(),
                         links,
+                        &mut should_cancel,
                         |snapshot| on_snapshots(std::slice::from_ref(snapshot)),
                     ) {
-                        Ok(snapshots) => snapshots,
+                        Ok(LatencyProbeHelperStreamOutcome::Completed) => false,
+                        Ok(LatencyProbeHelperStreamOutcome::Cancelled) => true,
                         Err(err) => {
                             let failures = latency_probe_failure_snapshots_for_unseen_links(
                                 links,
@@ -166,21 +170,31 @@ impl ProductRuntimeProbeHandle {
                             if !failures.is_empty() {
                                 on_snapshots(&failures);
                             }
-                            let mut snapshots = err.snapshots;
-                            snapshots.extend(failures);
-                            snapshots
+                            false
                         }
                     }
                 } else {
+                    if should_cancel() {
+                        return true;
+                    }
                     let snapshots = handle.probe_node_latencies_without_group_update(links);
+                    if should_cancel() {
+                        return true;
+                    }
                     on_snapshots(&snapshots);
-                    snapshots
+                    false
                 }
             }
             Self::Fake => {
+                if should_cancel() {
+                    return true;
+                }
                 let snapshots = fake_runtime_probe_node_latencies(links);
+                if should_cancel() {
+                    return true;
+                }
                 on_snapshots(&snapshots);
-                snapshots
+                false
             }
         }
     }

@@ -15,6 +15,32 @@ pub(in crate::daed_product) fn api_get_node_latency_job(app: &AppState) -> HttpR
     HttpResponse::json(200, current_node_latency_job_value(&app.latency_jobs))
 }
 
+pub(in crate::daed_product) fn api_cancel_node_latency_job(
+    app: &AppState,
+    request: &HttpRequest,
+) -> HttpResponse {
+    let body = match json_body(request) {
+        Ok(body) => body,
+        Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
+    };
+    let Some(job_id) = body.get("id").and_then(Value::as_u64) else {
+        return HttpResponse::json(400, json!({"error": "latency job id is required"}));
+    };
+    match cancel_node_latency_job_value(&app.latency_jobs, job_id) {
+        Ok(value) => HttpResponse::json(200, value),
+        Err(LatencyJobCancelError::NoCurrentJob) => HttpResponse::json(
+            404,
+            json!({"error": LatencyJobCancelError::NoCurrentJob.to_string()}),
+        ),
+        Err(err @ LatencyJobCancelError::JobIdMismatch { .. }) => {
+            HttpResponse::json(409, json!({"error": err.to_string()}))
+        }
+        Err(err @ LatencyJobCancelError::ManagerUnavailable) => {
+            HttpResponse::json(500, json!({"error": err.to_string()}))
+        }
+    }
+}
+
 pub(in crate::daed_product) fn api_test_node_latencies(
     app: &AppState,
     request: &HttpRequest,
