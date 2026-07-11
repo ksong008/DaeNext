@@ -97,19 +97,6 @@ pub(super) fn write_http_response_for_request(
     )
 }
 
-pub(in crate::daed_product) fn write_cors_headers(
-    stream: &mut TcpStream,
-    request: &HttpRequest,
-) -> io::Result<()> {
-    if let Some(origin) = allowed_cors_origin(request) {
-        write!(
-            stream,
-            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\nAccess-Control-Max-Age: 300\r\n",
-        )?;
-    }
-    Ok(())
-}
-
 fn write_http_response_with_origin_and_timeout(
     stream: &mut TcpStream,
     origin: Option<&str>,

@@ -12,6 +12,8 @@ pub(super) fn serve_forever(
     let runtime_config = app.runtime.current_config();
     let config = ProductHttpWorkerConfig::from_config(runtime_config.as_ref());
     app.http_metrics.configure(config);
+    let sse_runtime =
+        ProductSseRuntime::start(config, Arc::downgrade(&app), Arc::clone(&app.http_metrics))?;
     let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
     let receiver = Arc::new(Mutex::new(receiver));
     let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(config.worker_count);
@@ -19,10 +21,11 @@ pub(super) fn serve_forever(
         let receiver = Arc::clone(&receiver);
         let app = Arc::clone(&app);
         let metrics = Arc::clone(&app.http_metrics);
+        let sse_runtime = Arc::clone(&sse_runtime);
         let handle = match thread::Builder::new()
             .name(format!("daed-http-{index}"))
             .stack_size(config.worker_stack_bytes)
-            .spawn(move || product_http_worker_loop(index, receiver, app, metrics))
+            .spawn(move || product_http_worker_loop(index, receiver, app, metrics, sse_runtime))
         {
             Ok(handle) => handle,
             Err(err) => {
@@ -50,6 +53,7 @@ pub(super) fn serve_forever(
     if let Some(runtime) = app.geodata_update_runtime.as_ref() {
         http_fields.extend(runtime.startup_fields());
     }
+    http_fields.extend(sse_runtime.startup_fields());
     let _ = append_startup_step_completed_for_config(
         &app.config_dir,
         &app.state,
@@ -111,6 +115,7 @@ pub(super) fn product_http_worker_loop(
     receiver: Arc<Mutex<Receiver<ProductHttpJob>>>,
     app: Arc<AppState>,
     metrics: Arc<ProductHttpMetrics>,
+    sse_runtime: Arc<ProductSseRuntime>,
 ) {
     loop {
         let recv_result = {
@@ -124,7 +129,12 @@ pub(super) fn product_http_worker_loop(
                 metrics.dequeued();
                 metrics.opened();
                 if matches!(
-                    handle_stream(job.stream, Arc::clone(&app), Arc::clone(&metrics)),
+                    handle_stream(
+                        job.stream,
+                        Arc::clone(&app),
+                        Arc::clone(&metrics),
+                        Some(Arc::clone(&sse_runtime)),
+                    ),
                     Ok(ProductHttpConnectionResult::Detached)
                 ) {
                     continue;
@@ -159,6 +169,7 @@ pub(super) fn handle_stream(
     mut stream: TcpStream,
     app: Arc<AppState>,
     metrics: Arc<ProductHttpMetrics>,
+    sse_runtime: Option<Arc<ProductSseRuntime>>,
 ) -> io::Result<ProductHttpConnectionResult> {
     let context = ProductHttpRequestContext {
         peer_ip: stream.peer_addr().ok().map(|peer| peer.ip()),
@@ -180,8 +191,8 @@ pub(super) fn handle_stream(
     if request.method == "GET"
         && (request.path == "/api/events/logs" || request.path == "/api/events/runtime")
     {
-        match authenticate_request(&app, &request) {
-            Ok(Some(_user)) => {}
+        let user = match authenticate_request(&app, &request) {
+            Ok(Some(user)) => user,
             Ok(None) => {
                 let response = HttpResponse::json(401, json!({"error": "authentication required"}));
                 write_http_response_for_request(&mut stream, &request, &response, head_only)?;
@@ -193,7 +204,12 @@ pub(super) fn handle_stream(
                 return Ok(ProductHttpConnectionResult::Closed);
             }
         };
-        return detach_sse_stream(stream, app, metrics, request);
+        let Some(sse_runtime) = sse_runtime.as_deref() else {
+            let response = HttpResponse::json(503, json!({"error": "SSE runtime is unavailable"}));
+            write_http_response_for_request(&mut stream, &request, &response, false)?;
+            return Ok(ProductHttpConnectionResult::Closed);
+        };
+        return detach_sse_stream(stream, metrics, request, user.id, sse_runtime);
     }
     if let Some(kind) = geodata_update_kind_for_request(&request)
         && let Some(runtime) = app.geodata_update_runtime.as_ref()
@@ -241,35 +257,33 @@ fn detach_geodata_update_stream(
 
 fn detach_sse_stream(
     mut stream: TcpStream,
-    app: Arc<AppState>,
     metrics: Arc<ProductHttpMetrics>,
     request: HttpRequest,
+    user_id: i64,
+    runtime: &ProductSseRuntime,
 ) -> io::Result<ProductHttpConnectionResult> {
     let stream_kind = if request.path == "/api/events/logs" {
-        "logs"
+        if let Err(error) = log_level_filter_from_request(&request)
+            .and_then(|_| log_event_after_id_from_request(&request).map(|_| ()))
+        {
+            let response = HttpResponse::json(400, json!({"error": error}));
+            write_http_response_for_request(&mut stream, &request, &response, false)?;
+            return Ok(ProductHttpConnectionResult::Closed);
+        }
+        ProductSseStreamKind::Logs
     } else {
-        "runtime"
+        ProductSseStreamKind::Runtime
     };
-    stream.set_write_timeout(Some(PRODUCT_HTTP_SSE_WRITE_TIMEOUT))?;
-    let thread_name = format!("daed-sse-{stream_kind}");
-    metrics.sse_opened();
-    let thread_metrics = Arc::clone(&metrics);
-    match thread::Builder::new()
-        .name(thread_name)
-        .stack_size(PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT)
-        .spawn(move || {
-            if request.path == "/api/events/logs" {
-                let _ = stream_log_events(&mut stream, &app, &request);
-            } else {
-                let _ = stream_runtime_events(&mut stream, &app, &request);
-            }
-            thread_metrics.sse_closed();
-            thread_metrics.closed();
-        }) {
-        Ok(_) => Ok(ProductHttpConnectionResult::Detached),
-        Err(err) => {
-            metrics.sse_closed();
-            Err(err)
+    match runtime.submit(user_id, stream_kind, stream, request, metrics) {
+        Ok(()) => Ok(ProductHttpConnectionResult::Detached),
+        Err(mut rejection) => {
+            write_http_response_for_request(
+                &mut rejection.stream,
+                &rejection.request,
+                &rejection.response,
+                false,
+            )?;
+            Ok(ProductHttpConnectionResult::Closed)
         }
     }
 }

@@ -261,6 +261,18 @@ struct ProductHttpMetrics {
     enqueued_total: AtomicU64,
     rejected_total: AtomicU64,
     queue_depth: AtomicU64,
+    sse_connection_limit: AtomicU64,
+    sse_per_user_limit: AtomicU64,
+    sse_queue_capacity: AtomicU64,
+    sse_worker_stack_bytes: AtomicU64,
+    sse_queue_depth: AtomicU64,
+    sse_submitted_total: AtomicU64,
+    sse_completed_total: AtomicU64,
+    sse_rejected_limit_total: AtomicU64,
+    sse_rejected_capacity_total: AtomicU64,
+    sse_rejected_unavailable_total: AtomicU64,
+    sse_runtime_joined_total: AtomicU64,
+    sse_runtime_detached_total: AtomicU64,
 }
 
 impl ProductHttpMetrics {
@@ -275,6 +287,23 @@ impl ProductHttpMetrics {
 
     fn accepted(&self) {
         self.accepted_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn configure_sse(
+        &self,
+        connection_limit: usize,
+        per_user_limit: usize,
+        queue_capacity: usize,
+        worker_stack_bytes: usize,
+    ) {
+        self.sse_connection_limit
+            .store(connection_limit as u64, Ordering::Relaxed);
+        self.sse_per_user_limit
+            .store(per_user_limit as u64, Ordering::Relaxed);
+        self.sse_queue_capacity
+            .store(queue_capacity as u64, Ordering::Relaxed);
+        self.sse_worker_stack_bytes
+            .store(worker_stack_bytes as u64, Ordering::Relaxed);
     }
 
     fn enqueued(&self) {
@@ -314,6 +343,58 @@ impl ProductHttpMetrics {
         );
     }
 
+    fn sse_enqueued(&self) {
+        self.sse_submitted_total.fetch_add(1, Ordering::Relaxed);
+        self.sse_queue_depth.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn sse_dequeued(&self) {
+        let _ = self
+            .sse_queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                Some(depth.saturating_sub(1))
+            });
+        self.sse_opened();
+    }
+
+    fn sse_submission_rollback(&self) {
+        let _ = self
+            .sse_queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                Some(depth.saturating_sub(1))
+            });
+    }
+
+    fn sse_completed(&self) {
+        self.sse_closed();
+        self.sse_completed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn sse_rejected_limit(&self) {
+        self.sse_rejected_limit_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn sse_rejected_capacity(&self) {
+        self.sse_rejected_capacity_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn sse_rejected_unavailable(&self) {
+        self.sse_rejected_unavailable_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn sse_runtime_joined(&self) {
+        self.sse_runtime_joined_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn sse_runtime_detached(&self) {
+        self.sse_runtime_detached_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn snapshot(&self) -> Value {
         json!({
             "configuredWorkers": self.configured_workers.load(Ordering::Relaxed),
@@ -325,6 +406,20 @@ impl ProductHttpMetrics {
             "enqueuedTotal": self.enqueued_total.load(Ordering::Relaxed),
             "rejectedTotal": self.rejected_total.load(Ordering::Relaxed),
             "queueDepth": self.queue_depth.load(Ordering::Relaxed),
+            "sseRuntime": {
+                "connectionLimit": self.sse_connection_limit.load(Ordering::Relaxed),
+                "perUserLimit": self.sse_per_user_limit.load(Ordering::Relaxed),
+                "queueCapacity": self.sse_queue_capacity.load(Ordering::Relaxed),
+                "workerStackBytes": self.sse_worker_stack_bytes.load(Ordering::Relaxed),
+                "queueDepth": self.sse_queue_depth.load(Ordering::Relaxed),
+                "submittedTotal": self.sse_submitted_total.load(Ordering::Relaxed),
+                "completedTotal": self.sse_completed_total.load(Ordering::Relaxed),
+                "rejectedLimitTotal": self.sse_rejected_limit_total.load(Ordering::Relaxed),
+                "rejectedCapacityTotal": self.sse_rejected_capacity_total.load(Ordering::Relaxed),
+                "rejectedUnavailableTotal": self.sse_rejected_unavailable_total.load(Ordering::Relaxed),
+                "runtimeJoinedTotal": self.sse_runtime_joined_total.load(Ordering::Relaxed),
+                "runtimeDetachedTotal": self.sse_runtime_detached_total.load(Ordering::Relaxed),
+            },
         })
     }
 }
@@ -703,6 +798,8 @@ mod state_schema;
 use self::state_schema::*;
 mod http_server;
 use self::http_server::*;
+mod sse_runtime;
+use self::sse_runtime::*;
 mod local_control;
 use self::local_control::*;
 mod api_routes;

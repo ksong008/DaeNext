@@ -60,6 +60,48 @@ pub(crate) fn log_scan_cursor_does_not_skip_ids_after_prune_rename() {
 }
 
 #[test]
+pub(crate) fn log_scan_batch_limits_scanned_lines_before_after_id() {
+    const TOTAL_LINES: u64 = 1_024;
+    const BATCH_LINES: usize = 32;
+
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-log-bounded-scan-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(product_log_dir(&dir)).unwrap();
+    let path = product_log_file(&dir);
+    let mut contents = String::new();
+    for id in 1..=TOTAL_LINES {
+        contents.push_str(&format!(
+            "{{\"id\":{id},\"ts\":\"2026-07-12T00:00:00Z\",\"level\":\"info\",\"message\":\"entry-{id:04}\",\"fields\":{{}}}}\n"
+        ));
+    }
+    fs::write(path, contents).unwrap();
+
+    let mut cursor = ProductLogScanCursor::start();
+    let mut batches = 0_usize;
+    loop {
+        let batch = read_log_entry_batch_from_cursor(
+            &dir,
+            cursor,
+            TOTAL_LINES.saturating_add(1),
+            BATCH_LINES,
+        )
+        .unwrap();
+        batches = batches.saturating_add(1);
+        assert!(batch.entries.is_empty());
+        cursor = batch.state.cursor;
+        if batch.reached_eof {
+            break;
+        }
+        assert!(batches <= TOTAL_LINES as usize / BATCH_LINES);
+    }
+
+    assert_eq!(batches, TOTAL_LINES as usize / BATCH_LINES + 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn product_json_log_timestamp_uses_local_offset_shape() {
     assert_eq!(iso8601_utc(0), "1970-01-01T00:00:00Z");
     assert_eq!(
