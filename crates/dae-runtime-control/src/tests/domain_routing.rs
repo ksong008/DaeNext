@@ -309,6 +309,48 @@ pub(super) fn domain_routing_dns_event_is_normalized_in_rust_and_preserves_multi
 }
 
 #[test]
+pub(super) fn domain_routing_owner_tracks_an_owner_when_the_kernel_delta_is_empty() {
+    let mut owner = DomainRoutingOwner::default();
+    let ip = parse_ip_key("192.0.2.90").unwrap();
+    owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::from_keys("owner-a", &[0x1], [ip]),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+
+    let second = owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::from_keys("owner-b", &[0x1], [ip]),
+            |_, updates, deletes| {
+                assert!(updates.is_empty());
+                assert!(deletes.is_empty());
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    assert!(second.skipped);
+    assert_eq!(owner.tracker().owner_count(), 2);
+    let remove_first = owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::remove("owner-a"),
+            |_, updates, deletes| {
+                assert!(updates.is_empty());
+                assert!(deletes.is_empty());
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(remove_first.skipped);
+    assert_eq!(owner.tracker().owner_count(), 1);
+    assert_eq!(owner.tracker().ip_count(), 1);
+}
+
+#[test]
 pub(super) fn domain_routing_owner_removes_only_the_departing_owner_bitmap() {
     let mut owner = DomainRoutingOwner::default();
     let shared_ip = parse_ip_key("192.0.2.1").unwrap();
