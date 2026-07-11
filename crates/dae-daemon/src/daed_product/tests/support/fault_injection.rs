@@ -69,6 +69,22 @@ impl RuntimeFaultFixture {
     }
 }
 
+impl RuntimeApplyCheckpoints for RuntimeFaultFixture {
+    fn checkpoint(&mut self, point: RuntimeApplyCheckpoint) -> io::Result<()> {
+        let point = match point {
+            RuntimeApplyCheckpoint::CreateDirectory => RuntimeFaultPoint::CreateDirectory,
+            RuntimeApplyCheckpoint::WriteCandidate => RuntimeFaultPoint::WriteCandidate,
+            RuntimeApplyCheckpoint::SyncCandidate => RuntimeFaultPoint::SyncCandidate,
+            RuntimeApplyCheckpoint::StartCandidate => RuntimeFaultPoint::StartCandidate,
+            RuntimeApplyCheckpoint::CommitPostStart => RuntimeFaultPoint::CommitPostStart,
+            RuntimeApplyCheckpoint::RenameCandidate => RuntimeFaultPoint::RenameCandidate,
+            RuntimeApplyCheckpoint::CommitDatabase => RuntimeFaultPoint::CommitDatabase,
+            RuntimeApplyCheckpoint::Rollback => RuntimeFaultPoint::Rollback,
+        };
+        RuntimeFaultFixture::checkpoint(self, point)
+    }
+}
+
 #[test]
 fn runtime_fault_fixture_covers_every_transaction_boundary_once() {
     for point in RuntimeFaultPoint::ALL {
