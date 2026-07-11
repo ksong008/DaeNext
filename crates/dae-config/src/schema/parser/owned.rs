@@ -78,6 +78,12 @@ pub(crate) fn parse_global_owned(section: Section) -> Result<Global, String> {
             "resident_tcp_flow_stack_bytes" => {
                 global.resident_tcp_flow_stack_bytes = Some(decode_value(&key, &val, "uint64")?)
             }
+            "resident_tcp_runtime_workers" => {
+                global.resident_tcp_runtime_workers = Some(decode_value(&key, &val, "uint64")?)
+            }
+            "resident_tcp_connection_limit" => {
+                global.resident_tcp_connection_limit = Some(decode_value(&key, &val, "uint64")?)
+            }
             "resident_dns_upstream_refresh_seconds" => {
                 global.resident_dns_upstream_refresh_seconds =
                     Some(decode_value(&key, &val, "uint64")?)

@@ -194,6 +194,25 @@ pub(crate) fn merge_global_json_value(target: &mut Value, source: &Value) {
     );
     set_global_u64(
         target,
+        "residentTcpRuntimeWorkers",
+        json_u64(
+            source,
+            &["residentTcpRuntimeWorkers", "resident_tcp_runtime_workers"],
+        ),
+    );
+    set_global_u64(
+        target,
+        "residentTcpConnectionLimit",
+        json_u64(
+            source,
+            &[
+                "residentTcpConnectionLimit",
+                "resident_tcp_connection_limit",
+            ],
+        ),
+    );
+    set_global_u64(
+        target,
         "residentDnsUpstreamRefreshSeconds",
         json_u64(
             source,
@@ -481,6 +500,16 @@ pub(crate) fn merge_global_directives(target: &mut Value, directives: &HashMap<S
         target,
         "residentTcpFlowStackBytes",
         directive_u64(directives, "resident_tcp_flow_stack_bytes"),
+    );
+    set_global_u64(
+        target,
+        "residentTcpRuntimeWorkers",
+        directive_u64(directives, "resident_tcp_runtime_workers"),
+    );
+    set_global_u64(
+        target,
+        "residentTcpConnectionLimit",
+        directive_u64(directives, "resident_tcp_connection_limit"),
     );
     set_global_u64(
         target,

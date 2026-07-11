@@ -1,10 +1,10 @@
 use super::*;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::mpsc::{self, Receiver};
 
 mod shutdown;
+mod task;
 
 use self::shutdown::shutdown_resident_runtime_owner;
+use self::task::*;
 
 pub(crate) struct ResidentRuntimeOwner {
     stop: Arc<AtomicBool>,
@@ -24,20 +24,6 @@ pub(crate) struct ResidentManualProbeHandle {
     manual_probe_plans: BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
     reload_generation: u64,
     resource_config: ResidentRuntimeResourceConfig,
-}
-
-#[derive(Debug)]
-struct ResidentRuntimeTask {
-    name: &'static str,
-    kind: &'static str,
-    handle: Option<JoinHandle<()>>,
-    completion: Option<Receiver<ResidentRuntimeTaskExit>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ResidentRuntimeTaskExit {
-    Completed,
-    Panicked,
 }
 
 impl std::fmt::Debug for ResidentRuntimeOwner {
@@ -123,32 +109,33 @@ impl ResidentRuntimeOwner {
         kind: &'static str,
         handle: JoinHandle<()>,
     ) {
-        self.tasks.push(ResidentRuntimeTask {
-            name,
-            kind,
-            handle: Some(handle),
-            completion: None,
-        });
+        self.tasks
+            .push(registered_resident_runtime_task(name, kind, handle));
     }
 
     pub(crate) fn spawn_thread<F>(&mut self, name: &'static str, kind: &'static str, run: F)
     where
         F: FnOnce() + Send + 'static,
     {
-        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
-        let handle = thread::spawn(move || {
-            let exit = match catch_unwind(AssertUnwindSafe(run)) {
-                Ok(()) => ResidentRuntimeTaskExit::Completed,
-                Err(_) => ResidentRuntimeTaskExit::Panicked,
-            };
-            let _ = completion_tx.send(exit);
-        });
-        self.tasks.push(ResidentRuntimeTask {
+        self.tasks
+            .push(spawn_resident_runtime_task(name, kind, None, run));
+    }
+
+    pub(crate) fn spawn_thread_with_stack<F>(
+        &mut self,
+        name: &'static str,
+        kind: &'static str,
+        stack_bytes: usize,
+        run: F,
+    ) where
+        F: FnOnce() + Send + 'static,
+    {
+        self.tasks.push(spawn_resident_runtime_task(
             name,
             kind,
-            handle: Some(handle),
-            completion: Some(completion_rx),
-        });
+            Some(stack_bytes),
+            run,
+        ));
     }
 
     pub(crate) fn task_registry_value(&self) -> Value {
