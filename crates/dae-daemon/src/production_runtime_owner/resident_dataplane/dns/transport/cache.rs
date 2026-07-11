@@ -172,7 +172,7 @@ impl ResidentDnsForwarderCache {
             h2_permits: Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS),
             h2: AsyncMutex::new(None),
             h2_open_lock: AsyncMutex::new(()),
-            h2_disabled: std::sync::atomic::AtomicBool::new(false),
+            h2_recovery: Mutex::new(ResidentDnsH2Recovery::default()),
         });
         self.get_or_insert_https_forwarder(key, forwarder)
     }

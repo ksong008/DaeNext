@@ -10,7 +10,8 @@ use super::wire::{
     read_http1_response_message_capped_async, read_to_end_capped_async,
     resident_dns_tls_client_config, restore_dns_response_id,
 };
-use std::sync::atomic::Ordering;
+
+const DNS_HTTPS_H2_RETRY_COOLDOWN: std::time::Duration = RESIDENT_UDP_RESPONSE_TIMEOUT;
 
 pub(super) async fn forward_dns_tls_async(
     upstream: &ResidentDnsUpstream,
@@ -266,11 +267,10 @@ async fn forward_dns_https_to_routed_target_async(
 impl ResidentDnsHttpsForwarder {
     async fn exchange(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
         let mut h2_error = None;
-        if !self.h2_disabled.load(Ordering::Relaxed) {
+        if self.h2_retry_ready() {
             match self.exchange_h2(payload).await {
                 Ok(response) => return Ok(response),
                 Err(err) => {
-                    self.clear_h2().await;
                     h2_error = Some(err);
                 }
             }
@@ -330,7 +330,11 @@ impl ResidentDnsHttpsForwarder {
     async fn exchange_h2(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
         let _permit = acquire_dns_permit(&self.h2_permits, "DNS HTTPS HTTP/2 stream pool").await?;
         let mut sender = self.h2_sender().await?;
-        forward_dns_https_over_h2_async(&self.upstream, payload, &mut sender).await
+        let result = forward_dns_https_over_h2_async(&self.upstream, payload, &mut sender).await;
+        if result.is_err() {
+            self.invalidate_h2().await;
+        }
+        result
     }
 
     async fn h2_sender(&self) -> Result<h2::client::SendRequest<Bytes>, String> {
@@ -340,6 +344,9 @@ impl ResidentDnsHttpsForwarder {
                 return Ok(forwarder.sender.clone());
             }
         }
+        if !self.h2_retry_ready() {
+            return Err("DNS HTTPS HTTP/2 retry cooldown is active".to_owned());
+        }
         let _open_guard = self.h2_open_lock.lock().await;
         {
             let h2 = self.h2.lock().await;
@@ -347,23 +354,51 @@ impl ResidentDnsHttpsForwarder {
                 return Ok(forwarder.sender.clone());
             }
         }
+        if !self.h2_retry_ready() {
+            return Err("DNS HTTPS HTTP/2 retry cooldown is active".to_owned());
+        }
         match open_dns_https_h2_forwarder_async(&self.upstream, self.target, self.mark).await {
             Ok(forwarder) => {
                 let sender = forwarder.sender.clone();
+                self.record_h2_success();
                 let mut h2 = self.h2.lock().await;
                 *h2 = Some(forwarder);
                 Ok(sender)
             }
             Err(err) => {
-                self.h2_disabled.store(true, Ordering::Relaxed);
+                self.record_h2_failure();
                 Err(err)
             }
         }
     }
 
-    async fn clear_h2(&self) {
+    async fn invalidate_h2(&self) {
+        let _open_guard = self.h2_open_lock.lock().await;
         let mut h2 = self.h2.lock().await;
         *h2 = None;
+        drop(h2);
+        self.record_h2_failure();
+    }
+
+    fn h2_retry_ready(&self) -> bool {
+        self.h2_recovery
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .should_attempt(std::time::Instant::now())
+    }
+
+    fn record_h2_failure(&self) {
+        self.h2_recovery
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .record_failure(std::time::Instant::now(), DNS_HTTPS_H2_RETRY_COOLDOWN);
+    }
+
+    fn record_h2_success(&self) {
+        self.h2_recovery
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .record_success();
     }
 }
 
