@@ -21,6 +21,45 @@ fn assert_log_field_from_json(fields: &Value, key: &str, value: &Value) {
 }
 
 #[test]
+pub(crate) fn log_scan_cursor_does_not_skip_ids_after_prune_rename() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-log-prune-cursor-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(product_log_dir(&dir)).unwrap();
+    let path = product_log_file(&dir);
+    let mut initial = String::new();
+    for id in 1..=510_u64 {
+        initial.push_str(&format!(
+            "{{\"id\":{id},\"ts\":\"2026-07-12T00:00:00Z\",\"level\":\"info\",\"message\":\"entry-{id:04}\",\"fields\":{{}}}}\n"
+        ));
+    }
+    fs::write(&path, initial).unwrap();
+    let cursor = ProductLogScanCursor::at_end(&dir).unwrap();
+    let mut appended = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    for id in 511..=700_u64 {
+        writeln!(
+            appended,
+            "{{\"id\":{id},\"ts\":\"2026-07-12T00:00:00Z\",\"level\":\"info\",\"message\":\"entry-{id:04}\",\"fields\":{{}}}}"
+        )
+        .unwrap();
+    }
+    appended.flush().unwrap();
+    prune_log_file_with_settings(&path, 500, MIN_LOG_MAX_BYTES).unwrap();
+
+    let mut ids = Vec::new();
+    let scan = scan_log_entries_from_cursor(&dir, cursor, 510, |entry| {
+        ids.push(log_entry_value(entry)["id"].as_u64().unwrap());
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(scan.reset);
+    assert_eq!(ids, (511..=700_u64).collect::<Vec<_>>());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn product_json_log_timestamp_uses_local_offset_shape() {
     assert_eq!(iso8601_utc(0), "1970-01-01T00:00:00Z");
     assert_eq!(

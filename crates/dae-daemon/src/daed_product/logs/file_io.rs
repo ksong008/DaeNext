@@ -413,69 +413,6 @@ pub(crate) fn reset_log_id_cache_to_last(path: &Path) -> io::Result<()> {
     set_log_id_cache(path, read_last_log_id(path)?)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProductLogScanState {
-    pub(crate) offset: u64,
-    pub(crate) max_seen_id: u64,
-}
-
-pub(crate) fn log_file_size(config_dir: &Path) -> io::Result<u64> {
-    let log_file = product_log_file(config_dir);
-    match fs::metadata(log_file) {
-        Ok(metadata) => Ok(metadata.len()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0),
-        Err(err) => Err(err),
-    }
-}
-
-pub(crate) fn scan_log_entries_from_offset(
-    config_dir: &Path,
-    offset: u64,
-    after_id: u64,
-    mut on_entry: impl FnMut(ProductLogEntry) -> io::Result<()>,
-) -> io::Result<ProductLogScanState> {
-    let log_file = product_log_file(config_dir);
-    let mut file = match fs::File::open(&log_file) {
-        Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Ok(ProductLogScanState {
-                offset: 0,
-                max_seen_id: after_id,
-            });
-        }
-        Err(err) => return Err(err),
-    };
-    let len = file.metadata()?.len();
-    let mut next_offset = offset.min(len);
-    if next_offset > 0 {
-        file.seek(SeekFrom::Start(next_offset))?;
-    }
-    let mut reader = io::BufReader::new(file);
-    let mut max_seen_id = after_id;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let read = reader.read_line(&mut line)?;
-        if read == 0 {
-            break;
-        }
-        next_offset = next_offset.saturating_add(read as u64);
-        let Some(entry) = parse_log_entry_line(&line) else {
-            continue;
-        };
-        if entry.id > max_seen_id {
-            max_seen_id = entry.id;
-        }
-        if entry.id > after_id {
-            on_entry(entry)?;
-        }
-    }
-    Ok(ProductLogScanState {
-        offset: next_offset,
-        max_seen_id,
-    })
-}
-
 pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
     let log_file = product_log_file(config_dir);
     let file = match fs::File::open(&log_file) {
