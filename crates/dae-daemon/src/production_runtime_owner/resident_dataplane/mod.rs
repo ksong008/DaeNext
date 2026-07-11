@@ -73,6 +73,9 @@ pub(super) use self::runtime::*;
 #[path = "runtime/stop_signal.rs"]
 mod stop_signal;
 pub(crate) use self::stop_signal::*;
+#[path = "runtime/relay_deadline.rs"]
+mod relay_deadline;
+pub(crate) use self::relay_deadline::*;
 #[path = "runtime/group_selector_summary.rs"]
 mod group_selector_summary;
 pub(super) use self::group_selector_summary::*;
