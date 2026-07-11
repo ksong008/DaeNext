@@ -18,6 +18,8 @@ mod config_roundtrip;
 #[cfg(test)]
 mod dae_file_import;
 #[cfg(test)]
+mod default_resource_transactions;
+#[cfg(test)]
 mod default_resources;
 #[cfg(test)]
 mod logs;
