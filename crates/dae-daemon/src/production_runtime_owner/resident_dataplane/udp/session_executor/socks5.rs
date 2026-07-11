@@ -4,9 +4,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[derive(Default)]
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Socks5UdpAssociateSession {
     control: Option<tokio::net::TcpStream>,
-    relay: Option<tokio::net::UdpSocket>,
-    relay_addr: Option<SocketAddr>,
-    response_buf: Vec<u8>,
+    relay: DatagramRelay,
 }
 
 impl Socks5UdpAssociateSession {
@@ -17,19 +15,11 @@ impl Socks5UdpAssociateSession {
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         self.ensure_open(proxy).await?;
-        let relay_addr = self
-            .relay_addr
-            .ok_or_else(|| "SOCKS5 UDP relay address is not initialized".to_owned())?;
-        let relay = self
-            .relay
-            .as_ref()
-            .ok_or_else(|| "SOCKS5 UDP relay socket is not initialized".to_owned())?;
         let request = udp_packet::wrap_target(&original_dst.to_string(), payload)
             .map_err(|err| format!("wrap SOCKS5 UDP packet: {err}"))?;
-        relay
-            .send_to(&request, relay_addr)
-            .await
-            .map_err(|err| format!("send SOCKS5 UDP datagram: {err}"))?;
+        self.relay
+            .send_packet(&request, proxy.mark, "SOCKS5")
+            .await?;
         if let Some(response) = self.poll_response()? {
             return Ok(response);
         }
@@ -37,26 +27,11 @@ impl Socks5UdpAssociateSession {
     }
 
     pub(super) fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        let relay = match self.relay.as_ref() {
-            Some(relay) => relay,
+        let response = match self.relay.poll_response("SOCKS5")? {
+            Some(response) => response,
             None => return Ok(None),
         };
-        if self.response_buf.len() < UDP_DATAGRAM_RESPONSE_CAPACITY {
-            self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
-        }
-        let (read, _) = match relay.try_recv_from(&mut self.response_buf) {
-            Ok(read) => read,
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::Interrupted | ErrorKind::TimedOut
-                ) =>
-            {
-                return Ok(None);
-            }
-            Err(err) => return Err(format!("receive SOCKS5 UDP datagram: {err}")),
-        };
-        let decoded = udp_packet::unwrap(&self.response_buf[..read])
+        let decoded = udp_packet::unwrap(&response)
             .map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;
         Ok(Some(
             UdpExchangeResult::new(decoded.payload, "socks5-udp-associate")
@@ -72,7 +47,7 @@ impl Socks5UdpAssociateSession {
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
-        if self.control.is_some() && self.relay.is_some() && self.relay_addr.is_some() {
+        if self.control.is_some() && self.relay.is_open() {
             return Ok(());
         }
         let ResidentProxyProtocolPlan::Socks5Tcp { username, password } = &proxy.handler else {
@@ -82,11 +57,16 @@ impl Socks5UdpAssociateSession {
         let bind =
             socks5_udp_associate_control_async(&mut control, "0.0.0.0:0", username, password)
                 .await?;
-        let relay_addr = socks5_udp_relay_addr_async(proxy, &bind).await?;
-        let relay = open_marked_tokio_udp_socket(relay_addr, proxy.mark).await?;
+        let control_peer = control
+            .peer_addr()
+            .map_err(|err| format!("read SOCKS5 control peer address: {err}"))?;
+        let relay_candidates = socks5_udp_relay_addr_candidates_async(&bind, control_peer).await?;
+        let mut relay = DatagramRelay::default();
+        relay
+            .open_candidates(relay_candidates, proxy.mark, "SOCKS5")
+            .await?;
         self.control = Some(control);
-        self.relay = Some(relay);
-        self.relay_addr = Some(relay_addr);
+        self.relay = relay;
         Ok(())
     }
 }
@@ -215,3 +195,6 @@ async fn read_socks5_address_bytes_async(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests;
