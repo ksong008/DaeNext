@@ -297,12 +297,12 @@ pub(crate) fn latency_probe_link_chunks_preserve_unique_order_and_node_mapping()
 }
 
 #[test]
-pub(crate) fn latency_probe_helper_parent_chunk_size_runs_one_helper_per_job() {
+pub(crate) fn latency_probe_helper_parent_chunk_size_bounds_process_work() {
     assert_eq!(latency_probe_helper_parent_chunk_size(0, 0), 1);
-    assert_eq!(latency_probe_helper_parent_chunk_size(0, 27), 27);
+    assert_eq!(latency_probe_helper_parent_chunk_size(0, 27), 4);
     assert_eq!(latency_probe_helper_parent_chunk_size(8, 1), 1);
     assert_eq!(latency_probe_helper_parent_chunk_size(8, 27), 27);
-    assert_eq!(latency_probe_helper_parent_chunk_size(32, 129), 129);
+    assert_eq!(latency_probe_helper_parent_chunk_size(32, 129), 128);
 
     let make_nodes = |count, port_base: i64, prefix: &str| {
         (0..count)
@@ -328,14 +328,20 @@ pub(crate) fn latency_probe_helper_parent_chunk_size_runs_one_helper_per_job() {
         &nodes,
         latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
     );
-    assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), vec![50]);
+    assert_eq!(
+        chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![32, 18]
+    );
 
     let nodes = make_nodes(129, 30_000, "large");
     let chunks = latency_probe_link_chunks(
         &nodes,
         latency_probe_helper_parent_chunk_size(8, latency_probe_unique_link_count(&nodes)),
     );
-    assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), vec![129]);
+    assert_eq!(
+        chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![32, 32, 32, 32, 1]
+    );
 }
 
 #[test]
