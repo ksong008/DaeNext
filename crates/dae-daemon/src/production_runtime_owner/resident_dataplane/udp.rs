@@ -66,8 +66,8 @@ use super::tcp::{
     decode_vmess_grpc_response_stream_async, open_grpc_h2_stream, open_h2_body_stream,
     open_hysteria2_quic_connection_candidates_async, open_juicity_quic_connection_candidates_async,
     open_tuic_quic_connection_candidates_async, open_xhttp_packet_up_parts,
-    open_xhttp_stream_parts, poll_xhttp_download_data, send_grpc_hunk, send_h2_data,
-    send_h2_data_with_context, send_xhttp_packet_up_request, send_xhttp_stream_data,
+    open_xhttp_stream_parts, poll_xhttp_download_data, read_xhttp_download_data, send_grpc_hunk,
+    send_h2_data, send_h2_data_with_context, send_xhttp_packet_up_request, send_xhttp_stream_data,
     set_socket_mark,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};

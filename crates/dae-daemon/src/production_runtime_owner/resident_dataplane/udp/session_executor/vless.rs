@@ -305,17 +305,39 @@ impl VlessXhttpH2UdpSession {
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::ReadyOnly).await
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::Wait).await
+    }
+
+    async fn read_response(
+        &mut self,
+        mode: UdpStreamReadMode,
+    ) -> Result<Option<UdpExchangeResult>, String> {
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
+        }
+        if self.download.is_none() && mode.waits_for_readiness() {
+            return std::future::pending().await;
         }
         let Some(download) = self.download.as_mut() else {
             return Ok(None);
         };
-        match poll_xhttp_download_data(download).await? {
+        let data = if mode.waits_for_readiness() {
+            read_xhttp_download_data(download).await?
+        } else {
+            poll_xhttp_download_data(download).await?
+        };
+        match data {
             Some(bytes) => {
                 self.response_plaintext.extend_from_slice(&bytes);
                 self.try_pop_response_payload()
                     .map(|payload| payload.map(|payload| self.response_result(payload)))
+            }
+            None if mode.waits_for_readiness() => {
+                Err("VLESS xHTTP UDP download stream closed".to_owned())
             }
             None => Ok(None),
         }
@@ -473,6 +495,10 @@ impl VlessXhttpH3UdpSession {
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
         self.inner.poll_response().await
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.inner.wait_response().await
     }
 
     pub(super) async fn shutdown(&mut self) {

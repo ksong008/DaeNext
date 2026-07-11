@@ -19,7 +19,8 @@ use self::h2_transport::XhttpH2EndpointSender;
 mod client_io;
 pub(crate) use self::client_io::{
     close_xhttp_download_client, close_xhttp_stream_upload_client, close_xhttp_upload_client,
-    poll_xhttp_download_data, send_xhttp_packet_up_request, send_xhttp_stream_data,
+    poll_xhttp_download_data, read_xhttp_download_data, send_xhttp_packet_up_request,
+    send_xhttp_stream_data,
 };
 
 mod relay;
