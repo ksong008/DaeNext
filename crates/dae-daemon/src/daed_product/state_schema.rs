@@ -1,13 +1,32 @@
 use super::*;
+
+static STATE_SCHEMA_MIGRATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
 pub(super) fn ensure_state_schema(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
         set_private_state_dir_permissions(parent)?;
     }
     let conn = open_state_connection(path)?;
-    apply_state_schema(&conn)?;
+    if !state_schema_is_current(&conn)? {
+        let _guard = STATE_SCHEMA_MIGRATION_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .map_err(|_| io::Error::other("state schema migration lock poisoned"))?;
+        if !state_schema_is_current(&conn)? {
+            conn.pragma_update(None, "journal_mode", "WAL")
+                .map_err(sqlite_io_error)?;
+            apply_state_schema(&conn)?;
+        }
+    }
     set_private_db_permissions(path)?;
     Ok(())
+}
+
+fn state_schema_is_current(conn: &Connection) -> io::Result<bool> {
+    conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .map(|version| version == STATE_SCHEMA_VERSION)
+        .map_err(sqlite_io_error)
 }
 
 pub(super) fn open_state_connection(path: &Path) -> io::Result<Connection> {
@@ -94,6 +113,7 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             tag TEXT UNIQUE,
             subscription_id INTEGER NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_nodes_subscription_id ON nodes(subscription_id);
         CREATE TABLE IF NOT EXISTS groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
@@ -106,12 +126,15 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             node_id INTEGER NOT NULL,
             PRIMARY KEY(group_id, node_id)
         );
+        CREATE INDEX IF NOT EXISTS idx_group_nodes_node_id ON group_nodes(node_id);
         CREATE TABLE IF NOT EXISTS group_subscriptions (
             group_id INTEGER NOT NULL,
             subscription_id INTEGER NOT NULL,
             name_filter_regex TEXT NULL,
             PRIMARY KEY(group_id, subscription_id)
         );
+        CREATE INDEX IF NOT EXISTS idx_group_subscriptions_subscription_id
+            ON group_subscriptions(subscription_id);
         CREATE TABLE IF NOT EXISTS group_policy_params (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             key TEXT NOT NULL,
@@ -197,6 +220,8 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     migrate_legacy_geodata_reload_pending(conn)?;
+    conn.pragma_update(None, "user_version", STATE_SCHEMA_VERSION)
+        .map_err(sqlite_io_error)?;
     Ok(())
 }
 

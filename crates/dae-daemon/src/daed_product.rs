@@ -69,6 +69,7 @@ const MAX_HTTP_HEADER_BYTES: usize = 64 << 10;
 const DAE_BUNDLE_IMPORT_PATH: &str = "/api/user/me/dae-bundle";
 const TOKEN_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 const STATE_DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const STATE_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_LOG_MAX_ENTRIES: i64 = 10_000;
 const DEFAULT_LOG_MAX_BYTES: i64 = 50 * 1024 * 1024;
 const MIN_LOG_MAX_ENTRIES: i64 = 500;
