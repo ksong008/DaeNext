@@ -14,5 +14,6 @@ pub(super) use self::subscription_refresh::*;
 mod scheduler;
 pub(super) use self::scheduler::*;
 mod group_summary;
+mod group_summary_batch;
 mod groups;
 pub(super) use self::groups::*;

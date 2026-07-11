@@ -4,6 +4,8 @@ mod account_profile_transactions;
 #[cfg(test)]
 mod bundle_import;
 #[cfg(test)]
+mod group_summary_batch;
+#[cfg(test)]
 mod latency;
 #[cfg(test)]
 mod node_identity;
