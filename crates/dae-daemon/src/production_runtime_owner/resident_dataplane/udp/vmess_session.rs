@@ -354,11 +354,11 @@ async fn open_vmess_underlay(
         VmessAeadUdpWrapperKind::GrpcTls => {
             let client = open_async_resident_tls_client(proxy).await?;
             let tls_underlay = async_resident_tls_underlay_name(&client);
-            let (send_stream, recv_stream, connection_task) =
+            let (send_stream, response, connection_task) =
                 open_grpc_h2_stream(client, proxy, first_write).await?;
             Ok(VmessAeadUdpUnderlay::GrpcTls {
                 send_stream,
-                recv_stream,
+                response,
                 connection_task,
                 encrypted_writer: None,
                 decrypted_rx: None,
@@ -450,7 +450,7 @@ enum VmessAeadUdpUnderlay {
     },
     GrpcTls {
         send_stream: h2::SendStream<Bytes>,
-        recv_stream: h2::RecvStream,
+        response: GrpcH2Response,
         connection_task: tokio::task::JoinHandle<()>,
         encrypted_writer: Option<tokio::io::DuplexStream>,
         decrypted_rx: Option<tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
@@ -666,7 +666,7 @@ where
 
 async fn read_vmess_grpc_payload(underlay: &mut VmessAeadUdpUnderlay) -> Result<Vec<u8>, String> {
     let VmessAeadUdpUnderlay::GrpcTls {
-        recv_stream,
+        response,
         encrypted_writer,
         decrypted_rx,
         decoder: _,
@@ -711,12 +711,8 @@ async fn read_vmess_grpc_payload(underlay: &mut VmessAeadUdpUnderlay) -> Result<
             .as_mut()
             .ok_or_else(|| "VMess gRPC decoder is not initialized".to_owned())?;
         tokio::select! {
-            data = recv_stream.data() => match data {
-            Some(Ok(bytes)) => {
-                recv_stream
-                    .flow_control()
-                    .release_capacity(bytes.len())
-                    .map_err(|err| format!("release VMess gRPC response capacity: {err}"))?;
+            data = response.next_data() => match data {
+            Ok(Some(bytes)) => {
                 response_buf.extend_from_slice(&bytes);
                 while let Some(payload) = response_buf.pop_payload()? {
                     if !payload.is_empty() {
@@ -732,8 +728,8 @@ async fn read_vmess_grpc_payload(underlay: &mut VmessAeadUdpUnderlay) -> Result<
                     }
                 }
             }
-            Some(Err(err)) => return Err(format!("read VMess gRPC response data: {err}")),
-            None => {
+            Err(err) => return Err(err),
+            Ok(None) => {
                 if let Some(writer) = encrypted_writer.as_mut() {
                     let _ = writer.shutdown().await;
                 }
