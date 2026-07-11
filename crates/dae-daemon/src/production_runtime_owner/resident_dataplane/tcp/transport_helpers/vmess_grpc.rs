@@ -18,19 +18,25 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     let mut inbound_closed = false;
     let mut response_closed = false;
     let mut decoder_disconnected = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
     let mut response_buf = GrpcHunkReadBuffer::default();
-    let mut decode_error = None;
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
+    let mut relay_cancelled = false;
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => {
+                relay_cancelled = true;
+                break;
+            }
             read = inbound.read(&mut inbound_buf), if !inbound_closed => {
                 match read {
                     Ok(0) => {
                         inbound_closed = true;
                         send_h2_data(send_stream, Bytes::new(), true).await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Ok(read) => {
                         let encrypted = upload_codec
@@ -39,12 +45,12 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                         send_grpc_hunk(send_stream, &encrypted, false).await?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
                         send_h2_data(send_stream, Bytes::new(), true).await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) => return Err(format!("read inbound TCP for VMess gRPC relay: {err}")),
                 }
@@ -62,22 +68,10 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                                 encrypted_writer
                                     .write_all(&payload)
                                     .await
-                                    .map_err(|err| format!("write VMess gRPC encrypted response to decoder: {err}"))?;
+                                .map_err(|err| format!("write VMess gRPC encrypted response to decoder: {err}"))?;
                             }
                         }
-                        let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
-                            &mut decrypted_rx,
-                            &mut decode_error,
-                        );
-                        decoder_disconnected = disconnected;
-                        write_vmess_grpc_decrypted(
-                            inbound,
-                            &mut stats,
-                            metrics,
-                            plain_chunks,
-                        )
-                        .await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Some(Err(err)) => return Err(format!("read VMess gRPC HTTP/2 response data: {err}")),
                     None => {
@@ -86,54 +80,40 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                         if !response_buf.is_empty() {
                             return Err("VMess gRPC response stream ended with partial hunk".to_owned());
                         }
-                        let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
-                            &mut decrypted_rx,
-                            &mut decode_error,
-                        );
-                        decoder_disconnected = disconnected;
-                        write_vmess_grpc_decrypted(
-                            inbound,
-                            &mut stats,
-                            metrics,
-                            plain_chunks,
-                        )
-                        .await?;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
-                let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
-                    &mut decrypted_rx,
-                    &mut decode_error,
-                );
-                decoder_disconnected = disconnected;
-                write_vmess_grpc_decrypted(
-                    inbound,
-                    &mut stats,
-                    metrics,
-                    plain_chunks,
-                )
-                .await?;
-                if inbound_closed && response_closed && decoder_disconnected {
-                    break;
+            decoded = decrypted_rx.recv(), if !decoder_disconnected => {
+                match decoded {
+                    Some(Ok(plain)) => {
+                        write_vmess_decrypted_chunk(inbound, &mut stats, metrics, plain).await?;
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                    }
+                    Some(Err(err)) => {
+                        let _ = encrypted_writer.shutdown().await;
+                        decoder.abort();
+                        return Err(err);
+                    }
+                    None => decoder_disconnected = true,
                 }
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    break;
-                }
+            }
+            _ = &mut idle_deadline => {
+                relay_cancelled = true;
+                break;
             }
         }
 
-        if let Some(err) = decode_error.take() {
-            let _ = encrypted_writer.shutdown().await;
-            decoder.abort();
-            return Err(err);
-        }
         if inbound_closed && response_closed && decoder_disconnected {
             break;
         }
     }
     let _ = encrypted_writer.shutdown().await;
+    if relay_cancelled {
+        decoder.abort();
+        let _ = decoder.await;
+        return Ok(stats);
+    }
     let decoder_result = decoder
         .await
         .map_err(|err| format!("join VMess gRPC response decoder failed: {err}"))?;
@@ -148,9 +128,7 @@ pub(crate) fn collect_vmess_grpc_decrypted(
     let mut chunks = Vec::new();
     loop {
         match decrypted_rx.try_recv() {
-            Ok(Ok(plain)) => {
-                chunks.push(plain);
-            }
+            Ok(Ok(plain)) => chunks.push(plain),
             Ok(Err(err)) => {
                 *decode_error = Some(err);
                 return (chunks, false);
@@ -161,21 +139,19 @@ pub(crate) fn collect_vmess_grpc_decrypted(
     }
 }
 
-pub(crate) async fn write_vmess_grpc_decrypted(
+pub(crate) async fn write_vmess_decrypted_chunk(
     inbound: &mut (impl AsyncWrite + Unpin),
     stats: &mut DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
-    chunks: Vec<Vec<u8>>,
+    plain: Vec<u8>,
 ) -> Result<(), String> {
-    for plain in chunks {
-        if !plain.is_empty() {
-            inbound
-                .write_all(&plain)
-                .await
-                .map_err(|err| format!("write VMess gRPC response to inbound: {err}"))?;
-            stats.direct_to_client += plain.len();
-            metrics.add_download(plain.len());
-        }
+    if !plain.is_empty() {
+        inbound
+            .write_all(&plain)
+            .await
+            .map_err(|err| format!("write VMess gRPC response to inbound: {err}"))?;
+        stats.direct_to_client += plain.len();
+        metrics.add_download(plain.len());
     }
     Ok(())
 }
