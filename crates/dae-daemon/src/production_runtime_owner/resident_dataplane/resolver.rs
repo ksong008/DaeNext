@@ -17,7 +17,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) use candidates::{
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
 const DNS_QCLASS_IN: u16 = 1;
-const DNS_BOOTSTRAP_RESPONSE_READ_LIMIT: usize = 4096;
+const DNS_BOOTSTRAP_RESPONSE_READ_LIMIT: usize = super::dns::DNS_MAX_UDP_MESSAGE_SIZE;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResolvedHostAddrs {

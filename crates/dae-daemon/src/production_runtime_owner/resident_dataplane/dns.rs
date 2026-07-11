@@ -119,7 +119,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstr
 
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
-const DNS_RESPONSE_READ_LIMIT: usize = 4096;
+pub(super) const DNS_MAX_UDP_MESSAGE_SIZE: usize = u16::MAX as usize;
+const DNS_RESPONSE_READ_LIMIT: usize = DNS_MAX_UDP_MESSAGE_SIZE;
 const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
 const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
 const DNS_DOH_RESPONSE_READ_LIMIT: usize = 1024 * 1024;
