@@ -62,7 +62,7 @@
       "name": "redirect_track",
       "pinning": "PinNone",
       "type": "LRUHash",
-      "value_size": 20
+      "value_size": 24
     },
     {
       "flags": 0,

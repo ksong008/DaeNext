@@ -21,6 +21,8 @@ pub mod programs;
 #[cfg(feature = "tproxy-program")]
 pub mod redirect_key;
 #[cfg(feature = "tproxy-program")]
+mod redirect_vlan;
+#[cfg(feature = "tproxy-program")]
 pub mod routing;
 #[cfg(feature = "tproxy-program")]
 pub mod tproxy;

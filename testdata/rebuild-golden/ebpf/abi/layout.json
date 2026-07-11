@@ -234,9 +234,17 @@
         {
           "field": "smac",
           "offset": 4
+        },
+        {
+          "field": "vlan_metadata",
+          "offset": 19
+        },
+        {
+          "field": "vlan_tci",
+          "offset": 20
         }
       ],
-      "size": 20
+      "size": 24
     },
     {
       "align": 8,
@@ -386,7 +394,7 @@
       "size": 56
     }
   ],
-  "redirect_track_abi_version": 2,
+  "redirect_track_abi_version": 3,
   "task_comm_len": 16,
   "tproxy_mark": 134217728
 }

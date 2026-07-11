@@ -76,7 +76,7 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     );
     assert_layout::<BpfOutboundConnectivityQuery>(&fixture, "bpfOutboundConnectivityQuery", 3, 1);
     assert_layout::<BpfPidPname>(&fixture, "bpfPidPname", 36, 4);
-    assert_layout::<BpfRedirectEntry>(&fixture, "bpfRedirectEntry", 20, 4);
+    assert_layout::<BpfRedirectEntry>(&fixture, "bpfRedirectEntry", 24, 4);
     assert_offset(
         &fixture,
         "bpfRedirectEntry",
@@ -88,6 +88,18 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
         "bpfRedirectEntry",
         "abi_version",
         offset_of!(BpfRedirectEntry, abi_version),
+    );
+    assert_offset(
+        &fixture,
+        "bpfRedirectEntry",
+        "vlan_metadata",
+        offset_of!(BpfRedirectEntry, vlan_metadata),
+    );
+    assert_offset(
+        &fixture,
+        "bpfRedirectEntry",
+        "vlan_tci",
+        offset_of!(BpfRedirectEntry, vlan_tci),
     );
     assert_layout::<BpfRedirectKey>(&fixture, "bpfRedirectKey", 48, 8);
     assert_offset(

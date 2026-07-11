@@ -32,6 +32,9 @@ const IPV6_DADDR_OFFSET: usize = 24;
 const IPV6_MAX_EXTENSIONS: u8 = 8;
 const VLAN_HLEN: u32 = 4;
 const VLAN_MAX_DEPTH: u8 = 2;
+pub const VLAN_DEPTH_MASK: u8 = 0b0000_0011;
+const VLAN_OUTER_8021AD: u8 = 0b0000_0100;
+const VLAN_INNER_8021AD: u8 = 0b0000_1000;
 
 #[repr(C)]
 pub struct ParsedPacket {
@@ -47,6 +50,8 @@ pub struct ParsedPacket {
     pub tcp_flags: u8,
     pub icmp6_type: u8,
     pub is_ipv4: u8,
+    pub vlan_metadata: u8,
+    pub vlan_tci: [u16; VLAN_MAX_DEPTH as usize],
 }
 
 impl ParsedPacket {
@@ -64,6 +69,8 @@ impl ParsedPacket {
             tcp_flags: 0,
             icmp6_type: 0,
             is_ipv4: 0,
+            vlan_metadata: 0,
+            vlan_tci: [0; VLAN_MAX_DEPTH as usize],
         }
     }
 }
@@ -193,6 +200,43 @@ fn is_vlan_protocol(proto: u32) -> bool {
 }
 
 #[inline(always)]
+unsafe fn record_vlan(out: *mut ParsedPacket, depth: u8, protocol: u16, tci: u16) -> bool {
+    unsafe {
+        match depth {
+            0 => {
+                (*out).vlan_tci[0] = tci;
+                if protocol == ETH_P_8021AD_NETWORK as u16 {
+                    (*out).vlan_metadata |= VLAN_OUTER_8021AD;
+                }
+            }
+            1 => {
+                (*out).vlan_tci[1] = tci;
+                if protocol == ETH_P_8021AD_NETWORK as u16 {
+                    (*out).vlan_metadata |= VLAN_INNER_8021AD;
+                }
+            }
+            _ => return false,
+        }
+        (*out).vlan_metadata = ((*out).vlan_metadata & !VLAN_DEPTH_MASK) | (depth + 1);
+    }
+    true
+}
+
+#[inline(always)]
+pub fn vlan_protocol_at(metadata: u8, index: u8) -> u16 {
+    let is_8021ad = if index == 0 {
+        metadata & VLAN_OUTER_8021AD != 0
+    } else {
+        metadata & VLAN_INNER_8021AD != 0
+    };
+    if is_8021ad {
+        ETH_P_8021AD_NETWORK as u16
+    } else {
+        ETH_P_8021Q_NETWORK as u16
+    }
+}
+
+#[inline(always)]
 pub unsafe fn parse_transport(skb: *mut __sk_buff, link_h_len: u32, out: *mut ParsedPacket) -> i32 {
     unsafe {
         ptr::write(out, ParsedPacket::zeroed());
@@ -201,7 +245,11 @@ pub unsafe fn parse_transport(skb: *mut __sk_buff, link_h_len: u32, out: *mut Pa
 
     let mut network_offset = 0_u32;
     let mut vlan_depth = if unsafe { (*skb).vlan_present } != 0 {
-        if !is_vlan_protocol(unsafe { (*skb).vlan_proto } & 0xffff) {
+        let protocol = unsafe { (*skb).vlan_proto } & 0xffff;
+        if !is_vlan_protocol(protocol) {
+            return 1;
+        }
+        if !unsafe { record_vlan(out, 0, protocol as u16, ((*skb).vlan_tci & 0xffff) as u16) } {
             return 1;
         }
         1
@@ -236,11 +284,16 @@ pub unsafe fn parse_transport(skb: *mut __sk_buff, link_h_len: u32, out: *mut Pa
         } {
             return -1;
         }
-        proto = unsafe { (*out).dport as u32 };
+        let tci = u16::from_be(unsafe { (*out).sport });
+        let next_proto = unsafe { (*out).dport as u32 };
         unsafe {
             (*out).sport = 0;
             (*out).dport = 0;
         }
+        if !unsafe { record_vlan(out, vlan_depth, proto as u16, tci) } {
+            return 1;
+        }
+        proto = next_proto;
         network_offset += VLAN_HLEN;
         vlan_depth += 1;
     }

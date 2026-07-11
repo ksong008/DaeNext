@@ -13,6 +13,8 @@ const BPF_FUNC_GET_CURRENT_PID_TGID: usize = 14;
 #[cfg(target_arch = "bpf")]
 const BPF_FUNC_GET_CURRENT_COMM: usize = 16;
 #[cfg(target_arch = "bpf")]
+const BPF_FUNC_SKB_VLAN_POP: usize = 19;
+#[cfg(target_arch = "bpf")]
 const BPF_FUNC_GET_CURRENT_TASK: usize = 35;
 #[cfg(target_arch = "bpf")]
 const BPF_FUNC_REDIRECT: usize = 23;
@@ -113,6 +115,20 @@ pub unsafe fn bpf_skb_store_bytes(
     let helper: unsafe extern "C" fn(*mut c_void, u32, *const c_void, u32, u64) -> i64 =
         unsafe { core::mem::transmute(BPF_FUNC_SKB_STORE_BYTES) };
     unsafe { helper(skb, offset, from, len, flags) }
+}
+
+#[cfg(target_arch = "bpf")]
+#[inline(always)]
+pub unsafe fn bpf_skb_vlan_pop(skb: *mut c_void) -> i64 {
+    let helper: unsafe extern "C" fn(*mut c_void) -> i64 =
+        unsafe { core::mem::transmute(BPF_FUNC_SKB_VLAN_POP) };
+    unsafe { helper(skb) }
+}
+
+#[cfg(not(target_arch = "bpf"))]
+#[inline(always)]
+pub unsafe fn bpf_skb_vlan_pop(_skb: *mut c_void) -> i64 {
+    0
 }
 
 #[cfg(not(target_arch = "bpf"))]

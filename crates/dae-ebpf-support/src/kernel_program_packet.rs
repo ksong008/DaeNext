@@ -56,6 +56,9 @@ pub struct KernelPacketParsed {
     pub tcp_flags: u8,
     pub icmp6_type: u8,
     pub is_ipv4: bool,
+    pub vlan_depth: u8,
+    pub vlan_protocols: [u16; VLAN_MAX_DEPTH as usize],
+    pub vlan_tci: [u16; VLAN_MAX_DEPTH as usize],
 }
 
 impl KernelPacketParsed {
@@ -73,6 +76,9 @@ impl KernelPacketParsed {
             tcp_flags: 0,
             icmp6_type: 0,
             is_ipv4: false,
+            vlan_depth: 0,
+            vlan_protocols: [0; VLAN_MAX_DEPTH as usize],
+            vlan_tci: [0; VLAN_MAX_DEPTH as usize],
         }
     }
 }
@@ -157,6 +163,9 @@ pub fn parse_kernel_program_packet_with_vlan(
         if !is_vlan_protocol(protocol) {
             return chain_next(parsed);
         }
+        parsed.vlan_depth = 1;
+        parsed.vlan_protocols[0] = protocol;
+        parsed.vlan_tci[0] = vlan.tci;
         1
     } else {
         0
@@ -178,9 +187,12 @@ pub fn parse_kernel_program_packet_with_vlan(
         let Some(vlan) = packet.get(network_offset..network_offset + VLAN_HLEN) else {
             return fault(parsed);
         };
+        parsed.vlan_protocols[vlan_depth as usize] = parsed.h_proto;
+        parsed.vlan_tci[vlan_depth as usize] = read_be_u16(vlan, 0);
         parsed.h_proto = read_ne_u16(vlan, 2);
         network_offset += VLAN_HLEN;
         vlan_depth += 1;
+        parsed.vlan_depth = vlan_depth;
     }
 
     match parsed.h_proto {

@@ -10,7 +10,7 @@ use crate::packet::{
     self, BpfSockTuple, ETH_HLEN, ETH_PROTO_OFFSET, ETH_SRC_OFFSET, IPPROTO_ICMPV6, IPPROTO_TCP,
     IPPROTO_UDP, NDP_REDIRECT, ParsedPacket,
 };
-use crate::{helpers, maps, redirect_key, routing, udp_state};
+use crate::{helpers, maps, redirect_key, redirect_vlan, routing, udp_state};
 
 const TC_ACT_UNSPEC: i32 = -1;
 const TCX_NEXT: i32 = TC_ACT_UNSPEC;
@@ -181,6 +181,9 @@ unsafe fn prep_redirect_to_control_plane(
             )
         };
     }
+    if !unsafe { redirect_vlan::strip(skb, info) } {
+        return false;
+    }
 
     let dae0peer_mac = crate::abi::param_dae0peer_mac();
     let _ = unsafe {
@@ -208,7 +211,9 @@ unsafe fn prep_redirect_to_control_plane(
         ptr::addr_of_mut!((*redirect_entry).link_layer)
             .write(redirect_link_layer_for_header_len(link_h_len));
         ptr::addr_of_mut!((*redirect_entry).abi_version).write(REDIRECT_TRACK_ABI_VERSION);
-        ptr::addr_of_mut!((*redirect_entry).padding).write(0);
+        if !redirect_vlan::capture(info, redirect_entry) {
+            return false;
+        }
         if helpers::bpf_map_update_elem(
             maps::redirect_track_map_ptr(),
             redirect_track_key.cast::<c_void>(),
@@ -327,6 +332,9 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
                 return TC_ACT_SHOT;
             }
         } else {
+            if !redirect_vlan::restore(skb, entry, info.h_proto as u16) {
+                return TC_ACT_SHOT;
+            }
             let _ = helpers::bpf_skb_store_bytes(
                 skb.cast::<c_void>(),
                 ETH_SRC_OFFSET,
@@ -354,83 +362,6 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
             0
         };
         helpers::bpf_redirect((*entry).ifindex, flags) as i32
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn redirect_entry(link_layer: u8) -> BpfRedirectEntry {
-        let mut entry = BpfRedirectEntry::zeroed();
-        entry.link_layer = link_layer;
-        entry
-    }
-
-    #[test]
-    fn redirect_entry_records_original_link_layer_without_changing_layout() {
-        assert_eq!(
-            redirect_link_layer_for_header_len(ETH_HLEN),
-            REDIRECT_LINK_LAYER_L2
-        );
-        assert_eq!(
-            redirect_link_layer_for_header_len(0),
-            REDIRECT_LINK_LAYER_L3
-        );
-    }
-
-    #[test]
-    fn chain_next_is_non_terminal_pass_through_action() {
-        assert_eq!(TCX_NEXT, TC_ACT_UNSPEC);
-        assert_eq!(chain_next(), TCX_NEXT);
-        assert_ne!(chain_next(), TC_ACT_OK);
-        assert_ne!(chain_next(), TC_ACT_SHOT);
-    }
-
-    #[test]
-    fn unavailable_udp_state_is_terminal_fail_closed() {
-        assert_eq!(udp_state_unavailable_action(), TC_ACT_SHOT);
-        assert_ne!(udp_state_unavailable_action(), chain_next());
-        assert_ne!(udp_state_unavailable_action(), TC_ACT_OK);
-        assert_eq!(
-            udp_state_unavailable_action_for_policy(
-                crate::abi::UDP_STATE_SATURATION_POLICY_FAIL_CLOSED
-            ),
-            TC_ACT_SHOT
-        );
-        assert_eq!(
-            udp_state_unavailable_action_for_policy(u32::MAX),
-            TC_ACT_SHOT
-        );
-    }
-
-    #[test]
-    fn physical_wan_control_plane_passthrough_continues_the_chain() {
-        assert_eq!(
-            physical_wan_control_plane_passthrough_action(),
-            chain_next()
-        );
-        assert_ne!(physical_wan_control_plane_passthrough_action(), TC_ACT_OK);
-        assert_ne!(physical_wan_control_plane_passthrough_action(), TC_ACT_SHOT);
-    }
-
-    #[test]
-    fn l3_wan_egress_return_path_records_and_strips_temporary_mac_header() {
-        let l2 = redirect_entry(REDIRECT_LINK_LAYER_L2);
-        let l3 = redirect_entry(REDIRECT_LINK_LAYER_L3);
-
-        assert_eq!(
-            redirect_link_layer_for_header_len(ETH_HLEN),
-            REDIRECT_LINK_LAYER_L2
-        );
-        assert_eq!(
-            redirect_link_layer_for_header_len(0),
-            REDIRECT_LINK_LAYER_L3
-        );
-        assert!(!redirect_entry_requires_l3_strip(&l2));
-        assert!(redirect_entry_requires_l3_strip(&l3));
-        assert_eq!(redirect_entry_l3_strip_delta(), -(ETH_HLEN as i32));
-        assert_eq!(redirect_entry_l3_strip_mode(), BPF_ADJ_ROOM_MAC);
     }
 }
 
@@ -691,5 +622,82 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
             ptr::addr_of_mut!(redirect_track_key),
             ptr::addr_of_mut!(redirect_entry),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn redirect_entry(link_layer: u8) -> BpfRedirectEntry {
+        let mut entry = BpfRedirectEntry::zeroed();
+        entry.link_layer = link_layer;
+        entry
+    }
+
+    #[test]
+    fn redirect_entry_records_original_link_layer_without_changing_layout() {
+        assert_eq!(
+            redirect_link_layer_for_header_len(ETH_HLEN),
+            REDIRECT_LINK_LAYER_L2
+        );
+        assert_eq!(
+            redirect_link_layer_for_header_len(0),
+            REDIRECT_LINK_LAYER_L3
+        );
+    }
+
+    #[test]
+    fn chain_next_is_non_terminal_pass_through_action() {
+        assert_eq!(TCX_NEXT, TC_ACT_UNSPEC);
+        assert_eq!(chain_next(), TCX_NEXT);
+        assert_ne!(chain_next(), TC_ACT_OK);
+        assert_ne!(chain_next(), TC_ACT_SHOT);
+    }
+
+    #[test]
+    fn unavailable_udp_state_is_terminal_fail_closed() {
+        assert_eq!(udp_state_unavailable_action(), TC_ACT_SHOT);
+        assert_ne!(udp_state_unavailable_action(), chain_next());
+        assert_ne!(udp_state_unavailable_action(), TC_ACT_OK);
+        assert_eq!(
+            udp_state_unavailable_action_for_policy(
+                crate::abi::UDP_STATE_SATURATION_POLICY_FAIL_CLOSED
+            ),
+            TC_ACT_SHOT
+        );
+        assert_eq!(
+            udp_state_unavailable_action_for_policy(u32::MAX),
+            TC_ACT_SHOT
+        );
+    }
+
+    #[test]
+    fn physical_wan_control_plane_passthrough_continues_the_chain() {
+        assert_eq!(
+            physical_wan_control_plane_passthrough_action(),
+            chain_next()
+        );
+        assert_ne!(physical_wan_control_plane_passthrough_action(), TC_ACT_OK);
+        assert_ne!(physical_wan_control_plane_passthrough_action(), TC_ACT_SHOT);
+    }
+
+    #[test]
+    fn l3_wan_egress_return_path_records_and_strips_temporary_mac_header() {
+        let l2 = redirect_entry(REDIRECT_LINK_LAYER_L2);
+        let l3 = redirect_entry(REDIRECT_LINK_LAYER_L3);
+
+        assert_eq!(
+            redirect_link_layer_for_header_len(ETH_HLEN),
+            REDIRECT_LINK_LAYER_L2
+        );
+        assert_eq!(
+            redirect_link_layer_for_header_len(0),
+            REDIRECT_LINK_LAYER_L3
+        );
+        assert!(!redirect_entry_requires_l3_strip(&l2));
+        assert!(redirect_entry_requires_l3_strip(&l3));
+        assert_eq!(redirect_entry_l3_strip_delta(), -(ETH_HLEN as i32));
+        assert_eq!(redirect_entry_l3_strip_mode(), BPF_ADJ_ROOM_MAC);
     }
 }
