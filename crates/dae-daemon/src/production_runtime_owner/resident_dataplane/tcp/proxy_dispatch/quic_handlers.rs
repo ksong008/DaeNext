@@ -111,19 +111,21 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     obfs: &ResidentHysteria2ObfsPlan,
     port_hop_ports: &[u16],
 ) -> Result<Value, String> {
-    let remote = resolve_hysteria2_quic_remote_async(&selection.proxy, port_hop_ports).await?;
-    let mut endpoint =
-        open_marked_hysteria2_quic_endpoint_for_remote(selection.mark, obfs, remote)?;
-    endpoint.set_default_client_config(
-        build_hysteria2_runtime_client_config(allow_insecure, pin_sha256.to_owned())
-            .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
-    );
+    let ResidentConnectedQuicEndpoint {
+        remote,
+        endpoint,
+        connection,
+    } = open_hysteria2_quic_connection_candidates_async(
+        &selection.proxy,
+        selection.mark,
+        obfs,
+        port_hop_ports,
+        allow_insecure,
+        pin_sha256,
+        RESIDENT_CONNECT_TIMEOUT,
+    )
+    .await?;
     let port_hopping = !port_hop_ports.is_empty();
-    let connection = endpoint
-        .connect(remote, &selection.proxy.server_name)
-        .map_err(|err| format!("connect Hysteria2 QUIC endpoint: {err}"))?
-        .await
-        .map_err(|err| format!("await Hysteria2 QUIC connect: {err}"))?;
     let auth_report = authenticate_hysteria2_connection(connection.clone(), auth, max_rx)
         .await
         .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
@@ -264,17 +266,18 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
     alpn: &[String],
     allow_insecure: bool,
 ) -> Result<Value, String> {
-    let remote = resolve_proxy_udp_addr_async(&selection.proxy).await?;
-    let mut endpoint = open_marked_quic_endpoint_for_remote(selection.mark, remote)?;
-    endpoint.set_default_client_config(
-        build_tuic_runtime_client_config(alpn, allow_insecure)
-            .map_err(|err| format!("build TUIC QUIC client config: {err}"))?,
-    );
-    let connection = endpoint
-        .connect(remote, &selection.proxy.server_name)
-        .map_err(|err| format!("connect TUIC QUIC endpoint: {err}"))?
-        .await
-        .map_err(|err| format!("await TUIC QUIC connect: {err}"))?;
+    let ResidentConnectedQuicEndpoint {
+        endpoint,
+        connection,
+        ..
+    } = open_tuic_quic_connection_candidates_async(
+        &selection.proxy,
+        selection.mark,
+        alpn,
+        allow_insecure,
+        RESIDENT_CONNECT_TIMEOUT,
+    )
+    .await?;
     let auth_report = authenticate_tuic_connection(&connection, uuid, password)
         .await
         .map_err(|err| format!("authenticate TUIC QUIC connection: {err}"))?;
@@ -362,17 +365,18 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
     allow_insecure: bool,
     pinned_certchain_sha256: &str,
 ) -> Result<Value, String> {
-    let remote = resolve_proxy_udp_addr_async(&selection.proxy).await?;
-    let mut endpoint = open_marked_quic_endpoint_for_remote(selection.mark, remote)?;
-    endpoint.set_default_client_config(
-        build_juicity_runtime_client_config(allow_insecure, pinned_certchain_sha256)
-            .map_err(|err| format!("build Juicity QUIC client config: {err}"))?,
-    );
-    let connection = endpoint
-        .connect(remote, &selection.proxy.server_name)
-        .map_err(|err| format!("connect Juicity QUIC endpoint: {err}"))?
-        .await
-        .map_err(|err| format!("await Juicity QUIC connect: {err}"))?;
+    let ResidentConnectedQuicEndpoint {
+        endpoint,
+        connection,
+        ..
+    } = open_juicity_quic_connection_candidates_async(
+        &selection.proxy,
+        selection.mark,
+        allow_insecure,
+        pinned_certchain_sha256,
+        RESIDENT_CONNECT_TIMEOUT,
+    )
+    .await?;
     let (auth_report, mut auth_stream) =
         authenticate_juicity_connection(&connection, uuid, password)
             .await

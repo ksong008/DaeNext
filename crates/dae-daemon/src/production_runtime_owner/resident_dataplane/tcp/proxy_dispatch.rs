@@ -7,5 +7,7 @@ mod anytls;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::anytls::*;
 mod quic_handlers;
 pub(super) use self::quic_handlers::*;
+mod quic_connections;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::quic_connections::*;
 mod quic_helpers;
 pub(crate) use self::quic_helpers::*;
