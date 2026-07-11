@@ -21,9 +21,15 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
     let mut pending_plain_uplink_flush_bytes = 0_usize;
     let mut pending_plain_uplink_flush_deadline = None;
     let mut inbound_closed = false;
-    let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
     let mut proxy_buf = [0_u8; 16 * 1024];
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    let close_drain_deadline =
+        resident_relay_idle_deadline(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
+    tokio::pin!(close_drain_deadline);
+    let mut close_drain_active = false;
 
     if !initial_payload.is_empty() {
         if vision_enabled {
@@ -50,8 +56,9 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
         metrics.add_upload(initial_payload.len());
     }
 
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
             inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
                 match inbound_read {
                     Ok(0) => {
@@ -66,7 +73,12 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
                         }
                         inbound_closed = true;
                         client.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        reset_resident_relay_idle_deadline(
+                            close_drain_deadline.as_mut(),
+                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                        );
+                        close_drain_active = true;
                     }
                     Ok(read) => {
                         if vision_enabled {
@@ -114,7 +126,7 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
                         }
                         stats.client_to_proxy += read;
                         metrics.add_upload(read);
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         if !vision_enabled {
@@ -128,7 +140,12 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
                         }
                         inbound_closed = true;
                         client.shutdown().await;
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        reset_resident_relay_idle_deadline(
+                            close_drain_deadline.as_mut(),
+                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                        );
+                        close_drain_active = true;
                     }
                     Err(err) => {
                         return Err(RelayError::new(format!("read inbound TCP: {err}"), &stats));
@@ -157,7 +174,7 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
                             }
                             stats.proxy_to_client += read;
                             metrics.add_download(read);
-                            last_activity = Instant::now();
+                            reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                             continue;
                         }
 
@@ -201,7 +218,13 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
                             stats.proxy_to_client += payload.len();
                             metrics.add_download(payload.len());
                         }
-                        last_activity = Instant::now();
+                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        if close_drain_active {
+                            reset_resident_relay_idle_deadline(
+                                close_drain_deadline.as_mut(),
+                                RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+                            );
+                        }
                     }
                     Err(err) => {
                         return Err(RelayError::new(format!("read VLESS TLS plaintext: {err}"), &stats));
@@ -216,15 +239,11 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
                 )
                     .await
                     .map_err(|err| RelayError::new(err, &stats))?;
-                last_activity = Instant::now();
+                reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
             }
-            _ = time::sleep(Duration::from_millis(100)) => {
-                if inbound_closed && !downlink_direct {
-                    break;
-                }
-                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-                    return Err(RelayError::new("resident TCP relay idle timeout", &stats));
-                }
+            _ = &mut close_drain_deadline, if close_drain_active && !downlink_direct => break,
+            _ = &mut idle_deadline => {
+                return Err(RelayError::new("resident TCP relay idle timeout", &stats));
             }
         }
     }
