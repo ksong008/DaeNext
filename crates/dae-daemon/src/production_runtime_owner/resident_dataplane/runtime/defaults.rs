@@ -2,6 +2,7 @@ use super::*;
 pub(crate) const VLESS_RESPONSE_VERSION: u8 = 0;
 pub(crate) const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
 pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT: Duration = Duration::from_millis(100);
 pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
     Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
