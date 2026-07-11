@@ -48,6 +48,9 @@ mod executable_graph;
 
 use executable_graph::{ResidentExecutableGraphDescriptor, resident_graph_identity};
 
+mod udp_chain;
+pub(super) use self::udp_chain::*;
+
 mod model;
 pub(super) use self::model::*;
 mod transport_defaults;

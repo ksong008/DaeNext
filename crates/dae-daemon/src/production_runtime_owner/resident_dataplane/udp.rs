@@ -54,7 +54,7 @@ use super::plan::share_resident_proxy_groups;
 use super::plan::{
     ResidentHysteria2ObfsPlan, ResidentProxyGroupPlan, ResidentProxyPlan,
     ResidentProxyProtocolPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
-    SharedResidentProxyGroupMap,
+    SharedResidentProxyGroupMap, resident_udp_chain_admission,
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,

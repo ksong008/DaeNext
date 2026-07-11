@@ -747,4 +747,63 @@ mod tests {
             mptcp: false,
         }
     }
+
+    fn with_plain_socks5_parent(mut child: ResidentProxyPlan) -> ResidentProxyPlan {
+        let parent = test_udp_proxy(ResidentProxyProtocolPlan::Socks5Tcp {
+            username: String::new(),
+            password: String::new(),
+        });
+        child.chain_parent = Some(Arc::new(parent));
+        child
+    }
+
+    #[test]
+    fn chained_udp_rejects_datagram_child_without_parent_packet_carrier() {
+        let proxy =
+            with_plain_socks5_parent(test_udp_proxy(ResidentProxyProtocolPlan::Socks5Tcp {
+                username: String::new(),
+                password: String::new(),
+            }));
+
+        assert_eq!(
+            udp_executor_shape(&UdpSessionExecutor::new_proxy_packet(&proxy)),
+            UdpExecutorShape::FailClosed
+        );
+        let graph = proxy.executable_graph_value();
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["status"],
+            "fail-closed"
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["chainCarrier"],
+            "unsupported"
+        );
+        assert!(
+            graph["runtimeComponents"]["packetSessionManager"]["unsupportedReason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("independent packet path"))
+        );
+    }
+
+    #[test]
+    fn chained_udp_admits_vmess_packet_over_parent_stream() {
+        let proxy =
+            with_plain_socks5_parent(test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
+                id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            }));
+
+        assert_eq!(
+            udp_executor_shape(&UdpSessionExecutor::new_proxy_packet(&proxy)),
+            UdpExecutorShape::VmessAead
+        );
+        let graph = proxy.executable_graph_value();
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["status"],
+            "admitted"
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["chainCarrier"],
+            "parent-connect-stream"
+        );
+    }
 }
