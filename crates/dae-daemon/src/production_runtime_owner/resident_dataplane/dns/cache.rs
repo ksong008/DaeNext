@@ -10,6 +10,8 @@ use super::{ResidentDnsUpstream, ResidentDnsUpstreamScheme, unix_now};
 
 mod reload;
 pub(super) use self::reload::ResidentDnsRuntimeCacheSnapshot;
+mod deadline_index;
+use self::deadline_index::{ResidentDnsCacheDeadline, ResidentDnsCacheDeadlineIndex};
 
 const DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS: i64 = 60;
 
@@ -21,9 +23,16 @@ pub(super) struct ResidentDnsRuntimeCache {
 
 #[derive(Debug, Default)]
 struct ResidentDnsRuntimeCacheState {
-    entries: BTreeMap<ResidentDnsResponseCacheKey, DnsCacheEntry>,
+    entries: BTreeMap<ResidentDnsResponseCacheKey, ResidentDnsStoredCacheEntry>,
+    deadlines: ResidentDnsCacheDeadlineIndex,
     stats: DnsCacheStats,
     next_sweep_unix: i64,
+}
+
+#[derive(Debug)]
+struct ResidentDnsStoredCacheEntry {
+    entry: DnsCacheEntry,
+    deadline: ResidentDnsCacheDeadline,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -114,10 +123,7 @@ impl ResidentDnsRuntimeCache {
             .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        let Some(entry) = lookup_scoped_entry(&mut state, now_unix, key, ignore_fixed_ttl) else {
-            return Ok(false);
-        };
-        Ok(entry.fill_packed_response_into(request.id(), out).is_some())
+        lookup_scoped_response_into(&mut state, now_unix, key, request, ignore_fixed_ttl, out)
     }
 
     pub(super) fn lookup_key_has_any_ip(
@@ -131,10 +137,10 @@ impl ResidentDnsRuntimeCache {
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
         sweep_expired_if_due(&mut state, now_unix);
-        Ok(state.entries.iter().any(|(candidate, entry)| {
+        Ok(state.entries.iter().any(|(candidate, stored)| {
             &candidate.base == key
-                && entry.lookup_deadline(ignore_fixed_ttl) > now_unix
-                && entry.has_any_ip
+                && stored.entry.lookup_deadline(ignore_fixed_ttl) > now_unix
+                && stored.entry.has_any_ip
         }))
     }
 
@@ -153,7 +159,7 @@ impl ResidentDnsRuntimeCache {
             evict_entries(&mut state, now_unix);
         }
         entry.route_owner_key = key.base.to_string();
-        state.entries.insert(key, entry);
+        insert_cache_entry(&mut state, key, entry);
         Ok(())
     }
 
@@ -170,7 +176,7 @@ impl ResidentDnsRuntimeCache {
             .collect::<Vec<_>>();
         let mut removed = Vec::with_capacity(scoped_keys.len());
         for scoped_key in scoped_keys {
-            if let Some(entry) = state.entries.remove(&scoped_key) {
+            if let Some(entry) = remove_cache_entry(&mut state, &scoped_key) {
                 removed.push(entry);
             }
         }
@@ -195,6 +201,14 @@ impl ResidentDnsRuntimeCache {
     }
 
     #[cfg(test)]
+    pub(super) fn deadline_len(&self) -> usize {
+        self.state
+            .lock()
+            .map(|state| state.deadlines.len())
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
     pub(super) fn stats(&self) -> dae_dns::DnsCacheStats {
         self.state
             .lock()
@@ -203,44 +217,53 @@ impl ResidentDnsRuntimeCache {
     }
 }
 
-fn lookup_scoped_entry(
+fn lookup_scoped_response_into(
     state: &mut ResidentDnsRuntimeCacheState,
     now_unix: i64,
     key: &ResidentDnsResponseCacheKey,
+    request: &DnsPacketView<'_>,
     ignore_fixed_ttl: bool,
-) -> Option<DnsCacheEntry> {
+    out: &mut Vec<u8>,
+) -> Result<bool, String> {
     let (lookup_deadline, cache_expires_at) = {
-        let entry = state.entries.get(key)?;
+        let Some(stored) = state.entries.get(key) else {
+            return Ok(false);
+        };
         (
-            entry.lookup_deadline(ignore_fixed_ttl),
-            entry.cache_expires_at(),
+            stored.entry.lookup_deadline(ignore_fixed_ttl),
+            stored.entry.cache_expires_at(),
         )
     };
     if lookup_deadline > now_unix {
         state.stats.hit_total += 1;
-        return state.entries.get(key).cloned();
+        return Ok(state
+            .entries
+            .get(key)
+            .and_then(|stored| stored.entry.fill_packed_response_into(request.id(), out))
+            .is_some());
     }
     if cache_expires_at <= now_unix {
-        state.entries.remove(key);
+        remove_cache_entry(state, key);
         state.stats.expired_removal_total += 1;
         state.stats.remove_callback_total += 1;
     }
-    None
+    Ok(false)
 }
 
 fn evict_entries(state: &mut ResidentDnsRuntimeCacheState, now_unix: i64) {
     remove_expired_entries(state, now_unix);
     while state.entries.len() >= DNS_CACHE_MAX_ENTRIES {
-        let Some(oldest_key) = state
-            .entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.cache_expires_at())
-            .map(|(key, _)| key.clone())
-        else {
+        let Some(deadline) = state.deadlines.pop_first() else {
             break;
         };
-        state.entries.remove(&oldest_key);
-        state.stats.remove_callback_total += 1;
+        if state
+            .entries
+            .get(&deadline.key)
+            .is_some_and(|stored| stored.deadline == deadline)
+        {
+            state.entries.remove(&deadline.key);
+            state.stats.remove_callback_total += 1;
+        }
     }
 }
 
@@ -253,13 +276,44 @@ fn sweep_expired_if_due(state: &mut ResidentDnsRuntimeCacheState, now_unix: i64)
 }
 
 fn remove_expired_entries(state: &mut ResidentDnsRuntimeCacheState, now_unix: i64) {
-    let before = state.entries.len();
-    state
-        .entries
-        .retain(|_, entry| entry.cache_expires_at() > now_unix);
-    let removed = before - state.entries.len();
+    let mut removed = 0_usize;
+    while let Some(deadline) = state.deadlines.pop_expired(now_unix) {
+        if state
+            .entries
+            .get(&deadline.key)
+            .is_some_and(|stored| stored.deadline == deadline)
+        {
+            state.entries.remove(&deadline.key);
+            removed += 1;
+        }
+    }
     state.stats.expired_removal_total += removed as u64;
     state.stats.remove_callback_total += removed as u64;
+}
+
+fn insert_cache_entry(
+    state: &mut ResidentDnsRuntimeCacheState,
+    key: ResidentDnsResponseCacheKey,
+    entry: DnsCacheEntry,
+) {
+    if let Some(previous) = state.entries.remove(&key) {
+        state.deadlines.remove(&previous.deadline);
+    }
+    let deadline = state
+        .deadlines
+        .insert(key.clone(), entry.cache_expires_at());
+    state
+        .entries
+        .insert(key, ResidentDnsStoredCacheEntry { entry, deadline });
+}
+
+fn remove_cache_entry(
+    state: &mut ResidentDnsRuntimeCacheState,
+    key: &ResidentDnsResponseCacheKey,
+) -> Option<DnsCacheEntry> {
+    let stored = state.entries.remove(key)?;
+    state.deadlines.remove(&stored.deadline);
+    Some(stored.entry)
 }
 
 impl Drop for ResidentDnsInflightGuard<'_> {
