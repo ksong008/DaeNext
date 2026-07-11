@@ -42,15 +42,21 @@ pub(in crate::daed_product) fn prepare_runtime_materialization_plan(
 ) -> io::Result<RuntimeMaterializationPlan> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
-    let config = required_selected_section_raw(&conn, SectionKind::Config)?;
-    let dns = required_selected_section_raw(&conn, SectionKind::Dns)?;
-    let routing = required_selected_section_raw(&conn, SectionKind::Routing)?;
-    let groups = list_groups_value(state)?;
-    let nodes = list_all_nodes_value(state)?;
+    prepare_runtime_materialization_plan_with_connection(&conn)
+}
+
+pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_connection(
+    conn: &Connection,
+) -> io::Result<RuntimeMaterializationPlan> {
+    let config = required_selected_section_raw(conn, SectionKind::Config)?;
+    let dns = required_selected_section_raw(conn, SectionKind::Dns)?;
+    let routing = required_selected_section_raw(conn, SectionKind::Routing)?;
+    let groups = list_groups_value_with_connection(conn)?;
+    let nodes = list_all_nodes_value_with_connection(conn)?;
     let generated_at = now_text();
-    let group_version_sum = group_version_sum(&conn)?;
-    let group_ids = group_ids_text(&conn)?;
-    let external_input_version = current_runtime_external_input_version(&conn)?;
+    let group_version_sum = group_version_sum(conn)?;
+    let group_ids = group_ids_text(conn)?;
+    let external_input_version = current_runtime_external_input_version(conn)?;
     let content = render_generated_config(
         &generated_at,
         Some(&config),
