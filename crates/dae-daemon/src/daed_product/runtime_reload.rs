@@ -11,6 +11,7 @@ pub(in crate::daed_product) struct AppliedRuntimeReload {
     pub(in crate::daed_product) allocator_reclaim: Value,
 }
 
+#[derive(Debug)]
 pub(in crate::daed_product) enum RuntimeReloadPrepareError {
     LogPolicy(String),
     Materialize(String),
@@ -81,25 +82,19 @@ pub(in crate::daed_product) fn apply_prepared_runtime_reload(
     latency_seed: &[Value],
     reclaim_reason: AllocatorReclaimReason,
 ) -> Result<AppliedRuntimeReload, String> {
-    let config_content = prepared.plan.content.clone();
-    let outcome = runtime.reload_with_config_content(
-        prepared.config,
-        Some(config_content),
+    let mut checkpoints = NoopRuntimeApplyCheckpoints;
+    let (runtime_report, materialized_report) = apply_runtime_generation(
+        runtime,
+        state,
+        config_dir,
         source,
+        prepared,
         latency_seed,
+        &mut checkpoints,
     )?;
-    let materialized_report =
-        match apply_runtime_materialization_plan(state, config_dir, &prepared.plan) {
-            Ok(report) => report,
-            Err(err) => {
-                let _ = runtime.stop();
-                let _ = mark_system_stopped(state);
-                return Err(err.to_string());
-            }
-        };
     let allocator_reclaim = allocator_reclaim(reclaim_reason);
     Ok(AppliedRuntimeReload {
-        runtime_report: outcome.report,
+        runtime_report,
         materialized_report,
         allocator_reclaim,
     })
