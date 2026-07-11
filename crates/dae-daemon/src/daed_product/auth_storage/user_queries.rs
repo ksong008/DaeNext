@@ -1,4 +1,20 @@
 use super::*;
+
+#[cfg(test)]
+thread_local! {
+    static USER_QUERY_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_user_query_count_for_current_thread() {
+    USER_QUERY_COUNT.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn user_query_count_for_current_thread() -> usize {
+    USER_QUERY_COUNT.get()
+}
+
 pub(crate) fn load_user_by_username(
     state: &Path,
     username: &str,
@@ -12,6 +28,7 @@ pub(crate) fn load_user_by_username(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn load_user_by_id(state: &Path, id: i64) -> io::Result<Option<UserRecord>> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
@@ -30,6 +47,9 @@ pub(crate) fn query_user<P>(
 where
     P: rusqlite::Params,
 {
+    #[cfg(test)]
+    USER_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+
     conn.query_row(sql, params, |row| {
         Ok(UserRecord {
             id: row.get(0)?,
