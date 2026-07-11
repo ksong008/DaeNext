@@ -98,6 +98,7 @@ impl ResidentDnsForwarderCache {
                     target,
                     mark,
                     next_shard: std::sync::atomic::AtomicUsize::new(0),
+                    executor: Arc::clone(&self.udp_executor),
                     shards: (0..shard_count)
                         .map(|_| ResidentDnsUdpForwarderShard {
                             handle: AsyncMutex::new(None),

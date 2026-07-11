@@ -1,4 +1,4 @@
-use super::transport::udp_multiplex::ResidentDnsUdpMultiplexHandle;
+use super::transport::udp_multiplex::{ResidentDnsUdpActorExecutor, ResidentDnsUdpMultiplexHandle};
 use super::*;
 use std::time::Duration;
 
@@ -116,12 +116,15 @@ impl Eq for ResidentDnsUpstreamTarget {}
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsForwarderCache {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) state:
         Mutex<ResidentDnsForwarderCacheState>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) udp_executor:
+        Arc<ResidentDnsUdpActorExecutor>,
 }
 
 impl Default for ResidentDnsForwarderCache {
     fn default() -> Self {
         Self {
             state: Mutex::new(ResidentDnsForwarderCacheState::default()),
+            udp_executor: Arc::new(ResidentDnsUdpActorExecutor::default()),
         }
     }
 }
@@ -231,6 +234,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) next_shard:
         std::sync::atomic::AtomicUsize,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) executor:
+        Arc<ResidentDnsUdpActorExecutor>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) shards:
         Vec<ResidentDnsUdpForwarderShard>,
 }
