@@ -67,7 +67,9 @@ use self::cache::{
     ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache,
     ResidentDnsRuntimeCacheSnapshot,
 };
-pub(super) use self::domain_routing::ResidentDnsDomainRouting;
+pub(super) use self::domain_routing::{
+    ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
+};
 use self::domain_routing::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
 };

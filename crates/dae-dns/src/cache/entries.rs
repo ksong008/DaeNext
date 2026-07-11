@@ -137,18 +137,27 @@ impl DnsCacheEntries {
         &mut self,
         question: &DnsPacketQuestionView<'_>,
     ) -> Result<Option<DnsCacheEntry>, DnsError> {
+        Ok(self
+            .remove_packet_question_entry(question)?
+            .map(|(_, entry)| entry))
+    }
+
+    pub(super) fn remove_packet_question_entry(
+        &mut self,
+        question: &DnsPacketQuestionView<'_>,
+    ) -> Result<Option<(DnsCacheKey, DnsCacheEntry)>, DnsError> {
         match self {
             Self::Small(entries) => {
                 let mut index = 0;
                 while index < entries.len() {
                     if packet_question_matches_key(question, &entries[index].0)? {
-                        return Ok(Some(entries.swap_remove(index).1));
+                        return Ok(Some(entries.swap_remove(index)));
                     }
                     index += 1;
                 }
                 Ok(None)
             }
-            Self::Map(entries) => Ok(entries.remove(&DnsPacketQuestionCacheKey(question))),
+            Self::Map(entries) => Ok(entries.remove_entry(&DnsPacketQuestionCacheKey(question))),
         }
     }
 
@@ -174,14 +183,17 @@ impl DnsCacheEntries {
         }
     }
 
-    pub(super) fn remove_expired_entries(&mut self, now_unix: i64) -> Vec<DnsCacheEntry> {
+    pub(super) fn remove_expired_entries(
+        &mut self,
+        now_unix: i64,
+    ) -> Vec<(DnsCacheKey, DnsCacheEntry)> {
         match self {
             Self::Small(entries) => {
                 let mut removed = Vec::new();
                 let mut index = 0;
                 while index < entries.len() {
                     if entries[index].1.cache_expires_at() <= now_unix {
-                        removed.push(entries.swap_remove(index).1);
+                        removed.push(entries.swap_remove(index));
                     } else {
                         index += 1;
                     }
@@ -190,8 +202,17 @@ impl DnsCacheEntries {
             }
             Self::Map(entries) => entries
                 .extract_if(|_, entry| entry.cache_expires_at() <= now_unix)
-                .map(|(_, entry)| entry)
                 .collect(),
+        }
+    }
+
+    pub(super) fn next_expiry_unix(&self) -> Option<i64> {
+        match self {
+            Self::Small(entries) => entries
+                .iter()
+                .map(|(_, entry)| entry.cache_expires_at())
+                .min(),
+            Self::Map(entries) => entries.values().map(DnsCacheEntry::cache_expires_at).min(),
         }
     }
 

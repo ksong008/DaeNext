@@ -238,7 +238,7 @@ pub(crate) fn start_resident_dataplane_workers(
         Arc::clone(&proxy_groups),
         routing_tuple_map_id,
         routing_matcher,
-        dns_domain_routing,
+        dns_domain_routing.clone(),
         Arc::clone(&dns),
         tcp_dial_mode,
         sniffing_timeout,
@@ -259,6 +259,34 @@ pub(crate) fn start_resident_dataplane_workers(
                 None,
             );
         }
+    };
+    let domain_routing_maintenance = match dns_domain_routing.as_ref() {
+        Some(domain_routing) => match domain_routing.start_maintenance() {
+            Ok((maintenance, thread)) => {
+                owner.register_thread(
+                    "dns-domain-routing-maintenance",
+                    "dns-domain-routing-maintenance",
+                    thread,
+                );
+                Some(maintenance)
+            }
+            Err(err) => {
+                let cleanup = owner.shutdown();
+                return (
+                    json!({
+                        "status": "fail",
+                        "enabled": true,
+                        "error": err,
+                        "cleanup": cleanup,
+                        "event_file": Value::Null,
+                        "event_file_status": "disabled",
+                        "event_log": "product-log-sink",
+                    }),
+                    None,
+                );
+            }
+        },
+        None => None,
     };
     let tcp_flow_stack_bytes = resource_config.tcp_flow_stack_bytes.value();
     let udp_session_limit = resource_config.udp_session_limit.value();
@@ -515,6 +543,7 @@ pub(crate) fn start_resident_dataplane_workers(
             groups: runtime_groups,
             manual_probe_plans,
             dns_reload_handle,
+            domain_routing_maintenance,
         }),
     )
 }
