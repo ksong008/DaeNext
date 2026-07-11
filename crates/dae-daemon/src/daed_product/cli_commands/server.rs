@@ -43,11 +43,16 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             }
         }
     }
-    start_subscription_scheduler(
+    let subscription_scheduler = match start_subscription_scheduler(
         options.state.clone(),
         options.config_dir.clone(),
         Arc::clone(&runtime),
-    );
+    ) {
+        Ok(scheduler) => scheduler,
+        Err(err) => {
+            return DaedProductOutput::error(format!("start subscription scheduler failed: {err}"));
+        }
+    };
     let app = AppState {
         config_dir: options.config_dir,
         state: options.state,
@@ -59,9 +64,14 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
     };
-    match serve_forever(&options.listen, app, startup_started_at) {
-        Ok(()) => DaedProductOutput::ok(String::new()),
-        Err(err) => DaedProductOutput::error(format!("run failed: {err}")),
+    let server_result = serve_forever(&options.listen, app, startup_started_at);
+    let scheduler_result = subscription_scheduler.shutdown();
+    match (server_result, scheduler_result) {
+        (Ok(()), Ok(())) => DaedProductOutput::ok(String::new()),
+        (Err(err), _) => DaedProductOutput::error(format!("run failed: {err}")),
+        (Ok(()), Err(err)) => {
+            DaedProductOutput::error(format!("stop subscription scheduler failed: {err}"))
+        }
     }
 }
 

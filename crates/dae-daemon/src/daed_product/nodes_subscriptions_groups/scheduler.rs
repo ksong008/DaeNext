@@ -1,5 +1,18 @@
 use super::*;
 
+mod invalid_cron;
+mod lifecycle;
+
+pub(crate) use lifecycle::SubscriptionSchedulerHandle;
+
+pub(crate) fn start_subscription_scheduler(
+    state: PathBuf,
+    config_dir: PathBuf,
+    runtime: Arc<ProductRuntimeManager>,
+) -> io::Result<SubscriptionSchedulerHandle> {
+    lifecycle::start_subscription_scheduler(state, config_dir, runtime)
+}
+
 const SUBSCRIPTION_SCHEDULER_TICK: Duration = Duration::from_secs(60);
 const SUBSCRIPTION_SCHEDULER_LOOKBACK_LIMIT_SECS: u64 = 366 * 24 * 60 * 60;
 
@@ -16,7 +29,7 @@ struct ScheduledSubscriptionScan {
     invalid_cron: Vec<InvalidScheduledSubscriptionCron>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct InvalidScheduledSubscriptionCron {
     id: i64,
     error: String,
@@ -46,53 +59,36 @@ struct CronMoment {
     day_of_week: u8,
 }
 
-pub(crate) fn start_subscription_scheduler(
-    state: PathBuf,
-    config_dir: PathBuf,
-    runtime: Arc<ProductRuntimeManager>,
-) {
-    let _ = thread::Builder::new()
-        .name("daed-subscription-scheduler".to_owned())
-        .spawn(move || {
-            let _ = ensure_state_schema(&state);
-            let _ = set_metadata(&state, "subscription_scheduler_started_at", &now_text());
-            let _ = append_log_for_config(
-                &config_dir,
-                &state,
-                "info",
-                "subscription scheduler started by Rust daed",
-            );
-            loop {
-                if let Err(err) = refresh_due_subscriptions_for_scheduler(
-                    &state,
-                    &config_dir,
-                    &runtime,
-                    unix_now(),
-                ) {
-                    let _ = append_log_for_config(
-                        &config_dir,
-                        &state,
-                        "error",
-                        &format!("subscription scheduler tick failed: {err}"),
-                    );
-                }
-                thread::sleep(SUBSCRIPTION_SCHEDULER_TICK);
-            }
-        });
-}
-
+#[cfg(test)]
 pub(crate) fn refresh_due_subscriptions_for_scheduler(
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
     now_unix: u64,
 ) -> io::Result<Value> {
+    let mut invalid_cron = invalid_cron::InvalidCronLogTracker::default();
+    refresh_due_subscriptions_for_scheduler_with_tracker(
+        state,
+        config_dir,
+        runtime,
+        now_unix,
+        &mut invalid_cron,
+    )
+}
+
+fn refresh_due_subscriptions_for_scheduler_with_tracker(
+    state: &Path,
+    config_dir: &Path,
+    runtime: &ProductRuntimeManager,
+    now_unix: u64,
+    invalid_cron: &mut invalid_cron::InvalidCronLogTracker,
+) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let scan = due_scheduled_subscriptions(&conn, now_unix)?;
     drop(conn);
 
-    for invalid in &scan.invalid_cron {
+    for invalid in invalid_cron.take_changed(&scan.invalid_cron) {
         let _ = append_log_for_config(
             config_dir,
             state,
