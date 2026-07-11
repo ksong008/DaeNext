@@ -82,23 +82,23 @@ pub(super) fn prepare_runtime_generation(
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&candidate_path)
+        .open(candidate_path)
         .map_err(|err| {
             format!(
                 "create runtime candidate {}: {err}",
-                path_string(&candidate_path)
+                path_string(candidate_path)
             )
         })?;
     file.write_all(plan.content.as_bytes()).map_err(|err| {
         format!(
             "write runtime candidate {}: {err}",
-            path_string(&candidate_path)
+            path_string(candidate_path)
         )
     })?;
-    set_private_runtime_file_permissions(&candidate_path).map_err(|err| {
+    set_private_runtime_file_permissions(candidate_path).map_err(|err| {
         format!(
             "set runtime candidate permissions {}: {err}",
-            path_string(&candidate_path)
+            path_string(candidate_path)
         )
     })?;
     checkpoints
@@ -107,7 +107,7 @@ pub(super) fn prepare_runtime_generation(
     file.sync_all().map_err(|err| {
         format!(
             "sync runtime candidate {}: {err}",
-            path_string(&candidate_path)
+            path_string(candidate_path)
         )
     })?;
     sync_directory(&runtime_dir)?;
