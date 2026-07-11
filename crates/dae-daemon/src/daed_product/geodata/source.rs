@@ -3,6 +3,12 @@ use super::*;
 
 const GEODATA_SOURCE_URL_MAX_LEN: usize = 2048;
 
+pub(super) enum GeodataSourceUrlUpdate<'a> {
+    Keep,
+    RestoreDefault,
+    Set(&'a str),
+}
+
 pub(super) fn geodata_sources_status(state: &Path) -> io::Result<Value> {
     Ok(json!({
         "geosite": geodata_source_status(state, GeodataKind::Geosite)?,
@@ -40,37 +46,70 @@ pub(super) fn geodata_source(state: &Path, kind: GeodataKind) -> io::Result<Geod
     })
 }
 
+#[cfg(test)]
 pub(super) fn set_geodata_source_url(
     state: &Path,
     kind: GeodataKind,
     raw_url: &str,
 ) -> io::Result<Value> {
-    let url = normalize_geodata_source_url(raw_url)?;
-    reject_obviously_wrong_geodata_source(kind, &url)?;
-    let value = if url == kind.default_source_url() {
-        ""
-    } else {
-        url.as_str()
-    };
-    set_metadata(state, &geodata_source_metadata_key(kind), value)?;
-    geodata_source_status(state, kind)
+    update_geodata_source_settings(state, kind, GeodataSourceUrlUpdate::Set(raw_url), None)
 }
 
+#[cfg(test)]
 pub(super) fn set_geodata_source_use_proxy(
     state: &Path,
     kind: GeodataKind,
     use_proxy: bool,
 ) -> io::Result<Value> {
-    set_metadata(
-        state,
-        &geodata_source_use_proxy_metadata_key(kind),
-        if use_proxy { "true" } else { "false" },
-    )?;
-    geodata_source_status(state, kind)
+    update_geodata_source_settings(state, kind, GeodataSourceUrlUpdate::Keep, Some(use_proxy))
 }
 
+#[cfg(test)]
 pub(super) fn reset_geodata_source_url(state: &Path, kind: GeodataKind) -> io::Result<Value> {
-    set_metadata(state, &geodata_source_metadata_key(kind), "")?;
+    update_geodata_source_settings(state, kind, GeodataSourceUrlUpdate::RestoreDefault, None)
+}
+
+pub(super) fn update_geodata_source_settings(
+    state: &Path,
+    kind: GeodataKind,
+    url_update: GeodataSourceUrlUpdate<'_>,
+    use_proxy: Option<bool>,
+) -> io::Result<Value> {
+    let source_url = match url_update {
+        GeodataSourceUrlUpdate::Keep => None,
+        GeodataSourceUrlUpdate::RestoreDefault => Some(String::new()),
+        GeodataSourceUrlUpdate::Set(raw_url) => {
+            let url = normalize_geodata_source_url(raw_url)?;
+            reject_obviously_wrong_geodata_source(kind, &url)?;
+            Some(if url == kind.default_source_url() {
+                String::new()
+            } else {
+                url
+            })
+        }
+    };
+    if source_url.is_none() && use_proxy.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "geodata source url or useProxy is required",
+        ));
+    }
+    ensure_state_schema(state)?;
+    let mut conn = open_state_connection(state)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_io_error)?;
+    if let Some(source_url) = source_url.as_deref() {
+        set_metadata_with_connection(&tx, &geodata_source_metadata_key(kind), source_url)?;
+    }
+    if let Some(use_proxy) = use_proxy {
+        set_metadata_with_connection(
+            &tx,
+            &geodata_source_use_proxy_metadata_key(kind),
+            if use_proxy { "true" } else { "false" },
+        )?;
+    }
+    tx.commit().map_err(sqlite_io_error)?;
     geodata_source_status(state, kind)
 }
 

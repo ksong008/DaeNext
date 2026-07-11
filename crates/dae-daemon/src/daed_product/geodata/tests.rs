@@ -2,8 +2,8 @@ use super::http::{
     GeodataHttpFileResult, read_geodata_http_response, read_geodata_http_response_to_file,
 };
 use super::source::{
-    geodata_source, geodata_source_status, reset_geodata_source_url, set_geodata_source_url,
-    set_geodata_source_use_proxy,
+    GeodataSourceUrlUpdate, geodata_source, geodata_source_status, reset_geodata_source_url,
+    set_geodata_source_url, set_geodata_source_use_proxy, update_geodata_source_settings,
 };
 use super::status::geodata_status_for_dir;
 use super::types::{GEOIP_FILE, GEOSITE_FILE, GeodataSourceMode};
@@ -260,6 +260,48 @@ fn geodata_source_settings_accept_direct_files_and_use_proxy() {
     assert_eq!(geoip["sourceType"], json!("direct"));
     assert_eq!(geoip["useProxy"], json!(true));
 
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geodata_source_url_and_proxy_setting_roll_back_together() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-geodata-source-transaction-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    open_state_connection(&state)
+        .unwrap()
+        .execute_batch(
+            r#"
+            CREATE TRIGGER reject_geodata_proxy_setting
+            BEFORE INSERT ON daed_product_metadata
+            WHEN NEW.key = 'geodata_geoip_use_proxy'
+            BEGIN
+                SELECT RAISE(ABORT, 'injected geodata proxy setting failure');
+            END;
+            "#,
+        )
+        .unwrap();
+
+    let error = update_geodata_source_settings(
+        &state,
+        GeodataKind::Geoip,
+        GeodataSourceUrlUpdate::Set("https://mirror.example.test/data/geoip.dat"),
+        Some(true),
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("injected geodata proxy setting failure")
+    );
+    let status = geodata_source_status(&state, GeodataKind::Geoip).unwrap();
+    assert_eq!(status["usingDefault"], json!(true));
+    assert_eq!(status["useProxy"], json!(false));
     let _ = fs::remove_dir_all(&dir);
 }
 
