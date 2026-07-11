@@ -1,9 +1,13 @@
 use super::*;
 pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOutput {
     let startup_started_at = Instant::now();
-    let options = match parse_run_args(args) {
+    let mut options = match parse_run_args(args) {
         Ok(options) => options,
         Err(err) => return DaedProductOutput::usage(err),
+    };
+    options.config_dir = match prepare_config_directory(&options.config_dir) {
+        Ok(config_dir) => config_dir,
+        Err(err) => return DaedProductOutput::error(err),
     };
     if let Err(err) = ensure_state_schema(&options.state) {
         return DaedProductOutput::error(format!("init state failed: {err}"));
