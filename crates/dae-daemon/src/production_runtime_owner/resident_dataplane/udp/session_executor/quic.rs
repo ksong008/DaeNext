@@ -1,7 +1,11 @@
 use super::*;
-use std::collections::BTreeMap;
 use std::future::poll_fn;
 use std::task::Poll;
+
+mod fragment_buffer;
+mod packet_id;
+use self::fragment_buffer::QuicUdpFragmentBuffer;
+use self::packet_id::QuicUdpPacketIdAllocator;
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria2QuicDatagramSession
 {
@@ -15,84 +19,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria
     connection: Option<quinn::Connection>,
     session_id: u32,
     fragments: QuicUdpFragmentBuffer,
-}
-
-#[derive(Default)]
-struct QuicUdpFragmentBuffer {
-    pending: BTreeMap<u16, PendingQuicUdpFragments>,
-}
-
-struct PendingQuicUdpFragments {
-    total: u8,
-    parts: BTreeMap<u8, Vec<u8>>,
-}
-
-impl QuicUdpFragmentBuffer {
-    fn push(
-        &mut self,
-        packet_id: u16,
-        frag_id: u8,
-        frag_count: u8,
-        payload: Vec<u8>,
-        label: &str,
-    ) -> Result<Option<Vec<u8>>, String> {
-        if frag_count == 0 || frag_id >= frag_count {
-            return Err(format!(
-                "invalid {label} UDP fragment fields: frag_id={frag_id} frag_count={frag_count}"
-            ));
-        }
-        if frag_count == 1 {
-            return Ok(Some(payload));
-        }
-        if !self.pending.contains_key(&packet_id) && self.pending.len() >= 64 {
-            return Err(format!("{label} UDP fragment buffer is full"));
-        }
-        if let Some(entry) = self.pending.get(&packet_id)
-            && entry.total != frag_count
-        {
-            let previous = entry.total;
-            self.pending.remove(&packet_id);
-            return Err(format!(
-                "{label} UDP fragment count changed for packet {packet_id}: {previous} -> {frag_count}"
-            ));
-        }
-        let complete = {
-            let entry = self
-                .pending
-                .entry(packet_id)
-                .or_insert_with(|| PendingQuicUdpFragments {
-                    total: frag_count,
-                    parts: BTreeMap::new(),
-                });
-            entry.parts.insert(frag_id, payload);
-            entry.parts.len() == frag_count as usize
-        };
-        if !complete {
-            return Ok(None);
-        }
-        let entry = self
-            .pending
-            .remove(&packet_id)
-            .ok_or_else(|| format!("{label} UDP fragment packet disappeared"))?;
-        let mut out = Vec::new();
-        for id in 0..entry.total {
-            let part = entry.parts.get(&id).ok_or_else(|| {
-                format!("{label} UDP fragment packet {packet_id} missing fragment {id}")
-            })?;
-            if out.len() + part.len() > u16::MAX as usize {
-                return Err(format!(
-                    "{label} UDP reassembled payload too large: {} bytes",
-                    out.len() + part.len()
-                ));
-            }
-            out.extend_from_slice(part);
-        }
-        Ok(Some(out))
-    }
-
-    fn clear(&mut self) {
-        self.pending.clear();
-    }
+    packet_ids: QuicUdpPacketIdAllocator,
 }
 
 impl Hysteria2QuicDatagramSession {
@@ -115,6 +42,7 @@ impl Hysteria2QuicDatagramSession {
             connection: None,
             session_id: fastrand::u32(1..=u32::MAX),
             fragments: QuicUdpFragmentBuffer::default(),
+            packet_ids: QuicUdpPacketIdAllocator::default(),
         }
     }
 
@@ -129,7 +57,7 @@ impl Hysteria2QuicDatagramSession {
             .connection
             .as_ref()
             .ok_or_else(|| "Hysteria2 QUIC connection is not initialized".to_owned())?;
-        let packet_id = fastrand::u16(1..=u16::MAX);
+        let packet_id = self.packet_ids.allocate()?;
         let request = build_hysteria2_udp_message(
             self.session_id,
             packet_id,
@@ -233,6 +161,7 @@ impl Hysteria2QuicDatagramSession {
             endpoint.wait_idle().await;
         }
         self.fragments.clear();
+        self.packet_ids.clear();
     }
 }
 
@@ -245,6 +174,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuic
     connection: Option<quinn::Connection>,
     assoc_id: u16,
     fragments: QuicUdpFragmentBuffer,
+    packet_ids: QuicUdpPacketIdAllocator,
 }
 
 impl TuicQuicDatagramSession {
@@ -263,6 +193,7 @@ impl TuicQuicDatagramSession {
             connection: None,
             assoc_id: fastrand::u16(1..=u16::MAX),
             fragments: QuicUdpFragmentBuffer::default(),
+            packet_ids: QuicUdpPacketIdAllocator::default(),
         }
     }
 
@@ -277,7 +208,7 @@ impl TuicQuicDatagramSession {
             .connection
             .as_ref()
             .ok_or_else(|| "TUIC QUIC connection is not initialized".to_owned())?;
-        let packet_id = fastrand::u16(1..=u16::MAX);
+        let packet_id = self.packet_ids.allocate()?;
         let request =
             build_tuic_packet_frame(self.assoc_id, packet_id, &original_dst.to_string(), payload)?;
         connection
@@ -367,6 +298,7 @@ impl TuicQuicDatagramSession {
             endpoint.wait_idle().await;
         }
         self.fragments.clear();
+        self.packet_ids.clear();
     }
 }
 
@@ -522,30 +454,6 @@ mod tests {
         assert_eq!(
             tuic.underlay_reuse,
             Some("quic-endpoint-and-connection-reused")
-        );
-    }
-
-    #[test]
-    fn quic_udp_fragment_buffer_reassembles_fragments_by_packet_id() {
-        let mut buffer = QuicUdpFragmentBuffer::default();
-        assert!(
-            buffer
-                .push(7, 1, 3, b"middle-".to_vec(), "Hysteria2")
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            buffer
-                .push(7, 2, 3, b"tail".to_vec(), "Hysteria2")
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(
-            buffer
-                .push(7, 0, 3, b"head-".to_vec(), "Hysteria2")
-                .unwrap()
-                .unwrap(),
-            b"head-middle-tail"
         );
     }
 }
