@@ -197,6 +197,7 @@ pub(in crate::daed_product) fn current_runtime_external_input_version(
         .unwrap_or(0))
 }
 
+#[cfg(test)]
 pub(in crate::daed_product) fn bump_runtime_external_input_version(
     state: &Path,
 ) -> io::Result<i64> {

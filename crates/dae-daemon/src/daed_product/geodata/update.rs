@@ -1,9 +1,10 @@
 use super::file::{advise_file_dontneed, summarize_geodata_file};
 use super::http::{fetch_geodata_latest_release, fetch_geodata_url_to_file};
 use super::source::geodata_source;
-use super::status::{
-    geodata_dir, geodata_resource_status_from_parts, update_geodata_resource_status_cache,
-    write_geodata_release_version,
+use super::status::{geodata_dir, update_geodata_resource_status_cache};
+use super::transaction::{
+    PreparedGeodataGeneration, commit_geodata_generation, recover_geodata_transaction,
+    runtime_external_input_version_if_running,
 };
 use super::types::{GeodataKind, GeodataRelease, GeodataSourceMode};
 use super::*;
@@ -12,6 +13,7 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
     let _update_lease = app.geodata_updates.acquire(kind)?;
     let dir = geodata_dir(app);
     fs::create_dir_all(&dir)?;
+    recover_geodata_transaction(&dir, &app.state, kind)?;
     let source = geodata_source(&app.state, kind)?;
     let proxy_config = if source.use_proxy {
         Some(product_default_proxy_config(&app.state)?)
@@ -26,7 +28,6 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
             direct_geodata_release(kind, &source.url, proxy_config.as_ref())
         }
     };
-    let path = dir.join(kind.file_name());
     let tmp_path = app
         .geodata_updates
         .reserve_staging_path(&dir, kind, "download")?;
@@ -59,22 +60,37 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
             "downloaded geodata is empty",
         ));
     }
-    fs::rename(&tmp_path, &path).map_err(|err| {
-        let _ = fs::remove_file(&tmp_path);
-        err
-    })?;
     let version = release
         .version
         .unwrap_or_else(|| geodata_sha256_version(&download.sha256));
-    write_geodata_release_version(&dir, kind, &version)?;
+    let external_input_version_before = match runtime_external_input_version_if_running(app) {
+        Ok(version) => version,
+        Err(error) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(error);
+        }
+    };
+    let committed = commit_geodata_generation(
+        &app.geodata_updates,
+        &app.state,
+        &dir,
+        kind,
+        PreparedGeodataGeneration {
+            data_stage: tmp_path,
+            version,
+            summary,
+            sha256: download.sha256,
+            external_input_version_before,
+        },
+    )?;
+    let path = dir.join(kind.file_name());
     let _ = advise_file_dontneed(&path);
-    let status = geodata_resource_status_from_parts(&dir, kind, summary, download.sha256)?;
+    let status = committed.status;
     update_geodata_resource_status_cache(app, kind, status.clone());
-    let runtime_reload_required = bump_runtime_external_input_if_running(app)?;
     let mut response_object = serde_json::Map::new();
     response_object.insert(kind.response_key().to_owned(), status);
     response_object.insert("updated".to_owned(), json!(kind.response_key()));
-    if runtime_reload_required {
+    if committed.runtime_reload_required {
         response_object.insert("runtimeReloadRequired".to_owned(), json!(true));
     }
     Ok(Value::Object(response_object))
@@ -108,17 +124,4 @@ fn default_direct_geodata_version(
     fetch_geodata_latest_release(kind, &api_url, proxy_config)
         .ok()?
         .version
-}
-
-fn bump_runtime_external_input_if_running(app: &AppState) -> io::Result<bool> {
-    let running = app
-        .runtime
-        .inner
-        .lock()
-        .map(|inner| inner.runtime.is_some())
-        .unwrap_or(false);
-    if running {
-        bump_runtime_external_input_version(&app.state)?;
-    }
-    Ok(running)
 }

@@ -12,6 +12,7 @@ use super::types::{GEOIP_FILE, GEOSITE_FILE, GeodataSourceMode};
 use super::*;
 
 mod status_cache;
+mod transaction;
 mod update;
 
 #[test]

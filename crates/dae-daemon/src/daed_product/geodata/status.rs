@@ -23,6 +23,16 @@ pub(super) fn geodata_status_parse_count() -> usize {
 
 pub(in crate::daed_product) fn geodata_status(app: &AppState) -> io::Result<Value> {
     let dir = geodata_dir(app);
+    for kind in [GeodataKind::Geosite, GeodataKind::Geoip] {
+        match app.geodata_updates.acquire(kind) {
+            Ok(lease) => {
+                super::transaction::recover_geodata_transaction(&dir, &app.state, kind)?;
+                drop(lease);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(error),
+        }
+    }
     Ok(json!({
         "geosite": geodata_resource_status_cached(app, &dir, GeodataKind::Geosite),
         "geoip": geodata_resource_status_cached(app, &dir, GeodataKind::Geoip),
@@ -38,10 +48,14 @@ pub(super) fn geodata_status_for_dir(dir: &Path) -> io::Result<Value> {
 }
 
 pub(super) fn geodata_dir(app: &AppState) -> PathBuf {
-    app.web_root
+    geodata_dir_for_web_root(&app.web_root)
+}
+
+pub(in crate::daed_product) fn geodata_dir_for_web_root(web_root: &Path) -> PathBuf {
+    web_root
         .parent()
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| app.web_root.clone())
+        .unwrap_or_else(|| web_root.to_path_buf())
 }
 
 fn geodata_resource_status(dir: &Path, kind: GeodataKind) -> Value {
@@ -131,6 +145,25 @@ pub(super) fn geodata_resource_status_from_parts(
     ))
 }
 
+pub(super) fn geodata_resource_status_from_staged_parts(
+    path: &Path,
+    kind: GeodataKind,
+    summary: dae_geodata::GeoDataSummary,
+    sha256: String,
+    version: &str,
+) -> io::Result<Value> {
+    if !is_valid_geodata_release_version(version) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid geodata release version: {version}"),
+        ));
+    }
+    let metadata = fs::metadata(path)?;
+    Ok(geodata_resource_status_value_with_version(
+        kind, &metadata, summary, sha256, version,
+    ))
+}
+
 fn geodata_resource_status_value(
     dir: &Path,
     kind: GeodataKind,
@@ -139,10 +172,21 @@ fn geodata_resource_status_value(
     sha256: String,
 ) -> Value {
     let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let updated_at = system_time_iso8601(modified);
     let version =
         read_geodata_release_version(dir, kind).unwrap_or_else(|| system_time_date(modified));
 
+    geodata_resource_status_value_with_version(kind, metadata, summary, sha256, &version)
+}
+
+fn geodata_resource_status_value_with_version(
+    kind: GeodataKind,
+    metadata: &fs::Metadata,
+    summary: dae_geodata::GeoDataSummary,
+    sha256: String,
+    version: &str,
+) -> Value {
+    let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let updated_at = system_time_iso8601(modified);
     let mut value = json!({
         "available": true,
         "version": version,
@@ -173,36 +217,6 @@ fn read_geodata_release_version(dir: &Path, kind: GeodataKind) -> Option<String>
     } else {
         None
     }
-}
-
-pub(super) fn write_geodata_release_version(
-    dir: &Path,
-    kind: GeodataKind,
-    version: &str,
-) -> io::Result<()> {
-    if !is_valid_geodata_release_version(version) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid geodata release version: {version}"),
-        ));
-    }
-    let path = dir.join(kind.version_file_name());
-    let tmp_path = dir.join(format!(
-        ".{}.version.tmp.{}.{}",
-        kind.file_name(),
-        std::process::id(),
-        unix_now()
-    ));
-    {
-        let mut file = fs::File::create(&tmp_path)?;
-        file.write_all(version.as_bytes())?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-    }
-    fs::rename(&tmp_path, &path).map_err(|err| {
-        let _ = fs::remove_file(&tmp_path);
-        err
-    })
 }
 
 pub(super) fn is_valid_geodata_release_version(value: &str) -> bool {
