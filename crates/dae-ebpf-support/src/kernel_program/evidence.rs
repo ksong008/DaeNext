@@ -170,6 +170,8 @@ pub fn packet_level_golden_evidence_queue() -> Vec<KernelProgramParityEvidenceLi
         "ipv6_extension_headers",
         "ipv4_non_initial_fragment_pass",
         "ipv6_non_initial_fragment_pass",
+        "single_vlan_ipv4",
+        "qinq_ipv6",
         "ipv6_icmpv6_ndp_redirect",
         "unsupported_l3_protocol_pass",
         "unsupported_l4_protocol_pass",

@@ -11,6 +11,8 @@ pub const ETH_SRC_OFFSET: u32 = 6;
 pub const ETH_PROTO_OFFSET: u32 = 12;
 pub const ETH_P_IP_NETWORK: u32 = u16::to_be(0x0800) as u32;
 pub const ETH_P_IPV6_NETWORK: u32 = u16::to_be(0x86dd) as u32;
+pub const ETH_P_8021Q_NETWORK: u32 = u16::to_be(0x8100) as u32;
+pub const ETH_P_8021AD_NETWORK: u32 = u16::to_be(0x88a8) as u32;
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 pub const IPPROTO_ICMPV6: u8 = 58;
@@ -28,6 +30,8 @@ const IPV6_HEADER_LEN: u32 = 40;
 const IPV6_SADDR_OFFSET: usize = 8;
 const IPV6_DADDR_OFFSET: usize = 24;
 const IPV6_MAX_EXTENSIONS: u8 = 8;
+const VLAN_HLEN: u32 = 4;
+const VLAN_MAX_DEPTH: u8 = 2;
 
 #[repr(C)]
 pub struct ParsedPacket {
@@ -184,6 +188,11 @@ fn ipv6_optlen(hdr_ext_len: u8) -> u32 {
 }
 
 #[inline(always)]
+fn is_vlan_protocol(proto: u32) -> bool {
+    proto == ETH_P_8021Q_NETWORK || proto == ETH_P_8021AD_NETWORK
+}
+
+#[inline(always)]
 pub unsafe fn parse_transport(skb: *mut __sk_buff, link_h_len: u32, out: *mut ParsedPacket) -> i32 {
     unsafe {
         ptr::write(out, ParsedPacket::zeroed());
@@ -191,6 +200,14 @@ pub unsafe fn parse_transport(skb: *mut __sk_buff, link_h_len: u32, out: *mut Pa
     }
 
     let mut network_offset = 0_u32;
+    let mut vlan_depth = if unsafe { (*skb).vlan_present } != 0 {
+        if !is_vlan_protocol(unsafe { (*skb).vlan_proto } & 0xffff) {
+            return 1;
+        }
+        1
+    } else {
+        0
+    };
     if link_h_len == ETH_HLEN {
         let mut eth = [0u8; ETH_HLEN as usize];
         if !unsafe { load_bytes(skb, 0, eth.as_mut_ptr().cast::<c_void>(), ETH_HLEN) } {
@@ -204,7 +221,32 @@ pub unsafe fn parse_transport(skb: *mut __sk_buff, link_h_len: u32, out: *mut Pa
         network_offset += ETH_HLEN;
     }
 
-    let proto = unsafe { (*out).h_proto };
+    let mut proto = unsafe { (*out).h_proto };
+    while is_vlan_protocol(proto) {
+        if vlan_depth >= VLAN_MAX_DEPTH {
+            return 1;
+        }
+        if !unsafe {
+            load_bytes(
+                skb,
+                network_offset,
+                ptr::addr_of_mut!((*out).sport).cast::<c_void>(),
+                VLAN_HLEN,
+            )
+        } {
+            return -1;
+        }
+        proto = unsafe { (*out).dport as u32 };
+        unsafe {
+            (*out).sport = 0;
+            (*out).dport = 0;
+        }
+        network_offset += VLAN_HLEN;
+        vlan_depth += 1;
+    }
+    unsafe {
+        (*out).h_proto = proto;
+    }
     if proto == ETH_P_IP_NETWORK {
         unsafe { parse_ipv4(skb, network_offset, out) }
     } else if proto == ETH_P_IPV6_NETWORK {
