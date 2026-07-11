@@ -64,23 +64,34 @@ impl UdpReplyHandle {
         }
         let deadline = time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT;
         let (response, receiver) = oneshot::channel();
-        match self.sender.try_send(UdpReplyRequest {
+        let permit = match self.sender.try_reserve() {
+            Ok(permit) => permit,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                match time::timeout_at(deadline, self.sender.reserve()).await {
+                    Ok(Ok(permit)) => permit,
+                    Ok(Err(_)) => return Err(UdpReplyError::DispatcherClosed),
+                    Err(_) => {
+                        self.metrics.udp_reply_queue_full();
+                        self.metrics.udp_reply_failed();
+                        return Err(UdpReplyError::QueueFull);
+                    }
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                return Err(UdpReplyError::DispatcherClosed);
+            }
+        };
+        if self.closing.load(Ordering::Acquire) {
+            return Err(UdpReplyError::Closing);
+        }
+        permit.send(UdpReplyRequest {
             original_dst,
             peer,
             payload,
             deadline,
             response,
-        }) {
-            Ok(()) => self.metrics.udp_reply_queued(),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.metrics.udp_reply_queue_full();
-                self.metrics.udp_reply_failed();
-                return Err(UdpReplyError::QueueFull);
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                return Err(UdpReplyError::DispatcherClosed);
-            }
-        }
+        });
+        self.metrics.udp_reply_queued();
         match time::timeout_at(deadline, receiver).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(UdpReplyError::DispatcherClosed),
@@ -186,8 +197,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reply_handle_rejects_when_its_bounded_queue_is_full() {
-        let (sender, _receiver) = mpsc::channel(1);
+    async fn reply_handle_waits_for_bounded_queue_capacity() {
+        let (sender, mut receiver) = mpsc::channel(1);
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
         let handle = UdpReplyHandle {
             sender,
@@ -208,9 +219,18 @@ mod tests {
             })
             .unwrap();
 
-        let err = handle.send(target, peer, vec![2]).await.unwrap_err();
-        assert!(matches!(err, UdpReplyError::QueueFull));
-        assert_eq!(metrics.snapshot()["udpReplyQueueFull"].as_u64().unwrap(), 1);
+        let send = tokio::spawn(async move { handle.send(target, peer, vec![2]).await });
+        tokio::task::yield_now().await;
+        assert!(!send.is_finished());
+
+        let first = receiver.recv().await.unwrap();
+        let _ = first.response.send(Ok(()));
+        let second = receiver.recv().await.unwrap();
+        let _ = second.response.send(Ok(()));
+
+        send.await.unwrap().unwrap();
+        assert_eq!(metrics.snapshot()["udpReplyQueueFull"].as_u64().unwrap(), 0);
+        assert_eq!(metrics.snapshot()["udpReplyQueued"].as_u64().unwrap(), 1);
     }
 
     #[test]
