@@ -24,4 +24,6 @@ mod product_resources;
 #[cfg(test)]
 mod runtime_config;
 #[cfg(test)]
+mod runtime_generation;
+#[cfg(test)]
 mod runtime_lifecycle;
