@@ -44,6 +44,14 @@ fn bundle_roundtrip_preserves_node_id_runtime_tag_and_group_binding() {
     assert_eq!(exported_node["runtimeTag"], json!(expected_tag.as_str()));
 
     let target = FreshProductState::new("identity-bundle-target");
+    target
+        .connection()
+        .execute(
+            "INSERT INTO users(id, username, password_hash, jwt_secret, json_storage)
+             VALUES(?1, ?2, '', '', '{}')",
+            params![user.id, user.username],
+        )
+        .unwrap();
     let outcome = import_bundle(target.state(), target.root(), &bundle, &user).unwrap();
     assert!(outcome.imported);
     let imported_nodes = list_all_nodes_value(target.state()).unwrap();
