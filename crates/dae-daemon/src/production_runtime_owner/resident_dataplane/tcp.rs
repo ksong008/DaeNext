@@ -9,12 +9,11 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::slice;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex, atomic::Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+
+use super::{ResidentStopSignal, SharedResidentStopSignal};
 
 use bytes::Bytes;
 use dae_core_types::OutboundIndex;
@@ -102,9 +101,9 @@ use super::vision::{
     VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,
 };
 use super::{
-    RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_TCP_ACCEPT_SLEEP,
-    RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION,
-    resident_socket_addr_display, resident_tcp_network_name,
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_TCP_IDLE_TIMEOUT,
+    TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION, resident_socket_addr_display,
+    resident_tcp_network_name,
 };
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};

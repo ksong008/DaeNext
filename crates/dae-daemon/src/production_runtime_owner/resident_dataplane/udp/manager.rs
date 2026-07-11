@@ -53,7 +53,7 @@ pub(super) fn run_resident_udp_session_manager(
     dial_mode: TcpDialMode,
     so_mark_from_dae: u32,
     dns: Arc<ResidentDnsPlan>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -108,7 +108,7 @@ async fn run_resident_udp_session_manager_async(
     dial_mode: TcpDialMode,
     so_mark_from_dae: u32,
     dns: Arc<ResidentDnsPlan>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -205,6 +205,7 @@ async fn run_resident_udp_session_manager_async(
             .clamp(16, 1024),
     );
 
+    let mut stop_listener = stop.listener();
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
             Some(key) = cleanup_rx.recv() => {
@@ -264,7 +265,7 @@ async fn run_resident_udp_session_manager_async(
                     }
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {}
+            _ = stop_listener.cancelled() => break,
         }
     }
 

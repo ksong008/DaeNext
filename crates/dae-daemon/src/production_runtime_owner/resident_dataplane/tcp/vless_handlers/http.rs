@@ -22,7 +22,7 @@ pub(crate) async fn handle_vless_h2_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
@@ -128,7 +128,7 @@ pub(crate) async fn handle_vless_grpc_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
@@ -216,7 +216,7 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
@@ -372,7 +372,7 @@ pub(crate) async fn handle_resident_proxy_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpProxySelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: TcpSniffReport,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<Value, String> {

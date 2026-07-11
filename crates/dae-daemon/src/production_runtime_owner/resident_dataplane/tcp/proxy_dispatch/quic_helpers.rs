@@ -22,7 +22,7 @@ pub(crate) async fn relay_tcp_over_quic_stream_async(
     inbound: &mut TokioTcpStream,
     send: &mut quinn::SendStream,
     recv: &mut quinn::RecvStream,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut stats = DirectTcpRelayStats::default();

@@ -15,7 +15,7 @@ pub(super) async fn handle_transparent_tcp_dns_fast_path_async(
     inbound: &mut TokioTcpStream,
     original_dst: SocketAddr,
     dns: Arc<ResidentDnsPlan>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<(), String> {
     let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));

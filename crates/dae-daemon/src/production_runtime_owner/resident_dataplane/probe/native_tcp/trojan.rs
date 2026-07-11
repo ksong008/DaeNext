@@ -1,9 +1,8 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 use dae_outbound::{shared_transport::HttpUpgradeOptions, trojan::packet as trojan_packet};
+
+use super::super::super::ResidentStopSignal;
 
 use super::super::super::client::open_async_resident_tls_client_with_flow;
 use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
@@ -61,7 +60,7 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
 
@@ -171,7 +170,7 @@ async fn open_trojan_inner_shadowsocks_native_tcp_tunnel(
         .map_err(NativeTcpProbeError::Open)?;
 
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let target = target.to_owned();

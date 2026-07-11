@@ -12,7 +12,7 @@ pub(crate) fn resident_udp_loop(
     dial_mode: TcpDialMode,
     so_mark_from_dae: u32,
     dns: Arc<ResidentDnsPlan>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,

@@ -3,7 +3,7 @@ use std::path::Path;
 pub(crate) fn resident_tcp_accept_loop(
     listener: TcpListener,
     router: Arc<ResidentTcpRouter>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -42,7 +42,7 @@ pub(crate) fn resident_tcp_accept_loop(
 pub(crate) async fn resident_tcp_accept_loop_async(
     listener: TcpListener,
     router: Arc<ResidentTcpRouter>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -72,29 +72,35 @@ pub(crate) async fn resident_tcp_accept_loop_async(
     append_tcp_execution_fields(&mut event, "async-accept-direct");
     event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
     append_event(&event_file, &event_lock, event);
+    let mut stop_listener = stop.listener();
     while !stop.load(Ordering::Relaxed) {
-        let permit = match time::timeout(RESIDENT_TCP_ACCEPT_SLEEP, admission.acquire()).await {
-            Err(_) => {
-                admission.record_capacity_wait();
-                continue;
-            }
-            Ok(Ok(permit)) => permit,
-            Ok(Err(err)) => {
+        let permit = tokio::select! {
+            _ = stop_listener.cancelled() => break,
+            permit = admission.acquire() => match permit {
+                Ok(permit) => permit,
+                Err(err) => {
                 append_event(
                     &event_file,
                     &event_lock,
                     json!({"event": "tcp_admission_failed", "error": err}),
                 );
                 break;
+                }
             }
         };
         if stop.load(Ordering::Relaxed) {
             drop(permit);
             break;
         }
-        match time::timeout(RESIDENT_TCP_ACCEPT_SLEEP, listener.accept()).await {
-            Err(_) => drop(permit),
-            Ok(Ok((stream, peer))) => {
+        let accepted = tokio::select! {
+            _ = stop_listener.cancelled() => {
+                drop(permit);
+                break;
+            }
+            accepted = listener.accept() => accepted,
+        };
+        match accepted {
+            Ok((stream, peer)) => {
                 spawn_async_tcp_flow(
                     stream,
                     peer,
@@ -106,14 +112,17 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                     admission.admitted(permit),
                 );
             }
-            Ok(Err(err)) => {
+            Err(err) => {
                 drop(permit);
                 append_event(
                     &event_file,
                     &event_lock,
                     json!({"event": "tcp_accept_failed", "error": err.to_string()}),
                 );
-                time::sleep(Duration::from_millis(100)).await;
+                tokio::select! {
+                    _ = stop_listener.cancelled() => break,
+                    _ = time::sleep(Duration::from_millis(100)) => {}
+                }
             }
         }
     }
@@ -129,7 +138,7 @@ fn spawn_async_tcp_flow(
     stream: TokioTcpStream,
     peer: SocketAddr,
     router: Arc<ResidentTcpRouter>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -164,7 +173,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     mut inbound: TokioTcpStream,
     peer: SocketAddr,
     router: Arc<ResidentTcpRouter>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     metrics: Arc<ResidentDataplaneMetrics>,
     event_file: &Path,
     event_lock: &Arc<Mutex<()>>,

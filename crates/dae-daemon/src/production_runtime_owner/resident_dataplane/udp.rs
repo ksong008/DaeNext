@@ -6,6 +6,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use super::SharedResidentStopSignal;
+
 use bytes::Bytes;
 use dae_datapath::TcpDialMode;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;

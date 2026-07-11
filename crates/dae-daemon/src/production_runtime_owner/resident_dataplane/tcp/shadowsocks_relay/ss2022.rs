@@ -3,7 +3,7 @@ use super::*;
 pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     proxy: &mut TokioTcpStream,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     target: &str,
     cipher: &str,
     password: &str,
@@ -79,7 +79,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
 async fn relay_shadowsocks_2022_upload_async<R, W>(
     inbound: &mut R,
     proxy: &mut W,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     encoder: &mut Ss2022TcpClientStreamEncoder,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<usize, String>
@@ -133,7 +133,7 @@ where
 async fn relay_shadowsocks_2022_download_async<R, W>(
     proxy: &mut R,
     inbound: &mut W,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     cipher: &str,
     password: &str,
     client_salt: &[u8],
@@ -273,7 +273,7 @@ mod tests {
 
         let mut proxy = TokioTcpStream::connect(endpoint).await.unwrap();
         let (mut client_side, mut relay_side) = tokio::io::duplex(64 * 1024);
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = ResidentStopSignal::shared();
         let relay_stop = Arc::clone(&stop);
         let metrics = ResidentDataplaneMetrics::default();
         let relay = tokio::spawn(async move {
@@ -348,7 +348,7 @@ mod tests {
 
         let mut proxy = TokioTcpStream::connect(endpoint).await.unwrap();
         let (mut client_side, mut relay_side) = tokio::io::duplex(128 * 1024);
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = ResidentStopSignal::shared();
         let relay_stop = Arc::clone(&stop);
         let metrics = ResidentDataplaneMetrics::default();
         let relay = tokio::spawn(async move {

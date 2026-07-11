@@ -108,7 +108,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
     groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     proxy_groups: SharedResidentProxyGroupMap,
     resuscitation_rx: Receiver<ResidentHealthResuscitationRequest>,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,

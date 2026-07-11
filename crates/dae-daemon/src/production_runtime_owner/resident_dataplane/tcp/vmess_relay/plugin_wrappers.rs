@@ -3,7 +3,7 @@ use super::*;
 pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncResidentTlsClient,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     target: &str,
     cipher: &str,
     password: &str,
@@ -154,7 +154,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
 pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     client: &mut AsyncResidentTlsClient,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     target: &str,
     trojan_password: &str,
     inner_cipher: &str,

@@ -3,10 +3,7 @@ use super::client_io::{
 };
 use super::*;
 use bytes::{Bytes, BytesMut};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -19,7 +16,7 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
     download: &mut XhttpDownloadClient,
     session_id: &str,
     mut seq: u64,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     mut stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
@@ -97,7 +94,7 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     upload: &mut XhttpStreamUploadClient,
     download: &mut XhttpDownloadClient,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     mut stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {

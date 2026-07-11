@@ -89,7 +89,8 @@ fn health_scheduler_retains_shared_group_arcs_and_stops_without_a_round() {
         assert!(shared.values().any(|shared| Arc::ptr_eq(shared, group)));
     }
 
-    let stop = Arc::new(AtomicBool::new(true));
+    let stop = ResidentStopSignal::shared();
+    stop.store(true, Ordering::Relaxed);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let (_handle, receiver) = resident_health_resuscitation_channel(Arc::clone(&metrics));
     resident_health_scheduler_loop(
@@ -139,7 +140,7 @@ async fn shared_health_schedule_runs_one_zero_interval_round_and_updates_selecto
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let shared = plan::share_resident_proxy_groups(plan.proxies);
     let group = Arc::clone(shared.values().next().unwrap());
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let (_stop_tx, stop_rx) = watch::channel(false);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
 
@@ -198,7 +199,7 @@ async fn udp_resuscitation_runs_on_the_shared_health_runtime() {
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let shared = plan::share_resident_proxy_groups(plan.proxies);
     let outbound = *shared.keys().next().unwrap();
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = ResidentStopSignal::shared();
     let (stop_tx, stop_rx) = watch::channel(false);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let (handle, receiver) = resident_health_resuscitation_channel(Arc::clone(&metrics));

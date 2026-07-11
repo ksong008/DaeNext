@@ -7,7 +7,7 @@ pub(super) async fn handle_direct_tcp_connection_async(
     peer: SocketAddr,
     original_dst: SocketAddr,
     selection: TcpDirectSelection,
-    stop: Arc<AtomicBool>,
+    stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
