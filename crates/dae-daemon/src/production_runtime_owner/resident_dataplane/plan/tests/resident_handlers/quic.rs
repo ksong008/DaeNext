@@ -139,5 +139,25 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
         juicity.handler,
         ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
     ));
-    vec![hysteria2, tuic, juicity]
+    let proxies = vec![hysteria2, tuic, juicity];
+    for proxy in &proxies {
+        let graph = proxy.executable_graph_value();
+        let lifecycle = &graph["runtimeComponents"]["underlayFactory"]["quicLifecycle"];
+        assert_eq!(lifecycle["endpointScope"], "per-flow");
+        assert_eq!(lifecycle["connectionScope"], "per-flow");
+        assert_eq!(lifecycle["clientConfigScope"], "per-flow");
+        assert_eq!(lifecycle["crossFlowConnectionReuse"], false);
+        assert_eq!(
+            graph["runtimeComponents"]["generationCache"]["perFlowProviders"],
+            serde_json::json!(["quic-client-config", "quic-endpoint", "quic-connection"])
+        );
+        assert!(
+            !graph["runtimeComponents"]["generationCache"]["sharedProviderCaches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|provider| provider == "quic-client-config")
+        );
+    }
+    proxies
 }

@@ -384,6 +384,14 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
             json!(stream_wrapper.expanded_stream_wrapper_complete),
         );
         report.insert(
+            "stream_wrapper_runtime_limits_visible".to_owned(),
+            json!(stream_wrapper.runtime_limits_visible),
+        );
+        report.insert(
+            "stream_wrapper_full_fidelity_and_pooling_complete".to_owned(),
+            json!(stream_wrapper.full_fidelity_and_pooling_complete),
+        );
+        report.insert(
             "stream_wrapper_capability_report_schema".to_owned(),
             json!(stream_wrapper.schema),
         );
@@ -399,10 +407,18 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
             "stream_wrapper_capability_typed_report".to_owned(),
             json!({
                 "schema": "stream-wrapper-capability-typed-report",
-                "status": if stream_wrapper.expanded_stream_wrapper_complete { "pass" } else { "blocked" },
+                "status": if !stream_wrapper.expanded_stream_wrapper_complete {
+                    "blocked"
+                } else if stream_wrapper.full_fidelity_and_pooling_complete {
+                    "pass"
+                } else {
+                    "scoped"
+                },
                 "websocket_wss_loopback_ready": stream_wrapper.websocket_wss_loopback_ready,
                 "resident_source_admission_ready": stream_wrapper.resident_source_admission_ready,
                 "expanded_stream_wrapper_complete": stream_wrapper.expanded_stream_wrapper_complete,
+                "runtime_limits_visible": stream_wrapper.runtime_limits_visible,
+                "full_fidelity_and_pooling_complete": stream_wrapper.full_fidelity_and_pooling_complete,
                 "blocked_rows_visible": false,
                 "current_report_schema": true,
             }),

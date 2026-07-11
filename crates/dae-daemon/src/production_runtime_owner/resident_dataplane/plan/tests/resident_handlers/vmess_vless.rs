@@ -281,6 +281,14 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         vmess_grpc_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-grpc-h2-stream"
     );
+    assert_eq!(
+        vmess_grpc_graph["runtimeComponents"]["streamWrapperFactory"]["runtimeLimits"]["messageCompression"],
+        "identity-only"
+    );
+    assert_eq!(
+        vmess_grpc_graph["runtimeComponents"]["streamWrapperFactory"]["runtimeLimits"]["compressedInboundHunk"],
+        "fail-closed"
+    );
     assert!(
         vmess_grpc_graph["streamWrapperEndpoint"]["hostHash"]
             .as_str()

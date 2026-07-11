@@ -296,7 +296,7 @@ const PACKET_SEMANTICS_CAPABILITY_ROWS: [PacketSemanticsCapabilityRow; 8] = [
     ),
     admitted_packet_row(
         "multiplexed-stream",
-        "resident-shared-mux-stream",
+        "resident-vless-mux-framing",
         "multiplexed-stream",
         "selected-resident-wrapper-graph",
     ),
