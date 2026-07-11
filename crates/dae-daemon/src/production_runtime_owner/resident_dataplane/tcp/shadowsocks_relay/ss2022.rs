@@ -66,11 +66,6 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
                 stats.direct_to_client += download_result?;
                 break;
             }
-            _ = time::sleep(Duration::from_millis(100)) => {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-            }
         }
     }
     Ok(stats)
@@ -89,8 +84,13 @@ where
 {
     let mut uploaded = 0_usize;
     let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut stop_listener = stop.listener();
     loop {
         tokio::select! {
+            _ = stop_listener.cancelled() => {
+                let _ = proxy.shutdown().await;
+                break;
+            }
             inbound_read = inbound.read(&mut inbound_buf) => {
                 match inbound_read {
                     Ok(0) => {
@@ -119,12 +119,6 @@ where
                     }
                 }
             }
-            _ = time::sleep(Duration::from_millis(100)) => {
-                if stop.load(Ordering::Relaxed) {
-                    let _ = proxy.shutdown().await;
-                    break;
-                }
-            }
         }
     }
     Ok(uploaded)
@@ -145,28 +139,29 @@ where
 {
     let mut downloaded = 0_usize;
     let mut decoder = None;
-    while !stop.load(Ordering::Relaxed) {
-        let proxy_plain = match time::timeout(
-            RESIDENT_TCP_IDLE_TIMEOUT,
-            read_shadowsocks_2022_proxy_plain_async(
+    let mut stop_listener = stop.listener();
+    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(idle_deadline);
+    loop {
+        let proxy_plain = tokio::select! {
+            _ = stop_listener.cancelled() => break,
+            result = read_shadowsocks_2022_proxy_plain_async(
                 proxy,
                 &mut decoder,
                 cipher,
                 password,
                 client_salt,
-            ),
-        )
-        .await
-        {
-            Ok(Ok(plain)) => plain,
-            Ok(Err(err)) => {
-                let message = err.to_string();
-                if is_graceful_shadowsocks_response_message(&message) {
-                    break;
+            ) => match result {
+                Ok(plain) => plain,
+                Err(err) => {
+                    let message = err.to_string();
+                    if is_graceful_shadowsocks_response_message(&message) {
+                        break;
+                    }
+                    return Err(format!("read Shadowsocks 2022 response chunk: {message}"));
                 }
-                return Err(format!("read Shadowsocks 2022 response chunk: {message}"));
-            }
-            Err(_) => {
+            },
+            _ = &mut idle_deadline => {
                 return Err("resident Shadowsocks 2022 relay idle timeout".to_owned());
             }
         };
@@ -194,6 +189,7 @@ where
                 }
             }
         }
+        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
     }
     Ok(downloaded)
 }
@@ -237,6 +233,42 @@ async fn read_shadowsocks_2022_proxy_plain_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shadowsocks_2022_idle_relay_stops_without_polling() {
+        let cipher = "2022-blake3-aes-128-gcm";
+        let password = "AQIDBAUGBwgJCgsMDQ4PEA==";
+        let listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let mut proxy = TokioTcpStream::connect(endpoint).await.unwrap();
+        let (_upstream, _) = listener.accept().await.unwrap();
+        let (_client_side, mut relay_side) = tokio::io::duplex(64 * 1024);
+        let stop = ResidentStopSignal::shared();
+        let relay_stop = Arc::clone(&stop);
+        let metrics = ResidentDataplaneMetrics::default();
+        let relay = tokio::spawn(async move {
+            relay_tcp_over_shadowsocks_2022_async(
+                &mut relay_side,
+                &mut proxy,
+                relay_stop,
+                "example.com:443",
+                cipher,
+                password,
+                16,
+                &[],
+                &metrics,
+            )
+            .await
+        });
+
+        tokio::task::yield_now().await;
+        stop.store(true, Ordering::Relaxed);
+        let result = time::timeout(Duration::from_millis(50), relay)
+            .await
+            .expect("SS2022 relay did not observe stop broadcast")
+            .unwrap();
+        assert!(result.is_ok());
+    }
 
     #[tokio::test]
     async fn shadowsocks_2022_relay_uploads_client_data_before_server_response() {
