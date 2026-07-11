@@ -81,6 +81,9 @@ pub fn param_to_object_bytes(param: BpfDaeParam) -> [u8; DAE_PARAM_SYMBOL_SIZE] 
     bytes[23] = param.padding;
     bytes[24..28].copy_from_slice(&param.task_struct_mm_offset.to_le_bytes());
     bytes[28..32].copy_from_slice(&param.mm_struct_arg_start_offset.to_le_bytes());
+    bytes[32..36].copy_from_slice(&param.abi_version.to_le_bytes());
+    bytes[36..40].copy_from_slice(&param.udp_state_saturation_policy.to_le_bytes());
+    bytes[40..48].copy_from_slice(&param.udp_state_idle_timeout_ns.to_le_bytes());
     bytes
 }
 
@@ -104,6 +107,9 @@ pub fn param_from_object_bytes(bytes: &[u8]) -> io::Result<BpfDaeParam> {
         padding: bytes[23],
         task_struct_mm_offset: u32::from_le_bytes(copy4(&bytes[24..28])?),
         mm_struct_arg_start_offset: u32::from_le_bytes(copy4(&bytes[28..32])?),
+        abi_version: u32::from_le_bytes(copy4(&bytes[32..36])?),
+        udp_state_saturation_policy: u32::from_le_bytes(copy4(&bytes[36..40])?),
+        udp_state_idle_timeout_ns: u64::from_le_bytes(copy8(&bytes[40..48])?),
     })
 }
 

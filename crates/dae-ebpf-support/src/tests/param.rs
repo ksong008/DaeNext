@@ -17,6 +17,15 @@ pub(super) fn dae_param_packs_big_endian_tproxy_port() {
     assert_eq!(param.has_bpf_get_current_task, 1);
     assert_eq!(param.task_struct_mm_offset, 2640);
     assert_eq!(param.mm_struct_arg_start_offset, 696);
+    assert_eq!(param.abi_version, BPF_DAE_PARAM_ABI_VERSION);
+    assert_eq!(
+        param.udp_state_saturation_policy,
+        UDP_STATE_SATURATION_POLICY_FAIL_CLOSED
+    );
+    assert_eq!(
+        param.udp_state_idle_timeout_ns,
+        UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT
+    );
 }
 
 #[test]
@@ -74,6 +83,9 @@ pub(super) fn dae_param_requirements_match_memo_fields() {
             "has_bpf_get_current_task",
             "task_struct_mm_offset",
             "mm_struct_arg_start_offset",
+            "abi_version",
+            "udp_state_saturation_policy",
+            "udp_state_idle_timeout_ns",
         ]
     );
 }
@@ -137,5 +149,14 @@ pub(super) fn param_object_bytes_roundtrip_layout() {
     assert_eq!(bytes[22], 1);
     assert_eq!(&bytes[24..28], &2640u32.to_le_bytes());
     assert_eq!(&bytes[28..32], &696u32.to_le_bytes());
+    assert_eq!(&bytes[32..36], &BPF_DAE_PARAM_ABI_VERSION.to_le_bytes());
+    assert_eq!(
+        &bytes[36..40],
+        &UDP_STATE_SATURATION_POLICY_FAIL_CLOSED.to_le_bytes()
+    );
+    assert_eq!(
+        &bytes[40..48],
+        &UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT.to_le_bytes()
+    );
     assert_eq!(param_from_object_bytes(&bytes).unwrap(), param);
 }

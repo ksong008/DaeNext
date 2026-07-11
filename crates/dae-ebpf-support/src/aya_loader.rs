@@ -16,9 +16,9 @@ use aya::programs::{
 };
 
 use crate::{
-    AttachBackend, BpfDaeParam, DaeCgroupAttachLine, DaeCgroupProgramKind, LoaderBackend,
-    RuntimeMapRole, TcAttachDirection, TcNativeAttachSpec, TcxAttachOrder, map_catalog,
-    pinned_reuse_maps, trace_core_sideload_gate_report,
+    AttachBackend, BpfDaeParam, BpfUdpStateMetrics, DaeCgroupAttachLine, DaeCgroupProgramKind,
+    LoaderBackend, RuntimeMapRole, TcAttachDirection, TcNativeAttachSpec, TcxAttachOrder,
+    map_catalog, pinned_reuse_maps, trace_core_sideload_gate_report,
 };
 
 mod types;
@@ -41,3 +41,5 @@ mod report;
 pub use self::report::*;
 mod common_helpers;
 use self::common_helpers::*;
+mod map_metrics;
+pub use self::map_metrics::*;

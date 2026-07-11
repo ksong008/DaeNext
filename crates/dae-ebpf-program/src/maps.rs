@@ -5,7 +5,8 @@ use aya_ebpf::{
         bpf_map_def,
         bpf_map_type::{
             BPF_MAP_TYPE_ARRAY, BPF_MAP_TYPE_ARRAY_OF_MAPS, BPF_MAP_TYPE_HASH,
-            BPF_MAP_TYPE_LPM_TRIE, BPF_MAP_TYPE_LRU_HASH, BPF_MAP_TYPE_SOCKMAP,
+            BPF_MAP_TYPE_LPM_TRIE, BPF_MAP_TYPE_LRU_HASH, BPF_MAP_TYPE_PERCPU_ARRAY,
+            BPF_MAP_TYPE_SOCKMAP,
         },
     },
     macros::{btf_map, map},
@@ -14,8 +15,8 @@ use aya_ebpf::{
 use crate::abi::{
     BpfDomainRouting, BpfLpmKey, BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname,
     BpfRedirectEntry, BpfRedirectTuple, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState,
-    MAX_COOKIE_PID_PNAME_MAPPING_NUM, MAX_DOMAIN_ROUTING_NUM, MAX_DST_MAPPING_NUM, MAX_LPM_NUM,
-    MAX_LPM_SIZE, MAX_MATCH_SET_LEN,
+    BpfUdpStateMetrics, MAX_COOKIE_PID_PNAME_MAPPING_NUM, MAX_DOMAIN_ROUTING_NUM,
+    MAX_DST_MAPPING_NUM, MAX_LPM_NUM, MAX_LPM_SIZE, MAX_MATCH_SET_LEN,
 };
 
 const BPF_F_NO_PREALLOC: u32 = 1;
@@ -178,6 +179,16 @@ static COOKIE_PID_MAP: RawMap = RawMap::new(
     PIN_BY_NAME,
 );
 
+#[map(name = "udp_state_metrics")]
+static UDP_STATE_METRICS: RawMap = RawMap::new(
+    BPF_MAP_TYPE_PERCPU_ARRAY,
+    size_of::<u32>(),
+    size_of::<BpfUdpStateMetrics>(),
+    1,
+    0,
+    PIN_NONE,
+);
+
 #[btf_map(name = "udp_conn_state_map")]
 static UDP_CONN_STATE_MAP: BtfMapDef<
     BpfTuplesKey,
@@ -216,6 +227,11 @@ pub(crate) fn cookie_pid_map_ptr() -> *mut c_void {
 #[inline(always)]
 pub(crate) fn udp_conn_state_map_ptr() -> *mut c_void {
     btf_map_ptr(&UDP_CONN_STATE_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn udp_state_metrics_map_ptr() -> *mut c_void {
+    map_ptr(&UDP_STATE_METRICS)
 }
 
 #[inline(always)]

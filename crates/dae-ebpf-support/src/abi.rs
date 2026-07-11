@@ -10,6 +10,9 @@ pub struct BpfDaeParam {
     pub padding: u8,
     pub task_struct_mm_offset: u32,
     pub mm_struct_arg_start_offset: u32,
+    pub abi_version: u32,
+    pub udp_state_saturation_policy: u32,
+    pub udp_state_idle_timeout_ns: u64,
 }
 
 #[repr(C)]
@@ -107,9 +110,24 @@ pub struct BpfUdpConnState {
     pub timer: BpfTimerOpaque,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BpfUdpStateMetrics {
+    pub state_created_total: u64,
+    pub state_refresh_total: u64,
+    pub insert_failure_total: u64,
+    pub post_insert_lookup_failure_total: u64,
+    pub timer_init_failure_total: u64,
+    pub timer_callback_failure_total: u64,
+    pub timer_start_failure_total: u64,
+}
+
 pub const TASK_COMM_LEN: usize = 16;
 pub const MAX_MATCH_SET_LEN: usize = 32 * 32;
 pub const TPROXY_MARK: u32 = 0x0800_0000;
+pub const BPF_DAE_PARAM_ABI_VERSION: u32 = 2;
+pub const UDP_STATE_SATURATION_POLICY_FAIL_CLOSED: u32 = 0;
+pub const UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT: u64 = 300_000_000_000;
 pub const LINK_HDR_LEN_NONE: u32 = 0;
 pub const LINK_HDR_LEN_ETHERNET: u32 = 14;
 
@@ -122,6 +140,7 @@ pub const BPF_LOOP_FEATURE_VERSION: super::kernel::Version = super::kernel::Vers
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BpfAbiContract {
     pub dae_param_size: usize,
+    pub dae_param_abi_version: u32,
     pub task_comm_len: usize,
     pub max_match_set_len: usize,
     pub tproxy_mark: u32,
@@ -132,6 +151,7 @@ pub struct BpfAbiContract {
 pub const fn bpf_abi_contract() -> BpfAbiContract {
     BpfAbiContract {
         dae_param_size: core::mem::size_of::<BpfDaeParam>(),
+        dae_param_abi_version: BPF_DAE_PARAM_ABI_VERSION,
         task_comm_len: TASK_COMM_LEN,
         max_match_set_len: MAX_MATCH_SET_LEN,
         tproxy_mark: TPROXY_MARK,

@@ -10,6 +10,9 @@ pub struct BpfDaeParam {
     pub padding: u8,
     pub task_struct_mm_offset: u32,
     pub mm_struct_arg_start_offset: u32,
+    pub abi_version: u32,
+    pub udp_state_saturation_policy: u32,
+    pub udp_state_idle_timeout_ns: u64,
 }
 
 impl BpfDaeParam {
@@ -24,6 +27,9 @@ impl BpfDaeParam {
             padding: 0,
             task_struct_mm_offset: 0,
             mm_struct_arg_start_offset: 0,
+            abi_version: 0,
+            udp_state_saturation_policy: UDP_STATE_SATURATION_POLICY_FAIL_CLOSED,
+            udp_state_idle_timeout_ns: 0,
         }
     }
 }
@@ -172,6 +178,18 @@ pub struct BpfUdpConnState {
     pub timer: bpf_timer,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfUdpStateMetrics {
+    pub state_created_total: u64,
+    pub state_refresh_total: u64,
+    pub insert_failure_total: u64,
+    pub post_insert_lookup_failure_total: u64,
+    pub timer_init_failure_total: u64,
+    pub timer_callback_failure_total: u64,
+    pub timer_start_failure_total: u64,
+}
+
 impl BpfUdpConnState {
     pub const fn new(is_wan_ingress_direction: bool) -> Self {
         Self {
@@ -197,6 +215,9 @@ pub const MAX_DST_MAPPING_NUM: u32 = 65_536 * 2;
 pub const MAX_COOKIE_PID_PNAME_MAPPING_NUM: u32 = 65_536;
 pub const MAX_DOMAIN_ROUTING_NUM: u32 = 65_536;
 pub const TPROXY_MARK: u32 = 0x0800_0000;
+pub const BPF_DAE_PARAM_ABI_VERSION: u32 = 2;
+pub const UDP_STATE_SATURATION_POLICY_FAIL_CLOSED: u32 = 0;
+pub const UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT: u64 = 300_000_000_000;
 pub const LINK_HDR_LEN_ETHERNET: u32 = 14;
 
 #[unsafe(no_mangle)]
@@ -230,6 +251,21 @@ pub fn param_dae0peer_mac() -> [u8; 6] {
             core::ptr::addr_of!(PARAM.dae0peer_mac[5]).read_volatile(),
         ]
     }
+}
+
+#[inline(always)]
+pub fn param_udp_state_idle_timeout_ns() -> u64 {
+    let value = unsafe { core::ptr::addr_of!(PARAM.udp_state_idle_timeout_ns).read_volatile() };
+    if value == 0 {
+        UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT
+    } else {
+        value
+    }
+}
+
+#[inline(always)]
+pub fn param_udp_state_saturation_policy() -> u32 {
+    unsafe { core::ptr::addr_of!(PARAM.udp_state_saturation_policy).read_volatile() }
 }
 
 #[inline(always)]
