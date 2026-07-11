@@ -9,6 +9,8 @@ mod state;
 pub(super) use self::state::*;
 mod server;
 pub(super) use self::server::*;
+mod config_directory;
+pub(super) use self::config_directory::*;
 mod export;
 pub(super) use self::export::*;
 mod resetpass;
