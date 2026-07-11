@@ -236,12 +236,7 @@ impl ResidentDnsUdpForwarder {
             .as_ref()
             .is_none_or(ResidentDnsUdpMultiplexHandle::is_closed)
         {
-            *handle = Some(if self.shards.len() > 1 {
-                super::udp_multiplex::open_threaded_udp_multiplex_handle(self.target, self.mark)
-                    .await?
-            } else {
-                super::udp_multiplex::open_udp_multiplex_handle(self.target, self.mark).await?
-            });
+            *handle = Some(self.executor.open_handle(self.target, self.mark).await?);
         }
         handle
             .as_ref()
