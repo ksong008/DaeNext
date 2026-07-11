@@ -73,9 +73,10 @@ pub use tls::{
     tls_server_echo,
 };
 pub use tls_fragment::{
-    SharedTlsFragmentStats, TLS_HANDSHAKE_CONTENT_TYPE, TLS_RECORD_HEADER_LEN, TlsFragmentOptions,
-    TlsFragmentStats, TlsFragmentWrite, TlsFragmentWriteReport, TlsFragmentingStream,
-    fragment_tls_write, new_tls_fragment_stats, parse_tls_fragment_range,
+    SharedTlsFragmentStats, TLS_FRAGMENT_MAX_BUFFERED_RECORD_LEN, TLS_HANDSHAKE_CONTENT_TYPE,
+    TLS_RECORD_HEADER_LEN, TlsFragmentOptions, TlsFragmentPlan, TlsFragmentPlanner,
+    TlsFragmentSegment, TlsFragmentStats, TlsFragmentWrite, TlsFragmentWriteReport,
+    TlsFragmentingStream, fragment_tls_write, new_tls_fragment_stats, parse_tls_fragment_range,
     snapshot_tls_fragment_stats,
 };
 pub use utls_fingerprint::{
