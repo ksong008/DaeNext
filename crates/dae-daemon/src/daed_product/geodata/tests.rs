@@ -422,6 +422,60 @@ fn geodata_http_reader_streams_response_body_to_file() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn geodata_https_redirect_rejects_plain_http_downgrade() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-geodata-redirect-downgrade-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("geosite.dat");
+    let mut reader = b"HTTP/1.1 302 Found\r\nLocation: http://example.test/geosite.dat\r\nContent-Length: 0\r\n\r\n"
+        .as_slice();
+    let base_url = url::Url::parse("https://example.test/geosite.dat").unwrap();
+
+    let Err(error) = read_geodata_http_response_to_file(&base_url, &mut reader, &path) else {
+        panic!("HTTPS to HTTP redirect was admitted");
+    };
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(error.to_string().contains("HTTPS to HTTP redirect"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn geodata_redirect_preserves_safe_relative_and_upgrade_targets() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-geodata-safe-redirect-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("geosite.dat");
+    for (base, location, expected) in [
+        (
+            "https://example.test/releases/latest",
+            "/assets/geosite.dat",
+            "https://example.test/assets/geosite.dat",
+        ),
+        (
+            "http://example.test/geosite.dat",
+            "https://cdn.example.test/geosite.dat",
+            "https://cdn.example.test/geosite.dat",
+        ),
+    ] {
+        let response =
+            format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n");
+        let mut reader = response.as_bytes();
+        let base_url = url::Url::parse(base).unwrap();
+        let result = read_geodata_http_response_to_file(&base_url, &mut reader, &path).unwrap();
+        let GeodataHttpFileResult::Redirect(next) = result else {
+            panic!("expected safe geodata redirect");
+        };
+        assert_eq!(next.as_str(), expected);
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
 struct UnexpectedEofAfterData<'a> {
     data: &'a [u8],
     eof_sent: bool,
