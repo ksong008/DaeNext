@@ -12,11 +12,12 @@ use dae_ebpf_support::{
 };
 #[cfg(feature = "native-ebpf")]
 use dae_ebpf_support::{
-    TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcNativeAttachSpec, tc_handle,
+    AyaCgroupAttachPreflightReport, dae_cgroup_attach_matrix, detect_cgroup2_mount,
+    load_attach_aya_cgroup_program, preflight_aya_cgroup_programs,
 };
 #[cfg(feature = "native-ebpf")]
 use dae_ebpf_support::{
-    dae_cgroup_attach_matrix, detect_cgroup2_mount, load_attach_aya_cgroup_program,
+    TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcNativeAttachSpec, tc_handle,
 };
 use serde_json::{Value, json};
 
@@ -36,6 +37,8 @@ mod map_profile;
 use self::map_profile::*;
 mod attach_backend;
 mod attach_flow;
+mod cgroup;
+pub(in crate::production_runtime_owner) use self::cgroup::native_cgroup_attach_preflight;
 mod map_cleanup;
 mod state;
 #[cfg(any(feature = "native-ebpf", test))]

@@ -14,6 +14,7 @@ use aya::programs::{
     links::FdLink,
     tc::{self, NlOptions, SchedClassifierLinkId, TcAttachOptions},
 };
+use aya::util::KernelVersion;
 
 use crate::{
     AttachBackend, BpfDaeParam, BpfUdpStateMetrics, DaeCgroupAttachLine, DaeCgroupProgramKind,
@@ -31,6 +32,8 @@ mod tc_attach;
 pub use self::tc_attach::*;
 mod cgroup;
 pub use self::cgroup::*;
+mod cgroup_preflight;
+pub use self::cgroup_preflight::*;
 mod netns;
 use self::netns::*;
 mod lpm_pinning;

@@ -6,6 +6,7 @@ pub mod aya_loader;
 pub mod bpf_error;
 pub mod capability;
 pub mod cgroup;
+pub mod cgroup_query;
 pub mod connectivity;
 pub mod kernel;
 pub mod kernel_program;
@@ -62,7 +63,8 @@ pub use attach::{
 };
 #[cfg(feature = "aya-loader")]
 pub use aya_loader::{
-    AyaCgroupAttachDetachReport, AyaLoadedMapSpec, AyaMapSpecMismatch, AyaNativeRuntimePinReport,
+    AyaCgroupAttachDetachReport, AyaCgroupAttachPreflightLine, AyaCgroupAttachPreflightReport,
+    AyaCgroupProgramIdentity, AyaLoadedMapSpec, AyaMapSpecMismatch, AyaNativeRuntimePinReport,
     AyaPinnedObject, AyaPnameBtfOffsets, AyaTargetBtfReport, AyaTargetBtfSelection,
     AyaTargetBtfSource, AyaTcAttachDetachReport, AyaTcxProgramOrderEntry,
     AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachRingbufSmokeReport,
@@ -75,15 +77,21 @@ pub use aya_loader::{
     load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
     load_aya_cgroup_program_for_admission, load_aya_userspace_object,
     load_aya_userspace_object_bytes, load_pin_aya_trace_object,
-    pin_aya_loaded_object_for_native_runtime, read_aya_udp_state_metrics,
-    resolve_pname_btf_offsets, resolve_pname_btf_offsets_from_path,
+    pin_aya_loaded_object_for_native_runtime, preflight_aya_cgroup_programs,
+    read_aya_udp_state_metrics, resolve_pname_btf_offsets, resolve_pname_btf_offsets_from_path,
 };
 pub use bpf_error::{BpfErrorClass, classify_bpf_io_error, format_bpf_io_error};
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
 pub use cgroup::{
-    DaeCgroupAttachLine, DaeCgroupAttachRole, DaeCgroupProgramKind, PinnedCgroupAttachOptions,
-    PinnedCgroupAttachReport, attach_pin_cgroup_monitor, dae_cgroup_attach_matrix,
-    detect_cgroup2_mount, detect_cgroup2_mount_from_proc_mounts,
+    CGROUP_ATTACH_MODE_ALLOW_MULTIPLE, CGROUP_ATTACH_MODE_BPF_LINK_MULTI,
+    CGROUP_ATTACH_MODE_MULTI_COMPATIBLE, DaeCgroupAttachLine, DaeCgroupAttachRole,
+    DaeCgroupProgramKind, PinnedCgroupAttachOptions, PinnedCgroupAttachReport,
+    attach_pin_cgroup_monitor, dae_cgroup_attach_matrix, detect_cgroup2_mount,
+    detect_cgroup2_mount_from_proc_mounts,
+};
+pub use cgroup_query::{
+    CGROUP_ATTACH_FLAG_ALLOW_MULTIPLE, CgroupAttachmentQuery, CgroupAttachmentSnapshot,
+    query_cgroup_attachments,
 };
 pub use connectivity::{
     ConnectivityEvent, ConnectivityKey, ConnectivityMap, ConnectivityMapFdCache,

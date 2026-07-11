@@ -100,44 +100,6 @@ impl NativeEbpfRuntimeState {
         self.try_attach_spec(param_object, spec, backend)
     }
 
-    #[cfg(not(feature = "native-ebpf"))]
-    pub(super) fn try_attach_cgroup_programs(
-        &mut self,
-        _param_object: &Path,
-    ) -> Result<Vec<Value>, String> {
-        Err("native eBPF runtime feature is not compiled".to_owned())
-    }
-
-    #[cfg(feature = "native-ebpf")]
-    pub(super) fn try_attach_cgroup_programs(
-        &mut self,
-        param_object: &Path,
-    ) -> Result<Vec<Value>, String> {
-        let cgroup_path = detect_cgroup2_mount()
-            .map_err(|err| format!("native eBPF cgroup2 mount detection failed: {err}"))?;
-        let mut reports = Vec::new();
-        for line in dae_cgroup_attach_matrix() {
-            let report = load_attach_aya_cgroup_program(
-                self.ensure_loaded(param_object)?,
-                &line,
-                &cgroup_path,
-            )?;
-            reports.push(json!({
-                "role": format!("{:?}", report.role),
-                "cgroup_path": path_string(&report.cgroup_path),
-                "program_name": report.program_name,
-                "section": report.section,
-                "program_kind": report.program_kind.as_str(),
-                "attach_mode": report.attach_mode,
-                "loaded": report.loaded,
-                "attached": report.attached,
-                "detached": report.detached,
-                "link_lifetime_owned_by_backend": report.link_lifetime_owned_by_backend,
-            }));
-        }
-        Ok(reports)
-    }
-
     #[cfg(feature = "native-ebpf")]
     pub(super) fn try_attach_spec(
         &mut self,

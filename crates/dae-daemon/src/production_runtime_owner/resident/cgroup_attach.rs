@@ -1,5 +1,47 @@
 use super::*;
 
+pub(super) fn resident_cgroup_preflight_check(
+    options: &ProductionRuntimeOwnerOptions,
+    wan_ifaces: &[String],
+) -> Value {
+    if wan_ifaces.is_empty() || !options.native_ebpf_requested {
+        return json!({
+            "name": "resident-cgroup-coexistence-preflight",
+            "status": "pass",
+            "skipped": true,
+            "reason": if wan_ifaces.is_empty() {
+                "wan_interface is not configured"
+            } else {
+                "native eBPF backend is not requested"
+            },
+        });
+    }
+    match native_cgroup_attach_preflight() {
+        Ok(mut report) => {
+            let compatible = report["compatible"].as_bool().unwrap_or(false);
+            if let Value::Object(fields) = &mut report {
+                fields.insert(
+                    "name".to_owned(),
+                    json!("resident-cgroup-coexistence-preflight"),
+                );
+                if !compatible {
+                    fields.insert(
+                        "blocker".to_owned(),
+                        json!("cgroup has an incompatible non-multi attachment; existing programs will not be replaced"),
+                    );
+                }
+            }
+            report
+        }
+        Err(error) => json!({
+            "name": "resident-cgroup-coexistence-preflight",
+            "status": "fail",
+            "blocker": format!("cgroup coexistence preflight failed: {error}"),
+            "error": error,
+        }),
+    }
+}
+
 // Resident startup evidence keeps attach inputs and report artifacts explicit.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resident_cgroup_attach_evidence(
@@ -16,7 +58,7 @@ pub(super) fn resident_cgroup_attach_evidence(
         native_runtime.pname_evidence(pname_rules_required, native_param_image);
     let cgroup_link_lifecycle = json!({
         "status": "owned-by-aya-runtime",
-        "attachMode": "single",
+        "attachMode": dae_ebpf_support::CGROUP_ATTACH_MODE_MULTI_COMPATIBLE,
         "releaseBoundary": "resident-runtime-reset",
         "staleCleanup": "owned-link-drop",
         "programs": dae_cgroup_attach_matrix()

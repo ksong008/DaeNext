@@ -240,13 +240,14 @@ impl NativeEbpfRuntimeState {
             return None;
         }
         match self.try_attach_cgroup_programs(param_object) {
-            Ok(reports) => {
+            Ok((preflight, reports)) => {
                 self.cgroup_attached = true;
                 steps.push(json!({
                     "name": "attach-native-ebpf-cgroup-programs",
                     "status": "pass",
                     "role": "cgroup_pname_monitor",
                     "backend": "aya",
+                    "preflight": preflight,
                     "programs": reports,
                     "command_backend_required": true,
                     "actual_command_backend_required": false,

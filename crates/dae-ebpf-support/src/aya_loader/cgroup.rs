@@ -52,6 +52,7 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
 ) -> Result<AyaCgroupAttachDetachReport, String> {
     let cgroup = fs::File::open(cgroup_path)
         .map_err(|err| format!("open cgroup path {} failed: {err}", cgroup_path.display()))?;
+    let (attach_mode, attach_mode_name) = compatible_cgroup_attach_mode()?;
     match line.aya_program_kind {
         DaeCgroupProgramKind::Sock => {
             let program = loaded.ebpf.program_mut(line.program_name).ok_or_else(|| {
@@ -62,7 +63,7 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                 .map_err(|err| format!("aya program is not a cgroup sock program: {err:?}"))?;
             load_cgroup_sock_program(program, line.program_name)?;
             let link_id = program
-                .attach(&cgroup, CgroupAttachMode::Single)
+                .attach(&cgroup, attach_mode)
                 .map_err(|err| format!("aya cgroup sock attach failed: {err:?}"))?;
             if detach_after_attach {
                 program
@@ -82,7 +83,7 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                 .map_err(|err| format!("aya program is not a cgroup sock_addr program: {err:?}"))?;
             load_cgroup_sock_addr_program(program, line.program_name)?;
             let link_id = program
-                .attach(&cgroup, CgroupAttachMode::Single)
+                .attach(&cgroup, attach_mode)
                 .map_err(|err| format!("aya cgroup sock_addr attach failed: {err:?}"))?;
             if detach_after_attach {
                 program
@@ -97,12 +98,28 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
         program_name: line.program_name.to_owned(),
         section: line.section.to_owned(),
         program_kind: line.aya_program_kind,
-        attach_mode: line.attach_mode.to_owned(),
+        attach_mode: attach_mode_name.to_owned(),
         loaded: true,
         attached: true,
         detached: detach_after_attach,
         link_lifetime_owned_by_backend: line.link_lifetime_owned_by_backend,
     })
+}
+
+fn compatible_cgroup_attach_mode() -> Result<(CgroupAttachMode, &'static str), String> {
+    let kernel = KernelVersion::current()
+        .map_err(|error| format!("read kernel version for cgroup attach: {error}"))?;
+    if kernel >= KernelVersion::new(5, 7, 0) {
+        Ok((
+            CgroupAttachMode::Single,
+            crate::CGROUP_ATTACH_MODE_BPF_LINK_MULTI,
+        ))
+    } else {
+        Ok((
+            CgroupAttachMode::AllowMultiple,
+            crate::CGROUP_ATTACH_MODE_ALLOW_MULTIPLE,
+        ))
+    }
 }
 
 fn load_cgroup_sock_program(program: &mut CgroupSock, name: &str) -> Result<(), String> {

@@ -5,6 +5,10 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+pub const CGROUP_ATTACH_MODE_MULTI_COMPATIBLE: &str = "multi-compatible";
+pub const CGROUP_ATTACH_MODE_BPF_LINK_MULTI: &str = "bpf-link-multi";
+pub const CGROUP_ATTACH_MODE_ALLOW_MULTIPLE: &str = "allow-multiple";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DaeCgroupProgramKind {
     Sock,
@@ -119,7 +123,7 @@ pub fn dae_cgroup_attach_matrix() -> Vec<DaeCgroupAttachLine> {
         program_name: role.program_name(),
         attach_type: role.attach_type(),
         aya_program_kind: role.program_kind(),
-        attach_mode: "single",
+        attach_mode: CGROUP_ATTACH_MODE_MULTI_COMPATIBLE,
         link_lifetime_owned_by_backend: true,
     })
     .collect()
@@ -219,7 +223,7 @@ fn attach_pin_one_cgroup_line(
         link_path,
         section: line.section.to_owned(),
         attach_type: line.role.bpf_attach_type(),
-        attach_mode: line.attach_mode.to_owned(),
+        attach_mode: CGROUP_ATTACH_MODE_BPF_LINK_MULTI.to_owned(),
         attached: true,
         pinned: true,
     })
