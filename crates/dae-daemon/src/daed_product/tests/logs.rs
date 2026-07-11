@@ -143,6 +143,7 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
         auth_runtime: product_test_auth_runtime(),
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        geodata_update_runtime: None,
     };
     for (raw_query, expected_len, expected_level) in [
         ("", 3, None),

@@ -241,6 +241,7 @@ struct AppState {
     auth_runtime: Arc<ProductAuthRuntime>,
     geodata_updates: Arc<geodata::ProductGeodataUpdateCoordinator>,
     geodata_status_cache: Arc<Mutex<GeodataStatusCache>>,
+    geodata_update_runtime: Option<Arc<geodata::ProductGeodataUpdateRuntime>>,
 }
 
 #[derive(Debug, Default)]

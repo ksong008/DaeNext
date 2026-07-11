@@ -56,17 +56,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             return DaedProductOutput::error(format!("start authentication runtime failed: {err}"));
         }
     };
-    let subscription_scheduler = match start_subscription_scheduler(
-        options.state.clone(),
-        options.config_dir.clone(),
-        Arc::clone(&runtime),
-    ) {
-        Ok(scheduler) => scheduler,
-        Err(err) => {
-            return DaedProductOutput::error(format!("start subscription scheduler failed: {err}"));
-        }
-    };
-    let app = AppState {
+    let mut app = AppState {
         config_dir: options.config_dir,
         state: options.state,
         web_root: options.web_root,
@@ -78,6 +68,26 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         auth_runtime,
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        geodata_update_runtime: None,
+    };
+    app.geodata_update_runtime =
+        match geodata::ProductGeodataUpdateRuntime::start_for_app(http_config, &app) {
+            Ok(runtime) => Some(runtime),
+            Err(err) => {
+                return DaedProductOutput::error(format!(
+                    "start geodata update runtime failed: {err}"
+                ));
+            }
+        };
+    let subscription_scheduler = match start_subscription_scheduler(
+        app.state.clone(),
+        app.config_dir.clone(),
+        Arc::clone(&app.runtime),
+    ) {
+        Ok(scheduler) => scheduler,
+        Err(err) => {
+            return DaedProductOutput::error(format!("start subscription scheduler failed: {err}"));
+        }
     };
     let server_result = serve_forever(&options.listen, app, startup_started_at);
     let scheduler_result = subscription_scheduler.shutdown();

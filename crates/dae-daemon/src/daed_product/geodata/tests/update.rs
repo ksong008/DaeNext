@@ -25,6 +25,7 @@ fn concurrent_same_kind_update_is_rejected_before_a_second_download() {
         auth_runtime: product_test_auth_runtime(),
         geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        geodata_update_runtime: None,
     };
     let body = message([field_message(
         1,
@@ -104,6 +105,7 @@ fn geodata_update_api_reports_same_kind_conflict_truthfully() {
         auth_runtime: product_test_auth_runtime(),
         geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        geodata_update_runtime: None,
     };
     let _lease = app.geodata_updates.acquire(GeodataKind::Geosite).unwrap();
 

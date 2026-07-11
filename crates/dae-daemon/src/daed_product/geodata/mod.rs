@@ -12,6 +12,8 @@ mod transaction;
 mod types;
 mod update;
 mod update_admission;
+mod update_context;
+mod update_runtime;
 
 use source::{GeodataSourceUrlUpdate, geodata_sources_status, update_geodata_source_settings};
 pub(in crate::daed_product) use status::{geodata_dir_for_web_root, geodata_status};
@@ -20,6 +22,8 @@ pub(in crate::daed_product) use transaction::recover_geodata_transactions;
 pub(in crate::daed_product) use types::GeodataKind;
 use update::update_geodata;
 pub(in crate::daed_product) use update_admission::ProductGeodataUpdateCoordinator;
+use update_context::ProductGeodataUpdateContext;
+pub(in crate::daed_product) use update_runtime::ProductGeodataUpdateRuntime;
 
 pub(in crate::daed_product) fn api_geodata_status(app: &AppState) -> HttpResponse {
     match geodata_status(app) {
@@ -82,7 +86,14 @@ pub(in crate::daed_product) fn api_update_geodata(
     app: &AppState,
     kind: GeodataKind,
 ) -> HttpResponse {
-    let response = match update_geodata(app, kind) {
+    geodata_update_http_response(kind, update_geodata(app, kind))
+}
+
+pub(super) fn geodata_update_http_response(
+    kind: GeodataKind,
+    result: io::Result<Value>,
+) -> HttpResponse {
+    let response = match result {
         Ok(status) => HttpResponse::json(200, status),
         Err(err) if err.kind() == io::ErrorKind::WouldBlock => HttpResponse::json(
             409,
@@ -101,4 +112,17 @@ pub(in crate::daed_product) fn api_update_geodata(
     };
     let _ = allocator_reclaim(AllocatorReclaimReason::GeodataUpdate);
     response
+}
+
+pub(in crate::daed_product) fn geodata_update_kind_for_request(
+    request: &HttpRequest,
+) -> Option<GeodataKind> {
+    if request.method != "POST" {
+        return None;
+    }
+    match request.path.as_str() {
+        "/api/geodata/geosite/update" => Some(GeodataKind::Geosite),
+        "/api/geodata/geoip/update" => Some(GeodataKind::Geoip),
+        _ => None,
+    }
 }

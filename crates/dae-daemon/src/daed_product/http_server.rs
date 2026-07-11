@@ -47,6 +47,9 @@ pub(super) fn serve_forever(
     );
     http_fields.insert("sources".to_owned(), config.sources_json().to_string());
     http_fields.extend(app.auth_runtime.startup_fields());
+    if let Some(runtime) = app.geodata_update_runtime.as_ref() {
+        http_fields.extend(runtime.startup_fields());
+    }
     let _ = append_startup_step_completed_for_config(
         &app.config_dir,
         &app.state,
@@ -192,9 +195,48 @@ pub(super) fn handle_stream(
         };
         return detach_sse_stream(stream, app, metrics, request);
     }
+    if let Some(kind) = geodata_update_kind_for_request(&request)
+        && let Some(runtime) = app.geodata_update_runtime.as_ref()
+    {
+        match authenticate_request(&app, &request) {
+            Ok(Some(_user)) => {}
+            Ok(None) => {
+                let response = HttpResponse::json(401, json!({"error": "authentication required"}));
+                write_http_response_for_request(&mut stream, &request, &response, false)?;
+                return Ok(ProductHttpConnectionResult::Closed);
+            }
+            Err(err) => {
+                let response = HttpResponse::json(500, json!({"error": err.to_string()}));
+                write_http_response_for_request(&mut stream, &request, &response, false)?;
+                return Ok(ProductHttpConnectionResult::Closed);
+            }
+        }
+        return detach_geodata_update_stream(stream, request, kind, runtime, metrics);
+    }
     let response = route_request_with_context(&app, &request, context);
     write_http_response_for_request(&mut stream, &request, &response, head_only)?;
     Ok(ProductHttpConnectionResult::Closed)
+}
+
+fn detach_geodata_update_stream(
+    stream: TcpStream,
+    request: HttpRequest,
+    kind: GeodataKind,
+    runtime: &ProductGeodataUpdateRuntime,
+    metrics: Arc<ProductHttpMetrics>,
+) -> io::Result<ProductHttpConnectionResult> {
+    match runtime.submit(kind, stream, request, metrics) {
+        Ok(()) => Ok(ProductHttpConnectionResult::Detached),
+        Err(mut rejection) => {
+            write_http_response_for_request(
+                &mut rejection.stream,
+                &rejection.request,
+                &rejection.response,
+                false,
+            )?;
+            Ok(ProductHttpConnectionResult::Closed)
+        }
+    }
 }
 
 fn detach_sse_stream(

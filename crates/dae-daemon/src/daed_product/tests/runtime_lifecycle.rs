@@ -30,6 +30,7 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
         auth_runtime: product_test_auth_runtime(),
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        geodata_update_runtime: None,
     };
     set_metadata(&state, "runtime_log_level", "info").unwrap();
     let request = HttpRequest {
@@ -374,6 +375,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
         auth_runtime: product_test_auth_runtime(),
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        geodata_update_runtime: None,
     };
     let request = HttpRequest {
         method: "GET".to_owned(),

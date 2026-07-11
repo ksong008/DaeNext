@@ -331,6 +331,7 @@ mod tests {
             auth_runtime: product_test_auth_runtime(),
             geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
             geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+            geodata_update_runtime: None,
         };
 
         let response = handle_local_control_reload(&app);

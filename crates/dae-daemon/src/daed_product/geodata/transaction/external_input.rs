@@ -1,9 +1,9 @@
 use super::*;
 
 pub(in crate::daed_product::geodata) fn runtime_external_input_version_if_running(
-    app: &AppState,
+    context: &ProductGeodataUpdateContext,
 ) -> io::Result<Option<i64>> {
-    let running = app
+    let running = context
         .runtime
         .inner
         .lock()
@@ -12,8 +12,8 @@ pub(in crate::daed_product::geodata) fn runtime_external_input_version_if_runnin
     if !running {
         return Ok(None);
     }
-    ensure_state_schema(&app.state)?;
-    let conn = open_state_connection(&app.state)?;
+    ensure_state_schema(&context.state)?;
+    let conn = open_state_connection(&context.state)?;
     current_runtime_external_input_version(&conn).map(Some)
 }
 
