@@ -1,7 +1,25 @@
 use super::file::{advise_file_dontneed, sha256_file, summarize_geodata_file};
+use super::status_cache::{GeodataResourceIdentity, GeodataStatusCacheEntry};
 use super::time::{system_time_date, system_time_iso8601};
 use super::types::GeodataKind;
 use super::*;
+
+const GEODATA_STATUS_STABILITY_ATTEMPTS: usize = 2;
+
+#[cfg(test)]
+std::thread_local! {
+    static GEODATA_STATUS_PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn reset_geodata_status_parse_count() {
+    GEODATA_STATUS_PARSE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn geodata_status_parse_count() -> usize {
+    GEODATA_STATUS_PARSE_COUNT.with(std::cell::Cell::get)
+}
 
 pub(in crate::daed_product) fn geodata_status(app: &AppState) -> io::Result<Value> {
     let dir = geodata_dir(app);
@@ -34,20 +52,36 @@ fn geodata_resource_status(dir: &Path, kind: GeodataKind) -> Value {
 }
 
 fn geodata_resource_status_cached(app: &AppState, dir: &Path, kind: GeodataKind) -> Value {
-    let Ok(mut cache) = app.geodata_status_cache.lock() else {
-        return geodata_resource_status(dir, kind);
-    };
-    let slot = match kind {
-        GeodataKind::Geosite => &mut cache.geosite,
-        GeodataKind::Geoip => &mut cache.geoip,
-    };
-    if let Some(value) = slot.as_ref() {
-        return value.clone();
-    }
+    for _ in 0..GEODATA_STATUS_STABILITY_ATTEMPTS {
+        let Ok(identity_before) = GeodataResourceIdentity::capture(dir, kind) else {
+            return geodata_resource_status(dir, kind);
+        };
+        if let Ok(cache) = app.geodata_status_cache.lock() {
+            let slot = match kind {
+                GeodataKind::Geosite => &cache.geosite,
+                GeodataKind::Geoip => &cache.geoip,
+            };
+            if let Some(entry) = slot.as_ref()
+                && entry.matches(&identity_before)
+            {
+                return entry.value().clone();
+            }
+        }
 
-    let value = geodata_resource_status(dir, kind);
-    *slot = Some(value.clone());
-    value
+        let value = geodata_resource_status(dir, kind);
+        let Ok(identity_after) = GeodataResourceIdentity::capture(dir, kind) else {
+            return value;
+        };
+        if identity_before == identity_after {
+            set_geodata_resource_status_cache_entry(
+                app,
+                kind,
+                GeodataStatusCacheEntry::new(identity_after, value.clone()),
+            );
+            return value;
+        }
+    }
+    geodata_resource_status(dir, kind)
 }
 
 fn geodata_resource_unavailable_status(kind: GeodataKind, err: io::Error) -> Value {
@@ -74,6 +108,8 @@ fn geodata_resource_unavailable_status(kind: GeodataKind, err: io::Error) -> Val
 }
 
 fn geodata_resource_status_result(dir: &Path, kind: GeodataKind) -> io::Result<Value> {
+    #[cfg(test)]
+    GEODATA_STATUS_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     let path = dir.join(kind.file_name());
     let summary = summarize_geodata_file(kind, &path)?;
     let sha256 = sha256_file(&path)?;
@@ -177,13 +213,24 @@ pub(super) fn is_valid_geodata_release_version(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
-fn set_geodata_resource_status_cache(app: &AppState, kind: GeodataKind, value: Value) {
+fn set_geodata_resource_status_cache(app: &AppState, dir: &Path, kind: GeodataKind, value: Value) {
+    let Ok(entry) = GeodataStatusCacheEntry::capture(dir, kind, value) else {
+        return;
+    };
+    set_geodata_resource_status_cache_entry(app, kind, entry);
+}
+
+fn set_geodata_resource_status_cache_entry(
+    app: &AppState,
+    kind: GeodataKind,
+    entry: GeodataStatusCacheEntry,
+) {
     let Ok(mut cache) = app.geodata_status_cache.lock() else {
         return;
     };
     match kind {
-        GeodataKind::Geosite => cache.geosite = Some(value),
-        GeodataKind::Geoip => cache.geoip = Some(value),
+        GeodataKind::Geosite => cache.geosite = Some(entry),
+        GeodataKind::Geoip => cache.geoip = Some(entry),
     }
 }
 
@@ -192,5 +239,6 @@ pub(super) fn update_geodata_resource_status_cache(
     kind: GeodataKind,
     value: Value,
 ) {
-    set_geodata_resource_status_cache(app, kind, value);
+    let dir = geodata_dir(app);
+    set_geodata_resource_status_cache(app, &dir, kind, value);
 }

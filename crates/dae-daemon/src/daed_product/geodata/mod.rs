@@ -4,6 +4,7 @@ mod file;
 mod http;
 mod source;
 mod status;
+mod status_cache;
 #[cfg(test)]
 mod tests;
 mod time;
@@ -13,6 +14,7 @@ mod update_admission;
 
 use source::{GeodataSourceUrlUpdate, geodata_sources_status, update_geodata_source_settings};
 pub(in crate::daed_product) use status::geodata_status;
+pub(in crate::daed_product) use status_cache::GeodataStatusCacheEntry;
 pub(in crate::daed_product) use types::GeodataKind;
 use update::update_geodata;
 pub(in crate::daed_product) use update_admission::ProductGeodataUpdateCoordinator;
