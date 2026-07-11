@@ -9,7 +9,10 @@ use dae_outbound::shared_transport::mux::{
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
 use super::super::client::AsyncResidentTlsClient;
-use super::websocket::WebSocketBinaryFrameDecoder;
+use super::websocket::{
+    AsyncWebSocketControlWriter, AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState,
+    WebSocketBinaryFrameDecoder,
+};
 
 pub(super) async fn read_shadowsocks_aead_chunk_from_websocket_tls(
     client: &mut AsyncResidentTlsClient,
@@ -68,71 +71,11 @@ where
 }
 
 #[derive(Default)]
-pub(crate) struct AsyncWebSocketPayloadState {
-    decoder: WebSocketBinaryFrameDecoder,
-    pending: CursorByteBuffer,
-}
-
-pub(crate) struct AsyncWebSocketPayloadReader<'a, 'b, R> {
-    client: &'a mut R,
-    state: &'b mut AsyncWebSocketPayloadState,
-}
-
-impl<'a, 'b, R> AsyncWebSocketPayloadReader<'a, 'b, R>
-where
-    R: AsyncRead + Unpin,
-{
-    pub(crate) fn new(client: &'a mut R, state: &'b mut AsyncWebSocketPayloadState) -> Self {
-        Self { client, state }
-    }
-}
-
-impl<R> AsyncRead for AsyncWebSocketPayloadReader<'_, '_, R>
-where
-    R: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        out: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        if drain_async_websocket_payload(self.state, out) || out.remaining() == 0 {
-            return Poll::Ready(Ok(()));
-        }
-
-        loop {
-            let mut buf = [0_u8; 8192];
-            let mut read_buf = ReadBuf::new(&mut buf);
-            match Pin::new(&mut *self.client).poll_read(cx, &mut read_buf) {
-                Poll::Ready(Ok(())) => {
-                    let read = read_buf.filled();
-                    if read.is_empty() {
-                        return Poll::Ready(Ok(()));
-                    }
-                    let frames = self
-                        .state
-                        .decoder
-                        .push(read)
-                        .map_err(std::io::Error::other)?;
-                    for frame in frames {
-                        self.state.pending.extend_from_slice(&frame);
-                    }
-                    if drain_async_websocket_payload(self.state, out) || out.remaining() == 0 {
-                        return Poll::Ready(Ok(()));
-                    }
-                }
-                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
-
-#[derive(Default)]
 pub(super) struct AsyncV2rayPluginMuxPayloadState {
     ws_decoder: WebSocketBinaryFrameDecoder,
     mux_bytes: CursorByteBuffer,
     pending_payload: CursorByteBuffer,
+    control: AsyncWebSocketControlWriter,
     closed: bool,
 }
 
@@ -158,44 +101,49 @@ impl<'a, 'b> AsyncV2rayPluginMuxPayloadReader<'a, 'b> {
 
 impl AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_> {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         out: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        if drain_v2ray_plugin_mux_payload(self.state, out)? || out.remaining() == 0 {
-            return Poll::Ready(Ok(()));
-        }
-        if self.state.closed {
-            return Poll::Ready(Ok(()));
-        }
+        let this = self.get_mut();
+        let mux_id = this.mux_id;
+        let client = &mut *this.client;
+        let state = &mut *this.state;
 
         loop {
-            let mux_id = self.mux_id;
-            if parse_pending_v2ray_plugin_mux_frames(self.state, mux_id)?
-                && (drain_v2ray_plugin_mux_payload(self.state, out)? || out.remaining() == 0)
+            match state.control.poll_flush(&mut *client, cx) {
+                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                Poll::Pending => return Poll::Pending,
+            }
+            if drain_v2ray_plugin_mux_payload(state, out)? || out.remaining() == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            if parse_pending_v2ray_plugin_mux_frames(state, mux_id)?
+                && (drain_v2ray_plugin_mux_payload(state, out)? || out.remaining() == 0)
             {
                 return Poll::Ready(Ok(()));
             }
-            if self.state.closed {
+            if state.closed {
                 return Poll::Ready(Ok(()));
             }
 
             let mut buf = [0_u8; 8192];
             let mut read_buf = ReadBuf::new(&mut buf);
-            match Pin::new(&mut *self.client).poll_read(cx, &mut read_buf) {
+            match Pin::new(&mut *client).poll_read(cx, &mut read_buf) {
                 Poll::Ready(Ok(())) => {
                     let read = read_buf.filled();
                     if read.is_empty() {
-                        self.state.closed = true;
+                        state.closed = true;
                         return Poll::Ready(Ok(()));
                     }
-                    let frames = self
-                        .state
-                        .ws_decoder
-                        .push(read)
-                        .map_err(std::io::Error::other)?;
+                    let frames = state.ws_decoder.push(read).map_err(std::io::Error::other)?;
                     for frame in frames {
-                        self.state.mux_bytes.extend_from_slice(&frame);
+                        state.mux_bytes.extend_from_slice(&frame);
+                    }
+                    state.control.queue_from(&mut state.ws_decoder);
+                    if state.ws_decoder.is_closed() {
+                        state.closed = true;
                     }
                     continue;
                 }
@@ -204,13 +152,6 @@ impl AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_> {
             }
         }
     }
-}
-
-fn drain_async_websocket_payload(
-    state: &mut AsyncWebSocketPayloadState,
-    out: &mut ReadBuf<'_>,
-) -> bool {
-    state.pending.drain_to_read_buf(out)
 }
 
 fn drain_v2ray_plugin_mux_payload(

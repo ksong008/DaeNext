@@ -8,6 +8,14 @@ use tokio::time;
 use super::super::RESIDENT_CONNECT_TIMEOUT;
 use super::super::client::AsyncVlessTlsClient;
 
+mod async_payload;
+mod framing;
+pub(super) use async_payload::AsyncWebSocketControlWriter;
+pub(crate) use async_payload::{AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState};
+#[cfg(test)]
+pub(crate) use framing::RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES;
+pub(crate) use framing::WebSocketBinaryFrameDecoder;
+
 pub(in crate::production_runtime_owner::resident_dataplane) async fn websocket_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
@@ -146,77 +154,17 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn write_webso
     client.write_plain_all(&frame, label).await
 }
 
-#[derive(Default)]
-pub(crate) struct WebSocketBinaryFrameDecoder {
-    pending: Vec<u8>,
-    closed: bool,
-}
-
-impl WebSocketBinaryFrameDecoder {
-    pub(crate) fn push(&mut self, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-        if self.closed {
-            return Ok(Vec::new());
-        }
-        self.pending.extend_from_slice(input);
-        let mut frames = Vec::new();
-        loop {
-            if self.pending.len() < 2 {
-                break;
-            }
-            let fin = self.pending[0] & 0x80 != 0;
-            let opcode = self.pending[0] & 0x0f;
-            if !fin || !matches!(opcode, 2 | 8) {
-                return Err(format!(
-                    "unexpected websocket frame: fin={fin} opcode={opcode}"
-                ));
-            }
-            let masked = self.pending[1] & 0x80 != 0;
-            let mut len = (self.pending[1] & 0x7f) as usize;
-            let mut header_len = 2_usize;
-            if len == 126 {
-                if self.pending.len() < 4 {
-                    break;
-                }
-                len = u16::from_be_bytes([self.pending[2], self.pending[3]]) as usize;
-                header_len = 4;
-            } else if len == 127 {
-                return Err("websocket 64-bit length unsupported in resident relay".to_owned());
-            }
-            let mask_key = if masked {
-                if self.pending.len() < header_len + 4 {
-                    break;
-                }
-                let key = [
-                    self.pending[header_len],
-                    self.pending[header_len + 1],
-                    self.pending[header_len + 2],
-                    self.pending[header_len + 3],
-                ];
-                header_len += 4;
-                Some(key)
-            } else {
-                None
-            };
-            if self.pending.len() < header_len + len {
-                break;
-            }
-            let mut payload = self.pending[header_len..header_len + len].to_vec();
-            if let Some(mask_key) = mask_key {
-                for (index, byte) in payload.iter_mut().enumerate() {
-                    *byte ^= mask_key[index % 4];
-                }
-            }
-            self.pending.drain(..header_len + len);
-            if opcode == 8 {
-                self.closed = true;
-                break;
-            }
-            frames.push(payload);
-        }
-        Ok(frames)
+pub(crate) async fn write_websocket_control_responses_over_resident_tls_async(
+    client: &mut AsyncVlessTlsClient,
+    decoder: &mut WebSocketBinaryFrameDecoder,
+    label: &str,
+) -> Result<(), String> {
+    let responses = decoder.take_control_responses();
+    if responses.is_empty() {
+        return Ok(());
     }
-
-    pub(crate) fn is_closed(&self) -> bool {
-        self.closed
+    for response in responses {
+        client.write_plain_all_buffered(&response, label).await?;
     }
+    client.flush_plain(label).await
 }

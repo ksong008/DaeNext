@@ -69,6 +69,13 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
                         let frames = ws_decoder
                             .push(&proxy_buf[..read])
                             .map_err(|err| RelayError::new(err, &stats))?;
+                        write_websocket_control_responses_over_resident_tls_async(
+                            client,
+                            &mut ws_decoder,
+                            "write websocket control response",
+                        )
+                        .await
+                        .map_err(|err| RelayError::new(err, &stats))?;
                         for frame in frames {
                             let payload = stripper
                                 .consume(&frame)
@@ -82,6 +89,9 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
                                 stats.proxy_to_client += payload.len();
                                 metrics.add_download(payload.len());
                             }
+                        }
+                        if ws_decoder.is_closed() {
+                            break;
                         }
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         if close_drain_active {
@@ -178,6 +188,12 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
                         let frames = ws_decoder
                             .push(&proxy_buf[..read])
                             .map_err(|err| format!("decode Trojan websocket frame: {err}"))?;
+                        write_websocket_control_responses_over_resident_tls_async(
+                            client,
+                            &mut ws_decoder,
+                            "write Trojan websocket control response",
+                        )
+                        .await?;
                         for payload in frames {
                             if !payload.is_empty() {
                                 if let Err(err) = inbound.write_all(&payload).await {

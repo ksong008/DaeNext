@@ -390,12 +390,168 @@ fn resident_websocket_decoder_treats_close_frame_as_eof() {
         .unwrap();
     assert_eq!(frames, vec![b"one".to_vec()]);
     assert!(decoder.is_closed());
+    let responses = decoder.take_control_responses();
+    assert_eq!(responses.len(), 1);
+    assert_eq!(
+        decode_client_websocket_control_frame(&responses[0]),
+        (8, Vec::new())
+    );
     assert!(
         decoder
             .push(&[0x82, 0x03, b't', b'w', b'o'])
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn resident_websocket_decoder_reassembles_fragmented_binary_messages() {
+    let mut decoder = WebSocketBinaryFrameDecoder::default();
+
+    assert!(
+        decoder
+            .push(&[0x02, 0x03, b'o', b'n', b'e'])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        decoder
+            .push(&[0x00, 0x03, b't', b'w', b'o'])
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        decoder
+            .push(&[0x80, 0x05, b't', b'h', b'r', b'e', b'e'])
+            .unwrap(),
+        vec![b"onetwothree".to_vec()]
+    );
+}
+
+#[test]
+fn resident_websocket_decoder_accepts_control_frames_between_fragments() {
+    let mut decoder = WebSocketBinaryFrameDecoder::default();
+
+    assert!(
+        decoder
+            .push(&[0x02, 0x03, b'o', b'n', b'e'])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        decoder
+            .push(&[0x89, 0x04, b'p', b'i', b'n', b'g'])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        decoder
+            .push(&[0x8a, 0x04, b'p', b'o', b'n', b'g'])
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        decoder.push(&[0x80, 0x03, b't', b'w', b'o']).unwrap(),
+        vec![b"onetwo".to_vec()]
+    );
+    let responses = decoder.take_control_responses();
+    assert_eq!(responses.len(), 1);
+    assert_eq!(
+        decode_client_websocket_control_frame(&responses[0]),
+        (10, b"ping".to_vec())
+    );
+}
+
+#[test]
+fn resident_websocket_decoder_accepts_bounded_64_bit_payload_length() {
+    let payload = vec![0x5a; u16::MAX as usize + 1];
+    let mut frame = Vec::with_capacity(payload.len() + 10);
+    frame.extend_from_slice(&[0x82, 0x7f]);
+    frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    frame.extend_from_slice(&payload);
+
+    let mut decoder = WebSocketBinaryFrameDecoder::default();
+    assert_eq!(decoder.push(&frame).unwrap(), vec![payload]);
+}
+
+#[test]
+fn resident_websocket_decoder_rejects_invalid_fragment_state_and_oversize() {
+    let mut decoder = WebSocketBinaryFrameDecoder::default();
+    assert!(
+        decoder
+            .push(&[0x80, 0x01, b'x'])
+            .unwrap_err()
+            .contains("continuation without")
+    );
+
+    let mut decoder = WebSocketBinaryFrameDecoder::default();
+    decoder.push(&[0x02, 0x01, b'a']).unwrap();
+    assert!(
+        decoder
+            .push(&[0x82, 0x01, b'b'])
+            .unwrap_err()
+            .contains("before fragmented message completed")
+    );
+
+    let mut decoder = WebSocketBinaryFrameDecoder::default();
+    assert!(
+        decoder
+            .push(&[0x09, 0x00])
+            .unwrap_err()
+            .contains("invalid websocket control frame")
+    );
+
+    let oversized = RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES as u64 + 1;
+    let mut frame = vec![0x82, 0x7f];
+    frame.extend_from_slice(&oversized.to_be_bytes());
+    let mut decoder = WebSocketBinaryFrameDecoder::default();
+    assert!(decoder.push(&frame).unwrap_err().contains("frame exceeds"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn async_websocket_payload_reader_writes_pong_and_delivers_binary_data() {
+    let (mut client, mut server) = tokio::io::duplex(1024);
+    let server_task = tokio::spawn(async move {
+        server
+            .write_all(&[0x89, 0x04, b'p', b'i', b'n', b'g'])
+            .await
+            .unwrap();
+        let mut pong = [0_u8; 10];
+        server.read_exact(&mut pong).await.unwrap();
+        server
+            .write_all(&[0x02, 0x03, b'o', b'n', b'e', 0x80, 0x03, b't', b'w', b'o'])
+            .await
+            .unwrap();
+        pong
+    });
+
+    let mut state = AsyncWebSocketPayloadState::default();
+    let mut reader = AsyncWebSocketPayloadReader::new(&mut client, &mut state);
+    let mut payload = [0_u8; 6];
+    reader.read_exact(&mut payload).await.unwrap();
+    assert_eq!(&payload, b"onetwo");
+
+    let pong = server_task.await.unwrap();
+    assert_eq!(
+        decode_client_websocket_control_frame(&pong),
+        (10, b"ping".to_vec())
+    );
+}
+
+fn decode_client_websocket_control_frame(frame: &[u8]) -> (u8, Vec<u8>) {
+    assert!(frame.len() >= 6);
+    assert_ne!(frame[0] & 0x80, 0);
+    assert_ne!(frame[1] & 0x80, 0);
+    let opcode = frame[0] & 0x0f;
+    let payload_len = (frame[1] & 0x7f) as usize;
+    assert_eq!(frame.len(), 6 + payload_len);
+    let mask = [frame[2], frame[3], frame[4], frame[5]];
+    let payload = frame[6..]
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| byte ^ mask[index % mask.len()])
+        .collect();
+    (opcode, payload)
 }
 
 #[test]
