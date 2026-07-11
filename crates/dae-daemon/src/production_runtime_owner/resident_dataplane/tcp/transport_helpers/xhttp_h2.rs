@@ -138,9 +138,8 @@ pub(crate) enum XhttpStreamUploadClient {
         connection: Option<XhttpH3Connection>,
         xmux_lease: Option<XhttpXmuxClientLease>,
     },
-    H3Shared {
-        stream:
-            Arc<tokio::sync::Mutex<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>>,
+    H3StreamOne {
+        send: h3::client::RequestStream<h3_quinn::SendStream<Bytes>, Bytes>,
         connection: Option<XhttpH3Connection>,
         xmux_lease: Option<XhttpXmuxClientLease>,
     },
@@ -161,8 +160,7 @@ pub(crate) enum XhttpDownloadClient {
         connection: Option<XhttpH3Connection>,
         xmux_lease: Option<XhttpXmuxClientLease>,
     },
-    H3Shared {
-        stream:
-            Arc<tokio::sync::Mutex<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>>,
+    H3StreamOne {
+        recv: h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
     },
 }

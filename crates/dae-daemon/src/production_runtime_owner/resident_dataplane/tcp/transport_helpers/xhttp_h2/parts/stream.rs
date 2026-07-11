@@ -152,15 +152,15 @@ async fn open_xhttp_stream_one_parts(
                     response.status()
                 ));
             }
-            let shared = Arc::new(tokio::sync::Mutex::new(stream));
+            let (send, recv) = stream.split();
             Ok(XhttpStreamParts {
                 session_id: None,
-                upload: XhttpStreamUploadClient::H3Shared {
-                    stream: Arc::clone(&shared),
+                upload: XhttpStreamUploadClient::H3StreamOne {
+                    send,
                     connection: endpoint_client.connection,
                     xmux_lease: endpoint_client.xmux_lease,
                 },
-                download: XhttpDownloadClient::H3Shared { stream: shared },
+                download: XhttpDownloadClient::H3StreamOne { recv },
                 upload_underlay: "quinn-h3",
                 upload_http_version,
                 download_separate: false,
