@@ -1,5 +1,7 @@
 use super::*;
 #[cfg(test)]
+mod account_profile_transactions;
+#[cfg(test)]
 mod bundle_import;
 #[cfg(test)]
 mod latency;
