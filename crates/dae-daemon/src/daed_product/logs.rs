@@ -9,5 +9,7 @@ mod query_settings;
 pub(super) use self::query_settings::*;
 mod file_io;
 pub(super) use self::file_io::*;
+mod scan_cursor;
+pub(super) use self::scan_cursor::*;
 mod runtime_sse;
 pub(super) use self::runtime_sse::*;

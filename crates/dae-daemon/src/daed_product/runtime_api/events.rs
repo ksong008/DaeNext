@@ -97,17 +97,17 @@ pub(in crate::daed_product) fn stream_log_events(
     let log_file = product_log_file(&app.config_dir);
     let replay_from_cursor = after_id.is_some();
     let mut last_seen_id = after_id.unwrap_or_else(|| cached_last_log_id(&log_file).unwrap_or(0));
-    let mut scan_offset = if replay_from_cursor {
-        0
+    let mut scan_cursor = if replay_from_cursor {
+        ProductLogScanCursor::start()
     } else {
-        log_file_size(&app.config_dir).unwrap_or(0)
+        ProductLogScanCursor::at_end(&app.config_dir)?
     };
     let mut last_heartbeat = Instant::now();
     loop {
         let current_last_id = cached_last_log_id(&log_file).unwrap_or(0);
         if current_last_id < last_seen_id {
             last_seen_id = 0;
-            scan_offset = 0;
+            scan_cursor = ProductLogScanCursor::start();
         }
         if current_last_id == last_seen_id {
             if last_heartbeat.elapsed() >= LOG_STREAM_HEARTBEAT_INTERVAL {
@@ -118,18 +118,16 @@ pub(in crate::daed_product) fn stream_log_events(
             thread::sleep(LOG_STREAM_POLL_INTERVAL);
             continue;
         }
-        let scan_result =
-            scan_log_entries_from_offset(&app.config_dir, scan_offset, last_seen_id, |entry| {
+        let scan =
+            scan_log_entries_from_cursor(&app.config_dir, scan_cursor, last_seen_id, |entry| {
                 if log_entry_matches_filter(&entry, level.as_deref(), query.as_deref()) {
                     write_sse_stream_event(stream, "log.entry", &log_entry_value(entry))?;
                 }
                 Ok(())
-            });
-        if let Ok(scan) = scan_result {
-            scan_offset = scan.offset;
-            if scan.max_seen_id > last_seen_id {
-                last_seen_id = scan.max_seen_id;
-            }
+            })?;
+        scan_cursor = scan.cursor;
+        if scan.max_seen_id > last_seen_id {
+            last_seen_id = scan.max_seen_id;
         }
         if last_heartbeat.elapsed() >= LOG_STREAM_HEARTBEAT_INTERVAL {
             stream.write_all(b": heartbeat\n\n")?;
