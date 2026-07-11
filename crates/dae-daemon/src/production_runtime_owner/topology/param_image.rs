@@ -33,6 +33,9 @@ pub(crate) fn write_param_image(
                 "has_bpf_get_current_task": param.has_bpf_get_current_task,
                 "task_struct_mm_offset": param.task_struct_mm_offset,
                 "mm_struct_arg_start_offset": param.mm_struct_arg_start_offset,
+                "abi_version": param.abi_version,
+                "udp_state_saturation_policy": param.udp_state_saturation_policy,
+                "udp_state_idle_timeout_ns": param.udp_state_idle_timeout_ns.to_string(),
             },
             "location": {
                 "symbol": report.location.symbol,

@@ -88,6 +88,65 @@ impl NativeEbpfRuntimeState {
         value
     }
 
+    pub(in crate::production_runtime_owner) fn runtime_metrics(&self) -> Value {
+        #[cfg(feature = "native-ebpf")]
+        {
+            let profile = self.load_input.as_ref().map(|input| &input.map_profile);
+            let udp_state_capacity = self.loaded.as_ref().and_then(|loaded| {
+                loaded
+                    .report
+                    .loaded_map_specs
+                    .iter()
+                    .find(|spec| spec.name == "udp_conn_state_map")
+                    .map(|spec| spec.max_entries)
+            });
+            let metrics = self.loaded.as_ref().map(|loaded| {
+                dae_ebpf_support::read_aya_udp_state_metrics(loaded).map(|metrics| {
+                    json!({
+                        "stateCreatedTotal": metrics.state_created_total,
+                        "stateRefreshTotal": metrics.state_refresh_total,
+                        "insertFailureTotal": metrics.insert_failure_total,
+                        "postInsertLookupFailureTotal": metrics.post_insert_lookup_failure_total,
+                        "timerInitFailureTotal": metrics.timer_init_failure_total,
+                        "timerCallbackFailureTotal": metrics.timer_callback_failure_total,
+                        "timerStartFailureTotal": metrics.timer_start_failure_total,
+                    })
+                })
+            });
+            match metrics {
+                Some(Ok(metrics)) => json!({
+                    "status": "pass",
+                    "mapProfile": profile.map(|selection| selection.profile.name()),
+                    "mapProfileSource": profile.map(|selection| selection.source),
+                    "udpStateCapacity": udp_state_capacity,
+                    "udpStateIdleTimeoutNs": profile.map(|selection| selection.profile.udp_state_idle_timeout_ns().to_string()),
+                    "udpStateSaturationPolicy": "fail-closed",
+                    "udpStateMetrics": metrics,
+                }),
+                Some(Err(error)) => json!({
+                    "status": "error",
+                    "error": error,
+                    "mapProfile": profile.map(|selection| selection.profile.name()),
+                    "udpStateCapacity": udp_state_capacity,
+                    "udpStateSaturationPolicy": "fail-closed",
+                }),
+                None => json!({
+                    "status": "unavailable",
+                    "mapProfile": profile.map(|selection| selection.profile.name()),
+                    "udpStateSaturationPolicy": "fail-closed",
+                }),
+            }
+        }
+        #[cfg(not(feature = "native-ebpf"))]
+        {
+            let _ = self;
+            json!({
+                "status": "unavailable",
+                "reason": "native eBPF support is not compiled",
+            })
+        }
+    }
+
     pub(in crate::production_runtime_owner) fn reset(&mut self) {
         #[cfg(feature = "native-ebpf")]
         {

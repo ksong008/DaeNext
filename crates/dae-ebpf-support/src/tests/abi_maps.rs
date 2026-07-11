@@ -12,7 +12,7 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     );
     assert_eq!(TPROXY_MARK, fixture["tproxy_mark"].as_u64().unwrap() as u32);
 
-    assert_layout::<BpfDaeParam>(&fixture, "bpfDaeParam", 32, 4);
+    assert_layout::<BpfDaeParam>(&fixture, "bpfDaeParam", 48, 8);
     assert_offset(
         &fixture,
         "bpfDaeParam",
@@ -43,6 +43,24 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
         "mm_struct_arg_start_offset",
         offset_of!(BpfDaeParam, mm_struct_arg_start_offset),
     );
+    assert_offset(
+        &fixture,
+        "bpfDaeParam",
+        "abi_version",
+        offset_of!(BpfDaeParam, abi_version),
+    );
+    assert_offset(
+        &fixture,
+        "bpfDaeParam",
+        "udp_state_saturation_policy",
+        offset_of!(BpfDaeParam, udp_state_saturation_policy),
+    );
+    assert_offset(
+        &fixture,
+        "bpfDaeParam",
+        "udp_state_idle_timeout_ns",
+        offset_of!(BpfDaeParam, udp_state_idle_timeout_ns),
+    );
 
     assert_layout::<BpfDomainRouting>(&fixture, "bpfDomainRouting", 128, 4);
     assert_layout::<BpfMatchSet>(&fixture, "bpfMatchSet", 24, 4);
@@ -71,6 +89,7 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     );
     assert_layout::<BpfTuplesKey>(&fixture, "bpfTuplesKey", 40, 2);
     assert_layout::<BpfUdpConnState>(&fixture, "bpfUdpConnState", 24, 8);
+    assert_layout::<BpfUdpStateMetrics>(&fixture, "bpfUdpStateMetrics", 56, 8);
 }
 
 #[cfg(feature = "aya-loader")]
@@ -157,6 +176,18 @@ pub(super) fn runtime_map_profiles_are_ordered_and_cover_only_catalogued_maps() 
         assert!(balanced_capacity <= high_capacity);
         assert_eq!(high_capacity, catalog_capacity);
     }
+    assert!(
+        RuntimeMapProfile::LowMemory.udp_state_idle_timeout_ns()
+            < RuntimeMapProfile::Balanced.udp_state_idle_timeout_ns()
+    );
+    assert!(
+        RuntimeMapProfile::Balanced.udp_state_idle_timeout_ns()
+            < RuntimeMapProfile::HighPerformance.udp_state_idle_timeout_ns()
+    );
+    assert_eq!(
+        RuntimeMapProfile::HighPerformance.udp_state_idle_timeout_ns(),
+        UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT
+    );
     assert!(!map_catalog().iter().any(|spec| spec.name == "fast_sock"));
     assert!(
         !map_catalog()
@@ -176,6 +207,7 @@ fn profile_capacity(profile: &[(&str, u32)], name: &str) -> u32 {
 pub(super) fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explicit() {
     let abi = bpf_abi_contract();
     assert_eq!(abi.dae_param_size, size_of::<BpfDaeParam>());
+    assert_eq!(abi.dae_param_abi_version, BPF_DAE_PARAM_ABI_VERSION);
     assert_eq!(abi.task_comm_len, TASK_COMM_LEN);
     assert_eq!(abi.max_match_set_len, MAX_MATCH_SET_LEN);
     assert_eq!(abi.tproxy_mark, TPROXY_MARK);

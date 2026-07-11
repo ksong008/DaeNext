@@ -60,6 +60,7 @@ impl ResidentProductionRuntime {
             "fakeRuntime": false,
             "residentRuntimeStarted": self.start_report["resident_runtime_started"].as_bool().unwrap_or(false),
             "residentDataplane": resident_dataplane,
+            "residentEbpf": self.native_runtime.runtime_metrics(),
             "residentInterfaceState": self
                 .resident_interface_state_snapshot(),
             "startupEvidence": self.start_report["startupEvidence"].clone(),

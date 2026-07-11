@@ -1,6 +1,9 @@
 use std::mem::size_of;
 
-use crate::{BpfDaeParam, DaeParamInput, build_dae_param};
+use crate::{
+    BPF_DAE_PARAM_ABI_VERSION, BpfDaeParam, DaeParamInput, UDP_STATE_SATURATION_POLICY_FAIL_CLOSED,
+    build_dae_param,
+};
 
 pub const DAE_PARAM_SYMBOL: &str = "PARAM";
 pub const DAE_PARAM_SYMBOL_SIZE: usize = size_of::<BpfDaeParam>();
@@ -26,9 +29,12 @@ pub struct DaeParamPayload {
     pub padding: u8,
     pub task_struct_mm_offset: u32,
     pub mm_struct_arg_start_offset: u32,
+    pub abi_version: u32,
+    pub udp_state_saturation_policy: u32,
+    pub udp_state_idle_timeout_ns: u64,
 }
 
-pub fn dae_param_requirements() -> [DaeParamRequirement; 8] {
+pub fn dae_param_requirements() -> [DaeParamRequirement; 11] {
     [
         DaeParamRequirement {
             field: "tproxy_port",
@@ -70,6 +76,21 @@ pub fn dae_param_requirements() -> [DaeParamRequirement; 8] {
             source: "target BTF mm_struct.arg_start",
             requirement: "must be non-zero only when current_task argv[0] pname mode is enabled",
         },
+        DaeParamRequirement {
+            field: "abi_version",
+            source: "dae-ebpf-support ABI contract",
+            requirement: "must match the PARAM layout version compiled into the BPF object",
+        },
+        DaeParamRequirement {
+            field: "udp_state_saturation_policy",
+            source: "native runtime UDP state policy",
+            requirement: "must select a supported fail-safe action for unavailable UDP state",
+        },
+        DaeParamRequirement {
+            field: "udp_state_idle_timeout_ns",
+            source: "selected runtime map profile",
+            requirement: "must be a non-zero bounded idle timeout before BPF load",
+        },
     ]
 }
 
@@ -88,6 +109,9 @@ pub fn build_dae_param_payload(input: DaeParamInput) -> DaeParamPayload {
         padding: packed.padding,
         task_struct_mm_offset: packed.task_struct_mm_offset,
         mm_struct_arg_start_offset: packed.mm_struct_arg_start_offset,
+        abi_version: packed.abi_version,
+        udp_state_saturation_policy: packed.udp_state_saturation_policy,
+        udp_state_idle_timeout_ns: packed.udp_state_idle_timeout_ns,
     }
 }
 
@@ -101,6 +125,9 @@ pub fn dae_param_runtime_values_present(payload: &DaeParamPayload) -> bool {
         && payload.dae0_ifindex != 0
         && payload.dae_netns_id != 0
         && payload.dae0peer_mac != [0; 6]
+        && payload.abi_version == BPF_DAE_PARAM_ABI_VERSION
+        && payload.udp_state_saturation_policy == UDP_STATE_SATURATION_POLICY_FAIL_CLOSED
+        && payload.udp_state_idle_timeout_ns != 0
 }
 
 pub fn param_aware_load_admitted(

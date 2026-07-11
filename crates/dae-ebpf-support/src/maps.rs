@@ -32,6 +32,7 @@ pub enum RuntimeMapRole {
     Tracking,
     DomainRouting,
     UdpState,
+    Observability,
     InnerMapCatalog,
     Other,
 }
@@ -47,6 +48,7 @@ impl RuntimeMapRole {
             b"redirect_track" => Self::Tracking,
             b"domain_routing_map" => Self::DomainRouting,
             b"udp_conn_state_map" => Self::UdpState,
+            b"udp_state_metrics" => Self::Observability,
             b"lpm_array_map" | b"unused_lpm_type" => Self::InnerMapCatalog,
             _ => Self::Other,
         }
@@ -82,7 +84,7 @@ pub fn runtime_map_contract() -> Vec<RuntimeMapContract> {
 
 const PINNED_REUSE_MAPS: [&str; 2] = ["cookie_pid_map", "routing_tuples_map"];
 
-const MAP_CATALOG: [MapSpec; 11] = [
+const MAP_CATALOG: [MapSpec; 12] = [
     MapSpec {
         name: ".rodata",
         map_type: "Array",
@@ -170,6 +172,15 @@ const MAP_CATALOG: [MapSpec; 11] = [
         key_size: 40,
         value_size: 24,
         max_entries: 131072,
+        flags: 0,
+        pinning: "PinNone",
+    },
+    MapSpec {
+        name: "udp_state_metrics",
+        map_type: "PerCpuArray",
+        key_size: 4,
+        value_size: 56,
+        max_entries: 1,
         flags: 0,
         pinning: "PinNone",
     },

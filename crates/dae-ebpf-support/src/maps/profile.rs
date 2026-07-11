@@ -30,6 +30,10 @@ const HIGH_PERFORMANCE_CAPACITIES: [(&str, u32); 5] = [
     ("udp_conn_state_map", 131_072),
 ];
 
+const LOW_MEMORY_UDP_STATE_IDLE_TIMEOUT_NS: u64 = 60_000_000_000;
+const BALANCED_UDP_STATE_IDLE_TIMEOUT_NS: u64 = 120_000_000_000;
+const HIGH_PERFORMANCE_UDP_STATE_IDLE_TIMEOUT_NS: u64 = 300_000_000_000;
+
 impl RuntimeMapProfile {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
@@ -53,6 +57,14 @@ impl RuntimeMapProfile {
             Self::LowMemory => &LOW_MEMORY_CAPACITIES,
             Self::Balanced => &BALANCED_CAPACITIES,
             Self::HighPerformance => &HIGH_PERFORMANCE_CAPACITIES,
+        }
+    }
+
+    pub const fn udp_state_idle_timeout_ns(self) -> u64 {
+        match self {
+            Self::LowMemory => LOW_MEMORY_UDP_STATE_IDLE_TIMEOUT_NS,
+            Self::Balanced => BALANCED_UDP_STATE_IDLE_TIMEOUT_NS,
+            Self::HighPerformance => HIGH_PERFORMANCE_UDP_STATE_IDLE_TIMEOUT_NS,
         }
     }
 }

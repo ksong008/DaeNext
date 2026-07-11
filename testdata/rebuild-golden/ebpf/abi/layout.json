@@ -73,7 +73,7 @@
   ],
   "structs": [
     {
-      "align": 4,
+      "align": 8,
       "name": "bpfDaeParam",
       "offsets": [
         {
@@ -109,11 +109,23 @@
           "offset": 24
         },
         {
+          "field": "abi_version",
+          "offset": 32
+        },
+        {
+          "field": "udp_state_saturation_policy",
+          "offset": 36
+        },
+        {
+          "field": "udp_state_idle_timeout_ns",
+          "offset": 40
+        },
+        {
           "field": "tproxy_port",
           "offset": 0
         }
       ],
-      "size": 32
+      "size": 48
     },
     {
       "align": 4,
@@ -313,6 +325,41 @@
         }
       ],
       "size": 24
+    },
+    {
+      "align": 8,
+      "name": "bpfUdpStateMetrics",
+      "offsets": [
+        {
+          "field": "state_created_total",
+          "offset": 0
+        },
+        {
+          "field": "state_refresh_total",
+          "offset": 8
+        },
+        {
+          "field": "insert_failure_total",
+          "offset": 16
+        },
+        {
+          "field": "post_insert_lookup_failure_total",
+          "offset": 24
+        },
+        {
+          "field": "timer_init_failure_total",
+          "offset": 32
+        },
+        {
+          "field": "timer_callback_failure_total",
+          "offset": 40
+        },
+        {
+          "field": "timer_start_failure_total",
+          "offset": 48
+        }
+      ],
+      "size": 56
     }
   ],
   "task_comm_len": 16,

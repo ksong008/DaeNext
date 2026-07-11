@@ -1,4 +1,7 @@
-use crate::abi::BpfDaeParam;
+use crate::abi::{
+    BPF_DAE_PARAM_ABI_VERSION, BpfDaeParam, UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT,
+    UDP_STATE_SATURATION_POLICY_FAIL_CLOSED,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DaeParamInput {
@@ -27,5 +30,8 @@ pub fn build_dae_param(input: DaeParamInput) -> BpfDaeParam {
         padding: 0,
         task_struct_mm_offset: input.task_struct_mm_offset,
         mm_struct_arg_start_offset: input.mm_struct_arg_start_offset,
+        abi_version: BPF_DAE_PARAM_ABI_VERSION,
+        udp_state_saturation_policy: UDP_STATE_SATURATION_POLICY_FAIL_CLOSED,
+        udp_state_idle_timeout_ns: UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT,
     }
 }

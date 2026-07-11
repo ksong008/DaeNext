@@ -92,6 +92,15 @@
       "value_size": 24
     },
     {
+      "flags": 0,
+      "key_size": 4,
+      "max_entries": 1,
+      "name": "udp_state_metrics",
+      "pinning": "PinNone",
+      "type": "PerCpuArray",
+      "value_size": 56
+    },
+    {
       "flags": 1,
       "key_size": 20,
       "max_entries": 2048000,

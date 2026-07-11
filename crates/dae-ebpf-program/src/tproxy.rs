@@ -77,6 +77,19 @@ fn is_dns_udp(info: *const ParsedPacket) -> bool {
 }
 
 #[inline(always)]
+fn udp_state_unavailable_action() -> i32 {
+    udp_state_unavailable_action_for_policy(crate::abi::param_udp_state_saturation_policy())
+}
+
+#[inline(always)]
+const fn udp_state_unavailable_action_for_policy(policy: u32) -> i32 {
+    match policy {
+        crate::abi::UDP_STATE_SATURATION_POLICY_FAIL_CLOSED => TC_ACT_SHOT,
+        _ => TC_ACT_SHOT,
+    }
+}
+
+#[inline(always)]
 unsafe fn assign_listener(skb: *mut __sk_buff, l4proto: u32, is_ipv4: u32) {
     let key = if l4proto == IPPROTO_TCP as u32 {
         if is_ipv4 != 0 {
@@ -366,6 +379,23 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_udp_state_is_terminal_fail_closed() {
+        assert_eq!(udp_state_unavailable_action(), TC_ACT_SHOT);
+        assert_ne!(udp_state_unavailable_action(), chain_next());
+        assert_ne!(udp_state_unavailable_action(), TC_ACT_OK);
+        assert_eq!(
+            udp_state_unavailable_action_for_policy(
+                crate::abi::UDP_STATE_SATURATION_POLICY_FAIL_CLOSED
+            ),
+            TC_ACT_SHOT
+        );
+        assert_eq!(
+            udp_state_unavailable_action_for_policy(u32::MAX),
+            TC_ACT_SHOT
+        );
+    }
+
+    #[test]
     fn l3_wan_egress_return_path_records_and_strips_temporary_mac_header() {
         let l2 = redirect_entry(REDIRECT_LINK_LAYER_L2);
         let l3 = redirect_entry(REDIRECT_LINK_LAYER_L3);
@@ -401,7 +431,7 @@ pub fn lan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     if info.l4proto == IPPROTO_UDP
         && !udp_state::refresh_reversed_udp_state(ptr::addr_of!(info), true)
     {
-        return TC_ACT_SHOT;
+        return udp_state_unavailable_action();
     }
     chain_next()
 }
@@ -416,7 +446,7 @@ pub fn wan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     if info.l4proto == IPPROTO_UDP
         && !udp_state::refresh_reversed_udp_state(ptr::addr_of!(info), true)
     {
-        return TC_ACT_SHOT;
+        return udp_state_unavailable_action();
     }
     chain_next()
 }
@@ -486,7 +516,7 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
             )
         };
         if state.is_null() {
-            return TC_ACT_SHOT;
+            return udp_state_unavailable_action();
         }
         if unsafe { (*state).is_wan_ingress_direction } != 0 {
             return chain_next();
@@ -602,7 +632,7 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
                 )
             };
             if state.is_null() {
-                return TC_ACT_SHOT;
+                return udp_state_unavailable_action();
             }
             if unsafe { (*state).is_wan_ingress_direction } != 0 {
                 return chain_next();

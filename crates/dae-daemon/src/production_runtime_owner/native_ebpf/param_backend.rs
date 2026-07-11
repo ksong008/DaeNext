@@ -30,7 +30,8 @@ pub(crate) fn prepare_native_param_object(
             load_input: None,
         };
     }
-    let param = build_dae_param(DaeParamInput {
+    let map_profile = selected_native_map_profile();
+    let mut param = build_dae_param(DaeParamInput {
         tproxy_port: options.tproxy_port,
         control_plane_pid: std::process::id(),
         dae0_ifindex,
@@ -40,7 +41,7 @@ pub(crate) fn prepare_native_param_object(
         task_struct_mm_offset: 0,
         mm_struct_arg_start_offset: 0,
     });
-    let map_profile = selected_native_map_profile();
+    param.udp_state_idle_timeout_ns = map_profile.profile.udp_state_idle_timeout_ns();
     let selected_param_object = PathBuf::from(NATIVE_PARAM_OBJECT_IDENTITY);
     NativeParamObjectPreparation {
         selected_param_object: selected_param_object.clone(),
@@ -60,6 +61,8 @@ pub(crate) fn prepare_native_param_object(
                 "source": map_profile.source,
                 "invalidValue": map_profile.invalid_value.as_deref(),
                 "maxEntriesOverrides": map_profile.profile.max_entries_overrides(),
+                "udpStateIdleTimeoutNs": param.udp_state_idle_timeout_ns.to_string(),
+                "udpStateSaturationPolicy": "fail-closed",
             },
             "param": {
                 "tproxy_port": param.tproxy_port,
@@ -70,6 +73,9 @@ pub(crate) fn prepare_native_param_object(
                 "has_bpf_get_current_task": param.has_bpf_get_current_task,
                 "task_struct_mm_offset": param.task_struct_mm_offset,
                 "mm_struct_arg_start_offset": param.mm_struct_arg_start_offset,
+                "abi_version": param.abi_version,
+                "udp_state_saturation_policy": param.udp_state_saturation_policy,
+                "udp_state_idle_timeout_ns": param.udp_state_idle_timeout_ns.to_string(),
             },
             "location": Value::Null,
         }),
