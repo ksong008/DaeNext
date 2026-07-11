@@ -29,6 +29,13 @@ pub(crate) fn product_log_dir(config_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn clear_log_file(config_dir: &Path) -> io::Result<()> {
+    if let Some(runtime) = product_log_runtime_for(config_dir) {
+        return runtime.clear();
+    }
+    clear_log_file_direct(config_dir)
+}
+
+pub(crate) fn clear_log_file_direct(config_dir: &Path) -> io::Result<()> {
     let log_file = product_log_file(config_dir);
     ensure_log_dir(config_dir)?;
     let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
@@ -41,6 +48,15 @@ pub(crate) fn clear_log_file(config_dir: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn clear_log_file_preserving_startup_reload_logs(config_dir: &Path) -> io::Result<()> {
+    if let Some(runtime) = product_log_runtime_for(config_dir) {
+        return runtime.clear_preserving_lifecycle();
+    }
+    clear_log_file_preserving_startup_reload_logs_direct(config_dir)
+}
+
+pub(crate) fn clear_log_file_preserving_startup_reload_logs_direct(
+    config_dir: &Path,
+) -> io::Result<()> {
     let log_file = product_log_file(config_dir);
     ensure_log_dir(config_dir)?;
     let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
@@ -80,6 +96,8 @@ pub(crate) fn clear_log_file_preserving_startup_reload_logs(config_dir: &Path) -
 }
 
 pub(crate) fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
+    #[cfg(test)]
+    observe_log_append_open(path);
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -89,6 +107,8 @@ pub(crate) fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
 }
 
 pub(crate) fn set_log_file_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    observe_log_file_permission_write(path);
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
@@ -96,6 +116,8 @@ pub(crate) fn set_log_file_permissions(path: &Path) -> io::Result<()> {
 pub(crate) fn ensure_log_dir(config_dir: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let log_dir = product_log_dir(config_dir);
+    #[cfg(test)]
+    observe_log_dir_permission_write(&log_dir);
     fs::create_dir_all(&log_dir)?;
     fs::set_permissions(log_dir, fs::Permissions::from_mode(0o750))
 }
@@ -449,6 +471,9 @@ pub(crate) fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>
 
 pub(crate) fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result<()> {
     let (max_entries, max_bytes) = log_settings_tuple(conn)?;
+    if let Some(runtime) = product_log_runtime_for(config_dir) {
+        return runtime.apply_limits(max_entries, max_bytes);
+    }
     let log_file = product_log_file(config_dir);
     let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
     let _guard = lock
@@ -491,6 +516,8 @@ pub(crate) fn prune_log_file_with_settings(
     if data.is_empty() {
         return Ok(());
     }
+    #[cfg(test)]
+    observe_log_prune_rewrite(path);
     let tmp_path = path.with_extension("jsonl.tmp");
     write_pruned_log_tail(&tmp_path, &data, max_entries)?;
     set_log_file_permissions(&tmp_path)?;

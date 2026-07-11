@@ -21,6 +21,12 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     if let Err(err) = initialize_log_store(&options.config_dir, &options.state) {
         return DaedProductOutput::error(format!("init log store failed: {err}"));
     }
+    let product_log_runtime = match start_product_log_runtime(&options.config_dir, &options.state) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return DaedProductOutput::error(format!("start product log writer failed: {err}"));
+        }
+    };
     register_resident_event_product_log_sink(&options.config_dir, &options.state);
     if let Err(err) = block_product_signals() {
         return DaedProductOutput::error(format!("install signal control failed: {err}"));
@@ -91,6 +97,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     };
     let server_result = serve_forever(&options.listen, app, startup_started_at);
     let scheduler_result = subscription_scheduler.shutdown();
+    drop(product_log_runtime);
     match (server_result, scheduler_result) {
         (Ok(()), Ok(())) => DaedProductOutput::ok(String::new()),
         (Err(err), _) => DaedProductOutput::error(format!("run failed: {err}")),

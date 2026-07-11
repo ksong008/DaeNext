@@ -1,5 +1,7 @@
 use super::*;
 pub(crate) fn current_runtime_log_level(state: &Path) -> io::Result<String> {
+    #[cfg(test)]
+    observe_runtime_level_read(state);
     let level = get_metadata(state, "runtime_log_level")?
         .and_then(|level| normalize_runtime_log_level(&level))
         .unwrap_or_else(|| DEFAULT_RUNTIME_LOG_LEVEL.to_owned());

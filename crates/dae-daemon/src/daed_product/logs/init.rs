@@ -17,7 +17,7 @@ pub(crate) fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Resul
 }
 
 pub(crate) fn register_resident_event_product_log_sink(config_dir: &Path, state: &Path) {
-    let _ = refresh_resident_event_log_policy(state);
+    let _ = refresh_resident_event_log_policy(config_dir, state);
     let config_dir = config_dir.to_path_buf();
     let state = state.to_path_buf();
     set_resident_event_log_sink(Some(Arc::new(move |event| {
@@ -25,11 +25,16 @@ pub(crate) fn register_resident_event_product_log_sink(config_dir: &Path, state:
     })));
 }
 
-pub(crate) fn refresh_resident_event_log_policy(state: &Path) -> io::Result<()> {
-    ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    let (max_entries, max_bytes) = log_settings_tuple(&conn)?;
-    let runtime_level = current_runtime_log_level(state)?;
+pub(crate) fn refresh_resident_event_log_policy(config_dir: &Path, state: &Path) -> io::Result<()> {
+    let policy = ProductLogPolicy::load(state)?;
+    if let Some(runtime) = product_log_runtime_for(config_dir) {
+        runtime.replace_policy(policy.clone())?;
+    }
+    let ProductLogPolicy {
+        runtime_level,
+        max_entries,
+        max_bytes,
+    } = policy;
     set_resident_event_log_policy(Some(Arc::new(move |event| {
         let event_name = event.get("event").and_then(Value::as_str).unwrap_or("");
         let level = if event_name.is_empty() {
@@ -52,7 +57,7 @@ pub(crate) fn refresh_log_policy_and_reset_logs(
     state: &Path,
     runtime: Option<&ProductRuntimeManager>,
 ) -> io::Result<()> {
-    refresh_resident_event_log_policy(state)?;
+    refresh_resident_event_log_policy(config_dir, state)?;
     clear_log_file(config_dir)?;
     if let Some(runtime) = runtime {
         runtime.clear_resident_event_log()?;
@@ -65,11 +70,9 @@ pub(crate) fn refresh_log_policy_and_reset_runtime_cycle_logs(
     state: &Path,
     runtime: Option<&ProductRuntimeManager>,
 ) -> io::Result<()> {
-    refresh_resident_event_log_policy(state)?;
+    refresh_resident_event_log_policy(config_dir, state)?;
     clear_log_file_preserving_startup_reload_logs(config_dir)?;
-    ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    prune_log_file(config_dir, &conn)?;
+    apply_log_limits_without_runtime(config_dir, state)?;
     if let Some(runtime) = runtime {
         runtime.clear_resident_event_log()?;
     }
@@ -81,14 +84,21 @@ pub(crate) fn refresh_log_policy_and_apply_log_limits(
     state: &Path,
     runtime: Option<&ProductRuntimeManager>,
 ) -> io::Result<()> {
-    refresh_resident_event_log_policy(state)?;
-    ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    prune_log_file(config_dir, &conn)?;
+    refresh_resident_event_log_policy(config_dir, state)?;
+    apply_log_limits_without_runtime(config_dir, state)?;
     if let Some(runtime) = runtime {
         runtime.prune_resident_event_log()?;
     }
     Ok(())
+}
+
+fn apply_log_limits_without_runtime(config_dir: &Path, state: &Path) -> io::Result<()> {
+    if product_log_runtime_for(config_dir).is_some() {
+        return Ok(());
+    }
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    prune_log_file(config_dir, &conn)
 }
 
 #[cfg(test)]

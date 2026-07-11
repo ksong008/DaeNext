@@ -142,6 +142,38 @@ pub(crate) fn runtime_log_level_defaults_to_error() {
 }
 
 #[test]
+pub(crate) fn product_log_writer_avoids_per_entry_db_open_and_chmod_work() {
+    const APPENDS: u64 = 300;
+
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-log-io-baseline-{}",
+        fastrand::u64(..)
+    ));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    initialize_log_store(&dir, &state).unwrap();
+    set_metadata(&state, "runtime_log_level", "error").unwrap();
+    let _observation = observe_product_log_io(&dir, &state);
+    let runtime = start_product_log_runtime_for_test(&dir, &state).unwrap();
+
+    for id in 0..APPENDS {
+        append_log_for_config(&dir, &state, "error", &format!("baseline-{id}")).unwrap();
+    }
+
+    let snapshot = product_log_io_test_snapshot();
+    assert_eq!(snapshot.runtime_level_reads, 1);
+    assert_eq!(snapshot.settings_reads, 1);
+    assert_eq!(snapshot.append_opens, 1);
+    assert_eq!(snapshot.file_permission_writes, 0);
+    assert_eq!(snapshot.dir_permission_writes, 0);
+    assert_eq!(snapshot.prune_rewrites, 0);
+    assert_eq!(runtime.snapshot()["appendedTotal"], json!(APPENDS));
+    assert_eq!(runtime.snapshot()["queueDepth"], json!(0));
+    drop(runtime);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
