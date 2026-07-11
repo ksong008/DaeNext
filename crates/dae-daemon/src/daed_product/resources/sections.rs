@@ -325,26 +325,6 @@ pub(crate) fn delete_section(state: &Path, kind: SectionKind, id: i64) -> HttpRe
     }
 }
 
-pub(crate) fn select_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
-    let conn = match open_state_connection(state) {
-        Ok(conn) => conn,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    };
-    let clear = format!("UPDATE {} SET selected = 0", kind.table());
-    let set = format!(
-        "UPDATE {} SET selected = 1, version = version + 1 WHERE id = ?1",
-        kind.table()
-    );
-    if let Err(err) = conn.execute(&clear, []) {
-        return HttpResponse::json(400, json!({"error": err.to_string()}));
-    }
-    match conn.execute(&set, params![id]) {
-        Ok(0) => HttpResponse::json(404, json!({"error": "resource not found"})),
-        Ok(_) => get_section(state, kind, id),
-        Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
-    }
-}
-
 pub(crate) fn section_request_value(kind: SectionKind, body: &Value) -> String {
     if kind == SectionKind::Config
         && let Some(parsed_global) = body.get("parsedGlobal")

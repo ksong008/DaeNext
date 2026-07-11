@@ -51,6 +51,7 @@ pub(super) fn handle_api_request(
                 ("PUT", "/user/me/storage") => api_set_storage(app, request, user),
                 ("DELETE", "/user/me/storage") => api_delete_storage(app, request, user),
                 ("POST", "/user/me/default-resources") => api_default_resources(app, request, user),
+                ("POST", "/profiles/select") => api_select_profile(&app.state, request),
                 ("GET", "/user/me/dae-bundle") => api_get_bundle(app, &user),
                 ("PUT", "/user/me/dae-bundle") => api_put_bundle(app, request, &user),
                 ("GET", "/user/me/dae-config-file") => api_get_dae_config_file(app),
