@@ -1175,6 +1175,87 @@ pub(crate) fn group_subscription_bindings_apply_name_regex_to_matched_nodes() {
 }
 
 #[test]
+pub(crate) fn group_subscription_filter_preview_uses_rust_regex_and_bounds_samples() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+         VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a')",
+        [],
+    )
+    .unwrap();
+    let links = (0..GROUP_SUBSCRIPTION_FILTER_PREVIEW_PER_SUBSCRIPTION_SAMPLE_LIMIT + 3)
+        .map(|index| format!("http://127.0.0.1:9/alpha-{index}#Alpha-{index}"))
+        .chain(std::iter::once("http://127.0.0.1:9/beta#Beta".to_owned()))
+        .collect::<Vec<_>>();
+    replace_subscription_nodes(&conn, 7, &links).unwrap();
+    drop(conn);
+
+    let preview =
+        group_subscription_filter_preview_value(&state, &[7, 7], Some("(?i)^alpha")).unwrap();
+    assert_eq!(preview["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        preview["matchedCount"],
+        json!(GROUP_SUBSCRIPTION_FILTER_PREVIEW_PER_SUBSCRIPTION_SAMPLE_LIMIT + 3)
+    );
+    assert_eq!(
+        preview["items"][0]["sampleMatchedNodes"]
+            .as_array()
+            .map(Vec::len),
+        Some(GROUP_SUBSCRIPTION_FILTER_PREVIEW_PER_SUBSCRIPTION_SAMPLE_LIMIT)
+    );
+    assert_eq!(preview["items"][0]["sampleTruncated"], json!(true));
+    assert!(
+        preview["items"][0]["sampleMatchedNodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|node| node["name"].as_str().unwrap().starts_with("Alpha-"))
+    );
+
+    let err = group_subscription_filter_preview_value(&state, &[7], Some("(?=alpha)")).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+    let conn = open_state_connection(&state).unwrap();
+    for subscription_id in 8_i64..=15 {
+        conn.execute(
+            "INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+             VALUES(?1, 'now', ?2, 'fetched', '', ?3)",
+            params![
+                subscription_id,
+                format!("https://subscription.invalid/{subscription_id}"),
+                format!("sub-{subscription_id}")
+            ],
+        )
+        .unwrap();
+        let links = (0..GROUP_SUBSCRIPTION_FILTER_PREVIEW_PER_SUBSCRIPTION_SAMPLE_LIMIT + 1)
+            .map(|index| {
+                format!(
+                    "http://127.0.0.1:9/{subscription_id}-{index}#node-{subscription_id}-{index}"
+                )
+            })
+            .collect::<Vec<_>>();
+        replace_subscription_nodes(&conn, subscription_id, &links).unwrap();
+    }
+    drop(conn);
+    let subscription_ids = (7_i64..=15).collect::<Vec<_>>();
+    let preview = group_subscription_filter_preview_value(&state, &subscription_ids, None).unwrap();
+    let sampled_count = preview["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["sampleMatchedNodes"].as_array().unwrap().len())
+        .sum::<usize>();
+    assert_eq!(
+        sampled_count,
+        GROUP_SUBSCRIPTION_FILTER_PREVIEW_TOTAL_SAMPLE_LIMIT
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn group_summary_avoids_full_node_and_matched_node_expansion() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

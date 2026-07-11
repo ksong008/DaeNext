@@ -72,6 +72,12 @@ pub(super) fn api_groups(app: &AppState, request: &HttpRequest, api_path: &str) 
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
     }
+    if api_path == "/groups/subscription-preview" {
+        return match request.method.as_str() {
+            "POST" => preview_group_subscription_filter(&app.state, request),
+            _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
+        };
+    }
     let suffix = api_path.trim_start_matches("/groups/");
     let parts = suffix.split('/').collect::<Vec<_>>();
     let Some(id) = parts.first().and_then(|value| value.parse::<i64>().ok()) else {

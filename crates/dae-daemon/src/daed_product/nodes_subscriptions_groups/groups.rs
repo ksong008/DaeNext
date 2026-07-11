@@ -479,6 +479,22 @@ pub(crate) fn nodes_for_subscription_filtered_value(
     name_filter_regex: Option<&str>,
 ) -> io::Result<Vec<Value>> {
     let filter = compile_name_filter(name_filter_regex)?;
+    let mut items = Vec::new();
+    visit_subscription_nodes_matching_name_filter(
+        conn,
+        subscription_id,
+        filter.as_ref(),
+        |node| items.push(node),
+    )?;
+    Ok(items)
+}
+
+pub(crate) fn visit_subscription_nodes_matching_name_filter(
+    conn: &Connection,
+    subscription_id: i64,
+    filter: Option<&Regex>,
+    mut visit: impl FnMut(Value),
+) -> io::Result<()> {
     let mut stmt = conn
         .prepare(
             "SELECT id, link, name, address, protocol, tag, subscription_id FROM nodes WHERE subscription_id = ?1 ORDER BY id",
@@ -487,14 +503,13 @@ pub(crate) fn nodes_for_subscription_filtered_value(
     let rows = stmt
         .query_map(params![subscription_id], node_row_value)
         .map_err(sqlite_io_error)?;
-    let mut items = Vec::new();
     for row in rows {
         let node = row.map_err(sqlite_io_error)?;
-        if node_matches_name_filter(&node, filter.as_ref()) {
-            items.push(node);
+        if node_matches_name_filter(&node, filter) {
+            visit(node);
         }
     }
-    Ok(items)
+    Ok(())
 }
 
 pub(crate) fn compile_name_filter(name_filter_regex: Option<&str>) -> io::Result<Option<Regex>> {
