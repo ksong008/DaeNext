@@ -8,6 +8,8 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod network_state;
+
 const INTERFACE_MONITOR_POLL_MS: u64 = 2_000;
 const SYSFS_INTERFACE_IFINDEX_FILE: &str = "ifindex";
 const MONITOR_STATUS_PASS: &str = "pass";
