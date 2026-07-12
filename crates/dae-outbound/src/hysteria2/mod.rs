@@ -1,3 +1,4 @@
+mod auth;
 pub mod contract;
 mod dataplane;
 pub mod link;
@@ -8,6 +9,9 @@ mod tls;
 mod underlay;
 mod wire;
 
+pub use auth::{
+    Hysteria2AuthReport, Hysteria2AuthenticatedSession, authenticate_hysteria2_connection,
+};
 pub use dataplane::{
     DEFAULT_TRUE_QUIC_LINK, DEFAULT_TRUE_QUIC_PORT_HOP_ITERATIONS,
     DEFAULT_TRUE_QUIC_SUBSCRIPTION_TAG, DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS,
@@ -24,8 +28,7 @@ pub use quic_loopback::{
     run_hysteria2_quic_loopback_smoke,
 };
 pub use runtime::{
-    Hysteria2AuthReport, Hysteria2TcpResponseHead, authenticate_hysteria2_connection,
-    read_hysteria2_tcp_response, write_hysteria2_tcp_request,
+    Hysteria2TcpResponseHead, read_hysteria2_tcp_response, write_hysteria2_tcp_request,
 };
 pub use tls::{build_hysteria2_pinned_client_config, build_hysteria2_runtime_client_config};
 pub use underlay::{

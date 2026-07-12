@@ -17,6 +17,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria
     port_hop_ports: Vec<u16>,
     endpoint: Option<quinn::Endpoint>,
     connection: Option<quinn::Connection>,
+    auth_session: Option<Hysteria2AuthenticatedSession>,
     session_id: u32,
     fragments: QuicUdpFragmentBuffer,
     packet_ids: QuicUdpPacketIdAllocator,
@@ -40,6 +41,7 @@ impl Hysteria2QuicDatagramSession {
             port_hop_ports,
             endpoint: None,
             connection: None,
+            auth_session: None,
             session_id: fastrand::u32(1..=u32::MAX),
             fragments: QuicUdpFragmentBuffer::default(),
             packet_ids: QuicUdpPacketIdAllocator::default(),
@@ -151,23 +153,25 @@ impl Hysteria2QuicDatagramSession {
             RESIDENT_UDP_RESPONSE_TIMEOUT,
         )
         .await?;
-        let auth_report = time::timeout(
+        let auth_session = time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
             authenticate_hysteria2_connection(connection.clone(), &self.auth, self.max_rx),
         )
         .await
         .map_err(|_| "Hysteria2 QUIC auth timeout".to_owned())?
         .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
-        if !auth_report.auth_ok || !auth_report.udp_enabled {
+        if !auth_session.report().auth_ok || !auth_session.report().udp_enabled {
             connection.close(0x101_u32.into(), b"resident hysteria2 udp auth failed");
             endpoint.wait_idle().await;
             return Err(format!(
                 "Hysteria2 UDP unavailable after auth: status={} udp_enabled={}",
-                auth_report.status, auth_report.udp_enabled
+                auth_session.report().status,
+                auth_session.report().udp_enabled
             ));
         }
         self.connection = Some(connection);
         self.endpoint = Some(endpoint);
+        self.auth_session = Some(auth_session);
         Ok(())
     }
 
@@ -175,6 +179,7 @@ impl Hysteria2QuicDatagramSession {
         if let Some(connection) = self.connection.take() {
             connection.close(0_u32.into(), b"resident hysteria2 udp session done");
         }
+        self.auth_session = None;
         if let Some(endpoint) = self.endpoint.take() {
             endpoint.wait_idle().await;
         }
