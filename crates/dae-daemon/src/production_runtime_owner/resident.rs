@@ -41,9 +41,10 @@ use super::resident_routing::{
     update_existing_resident_routing_map, update_new_resident_routing_map,
 };
 use super::topology::{
-    attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
-    read_topology_values, setup_production_ip_datapath, show_host_program, show_peer_program,
-    write_param_image,
+    attach_host_program, attach_peer_program, cleanup_production_topology, preflight_blockers,
+    preflight_checks, production_names_check_failed, read_topology_values,
+    refresh_production_names_check, setup_production_ip_datapath, show_host_program,
+    show_peer_program, write_param_image,
 };
 use super::{
     DEFAULT_DAE_NETNS_ID, DEFAULT_HOST_SECTION, DEFAULT_PEER_SECTION, PRODUCTION_NETNS,

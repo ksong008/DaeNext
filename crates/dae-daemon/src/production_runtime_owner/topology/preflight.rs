@@ -1,4 +1,7 @@
 use super::*;
+
+const PRODUCTION_NAMES_FREE_CHECK: &str = "production-names-free";
+
 pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<Value> {
     let mut checks = Vec::new();
     push_check(
@@ -53,9 +56,47 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
         }),
         "native eBPF runtime request contract is invalid",
     );
+    push_production_names_check(&mut checks, options);
     push_check(
         &mut checks,
-        "production-names-free",
+        "tproxy-port-free",
+        !options.execute || tproxy_port_available(options.tproxy_port),
+        json!({"tproxy_port": options.tproxy_port}),
+        "production runtime owner tproxy port is already in use",
+    );
+    checks
+}
+
+pub(crate) fn preflight_blockers(checks: &[Value], include_production_names: bool) -> Vec<String> {
+    checks
+        .iter()
+        .filter(|check| check["status"].as_str() != Some("pass"))
+        .filter(|check| {
+            include_production_names || check["name"].as_str() != Some(PRODUCTION_NAMES_FREE_CHECK)
+        })
+        .filter_map(|check| check["blocker"].as_str().map(str::to_owned))
+        .collect()
+}
+
+pub(crate) fn production_names_check_failed(checks: &[Value]) -> bool {
+    checks.iter().any(|check| {
+        check["name"].as_str() == Some(PRODUCTION_NAMES_FREE_CHECK)
+            && check["status"].as_str() != Some("pass")
+    })
+}
+
+pub(crate) fn refresh_production_names_check(
+    checks: &mut Vec<Value>,
+    options: &ProductionRuntimeOwnerOptions,
+) {
+    checks.retain(|check| check["name"].as_str() != Some(PRODUCTION_NAMES_FREE_CHECK));
+    push_production_names_check(checks, options);
+}
+
+fn push_production_names_check(checks: &mut Vec<Value>, options: &ProductionRuntimeOwnerOptions) {
+    push_check(
+        checks,
+        PRODUCTION_NAMES_FREE_CHECK,
         !options.execute
             || (!iface_exists(PRODUCTION_HOST_IFACE)
                 && !iface_exists(PRODUCTION_PEER_IFACE)
@@ -67,12 +108,35 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
         }),
         "production runtime owner names are already in use",
     );
-    push_check(
-        &mut checks,
-        "tproxy-port-free",
-        !options.execute || tproxy_port_available(options.tproxy_port),
-        json!({"tproxy_port": options.tproxy_port}),
-        "production runtime owner tproxy port is already in use",
-    );
-    checks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_name_blocker_can_be_deferred_without_hiding_other_failures() {
+        let checks = vec![
+            json!({
+                "name": PRODUCTION_NAMES_FREE_CHECK,
+                "status": "fail",
+                "blocker": "names are in use",
+            }),
+            json!({
+                "name": "resident-cgroup-preflight",
+                "status": "fail",
+                "blocker": "cgroup conflict",
+            }),
+        ];
+
+        assert!(production_names_check_failed(&checks));
+        assert_eq!(
+            preflight_blockers(&checks, false),
+            ["cgroup conflict".to_owned()]
+        );
+        assert_eq!(
+            preflight_blockers(&checks, true),
+            ["names are in use".to_owned(), "cgroup conflict".to_owned()]
+        );
+    }
 }
