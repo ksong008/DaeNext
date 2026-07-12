@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,16 +35,31 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
     method: &str,
     timeout: Duration,
 ) -> Result<(), String> {
-    match open_native_tcp_tunnel(Arc::clone(&proxy), target).await {
-        Ok(mut tunnel) => {
-            probe_native_tcp_tunnel(&mut *tunnel, scheme, host, path, method, timeout).await
+    let probe = async {
+        match open_native_tcp_tunnel(Arc::clone(&proxy), target).await {
+            Ok(mut tunnel) => {
+                probe_native_tcp_tunnel(&mut *tunnel, scheme, host, path, method, timeout).await
+            }
+            Err(NativeTcpProbeError::NotAdmitted) => Err(format!(
+                "native outbound probe not admitted for protocol {} net {} tls {}",
+                proxy.protocol, proxy.net, proxy.tls
+            )),
+            Err(NativeTcpProbeError::Open(err)) => Err(err),
         }
-        Err(NativeTcpProbeError::NotAdmitted) => Err(format!(
-            "native outbound probe not admitted for protocol {} net {} tls {}",
-            proxy.protocol, proxy.net, proxy.tls
-        )),
-        Err(NativeTcpProbeError::Open(err)) => Err(err),
-    }
+    };
+    await_native_tcp_probe_with_timeout(timeout, probe).await
+}
+
+async fn await_native_tcp_probe_with_timeout<F>(timeout: Duration, probe: F) -> Result<(), String>
+where
+    F: Future<Output = Result<(), String>>,
+{
+    tokio::time::timeout(timeout, probe).await.map_err(|_| {
+        format!(
+            "native outbound probe timed out after {} ms",
+            timeout.as_millis()
+        )
+    })?
 }
 
 async fn open_native_tcp_tunnel(
@@ -83,5 +99,24 @@ async fn open_native_tcp_tunnel(
         | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
             open_quic_stream_native_tcp_tunnel(proxy, target).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn timeout_bounds_the_complete_native_probe_future() {
+        let timeout = Duration::from_millis(1);
+        let result = await_native_tcp_probe_with_timeout(
+            timeout,
+            std::future::pending::<Result<(), String>>(),
+        )
+        .await;
+        assert_eq!(
+            result.unwrap_err(),
+            "native outbound probe timed out after 1 ms"
+        );
     }
 }
