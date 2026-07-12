@@ -4,7 +4,8 @@ use std::task::{Context, Poll};
 
 use dae_outbound::{
     hysteria2::{
-        authenticate_hysteria2_connection, read_hysteria2_tcp_response, write_hysteria2_tcp_request,
+        Hysteria2AuthenticatedSession, authenticate_hysteria2_connection,
+        read_hysteria2_tcp_response, write_hysteria2_tcp_request,
     },
     juicity::{JuicityAuthStream, authenticate_juicity_connection, write_juicity_tcp_request},
     tuic::{authenticate_tuic_connection, write_tuic_connect_request},
@@ -50,18 +51,18 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
-            let auth_report = authenticate_hysteria2_connection(connection.clone(), &auth, max_rx)
+            let auth_session = authenticate_hysteria2_connection(connection.clone(), &auth, max_rx)
                 .await
                 .map_err(|err| {
                     NativeTcpProbeError::Open(format!(
                         "authenticate native Hysteria2 connection: {err}"
                     ))
                 })?;
-            if !auth_report.auth_ok {
+            if !auth_session.report().auth_ok {
                 connection.close(0x101_u32.into(), b"native hysteria2 auth failed");
                 return Err(NativeTcpProbeError::Open(format!(
                     "native Hysteria2 auth status {}",
-                    auth_report.status
+                    auth_session.report().status
                 )));
             }
             let (mut send, recv) = connection.open_bi().await.map_err(|err| {
@@ -86,7 +87,12 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 )));
             }
             Ok(Box::new(QuicStreamNativeTcpTunnel::new(
-                send, recv, connection, endpoint, None,
+                send,
+                recv,
+                connection,
+                endpoint,
+                Some(auth_session),
+                None,
             )))
         }
         ResidentProxyProtocolPlan::TuicQuicTcp {
@@ -122,7 +128,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                     NativeTcpProbeError::Open(format!("write native TUIC TCP connect: {err}"))
                 })?;
             Ok(Box::new(QuicStreamNativeTcpTunnel::new(
-                send, recv, connection, endpoint, None,
+                send, recv, connection, endpoint, None, None,
             )))
         }
         ResidentProxyProtocolPlan::JuicityQuicTcp {
@@ -164,6 +170,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 recv,
                 connection,
                 endpoint,
+                None,
                 Some(auth_stream),
             )))
         }
@@ -176,6 +183,7 @@ struct QuicStreamNativeTcpTunnel {
     recv: quinn::RecvStream,
     connection: quinn::Connection,
     endpoint: quinn::Endpoint,
+    _hysteria2_auth_session: Option<Hysteria2AuthenticatedSession>,
     _juicity_auth_stream: Option<JuicityAuthStream>,
 }
 
@@ -185,6 +193,7 @@ impl QuicStreamNativeTcpTunnel {
         recv: quinn::RecvStream,
         connection: quinn::Connection,
         endpoint: quinn::Endpoint,
+        hysteria2_auth_session: Option<Hysteria2AuthenticatedSession>,
         juicity_auth_stream: Option<JuicityAuthStream>,
     ) -> Self {
         Self {
@@ -192,6 +201,7 @@ impl QuicStreamNativeTcpTunnel {
             recv,
             connection,
             endpoint,
+            _hysteria2_auth_session: hysteria2_auth_session,
             _juicity_auth_stream: juicity_auth_stream,
         }
     }

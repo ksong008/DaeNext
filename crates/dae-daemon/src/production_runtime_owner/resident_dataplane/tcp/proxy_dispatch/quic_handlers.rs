@@ -126,10 +126,10 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     )
     .await?;
     let port_hopping = !port_hop_ports.is_empty();
-    let auth_report = authenticate_hysteria2_connection(connection.clone(), auth, max_rx)
+    let auth_session = authenticate_hysteria2_connection(connection.clone(), auth, max_rx)
         .await
         .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
-    if !auth_report.auth_ok {
+    if !auth_session.report().auth_ok {
         connection.close(0x101_u32.into(), b"resident hysteria2 auth failed");
         let mut event = generic_proxy_tcp_failed_event(
             peer,
@@ -137,7 +137,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
             &selection,
             sniff,
             "hysteria2",
-            &format!("Hysteria2 auth status {}", auth_report.status),
+            &format!("Hysteria2 auth status {}", auth_session.report().status),
             "async-proxy-quic-tcp",
         );
         event["quic_underlay"] = json!("quinn-h3");
@@ -221,7 +221,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
                 None,
                 Some("quinn-h3"),
             );
-            event["hysteria2_udp_enabled"] = json!(auth_report.udp_enabled);
+            event["hysteria2_udp_enabled"] = json!(auth_session.report().udp_enabled);
             Ok(event)
         }
         Err(err) => {
@@ -246,7 +246,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
                 None,
                 Some("quinn-h3"),
             );
-            event["hysteria2_udp_enabled"] = json!(auth_report.udp_enabled);
+            event["hysteria2_udp_enabled"] = json!(auth_session.report().udp_enabled);
             Ok(event)
         }
     }

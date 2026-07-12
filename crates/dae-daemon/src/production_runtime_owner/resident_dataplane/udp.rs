@@ -13,7 +13,7 @@ use dae_datapath::TcpDialMode;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 use dae_outbound::{
     anytls::{contract as anytls_contract, link as anytls_link},
-    hysteria2::authenticate_hysteria2_connection,
+    hysteria2::{Hysteria2AuthenticatedSession, authenticate_hysteria2_connection},
     juicity::{
         authenticate_juicity_connection, decode_stream_packet_frame, seal_stream_packet_frame,
     },
