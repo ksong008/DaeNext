@@ -17,19 +17,24 @@ pub(super) fn start_with_options(
     ));
     checks.extend(resident_kernel_feature_checks(&lan_ifaces, &wan_ifaces));
     checks.push(resident_cgroup_preflight_check(&options, &wan_ifaces));
-    let blockers = checks
-        .iter()
-        .filter(|check| check["status"].as_str() != Some("pass"))
-        .filter_map(|check| check["blocker"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    if !blockers.is_empty() {
+    let non_owner_blockers = preflight_blockers(&checks, false);
+    if !non_owner_blockers.is_empty() {
+        let blockers = preflight_blockers(&checks, true);
         return Err(format!(
             "resident production runtime preflight failed: {}",
             blockers.join("; ")
         ));
     }
-    if options.execute {
+    if options.execute && production_names_check_failed(&checks) {
         cleanup_stale_production_owner_after_crash(&lan_ifaces);
+        refresh_production_names_check(&mut checks, &options);
+    }
+    let blockers = preflight_blockers(&checks, true);
+    if !blockers.is_empty() {
+        return Err(format!(
+            "resident production runtime preflight failed: {}",
+            blockers.join("; ")
+        ));
     }
 
     let before_pin_snapshot = bpf_dae_snapshot();
