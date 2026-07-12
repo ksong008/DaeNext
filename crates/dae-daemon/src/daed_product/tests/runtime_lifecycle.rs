@@ -217,6 +217,22 @@ pub(crate) fn runtime_signal_stop_waits_for_cleanup_report() {
 }
 
 #[test]
+pub(crate) fn product_server_blocks_lifecycle_signals_before_spawning_log_workers() {
+    let source = include_str!("../cli_commands/server.rs");
+    let block_signals = source
+        .find("if let Err(err) = block_product_signals()")
+        .expect("product server must block lifecycle signals");
+    let start_log_runtime = source
+        .find("start_product_log_runtime(&options.config_dir, &options.state)")
+        .expect("product server must start the product log runtime");
+
+    assert!(
+        block_signals < start_log_runtime,
+        "all product worker threads must inherit the blocked lifecycle signal mask"
+    );
+}
+
+#[test]
 pub(crate) fn runtime_cleanup_interlock_blocks_failed_cleanup() {
     let manager = ProductRuntimeManager::new();
     {

@@ -21,6 +21,9 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     if let Err(err) = initialize_log_store(&options.config_dir, &options.state) {
         return DaedProductOutput::error(format!("init log store failed: {err}"));
     }
+    if let Err(err) = block_product_signals() {
+        return DaedProductOutput::error(format!("install signal control failed: {err}"));
+    }
     let product_log_runtime = match start_product_log_runtime(&options.config_dir, &options.state) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -28,9 +31,6 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         }
     };
     register_resident_event_product_log_sink(&options.config_dir, &options.state);
-    if let Err(err) = block_product_signals() {
-        return DaedProductOutput::error(format!("install signal control failed: {err}"));
-    }
     let runtime = Arc::new(ProductRuntimeManager::new());
     if let Err(err) = install_product_signal_thread(
         Arc::clone(&runtime),
