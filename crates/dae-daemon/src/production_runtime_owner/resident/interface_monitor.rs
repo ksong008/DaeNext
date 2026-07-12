@@ -8,10 +8,22 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod baseline_state;
 mod network_state;
+mod recovery_snapshot;
+mod recovery_state;
+#[cfg(test)]
+mod tests;
+
+use baseline_state::WanBaselineTracker;
+use network_state::{WanMonitorPolicy, observe_wan_network_state};
+use recovery_snapshot::interface_monitor_snapshot_with_wan_state;
+use recovery_state::RecoveryDebounce;
 
 const INTERFACE_MONITOR_POLL_MS: u64 = 2_000;
+const INTERFACE_RECOVERY_STABLE_OBSERVATIONS: u32 = 2;
 const SYSFS_INTERFACE_IFINDEX_FILE: &str = "ifindex";
+const SYSFS_INTERFACE_MTU_FILE: &str = "mtu";
 const MONITOR_STATUS_PASS: &str = "pass";
 const MONITOR_STATUS_DEGRADED: &str = "degraded";
 const INTERFACE_STATE_ATTACHED: &str = "attached";
@@ -25,6 +37,7 @@ const REATTACH_REASON_INITIAL_INTERFACE_MISSING: &str = "initial-interface-missi
 const REATTACH_REASON_CURRENT_UNVERIFIED: &str = "current-interface-unverified";
 const REATTACH_REASON_INITIAL_UNVERIFIED: &str = "initial-interface-unverified";
 const REATTACH_REASON_IFINDEX_CHANGED: &str = "ifindex-changed";
+const REATTACH_REASON_INTERFACE_MTU_CHANGED: &str = "interface-mtu-changed";
 const REATTACH_REASON_INTERFACE_TYPE_CHANGED: &str = "interface-type-changed";
 const REATTACH_REASON_LINK_LAYER_CHANGED: &str = "link-layer-changed";
 
@@ -39,6 +52,7 @@ struct InterfaceMonitorSpec {
 struct InterfaceObservation {
     exists: bool,
     ifindex: Option<u32>,
+    mtu: Option<u32>,
     arphrd: Option<u16>,
     link_layer: Option<&'static str>,
     errors: Vec<String>,
@@ -91,23 +105,45 @@ impl Drop for ResidentInterfaceMonitorRuntime {
 }
 
 pub(super) fn start_resident_interface_monitor(
+    config: &Config,
     lan_ifaces: &[String],
     wan_ifaces: &[String],
 ) -> ResidentInterfaceMonitorRuntime {
     let specs = interface_specs(sys_class_net_path(), lan_ifaces, wan_ifaces);
-    let state = Arc::new(Mutex::new(interface_monitor_snapshot(
+    let policy = WanMonitorPolicy::from_config(config, wan_ifaces);
+    let mut baseline_wan = WanBaselineTracker::new(observe_wan_network_state(&policy));
+    let mut debounce = RecoveryDebounce::default();
+    let state = Arc::new(Mutex::new(interface_monitor_snapshot_with_wan_state(
         sys_class_net_path(),
         &specs,
+        &policy,
+        baseline_wan.baseline(),
+        baseline_wan.baseline(),
+        &mut debounce,
     )));
     let stop = Arc::new(AtomicBool::new(false));
     let thread_state = Arc::clone(&state);
     let thread_stop = Arc::clone(&stop);
-    let handle = thread::Builder::new()
+    let handle = match thread::Builder::new()
         .name("resident-interface-monitor".to_owned())
         .spawn(move || {
             while !thread_stop.load(Ordering::Relaxed) {
+                let current_wan = observe_wan_network_state(&policy);
+                baseline_wan.observe(
+                    &policy,
+                    &current_wan,
+                    INTERFACE_RECOVERY_STABLE_OBSERVATIONS,
+                );
+                let snapshot = interface_monitor_snapshot_with_wan_state(
+                    sys_class_net_path(),
+                    &specs,
+                    &policy,
+                    baseline_wan.baseline(),
+                    &current_wan,
+                    &mut debounce,
+                );
                 if let Ok(mut guard) = thread_state.lock() {
-                    *guard = interface_monitor_snapshot(sys_class_net_path(), &specs);
+                    *guard = snapshot;
                 }
                 for _ in 0..20 {
                     if thread_stop.load(Ordering::Relaxed) {
@@ -116,8 +152,18 @@ pub(super) fn start_resident_interface_monitor(
                     thread::sleep(Duration::from_millis(INTERFACE_MONITOR_POLL_MS / 20));
                 }
             }
-        })
-        .ok();
+        }) {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            if let Ok(mut snapshot) = state.lock() {
+                snapshot["status"] = json!(MONITOR_STATUS_DEGRADED);
+                snapshot["monitorRunning"] = json!(false);
+                snapshot["monitorError"] =
+                    json!(format!("failed to spawn resident interface monitor: {err}"));
+            }
+            None
+        }
+    };
     ResidentInterfaceMonitorRuntime {
         stop,
         state,
@@ -158,6 +204,7 @@ fn push_role(specs: &mut BTreeMap<String, Vec<&'static str>>, iface: &str, role:
     }
 }
 
+#[cfg(test)]
 fn interface_monitor_snapshot(sys_class_net: &Path, specs: &[InterfaceMonitorSpec]) -> Value {
     let interfaces = specs
         .iter()
@@ -176,6 +223,8 @@ fn interface_monitor_snapshot(sys_class_net: &Path, specs: &[InterfaceMonitorSpe
                 "current": interface_observation_json(&current),
                 "expectedIfindex": spec.initial.ifindex,
                 "observedIfindex": current.ifindex,
+                "expectedMtu": spec.initial.mtu,
+                "observedMtu": current.mtu,
                 "expectedArphrdType": spec.initial.arphrd,
                 "observedArphrdType": current.arphrd,
                 "expectedLinkLayer": spec.initial.link_layer,
@@ -237,6 +286,9 @@ fn interface_monitor_status(
     if initial.ifindex != current.ifindex {
         reasons.push(REATTACH_REASON_IFINDEX_CHANGED);
     }
+    if initial.mtu != current.mtu {
+        reasons.push(REATTACH_REASON_INTERFACE_MTU_CHANGED);
+    }
     if initial.arphrd != current.arphrd {
         reasons.push(REATTACH_REASON_INTERFACE_TYPE_CHANGED);
     }
@@ -251,10 +303,7 @@ fn interface_monitor_status(
             reasons,
         }
     } else {
-        let reattach_ready = current.exists
-            && current.errors.is_empty()
-            && initial.exists
-            && initial.errors.is_empty();
+        let reattach_ready = current.exists && current.errors.is_empty();
         InterfaceMonitorStatus {
             state: if current.errors.is_empty() {
                 INTERFACE_STATE_STALE
@@ -274,6 +323,7 @@ fn observe_interface(sys_class_net: &Path, iface: &str) -> InterfaceObservation 
         return InterfaceObservation {
             exists,
             ifindex: None,
+            mtu: None,
             arphrd: None,
             link_layer: None,
             errors: Vec::new(),
@@ -282,6 +332,13 @@ fn observe_interface(sys_class_net: &Path, iface: &str) -> InterfaceObservation 
 
     let mut errors = Vec::new();
     let ifindex = match read_interface_u32(sys_class_net, iface, SYSFS_INTERFACE_IFINDEX_FILE) {
+        Ok(value) => Some(value),
+        Err(err) => {
+            errors.push(err);
+            None
+        }
+    };
+    let mtu = match read_interface_u32(sys_class_net, iface, SYSFS_INTERFACE_MTU_FILE) {
         Ok(value) => Some(value),
         Err(err) => {
             errors.push(err);
@@ -307,6 +364,7 @@ fn observe_interface(sys_class_net: &Path, iface: &str) -> InterfaceObservation 
     InterfaceObservation {
         exists,
         ifindex,
+        mtu,
         arphrd,
         link_layer,
         errors,
@@ -317,6 +375,7 @@ fn interface_observation_json(observation: &InterfaceObservation) -> Value {
     json!({
         "exists": observation.exists,
         "ifindex": observation.ifindex,
+        "mtu": observation.mtu,
         "arphrdType": observation.arphrd,
         "linkLayer": observation.link_layer,
         "errors": observation.errors,
@@ -337,144 +396,4 @@ fn unix_now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::production_runtime_owner::resident_interfaces::{
-        ARPHRD_ETHER, ARPHRD_PPP, SYSFS_INTERFACE_TYPE_FILE,
-    };
-
-    const TEST_LAN: &str = "test_lan0";
-    const TEST_WAN: &str = "test_wan0";
-
-    #[test]
-    fn monitor_marks_unchanged_interfaces_attached() {
-        let dir = test_sys_class_net();
-        write_iface(&dir, TEST_LAN, 11, ARPHRD_ETHER);
-        write_iface(&dir, TEST_WAN, 12, ARPHRD_PPP);
-        let specs = interface_specs(&dir, &[TEST_LAN.to_owned()], &[TEST_WAN.to_owned()]);
-
-        let snapshot = interface_monitor_snapshot(&dir, &specs);
-
-        assert_eq!(snapshot["status"], json!(MONITOR_STATUS_PASS));
-        assert_eq!(snapshot["reattachRequired"], json!(false));
-        assert_eq!(snapshot["reattachReady"], json!(false));
-        let interfaces = snapshot["interfaces"].as_array().unwrap();
-        assert_eq!(interfaces.len(), 2);
-        assert!(interfaces.iter().all(|iface| {
-            iface["state"] == json!(INTERFACE_STATE_ATTACHED)
-                && iface["reattachRequired"] == json!(false)
-                && iface["reattachReady"] == json!(true)
-        }));
-        let wan = interfaces
-            .iter()
-            .find(|iface| {
-                iface["roles"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&json!(INTERFACE_ROLE_WAN))
-            })
-            .unwrap();
-        assert_eq!(wan["expectedLinkLayer"], json!("l3"));
-        assert_eq!(wan["observedLinkLayer"], json!("l3"));
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn monitor_requires_reattach_when_interface_disappears() {
-        let dir = test_sys_class_net();
-        write_iface(&dir, TEST_WAN, 12, ARPHRD_PPP);
-        let specs = interface_specs(&dir, &[], &[TEST_WAN.to_owned()]);
-        fs::remove_dir_all(dir.join(TEST_WAN)).unwrap();
-
-        let snapshot = interface_monitor_snapshot(&dir, &specs);
-        let iface = &snapshot["interfaces"][0];
-
-        assert_eq!(snapshot["status"], json!(MONITOR_STATUS_DEGRADED));
-        assert_eq!(snapshot["reattachRequired"], json!(true));
-        assert_eq!(snapshot["reattachReady"], json!(false));
-        assert_eq!(iface["state"], json!(INTERFACE_STATE_MISSING));
-        assert_eq!(iface["reattachRequired"], json!(true));
-        assert_eq!(iface["reattachReady"], json!(false));
-        assert!(
-            iface["reattachReasons"]
-                .as_array()
-                .unwrap()
-                .contains(&json!(REATTACH_REASON_INTERFACE_MISSING))
-        );
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn monitor_requires_reattach_when_interface_is_recreated() {
-        let dir = test_sys_class_net();
-        write_iface(&dir, TEST_WAN, 12, ARPHRD_PPP);
-        let specs = interface_specs(&dir, &[], &[TEST_WAN.to_owned()]);
-        write_iface(&dir, TEST_WAN, 21, ARPHRD_PPP);
-
-        let snapshot = interface_monitor_snapshot(&dir, &specs);
-        let iface = &snapshot["interfaces"][0];
-
-        assert_eq!(snapshot["status"], json!(MONITOR_STATUS_DEGRADED));
-        assert_eq!(snapshot["reattachReady"], json!(true));
-        assert_eq!(iface["state"], json!(INTERFACE_STATE_STALE));
-        assert_eq!(iface["reattachReady"], json!(true));
-        assert_eq!(iface["expectedIfindex"], json!(12));
-        assert_eq!(iface["observedIfindex"], json!(21));
-        assert!(
-            iface["reattachReasons"]
-                .as_array()
-                .unwrap()
-                .contains(&json!(REATTACH_REASON_IFINDEX_CHANGED))
-        );
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn monitor_requires_reattach_when_link_layer_changes() {
-        let dir = test_sys_class_net();
-        write_iface(&dir, TEST_WAN, 12, ARPHRD_ETHER);
-        let specs = interface_specs(&dir, &[], &[TEST_WAN.to_owned()]);
-        write_iface(&dir, TEST_WAN, 12, ARPHRD_PPP);
-
-        let snapshot = interface_monitor_snapshot(&dir, &specs);
-        let iface = &snapshot["interfaces"][0];
-
-        assert_eq!(iface["state"], json!(INTERFACE_STATE_STALE));
-        assert_eq!(snapshot["reattachReady"], json!(true));
-        assert_eq!(iface["reattachReady"], json!(true));
-        assert_eq!(iface["expectedLinkLayer"], json!("l2"));
-        assert_eq!(iface["observedLinkLayer"], json!("l3"));
-        assert!(
-            iface["reattachReasons"]
-                .as_array()
-                .unwrap()
-                .contains(&json!(REATTACH_REASON_LINK_LAYER_CHANGED))
-        );
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    fn test_sys_class_net() -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("daed-interface-monitor-test-{}", fastrand::u64(..)));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write_iface(sys_class_net: &Path, iface: &str, ifindex: u32, arphrd: u16) {
-        let iface_dir = sys_class_net.join(iface);
-        fs::create_dir_all(&iface_dir).unwrap();
-        fs::write(
-            iface_dir.join(SYSFS_INTERFACE_IFINDEX_FILE),
-            ifindex.to_string(),
-        )
-        .unwrap();
-        fs::write(
-            iface_dir.join(SYSFS_INTERFACE_TYPE_FILE),
-            arphrd.to_string(),
-        )
-        .unwrap();
-    }
 }

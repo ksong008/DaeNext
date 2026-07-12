@@ -480,7 +480,7 @@ pub(super) fn start_with_options(
             || (native_runtime.peer_attached() && native_runtime.host_attached());
         ok &= attach_outputs_passed;
         let resident_interface_monitor = if ok {
-            let monitor = start_resident_interface_monitor(&lan_ifaces, &wan_ifaces);
+            let monitor = start_resident_interface_monitor(config, &lan_ifaces, &wan_ifaces);
             let snapshot = monitor.snapshot();
             interface_monitor = Some(monitor);
             snapshot
