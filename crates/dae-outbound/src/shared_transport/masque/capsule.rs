@@ -1,6 +1,8 @@
 use bytes::{Bytes, BytesMut};
 
-use super::{MasqueCodecError, decode_quic_varint_prefix, encode_quic_varint};
+use super::{
+    MasqueCodecError, decode_quic_varint_prefix, encode_quic_varint, quic_varint_encoded_len,
+};
 
 pub const CONNECT_UDP_CAPSULE_TYPE: u64 = 0;
 pub const CONNECT_UDP_CONTEXT_ID: u64 = 0;
@@ -161,10 +163,19 @@ pub fn encode_connect_udp_capsule(
             actual: payload.len(),
         });
     }
-    let mut capsule_payload = Vec::with_capacity(payload.len().saturating_add(1));
-    encode_quic_varint(CONNECT_UDP_CONTEXT_ID, &mut capsule_payload)?;
-    capsule_payload.extend_from_slice(payload);
-    encode_capsule(CONNECT_UDP_CAPSULE_TYPE, &capsule_payload, limits)
+    let context_len = quic_varint_encoded_len(CONNECT_UDP_CONTEXT_ID)?;
+    let capsule_payload_len = context_len
+        .checked_add(payload.len())
+        .ok_or(MasqueCodecError::LengthOverflow)?;
+    let frame_len =
+        validated_capsule_frame_len(CONNECT_UDP_CAPSULE_TYPE, capsule_payload_len, limits)?;
+    let mut encoded = Vec::with_capacity(frame_len);
+    encode_quic_varint(CONNECT_UDP_CAPSULE_TYPE, &mut encoded)?;
+    encode_quic_varint(capsule_payload_len as u64, &mut encoded)?;
+    encode_quic_varint(CONNECT_UDP_CONTEXT_ID, &mut encoded)?;
+    encoded.extend_from_slice(payload);
+    debug_assert_eq!(encoded.len(), frame_len);
+    Ok(encoded)
 }
 
 pub fn encode_unknown_capsule(
@@ -185,18 +196,31 @@ fn encode_capsule(
     payload: &[u8],
     limits: MasqueCapsuleLimits,
 ) -> Result<Vec<u8>, MasqueCodecError> {
-    if payload.len() > limits.max_capsule_payload_bytes {
-        return Err(MasqueCodecError::CapsulePayloadLimitExceeded {
-            limit: limits.max_capsule_payload_bytes,
-            actual: payload.len() as u64,
-        });
-    }
-    let mut encoded = Vec::new();
+    let frame_len = validated_capsule_frame_len(capsule_type, payload.len(), limits)?;
+    let mut encoded = Vec::with_capacity(frame_len);
     encode_quic_varint(capsule_type, &mut encoded)?;
     encode_quic_varint(payload.len() as u64, &mut encoded)?;
-    let required = encoded
-        .len()
-        .checked_add(payload.len())
+    encoded.extend_from_slice(payload);
+    debug_assert_eq!(encoded.len(), frame_len);
+    Ok(encoded)
+}
+
+fn validated_capsule_frame_len(
+    capsule_type: u64,
+    payload_len: usize,
+    limits: MasqueCapsuleLimits,
+) -> Result<usize, MasqueCodecError> {
+    if payload_len > limits.max_capsule_payload_bytes {
+        return Err(MasqueCodecError::CapsulePayloadLimitExceeded {
+            limit: limits.max_capsule_payload_bytes,
+            actual: payload_len as u64,
+        });
+    }
+    let payload_len_u64 =
+        u64::try_from(payload_len).map_err(|_| MasqueCodecError::LengthOverflow)?;
+    let required = quic_varint_encoded_len(capsule_type)?
+        .checked_add(quic_varint_encoded_len(payload_len_u64)?)
+        .and_then(|header_len| header_len.checked_add(payload_len))
         .ok_or(MasqueCodecError::LengthOverflow)?;
     if required > limits.max_buffered_bytes {
         return Err(MasqueCodecError::BufferLimitExceeded {
@@ -204,9 +228,7 @@ fn encode_capsule(
             required,
         });
     }
-    encoded.reserve(payload.len());
-    encoded.extend_from_slice(payload);
-    Ok(encoded)
+    Ok(required)
 }
 
 #[cfg(test)]
