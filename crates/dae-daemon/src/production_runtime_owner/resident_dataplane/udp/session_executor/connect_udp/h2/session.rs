@@ -3,8 +3,7 @@ use std::task::Poll;
 
 use futures_util::future::poll_fn;
 
-use super::pool::{ConnectUdpH2ConnectionLease, acquire_connect_udp_h2_connection};
-use super::request::{connect_udp_h2_request, validate_connect_udp_h2_response};
+use super::tunnel::{ConnectUdpH2Tunnel, open_connect_udp_h2_tunnel};
 use super::*;
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct ConnectUdpH2Session {
@@ -12,13 +11,6 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct ConnectU
     tunnel: Option<ConnectUdpH2Tunnel>,
     decoder: MasqueCapsuleDecoder,
     responses: VecDeque<Bytes>,
-}
-
-struct ConnectUdpH2Tunnel {
-    target: SocketAddr,
-    send: ::h2::SendStream<Bytes>,
-    receive: ::h2::RecvStream,
-    _connection_lease: ConnectUdpH2ConnectionLease,
 }
 
 impl ConnectUdpH2Session {
@@ -55,6 +47,11 @@ impl ConnectUdpH2Session {
                     .unwrap_or(original_dst),
                 original_dst,
             ));
+        }
+        if payload.len() > self.runtime.capsule_limits.max_datagram_payload_bytes
+            && let Some(tunnel) = self.tunnel.as_ref()
+        {
+            tunnel.connection_lease.record_mtu_rejection();
         }
         let capsule = encode_connect_udp_capsule(payload, self.runtime.capsule_limits)
             .map_err(|err| format!("encode CONNECT-UDP H2 DATAGRAM Capsule: {err}"))?;
@@ -94,7 +91,12 @@ impl ConnectUdpH2Session {
                     .pop_front()
                     .map(|payload| self.response_result(payload)))
             }
-            Some(Some(Err(err))) => Err(format!("read CONNECT-UDP H2 Capsule DATA: {err}")),
+            Some(Some(Err(err))) => {
+                if err.is_reset() {
+                    tunnel.connection_lease.record_reset();
+                }
+                Err(format!("read CONNECT-UDP H2 Capsule DATA: {err}"))
+            }
             Some(None) => Err(self.stream_closed_error()),
         }
     }
@@ -116,6 +118,9 @@ impl ConnectUdpH2Session {
                     self.decode_chunk(&chunk)?;
                 }
                 Some(Err(err)) => {
+                    if err.is_reset() {
+                        tunnel.connection_lease.record_reset();
+                    }
                     return Err(format!("read CONNECT-UDP H2 Capsule DATA: {err}"));
                 }
                 None => return Err(self.stream_closed_error()),
@@ -135,33 +140,9 @@ impl ConnectUdpH2Session {
         proxy: &ResidentProxyPlan,
         original_dst: SocketAddr,
     ) -> Result<(), String> {
-        let lease = acquire_connect_udp_h2_connection(proxy).await?;
-        let mut sender = time::timeout(RESIDENT_CONNECT_TIMEOUT, lease.sender.clone().ready())
-            .await
-            .map_err(|_| "CONNECT-UDP H2 stream capacity timeout".to_owned())?
-            .map_err(|err| format!("CONNECT-UDP H2 stream capacity: {err}"))?;
-        if !sender.is_extended_connect_protocol_enabled() {
-            return Err(
-                "CONNECT-UDP H2 peer disabled extended CONNECT before stream creation".to_owned(),
-            );
-        }
-        let request = connect_udp_h2_request(proxy, original_dst)?;
-        let (response, send) = sender
-            .send_request(request, false)
-            .map_err(|err| format!("send CONNECT-UDP H2 request headers: {err}"))?;
-        let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
-            .await
-            .map_err(|_| "CONNECT-UDP H2 response headers timeout".to_owned())?
-            .map_err(|err| format!("read CONNECT-UDP H2 response headers: {err}"))?;
-        validate_connect_udp_h2_response(&response)?;
         self.decoder = MasqueCapsuleDecoder::new(self.runtime.capsule_limits);
         self.responses.clear();
-        self.tunnel = Some(ConnectUdpH2Tunnel {
-            target: original_dst,
-            send,
-            receive: response.into_body(),
-            _connection_lease: lease,
-        });
+        self.tunnel = Some(open_connect_udp_h2_tunnel(proxy, original_dst, self.runtime).await?);
         Ok(())
     }
 

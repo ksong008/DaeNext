@@ -2,8 +2,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::key::ConnectUdpH2PoolKey;
-use super::state::{ConnectUdpH2ConnectionLease, ConnectUdpH2Pool};
+use super::state::{ConnectUdpH2ConnectionLease, ConnectUdpH2Pool, ConnectUdpH2PoolSnapshot};
 use super::*;
+
+mod snapshot;
+
+pub(in crate::production_runtime_owner::resident_dataplane) use self::snapshot::connect_udp_h2_pool_metrics_snapshot;
 
 static CONNECT_UDP_H2_POOLS: OnceLock<Mutex<HashMap<ConnectUdpH2PoolKey, Arc<ConnectUdpH2Pool>>>> =
     OnceLock::new();

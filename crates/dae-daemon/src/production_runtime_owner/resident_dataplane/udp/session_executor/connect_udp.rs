@@ -1,19 +1,35 @@
 use super::*;
+use serde_json::Value;
 
 mod h2;
 mod h3;
 mod identity;
+mod metrics;
 mod request;
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) use self::h2::ConnectUdpH2Session;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::h2::clear_connect_udp_h2_pools;
+use self::h2::connect_udp_h2_pool_metrics_snapshot;
 pub(in crate::production_runtime_owner::resident_dataplane::udp) use self::h3::ConnectUdpH3Session;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::h3::clear_connect_udp_h3_pools;
+use self::h3::connect_udp_h3_pool_metrics_snapshot;
 use self::identity::connect_udp_authentication_identity;
+use self::metrics::{ConnectUdpConnectionRetirementReason, ConnectUdpPoolEvents};
 use self::request::{
     CAPSULE_PROTOCOL_HEADER, CAPSULE_PROTOCOL_TRUE, connect_udp_request_parts,
     validate_connect_udp_response,
 };
+
+pub(in crate::production_runtime_owner::resident_dataplane) fn connect_udp_pool_metrics_snapshot(
+    generation: u64,
+) -> Value {
+    json!({
+        "schemaVersion": 1,
+        "reloadGeneration": generation,
+        "h2": connect_udp_h2_pool_metrics_snapshot(generation),
+        "h3": connect_udp_h3_pool_metrics_snapshot(generation),
+    })
+}
 
 pub(super) struct ConnectUdpPlanRef<'a> {
     pub(super) authentication: &'a ResidentConnectUdpAuthPlan,

@@ -396,6 +396,57 @@ async fn h3_stream_and_connection_failures_are_closed_without_fallback() {
 }
 
 #[tokio::test]
+async fn h3_goaway_keeps_existing_stream_and_reconnects_new_session() {
+    let server =
+        ConnectUdpH3TestServer::start(ConnectUdpH3TestServerConfig::goaway_after_first_stream())
+            .await;
+    let (proxy, runtime) = test_proxy(&server, None);
+    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53);
+    let mut existing = ConnectUdpH3Session::new(runtime);
+    assert_eq!(
+        exchange(&mut existing, &proxy, target, b"before-goaway")
+            .await
+            .unwrap()
+            .payload,
+        b"before-goaway"
+    );
+
+    let mut replacement = ConnectUdpH3Session::new(runtime);
+    assert_eq!(
+        exchange(&mut replacement, &proxy, target, b"after-goaway")
+            .await
+            .unwrap()
+            .payload,
+        b"after-goaway"
+    );
+    assert_eq!(
+        exchange(&mut existing, &proxy, target, b"existing-still-open")
+            .await
+            .unwrap()
+            .payload,
+        b"existing-still-open"
+    );
+    assert!(server.connection_count() >= 2);
+    let snapshot = connect_udp_h3_pool_metrics_snapshot(runtime.generation);
+    assert_eq!(snapshot["poolCount"], 1);
+    assert_eq!(snapshot["acceptingActors"], 1);
+    assert_eq!(snapshot["retiringActors"], 1);
+    assert_eq!(snapshot["activeSessions"], 2);
+    assert_eq!(snapshot["connectionRetirements"], 1);
+    assert_eq!(snapshot["goawayEvents"], 1);
+    assert_eq!(snapshot["negotiatedDatagrams"], true);
+    assert!(snapshot["negotiatedDatagramLimitMin"].as_u64().is_some());
+
+    replacement.shutdown().await;
+    existing.shutdown().await;
+    clear_generation(runtime);
+    assert_eq!(
+        connect_udp_h3_pool_metrics_snapshot(runtime.generation)["poolCount"],
+        0
+    );
+}
+
+#[tokio::test]
 async fn h3_rejects_cross_target_reuse_and_oversized_datagrams() {
     let server = ConnectUdpH3TestServer::start(ConnectUdpH3TestServerConfig::echo()).await;
     let (proxy, runtime) = test_proxy(&server, None);

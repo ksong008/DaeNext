@@ -1,6 +1,6 @@
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -23,6 +23,7 @@ const CAPSULE_PROTOCOL_TRUE: &str = "?1";
 enum TestResponseBehavior {
     Echo,
     DnsAnswer,
+    GoAwayAfterFirstStream,
     ResetAfterHeaders,
     MalformedCapsule,
 }
@@ -77,6 +78,13 @@ impl ConnectUdpH2TestServerConfig {
         }
     }
 
+    pub(super) fn goaway_after_first_stream() -> Self {
+        Self {
+            behavior: TestResponseBehavior::GoAwayAfterFirstStream,
+            ..Self::echo()
+        }
+    }
+
     pub(super) fn malformed_capsule() -> Self {
         Self {
             behavior: TestResponseBehavior::MalformedCapsule,
@@ -96,6 +104,7 @@ pub(super) struct ConnectUdpH2TestObservation {
 struct ConnectUdpH2TestServerState {
     connections: AtomicUsize,
     streams: AtomicUsize,
+    goaway_sent: AtomicBool,
     observations: Mutex<Vec<ConnectUdpH2TestObservation>>,
 }
 
@@ -124,6 +133,7 @@ impl ConnectUdpH2TestServer {
         let state = Arc::new(ConnectUdpH2TestServerState {
             connections: AtomicUsize::new(0),
             streams: AtomicUsize::new(0),
+            goaway_sent: AtomicBool::new(false),
             observations: Mutex::new(Vec::new()),
         });
         let task_state = Arc::clone(&state);
@@ -154,6 +164,13 @@ impl ConnectUdpH2TestServer {
                             break;
                         };
                         state.streams.fetch_add(1, Ordering::Relaxed);
+                        if matches!(
+                            config.behavior,
+                            TestResponseBehavior::GoAwayAfterFirstStream
+                        ) && !state.goaway_sent.swap(true, Ordering::AcqRel)
+                        {
+                            connection.graceful_shutdown();
+                        }
                         let config = config.clone();
                         let state = Arc::clone(&state);
                         streams.spawn(async move {
@@ -268,7 +285,9 @@ async fn handle_request(
                     .release_capacity(data.len());
             }
         }
-        TestResponseBehavior::Echo | TestResponseBehavior::DnsAnswer => {
+        TestResponseBehavior::Echo
+        | TestResponseBehavior::DnsAnswer
+        | TestResponseBehavior::GoAwayAfterFirstStream => {
             let limits = ResidentConnectUdpRuntimePlan::standalone().capsule_limits;
             let mut decoder = MasqueCapsuleDecoder::new(limits);
             while let Some(data) = request.body_mut().data().await {

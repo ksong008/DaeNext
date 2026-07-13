@@ -16,8 +16,9 @@ pub(super) struct ConnectUdpH3OpenedStream {
 }
 
 pub(super) struct ConnectUdpH3OpenResult {
-    pub(super) response: oneshot::Sender<Result<ConnectUdpH3OpenedSession, String>>,
-    pub(super) result: Result<ConnectUdpH3OpenedStream, String>,
+    pub(super) response:
+        oneshot::Sender<Result<ConnectUdpH3OpenedSession, ConnectUdpH3OpenFailure>>,
+    pub(super) result: Result<ConnectUdpH3OpenedStream, ConnectUdpH3OpenFailure>,
 }
 
 pub(super) async fn open_connect_udp_h3_session(
@@ -25,21 +26,46 @@ pub(super) async fn open_connect_udp_h3_session(
     proxy: Arc<ResidentProxyPlan>,
     target: SocketAddr,
     response_queue_depth: usize,
-    response: oneshot::Sender<Result<ConnectUdpH3OpenedSession, String>>,
+    response: oneshot::Sender<Result<ConnectUdpH3OpenedSession, ConnectUdpH3OpenFailure>>,
 ) -> ConnectUdpH3OpenResult {
     let result = async {
-        let request = connect_udp_h3_request(&proxy, target)?;
+        let request =
+            connect_udp_h3_request(&proxy, target).map_err(ConnectUdpH3OpenFailure::terminal)?;
         let mut stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
             .await
-            .map_err(|_| "CONNECT-UDP H3 request stream timeout".to_owned())?
-            .map_err(|err| format!("send CONNECT-UDP H3 request: {err:?}"))?;
+            .map_err(|_| {
+                ConnectUdpH3OpenFailure::retryable_connection(
+                    "CONNECT-UDP H3 request stream timeout",
+                    ConnectUdpConnectionRetirementReason::Other,
+                )
+            })?
+            .map_err(|err| {
+                ConnectUdpH3OpenFailure::retryable_connection(
+                    format!("send CONNECT-UDP H3 request: {err:?}"),
+                    h3_retirement_reason(&err),
+                )
+            })?;
         let quarter_stream_id = MasqueQuarterStreamId::from_quarter_stream_id(stream.id().index())
-            .map_err(|err| format!("derive CONNECT-UDP H3 Quarter Stream ID: {err}"))?;
+            .map_err(|err| {
+                ConnectUdpH3OpenFailure::terminal(format!(
+                    "derive CONNECT-UDP H3 Quarter Stream ID: {err}"
+                ))
+            })?;
         let received = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
             .await
-            .map_err(|_| "CONNECT-UDP H3 response headers timeout".to_owned())?
-            .map_err(|err| format!("read CONNECT-UDP H3 response headers: {err:?}"))?;
-        validate_connect_udp_h3_response(&received)?;
+            .map_err(|_| {
+                ConnectUdpH3OpenFailure::retryable_connection(
+                    "CONNECT-UDP H3 response headers timeout",
+                    ConnectUdpConnectionRetirementReason::Other,
+                )
+            })?
+            .map_err(|err| {
+                ConnectUdpH3OpenFailure::retryable_connection(
+                    format!("read CONNECT-UDP H3 response headers: {err:?}"),
+                    h3_retirement_reason(&err),
+                )
+            })?;
+        validate_connect_udp_h3_response(&received).map_err(ConnectUdpH3OpenFailure::terminal)?;
         let (send, receive) = stream.split();
         let (response_sender, response_receiver) = mpsc::channel(response_queue_depth.max(1));
         Ok(ConnectUdpH3OpenedStream {
@@ -52,4 +78,14 @@ pub(super) async fn open_connect_udp_h3_session(
     }
     .await;
     ConnectUdpH3OpenResult { response, result }
+}
+
+fn h3_retirement_reason(error: &::h3::error::StreamError) -> ConnectUdpConnectionRetirementReason {
+    match error {
+        ::h3::error::StreamError::RemoteClosing => ConnectUdpConnectionRetirementReason::GoAway,
+        ::h3::error::StreamError::RemoteTerminate { .. } => {
+            ConnectUdpConnectionRetirementReason::Reset
+        }
+        _ => ConnectUdpConnectionRetirementReason::Other,
+    }
 }

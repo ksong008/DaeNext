@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -27,6 +27,7 @@ enum TestResponseBehavior {
     DnsAnswer,
     UnknownQuarterThenEcho,
     MalformedContext,
+    GoAwayAfterFirstStream,
     ResetAfterHeaders,
     CloseConnectionAfterHeaders,
 }
@@ -116,6 +117,13 @@ impl ConnectUdpH3TestServerConfig {
         }
     }
 
+    pub(super) fn goaway_after_first_stream() -> Self {
+        Self {
+            behavior: TestResponseBehavior::GoAwayAfterFirstStream,
+            ..Self::echo()
+        }
+    }
+
     pub(super) fn close_connection_after_headers() -> Self {
         Self {
             behavior: TestResponseBehavior::CloseConnectionAfterHeaders,
@@ -138,6 +146,7 @@ struct ConnectUdpH3TestServerState {
     connections: AtomicUsize,
     streams: AtomicUsize,
     datagrams: AtomicUsize,
+    goaway_sent: AtomicBool,
     observations: Mutex<Vec<ConnectUdpH3TestObservation>>,
 }
 
@@ -159,6 +168,7 @@ impl ConnectUdpH3TestServer {
             connections: AtomicUsize::new(0),
             streams: AtomicUsize::new(0),
             datagrams: AtomicUsize::new(0),
+            goaway_sent: AtomicBool::new(false),
             observations: Mutex::new(Vec::new()),
         });
         let task_state = Arc::clone(&state);
@@ -263,6 +273,12 @@ async fn run_connection(
                 let Ok((request, stream)) = resolver.resolve_request().await else {
                     break;
                 };
+                if matches!(config.behavior, TestResponseBehavior::GoAwayAfterFirstStream)
+                    && !state.goaway_sent.swap(true, Ordering::AcqRel)
+                    && incoming.shutdown(0).await.is_err()
+                {
+                    break;
+                }
                 if handle_request(&connection, request, stream, &config, &state, &mut sessions)
                     .await
                     .is_err()
@@ -400,7 +416,7 @@ fn handle_datagram(
                 limits,
             )?;
         }
-        TestResponseBehavior::Echo => {
+        TestResponseBehavior::Echo | TestResponseBehavior::GoAwayAfterFirstStream => {
             send_echo(
                 connection,
                 decoded.quarter_stream_id,

@@ -7,14 +7,19 @@ use tokio::sync::Notify;
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::udp::session_executor::connect_udp::h3::actor::{
-    ConnectUdpH3ActorCommand, start_connect_udp_h3_actor,
+    ConnectUdpH3ActorAdmission, ConnectUdpH3ActorCommand, start_connect_udp_h3_actor,
 };
+
+mod snapshot;
+
+pub(super) use self::snapshot::ConnectUdpH3PoolSnapshot;
 
 pub(super) struct ConnectUdpH3Pool {
     max_connections: usize,
     sessions_per_connection: usize,
     state: Mutex<ConnectUdpH3PoolState>,
     state_changed: Arc<Notify>,
+    events: Arc<ConnectUdpPoolEvents>,
 }
 
 #[derive(Default)]
@@ -28,6 +33,8 @@ struct ConnectUdpH3ActorEntry {
     sender: tokio::sync::mpsc::Sender<ConnectUdpH3ActorCommand>,
     task: tokio::task::JoinHandle<()>,
     usage: Arc<ConnectUdpH3ActorUsage>,
+    admission: Arc<ConnectUdpH3ActorAdmission>,
+    max_datagram_size: usize,
 }
 
 struct ConnectUdpH3ActorUsage {
@@ -41,6 +48,7 @@ struct ConnectUdpH3ActorLease
         tokio::sync::mpsc::Sender<ConnectUdpH3ActorCommand>,
     usage: Arc<ConnectUdpH3ActorUsage>,
     state_changed: Arc<Notify>,
+    admission: Arc<ConnectUdpH3ActorAdmission>,
 }
 
 enum ConnectUdpH3AcquireAction {
@@ -56,6 +64,21 @@ impl Drop for ConnectUdpH3ActorLease {
     }
 }
 
+impl ConnectUdpH3ActorLease {
+    pub(in crate::production_runtime_owner::resident_dataplane::udp::session_executor::connect_udp::h3) fn retire(
+        &self,
+        reason: ConnectUdpConnectionRetirementReason,
+    ) {
+        self.admission.retire(reason);
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp::session_executor::connect_udp::h3) fn record_queue_full(
+        &self,
+    ) {
+        self.admission.record_queue_full();
+    }
+}
+
 impl ConnectUdpH3Pool {
     pub(super) fn new(runtime: ResidentConnectUdpRuntimePlan) -> Self {
         Self {
@@ -63,6 +86,7 @@ impl ConnectUdpH3Pool {
             sessions_per_connection: runtime.sessions_per_connection.max(1),
             state: Mutex::new(ConnectUdpH3PoolState::default()),
             state_changed: Arc::new(Notify::new()),
+            events: Arc::new(ConnectUdpPoolEvents::default()),
         }
     }
 
@@ -81,10 +105,24 @@ impl ConnectUdpH3Pool {
                 if state.closing {
                     return Err("CONNECT-UDP H3 pool is closing".to_owned());
                 }
-                state.actors.retain(|actor| !actor.task.is_finished());
+                state.actors.retain(|actor| {
+                    let retired_idle = !actor.admission.is_accepting()
+                        && actor.usage.active_sessions.load(Ordering::Acquire) == 0;
+                    if retired_idle {
+                        let _ = actor.sender.try_send(ConnectUdpH3ActorCommand::Shutdown);
+                        actor.task.abort();
+                    }
+                    !actor.task.is_finished() && !retired_idle
+                });
+                let accepting_actors = state
+                    .actors
+                    .iter()
+                    .filter(|actor| actor.admission.is_accepting())
+                    .count();
                 if let Some(actor) = state
                     .actors
                     .iter()
+                    .filter(|actor| actor.admission.is_accepting())
                     .min_by_key(|actor| actor.usage.active_sessions.load(Ordering::Acquire))
                 {
                     let active = actor.usage.active_sessions.load(Ordering::Acquire);
@@ -94,16 +132,16 @@ impl ConnectUdpH3Pool {
                             sender: actor.sender.clone(),
                             usage: Arc::clone(&actor.usage),
                             state_changed: Arc::clone(&self.state_changed),
+                            admission: Arc::clone(&actor.admission),
                         })
-                    } else if state.actors.len().saturating_add(state.opening)
-                        < self.max_connections
+                    } else if accepting_actors.saturating_add(state.opening) < self.max_connections
                     {
                         state.opening = state.opening.saturating_add(1);
                         ConnectUdpH3AcquireAction::Open
                     } else {
                         ConnectUdpH3AcquireAction::Wait
                     }
-                } else if state.actors.len().saturating_add(state.opening) < self.max_connections {
+                } else if accepting_actors.saturating_add(state.opening) < self.max_connections {
                     state.opening = state.opening.saturating_add(1);
                     ConnectUdpH3AcquireAction::Open
                 } else {
@@ -114,9 +152,12 @@ impl ConnectUdpH3Pool {
             match action {
                 ConnectUdpH3AcquireAction::Selected(lease) => return Ok(lease),
                 ConnectUdpH3AcquireAction::Open => {
+                    let admission = Arc::new(ConnectUdpH3ActorAdmission::new(
+                        Arc::clone(&self.events),
+                        Arc::clone(&self.state_changed),
+                    ));
                     let opened =
-                        start_connect_udp_h3_actor(proxy, runtime, Arc::clone(&self.state_changed))
-                            .await;
+                        start_connect_udp_h3_actor(proxy, runtime, Arc::clone(&admission)).await;
                     let mut state = self
                         .state
                         .lock()
@@ -131,11 +172,14 @@ impl ConnectUdpH3Pool {
                                 sender: opened.sender.clone(),
                                 usage: Arc::clone(&usage),
                                 state_changed: Arc::clone(&self.state_changed),
+                                admission: Arc::clone(&admission),
                             };
                             state.actors.push(ConnectUdpH3ActorEntry {
                                 sender: opened.sender,
                                 task: opened.task,
                                 usage,
+                                admission,
+                                max_datagram_size: opened.max_datagram_size,
                             });
                             Ok(lease)
                         }

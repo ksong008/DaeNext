@@ -1,8 +1,12 @@
 use tokio::sync::mpsc::error::TryRecvError;
 
-use super::actor::{ConnectUdpH3ActorCommand, ConnectUdpH3OpenedSession};
-use super::pool::{ConnectUdpH3ActorLease, acquire_connect_udp_h3_actor};
+use super::actor::ConnectUdpH3ActorCommand;
+use super::pool::ConnectUdpH3ActorLease;
 use super::*;
+
+mod open;
+
+use self::open::open_connect_udp_h3_binding;
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct ConnectUdpH3Session {
     runtime: ResidentConnectUdpRuntimePlan,
@@ -121,30 +125,12 @@ impl ConnectUdpH3Session {
                 self.runtime, proxy_runtime,
             ));
         }
-        let actor = acquire_connect_udp_h3_actor(proxy).await?;
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        time::timeout(
-            RESIDENT_CONNECT_TIMEOUT,
-            actor.sender.send(ConnectUdpH3ActorCommand::OpenSession {
-                target: original_dst,
-                response: response_tx,
-            }),
-        )
-        .await
-        .map_err(|_| "CONNECT-UDP H3 actor open queue timeout".to_owned())?
-        .map_err(|_| "CONNECT-UDP H3 actor is closed".to_owned())?;
-        let ConnectUdpH3OpenedSession {
-            quarter_stream_id,
-            responses,
-        } = time::timeout(RESIDENT_CONNECT_TIMEOUT, response_rx)
-            .await
-            .map_err(|_| "CONNECT-UDP H3 session open timeout".to_owned())?
-            .map_err(|_| "CONNECT-UDP H3 actor dropped session open result".to_owned())??;
+        let opened = open_connect_udp_h3_binding(proxy, original_dst, self.runtime).await?;
         self.target = Some(original_dst);
         self.binding = Some(ConnectUdpH3SessionBinding {
-            quarter_stream_id,
-            responses,
-            actor,
+            quarter_stream_id: opened.quarter_stream_id,
+            responses: opened.responses,
+            actor: opened.actor,
             closed: false,
         });
         Ok(())
