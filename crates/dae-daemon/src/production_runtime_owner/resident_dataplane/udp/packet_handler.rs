@@ -106,7 +106,6 @@ impl UdpExchangeResult {
 #[derive(Clone, Copy)]
 enum UdpExchangeSessionScope {
     ManagedSession,
-    IndependentDatagram,
 }
 
 impl UdpExchangeSessionScope {
@@ -151,34 +150,6 @@ pub(super) async fn record_udp_exchange_result(
         udp_reply,
         exchange,
         UdpExchangeSessionScope::ManagedSession,
-    )
-    .await;
-}
-
-pub(super) async fn record_udp_dns_datagram_exchange_result(
-    proxy: &ResidentProxyPlan,
-    packet: UdpOriginalDstPacket,
-    original_dst: SocketAddr,
-    dscp: u8,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    udp_reply: &UdpReplyHandle,
-    exchange: Result<(&'static str, UdpExchangeResult), String>,
-) {
-    record_udp_session_exchange_result(
-        proxy,
-        packet.peer,
-        original_dst,
-        packet.payload.len(),
-        true,
-        Some(dscp),
-        event_file,
-        event_lock,
-        metrics,
-        udp_reply,
-        exchange,
-        UdpExchangeSessionScope::IndependentDatagram,
     )
     .await;
 }

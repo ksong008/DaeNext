@@ -21,6 +21,13 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_ingress_drain_batches: AtomicU64,
     udp_ingress_drain_budget_hits: AtomicU64,
     udp_ingress_truncated: AtomicU64,
+    dns_fast_path_active: AtomicU64,
+    dns_fast_path_maximum_active: AtomicU64,
+    dns_fast_path_queued: AtomicU64,
+    dns_fast_path_queue_full: AtomicU64,
+    dns_fast_path_completed: AtomicU64,
+    dns_fast_path_failed: AtomicU64,
+    dns_fast_path_cancelled: AtomicU64,
     udp_reply_queued: AtomicU64,
     udp_reply_queue_full: AtomicU64,
     udp_reply_sent: AtomicU64,
@@ -142,6 +149,37 @@ impl ResidentDataplaneMetrics {
         self.udp_reply_queued.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(super) fn dns_fast_path_queued(&self) {
+        self.dns_fast_path_queued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_fast_path_queue_full(&self) {
+        self.dns_fast_path_queue_full
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_fast_path_started(&self) {
+        let active = self
+            .dns_fast_path_active
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.dns_fast_path_maximum_active
+            .fetch_max(active, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_fast_path_finished(&self, failed: bool) {
+        self.dns_fast_path_released();
+        if failed {
+            self.dns_fast_path_failed.fetch_add(1, Ordering::Relaxed);
+        }
+        self.dns_fast_path_completed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_fast_path_rejected(&self) {
+        self.dns_fast_path_queue_full();
+        self.dns_fast_path_failed.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(super) fn udp_reply_queue_full(&self) {
         self.udp_reply_queue_full.fetch_add(1, Ordering::Relaxed);
     }
@@ -153,6 +191,20 @@ impl ResidentDataplaneMetrics {
     pub(super) fn udp_reply_send_would_block(&self) {
         self.udp_reply_send_would_block
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_fast_path_cancelled(&self) {
+        self.dns_fast_path_released();
+        self.dns_fast_path_failed.fetch_add(1, Ordering::Relaxed);
+        self.dns_fast_path_cancelled.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn dns_fast_path_released(&self) {
+        let _ = self.dns_fast_path_active.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |active| Some(active.saturating_sub(1)),
+        );
     }
 
     pub(super) fn udp_reply_socket_recreated(&self) {
@@ -186,6 +238,13 @@ impl ResidentDataplaneMetrics {
             "udpIngressDrainBatches": self.udp_ingress_drain_batches.load(Ordering::Relaxed),
             "udpIngressDrainBudgetHits": self.udp_ingress_drain_budget_hits.load(Ordering::Relaxed),
             "udpIngressTruncated": self.udp_ingress_truncated.load(Ordering::Relaxed),
+            "dnsFastPathActive": self.dns_fast_path_active.load(Ordering::Relaxed),
+            "dnsFastPathMaximumActive": self.dns_fast_path_maximum_active.load(Ordering::Relaxed),
+            "dnsFastPathQueued": self.dns_fast_path_queued.load(Ordering::Relaxed),
+            "dnsFastPathQueueFull": self.dns_fast_path_queue_full.load(Ordering::Relaxed),
+            "dnsFastPathCompleted": self.dns_fast_path_completed.load(Ordering::Relaxed),
+            "dnsFastPathFailed": self.dns_fast_path_failed.load(Ordering::Relaxed),
+            "dnsFastPathCancelled": self.dns_fast_path_cancelled.load(Ordering::Relaxed),
             "udpReplyQueued": self.udp_reply_queued.load(Ordering::Relaxed),
             "udpReplyQueueFull": self.udp_reply_queue_full.load(Ordering::Relaxed),
             "udpReplySent": self.udp_reply_sent.load(Ordering::Relaxed),

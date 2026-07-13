@@ -12,15 +12,17 @@ use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRE
 use dae_ebpf_support::BpfRoutingResult;
 use dae_routing::RoutingMatcher;
 use tokio::io::unix::AsyncFd;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::mpsc;
 
 use super::super::plan::resident_data_udp_network_type;
 use super::*;
 
+mod dns_dispatcher;
 mod dns_fast_path;
 mod ingress;
 mod router;
 mod sniff;
+use self::dns_dispatcher::{ResidentDnsFastPathDispatcher, ResidentDnsFastPathHandle};
 use self::dns_fast_path::{
     minimal_resident_dns_routing_result, resident_udp_dns_fast_path_applies,
     resident_udp_dns_fast_path_can_bypass_missing_tuple,
@@ -41,8 +43,6 @@ const UDP_ROUTE_REASON_LIMIT: &str = "session limit reached";
 const UDP_ROUTE_REASON_QUEUE_FULL: &str = "session queue full";
 const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
 const UDP_ROUTE_REASON_DNS_FAST_PATH: &str = "handled resident DNS packet without UDP session";
-const UDP_ROUTE_REASON_FORCED_DNS_FAST_PATH: &str =
-    "handled forced resident DNS packet without UDP session";
 
 pub(super) fn run_resident_udp_session_manager(
     socket: UdpSocket,
@@ -167,6 +167,8 @@ async fn run_resident_udp_session_manager_async(
             "routing_tuple_map_id": router.routing_tuple_map_id(),
             "session_limit": session_limit,
             "dns_fast_path_concurrency": dns_fast_path_concurrency,
+            "dns_fast_path_queue_depth": runtime_config.dns_fast_path_queue_depth,
+            "forced_dns_session_lanes": runtime_config.runtime_shards,
             "generation": runtime_config.generation,
             "runtimeProfile": runtime_config.profile,
             "packetSessionManager": {
@@ -191,13 +193,21 @@ async fn run_resident_udp_session_manager_async(
     let mut sessions: HashMap<UdpSessionKey, UdpSessionEntry> = HashMap::new();
     let mut direct_sessions: HashMap<UdpDirectSessionKey, UdpDirectSessionEntry> = HashMap::new();
     let mut sniffers: HashMap<UdpSniffKey, UdpPendingSniffer> = HashMap::new();
-    let dns_fast_path_permits = Arc::new(Semaphore::new(dns_fast_path_concurrency));
     let reply_dispatcher = UdpReplyDispatcher::start(
         runtime_config.reply_queue_depth,
         runtime_config.reply_socket_cache_capacity,
         Arc::clone(&metrics),
     );
     let udp_reply = reply_dispatcher.handle();
+    let dns_fast_path_dispatcher = ResidentDnsFastPathDispatcher::start(
+        Arc::clone(&dns),
+        udp_reply.clone(),
+        Arc::clone(&metrics),
+        dns_fast_path_concurrency,
+        runtime_config.dns_fast_path_queue_depth,
+        runtime_config.shutdown_timeout,
+    );
+    let dns_fast_path = dns_fast_path_dispatcher.handle();
     let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<UdpSessionKey>(session_limit);
     let (direct_cleanup_tx, mut direct_cleanup_rx) =
         mpsc::channel::<UdpDirectSessionKey>(session_limit);
@@ -241,11 +251,12 @@ async fn run_resident_udp_session_manager_async(
                                 &mut sessions,
                                 &mut direct_sessions,
                                 &mut sniffers,
-                                &dns_fast_path_permits,
+                                &dns_fast_path,
                                 &cleanup_tx,
                                 &direct_cleanup_tx,
                                 session_limit,
                                 session_queue_depth,
+                                runtime_config.runtime_shards,
                             );
                         }
                         if batch.budget_hit {
@@ -292,6 +303,8 @@ async fn run_resident_udp_session_manager_async(
             }
         }
     }
+    drop(dns_fast_path);
+    let dns_fast_path_shutdown = dns_fast_path_dispatcher.shutdown().await;
     drop(udp_reply);
     let reply_shutdown = reply_dispatcher.shutdown().await;
     append_event(
@@ -303,6 +316,10 @@ async fn run_resident_udp_session_manager_async(
             "timed_out_sessions": timed_out,
             "panicked_sessions": panicked,
             "active_sessions": active_sessions.load(Ordering::Relaxed),
+            "dns_fast_path_dispatcher": match dns_fast_path_shutdown {
+                Ok(completed) => json!({"status": "pass", "completed": completed}),
+                Err(err) => json!({"status": "fail", "error": err}),
+            },
             "reply_dispatcher": match reply_shutdown {
                 Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
                 Err(err) => json!({"status": "fail", "error": err.to_string()}),
@@ -323,11 +340,12 @@ fn handle_manager_packet(
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
     direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
     sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>,
-    dns_fast_path_permits: &Arc<Semaphore>,
+    dns_fast_path: &ResidentDnsFastPathHandle,
     cleanup_tx: &mpsc::Sender<UdpSessionKey>,
     direct_cleanup_tx: &mpsc::Sender<UdpDirectSessionKey>,
     session_limit: usize,
     session_queue_depth: usize,
+    forced_dns_session_lanes: usize,
 ) {
     let Some(original_dst) = packet.original_dst else {
         append_event(
@@ -371,11 +389,12 @@ fn handle_manager_packet(
             active_sessions,
             sessions,
             direct_sessions,
-            dns_fast_path_permits,
+            dns_fast_path,
             cleanup_tx,
             direct_cleanup_tx,
             session_limit,
             session_queue_depth,
+            forced_dns_session_lanes,
             ready.initial,
             &ready.sniffed_domain,
         );
@@ -393,11 +412,12 @@ fn forward_manager_packet(
     active_sessions: &Arc<AtomicUsize>,
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
     direct_sessions: &mut HashMap<UdpDirectSessionKey, UdpDirectSessionEntry>,
-    dns_fast_path_permits: &Arc<Semaphore>,
+    dns_fast_path: &ResidentDnsFastPathHandle,
     cleanup_tx: &mpsc::Sender<UdpSessionKey>,
     direct_cleanup_tx: &mpsc::Sender<UdpDirectSessionKey>,
     session_limit: usize,
     session_queue_depth: usize,
+    forced_dns_session_lanes: usize,
     initial: BpfRoutingResult,
     sniffed_domain: &str,
 ) {
@@ -430,14 +450,7 @@ fn forward_manager_packet(
     };
     let proxy_selection = match selection {
         ResidentUdpSelection::ResidentDns => {
-            spawn_resident_dns_datagram_handler(
-                packet,
-                original_dst,
-                Arc::clone(dns),
-                Arc::clone(dns_fast_path_permits),
-                Arc::clone(metrics),
-                udp_reply.clone(),
-            );
+            dns_fast_path.try_dispatch(packet, original_dst);
             return;
         }
         ResidentUdpSelection::Proxy(selection) => selection,
@@ -470,6 +483,7 @@ fn forward_manager_packet(
                     original_dst,
                     &selection,
                     None,
+                    None,
                     sniffed_domain,
                     initial.dscp,
                     false,
@@ -494,12 +508,7 @@ fn forward_manager_packet(
         }
     };
     let proxy = Arc::clone(&proxy_selection.proxy);
-    if resident_udp_dns_fast_path_applies(original_dst) {
-        let reason = if proxy_selection.force_proxy_packet {
-            UDP_ROUTE_REASON_FORCED_DNS_FAST_PATH
-        } else {
-            UDP_ROUTE_REASON_DNS_FAST_PATH
-        };
+    if resident_udp_dns_fast_path_applies(original_dst) && !proxy_selection.force_proxy_packet {
         append_event(
             event_file,
             event_lock,
@@ -510,35 +519,20 @@ fn forward_manager_packet(
                 &proxy,
                 sniffed_domain,
                 initial.dscp,
-                reason,
+                UDP_ROUTE_REASON_DNS_FAST_PATH,
             ),
         );
-        if proxy_selection.force_proxy_packet {
-            spawn_forced_resident_dns_proxy_datagram_handler(
-                packet,
-                proxy,
-                original_dst,
-                initial.dscp,
-                Arc::clone(dns),
-                Arc::clone(dns_fast_path_permits),
-                event_file.to_path_buf(),
-                Arc::clone(event_lock),
-                Arc::clone(metrics),
-                udp_reply.clone(),
-            );
-        } else {
-            spawn_resident_dns_datagram_handler(
-                packet,
-                original_dst,
-                Arc::clone(dns),
-                Arc::clone(dns_fast_path_permits),
-                Arc::clone(metrics),
-                udp_reply.clone(),
-            );
-        }
+        dns_fast_path.try_dispatch(packet, original_dst);
         return;
     }
-    let key = UdpSessionKey::new(&proxy, packet.peer, original_dst);
+    let key = if proxy_selection.force_proxy_packet
+        && resident_udp_dns_fast_path_applies(original_dst)
+    {
+        let dispatch_lane = dns_request_dispatch_lane(&packet.payload, forced_dns_session_lanes);
+        UdpSessionKey::with_dispatch_lane(&proxy, packet.peer, original_dst, dispatch_lane)
+    } else {
+        UdpSessionKey::new(&proxy, packet.peer, original_dst)
+    };
     if !sessions.contains_key(&key) {
         let existing_session_count = sessions.len() + direct_sessions.len();
         if existing_session_count >= session_limit {
@@ -550,6 +544,7 @@ fn forward_manager_packet(
                     original_dst,
                     &proxy_selection.route,
                     Some(&proxy),
+                    Some(&key),
                     sniffed_domain,
                     initial.dscp,
                     false,
@@ -615,6 +610,7 @@ fn forward_manager_packet(
                 original_dst,
                 &proxy_selection.route,
                 Some(&proxy_selection.proxy),
+                Some(&key),
                 sniffed_domain,
                 initial.dscp,
                 false,
@@ -643,6 +639,7 @@ fn forward_manager_packet(
                 original_dst,
                 &proxy_selection.route,
                 Some(&proxy_selection.proxy),
+                Some(&key),
                 sniffed_domain,
                 initial.dscp,
                 true,
@@ -770,141 +767,6 @@ fn forward_direct_manager_packet(
     }
 }
 
-fn spawn_resident_dns_datagram_handler(
-    packet: UdpOriginalDstPacket,
-    original_dst: SocketAddr,
-    dns: Arc<ResidentDnsPlan>,
-    permits: Arc<Semaphore>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    udp_reply: UdpReplyHandle,
-) {
-    let Ok(permit) = permits.try_acquire_owned() else {
-        metrics.add_upload(packet.payload.len());
-        if let Ok(response) = build_dns_server_failure_response(&packet.payload) {
-            let response_len = response.len();
-            tokio::spawn(async move {
-                if udp_reply
-                    .send(original_dst, packet.peer, response)
-                    .await
-                    .is_ok()
-                {
-                    metrics.add_download(response_len);
-                }
-            });
-        }
-        return;
-    };
-    tokio::spawn(async move {
-        let _permit = permit;
-        metrics.add_upload(packet.payload.len());
-        let response = match time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            handle_resident_dns_udp_async(&dns, original_dst, &packet.payload),
-        )
-        .await
-        {
-            Ok(Ok(response)) => response,
-            Ok(Err(_)) | Err(_) => match build_dns_server_failure_response(&packet.payload) {
-                Ok(response) => response,
-                Err(_) => return,
-            },
-        };
-        let response_len = response.len();
-        if udp_reply
-            .send(original_dst, packet.peer, response)
-            .await
-            .is_ok()
-        {
-            metrics.add_download(response_len);
-        }
-    });
-}
-
-fn spawn_forced_resident_dns_proxy_datagram_handler(
-    packet: UdpOriginalDstPacket,
-    proxy: Arc<ResidentProxyPlan>,
-    original_dst: SocketAddr,
-    dscp: u8,
-    dns: Arc<ResidentDnsPlan>,
-    permits: Arc<Semaphore>,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    udp_reply: UdpReplyHandle,
-) {
-    let Ok(permit) = permits.try_acquire_owned() else {
-        metrics.add_upload(packet.payload.len());
-        if let Ok(response) = build_dns_server_failure_response(&packet.payload) {
-            let response_len = response.len();
-            tokio::spawn(async move {
-                if udp_reply
-                    .send(original_dst, packet.peer, response)
-                    .await
-                    .is_ok()
-                {
-                    metrics.add_download(response_len);
-                }
-            });
-        }
-        return;
-    };
-    tokio::spawn(async move {
-        let _permit = permit;
-        let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
-        let exchange = match time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            execute_forced_dns_proxy_datagram(
-                &mut executor,
-                &dns,
-                &proxy,
-                original_dst,
-                &packet.payload,
-            ),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(format!(
-                "forced resident DNS proxy datagram timed out after {}ms",
-                RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
-            )),
-        };
-        executor.shutdown().await;
-        record_udp_dns_datagram_exchange_result(
-            &proxy,
-            packet,
-            original_dst,
-            dscp,
-            event_file,
-            event_lock,
-            metrics,
-            &udp_reply,
-            exchange,
-        )
-        .await;
-    });
-}
-
-async fn execute_forced_dns_proxy_datagram(
-    executor: &mut UdpSessionExecutor,
-    dns: &ResidentDnsPlan,
-    proxy: &ResidentProxyPlan,
-    original_dst: SocketAddr,
-    payload: &[u8],
-) -> Result<(&'static str, UdpExchangeResult), String> {
-    let (event, response) = executor.execute(dns, proxy, original_dst, payload).await?;
-    if response.reply_forwarded {
-        return Ok((event, response.into_independent_datagram()));
-    }
-    executor
-        .wait_response_with_timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            "receive forced resident DNS proxy datagram",
-        )
-        .await
-        .map(|(event, response)| (event, response.into_independent_datagram()))
-}
-
 fn append_udp_route_selection_failed(
     event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
@@ -931,6 +793,7 @@ fn udp_route_chosen_event(
     original_dst: SocketAddr,
     route: &ResidentUdpRouteSelection,
     proxy: Option<&ResidentProxyPlan>,
+    packet_session: Option<&UdpSessionKey>,
     sniffed_domain: &str,
     dscp: u8,
     task_queued: bool,
@@ -998,10 +861,10 @@ fn udp_route_chosen_event(
             "graphId".to_owned(),
             serde_json::Value::String(proxy.graph_id.clone()),
         );
-        map.insert(
-            "packetSession".to_owned(),
-            UdpSessionKey::new(proxy, peer, original_dst).to_value(),
-        );
+        let packet_session = packet_session
+            .map(UdpSessionKey::to_value)
+            .unwrap_or_else(|| UdpSessionKey::new(proxy, peer, original_dst).to_value());
+        map.insert("packetSession".to_owned(), packet_session);
     }
     event
 }
@@ -1054,6 +917,7 @@ fn udp_route_chosen_event_without_packet_session(
         original_dst,
         route,
         Some(proxy),
+        None,
         sniffed_domain,
         dscp,
         false,

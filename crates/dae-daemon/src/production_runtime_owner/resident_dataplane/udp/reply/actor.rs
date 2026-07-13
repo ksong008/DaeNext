@@ -42,7 +42,8 @@ struct UdpReplyRequest {
     peer: SocketAddr,
     payload: Vec<u8>,
     deadline: time::Instant,
-    response: oneshot::Sender<Result<(), UdpReplyError>>,
+    response: Option<oneshot::Sender<Result<(), UdpReplyError>>>,
+    download_bytes_on_success: usize,
 }
 
 #[derive(Clone)]
@@ -89,7 +90,8 @@ impl UdpReplyHandle {
             peer,
             payload,
             deadline,
-            response,
+            response: Some(response),
+            download_bytes_on_success: 0,
         });
         self.metrics.udp_reply_queued();
         match time::timeout_at(deadline, receiver).await {
@@ -97,6 +99,42 @@ impl UdpReplyHandle {
             Ok(Err(_)) => Err(UdpReplyError::DispatcherClosed),
             Err(_) => Err(UdpReplyError::TimedOut),
         }
+    }
+
+    pub(in super::super) fn try_send_detached(
+        &self,
+        original_dst: SocketAddr,
+        peer: SocketAddr,
+        payload: Vec<u8>,
+        count_download_on_success: bool,
+    ) -> Result<(), UdpReplyError> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(UdpReplyError::Closing);
+        }
+        let download_bytes_on_success = if count_download_on_success {
+            payload.len()
+        } else {
+            0
+        };
+        self.sender
+            .try_send(UdpReplyRequest {
+                original_dst,
+                peer,
+                payload,
+                deadline: time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT,
+                response: None,
+                download_bytes_on_success,
+            })
+            .map_err(|err| match err {
+                mpsc::error::TrySendError::Full(_) => {
+                    self.metrics.udp_reply_queue_full();
+                    self.metrics.udp_reply_failed();
+                    UdpReplyError::QueueFull
+                }
+                mpsc::error::TrySendError::Closed(_) => UdpReplyError::DispatcherClosed,
+            })?;
+        self.metrics.udp_reply_queued();
+        Ok(())
     }
 }
 
@@ -176,8 +214,12 @@ async fn run_udp_reply_actor(
                 let result = send_udp_reply(&mut cache, &metrics, &request).await;
                 if result.is_err() {
                     metrics.udp_reply_failed();
+                } else if request.download_bytes_on_success > 0 {
+                    metrics.add_download(request.download_bytes_on_success);
                 }
-                let _ = request.response.send(result);
+                if let Some(response) = request.response {
+                    let _ = response.send(result);
+                }
             }
         }
     }
@@ -215,7 +257,8 @@ mod tests {
                 peer,
                 payload: vec![1],
                 deadline: time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT,
-                response,
+                response: Some(response),
+                download_bytes_on_success: 0,
             })
             .unwrap();
 
@@ -224,9 +267,9 @@ mod tests {
         assert!(!send.is_finished());
 
         let first = receiver.recv().await.unwrap();
-        let _ = first.response.send(Ok(()));
+        let _ = first.response.unwrap().send(Ok(()));
         let second = receiver.recv().await.unwrap();
-        let _ = second.response.send(Ok(()));
+        let _ = second.response.unwrap().send(Ok(()));
 
         send.await.unwrap().unwrap();
         assert_eq!(metrics.snapshot()["udpReplyQueueFull"].as_u64().unwrap(), 0);
@@ -238,5 +281,25 @@ mod tests {
         assert!(!UdpReplyError::QueueFull.should_log());
         assert!(!UdpReplyError::TimedOut.should_log());
         assert!(UdpReplyError::Socket("fatal".to_owned()).should_log());
+    }
+
+    #[tokio::test]
+    async fn detached_reply_uses_the_bounded_queue_without_a_waiter_task() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let handle = UdpReplyHandle {
+            sender,
+            closing: Arc::new(AtomicBool::new(false)),
+            metrics,
+        };
+        let target: SocketAddr = "127.0.0.1:53".parse().unwrap();
+        let peer: SocketAddr = "127.0.0.1:10000".parse().unwrap();
+
+        handle
+            .try_send_detached(target, peer, vec![1, 2, 3], true)
+            .unwrap();
+        let request = receiver.recv().await.unwrap();
+        assert!(request.response.is_none());
+        assert_eq!(request.download_bytes_on_success, 3);
     }
 }

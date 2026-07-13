@@ -67,6 +67,7 @@ bytes.workspace = true
 fastrand.workspace = true
 flate2.workspace = true
 foreign-types.workspace = true
+futures-util.workspace = true
 getrandom.workspace = true
 h2.workspace = true
 h3.workspace = true
