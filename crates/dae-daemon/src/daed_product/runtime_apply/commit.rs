@@ -76,6 +76,20 @@ fn commit_runtime_state(
     set_metadata_in_transaction(&tx, LAST_MATERIALIZED_AT_METADATA_KEY, &plan.generated_at)?;
     set_metadata_in_transaction(&tx, RUNTIME_RUNNING_METADATA_KEY, "true")?;
     set_metadata_in_transaction(&tx, RUNTIME_GENERATION_METADATA_KEY, &candidate.generation)?;
+    match candidate.probe_generation() {
+        Some(generation) => set_metadata_in_transaction(
+            &tx,
+            RUNTIME_PROBE_GENERATION_METADATA_KEY,
+            &generation.to_string(),
+        )?,
+        None => {
+            tx.execute(
+                "DELETE FROM daed_product_metadata WHERE key = ?1",
+                params![RUNTIME_PROBE_GENERATION_METADATA_KEY],
+            )
+            .map_err(|err| format!("clear runtime probe generation: {err}"))?;
+        }
+    }
     set_metadata_in_transaction(&tx, RUNTIME_TRANSITION_PHASE_METADATA_KEY, "committed")?;
     set_metadata_in_transaction(&tx, RUNTIME_LOG_LEVEL_METADATA_KEY, runtime_log_level)?;
     tx.execute(

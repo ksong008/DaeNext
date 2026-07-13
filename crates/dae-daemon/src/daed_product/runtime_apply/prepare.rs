@@ -7,6 +7,7 @@ pub(super) struct PreparedRuntimeGeneration {
     pub(super) output_path: Option<PathBuf>,
     pub(super) previous_content: Option<Vec<u8>>,
     pub(super) database_snapshot: RuntimeDatabaseSnapshot,
+    probe_generation: Option<u64>,
     committed: bool,
 }
 
@@ -31,6 +32,14 @@ pub(super) struct RuntimeSystemSnapshot {
 }
 
 impl PreparedRuntimeGeneration {
+    pub(super) fn set_probe_generation(&mut self, generation: Option<u64>) {
+        self.probe_generation = generation;
+    }
+
+    pub(super) fn probe_generation(&self) -> Option<u64> {
+        self.probe_generation
+    }
+
     pub(super) fn mark_committed(&mut self) {
         self.committed = true;
         self.candidate_path = None;
@@ -63,6 +72,7 @@ pub(super) fn prepare_runtime_generation(
             output_path: None,
             previous_content: None,
             database_snapshot,
+            probe_generation: None,
             committed: false,
         });
     };
@@ -97,6 +107,7 @@ pub(super) fn prepare_runtime_generation(
         output_path: Some(output_path),
         previous_content,
         database_snapshot,
+        probe_generation: None,
         committed: false,
     };
     let candidate_path = candidate

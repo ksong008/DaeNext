@@ -22,6 +22,8 @@ fn running_stop_fixture(scope: &str) -> (FreshProductState, ProductRuntimeManage
             ) VALUES(1, 1, 1, 1, 0, '', 1, 1, 1, 0);
             INSERT OR REPLACE INTO daed_product_metadata(key, value)
                 VALUES('runtime_running', 'true');
+            INSERT OR REPLACE INTO daed_product_metadata(key, value)
+                VALUES('runtime_probe_generation', '41');
             "#,
         )
         .unwrap();
@@ -59,6 +61,10 @@ fn runtime_stop_persists_state_before_detaching_running_runtime() {
             .unwrap()
             .as_deref(),
         Some("false")
+    );
+    assert_eq!(
+        get_metadata(fixture.state(), RUNTIME_PROBE_GENERATION_METADATA_KEY).unwrap(),
+        None
     );
 }
 
@@ -101,5 +107,11 @@ fn runtime_stop_database_failure_keeps_runtime_and_persisted_state_running() {
             .unwrap()
             .as_deref(),
         Some("true")
+    );
+    assert_eq!(
+        get_metadata(fixture.state(), RUNTIME_PROBE_GENERATION_METADATA_KEY)
+            .unwrap()
+            .as_deref(),
+        Some("41")
     );
 }

@@ -5,6 +5,7 @@ use super::*;
 pub(crate) struct NodeLatencyWrite {
     pub(in crate::daed_product) node_id: i64,
     pub(in crate::daed_product) node_link: String,
+    pub(in crate::daed_product) probe_generation: Option<u64>,
     pub(in crate::daed_product) latency_ms: Option<i64>,
     pub(in crate::daed_product) alive: bool,
     pub(in crate::daed_product) tested_at: String,
@@ -108,11 +109,13 @@ pub(crate) fn runtime_node_latency_results_for_nodes(
             .and_then(Value::as_str)
             .filter(|message| !message.is_empty())
             .map(str::to_owned);
+        let probe_generation = snapshot.get("reloadGeneration").and_then(Value::as_u64);
         for &(node_id, node_link) in matched_nodes {
             tested_ids.insert(node_id);
             results.push(NodeLatencyWrite {
                 node_id,
                 node_link: node_link.to_owned(),
+                probe_generation,
                 latency_ms,
                 alive,
                 tested_at: checked_at.clone(),
@@ -169,12 +172,14 @@ pub(crate) fn store_node_latency_result(
 pub(crate) fn native_probe_unavailable_results(
     nodes: &[(i64, String, String)],
     tested_at: &str,
+    probe_generation: Option<u64>,
 ) -> Vec<NodeLatencyWrite> {
     nodes
         .iter()
         .map(|(id, link, _)| NodeLatencyWrite {
             node_id: *id,
             node_link: link.clone(),
+            probe_generation,
             latency_ms: None,
             alive: false,
             tested_at: tested_at.to_owned(),
