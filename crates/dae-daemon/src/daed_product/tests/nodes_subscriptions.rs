@@ -367,7 +367,8 @@ pub(crate) fn create_subscription_persists_use_proxy_flag() {
         body: br#"{"link":"file://sub/test.sub","tag":"proxied","useProxy":true}"#.to_vec(),
     };
 
-    let response = create_subscription(&state, &dir, &request);
+    let runtime = ProductRuntimeManager::new();
+    let response = create_subscription(&state, &dir, &runtime, &request);
     assert_eq!(response.status, 201);
     let subscriptions = list_subscriptions_value(&state, false).unwrap();
     assert_eq!(subscriptions["items"][0]["useProxy"], json!(true));
@@ -416,7 +417,8 @@ pub(crate) fn subscription_create_delete_operations_are_serialized() {
                 headers: HashMap::new(),
                 body,
             };
-            let response = create_subscription(&state, &dir, &request);
+            let runtime = ProductRuntimeManager::new();
+            let response = create_subscription(&state, &dir, &runtime, &request);
             assert_eq!(response.status, 201);
             let value: Value = serde_json::from_slice(&response.body).unwrap();
             let id = value["subscription"]["id"].as_i64().unwrap();

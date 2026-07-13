@@ -26,6 +26,7 @@ pub(crate) use self::events::{
     ResidentEventWriterRuntime, set_event_log_policy, set_event_log_sink,
 };
 use self::events::{append_event, path_string};
+pub(crate) use self::plan::{ResidentNodeSourceAdmission, resident_node_source_admissions};
 use self::plan::{build_resident_dataplane_plan, build_resident_dataplane_plan_with_geodata};
 use self::probe::*;
 use self::tcp::{ResidentTcpRouter, ResidentTcpRuntimeConfig, resident_tcp_accept_loop};

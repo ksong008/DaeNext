@@ -146,15 +146,13 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
         }
     }
 
-    let mut runtime_reloaded = false;
-    let mut runtime_reload_error = None::<String>;
-    if runtime_input_changes > 0 {
-        match reload_runtime_after_subscription_refresh(state, config_dir, runtime) {
-            Ok(Some(_)) => runtime_reloaded = true,
-            Ok(None) => {}
-            Err(err) => runtime_reload_error = Some(err),
-        }
-    }
+    let runtime_apply = apply_runtime_after_subscription_change(
+        state,
+        config_dir,
+        runtime,
+        runtime_input_changes > 0,
+        "subscription-scheduler",
+    );
 
     let checked_at = iso8601_utc(now_unix);
     let _ = set_metadata(state, "subscription_scheduler_last_tick_at", &checked_at);
@@ -176,8 +174,10 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
         "runtimeInputChanged": runtime_input_changes,
         "fetchErrors": fetch_errors,
         "invalidCronCount": scan.invalid_cron.len(),
-        "runtimeReloaded": runtime_reloaded,
-        "runtimeReloadError": runtime_reload_error,
+        "runtimeApplyRequested": runtime_apply.requested,
+        "runtimeReloaded": runtime_apply.applied,
+        "runtimeReload": runtime_apply.report,
+        "runtimeReloadError": runtime_apply.error,
     }))
 }
 

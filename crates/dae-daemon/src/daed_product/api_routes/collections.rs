@@ -31,8 +31,8 @@ pub(super) fn api_subscriptions(
     if api_path == "/subscriptions" {
         return match request.method.as_str() {
             "GET" => list_subscriptions(&app.state, request),
-            "POST" => create_subscription(&app.state, &app.config_dir, request),
-            "DELETE" => delete_subscriptions(&app.state, request),
+            "POST" => create_subscription(&app.state, &app.config_dir, &app.runtime, request),
+            "DELETE" => delete_subscriptions(&app.state, &app.config_dir, &app.runtime, request),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
     }
@@ -59,7 +59,7 @@ pub(super) fn api_subscriptions(
     match request.method.as_str() {
         "GET" => get_subscription(&app.state, id),
         "PUT" | "PATCH" => update_subscription(&app.state, request, id),
-        "DELETE" => delete_subscription_by_id(&app.state, id),
+        "DELETE" => delete_subscription_by_id(&app.state, &app.config_dir, &app.runtime, id),
         _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
     }
 }
