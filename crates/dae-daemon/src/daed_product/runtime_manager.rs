@@ -2,6 +2,7 @@ use super::*;
 
 mod apply_state;
 mod cleanup;
+pub(in crate::daed_product) mod event_identity;
 mod instance;
 mod process_transition;
 mod recovery;
