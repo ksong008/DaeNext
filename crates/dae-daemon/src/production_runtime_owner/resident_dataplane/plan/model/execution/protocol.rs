@@ -7,6 +7,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentProtoco
     VlessMux,
     Socks5,
     HttpProxy,
+    ConnectUdpH2,
+    ConnectUdpH3,
     ShadowsocksAead,
     Shadowsocks2022,
     ShadowsocksSimpleObfsHttp,
@@ -29,6 +31,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentTcpRunt
     FrameTls,
     Quic,
     Stream,
+    PolicyClosed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +43,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentTcpProb
     AnyTls,
     Shadowsocks,
     Quic,
+    PolicyClosed,
 }
 
 #[cfg(test)]
@@ -50,6 +54,7 @@ impl ResidentTcpRuntimeDispatch {
             Self::FrameTls => "frame-tls",
             Self::Quic => "quic",
             Self::Stream => "stream",
+            Self::PolicyClosed => "policy-closed",
         }
     }
 }
@@ -65,6 +70,7 @@ impl ResidentTcpProbeDispatch {
             Self::AnyTls => "anytls",
             Self::Shadowsocks => "shadowsocks",
             Self::Quic => "quic",
+            Self::PolicyClosed => "policy-closed",
         }
     }
 }
@@ -81,6 +87,8 @@ impl ResidentProtocolShape {
             ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => Self::VlessMux,
             ResidentProxyProtocolPlan::Socks5Tcp { .. } => Self::Socks5,
             ResidentProxyProtocolPlan::HttpProxyTcp { .. } => Self::HttpProxy,
+            ResidentProxyProtocolPlan::ConnectUdpH2Tls { .. } => Self::ConnectUdpH2,
+            ResidentProxyProtocolPlan::ConnectUdpH3Tls { .. } => Self::ConnectUdpH3,
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => Self::ShadowsocksAead,
             ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => Self::Shadowsocks2022,
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => {
@@ -125,6 +133,7 @@ impl ResidentProtocolShape {
             Self::VlessMux => "resident-vless-mux-tcp",
             Self::Socks5 => "resident-socks5-connect",
             Self::HttpProxy => "resident-http-connect",
+            Self::ConnectUdpH2 | Self::ConnectUdpH3 => "connect-udp-tcp-policy-closed",
             Self::ShadowsocksAead => "resident-shadowsocks-aead-stream",
             Self::Shadowsocks2022 => "resident-shadowsocks-2022-stream",
             Self::ShadowsocksSimpleObfsHttp => "resident-shadowsocks-simple-obfs-http-stream",
@@ -162,6 +171,7 @@ impl ResidentProtocolShape {
                 ResidentTcpRuntimeDispatch::FrameTls
             }
             Self::Hysteria2 | Self::Tuic | Self::Juicity => ResidentTcpRuntimeDispatch::Quic,
+            Self::ConnectUdpH2 | Self::ConnectUdpH3 => ResidentTcpRuntimeDispatch::PolicyClosed,
             _ => ResidentTcpRuntimeDispatch::Stream,
         }
     }
@@ -171,6 +181,7 @@ impl ResidentProtocolShape {
     ) -> ResidentTcpProbeDispatch {
         match self {
             Self::Socks5 | Self::HttpProxy => ResidentTcpProbeDispatch::Basic,
+            Self::ConnectUdpH2 | Self::ConnectUdpH3 => ResidentTcpProbeDispatch::PolicyClosed,
             Self::VlessStandard | Self::VlessVision | Self::VlessMux => {
                 ResidentTcpProbeDispatch::Vless
             }

@@ -13,7 +13,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) use execution::{
     ResidentUdpExecutorFactory, UdpPacketSemantics,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use protocol::ResidentProtocolExecutorContract;
-pub(crate) use protocol::{ResidentHysteria2ObfsPlan, ResidentProxyProtocolPlan};
+pub(crate) use protocol::{
+    ResidentConnectUdpAuthPlan, ResidentHysteria2ObfsPlan, ResidentProxyProtocolPlan,
+};
 pub(in crate::production_runtime_owner::resident_dataplane) use security::ResidentSecurityUnderlayPlan;
 pub(in crate::production_runtime_owner::resident_dataplane) use wrapper::ResidentStreamWrapperPlan;
 pub(crate) use xhttp::{

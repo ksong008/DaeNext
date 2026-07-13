@@ -13,6 +13,14 @@ fn exact_shape_source(id: &str) -> String {
         "socks5-basic" => socks5_fixture_url(&primary, fixture_port(1)),
         "http-connect" => http_proxy_fixture_url(&primary, fixture_port(1)),
         "https-connect" => https_proxy_fixture_url(&primary, fixture_port(1)),
+        "connect-udp-h2" => format!(
+            "masque://identity-1:credential-1@{primary}:{}?transport=h2&auth=basic&template=%2F.well-known%2Fmasque%2Fudp%2F%7Btarget_host%7D%2F%7Btarget_port%7D%2F&sni={authority}#fixture-connect-udp-h2",
+            fixture_port(1),
+        ),
+        "connect-udp-h3" => format!(
+            "masque://{primary}:{}?transport=h3&auth=none&template=%2F.well-known%2Fmasque%2Fudp%2F%7Btarget_host%7D%2F%7Btarget_port%7D%2F&sni={authority}#fixture-connect-udp-h3",
+            fixture_port(1),
+        ),
         "hysteria2-quic" => hysteria2_fixture_url("", &primary, fixture_port(6)),
         "vless-websocket-tls" => vless_fixture_url(
             "",

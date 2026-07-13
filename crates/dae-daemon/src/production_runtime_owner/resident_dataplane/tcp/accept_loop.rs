@@ -250,7 +250,12 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
         TcpSelection::Proxy(selection) => {
             let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
             let runtime_dispatch = selection.proxy.execution_plan().protocol.runtime_dispatch();
-            let result = if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
+            let result = if runtime_dispatch == ResidentTcpRuntimeDispatch::PolicyClosed {
+                Err(format!(
+                    "resident TCP dispatcher policy-closed for UDP-only exact protocol shape {:?}",
+                    selection.proxy.execution_plan().protocol
+                ))
+            } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
                 handle_proxy_tcp_connection_async(
                     &mut inbound,
                     peer,

@@ -1,14 +1,14 @@
 use super::*;
 
 #[test]
-fn source_shape_registry_opens_complete_expanded_matrix_after_xhttp_closure() {
+fn source_shape_registry_reports_pending_connect_udp_rows() {
     let contract = source_shape_registry_contract();
 
     assert_eq!(contract.schema, "outbound-source-shape-registry");
     assert_eq!(contract.schema_version, 1);
     assert!(contract.source_shape_registry_open);
     assert!(contract.expanded_source_matrix_open);
-    assert!(contract.expanded_source_matrix_complete);
+    assert!(!contract.expanded_source_matrix_complete);
     assert!(!contract.production_readiness_may_use_current_config_matrix_as_source_matrix);
     assert!(contract.rows.len() >= 20);
     assert!(
@@ -55,6 +55,7 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
         "hy2",
         "hysteria2",
         "juicity",
+        "masque",
         "ss",
         "socks",
         "socks5",
@@ -89,14 +90,22 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
 }
 
 #[test]
-fn source_shape_registry_has_no_runtime_blocked_rows_after_extended_xhttp_admission() {
+fn source_shape_registry_keeps_only_explicit_connect_udp_rows_blocked() {
     let rows = source_shape_registry_rows();
     let blocked = rows
         .iter()
         .filter(|row| row.resident_status == "blocked")
         .collect::<Vec<_>>();
 
-    assert!(blocked.is_empty(), "blocked rows remain: {blocked:#?}");
+    assert_eq!(
+        blocked.iter().map(|row| row.shape_id).collect::<Vec<_>>(),
+        ["connect-udp-h2-endpoint", "connect-udp-h3-endpoint"]
+    );
+    assert!(blocked.iter().all(|row| {
+        row.protocol_family == "connect-udp"
+            && row.link_schemes == ["masque"]
+            && row.executor_proof.proof_state == "descriptor-only-fail-closed"
+    }));
 }
 
 #[test]

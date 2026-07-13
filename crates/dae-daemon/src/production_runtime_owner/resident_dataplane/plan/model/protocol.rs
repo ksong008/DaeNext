@@ -19,6 +19,14 @@ pub(crate) enum ResidentProxyProtocolPlan {
         transport_host: String,
         transport_path: String,
     },
+    ConnectUdpH2Tls {
+        authentication: ResidentConnectUdpAuthPlan,
+        target_template: String,
+    },
+    ConnectUdpH3Tls {
+        authentication: ResidentConnectUdpAuthPlan,
+        target_template: String,
+    },
     ShadowsocksAeadTcp {
         cipher: String,
         password: String,
@@ -99,6 +107,21 @@ pub(crate) enum ResidentProxyProtocolPlan {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResidentConnectUdpAuthPlan {
+    None,
+    Basic { username: String, password: String },
+}
+
+impl ResidentConnectUdpAuthPlan {
+    fn compact_allocations(&mut self) {
+        if let Self::Basic { username, password } = self {
+            compact_string(username);
+            compact_string(password);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProtocolExecutorContract
@@ -169,6 +192,18 @@ impl ResidentProxyProtocolPlan {
                 // UDP requires a different protocol such as CONNECT-UDP/MASQUE.
                 udp_executor: "protocol-closed",
                 packet_semantics: "protocol-closed",
+                udp_policy_closed: true,
+            },
+            Self::ConnectUdpH2Tls { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "connect-udp-tcp-policy-closed",
+                udp_executor: "connect-udp-h2-executor-pending",
+                packet_semantics: "connect-udp-capsule",
+                udp_policy_closed: true,
+            },
+            Self::ConnectUdpH3Tls { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "connect-udp-tcp-policy-closed",
+                udp_executor: "connect-udp-h3-executor-pending",
+                packet_semantics: "connect-udp-http-datagram",
                 udp_policy_closed: true,
             },
             Self::ShadowsocksAeadTcp { .. } => ResidentProtocolExecutorContract {
@@ -290,6 +325,17 @@ impl ResidentProxyProtocolPlan {
                 compact_string(password);
                 compact_string(transport_host);
                 compact_string(transport_path);
+            }
+            Self::ConnectUdpH2Tls {
+                authentication,
+                target_template,
+            }
+            | Self::ConnectUdpH3Tls {
+                authentication,
+                target_template,
+            } => {
+                authentication.compact_allocations();
+                compact_string(target_template);
             }
             Self::ShadowsocksAeadTcp {
                 cipher, password, ..
