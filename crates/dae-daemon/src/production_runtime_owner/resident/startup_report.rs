@@ -23,6 +23,9 @@ pub(super) fn compact_start_report_for_runtime(start_report: &Value) -> Value {
         "resident_runtime_started": start_report["resident_runtime_started"].clone(),
         "resident_dataplane": start_report["resident_dataplane"].clone(),
         "resident_interface_monitor": start_report["resident_interface_monitor"].clone(),
+        "resident_datapath_binding_registry": start_report["resident_datapath_binding_registry"].clone(),
+        "resident_datapath_binding_postflight": start_report["resident_datapath_binding_postflight"].clone(),
+        "runtimeGeneration": start_report["runtimeGeneration"].clone(),
         "attachBackend": attach_backend,
         "netnsLinkMode": netns_link_mode,
         "startupEvidence": startup_evidence,
@@ -59,6 +62,7 @@ fn collect_startup_blocking_failures(start_report: &Value, failures: &mut Vec<St
         "peer_attach_show",
         "resident_outbound_connectivity",
         "resident_interface_monitor",
+        "resident_datapath_binding_postflight",
     ] {
         let pointer = format!("/{}", path.replace('.', "/"));
         if let Some(value) = start_report.pointer(&pointer) {

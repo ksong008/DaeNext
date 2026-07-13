@@ -96,7 +96,11 @@ pub(crate) const XUDP_COMMAND_NEW: u8 = 1;
 pub(crate) const XUDP_COMMAND_KEEP: u8 = 2;
 pub(crate) const XUDP_OPTION_DATA: u8 = 1;
 pub(crate) const XUDP_NETWORK_UDP: u8 = 2;
-pub(crate) static RESIDENT_RELOAD_GENERATION: AtomicU64 = AtomicU64::new(1);
+static RESIDENT_RUNTIME_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn next_resident_runtime_generation() -> u64 {
+    RESIDENT_RUNTIME_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
 
 pub(crate) fn resident_runtime_defaults_contract() -> Value {
     json!({

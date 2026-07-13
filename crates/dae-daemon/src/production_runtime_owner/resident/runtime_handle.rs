@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub struct ResidentProductionRuntime {
+    pub(super) runtime_generation: u64,
+    pub(super) binding_registry: ResidentDatapathBindingRegistry,
     pub(super) live_handoff: Option<LiveLoadedTproxyListenSocketMap>,
     pub(super) native_runtime: NativeEbpfRuntimeState,
     pub(super) dataplane: Option<ResidentDataplaneRuntime>,
@@ -55,12 +57,15 @@ impl ResidentProductionRuntime {
         json!({
             "running": !self.cleaned,
             "state": if self.cleaned { "stopped" } else { "running" },
+            "runtimeGeneration": self.runtime_generation,
             "attachBackend": attach_backend,
             "netnsLinkMode": netns_link_mode,
             "fakeRuntime": false,
             "residentRuntimeStarted": self.start_report["resident_runtime_started"].as_bool().unwrap_or(false),
             "residentDataplane": resident_dataplane,
             "residentEbpf": self.native_runtime.runtime_metrics(),
+            "residentDatapathBindings": self.binding_registry.to_value(),
+            "residentDatapathBindingPostflight": self.start_report["resident_datapath_binding_postflight"].clone(),
             "residentInterfaceState": self
                 .resident_interface_state_snapshot(),
             "startupEvidence": self.start_report["startupEvidence"].clone(),
@@ -212,6 +217,21 @@ impl ResidentProductionRuntime {
         );
 
         let phase_started = Instant::now();
+        let binding_cleanup_postflight = self.binding_registry.cleanup_postflight();
+        let binding_cleanup_ok = binding_cleanup_postflight["status"].as_str() == Some("pass");
+        self.cleanup_steps.push(json!({
+            "name": "resident-datapath-binding-cleanup-postflight",
+            "status": if binding_cleanup_ok { "pass" } else { "fail" },
+            "report": binding_cleanup_postflight,
+        }));
+        push_cleanup_phase_timing(
+            &mut cleanup_phase_timings,
+            "datapath_binding_cleanup_postflight",
+            if binding_cleanup_ok { "pass" } else { "fail" },
+            phase_started.elapsed(),
+        );
+
+        let phase_started = Instant::now();
         cleanup_resident_lan_programs(
             &mut self.cleanup_steps,
             &self.lan_ifaces,
@@ -273,7 +293,7 @@ impl ResidentProductionRuntime {
             .iter()
             .any(|step| step["timed_out"].as_bool().unwrap_or(false));
         let mut cleanup_report = json!({
-            "status": if loaded_map_cleaned && leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated && !cleanup_command_timed_out {
+            "status": if binding_cleanup_ok && loaded_map_cleaned && leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated && !cleanup_command_timed_out {
                 "pass"
             } else {
                 "fail"
@@ -283,6 +303,7 @@ impl ResidentProductionRuntime {
             "cleanup_elapsed_ns": cleanup_elapsed_ns,
             "cleanup_elapsed_ms": cleanup_elapsed_ns / 1_000_000,
             "cleanup_command_timed_out": cleanup_command_timed_out,
+            "binding_cleanup_postflight": binding_cleanup_postflight,
             "after_map_ids": after_map_ids,
             "loaded_map_cleaned": loaded_map_cleaned,
             "leftovers_after_cleanup": leftovers_after_cleanup,

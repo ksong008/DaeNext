@@ -98,6 +98,7 @@ mod udp_resources;
 use self::udp_resources::*;
 #[path = "runtime/resource_profile.rs"]
 mod resource_profile;
+pub(super) use self::resource_profile::resident_datapath_postflight_interval_seconds_default;
 use self::resource_profile::*;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;

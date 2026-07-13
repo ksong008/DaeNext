@@ -41,6 +41,9 @@ const HIGH_PERFORMANCE_DNS_UDP_FORWARDER_ATTEMPTS: usize = 3;
 const LOW_MEMORY_DNS_PROXY_UDP_ACTORS: usize = 2;
 const BALANCED_DNS_PROXY_UDP_ACTORS: usize = 8;
 const HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS: usize = 16;
+const LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 60;
+const BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 30;
+const HIGH_PERFORMANCE_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 15;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentRuntimeProfile {
@@ -173,6 +176,14 @@ impl ResidentRuntimeProfile {
             Self::HighPerformance => HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS,
         }
     }
+
+    pub(crate) fn datapath_postflight_interval_seconds_default(self) -> u64 {
+        match self {
+            Self::LowMemory => LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
+            Self::Balanced => BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
+            Self::HighPerformance => HIGH_PERFORMANCE_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
+        }
+    }
 }
 
 impl ResidentRuntimeProfileSelection {
@@ -217,6 +228,7 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsUdpForwarderPendingDefault": LOW_MEMORY_DNS_UDP_FORWARDER_PENDING_LIMIT,
                 "dnsUdpForwarderAttemptsDefault": LOW_MEMORY_DNS_UDP_FORWARDER_ATTEMPTS,
                 "dnsProxyUdpActorsDefault": LOW_MEMORY_DNS_PROXY_UDP_ACTORS,
+                "datapathPostflightIntervalSecondsDefault": LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
             {
                 "name": RESIDENT_RUNTIME_PROFILE_BALANCED,
@@ -232,6 +244,7 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsUdpForwarderPendingDefault": BALANCED_DNS_UDP_FORWARDER_PENDING_LIMIT,
                 "dnsUdpForwarderAttemptsDefault": BALANCED_DNS_UDP_FORWARDER_ATTEMPTS,
                 "dnsProxyUdpActorsDefault": BALANCED_DNS_PROXY_UDP_ACTORS,
+                "datapathPostflightIntervalSecondsDefault": BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
             {
                 "name": RESIDENT_RUNTIME_PROFILE_HIGH_PERFORMANCE,
@@ -247,9 +260,17 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsUdpForwarderPendingDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_PENDING_LIMIT,
                 "dnsUdpForwarderAttemptsDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_ATTEMPTS,
                 "dnsProxyUdpActorsDefault": HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS,
+                "datapathPostflightIntervalSecondsDefault": HIGH_PERFORMANCE_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
         ],
     })
+}
+
+pub(in crate::production_runtime_owner) fn resident_datapath_postflight_interval_seconds_default()
+-> u64 {
+    ResidentRuntimeProfileSelection::selected()
+        .profile
+        .datapath_postflight_interval_seconds_default()
 }
 
 fn select_resident_runtime_profile(configured: Option<&str>) -> ResidentRuntimeProfileSelection {

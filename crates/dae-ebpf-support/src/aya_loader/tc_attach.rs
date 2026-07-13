@@ -87,6 +87,7 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
     spec: &TcNativeAttachSpec,
     backend: AttachBackend,
 ) -> Result<(AyaTcAttachDetachReport, SchedClassifierLinkId), String> {
+    let ifindex = current_netns_interface_index(&spec.target.iface)?;
     if spec.clsact_required {
         add_clsact_or_accept_existing(&spec.target.iface)?;
     }
@@ -108,7 +109,11 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
             .load()
             .map_err(|err| format!("aya sched classifier load failed: {err:?}"))?;
     }
-    let program_id = classifier.info().ok().map(|info| info.id());
+    let program_info = classifier
+        .info()
+        .map_err(|err| format!("read sched classifier program identity failed: {err:?}"))?;
+    let program_id = Some(program_info.id());
+    let program_tag = format!("{:016x}", program_info.tag());
     let requested_backend = backend;
     let (
         backend,
@@ -268,8 +273,10 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
             backend_switch_used: backend_switch_error.is_some(),
             backend_switch_error,
             program_id,
+            program_tag,
             program_name: spec.program_name.clone(),
             iface: spec.target.iface.clone(),
+            ifindex,
             netns: None,
             netns_entered: false,
             direction: spec.target.direction,
@@ -298,6 +305,7 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
     options: &PinnedTcAttachOptions<'_>,
 ) -> Result<PinnedTcAttachReport, String> {
     let spec = options.spec;
+    let ifindex = current_netns_interface_index(&spec.target.iface)?;
     if spec.clsact_required {
         add_clsact_or_accept_existing(&spec.target.iface)?;
     }
@@ -319,7 +327,11 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
             program_path.display()
         )
     })?;
-    let program_id = classifier.info().ok().map(|info| info.id());
+    let program_info = classifier
+        .info()
+        .map_err(|err| format!("read pinned sched classifier identity failed: {err:?}"))?;
+    let program_id = Some(program_info.id());
+    let program_tag = format!("{:016x}", program_info.tag());
 
     let attach_result = match options.requested_backend {
         AttachBackend::Auto => {
@@ -392,9 +404,11 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
         backend_switch_used: attach_result.backend_switch_used,
         backend_switch_error: attach_result.backend_switch_error,
         program_id,
+        program_tag,
         program_name: spec.program_name.clone(),
         program_path,
         iface: spec.target.iface.clone(),
+        ifindex,
         netns: None,
         netns_entered: false,
         direction: spec.target.direction,
@@ -411,6 +425,52 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
         tc_filter_persistent: attach_result.backend == AttachBackend::TcNetlink,
         clsact_added_or_present: spec.clsact_required,
     })
+}
+
+pub fn query_aya_tcx_binding(
+    target: &crate::TcAttachTarget,
+) -> Result<AyaTcxBindingSnapshot, String> {
+    let mut snapshot = with_optional_netns(target.netns.as_deref(), || {
+        let attach_type = match target.direction {
+            TcAttachDirection::Ingress => TcAttachType::Ingress,
+            TcAttachDirection::Egress => TcAttachType::Egress,
+        };
+        let ifindex = current_netns_interface_index(&target.iface)?;
+        let (revision, program_order) = query_tcx_program_order(&target.iface, attach_type)?;
+        Ok(AyaTcxBindingSnapshot {
+            iface: target.iface.clone(),
+            ifindex,
+            netns: None,
+            direction: target.direction,
+            revision,
+            program_order,
+        })
+    })?;
+    snapshot.netns = target.netns.clone();
+    Ok(snapshot)
+}
+
+pub fn query_aya_interface_index(target: &crate::TcAttachTarget) -> Result<u32, String> {
+    with_optional_netns(target.netns.as_deref(), || {
+        current_netns_interface_index(&target.iface)
+    })
+}
+
+fn current_netns_interface_index(iface: &str) -> Result<u32, String> {
+    let iface = CString::new(iface)
+        .map_err(|_| "interface name contains an interior NUL byte".to_owned())?;
+    // SAFETY: `iface` is a live NUL-terminated C string for the duration of
+    // the call. `if_nametoindex` only reads that string and returns an index
+    // in the thread's current network namespace.
+    let ifindex = unsafe { libc::if_nametoindex(iface.as_ptr()) };
+    if ifindex == 0 {
+        Err(format!(
+            "resolve interface index failed: {}",
+            io::Error::last_os_error()
+        ))
+    } else {
+        Ok(ifindex)
+    }
 }
 
 pub(super) struct PinnedClassifierAttachResult {

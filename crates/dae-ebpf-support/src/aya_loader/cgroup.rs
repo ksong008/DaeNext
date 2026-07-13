@@ -53,7 +53,7 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
     let cgroup = fs::File::open(cgroup_path)
         .map_err(|err| format!("open cgroup path {} failed: {err}", cgroup_path.display()))?;
     let (attach_mode, attach_mode_name) = compatible_cgroup_attach_mode()?;
-    match line.aya_program_kind {
+    let (program_id, program_tag) = match line.aya_program_kind {
         DaeCgroupProgramKind::Sock => {
             let program = loaded.ebpf.program_mut(line.program_name).ok_or_else(|| {
                 format!("aya cgroup sock program not found: {}", line.program_name)
@@ -62,6 +62,10 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                 .try_into()
                 .map_err(|err| format!("aya program is not a cgroup sock program: {err:?}"))?;
             load_cgroup_sock_program(program, line.program_name)?;
+            let info = program
+                .info()
+                .map_err(|err| format!("read cgroup sock program info failed: {err:?}"))?;
+            let identity = (info.id(), format!("{:016x}", info.tag()));
             let link_id = program
                 .attach(&cgroup, attach_mode)
                 .map_err(|err| format!("aya cgroup sock attach failed: {err:?}"))?;
@@ -70,6 +74,7 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                     .detach(link_id)
                     .map_err(|err| format!("aya cgroup sock detach failed: {err:?}"))?;
             }
+            identity
         }
         DaeCgroupProgramKind::SockAddr => {
             let program = loaded.ebpf.program_mut(line.program_name).ok_or_else(|| {
@@ -82,6 +87,10 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                 .try_into()
                 .map_err(|err| format!("aya program is not a cgroup sock_addr program: {err:?}"))?;
             load_cgroup_sock_addr_program(program, line.program_name)?;
+            let info = program
+                .info()
+                .map_err(|err| format!("read cgroup sock_addr program info failed: {err:?}"))?;
+            let identity = (info.id(), format!("{:016x}", info.tag()));
             let link_id = program
                 .attach(&cgroup, attach_mode)
                 .map_err(|err| format!("aya cgroup sock_addr attach failed: {err:?}"))?;
@@ -90,13 +99,17 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                     .detach(link_id)
                     .map_err(|err| format!("aya cgroup sock_addr detach failed: {err:?}"))?;
             }
+            identity
         }
-    }
+    };
     Ok(AyaCgroupAttachDetachReport {
         role: line.role,
         cgroup_path: cgroup_path.to_owned(),
         program_name: line.program_name.to_owned(),
+        program_id,
+        program_tag,
         section: line.section.to_owned(),
+        attach_type: line.role.bpf_attach_type(),
         program_kind: line.aya_program_kind,
         attach_mode: attach_mode_name.to_owned(),
         loaded: true,

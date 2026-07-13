@@ -259,8 +259,10 @@ pub struct AyaTcAttachDetachReport {
     pub backend_switch_used: bool,
     pub backend_switch_error: Option<String>,
     pub program_id: Option<u32>,
+    pub program_tag: String,
     pub program_name: String,
     pub iface: String,
+    pub ifindex: u32,
     pub netns: Option<String>,
     pub netns_entered: bool,
     pub direction: TcAttachDirection,
@@ -297,9 +299,11 @@ pub struct PinnedTcAttachReport {
     pub backend_switch_used: bool,
     pub backend_switch_error: Option<String>,
     pub program_id: Option<u32>,
+    pub program_tag: String,
     pub program_name: String,
     pub program_path: PathBuf,
     pub iface: String,
+    pub ifindex: u32,
     pub netns: Option<String>,
     pub netns_entered: bool,
     pub direction: TcAttachDirection,
@@ -322,13 +326,26 @@ pub struct AyaCgroupAttachDetachReport {
     pub role: crate::DaeCgroupAttachRole,
     pub cgroup_path: PathBuf,
     pub program_name: String,
+    pub program_id: u32,
+    pub program_tag: String,
     pub section: String,
+    pub attach_type: u32,
     pub program_kind: DaeCgroupProgramKind,
     pub attach_mode: String,
     pub loaded: bool,
     pub attached: bool,
     pub detached: bool,
     pub link_lifetime_owned_by_backend: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaTcxBindingSnapshot {
+    pub iface: String,
+    pub ifindex: u32,
+    pub netns: Option<String>,
+    pub direction: TcAttachDirection,
+    pub revision: u64,
+    pub program_order: Vec<AyaTcxProgramOrderEntry>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

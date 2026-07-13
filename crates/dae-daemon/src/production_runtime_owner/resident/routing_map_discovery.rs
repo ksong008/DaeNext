@@ -288,6 +288,14 @@ pub(super) fn startup_evidence_from_report(start_report: &Value) -> Value {
             "mapCount": loaded_map_count,
         },
         "bindings": bindings,
+        "bindingRegistry": start_report
+            .get("resident_datapath_binding_registry")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "bindingPostflight": start_report
+            .get("resident_datapath_binding_postflight")
+            .cloned()
+            .unwrap_or(Value::Null),
         "routingMatchSets": startup_routing_match_sets(start_report),
         "mapCapacity": start_report
             .get("resident_reusable_maps")
