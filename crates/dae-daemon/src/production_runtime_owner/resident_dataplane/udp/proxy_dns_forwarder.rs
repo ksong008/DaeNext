@@ -45,14 +45,24 @@ impl ResidentProxyDnsUdpForwarder {
         runtime_config: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
         actor_executor: Arc<ResidentDnsUdpActorExecutor>,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        proxy
+            .execution_plan()
+            .udp
+            .agreement()
+            .admit_packet_relay("proxied DNS UDP forwarder")?;
+        if let Some(reason) = resident_udp_chain_admission(&proxy).unsupported_reason() {
+            return Err(format!(
+                "proxied DNS UDP forwarder rejected by typed chain agreement: {reason}"
+            ));
+        }
         let request_scoped_actor_pool = proxy.execution_plan().udp.uses_request_scoped_exchange();
         let actor_count = if request_scoped_actor_pool {
             runtime_config.proxy_actor_limit.max(1)
         } else {
             1
         };
-        Self {
+        Ok(Self {
             proxy,
             original_dst,
             next_actor: std::sync::atomic::AtomicUsize::new(0),
@@ -68,7 +78,7 @@ impl ResidentProxyDnsUdpForwarder {
             actor_executor,
             request_scoped_actor_pool,
             closing: AtomicBool::new(false),
-        }
+        })
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) async fn exchange(

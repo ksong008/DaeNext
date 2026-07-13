@@ -60,6 +60,45 @@ fn juicity_proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
     proxy
 }
 
+fn policy_closed_proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
+    let mut proxy = proxy_plan(server);
+    proxy.protocol = "http-proxy";
+    proxy.handler = ResidentProxyProtocolPlan::HttpProxyTcp {
+        username: String::new(),
+        password: String::new(),
+        transport: false,
+        transport_host: String::new(),
+        transport_path: String::new(),
+    };
+    proxy
+}
+
+#[test]
+fn policy_closed_proxy_cannot_construct_a_dns_udp_forwarder() {
+    let runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let actor_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+        runtime.clone(),
+        Arc::clone(&metrics),
+    ));
+    let err = ResidentProxyDnsUdpForwarder::new(
+        Arc::new(policy_closed_proxy_plan(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9,
+        ))),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+        runtime,
+        Arc::clone(&metrics),
+        actor_executor,
+    )
+    .err()
+    .expect("policy-closed factory must reject DNS UDP forwarder construction");
+
+    assert!(err.contains("typed UDP agreement"), "{err}");
+    assert!(err.contains("http-connect-udp-protocol-closed"), "{err}");
+    assert_eq!(metrics.snapshot()["dnsUdpActorsOpened"], 0);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn proxy_dns_udp_forwarder_uses_bounded_generation_owned_actors() {
     let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
@@ -79,7 +118,8 @@ async fn proxy_dns_udp_forwarder_uses_bounded_generation_owned_actors() {
         runtime,
         Arc::clone(&metrics),
         Arc::clone(&actor_executor),
-    );
+    )
+    .unwrap();
 
     assert_eq!(forwarder.actor_count(), 1);
     let first = forwarder.actor_handle(0).await.unwrap();
@@ -126,7 +166,8 @@ async fn request_scoped_proxy_dns_udp_uses_the_profile_actor_limit() {
         runtime,
         metrics,
         actor_executor,
-    );
+    )
+    .unwrap();
 
     assert_eq!(forwarder.actor_count(), 3);
     assert!(forwarder.request_scoped_actor_pool);
@@ -183,13 +224,16 @@ async fn one_proxy_dns_udp_actor_multiplexes_out_of_order_responses_without_head
         runtime.clone(),
         Arc::clone(&metrics),
     ));
-    let forwarder = Arc::new(ResidentProxyDnsUdpForwarder::new(
-        Arc::new(proxy_plan(upstream_addr)),
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
-        runtime,
-        Arc::clone(&metrics),
-        Arc::clone(&actor_executor),
-    ));
+    let forwarder = Arc::new(
+        ResidentProxyDnsUdpForwarder::new(
+            Arc::new(proxy_plan(upstream_addr)),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+            runtime,
+            Arc::clone(&metrics),
+            Arc::clone(&actor_executor),
+        )
+        .unwrap(),
+    );
     let first = dns_query(0x1111, "first.example");
     let second = dns_query(0x2222, "second.example");
     let first_forwarder = Arc::clone(&forwarder);

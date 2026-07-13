@@ -9,7 +9,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) use protocol::{
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use semantics::UdpPacketSemantics;
 pub(in crate::production_runtime_owner::resident_dataplane) use udp::{
-    ResidentStreamPacketTransport, ResidentUdpExecutorFactory,
+    RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentStreamPacketTransport,
+    ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

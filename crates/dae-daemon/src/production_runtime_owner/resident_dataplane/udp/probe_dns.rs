@@ -160,8 +160,32 @@ pub(crate) async fn probe_resident_proxy_udp_async(
     include_response_hex: bool,
 ) -> serde_json::Value {
     let started = Instant::now();
+    let agreement = proxy.execution_plan().udp.agreement();
     let handler = resident_udp_proxy_handler_name(proxy);
-    let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
+    let packet_semantics = agreement.packet_semantics();
+    if let Some(reason) = agreement.unsupported_reason() {
+        return json!({
+            "status": "protocol-closed",
+            "ok": true,
+            "protocol_closed": true,
+            "relay_available": false,
+            "negative_path_ready": true,
+            "agreement_disposition": agreement.disposition().as_str(),
+            "handler": handler,
+            "request_len": payload.len(),
+            "response_len": 0,
+            "payload_match": false,
+            "elapsed_ms": started.elapsed().as_millis(),
+            "error": reason,
+            "graphId": proxy.graph_id,
+            "packetSession": udp_probe_packet_session_value(
+                proxy,
+                original_dst,
+                handler,
+                packet_semantics,
+            ),
+        });
+    }
     let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);
     let dns = ResidentDnsPlan::asis(proxy.mark);
     let mut exchange = executor
@@ -181,6 +205,9 @@ pub(crate) async fn probe_resident_proxy_udp_async(
                 "status": if payload_match { "pass" } else { "fail" },
                 "ok": payload_match,
                 "protocol_closed": false,
+                "relay_available": true,
+                "negative_path_ready": false,
+                "agreement_disposition": agreement.disposition().as_str(),
                 "handler": handler,
                 "request_len": payload.len(),
                 "response_len": response.payload.len(),
@@ -201,30 +228,13 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             }
             report
         }
-        Err(err)
-            if matches!(
-                proxy.handler,
-                ResidentProxyProtocolPlan::HttpProxyTcp { .. }
-            ) =>
-        {
-            json!({
-                "status": "protocol-closed",
-                "ok": true,
-                "protocol_closed": true,
-                "handler": handler,
-                "request_len": payload.len(),
-                "response_len": 0,
-                "payload_match": false,
-                "elapsed_ms": started.elapsed().as_millis(),
-                "error": err,
-                "graphId": proxy.graph_id,
-                "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
-            })
-        }
         Err(err) => json!({
             "status": "fail",
             "ok": false,
             "protocol_closed": false,
+            "relay_available": false,
+            "negative_path_ready": false,
+            "agreement_disposition": agreement.disposition().as_str(),
             "handler": handler,
             "request_len": payload.len(),
             "response_len": 0,
@@ -261,6 +271,11 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
     original_dst: SocketAddr,
     lookup_host: &str,
 ) -> Result<(), String> {
+    proxy
+        .execution_plan()
+        .udp
+        .agreement()
+        .admit_packet_relay("background DNS UDP probe")?;
     let id = fastrand::u16(0..=u16::MAX);
     let query = build_dns_a_query(id, lookup_host)?;
     let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);

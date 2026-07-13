@@ -2,8 +2,9 @@ use serde_json::{Value, json};
 
 use super::super::{link_hash, redacted_link_source};
 use super::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
-    ResidentUdpChainAdmission, ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion,
+    RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentProxyPlan,
+    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentUdpChainAdmission,
+    ResidentUdpExecutionAgreement, ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion,
     ResidentXhttpMode, ResidentXhttpSettingsPlan, resident_udp_chain_admission,
 };
 
@@ -17,6 +18,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     link_hash: String,
     redacted_link_source: String,
     protocol_framing: &'static str,
+    tcp_executor: &'static str,
     endpoint_host_hash: String,
     endpoint_port: u16,
     transport_underlay: String,
@@ -24,10 +26,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     stream_wrapper: String,
     stream_host_hash: Option<String>,
     stream_path: String,
-    packet_semantics: String,
-    udp_executor: &'static str,
-    udp_policy_closed: bool,
-    udp_policy_closed_reason: Option<&'static str>,
+    udp_agreement: ResidentUdpExecutionAgreement,
     xhttp_mode: ResidentXhttpMode,
     xhttp_settings: ResidentXhttpSettingsPlan,
     xhttp_download_mode: Option<ResidentXhttpMode>,
@@ -53,6 +52,7 @@ impl ResidentExecutableGraphDescriptor {
             link_hash: proxy.graph_link_hash.clone(),
             redacted_link_source: proxy.redacted_link_source.clone(),
             protocol_framing: proxy.protocol,
+            tcp_executor: executor_contract.tcp_executor,
             endpoint_host_hash: link_hash(&proxy.server_host),
             endpoint_port: proxy.server_port,
             transport_underlay: execution.security.transport_label().to_owned(),
@@ -64,10 +64,7 @@ impl ResidentExecutableGraphDescriptor {
                 Some(link_hash(&proxy.stream_host))
             },
             stream_path: proxy.stream_path.clone(),
-            packet_semantics: execution.udp.packet_semantics().as_str().to_owned(),
-            udp_executor: executor_contract.udp_executor,
-            udp_policy_closed: executor_contract.udp_policy_closed,
-            udp_policy_closed_reason: execution.udp.policy_closed_reason(),
+            udp_agreement: execution.udp.agreement(),
             xhttp_mode: proxy.xhttp_mode,
             xhttp_settings: proxy.xhttp_settings.clone(),
             xhttp_download_mode: proxy.xhttp_download.as_ref().map(|download| download.mode),
@@ -101,6 +98,7 @@ impl ResidentExecutableGraphDescriptor {
         let stream_wrapper_factory = self.stream_wrapper_factory_value();
         let chain_executor = self.chain_executor_value();
         let generation_cache = self.generation_cache_value(reload_generation);
+        let udp_execution_agreement = self.udp_execution_agreement_value();
         let packet_session_manager = self.packet_session_manager_value();
         let probe_executor = self.probe_executor_value(reload_generation);
         let admission_block_reason = underlay_factory
@@ -132,7 +130,8 @@ impl ResidentExecutableGraphDescriptor {
                 "path": self.stream_path,
             },
             "protocolFraming": self.protocol_framing,
-            "packetSemantics": self.packet_semantics,
+            "tcpExecutor": self.tcp_executor,
+            "packetSemantics": self.udp_agreement.packet_semantics().as_str(),
             "chain": {
                 "mode": if self.chain_parent_count > 0 { "parent-proxy" } else { "none" },
                 "parentCount": self.chain_parent_count,
@@ -152,6 +151,7 @@ impl ResidentExecutableGraphDescriptor {
                 "streamWrapperFactory": stream_wrapper_factory,
                 "chainExecutor": chain_executor,
                 "generationCache": generation_cache,
+                "udpExecutionAgreement": udp_execution_agreement,
                 "packetSessionManager": packet_session_manager,
                 "probeExecutor": probe_executor,
             },
@@ -181,6 +181,7 @@ impl ResidentExecutableGraphDescriptor {
             "streamWrapperFactory": self.stream_wrapper_factory_value(),
             "chainExecutor": self.chain_executor_value(),
             "generationCache": self.generation_cache_value(reload_generation),
+            "udpExecutionAgreement": self.udp_execution_agreement_value(),
             "packetSessionManager": self.packet_session_manager_value(),
             "probeExecutor": self.probe_executor_value(reload_generation),
         })
@@ -358,36 +359,55 @@ impl ResidentExecutableGraphDescriptor {
         })
     }
 
+    fn udp_execution_agreement_value(&self) -> Value {
+        let agreement = self.udp_agreement;
+        json!({
+            "schemaVersion": 1,
+            "disposition": agreement.disposition().as_str(),
+            "executor": agreement.executor_label(),
+            "packetSemantics": agreement.packet_semantics().as_str(),
+            "policyClosed": agreement.policy_closed(),
+            "negativePathReady": agreement.negative_path_ready(),
+            "expectedPacketSessionStatus": agreement.component_status(),
+            "expectedProbeStatus": agreement.component_status(),
+            "unsupportedReason": agreement.unsupported_reason(),
+            "generationOwned": true,
+            "cleanupOwner": RESIDENT_UDP_CLEANUP_OWNER,
+            "cleanupPolicy": RESIDENT_UDP_CLEANUP_POLICY,
+        })
+    }
+
     fn packet_session_manager_value(&self) -> Value {
-        let chain_unsupported_reason = self
-            .udp_chain_admission
-            .unsupported_reason()
-            .map(Value::from)
-            .unwrap_or(Value::Null);
-        let unsupported_reason = if !chain_unsupported_reason.is_null() {
-            chain_unsupported_reason
-        } else if self.udp_policy_closed {
-            Value::from(
-                self.udp_policy_closed_reason
-                    .unwrap_or("protocol transport shape has no resident UDP packet executor"),
-            )
+        let agreement = self.udp_agreement;
+        let chain_unsupported_reason = self.udp_chain_admission.unsupported_reason();
+        let unsupported_reason = if let Some(reason) = agreement.unsupported_reason() {
+            Value::from(reason)
+        } else if let Some(reason) = chain_unsupported_reason {
+            Value::from(reason)
         } else {
             Value::Null
         };
-        let status = if unsupported_reason.is_null() {
-            self.udp_chain_admission.status()
+        let status = if agreement.policy_closed() {
+            agreement.component_status()
         } else {
-            "fail-closed"
+            self.udp_chain_admission.status()
         };
         json!({
             "schemaVersion": 1,
             "status": status,
             "manager": "resident-udp-session-manager",
-            "executor": self.udp_executor,
+            "executor": agreement.executor_label(),
             "graphId": self.graph_id,
-            "packetSemantics": self.packet_semantics,
+            "packetSemantics": agreement.packet_semantics().as_str(),
+            "agreementDisposition": agreement.disposition().as_str(),
+            "policyClosed": agreement.policy_closed(),
+            "negativePathReady": agreement.negative_path_ready(),
             "chainCarrier": self.udp_chain_admission.carrier(),
+            "chainUnsupportedReason": chain_unsupported_reason,
             "unsupportedReason": unsupported_reason,
+            "generationOwned": true,
+            "cleanupOwner": RESIDENT_UDP_CLEANUP_OWNER,
+            "cleanupPolicy": RESIDENT_UDP_CLEANUP_POLICY,
             "keyFields": [
                 "graphId",
                 "outbound",
@@ -396,20 +416,35 @@ impl ResidentExecutableGraphDescriptor {
                 "packetSemantics"
             ],
             "limitSource": "resident-udp-session-limit",
-            "transientExchangeCompatible": true,
+            "transientExchangeCompatible": !agreement.policy_closed(),
         })
     }
 
     fn probe_executor_value(&self, reload_generation: Option<u64>) -> Value {
+        let agreement = self.udp_agreement;
         json!({
             "schemaVersion": 1,
             "status": "admitted",
             "executor": "resident-executable-graph",
+            "trafficExecutor": self.tcp_executor,
             "graphId": self.graph_id,
             "reloadGeneration": reload_generation,
             "materialized": reload_generation.is_some(),
             "sharesTrafficExecutor": true,
             "latencyState": "group-selector",
+            "udp": {
+                "schemaVersion": 1,
+                "status": agreement.component_status(),
+                "executor": agreement.executor_label(),
+                "packetSemantics": agreement.packet_semantics().as_str(),
+                "agreementDisposition": agreement.disposition().as_str(),
+                "policyClosed": agreement.policy_closed(),
+                "negativePathReady": agreement.negative_path_ready(),
+                "unsupportedReason": agreement.unsupported_reason(),
+                "generationOwned": true,
+                "cleanupOwner": RESIDENT_UDP_CLEANUP_OWNER,
+                "cleanupPolicy": RESIDENT_UDP_CLEANUP_POLICY,
+            },
             "unsupportedReason": Value::Null,
         })
     }

@@ -125,6 +125,104 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn manual_udp_probe_reports_every_typed_policy_closed_shape_without_network_wait() {
+        let mut proxies = vec![
+            test_udp_proxy(ResidentProxyProtocolPlan::HttpProxyTcp {
+                username: String::new(),
+                password: String::new(),
+                transport: false,
+                transport_host: String::new(),
+                transport_path: String::new(),
+            }),
+            test_udp_proxy(ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
+                cipher: String::new(),
+                password: String::new(),
+                salt_len: 0,
+                host: String::new(),
+                path: String::new(),
+            }),
+            test_udp_proxy(ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp {
+                cipher: String::new(),
+                password: String::new(),
+                obfs_host: String::new(),
+                obfs_port: 0,
+            }),
+            test_udp_proxy(ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {
+                password: String::new(),
+                inner_cipher: String::new(),
+                inner_password: String::new(),
+            }),
+            test_udp_proxy(ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [0; 16] }),
+        ];
+
+        let mut trojan = test_udp_proxy(ResidentProxyProtocolPlan::TrojanTcpTls {
+            password: String::new(),
+        });
+        trojan.net = "unsupported-wrapper".to_owned();
+        proxies.push(trojan);
+
+        let mut vless_meek =
+            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        vless_meek.net = "meek".to_owned();
+        vless_meek.tls = "tls".to_owned();
+        proxies.push(vless_meek);
+
+        let mut vless_unsupported =
+            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        vless_unsupported.net = "websocket".to_owned();
+        vless_unsupported.tls = "tls".to_owned();
+        vless_unsupported.flow = XTLS_RPRX_VISION.to_owned();
+        proxies.push(vless_unsupported);
+
+        let mut vmess_h2 =
+            test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp { id: String::new() });
+        vmess_h2.net = "h2".to_owned();
+        vmess_h2.tls = "tls".to_owned();
+        proxies.push(vmess_h2);
+
+        let mut vmess_unsupported =
+            test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp { id: String::new() });
+        vmess_unsupported.net = "grpc".to_owned();
+        vmess_unsupported.tls = "none".to_owned();
+        proxies.push(vmess_unsupported);
+
+        let target = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9));
+        for proxy in proxies {
+            let agreement = proxy.execution_plan().udp.agreement();
+            assert!(agreement.policy_closed());
+            let graph = proxy.executable_graph_value();
+            let components = &graph["runtimeComponents"];
+            assert_eq!(
+                components["udpExecutionAgreement"]["disposition"],
+                agreement.disposition().as_str()
+            );
+            assert_eq!(components["packetSessionManager"]["status"], "fail-closed");
+            assert_eq!(
+                components["packetSessionManager"]["executor"],
+                agreement.executor_label()
+            );
+            assert_eq!(components["probeExecutor"]["status"], "admitted");
+            assert_eq!(components["probeExecutor"]["udp"]["status"], "fail-closed");
+            assert_eq!(
+                components["probeExecutor"]["udp"]["unsupportedReason"],
+                agreement.unsupported_reason().unwrap()
+            );
+            let result = probe_resident_proxy_udp_async(&proxy, target, b"probe", false).await;
+            assert_eq!(result["status"], "protocol-closed");
+            assert_eq!(result["ok"], true);
+            assert_eq!(result["protocol_closed"], true);
+            assert_eq!(result["relay_available"], false);
+            assert_eq!(result["negative_path_ready"], true);
+            assert_eq!(
+                result["agreement_disposition"],
+                agreement.disposition().as_str()
+            );
+            assert_eq!(result["handler"], agreement.executor_label());
+            assert_eq!(result["error"], agreement.unsupported_reason().unwrap());
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn resident_proxy_udp_bridge_surfaces_executor_errors() {
         let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::HttpProxyTcp {
             username: String::new(),
@@ -331,6 +429,7 @@ mod tests {
             }
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), expected);
+            assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
         }
 
         let mut vless_xhttp =
@@ -344,6 +443,7 @@ mod tests {
             udp_executor_shape(&executor),
             UdpExecutorShape::VlessXhttpH2
         );
+        assert!(executor.agrees_with(vless_xhttp.execution_plan().udp.agreement()));
 
         vless_xhttp.alpn = vec!["h3".to_owned()];
         let executor = UdpSessionExecutor::new_proxy_packet(&vless_xhttp);
@@ -351,6 +451,7 @@ mod tests {
             udp_executor_shape(&executor),
             UdpExecutorShape::VlessXhttpH3
         );
+        assert!(executor.agrees_with(vless_xhttp.execution_plan().udp.agreement()));
 
         let mut vless_udp443 =
             test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
@@ -445,6 +546,7 @@ mod tests {
             let proxy = test_udp_proxy(handler);
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+            assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
         }
 
         let vmess_udp_wrappers = [
@@ -467,6 +569,7 @@ mod tests {
             proxy.tls = tls.to_owned();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::VmessAead);
+            assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
         }
 
         for (net, tls) in [("grpc", ""), ("grpc", "none"), ("websocket", "reality")] {
@@ -476,6 +579,7 @@ mod tests {
             proxy.tls = tls.to_owned();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+            assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
         }
 
         for (net, tls) in [("grpc", ""), ("grpc", "none"), ("h2", ""), ("h2", "none")] {
@@ -486,6 +590,7 @@ mod tests {
             proxy.flow = String::new();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+            assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
         }
 
         for net in ["websocket", "httpupgrade", "grpc", "h2", "meek"] {
@@ -496,6 +601,7 @@ mod tests {
             proxy.flow = "xtls-rprx-vision".to_owned();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+            assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
         }
 
         let mut meek =
@@ -505,6 +611,7 @@ mod tests {
         meek.flow = String::new();
         let executor = UdpSessionExecutor::new_proxy_packet(&meek);
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+        assert!(executor.agrees_with(meek.execution_plan().udp.agreement()));
 
         for net in ["websocket", "httpupgrade", "grpc"] {
             let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::TrojanTcpTls {
@@ -513,6 +620,7 @@ mod tests {
             proxy.net = net.to_owned();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::Trojan);
+            assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
             assert!(!proxy.executor_contract().udp_policy_closed);
         }
 
@@ -522,6 +630,7 @@ mod tests {
         unsupported_trojan.net = "unsupported-wrapper".to_owned();
         let executor = UdpSessionExecutor::new_proxy_packet(&unsupported_trojan);
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+        assert!(executor.agrees_with(unsupported_trojan.execution_plan().udp.agreement()));
         assert!(unsupported_trojan.executor_contract().udp_policy_closed);
 
         let proxy = test_udp_proxy(ResidentProxyProtocolPlan::Socks5Tcp {

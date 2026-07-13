@@ -7,9 +7,10 @@ mod wrapper;
 mod xhttp;
 
 pub(in crate::production_runtime_owner::resident_dataplane) use execution::{
-    ResidentExecutionPlan, ResidentProtocolShape, ResidentStreamPacketTransport,
-    ResidentTcpProbeDispatch, ResidentTcpRuntimeDispatch, ResidentUdpExecutorFactory,
-    UdpPacketSemantics,
+    RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentExecutionPlan,
+    ResidentProtocolShape, ResidentStreamPacketTransport, ResidentTcpProbeDispatch,
+    ResidentTcpRuntimeDispatch, ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition,
+    ResidentUdpExecutorFactory, UdpPacketSemantics,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use protocol::ResidentProtocolExecutorContract;
 pub(crate) use protocol::{ResidentHysteria2ObfsPlan, ResidentProxyProtocolPlan};
