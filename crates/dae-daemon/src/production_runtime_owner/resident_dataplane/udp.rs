@@ -28,7 +28,6 @@ use dae_outbound::{
     socks5::{Socks5Address, udp_packet},
     trojan::packet as trojan_packet,
     tuic::authenticate_tuic_connection,
-    vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,
     vmess,
 };
@@ -55,9 +54,10 @@ use super::execution::{append_runtime_execution_descriptor, udp_execution_descri
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentHysteria2ObfsPlan, ResidentProxyGroupPlan, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
-    SharedResidentProxyGroupMap, resident_udp_chain_admission,
+    ResidentHysteria2ObfsPlan, ResidentProtocolShape, ResidentProxyGroupPlan, ResidentProxyPlan,
+    ResidentProxyProtocolPlan, ResidentStreamPacketTransport, ResidentUdpExecutorFactory,
+    ResidentXhttpHttpVersion, ResidentXhttpMode, SharedResidentProxyGroupMap, UdpPacketSemantics,
+    resident_udp_chain_admission,
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,
@@ -121,15 +121,3 @@ use self::reply::{UdpReplyDispatcher, UdpReplyHandle};
 mod chain_execution_tests;
 #[cfg(test)]
 mod tests;
-
-fn resident_xhttp_uses_h3(proxy: &ResidentProxyPlan) -> bool {
-    resident_xhttp_primary_http_version(proxy) == ResidentXhttpHttpVersion::H3
-}
-
-fn resident_xhttp_primary_http_version(proxy: &ResidentProxyPlan) -> ResidentXhttpHttpVersion {
-    if proxy.net != "xhttp" || proxy.tls == "reality" {
-        ResidentXhttpHttpVersion::H2
-    } else {
-        ResidentXhttpHttpVersion::from_tls_alpn(&proxy.alpn)
-    }
-}

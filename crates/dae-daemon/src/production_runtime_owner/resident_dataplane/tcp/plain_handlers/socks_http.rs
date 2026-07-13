@@ -112,7 +112,7 @@ pub(crate) async fn handle_https_proxy_tcp_connection_async(
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
             .await?;
     let tls_underlay = async_resident_tls_underlay_name(&proxy);
-    http_proxy_connect_async(
+    let response_leftover = http_proxy_connect_async(
         &mut proxy,
         &selection.route.dial_target,
         username,
@@ -122,6 +122,13 @@ pub(crate) async fn handle_https_proxy_tcp_connection_async(
         transport_path,
     )
     .await?;
+    if !response_leftover.is_empty() {
+        inbound
+            .write_all(&response_leftover)
+            .await
+            .map_err(|err| format!("write HTTPS proxy early tunnel payload to client: {err}"))?;
+        metrics.add_download(response_leftover.len());
+    }
     if !sniff.payload.is_empty() {
         proxy
             .write_plain_all(&sniff.payload, "write HTTPS proxy initial payload")
@@ -132,6 +139,7 @@ pub(crate) async fn handle_https_proxy_tcp_connection_async(
         .await
         .map(|mut stats| {
             stats.client_to_direct += sniff.payload.len();
+            stats.direct_to_client += response_leftover.len();
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,
@@ -183,7 +191,7 @@ pub(crate) async fn http_proxy_connect_async(
     transport: bool,
     transport_host: &str,
     transport_path: &str,
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
     let mut options = HttpConnectOptions::connect(target);
     options.username = username.to_owned();
     options.password = password.to_owned();
@@ -194,28 +202,16 @@ pub(crate) async fn http_proxy_connect_async(
     stream
         .write_plain_all(&request, "write HTTPS proxy CONNECT request")
         .await?;
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 512];
-    loop {
-        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.read_plain(&mut buf))
-            .await
-            .map_err(|_| "read HTTPS proxy CONNECT response timeout".to_owned())?
-            .map_err(|err| format!("read HTTPS proxy CONNECT response: {err}"))?;
-        if read == 0 {
-            break;
-        }
-        response.extend_from_slice(&buf[..read]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
-        if response.len() > 8192 {
-            return Err("HTTPS proxy CONNECT response too large".to_owned());
-        }
-    }
+    let (response, leftover) = time::timeout(
+        RESIDENT_CONNECT_TIMEOUT,
+        read_http_head_and_leftover_from_async_stream(stream),
+    )
+    .await
+    .map_err(|_| "read HTTPS proxy CONNECT response timeout".to_owned())??;
     let status = http_request::parse_connect_response(&response)
         .map_err(|err| format!("parse HTTPS proxy CONNECT response: {err}"))?;
     if status != 200 {
         return Err(format!("HTTPS proxy CONNECT status: {status}"));
     }
-    Ok(())
+    Ok(leftover)
 }

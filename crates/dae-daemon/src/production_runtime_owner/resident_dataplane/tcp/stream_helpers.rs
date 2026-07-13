@@ -363,24 +363,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn http_proxy_
             .write_all(&request)
             .await
             .map_err(|err| format!("write HTTP CONNECT request: {err}"))?;
-        let mut response = Vec::new();
-        let mut buf = [0_u8; 512];
-        loop {
-            let read = stream
-                .read(&mut buf)
-                .await
-                .map_err(|err| format!("read HTTP CONNECT response: {err}"))?;
-            if read == 0 {
-                break;
-            }
-            response.extend_from_slice(&buf[..read]);
-            if response.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
-            }
-            if response.len() > 8192 {
-                return Err("HTTP CONNECT response too large".to_owned());
-            }
-        }
+        let response = read_plain_http_connect_head_without_overread(stream).await?;
         let status = http_request::parse_connect_response(&response)
             .map_err(|err| format!("parse HTTP CONNECT response: {err}"))?;
         if status != 200 {
@@ -420,4 +403,28 @@ pub(super) async fn read_socks5_address_bytes_async(
         _ => {}
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn generic_http_head_reader_returns_early_tunnel_bytes() {
+        let (mut writer, mut reader) = tokio::io::duplex(512);
+        let response =
+            b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: fixture\r\n\r\nearly-tunnel";
+        let write_task = tokio::spawn(async move { writer.write_all(response).await });
+
+        let (head, leftover) = read_http_head_and_leftover_from_async_stream(&mut reader)
+            .await
+            .expect("generic HTTP head must parse");
+
+        write_task.await.unwrap().unwrap();
+        assert_eq!(
+            head,
+            b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: fixture\r\n\r\n"
+        );
+        assert_eq!(leftover, b"early-tunnel");
+    }
 }

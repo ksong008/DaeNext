@@ -7,7 +7,10 @@ use super::super::super::ResidentStopSignal;
 
 use super::super::super::client::open_async_resident_tls_client_with_flow;
 use super::super::super::direct::DirectTcpRelayStats;
-use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::super::super::plan::{
+    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
+    ResidentStreamWrapperPlan,
+};
 use super::super::super::{
     ResidentDataplaneMetrics,
     tcp::{
@@ -45,9 +48,12 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
     let relay_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let stats = DirectTcpRelayStats::default();
+    let execution = selection.proxy.execution_plan();
 
-    match (selection.proxy.net.as_str(), selection.proxy.tls.as_str()) {
-        ("tcp", "none") | ("tcp", "") => {
+    match execution.wrapper {
+        ResidentStreamWrapperPlan::None
+            if execution.security == ResidentSecurityUnderlayPlan::None =>
+        {
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -71,7 +77,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        ("tcp", "tls") => {
+        ResidentStreamWrapperPlan::None if execution.security.is_tls_stream() => {
             let mut client = open_async_resident_tls_client_with_flow(
                 &selection.proxy,
                 selection.mark,
@@ -97,7 +103,9 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        ("websocket", "none") | ("websocket", "") => {
+        ResidentStreamWrapperPlan::WebSocket
+            if execution.security == ResidentSecurityUnderlayPlan::None =>
+        {
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -125,7 +133,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        ("websocket", "tls") => {
+        ResidentStreamWrapperPlan::WebSocket if execution.security.is_tls_stream() => {
             let mut client = open_async_resident_tls_client_with_flow(
                 &selection.proxy,
                 selection.mark,
@@ -157,7 +165,9 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        ("httpupgrade", "none") | ("httpupgrade", "") => {
+        ResidentStreamWrapperPlan::HttpUpgrade
+            if execution.security == ResidentSecurityUnderlayPlan::None =>
+        {
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -186,7 +196,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        ("httpupgrade", "tls") => {
+        ResidentStreamWrapperPlan::HttpUpgrade if execution.security.is_tls_stream() => {
             let mut client = open_async_resident_tls_client_with_flow(
                 &selection.proxy,
                 selection.mark,
@@ -218,7 +228,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        ("grpc", _) => {
+        ResidentStreamWrapperPlan::Grpc if execution.security.is_tls_stream() => {
             let client = open_async_resident_tls_client_with_flow(
                 &selection.proxy,
                 selection.mark,
@@ -246,7 +256,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        ("h2", _) => {
+        ResidentStreamWrapperPlan::H2 if execution.security.is_tls_stream() => {
             let client = open_async_resident_tls_client_with_flow(
                 &selection.proxy,
                 selection.mark,

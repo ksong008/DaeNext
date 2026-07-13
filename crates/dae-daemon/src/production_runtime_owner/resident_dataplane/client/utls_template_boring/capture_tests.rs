@@ -287,7 +287,7 @@ fn test_tls_proxy(fingerprint: &UtlsFingerprint) -> ResidentProxyPlan {
             password: "capture-secret".to_owned(),
         },
     );
-    proxy.protocol = "trojan".to_owned();
+    proxy.protocol = "trojan";
     proxy.tls = "tls".to_owned();
     proxy
 }
@@ -297,7 +297,7 @@ fn test_reality_proxy(fingerprint: &UtlsFingerprint) -> ResidentProxyPlan {
         fingerprint,
         ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] },
     );
-    proxy.protocol = "vless".to_owned();
+    proxy.protocol = "vless";
     proxy.tls = "reality".to_owned();
     proxy.flow = "xtls-rprx-vision".to_owned();
     proxy.reality = Some(ResidentRealityUnderlayPlan {
@@ -316,7 +316,7 @@ fn base_proxy(
         graph_id: "resident-graph:utls-capture".to_owned(),
         graph_link_hash: "sha256:utls-capture".to_owned(),
         redacted_link_source: "capture:<redacted>".to_owned(),
-        protocol: String::new(),
+        protocol: "test",
         group_name: "capture".to_owned(),
         group_policy: "fixed".to_owned(),
         node_tag: format!("capture-{}", fingerprint.name),
@@ -354,6 +354,7 @@ fn base_proxy(
         }),
         reality: None,
         handler,
+        execution: None,
         chain_parent: None,
         mark: 0,
         mptcp: false,

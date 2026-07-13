@@ -7,11 +7,13 @@ mod stream;
 pub(crate) use self::stream::open_xhttp_stream_parts;
 
 fn xhttp_primary_tls_underlay_name(proxy: &ResidentProxyPlan) -> &'static str {
-    if proxy.tls == "reality" {
-        "reality"
-    } else if proxy.utls_fingerprint.is_some() {
-        "boringssl"
-    } else {
-        "rustls"
+    match proxy.execution_plan().security {
+        ResidentSecurityUnderlayPlan::RealityRustls
+        | ResidentSecurityUnderlayPlan::RealityFingerprint => "reality",
+        ResidentSecurityUnderlayPlan::FingerprintAwareTls => "boringssl",
+        ResidentSecurityUnderlayPlan::StandardTls
+        | ResidentSecurityUnderlayPlan::InsecureTls
+        | ResidentSecurityUnderlayPlan::FragmentedTls => "rustls",
+        _ => "unsupported",
     }
 }

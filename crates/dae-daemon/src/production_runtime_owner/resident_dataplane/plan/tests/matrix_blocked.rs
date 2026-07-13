@@ -1,4 +1,122 @@
 use super::*;
+
+#[test]
+pub(super) fn resident_exact_shape_graph_keeps_vless_meek_udp_policy_closed() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_meek_exact_shape".to_owned(),
+        vless_fixture_url(
+            "vless-meek",
+            &fixture_host(FixtureEndpoint::Primary),
+            fixture_authority_port(),
+            "meek",
+            "",
+            "https://meek.fixture.invalid/resource",
+            &fixture_host(FixtureEndpoint::Authority),
+            "",
+            "",
+        ),
+    )
+    .unwrap();
+
+    let graph = proxy.executable_graph_value();
+    assert_eq!(graph["streamWrapper"], "meek");
+    assert_eq!(graph["packetSemantics"], "protocol-closed");
+    assert_eq!(
+        graph["runtimeComponents"]["packetSessionManager"]["status"],
+        "fail-closed"
+    );
+    assert_eq!(
+        graph["runtimeComponents"]["packetSessionManager"]["executor"],
+        "vless-meek-udp-policy-closed"
+    );
+}
+
+#[test]
+pub(super) fn resident_exact_shape_graph_keeps_trojan_inner_udp_policy_closed() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let inner_cipher = aead_cipher_specs()
+        .first()
+        .expect("at least one fixture cipher")
+        .cipher;
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "trojan_inner_exact_shape".to_owned(),
+        trojan_inner_shadowsocks_fixture_url(inner_cipher),
+    )
+    .unwrap();
+
+    let graph = proxy.executable_graph_value();
+    assert_eq!(graph["packetSemantics"], "protocol-closed");
+    assert_eq!(
+        graph["runtimeComponents"]["packetSessionManager"]["status"],
+        "fail-closed"
+    );
+    assert_eq!(
+        graph["runtimeComponents"]["packetSessionManager"]["executor"],
+        "inner-encryption-udp-policy-closed"
+    );
+}
+
+#[test]
+pub(super) fn resident_chain_rejects_http_parent_transport_it_cannot_execute() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let source = format!(
+        "{} -> {}",
+        http_transport_fixture_url(&fixture_host(FixtureEndpoint::Primary), fixture_port(1)),
+        socks5_fixture_url(&fixture_host(FixtureEndpoint::Secondary), fixture_port(2))
+    );
+    let error = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "http_transport_parent".to_owned(),
+        source,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("plain SOCKS5/HTTP CONNECT parent"),
+        "{error}"
+    );
+}
 #[test]
 pub(super) fn resident_dataplane_plan_admits_nested_chain_without_flattening() {
     let config = parse_config(

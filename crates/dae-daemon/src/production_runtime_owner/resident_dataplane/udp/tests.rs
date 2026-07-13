@@ -84,7 +84,7 @@ mod tests {
     fn resident_vless_vision_udp_request_uses_xudp_mux_target() {
         let mut proxy =
             test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [9_u8; 16] });
-        proxy.protocol = "vless".to_owned();
+        proxy.protocol = "vless";
         proxy.flow = XTLS_RPRX_VISION.to_owned();
         proxy.tls = "tls".to_owned();
         let request = build_vless_udp_request(
@@ -108,7 +108,7 @@ mod tests {
             transport_host: String::new(),
             transport_path: String::new(),
         });
-        proxy.protocol = "http-proxy".to_owned();
+        proxy.protocol = "http-proxy";
         let original_dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53));
         let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
         let dns = ResidentDnsPlan::asis(proxy.mark);
@@ -120,7 +120,7 @@ mod tests {
         assert!(err.contains("unsupported_udp_handler"));
         assert!(err.contains("no UDP relay semantics"));
         assert!(err.contains("without alternate execution"));
-        assert!(err.contains("http-proxy-tcp"));
+        assert!(err.contains("http-connect-udp-protocol-closed"));
         assert!(err.contains("http-proxy"));
     }
 
@@ -133,7 +133,7 @@ mod tests {
             transport_host: String::new(),
             transport_path: String::new(),
         });
-        proxy.protocol = "http-proxy".to_owned();
+        proxy.protocol = "http-proxy";
         let original_dst = SocketAddr::V4(SocketAddrV4::new(
             Ipv4Addr::LOCALHOST,
             proxy.server_port.saturating_add(1),
@@ -325,7 +325,7 @@ mod tests {
                 &proxy.handler,
                 ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
             ) {
-                proxy.protocol = "vless".to_owned();
+                proxy.protocol = "vless";
                 proxy.flow = XTLS_RPRX_VISION.to_owned();
                 proxy.tls = "tls".to_owned();
             }
@@ -335,7 +335,7 @@ mod tests {
 
         let mut vless_xhttp =
             test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
-        vless_xhttp.protocol = "vless".to_owned();
+        vless_xhttp.protocol = "vless";
         vless_xhttp.net = "xhttp".to_owned();
         vless_xhttp.tls = "tls".to_owned();
         vless_xhttp.flow = String::new();
@@ -354,7 +354,7 @@ mod tests {
 
         let mut vless_udp443 =
             test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
-        vless_udp443.protocol = "vless".to_owned();
+        vless_udp443.protocol = "vless";
         vless_udp443.net = "tcp".to_owned();
         vless_udp443.tls = "tls".to_owned();
         vless_udp443.flow = "xtls-rprx-vision-udp443".to_owned();
@@ -382,7 +382,7 @@ mod tests {
         ] {
             let mut proxy =
                 test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
-            proxy.protocol = "vless".to_owned();
+            proxy.protocol = "vless";
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             proxy.flow = String::new();
@@ -561,7 +561,7 @@ mod tests {
         ] {
             let mut proxy =
                 test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
-            proxy.protocol = "vless".to_owned();
+            proxy.protocol = "vless";
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             proxy.flow = String::new();
@@ -571,11 +571,19 @@ mod tests {
                 UdpPacketSemantics::UdpOverStream,
                 "net={net:?} tls={tls:?}"
             );
-            assert_eq!(
-                resident_udp_proxy_handler_name(&proxy),
-                "vless-udp-over-stream",
-                "net={net:?} tls={tls:?}"
-            );
+            let expected_handler = match (net, tls) {
+                ("" | "tcp", "" | "none") => "resident-vless-udp-over-plain-tcp",
+                ("" | "tcp", _) => "resident-vless-udp-over-tls",
+                ("websocket", "" | "none") => "resident-vless-udp-over-websocket-plain",
+                ("websocket", _) => "resident-vless-udp-over-websocket",
+                ("httpupgrade", "" | "none") => "resident-vless-udp-over-httpupgrade-plain",
+                ("httpupgrade", _) => "resident-vless-udp-over-httpupgrade",
+                ("grpc", _) => "resident-vless-udp-over-grpc",
+                ("h2", _) => "resident-vless-udp-over-h2",
+                ("xhttp", _) => "resident-vless-xhttp-h2-packet",
+                _ => unreachable!(),
+            };
+            assert_eq!(resident_udp_proxy_handler_name(&proxy), expected_handler);
         }
 
         let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
@@ -597,7 +605,7 @@ mod tests {
         for flow in [XTLS_RPRX_VISION, "xtls-rprx-vision-udp443"] {
             let mut proxy =
                 test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
-            proxy.protocol = "vless".to_owned();
+            proxy.protocol = "vless";
             proxy.net = "tcp".to_owned();
             proxy.tls = "tls".to_owned();
             proxy.flow = flow.to_owned();
@@ -612,8 +620,7 @@ mod tests {
             );
             assert_eq!(
                 resident_udp_proxy_handler_name(&proxy),
-                "vless-vision-tcp-tls",
-                "flow={flow:?}"
+                "resident-vless-xudp"
             );
         }
     }
@@ -633,7 +640,7 @@ mod tests {
         ] {
             let mut proxy =
                 test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
-            proxy.protocol = "vless".to_owned();
+            proxy.protocol = "vless";
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             proxy.flow = flow.to_owned();
@@ -646,11 +653,12 @@ mod tests {
                 UdpPacketSemantics::ProtocolClosed,
                 "net={net:?} tls={tls:?} flow={flow:?}"
             );
-            assert_eq!(
-                resident_udp_proxy_handler_name(&proxy),
-                "vless-udp-protocol-closed",
-                "net={net:?} tls={tls:?} flow={flow:?}"
-            );
+            let expected_handler = if net == "meek" && flow.is_empty() {
+                "vless-meek-udp-policy-closed"
+            } else {
+                "vless-transport-udp-policy-closed"
+            };
+            assert_eq!(resident_udp_proxy_handler_name(&proxy), expected_handler);
         }
     }
 
@@ -729,7 +737,7 @@ mod tests {
             graph_id: "resident-graph:redacted".to_owned(),
             graph_link_hash: "sha256:redacted".to_owned(),
             redacted_link_source: "source:<redacted>".to_owned(),
-            protocol: "redacted".to_owned(),
+            protocol: "redacted",
             group_name: "proxy".to_owned(),
             group_policy: "fixed".to_owned(),
             node_tag: "redacted".to_owned(),
@@ -751,6 +759,7 @@ mod tests {
             utls_fingerprint: None,
             reality: None,
             handler,
+            execution: None,
             chain_parent: None,
             mark: 0,
             mptcp: false,

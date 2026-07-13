@@ -5,6 +5,8 @@ mod shared;
 #[cfg(test)]
 use self::shared::*;
 #[cfg(test)]
+mod exact_shape_fixture_contract;
+#[cfg(test)]
 mod fingerprint;
 #[cfg(test)]
 mod group_selection;

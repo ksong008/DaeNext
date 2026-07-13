@@ -63,7 +63,7 @@ impl VlessStandardUdpOverStreamSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if !proxy.flow.is_empty() {
+        if proxy.execution_plan().protocol != ResidentProtocolShape::VlessStandard {
             return Err(
                 "VLESS standard UDP-over-stream requires an empty flow; Vision uses XUDP"
                     .to_owned(),

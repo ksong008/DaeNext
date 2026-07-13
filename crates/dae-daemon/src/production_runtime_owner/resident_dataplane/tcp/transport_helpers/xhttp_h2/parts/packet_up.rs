@@ -22,11 +22,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         .clone()
         .unwrap_or_else(|| upload_endpoint.clone());
     let download_separate = proxy.xhttp_download.is_some();
-    let upload_http_version = if proxy.tls == "reality" {
-        ResidentXhttpHttpVersion::H2
-    } else {
-        upload_endpoint.http_version()
-    };
+    let upload_http_version = proxy.xhttp_primary_http_version();
     let download_http_version = download_endpoint.http_version();
     match (upload_http_version, download_http_version) {
         (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H1) => {

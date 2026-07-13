@@ -8,10 +8,8 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    if matches!(
-        &selection.proxy.handler,
-        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
-    ) {
+    let execution = selection.proxy.execution_plan();
+    if execution.wrapper == ResidentStreamWrapperPlan::Mux {
         return handle_vless_mux_tcp_connection_async(
             inbound,
             peer,
@@ -23,7 +21,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if selection.proxy.net == "websocket" {
+    if execution.wrapper == ResidentStreamWrapperPlan::WebSocket {
         return handle_vless_websocket_tcp_connection_async(
             inbound,
             peer,
@@ -35,7 +33,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if selection.proxy.net == "httpupgrade" {
+    if execution.wrapper == ResidentStreamWrapperPlan::HttpUpgrade {
         return handle_vless_httpupgrade_tcp_connection_async(
             inbound,
             peer,
@@ -47,7 +45,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if selection.proxy.net == "grpc" {
+    if execution.wrapper == ResidentStreamWrapperPlan::Grpc {
         return handle_vless_grpc_tcp_connection_async(
             inbound,
             peer,
@@ -59,7 +57,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if selection.proxy.net == "h2" {
+    if execution.wrapper == ResidentStreamWrapperPlan::H2 {
         return handle_vless_h2_tcp_connection_async(
             inbound,
             peer,
@@ -71,7 +69,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if selection.proxy.net == "meek" {
+    if execution.wrapper == ResidentStreamWrapperPlan::Meek {
         return handle_vless_meek_tcp_connection_async(
             inbound,
             peer,
@@ -83,7 +81,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if selection.proxy.net == "xhttp" {
+    if matches!(execution.wrapper, ResidentStreamWrapperPlan::Xhttp(_)) {
         return handle_vless_xhttp_h2_tcp_connection_async(
             inbound,
             peer,
@@ -95,7 +93,9 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if matches!(selection.proxy.tls.as_str(), "" | "none") {
+    if execution.wrapper == ResidentStreamWrapperPlan::None
+        && execution.security == ResidentSecurityUnderlayPlan::None
+    {
         return handle_vless_plain_tcp_connection_async(
             inbound,
             peer,
@@ -106,6 +106,9 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             metrics,
         )
         .await;
+    }
+    if execution.wrapper != ResidentStreamWrapperPlan::None {
+        return Err("materialized VLESS wrapper has no TCP executor".to_owned());
     }
     let mut client =
         open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)

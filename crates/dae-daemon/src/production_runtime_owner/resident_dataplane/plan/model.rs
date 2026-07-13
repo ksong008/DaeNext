@@ -1,10 +1,20 @@
 use super::*;
 
+mod execution;
 mod protocol;
+mod security;
+mod wrapper;
 mod xhttp;
 
+pub(in crate::production_runtime_owner::resident_dataplane) use execution::{
+    ResidentExecutionPlan, ResidentProtocolShape, ResidentStreamPacketTransport,
+    ResidentTcpProbeDispatch, ResidentTcpRuntimeDispatch, ResidentUdpExecutorFactory,
+    UdpPacketSemantics,
+};
 pub(in crate::production_runtime_owner::resident_dataplane) use protocol::ResidentProtocolExecutorContract;
 pub(crate) use protocol::{ResidentHysteria2ObfsPlan, ResidentProxyProtocolPlan};
+pub(in crate::production_runtime_owner::resident_dataplane) use security::ResidentSecurityUnderlayPlan;
+pub(in crate::production_runtime_owner::resident_dataplane) use wrapper::ResidentStreamWrapperPlan;
 pub(crate) use xhttp::{
     ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
 };
@@ -55,7 +65,7 @@ pub(crate) struct ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) graph_id: String,
     pub(in crate::production_runtime_owner::resident_dataplane) graph_link_hash: String,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) protocol: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) protocol: &'static str,
     pub(in crate::production_runtime_owner::resident_dataplane) group_name: String,
     pub(in crate::production_runtime_owner::resident_dataplane) group_policy: String,
     pub(in crate::production_runtime_owner::resident_dataplane) node_tag: String,
@@ -83,6 +93,8 @@ pub(crate) struct ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) reality:
         Option<ResidentRealityUnderlayPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) handler: ResidentProxyProtocolPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) execution:
+        Option<ResidentExecutionPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) chain_parent:
         Option<Arc<ResidentProxyPlan>>,
     pub(in crate::production_runtime_owner::resident_dataplane) mark: u32,
@@ -93,36 +105,28 @@ impl ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn executor_contract(
         &self,
     ) -> ResidentProtocolExecutorContract {
-        let contract = self.handler.executor_contract();
-        if !matches!(self.handler, ResidentProxyProtocolPlan::TrojanTcpTls { .. }) {
-            return contract;
-        }
-        match self.net.as_str() {
-            "" | "tcp" => contract,
-            "websocket" => ResidentProtocolExecutorContract {
-                tcp_executor: "resident-trojan-websocket-tls-stream",
-                udp_executor: "resident-trojan-udp-over-websocket",
-                packet_semantics: "udp-over-stream",
-                udp_policy_closed: false,
-            },
-            "httpupgrade" => ResidentProtocolExecutorContract {
-                tcp_executor: "resident-trojan-httpupgrade-tls-stream",
-                udp_executor: "resident-trojan-udp-over-httpupgrade",
-                packet_semantics: "udp-over-stream",
-                udp_policy_closed: false,
-            },
-            "grpc" => ResidentProtocolExecutorContract {
-                tcp_executor: "resident-trojan-grpc-tls-stream",
-                udp_executor: "resident-trojan-udp-over-grpc",
-                packet_semantics: "udp-over-stream",
-                udp_policy_closed: false,
-            },
-            _ => ResidentProtocolExecutorContract {
-                tcp_executor: contract.tcp_executor,
-                udp_executor: "transport-udp-policy-closed",
-                packet_semantics: "protocol-closed",
-                udp_policy_closed: true,
-            },
+        self.execution_plan().executor_contract()
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn execution_plan(
+        &self,
+    ) -> ResidentExecutionPlan {
+        self.execution
+            .unwrap_or_else(|| ResidentExecutionPlan::from_proxy(self))
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn materialize_execution(
+        &mut self,
+    ) {
+        self.execution = Some(ResidentExecutionPlan::from_proxy(self));
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn xhttp_primary_http_version(
+        &self,
+    ) -> ResidentXhttpHttpVersion {
+        match self.execution_plan().wrapper {
+            ResidentStreamWrapperPlan::Xhttp(version) => version,
+            _ => ResidentXhttpHttpVersion::H2,
         }
     }
 
@@ -130,7 +134,6 @@ impl ResidentProxyPlan {
         compact_string(&mut self.graph_id);
         compact_string(&mut self.graph_link_hash);
         compact_string(&mut self.redacted_link_source);
-        compact_string(&mut self.protocol);
         compact_string(&mut self.group_name);
         compact_string(&mut self.group_policy);
         compact_string(&mut self.node_tag);
@@ -262,37 +265,6 @@ impl ResidentProxyPlan {
                 "resident proxy {} node {} is not a VLESS handler",
                 self.protocol, self.node_tag
             )),
-        }
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn uses_vless_vision_xudp(
-        &self,
-    ) -> bool {
-        matches!(
-            self.handler,
-            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
-        ) && matches!(self.net.as_str(), "" | "tcp")
-            && is_xtls_rprx_vision_flow(&self.flow)
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn uses_standard_vless_udp_over_stream(
-        &self,
-    ) -> bool {
-        if !matches!(
-            self.handler,
-            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
-        ) || !self.flow.is_empty()
-        {
-            return false;
-        }
-
-        match (self.net.as_str(), self.tls.as_str()) {
-            ("" | "tcp", _) => true,
-            ("websocket" | "httpupgrade", _) => true,
-            ("grpc" | "h2", "" | "none") => false,
-            ("grpc" | "h2", _) => true,
-            ("xhttp", _) => true,
-            _ => false,
         }
     }
 }

@@ -30,18 +30,16 @@ pub(crate) enum ResidentTlsProvider {
 
 impl ResidentTlsProvider {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Result<Self, String> {
-        match proxy.tls.as_str() {
-            "tls" => {
-                if proxy.utls_fingerprint.is_some() {
-                    Ok(Self::FingerprintAwareBoring)
-                } else {
-                    Ok(Self::StandardRustls)
-                }
-            }
-            "reality" if proxy.utls_fingerprint.is_some() => Ok(Self::RealityFingerprintBoring),
-            "reality" => Ok(Self::RealityRustls),
+        match proxy.execution_plan().security {
+            ResidentSecurityUnderlayPlan::StandardTls
+            | ResidentSecurityUnderlayPlan::InsecureTls
+            | ResidentSecurityUnderlayPlan::FragmentedTls => Ok(Self::StandardRustls),
+            ResidentSecurityUnderlayPlan::FingerprintAwareTls => Ok(Self::FingerprintAwareBoring),
+            ResidentSecurityUnderlayPlan::RealityFingerprint => Ok(Self::RealityFingerprintBoring),
+            ResidentSecurityUnderlayPlan::RealityRustls => Ok(Self::RealityRustls),
             other => Err(format!(
-                "resident TLS factory cannot open security underlay {other} for protocol {}",
+                "resident TLS factory cannot open security underlay {} for protocol {}",
+                other.graph_label(),
                 proxy.protocol
             )),
         }

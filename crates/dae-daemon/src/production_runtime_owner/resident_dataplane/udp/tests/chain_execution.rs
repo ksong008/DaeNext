@@ -14,7 +14,7 @@ fn proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
         graph_id: "resident-graph:redacted".to_owned(),
         graph_link_hash: "sha256:redacted".to_owned(),
         redacted_link_source: "source:<redacted>".to_owned(),
-        protocol: "redacted".to_owned(),
+        protocol: "redacted",
         group_name: "proxy".to_owned(),
         group_policy: "fixed".to_owned(),
         node_tag: "redacted".to_owned(),
@@ -36,6 +36,7 @@ fn proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
         utls_fingerprint: None,
         reality: None,
         handler,
+        execution: None,
         chain_parent: None,
         mark: 0,
         mptcp: false,
@@ -105,7 +106,7 @@ async fn run_chained_packet_case(original_dst: SocketAddr) {
     let mut proxy = proxy_plan(ResidentProxyProtocolPlan::VmessAeadTcp {
         id: "00000000-0000-0000-0000-000000000001".to_owned(),
     });
-    proxy.protocol = "vmess".to_owned();
+    proxy.protocol = "vmess";
     proxy.tls = "none".to_owned();
     proxy.server_host = child_addr.ip().to_string();
     proxy.server_port = child_addr.port();
@@ -113,7 +114,7 @@ async fn run_chained_packet_case(original_dst: SocketAddr) {
         username: String::new(),
         password: String::new(),
     });
-    parent.protocol = "socks5".to_owned();
+    parent.protocol = "socks5";
     parent.tls = "none".to_owned();
     parent.server_host = parent_addr.ip().to_string();
     parent.server_port = parent_addr.port();

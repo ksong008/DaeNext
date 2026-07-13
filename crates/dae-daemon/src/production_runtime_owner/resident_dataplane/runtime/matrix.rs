@@ -231,7 +231,7 @@ pub(super) fn resident_proxy_matches_source_shape(
     proxy: &plan::ResidentProxyPlan,
     graph: &Value,
 ) -> bool {
-    source_shape_protocol_matches(row.protocol_family, row.link_schemes, &proxy.protocol)
+    source_shape_protocol_matches(row.protocol_family, row.link_schemes, proxy.protocol)
         && source_shape_field_matches(row.security_underlay, graph["securityUnderlay"].as_str())
         && source_shape_field_matches(row.stream_wrapper, graph["streamWrapper"].as_str())
         && source_shape_field_matches(row.packet_semantics, graph["packetSemantics"].as_str())

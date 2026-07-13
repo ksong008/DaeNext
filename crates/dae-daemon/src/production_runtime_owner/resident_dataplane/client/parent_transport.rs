@@ -1,5 +1,8 @@
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyProtocolPlan;
+use crate::production_runtime_owner::resident_dataplane::plan::{
+    ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan,
+};
 use crate::production_runtime_owner::resident_dataplane::tcp::{
     http_proxy_connect_plain_async, socks5_connect_async,
 };
@@ -53,7 +56,9 @@ async fn connect_plain_parent_to_target_async(
         }
         ResidentProxyProtocolPlan::HttpProxyTcp {
             username, password, ..
-        } if parent.tls == "none" => {
+        } if parent.execution_plan().security == ResidentSecurityUnderlayPlan::None
+            && parent.execution_plan().wrapper == ResidentStreamWrapperPlan::None =>
+        {
             http_proxy_connect_plain_async(stream, target, username, password, false, "", "")
                 .await?;
         }

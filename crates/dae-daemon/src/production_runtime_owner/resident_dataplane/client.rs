@@ -12,7 +12,6 @@ use dae_outbound::shared_transport::{
     UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE,
     UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM,
 };
-use dae_outbound::vless::contract::is_xtls_rprx_vision_flow;
 use rustls::client::RealityConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -27,8 +26,8 @@ use tokio::time;
 use super::RESIDENT_CONNECT_TIMEOUT;
 use super::direct::open_direct_tcp_connection_async;
 use super::plan::{
-    ResidentProxyPlan, ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan,
-    ResidentXhttpEndpointPlan,
+    ResidentProtocolShape, ResidentProxyPlan, ResidentRealityUnderlayPlan,
+    ResidentSecurityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
 };
 use super::resolver::authority_from_host_port;
 
