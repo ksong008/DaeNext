@@ -1,6 +1,6 @@
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use tokio::sync::Notify;
@@ -8,11 +8,16 @@ use tokio::sync::Notify;
 use super::client::open_connect_udp_h2_client;
 use super::*;
 
+mod snapshot;
+
+pub(super) use self::snapshot::ConnectUdpH2PoolSnapshot;
+
 pub(super) struct ConnectUdpH2Pool {
     max_connections: usize,
     sessions_per_connection: usize,
     state: Mutex<ConnectUdpH2PoolState>,
     state_changed: Arc<Notify>,
+    events: Arc<ConnectUdpPoolEvents>,
 }
 
 #[derive(Default)]
@@ -30,6 +35,7 @@ struct ConnectUdpH2ClientEntry {
 
 pub(super) struct ConnectUdpH2ConnectionUsage {
     active_sessions: AtomicUsize,
+    accepting: AtomicBool,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp::session_executor::connect_udp::h2)
@@ -39,6 +45,7 @@ struct ConnectUdpH2ConnectionLease
         ::h2::client::SendRequest<Bytes>,
     usage: Arc<ConnectUdpH2ConnectionUsage>,
     state_changed: Arc<Notify>,
+    events: Arc<ConnectUdpPoolEvents>,
 }
 
 enum ConnectUdpH2AcquireAction {
@@ -54,6 +61,30 @@ impl Drop for ConnectUdpH2ConnectionLease {
     }
 }
 
+impl ConnectUdpH2ConnectionLease {
+    pub(in crate::production_runtime_owner::resident_dataplane::udp::session_executor::connect_udp::h2) fn retire(
+        &self,
+        reason: ConnectUdpConnectionRetirementReason,
+    ) {
+        if self.usage.accepting.swap(false, Ordering::AcqRel) {
+            self.events.record_retirement(reason);
+            self.state_changed.notify_waiters();
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp::session_executor::connect_udp::h2) fn record_reset(
+        &self,
+    ) {
+        self.events.record_reset();
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp::session_executor::connect_udp::h2) fn record_mtu_rejection(
+        &self,
+    ) {
+        self.events.record_mtu_rejection();
+    }
+}
+
 impl ConnectUdpH2Pool {
     pub(super) fn new(runtime: ResidentConnectUdpRuntimePlan) -> Self {
         Self {
@@ -61,6 +92,7 @@ impl ConnectUdpH2Pool {
             sessions_per_connection: runtime.sessions_per_connection.max(1),
             state: Mutex::new(ConnectUdpH2PoolState::default()),
             state_changed: Arc::new(Notify::new()),
+            events: Arc::new(ConnectUdpPoolEvents::default()),
         }
     }
 
@@ -78,12 +110,23 @@ impl ConnectUdpH2Pool {
                 if state.closing {
                     return Err("CONNECT-UDP H2 pool is closing".to_owned());
                 }
-                state
+                state.clients.retain(|client| {
+                    let retired_idle = !client.usage.accepting.load(Ordering::Acquire)
+                        && client.usage.active_sessions.load(Ordering::Acquire) == 0;
+                    if retired_idle {
+                        client.driver_task.abort();
+                    }
+                    !client.driver_task.is_finished() && !retired_idle
+                });
+                let accepting_connections = state
                     .clients
-                    .retain(|client| !client.driver_task.is_finished());
+                    .iter()
+                    .filter(|client| client.usage.accepting.load(Ordering::Acquire))
+                    .count();
                 if let Some(client) = state
                     .clients
                     .iter()
+                    .filter(|client| client.usage.accepting.load(Ordering::Acquire))
                     .min_by_key(|client| client.usage.active_sessions.load(Ordering::Acquire))
                 {
                     let active = client.usage.active_sessions.load(Ordering::Acquire);
@@ -95,8 +138,9 @@ impl ConnectUdpH2Pool {
                             sender: client.sender.clone(),
                             usage: Arc::clone(&client.usage),
                             state_changed: Arc::clone(&self.state_changed),
+                            events: Arc::clone(&self.events),
                         })
-                    } else if state.clients.len().saturating_add(state.opening)
+                    } else if accepting_connections.saturating_add(state.opening)
                         < self.max_connections
                     {
                         state.opening = state.opening.saturating_add(1);
@@ -104,7 +148,8 @@ impl ConnectUdpH2Pool {
                     } else {
                         ConnectUdpH2AcquireAction::Wait
                     }
-                } else if state.clients.len().saturating_add(state.opening) < self.max_connections {
+                } else if accepting_connections.saturating_add(state.opening) < self.max_connections
+                {
                     state.opening = state.opening.saturating_add(1);
                     ConnectUdpH2AcquireAction::Open
                 } else {
@@ -126,11 +171,13 @@ impl ConnectUdpH2Pool {
                         Ok(opened) if !state.closing => {
                             let usage = Arc::new(ConnectUdpH2ConnectionUsage {
                                 active_sessions: AtomicUsize::new(1),
+                                accepting: AtomicBool::new(true),
                             });
                             let lease = ConnectUdpH2ConnectionLease {
                                 sender: opened.sender.clone(),
                                 usage: Arc::clone(&usage),
                                 state_changed: Arc::clone(&self.state_changed),
+                                events: Arc::clone(&self.events),
                             };
                             state.clients.push(ConnectUdpH2ClientEntry {
                                 sender: opened.sender,

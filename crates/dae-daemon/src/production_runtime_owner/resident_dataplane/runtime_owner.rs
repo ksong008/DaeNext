@@ -170,6 +170,8 @@ impl ResidentRuntimeOwner {
         });
         snapshot["resources"] = self.resource_config.json();
         snapshot["eventWriter"] = self.event_writer.metrics_snapshot();
+        snapshot["connectUdpPools"] =
+            udp::connect_udp_pool_metrics_snapshot(self.reload_generation);
         snapshot
     }
 

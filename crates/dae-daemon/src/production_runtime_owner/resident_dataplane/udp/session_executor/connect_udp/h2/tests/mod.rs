@@ -443,3 +443,52 @@ async fn h2_reset_and_malformed_capsule_fail_closed() {
     malformed_session.shutdown().await;
     clear_generation(malformed_runtime);
 }
+
+#[tokio::test]
+async fn h2_goaway_keeps_existing_stream_and_reconnects_new_session() {
+    let server =
+        ConnectUdpH2TestServer::start(ConnectUdpH2TestServerConfig::goaway_after_first_stream())
+            .await;
+    let (proxy, runtime) = test_proxy(&server, None);
+    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53);
+    let mut existing = ConnectUdpH2Session::new(runtime);
+    assert_eq!(
+        exchange(&mut existing, &proxy, target, b"before-goaway")
+            .await
+            .unwrap()
+            .payload,
+        b"before-goaway"
+    );
+
+    let mut replacement = ConnectUdpH2Session::new(runtime);
+    assert_eq!(
+        exchange(&mut replacement, &proxy, target, b"after-goaway")
+            .await
+            .unwrap()
+            .payload,
+        b"after-goaway"
+    );
+    assert_eq!(
+        exchange(&mut existing, &proxy, target, b"existing-still-open")
+            .await
+            .unwrap()
+            .payload,
+        b"existing-still-open"
+    );
+    assert!(server.connection_count() >= 2);
+    let snapshot = connect_udp_h2_pool_metrics_snapshot(runtime.generation);
+    assert_eq!(snapshot["poolCount"], 1);
+    assert_eq!(snapshot["acceptingConnections"], 1);
+    assert_eq!(snapshot["retiringConnections"], 1);
+    assert_eq!(snapshot["activeSessions"], 2);
+    assert_eq!(snapshot["connectionRetirements"], 1);
+    assert_eq!(snapshot["goawayEvents"], 1);
+
+    replacement.shutdown().await;
+    existing.shutdown().await;
+    clear_generation(runtime);
+    assert_eq!(
+        connect_udp_h2_pool_metrics_snapshot(runtime.generation)["poolCount"],
+        0
+    );
+}

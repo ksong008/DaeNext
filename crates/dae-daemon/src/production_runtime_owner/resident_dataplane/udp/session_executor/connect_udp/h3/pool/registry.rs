@@ -2,8 +2,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::key::ConnectUdpH3PoolKey;
-use super::state::{ConnectUdpH3ActorLease, ConnectUdpH3Pool};
+use super::state::{ConnectUdpH3ActorLease, ConnectUdpH3Pool, ConnectUdpH3PoolSnapshot};
 use super::*;
+
+mod snapshot;
+
+pub(in crate::production_runtime_owner::resident_dataplane) use self::snapshot::connect_udp_h3_pool_metrics_snapshot;
 
 static CONNECT_UDP_H3_POOLS: OnceLock<Mutex<HashMap<ConnectUdpH3PoolKey, Arc<ConnectUdpH3Pool>>>> =
     OnceLock::new();

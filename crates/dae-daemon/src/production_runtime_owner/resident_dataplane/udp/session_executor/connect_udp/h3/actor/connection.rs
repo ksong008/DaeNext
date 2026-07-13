@@ -2,8 +2,6 @@ use std::{borrow::Cow, sync::Arc};
 
 use ::h3::ConnectionState;
 use futures_util::future::poll_fn;
-use tokio::sync::Notify;
-
 use super::runtime::{ConnectUdpH3ActorContext, run_connect_udp_h3_actor};
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::resolve_socket_addr_candidates;
@@ -15,7 +13,7 @@ use crate::production_runtime_owner::resident_dataplane::udp::session_executor::
 pub(super) async fn start_connect_udp_h3_actor(
     proxy: &ResidentProxyPlan,
     runtime: ResidentConnectUdpRuntimePlan,
-    state_changed: Arc<Notify>,
+    admission: Arc<ConnectUdpH3ActorAdmission>,
 ) -> Result<ConnectUdpH3ActorClient, String> {
     let target = authority_from_host_port(&proxy.server_host, proxy.server_port);
     let candidates = resolve_socket_addr_candidates(
@@ -72,11 +70,16 @@ pub(super) async fn start_connect_udp_h3_actor(
             runtime,
             max_datagram_size,
             receiver,
+            admission: Arc::clone(&admission),
         })
         .await;
-        state_changed.notify_waiters();
+        admission.state_changed.notify_waiters();
     });
-    Ok(ConnectUdpH3ActorClient { sender, task })
+    Ok(ConnectUdpH3ActorClient {
+        sender,
+        task,
+        max_datagram_size,
+    })
 }
 
 async fn wait_for_connect_udp_h3_settings(

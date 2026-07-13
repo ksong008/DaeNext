@@ -52,6 +52,14 @@ impl ResidentConnectUdpRuntimePlan {
         Self::from_profile(0, selection.profile)
     }
 
+    pub(crate) fn h2_session_open_attempts(self) -> usize {
+        bounded_session_open_attempts(self.h2_pool_connections)
+    }
+
+    pub(crate) fn h3_session_open_attempts(self) -> usize {
+        bounded_session_open_attempts(self.h3_pool_connections)
+    }
+
     pub(crate) fn to_value(self) -> Value {
         json!({
             "generation": self.generation,
@@ -70,6 +78,10 @@ impl ResidentConnectUdpRuntimePlan {
             "datagramPayloadBytes": self.capsule_limits.max_datagram_payload_bytes,
         })
     }
+}
+
+fn bounded_session_open_attempts(pool_connections: usize) -> usize {
+    pool_connections.max(1).saturating_add(1)
 }
 
 #[cfg(test)]
@@ -95,5 +107,10 @@ mod tests {
         assert!(balanced.h3_datagram_buffer_bytes <= high.h3_datagram_buffer_bytes);
         assert_eq!(low.generation, 7);
         assert_eq!(low.capsule_limits, high.capsule_limits);
+        assert_eq!(low.h2_session_open_attempts(), low.h2_pool_connections + 1);
+        assert_eq!(
+            high.h3_session_open_attempts(),
+            high.h3_pool_connections + 1
+        );
     }
 }
