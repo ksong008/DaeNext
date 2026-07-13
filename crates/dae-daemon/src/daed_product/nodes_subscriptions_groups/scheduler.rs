@@ -100,20 +100,35 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
         );
     }
 
-    let mut refreshed = 0_usize;
+    let attempted = scan.due.len();
+    let mut fetched = 0_usize;
     let mut fetch_errors = 0_usize;
+    let mut runtime_input_changes = 0_usize;
     for subscription in &scan.due {
         match refresh_subscription_from_remote(state, config_dir, subscription.id) {
             Ok(report) => {
-                refreshed += 1;
-                if !report["fetched"].as_bool().unwrap_or(false) {
+                let outcome = SubscriptionRefreshOutcome::from_report(&report);
+                if outcome.fetched {
+                    fetched += 1;
+                } else {
                     fetch_errors += 1;
+                }
+                if outcome.requests_runtime_apply() {
+                    runtime_input_changes += 1;
                 }
                 let _ = append_log_for_config(
                     config_dir,
                     state,
-                    "info",
-                    &format!("subscription {} refreshed by scheduler", subscription.id),
+                    if outcome.fetched { "info" } else { "error" },
+                    &format!(
+                        "subscription {} {} by scheduler",
+                        subscription.id,
+                        if outcome.fetched {
+                            "refreshed"
+                        } else {
+                            "refresh fetch failed"
+                        }
+                    ),
                 );
             }
             Err(err) => {
@@ -133,7 +148,7 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
 
     let mut runtime_reloaded = false;
     let mut runtime_reload_error = None::<String>;
-    if refreshed > 0 {
+    if runtime_input_changes > 0 {
         match reload_runtime_after_subscription_refresh(state, config_dir, runtime) {
             Ok(Some(_)) => runtime_reloaded = true,
             Ok(None) => {}
@@ -155,8 +170,10 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
     );
     Ok(json!({
         "checkedAt": checked_at,
+        "attempted": attempted,
         "dueCount": scan.due.len(),
-        "refreshed": refreshed,
+        "refreshed": fetched,
+        "runtimeInputChanged": runtime_input_changes,
         "fetchErrors": fetch_errors,
         "invalidCronCount": scan.invalid_cron.len(),
         "runtimeReloaded": runtime_reloaded,
@@ -534,6 +551,39 @@ mod tests {
             )
             .unwrap();
         assert_eq!(imported, 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn scheduler_fetch_failure_is_not_counted_as_refresh_or_runtime_change() {
+        let dir =
+            std::env::temp_dir().join(format!("daed-product-scheduler-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute(
+            "INSERT INTO subscriptions(id, updated_at, link, cron_exp, cron_enable, status, info, tag)
+             VALUES(7, ?1, 'file://missing-subscription.txt', '* * * * *', 1, '', '', 'scheduled')",
+            params![iso8601_utc(unix_utc(2026, 6, 17, 0, 0, 0))],
+        )
+        .unwrap();
+        drop(conn);
+
+        let runtime = ProductRuntimeManager::new();
+        let report = refresh_due_subscriptions_for_scheduler(
+            &state,
+            &dir,
+            &runtime,
+            unix_utc(2026, 6, 17, 0, 1, 0),
+        )
+        .unwrap();
+
+        assert_eq!(report["attempted"], json!(1));
+        assert_eq!(report["dueCount"], json!(1));
+        assert_eq!(report["refreshed"], json!(0));
+        assert_eq!(report["fetchErrors"], json!(1));
+        assert_eq!(report["runtimeInputChanged"], json!(0));
+        assert_eq!(report["runtimeReloaded"], json!(false));
         fs::remove_dir_all(dir).unwrap();
     }
 
