@@ -16,7 +16,9 @@ use self::prepare::prepare_runtime_generation;
 use self::reconcile::{record_apply_failure, record_apply_success};
 use self::rollback::rollback_runtime_generation;
 
-const RUNTIME_GENERATION_METADATA_KEY: &str = "runtime_generation_id";
+pub(in crate::daed_product) const RUNTIME_GENERATION_METADATA_KEY: &str = "runtime_generation_id";
+pub(in crate::daed_product) const RUNTIME_PROBE_GENERATION_METADATA_KEY: &str =
+    "runtime_probe_generation";
 const RUNTIME_RUNNING_METADATA_KEY: &str = "runtime_running";
 const RUNTIME_TRANSITION_PHASE_METADATA_KEY: &str = "runtime_transition_phase";
 const LAST_MATERIALIZED_AT_METADATA_KEY: &str = "last_materialized_at";
@@ -27,6 +29,7 @@ pub(in crate::daed_product) const RUNTIME_PROCESS_TRANSITION_METADATA_KEY: &str 
     "runtime_pending_process_transition";
 const RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS: &[&str] = &[
     RUNTIME_GENERATION_METADATA_KEY,
+    RUNTIME_PROBE_GENERATION_METADATA_KEY,
     RUNTIME_RUNNING_METADATA_KEY,
     RUNTIME_TRANSITION_PHASE_METADATA_KEY,
     LAST_MATERIALIZED_AT_METADATA_KEY,
@@ -121,6 +124,7 @@ pub(in crate::daed_product) fn apply_runtime_generation(
             return Err(err);
         }
     };
+    candidate.set_probe_generation(runtime.current_probe_generation());
     runtime.set_apply_generation_phase(&generation, "commit");
     let commit_result = checkpoints
         .checkpoint(RuntimeApplyCheckpoint::CommitPostStart)

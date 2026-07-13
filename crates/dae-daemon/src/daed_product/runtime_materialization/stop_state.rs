@@ -42,5 +42,10 @@ fn persist_system_stopped(state: &Path) -> io::Result<()> {
         params![RUNTIME_PROCESS_TRANSITION_METADATA_KEY],
     )
     .map_err(sqlite_io_error)?;
+    tx.execute(
+        "DELETE FROM daed_product_metadata WHERE key = ?1",
+        params![RUNTIME_PROBE_GENERATION_METADATA_KEY],
+    )
+    .map_err(sqlite_io_error)?;
     tx.commit().map_err(sqlite_io_error)
 }

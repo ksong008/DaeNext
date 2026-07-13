@@ -280,7 +280,7 @@ fn run_node_latency_job_inner(
     } else if !nodes.is_empty() && !cancellation.is_requested() {
         let nodes = current_latency_probe_nodes(&conn, nodes)?;
         let tested_at = now_text();
-        let results = native_probe_unavailable_results(&nodes, &tested_at);
+        let results = native_probe_unavailable_results(&nodes, &tested_at, None);
         if !results.is_empty() && !cancellation.is_requested() {
             let alive = results.iter().filter(|result| result.alive).count();
             completed = results.len();
@@ -380,9 +380,13 @@ fn node_latency_results_for_runtime_snapshots(
         .cloned()
         .collect::<Vec<_>>();
     let mut results = runtime_results;
+    let probe_generation = runtime_snapshots
+        .iter()
+        .find_map(|snapshot| snapshot.get("reloadGeneration").and_then(Value::as_u64));
     results.extend(native_probe_unavailable_results(
         &fallback_nodes,
         &tested_at,
+        probe_generation,
     ));
     results
 }
@@ -516,6 +520,7 @@ mod tests {
         let results = vec![NodeLatencyWrite {
             node_id: 1,
             node_link: "socks://127.0.0.1:1080#one".to_owned(),
+            probe_generation: None,
             latency_ms: Some(9),
             alive: true,
             tested_at: "now".to_owned(),
@@ -552,6 +557,7 @@ mod tests {
         let results = vec![NodeLatencyWrite {
             node_id: 1,
             node_link: "socks://127.0.0.1:1080#one".to_owned(),
+            probe_generation: None,
             latency_ms: Some(9),
             alive: true,
             tested_at: "now".to_owned(),
@@ -626,6 +632,7 @@ mod tests {
             NodeLatencyWrite {
                 node_id: 1,
                 node_link: "socks://127.0.0.1:1080#one".to_owned(),
+                probe_generation: None,
                 latency_ms: Some(11),
                 alive: true,
                 tested_at: "2026-06-29T00:00:00Z".to_owned(),
@@ -634,6 +641,7 @@ mod tests {
             NodeLatencyWrite {
                 node_id: 2,
                 node_link: "socks://127.0.0.1:1081#two".to_owned(),
+                probe_generation: None,
                 latency_ms: Some(22),
                 alive: true,
                 tested_at: "2026-06-29T00:00:00Z".to_owned(),
@@ -642,6 +650,7 @@ mod tests {
             NodeLatencyWrite {
                 node_id: 3,
                 node_link: "socks://127.0.0.1:1082#three".to_owned(),
+                probe_generation: None,
                 latency_ms: Some(33),
                 alive: true,
                 tested_at: "2026-06-29T00:00:00Z".to_owned(),
@@ -676,6 +685,7 @@ mod tests {
             results.push(NodeLatencyWrite {
                 node_id: id,
                 node_link: link,
+                probe_generation: None,
                 latency_ms: Some(id),
                 alive: true,
                 tested_at: "2026-07-10T00:00:00Z".to_owned(),

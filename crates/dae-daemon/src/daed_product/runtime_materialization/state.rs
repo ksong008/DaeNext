@@ -13,6 +13,7 @@ pub(in crate::daed_product) fn general_state_report(
     let selected_config_id = selected_id(&conn, SectionKind::Config)?;
     let selected_dns_id = selected_id(&conn, SectionKind::Dns)?;
     let selected_routing_id = selected_id(&conn, SectionKind::Routing)?;
+    let runtime_revision = runtime_revision_report_from_connection(&conn, runtime, &runtime_state)?;
     Ok(json!({
         "running": running,
         "modified": modified,
@@ -20,6 +21,7 @@ pub(in crate::daed_product) fn general_state_report(
         "netnsLinkMode": runtime_state["netnsLinkMode"].clone(),
         "attachBackend": runtime_state["attachBackend"].clone(),
         "runtime": runtime_state,
+        "runtimeRevision": runtime_revision,
         "updatedAt": now_text(),
         "state": path_string(state),
         "selected": {
@@ -37,6 +39,114 @@ pub(in crate::daed_product) fn general_state_report(
             "logs": count_log_file_entries(config_dir)?,
         }
     }))
+}
+
+pub(in crate::daed_product) fn runtime_revision_report(
+    state: &Path,
+    runtime: &ProductRuntimeManager,
+    runtime_state: &Value,
+) -> io::Result<Value> {
+    let conn = open_state_connection(state)?;
+    runtime_revision_report_from_connection(&conn, runtime, runtime_state)
+}
+
+fn runtime_revision_report_from_connection(
+    conn: &Connection,
+    runtime: &ProductRuntimeManager,
+    runtime_state: &Value,
+) -> io::Result<Value> {
+    let desired_external_revision = current_runtime_external_input_version(conn)?;
+    let desired = json!({
+        "config": section_revision_value(selected_section_state(conn, SectionKind::Config)?),
+        "dns": section_revision_value(selected_section_state(conn, SectionKind::Dns)?),
+        "routing": section_revision_value(selected_section_state(conn, SectionKind::Routing)?),
+        "groupVersionSum": group_version_sum(conn)?,
+        "groupIds": group_ids_text(conn)?,
+        "externalInputVersion": desired_external_revision,
+    });
+    let active_state = running_runtime_state(conn)?;
+    let active = active_state
+        .as_ref()
+        .map(active_runtime_revision_value)
+        .unwrap_or(Value::Null);
+    let running = runtime_state["running"].as_bool().unwrap_or(false);
+    let desired_matches_active = active_state
+        .as_ref()
+        .is_some_and(|active| active_runtime_revision_matches(active, &desired));
+    let runtime_product_generation = runtime_state["activeGeneration"].as_str();
+    let persisted_product_generation =
+        metadata_value_from_connection(conn, RUNTIME_GENERATION_METADATA_KEY)?;
+    let runtime_probe_generation = runtime.current_probe_generation();
+    let persisted_probe_generation =
+        metadata_value_from_connection(conn, RUNTIME_PROBE_GENERATION_METADATA_KEY)?
+            .map(|value| {
+                value.parse::<u64>().map_err(|err| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid persisted runtime probe generation {value:?}: {err}"),
+                    )
+                })
+            })
+            .transpose()?;
+    let product_generation_matches = runtime_product_generation
+        .zip(persisted_product_generation.as_deref())
+        .is_some_and(|(runtime, persisted)| runtime == persisted);
+    let probe_generation_matches = runtime_probe_generation == persisted_probe_generation;
+    let activation_identity_consistent =
+        !running || (product_generation_matches && probe_generation_matches);
+
+    Ok(json!({
+        "desired": desired,
+        "active": active,
+        "desiredMatchesActive": desired_matches_active,
+        "pending": running && !desired_matches_active,
+        "activeProductGeneration": runtime_product_generation,
+        "persistedProductGeneration": persisted_product_generation,
+        "activeResidentProbeGeneration": runtime_probe_generation,
+        "persistedResidentProbeGeneration": persisted_probe_generation,
+        "productGenerationMatches": if running { json!(product_generation_matches) } else { Value::Null },
+        "probeGenerationMatches": probe_generation_matches,
+        "activationIdentityConsistent": activation_identity_consistent,
+    }))
+}
+
+fn section_revision_value(section: Option<RuntimeSectionState>) -> Value {
+    section
+        .map(|section| json!({"id": section.id, "version": section.version}))
+        .unwrap_or(Value::Null)
+}
+
+fn active_runtime_revision_value(active: &RunningRuntimeState) -> Value {
+    json!({
+        "config": {"id": active.config_id, "version": active.config_version},
+        "dns": {"id": active.dns_id, "version": active.dns_version},
+        "routing": {"id": active.routing_id, "version": active.routing_version},
+        "groupVersionSum": active.group_version_sum,
+        "groupIds": active.group_ids,
+        "externalInputVersion": active.external_input_version,
+    })
+}
+
+fn active_runtime_revision_matches(active: &RunningRuntimeState, desired: &Value) -> bool {
+    desired["config"]["id"].as_i64() == active.config_id
+        && desired["config"]["version"].as_i64() == Some(active.config_version)
+        && desired["dns"]["id"].as_i64() == active.dns_id
+        && desired["dns"]["version"].as_i64() == Some(active.dns_version)
+        && desired["routing"]["id"].as_i64() == active.routing_id
+        && desired["routing"]["version"].as_i64() == Some(active.routing_version)
+        && desired["groupVersionSum"].as_i64() == Some(active.group_version_sum)
+        && desired["groupIds"].as_str() == Some(active.group_ids.as_str())
+        && desired["externalInputVersion"].as_i64() == Some(active.external_input_version)
+}
+
+fn metadata_value_from_connection(conn: &Connection, key: &str) -> io::Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM daed_product_metadata WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(sqlite_io_error)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,5 +331,19 @@ pub(in crate::daed_product) fn bump_runtime_external_input_version_with_connecti
 
 pub(in crate::daed_product) fn mark_runtime_process_stopped(state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
-    set_metadata(state, "runtime_running", "false")
+    let mut conn = open_state_connection(state)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_io_error)?;
+    tx.execute(
+        "INSERT OR REPLACE INTO daed_product_metadata(key, value) VALUES('runtime_running', 'false')",
+        [],
+    )
+    .map_err(sqlite_io_error)?;
+    tx.execute(
+        "DELETE FROM daed_product_metadata WHERE key = ?1",
+        params![RUNTIME_PROBE_GENERATION_METADATA_KEY],
+    )
+    .map_err(sqlite_io_error)?;
+    tx.commit().map_err(sqlite_io_error)
 }

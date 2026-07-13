@@ -1,6 +1,8 @@
 use super::*;
 pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> Value {
     let runtime = app.runtime.summary();
+    let runtime_revision = runtime_revision_report(&app.state, &app.runtime, &runtime)
+        .unwrap_or_else(|err| json!({"error": err.to_string()}));
     let window_sec = query_u64(request, "windowSec")
         .unwrap_or(60)
         .clamp(1, 3_600);
@@ -53,6 +55,7 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         "runtimeSampler": app.runtime_sampler.as_ref().map(|sampler| sampler.snapshot()).unwrap_or(Value::Null),
         "runtimeSampleCount": sampled.sample_count,
         "runtime": runtime,
+        "runtimeRevision": runtime_revision,
         "samples": traffic.samples,
     })
 }

@@ -104,10 +104,13 @@ fn write_node_latency_results_chunk(
     results: &[NodeLatencyWrite],
 ) -> io::Result<(usize, usize)> {
     let tx = conn.transaction().map_err(sqlite_io_error)?;
+    let active_probe_generation = active_runtime_probe_generation(&tx)?;
     let mut written = 0_usize;
     let mut alive = 0_usize;
     for result in results {
-        if node_latency_result_target_exists(&tx, result.node_id, &result.node_link)? {
+        if probe_generation_is_current(result.probe_generation, active_probe_generation)
+            && node_latency_result_target_exists(&tx, result.node_id, &result.node_link)?
+        {
             store_node_latency_result(&tx, result)?;
             written = written.saturating_add(1);
             if result.alive {
@@ -117,6 +120,31 @@ fn write_node_latency_results_chunk(
     }
     tx.commit().map_err(sqlite_io_error)?;
     Ok((written, alive))
+}
+
+fn active_runtime_probe_generation(conn: &Connection) -> io::Result<Option<u64>> {
+    let value = conn
+        .query_row(
+            "SELECT value FROM daed_product_metadata WHERE key = ?1",
+            params![RUNTIME_PROBE_GENERATION_METADATA_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sqlite_io_error)?;
+    value
+        .map(|value| {
+            value.parse::<u64>().map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid active runtime probe generation {value:?}: {err}"),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn probe_generation_is_current(write: Option<u64>, active: Option<u64>) -> bool {
+    write == active
 }
 
 fn node_latency_result_target_exists(
@@ -164,6 +192,7 @@ mod tests {
             .queue(&[NodeLatencyWrite {
                 node_id: 1,
                 node_link: "socks://127.0.0.1:1080#one".to_owned(),
+                probe_generation: None,
                 latency_ms: Some(11),
                 alive: true,
                 tested_at: "now".to_owned(),
@@ -196,6 +225,138 @@ mod tests {
                 )
                 .unwrap(),
             11
+        );
+    }
+
+    #[test]
+    fn stale_probe_generation_is_discarded_without_becoming_pending_again() {
+        let fixture = FreshProductState::new("latency-persistence-generation");
+        let conn = fixture.connection();
+        conn.execute(
+            "INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+             VALUES(1, 'socks://127.0.0.1:1080#one', 'one', '127.0.0.1', 'socks', NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO daed_product_metadata(key, value) VALUES(?1, '2')",
+            params![RUNTIME_PROBE_GENERATION_METADATA_KEY],
+        )
+        .unwrap();
+        drop(conn);
+        let queue = LatencyPersistenceQueue::default();
+        queue
+            .queue(&[NodeLatencyWrite {
+                node_id: 1,
+                node_link: "socks://127.0.0.1:1080#one".to_owned(),
+                probe_generation: Some(1),
+                latency_ms: Some(11),
+                alive: true,
+                tested_at: "2026-07-13T00:00:00Z".to_owned(),
+                message: None,
+            }])
+            .unwrap();
+
+        let stale = queue.flush(fixture.state());
+
+        assert_eq!(stale.pending, 0);
+        assert!(stale.error.is_none());
+        assert_eq!(
+            fixture
+                .connection()
+                .query_row("SELECT COUNT(*) FROM node_latency_results", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+
+        queue
+            .queue(&[NodeLatencyWrite {
+                node_id: 1,
+                node_link: "socks://127.0.0.1:1080#one".to_owned(),
+                probe_generation: Some(2),
+                latency_ms: Some(22),
+                alive: true,
+                tested_at: "2026-07-13T00:00:01Z".to_owned(),
+                message: None,
+            }])
+            .unwrap();
+        let current = queue.flush(fixture.state());
+        assert_eq!(current.pending, 0);
+        assert!(current.error.is_none());
+        assert_eq!(
+            fixture
+                .connection()
+                .query_row(
+                    "SELECT latency_ms FROM node_latency_results WHERE node_id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            22
+        );
+    }
+
+    #[test]
+    fn queued_write_becomes_stale_while_database_is_busy_and_is_not_retried_forever() {
+        let fixture = FreshProductState::new("latency-persistence-stale-retry");
+        let conn = fixture.connection();
+        conn.execute(
+            "INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+             VALUES(1, 'socks://127.0.0.1:1080#one', 'one', '127.0.0.1', 'socks', NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO daed_product_metadata(key, value) VALUES(?1, '1')",
+            params![RUNTIME_PROBE_GENERATION_METADATA_KEY],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_generation_latency
+             BEFORE INSERT ON node_latency_results
+             BEGIN
+                 SELECT RAISE(ABORT, 'injected generation write failure');
+             END;",
+        )
+        .unwrap();
+        drop(conn);
+        let queue = LatencyPersistenceQueue::default();
+        queue
+            .queue(&[NodeLatencyWrite {
+                node_id: 1,
+                node_link: "socks://127.0.0.1:1080#one".to_owned(),
+                probe_generation: Some(1),
+                latency_ms: Some(11),
+                alive: true,
+                tested_at: "2026-07-13T00:00:00Z".to_owned(),
+                message: None,
+            }])
+            .unwrap();
+        assert_eq!(queue.flush(fixture.state()).pending, 1);
+
+        let conn = fixture.connection();
+        conn.execute("DROP TRIGGER reject_generation_latency", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE daed_product_metadata SET value = '2' WHERE key = ?1",
+            params![RUNTIME_PROBE_GENERATION_METADATA_KEY],
+        )
+        .unwrap();
+        drop(conn);
+
+        let flush = queue.flush(fixture.state());
+        assert_eq!(flush.pending, 0);
+        assert!(flush.error.is_none());
+        assert_eq!(
+            fixture
+                .connection()
+                .query_row("SELECT COUNT(*) FROM node_latency_results", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
         );
     }
 }

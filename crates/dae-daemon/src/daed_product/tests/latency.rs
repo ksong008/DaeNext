@@ -94,6 +94,7 @@ pub(crate) fn stored_successful_latency_seed_snapshots_skip_failures_and_redact_
         &NodeLatencyWrite {
             node_id: 11,
             node_link: "socks://127.0.0.1:1080#one".to_owned(),
+            probe_generation: None,
             latency_ms: Some(37),
             alive: true,
             tested_at: iso8601_utc(42),
@@ -106,6 +107,7 @@ pub(crate) fn stored_successful_latency_seed_snapshots_skip_failures_and_redact_
         &NodeLatencyWrite {
             node_id: 12,
             node_link: "socks://127.0.0.1:1081#two".to_owned(),
+            probe_generation: None,
             latency_ms: Some(10000),
             alive: false,
             tested_at: iso8601_utc(43),
@@ -448,6 +450,7 @@ pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
             },
             "latencyMs": 37,
             "alive": true,
+            "reloadGeneration": 7,
             "checkedAtUnix": 42,
             "message": "37ms",
         }),
@@ -474,6 +477,7 @@ pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
     let (results, tested_ids) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].node_id, 11);
+    assert_eq!(results[0].probe_generation, Some(7));
     assert_eq!(results[0].latency_ms, Some(37));
     assert!(results[0].alive);
     assert_eq!(results[0].message, None);

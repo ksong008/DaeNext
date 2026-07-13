@@ -374,3 +374,40 @@ fn reload_reports_process_owned_http_changes_as_pending_transition() {
         );
     });
 }
+
+#[test]
+fn general_state_exposes_desired_active_and_generation_consistency() {
+    with_product_runtime_fake_start_override(true, || {
+        let product = FreshProductState::new("runtime-revision-report");
+        product.seed_selected_resources();
+        let runtime = ProductRuntimeManager::new();
+        coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(product.root()),
+            RuntimeApplyIntent::ApiReload,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+
+        let current = general_state_report(product.state(), product.root(), &runtime).unwrap();
+        let revision = &current["runtimeRevision"];
+        assert_eq!(revision["desired"]["externalInputVersion"], json!(0));
+        assert_eq!(revision["active"]["externalInputVersion"], json!(0));
+        assert_eq!(revision["desiredMatchesActive"], json!(true));
+        assert_eq!(revision["pending"], json!(false));
+        assert_eq!(revision["productGenerationMatches"], json!(true));
+        assert_eq!(revision["probeGenerationMatches"], json!(true));
+        assert_eq!(revision["activationIdentityConsistent"], json!(true));
+
+        bump_runtime_external_input_version(product.state()).unwrap();
+        let pending = general_state_report(product.state(), product.root(), &runtime).unwrap();
+        let revision = &pending["runtimeRevision"];
+        assert_eq!(revision["desired"]["externalInputVersion"], json!(1));
+        assert_eq!(revision["active"]["externalInputVersion"], json!(0));
+        assert_eq!(revision["desiredMatchesActive"], json!(false));
+        assert_eq!(revision["pending"], json!(true));
+        assert_eq!(pending["modified"], json!(true));
+    });
+}
