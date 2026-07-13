@@ -17,6 +17,13 @@ pub(crate) struct ResidentDataplaneMetrics {
     health_resuscitation_queue_full: AtomicU64,
     health_resuscitation_disconnected: AtomicU64,
     pub(super) active_udp_sessions: AtomicU64,
+    udp_session_dispatch_queued: AtomicU64,
+    udp_session_dispatch_queue_full: AtomicU64,
+    udp_session_created: AtomicU64,
+    udp_session_reused: AtomicU64,
+    udp_session_admission_rejected: AtomicU64,
+    udp_session_queue_full: AtomicU64,
+    udp_session_shutdown_deadline_hits: AtomicU64,
     udp_ingress_packets: AtomicU64,
     udp_ingress_drain_batches: AtomicU64,
     udp_ingress_drain_budget_hits: AtomicU64,
@@ -112,6 +119,38 @@ impl ResidentDataplaneMetrics {
 
     pub(super) fn udp_opened(&self) {
         self.active_udp_sessions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_dispatch_queued(&self) {
+        self.udp_session_dispatch_queued
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_dispatch_queue_full(&self) {
+        self.udp_session_dispatch_queue_full
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_created(&self) {
+        self.udp_session_created.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_reused(&self) {
+        self.udp_session_reused.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_admission_rejected(&self) {
+        self.udp_session_admission_rejected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_queue_full(&self) {
+        self.udp_session_queue_full.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_shutdown_deadline_hit(&self) {
+        self.udp_session_shutdown_deadline_hits
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(super) fn udp_closed(&self) {
@@ -234,6 +273,13 @@ impl ResidentDataplaneMetrics {
             "healthResuscitationQueueFull": self.health_resuscitation_queue_full.load(Ordering::Relaxed),
             "healthResuscitationDisconnected": self.health_resuscitation_disconnected.load(Ordering::Relaxed),
             "activeUdpSessions": self.active_udp_sessions.load(Ordering::Relaxed),
+            "udpSessionDispatchQueued": self.udp_session_dispatch_queued.load(Ordering::Relaxed),
+            "udpSessionDispatchQueueFull": self.udp_session_dispatch_queue_full.load(Ordering::Relaxed),
+            "udpSessionCreated": self.udp_session_created.load(Ordering::Relaxed),
+            "udpSessionReused": self.udp_session_reused.load(Ordering::Relaxed),
+            "udpSessionAdmissionRejected": self.udp_session_admission_rejected.load(Ordering::Relaxed),
+            "udpSessionQueueFull": self.udp_session_queue_full.load(Ordering::Relaxed),
+            "udpSessionShutdownDeadlineHits": self.udp_session_shutdown_deadline_hits.load(Ordering::Relaxed),
             "udpIngressPackets": self.udp_ingress_packets.load(Ordering::Relaxed),
             "udpIngressDrainBatches": self.udp_ingress_drain_batches.load(Ordering::Relaxed),
             "udpIngressDrainBudgetHits": self.udp_ingress_drain_budget_hits.load(Ordering::Relaxed),

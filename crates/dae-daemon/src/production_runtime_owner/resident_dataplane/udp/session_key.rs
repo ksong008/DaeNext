@@ -5,6 +5,40 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+const STABLE_UDP_SHARD_HASH_OFFSET: u64 = 0xcbf29ce484222325;
+const STABLE_UDP_SHARD_HASH_PRIME: u64 = 0x100000001b3;
+
+struct StableUdpShardHasher(u64);
+
+impl Default for StableUdpShardHasher {
+    fn default() -> Self {
+        Self(STABLE_UDP_SHARD_HASH_OFFSET)
+    }
+}
+
+impl Hasher for StableUdpShardHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(STABLE_UDP_SHARD_HASH_PRIME);
+        }
+    }
+}
+
+pub(super) fn stable_udp_shard_index<T>(key: &T, shard_count: usize) -> usize
+where
+    T: Hash + ?Sized,
+{
+    let shard_count = shard_count.max(1);
+    let mut hasher = StableUdpShardHasher::default();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) % shard_count
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct UdpSessionKey {
     graph_id: String,
@@ -364,5 +398,14 @@ mod tests {
         assert_eq!(dns_request_dispatch_lane(&[0x00, 0x06], 4), 2);
         assert_eq!(dns_request_dispatch_lane(&[0x03], 4), 3);
         assert_eq!(dns_request_dispatch_lane(&[], 4), 0);
+    }
+
+    #[test]
+    fn stable_shard_hash_is_repeatable_and_bounded() {
+        let key = ("graph", "outbound", "192.0.2.1:53");
+        let first = stable_udp_shard_index(&key, 7);
+        assert_eq!(first, stable_udp_shard_index(&key, 7));
+        assert!(first < 7);
+        assert_eq!(stable_udp_shard_index(&key, 1), 0);
     }
 }
