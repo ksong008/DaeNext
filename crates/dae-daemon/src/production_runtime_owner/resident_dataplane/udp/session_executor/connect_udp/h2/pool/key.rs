@@ -1,5 +1,3 @@
-use sha2::{Digest, Sha256};
-
 use super::*;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -46,7 +44,7 @@ impl ConnectUdpH2PoolKey {
                 server_name: proxy.server_name.clone(),
                 alpn: proxy.alpn.clone(),
                 allow_insecure: proxy.allow_insecure,
-                authentication_identity: authentication_identity(plan.authentication),
+                authentication_identity: connect_udp_authentication_identity(plan.authentication),
                 target_template: plan.target_template.as_str().to_owned(),
                 mark: proxy.mark,
                 mptcp: proxy.mptcp,
@@ -54,19 +52,4 @@ impl ConnectUdpH2PoolKey {
             plan.runtime,
         ))
     }
-}
-
-fn authentication_identity(authentication: &ResidentConnectUdpAuthPlan) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    match authentication {
-        ResidentConnectUdpAuthPlan::None => hasher.update(b"none"),
-        ResidentConnectUdpAuthPlan::Basic { username, password } => {
-            hasher.update(b"basic\0");
-            hasher.update((username.len() as u64).to_be_bytes());
-            hasher.update(username.as_bytes());
-            hasher.update((password.len() as u64).to_be_bytes());
-            hasher.update(password.as_bytes());
-        }
-    }
-    hasher.finalize().into()
 }

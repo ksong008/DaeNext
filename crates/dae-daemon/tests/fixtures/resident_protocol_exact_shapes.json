@@ -132,8 +132,8 @@
       "securityUnderlay": "quic-tls",
       "streamWrapper": "connect-udp-h3",
       "tcpExecutor": "connect-udp-tcp-policy-closed",
-      "udpExecutor": "connect-udp-h3-executor-pending",
-      "udpStatus": "fail-closed",
+      "udpExecutor": "resident-connect-udp-h3-http-datagram",
+      "udpStatus": "admitted",
       "runtimeDispatch": "policy-closed",
       "probeDispatch": "policy-closed"
     },

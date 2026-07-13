@@ -98,6 +98,7 @@ mod direct_session;
 use self::direct_session::*;
 mod session_executor;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::clear_connect_udp_h2_pools;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::clear_connect_udp_h3_pools;
 use self::session_executor::*;
 mod vmess_session;
 use self::vmess_session::*;
