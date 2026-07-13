@@ -1,5 +1,22 @@
 use super::*;
 
+fn snapshot_selected_runtime_resources(state: &Path) {
+    let conn = open_state_connection(state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: direct }', 1, 1);
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+    materialize_runtime(state, None, false).unwrap();
+}
+
 #[test]
 pub(crate) fn subscription_http_request_formats_authority_and_accepts_compression() {
     let ipv4 = url::Url::parse("http://127.0.0.1:18080/list").unwrap();
@@ -723,6 +740,84 @@ pub(crate) fn update_node_preserves_latency_for_label_only_changes() {
         )
         .unwrap();
     assert_eq!(stored_link, renamed_link);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn manual_node_runtime_changes_advance_external_input_once_per_transaction() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    snapshot_selected_runtime_resources(&state);
+
+    let import = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/nodes".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({
+            "args": [
+                {"link": "http://127.0.0.1:9/one#one"},
+                {"link": "http://127.0.0.2:9/two#two"}
+            ]
+        }))
+        .unwrap(),
+    };
+    let response = import_nodes(&state, &import, None);
+    assert_eq!(response.status, 200);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    let first_id = body["items"][0]["node"]["id"].as_i64().unwrap();
+    let second_id = body["items"][1]["node"]["id"].as_i64().unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    assert!(runtime_modified(&conn, true).unwrap());
+    assert_eq!(current_runtime_external_input_version(&conn).unwrap(), 1);
+    drop(conn);
+
+    materialize_runtime(&state, None, false).unwrap();
+    let update = HttpRequest {
+        method: "PUT".to_owned(),
+        path: format!("/api/nodes/{first_id}"),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({
+            "link": "http://127.0.0.3:9/changed#one"
+        }))
+        .unwrap(),
+    };
+    assert_eq!(update_node(&state, &update, first_id).status, 200);
+    let conn = open_state_connection(&state).unwrap();
+    assert!(runtime_modified(&conn, true).unwrap());
+    assert_eq!(current_runtime_external_input_version(&conn).unwrap(), 2);
+    drop(conn);
+
+    materialize_runtime(&state, None, false).unwrap();
+    let tag_only = HttpRequest {
+        method: "PUT".to_owned(),
+        path: format!("/api/nodes/{first_id}"),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({"tag": "display-only"})).unwrap(),
+    };
+    assert_eq!(update_node(&state, &tag_only, first_id).status, 200);
+    let conn = open_state_connection(&state).unwrap();
+    assert!(!runtime_modified(&conn, true).unwrap());
+    assert_eq!(current_runtime_external_input_version(&conn).unwrap(), 2);
+    drop(conn);
+
+    let delete = HttpRequest {
+        method: "DELETE".to_owned(),
+        path: "/api/nodes".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({"ids": [first_id, second_id, second_id]})).unwrap(),
+    };
+    let response = delete_nodes(&state, &delete);
+    assert_eq!(response.status, 200);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["removed"], json!(2));
+    let conn = open_state_connection(&state).unwrap();
+    assert!(runtime_modified(&conn, true).unwrap());
+    assert_eq!(current_runtime_external_input_version(&conn).unwrap(), 3);
     fs::remove_dir_all(dir).unwrap();
 }
 

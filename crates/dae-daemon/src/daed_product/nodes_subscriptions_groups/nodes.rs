@@ -173,43 +173,120 @@ pub(crate) fn import_nodes(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_else(|| vec![body.clone()]);
-    let conn = match open_state_connection(state) {
+    let prepared = args
+        .into_iter()
+        .map(|item| {
+            let link = item
+                .get("link")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let tag = item.get("tag").and_then(Value::as_str).map(str::to_owned);
+            if link.is_empty() {
+                return PreparedNodeImport::Rejected(json!({
+                    "link": link,
+                    "error": "link is required",
+                    "node": Value::Null
+                }));
+            }
+            let parsed = parse_node_link(&link, tag.as_deref());
+            let stored_link = parsed
+                .normalized_link
+                .clone()
+                .unwrap_or_else(|| link.clone());
+            PreparedNodeImport::Ready {
+                link,
+                stored_link,
+                parsed,
+                tag,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
-    let mut items = Vec::new();
-    for item in args {
-        let link = item.get("link").and_then(Value::as_str).unwrap_or("");
-        let tag = item.get("tag").and_then(Value::as_str);
-        if link.is_empty() {
-            items.push(json!({"link": link, "error": "link is required", "node": Value::Null}));
+    let tx = match conn.transaction() {
+        Ok(tx) => tx,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    let mut pending_items = Vec::with_capacity(prepared.len());
+    let mut inserted = 0_usize;
+    for item in prepared {
+        let PreparedNodeImport::Ready {
+            link,
+            stored_link,
+            parsed,
+            tag,
+        } = item
+        else {
+            if let PreparedNodeImport::Rejected(response) = item {
+                pending_items.push(PendingNodeImport::Complete(response));
+            }
             continue;
-        }
-        let parsed = parse_node_link(link, tag);
-        let stored_link = parsed.normalized_link.as_deref().unwrap_or(link);
-        let result = conn.execute(
+        };
+        let result = tx.execute(
             "INSERT INTO nodes(link, name, address, protocol, tag, subscription_id) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             params![
-                stored_link,
+                &stored_link,
                 parsed.display_name,
                 parsed.address,
                 parsed.protocol,
-                tag,
+                tag.as_deref(),
                 subscription_id
             ],
         );
         match result {
             Ok(_) => {
-                let id = conn.last_insert_rowid();
-                let node = get_node_value(state, id).unwrap_or(None);
-                items.push(json!({"link": stored_link, "error": Value::Null, "node": node}));
+                inserted += 1;
+                pending_items.push(PendingNodeImport::Inserted {
+                    link: stored_link,
+                    id: tx.last_insert_rowid(),
+                });
             }
             Err(err) => {
-                items.push(json!({"link": link, "error": err.to_string(), "node": Value::Null}))
+                pending_items.push(PendingNodeImport::Complete(json!({
+                    "link": link,
+                    "error": err.to_string(),
+                    "node": Value::Null
+                })));
             }
         }
     }
+    if inserted > 0
+        && let Err(err) = bump_runtime_external_input_version_with_connection(&tx)
+    {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
+    if let Err(err) = tx.commit() {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
+    let items = pending_items
+        .into_iter()
+        .map(|item| match item {
+            PendingNodeImport::Complete(response) => response,
+            PendingNodeImport::Inserted { link, id } => {
+                let node = get_node_value(state, id).unwrap_or(None);
+                json!({"link": link, "error": Value::Null, "node": node})
+            }
+        })
+        .collect::<Vec<_>>();
     HttpResponse::json(200, json!({"items": items}))
+}
+
+enum PreparedNodeImport {
+    Rejected(Value),
+    Ready {
+        link: String,
+        stored_link: String,
+        parsed: ParsedNodeLink,
+        tag: Option<String>,
+    },
+}
+
+enum PendingNodeImport {
+    Complete(Value),
+    Inserted { link: String, id: i64 },
 }
 
 pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
@@ -270,6 +347,13 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
                 {
                     return HttpResponse::json(500, json!({"error": err.to_string()}));
                 }
+                if previous_identity
+                    .as_ref()
+                    .is_some_and(|current| current.link != stored_link)
+                    && let Err(err) = bump_runtime_external_input_version_with_connection(&tx)
+                {
+                    return HttpResponse::json(500, json!({"error": err.to_string()}));
+                }
                 if let Err(err) = tx.commit() {
                     return HttpResponse::json(500, json!({"error": err.to_string()}));
                 }
@@ -291,6 +375,7 @@ pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpR
 
 #[derive(Clone, Debug)]
 struct NodeLatencyIdentity {
+    link: String,
     stable_key: StableNodeKey,
     address: String,
     protocol: String,
@@ -303,6 +388,7 @@ fn node_latency_identity(conn: &Connection, id: i64) -> io::Result<Option<NodeLa
         |row| {
             let link = row.get::<_, String>(0)?;
             Ok(NodeLatencyIdentity {
+                link: link.clone(),
                 stable_key: StableNodeKey::from_link(&link),
                 address: row.get(1)?,
                 protocol: row.get(2)?,
@@ -322,13 +408,10 @@ fn node_latency_identity_changed(current: &NodeLatencyIdentity, next: &ParsedNod
 pub(crate) fn delete_nodes(state: &Path, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
-    let mut removed = 0_usize;
-    for id in ids {
-        if let Ok(value) = delete_node(state, id) {
-            removed += value;
-        }
+    match delete_nodes_transaction(state, ids) {
+        Ok(removed) => HttpResponse::json(200, json!({"removed": removed})),
+        Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
-    HttpResponse::json(200, json!({"removed": removed}))
 }
 
 pub(crate) fn delete_node_by_id(state: &Path, id: i64) -> HttpResponse {
@@ -339,16 +422,34 @@ pub(crate) fn delete_node_by_id(state: &Path, id: i64) -> HttpResponse {
 }
 
 pub(crate) fn delete_node(state: &Path, id: i64) -> io::Result<usize> {
-    let conn = open_state_connection(state)?;
-    conn.execute("DELETE FROM group_nodes WHERE node_id = ?1", params![id])
+    delete_nodes_transaction(state, [id])
+}
+
+fn delete_nodes_transaction(state: &Path, ids: impl IntoIterator<Item = i64>) -> io::Result<usize> {
+    let ids = ids.into_iter().collect::<BTreeSet<_>>();
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let mut conn = open_state_connection(state)?;
+    let tx = conn.transaction().map_err(sqlite_io_error)?;
+    let mut removed = 0_usize;
+    for id in ids {
+        tx.execute("DELETE FROM group_nodes WHERE node_id = ?1", params![id])
+            .map_err(sqlite_io_error)?;
+        tx.execute(
+            "DELETE FROM node_latency_results WHERE node_id = ?1",
+            params![id],
+        )
         .map_err(sqlite_io_error)?;
-    conn.execute(
-        "DELETE FROM node_latency_results WHERE node_id = ?1",
-        params![id],
-    )
-    .map_err(sqlite_io_error)?;
-    conn.execute("DELETE FROM nodes WHERE id = ?1", params![id])
-        .map_err(sqlite_io_error)
+        removed += tx
+            .execute("DELETE FROM nodes WHERE id = ?1", params![id])
+            .map_err(sqlite_io_error)?;
+    }
+    if removed > 0 {
+        bump_runtime_external_input_version_with_connection(&tx)?;
+    }
+    tx.commit().map_err(sqlite_io_error)?;
+    Ok(removed)
 }
 
 #[derive(Clone, Debug)]
