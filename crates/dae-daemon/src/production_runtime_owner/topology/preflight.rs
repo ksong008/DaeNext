@@ -1,6 +1,7 @@
 use super::*;
 
 const PRODUCTION_NAMES_FREE_CHECK: &str = "production-names-free";
+const TPROXY_PORT_FREE_CHECK: &str = "tproxy-port-free";
 
 pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<Value> {
     let mut checks = Vec::new();
@@ -59,12 +60,24 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
     push_production_names_check(&mut checks, options);
     push_check(
         &mut checks,
-        "tproxy-port-free",
+        TPROXY_PORT_FREE_CHECK,
         !options.execute || tproxy_port_available(options.tproxy_port),
         json!({"tproxy_port": options.tproxy_port}),
         "production runtime owner tproxy port is already in use",
     );
     checks
+}
+
+pub(crate) fn preflight_nonexclusive_blockers(checks: &[Value]) -> Vec<String> {
+    checks
+        .iter()
+        .filter(|check| check["status"].as_str() != Some("pass"))
+        .filter(|check| {
+            let name = check["name"].as_str();
+            name != Some(PRODUCTION_NAMES_FREE_CHECK) && name != Some(TPROXY_PORT_FREE_CHECK)
+        })
+        .filter_map(|check| check["blocker"].as_str().map(str::to_owned))
+        .collect()
 }
 
 pub(crate) fn preflight_blockers(checks: &[Value], include_production_names: bool) -> Vec<String> {
@@ -137,6 +150,35 @@ mod tests {
         assert_eq!(
             preflight_blockers(&checks, true),
             ["names are in use".to_owned(), "cgroup conflict".to_owned()]
+        );
+        assert_eq!(
+            preflight_nonexclusive_blockers(&checks),
+            ["cgroup conflict".to_owned()]
+        );
+    }
+
+    #[test]
+    fn candidate_preflight_defers_only_exclusive_owner_checks() {
+        let checks = vec![
+            json!({
+                "name": PRODUCTION_NAMES_FREE_CHECK,
+                "status": "fail",
+                "blocker": "names are in use",
+            }),
+            json!({
+                "name": TPROXY_PORT_FREE_CHECK,
+                "status": "fail",
+                "blocker": "port is in use",
+            }),
+            json!({
+                "name": "tool-ip-available",
+                "status": "fail",
+                "blocker": "required host tool is missing",
+            }),
+        ];
+        assert_eq!(
+            preflight_nonexclusive_blockers(&checks),
+            ["required host tool is missing".to_owned()]
         );
     }
 }

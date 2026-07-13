@@ -5,6 +5,7 @@ const BACKGROUND_STOP_CLEANUP_MODE: &str = "background-stop";
 
 pub(in crate::daed_product) struct PreparedProductRuntimeStop<'a> {
     manager: &'a ProductRuntimeManager,
+    coordinator: RuntimeStopPermit<'a>,
     _lifecycle: MutexGuard<'a, ()>,
     inner: MutexGuard<'a, ProductRuntimeState>,
     started: Instant,
@@ -15,6 +16,7 @@ impl ProductRuntimeManager {
         &self,
     ) -> Result<PreparedProductRuntimeStop<'_>, String> {
         let started = Instant::now();
+        let coordinator = self.coordinator.begin_stop()?;
         let lifecycle = self
             .lifecycle
             .lock()
@@ -25,6 +27,7 @@ impl ProductRuntimeManager {
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
         Ok(PreparedProductRuntimeStop {
             manager: self,
+            coordinator,
             _lifecycle: lifecycle,
             inner,
             started,
@@ -45,26 +48,28 @@ impl ProductRuntimeManager {
     }
 }
 
-impl PreparedProductRuntimeStop<'_> {
+impl<'a> PreparedProductRuntimeStop<'a> {
     pub(in crate::daed_product) fn commit_background(self) -> Value {
-        let (manager_inner, stopped_runtime, was_running, cleanup_epoch, started) =
+        let (manager_inner, stopped_runtime, was_running, cleanup_epoch, started, coordinator) =
             self.take_runtime(BACKGROUND_STOP_CLEANUP_MODE);
         if was_running {
             spawn_background_cleanup(manager_inner, cleanup_epoch, stopped_runtime);
         } else {
             drop(stopped_runtime);
         }
-        stop_report(
+        let report = stop_report(
             started,
             was_running,
             cleanup_epoch,
             BACKGROUND_STOP_CLEANUP_MODE,
             None,
-        )
+        );
+        coordinator.finish("stopped");
+        report
     }
 
     fn commit_and_wait(self, cleanup_mode: &str) -> Result<Value, String> {
-        let (manager_inner, stopped_runtime, was_running, cleanup_epoch, started) =
+        let (manager_inner, stopped_runtime, was_running, cleanup_epoch, started, coordinator) =
             self.take_runtime(cleanup_mode);
         let cleanup_report = if was_running {
             let cleanup_report = cleanup_runtime_instance_with_reclaim(
@@ -82,13 +87,15 @@ impl PreparedProductRuntimeStop<'_> {
             drop(stopped_runtime);
             None
         };
-        Ok(stop_report(
+        let report = stop_report(
             started,
             was_running,
             cleanup_epoch,
             cleanup_mode,
             cleanup_report,
-        ))
+        );
+        coordinator.finish("stopped");
+        Ok(report)
     }
 
     fn take_runtime(
@@ -100,6 +107,7 @@ impl PreparedProductRuntimeStop<'_> {
         bool,
         u64,
         Instant,
+        RuntimeStopPermit<'a>,
     ) {
         self.inner.lifecycle_epoch = self.inner.lifecycle_epoch.wrapping_add(1);
         let was_running = self.inner.runtime.is_some();
@@ -116,9 +124,12 @@ impl PreparedProductRuntimeStop<'_> {
         self.inner.last_transition_at = Some(now_text());
         self.inner.last_report = None;
         self.inner.last_error = None;
+        self.inner.active_generation = None;
+        self.inner.pending_process_transition = None;
         let cleanup_epoch = self.inner.lifecycle_epoch;
         let manager_inner = Arc::clone(&self.manager.inner);
         let started = self.started;
+        let coordinator = self.coordinator;
         drop(self.inner);
         (
             manager_inner,
@@ -126,6 +137,7 @@ impl PreparedProductRuntimeStop<'_> {
             was_running,
             cleanup_epoch,
             started,
+            coordinator,
         )
     }
 }

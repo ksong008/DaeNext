@@ -5,6 +5,8 @@ pub(super) fn commit_runtime_generation(
     state: &Path,
     config_dir: Option<&Path>,
     plan: &RuntimeMaterializationPlan,
+    runtime_log_level: &str,
+    process_transition: Option<&Value>,
     candidate: &mut PreparedRuntimeGeneration,
     checkpoints: &mut dyn RuntimeApplyCheckpoints,
 ) -> Result<Value, String> {
@@ -27,7 +29,14 @@ pub(super) fn commit_runtime_generation(
         candidate.candidate_path = None;
     }
 
-    commit_runtime_state(state, plan, candidate, checkpoints)?;
+    commit_runtime_state(
+        state,
+        plan,
+        runtime_log_level,
+        process_transition,
+        candidate,
+        checkpoints,
+    )?;
     candidate.mark_committed();
     Ok(plan.report(config_dir, false))
 }
@@ -35,6 +44,8 @@ pub(super) fn commit_runtime_generation(
 fn commit_runtime_state(
     state: &Path,
     plan: &RuntimeMaterializationPlan,
+    runtime_log_level: &str,
+    process_transition: Option<&Value>,
     candidate: &PreparedRuntimeGeneration,
     checkpoints: &mut dyn RuntimeApplyCheckpoints,
 ) -> Result<(), String> {
@@ -62,12 +73,36 @@ fn commit_runtime_state(
         ],
     )
     .map_err(|err| format!("insert committed runtime state: {err}"))?;
-    set_metadata_in_transaction(&tx, "last_materialized_at", &plan.generated_at)?;
-    set_metadata_in_transaction(&tx, "runtime_running", "true")?;
-    set_metadata_in_transaction(&tx, "runtime_generation_id", &candidate.generation)?;
-    set_metadata_in_transaction(&tx, "runtime_transition_phase", "committed")?;
+    set_metadata_in_transaction(&tx, LAST_MATERIALIZED_AT_METADATA_KEY, &plan.generated_at)?;
+    set_metadata_in_transaction(&tx, RUNTIME_RUNNING_METADATA_KEY, "true")?;
+    set_metadata_in_transaction(&tx, RUNTIME_GENERATION_METADATA_KEY, &candidate.generation)?;
+    set_metadata_in_transaction(&tx, RUNTIME_TRANSITION_PHASE_METADATA_KEY, "committed")?;
+    set_metadata_in_transaction(&tx, RUNTIME_LOG_LEVEL_METADATA_KEY, runtime_log_level)?;
+    tx.execute(
+        "DELETE FROM daed_product_metadata WHERE key = ?1",
+        params![RUNTIME_LAST_APPLY_ERROR_METADATA_KEY],
+    )
+    .map_err(|err| format!("clear previous runtime apply error: {err}"))?;
+    match process_transition {
+        Some(transition) => set_metadata_in_transaction(
+            &tx,
+            RUNTIME_PROCESS_TRANSITION_METADATA_KEY,
+            &transition.to_string(),
+        )?,
+        None => {
+            tx.execute(
+                "DELETE FROM daed_product_metadata WHERE key = ?1",
+                params![RUNTIME_PROCESS_TRANSITION_METADATA_KEY],
+            )
+            .map_err(|err| format!("clear runtime process transition: {err}"))?;
+        }
+    }
     if let Some(output_path) = candidate.output_path.as_ref() {
-        set_metadata_in_transaction(&tx, "last_generated_config_path", &path_string(output_path))?;
+        set_metadata_in_transaction(
+            &tx,
+            LAST_GENERATED_CONFIG_PATH_METADATA_KEY,
+            &path_string(output_path),
+        )?;
     }
     checkpoints
         .checkpoint(RuntimeApplyCheckpoint::CommitDatabase)

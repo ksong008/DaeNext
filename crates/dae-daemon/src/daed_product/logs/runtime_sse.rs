@@ -8,9 +8,14 @@ pub(crate) fn current_runtime_log_level(state: &Path) -> io::Result<String> {
     Ok(level)
 }
 
+pub(crate) fn runtime_log_level_for_config(config: &Config) -> String {
+    normalize_runtime_log_level(&config.global.log_level)
+        .unwrap_or_else(|| DEFAULT_RUNTIME_LOG_LEVEL.to_owned())
+}
+
+#[cfg(test)]
 pub(crate) fn set_runtime_log_level_from_config(state: &Path, config: &Config) -> io::Result<()> {
-    let level = normalize_runtime_log_level(&config.global.log_level)
-        .unwrap_or_else(|| DEFAULT_RUNTIME_LOG_LEVEL.to_owned());
+    let level = runtime_log_level_for_config(config);
     set_metadata(state, "runtime_log_level", &level)
 }
 

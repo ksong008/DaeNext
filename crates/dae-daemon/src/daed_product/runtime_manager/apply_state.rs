@@ -75,6 +75,9 @@ impl ProductRuntimeManager {
             inner.apply.rollback_result = failure.map(|(_, rollback)| rollback.to_owned());
             inner.apply.reconciliation_required = reconciliation_required;
             inner.apply.updated_at = Some(now_text());
+            if phase == "committed" && failure.is_none() {
+                inner.active_generation = Some(generation.to_owned());
+            }
             inner.last_error = failure.map(|(error, _)| error.to_owned());
             inner.last_transition_at = Some(now_text());
         }

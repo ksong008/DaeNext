@@ -9,6 +9,7 @@ struct CommittedRuntimeFixture {
     running_state: RunningRuntimeState,
     generation: String,
     tproxy_port: u16,
+    log_level: String,
 }
 
 impl CommittedRuntimeFixture {
@@ -36,6 +37,7 @@ impl CommittedRuntimeFixture {
             .unwrap()
             .unwrap();
         let tproxy_port = runtime.current_config().unwrap().global.tproxy_port;
+        let log_level = current_runtime_log_level(product.state()).unwrap();
         Self {
             product,
             config_dir,
@@ -44,6 +46,7 @@ impl CommittedRuntimeFixture {
             running_state,
             generation,
             tproxy_port,
+            log_level,
         }
     }
 
@@ -52,7 +55,7 @@ impl CommittedRuntimeFixture {
             .connection()
             .execute(
                 "UPDATE configs
-                 SET global = 'global { tproxy_port: 23456 }', version = version + 1
+                 SET global = 'global { tproxy_port: 23456 log_level: debug }', version = version + 1
                  WHERE selected = 1",
                 [],
             )
@@ -81,6 +84,10 @@ impl CommittedRuntimeFixture {
                 .unwrap()
                 .as_deref(),
             Some(self.generation.as_str())
+        );
+        assert_eq!(
+            current_runtime_log_level(self.product.state()).unwrap(),
+            self.log_level
         );
         assert_no_staged_runtime_files(&self.config_dir);
     }
@@ -167,6 +174,7 @@ fn runtime_generation_commit_faults_restore_runtime_file_and_database() {
             RuntimeFaultPoint::CommitPostStart,
             RuntimeFaultPoint::RenameCandidate,
             RuntimeFaultPoint::CommitDatabase,
+            RuntimeFaultPoint::PublishLogPolicy,
         ] {
             let fixture = CommittedRuntimeFixture::new(point.as_str());
             let prepared = fixture.prepare_changed_generation();
@@ -256,5 +264,111 @@ fn runtime_generation_rollback_failure_is_reported_as_reconciliation_required() 
         assert!(last_error.contains(RuntimeFaultPoint::CommitDatabase.as_str()));
         assert!(last_error.contains(RuntimeFaultPoint::Rollback.as_str()));
         assert_no_staged_runtime_files(&fixture.config_dir);
+    });
+}
+
+#[test]
+fn waiting_reload_coalesces_after_the_active_generation_reaches_latest_state() {
+    with_product_runtime_fake_start_override(true, || {
+        let product = FreshProductState::new("coalesced-latest-state");
+        product.seed_selected_resources();
+        let config_dir = product.root().join("config");
+        let runtime = Arc::new(ProductRuntimeManager::new());
+        let initial = coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(&config_dir),
+            RuntimeApplyIntent::ApiReload,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+        assert!(initial.applied);
+
+        let active = runtime.begin_apply(RuntimeApplyIntent::ApiReload).unwrap();
+        let state = product.state().to_path_buf();
+        let config_dir_for_waiter = config_dir.clone();
+        let waiting_runtime = Arc::clone(&runtime);
+        let (started_tx, started_rx) = mpsc::channel();
+        let waiting = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            coordinate_runtime_reload(
+                &waiting_runtime,
+                &state,
+                Some(&config_dir_for_waiter),
+                RuntimeApplyIntent::LocalControlReload,
+                &[],
+                AllocatorReclaimReason::ReloadCompleted,
+            )
+        });
+        started_rx.recv().unwrap();
+        active.finish("succeeded");
+
+        let coalesced = waiting.join().unwrap().unwrap();
+        assert!(!coalesced.applied);
+        assert!(coalesced.coalesced);
+        assert_eq!(runtime.summary()["reloadCount"], json!(1));
+        assert_eq!(
+            runtime.summary()["applyCoordinator"]["coalescedCount"],
+            json!(1)
+        );
+    });
+}
+
+#[test]
+fn reload_reports_process_owned_http_changes_as_pending_transition() {
+    with_product_runtime_fake_start_override(true, || {
+        let product = FreshProductState::new("pending-process-transition");
+        product.seed_selected_resources();
+        let config_dir = product.root().join("config");
+        let runtime = ProductRuntimeManager::new();
+        coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(&config_dir),
+            RuntimeApplyIntent::ApiReload,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+        let active_http = ProductHttpWorkerConfig::from_config(runtime.current_config().as_ref());
+        runtime.set_process_http_config(active_http);
+        let desired_workers = if active_http.worker_count == PRODUCT_HTTP_WORKER_MAX {
+            PRODUCT_HTTP_WORKER_MIN
+        } else {
+            active_http.worker_count + 1
+        };
+        product
+            .connection()
+            .execute(
+                "UPDATE configs SET global = ?1, version = version + 1 WHERE selected = 1",
+                params![format!("global {{ http_workers: {desired_workers} }}")],
+            )
+            .unwrap();
+
+        let applied = coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(&config_dir),
+            RuntimeApplyIntent::ApiReload,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+        assert!(applied.applied);
+        let pending = applied.pending_process_transition.unwrap();
+        assert_eq!(pending["state"], json!("pending-process-transition"));
+        assert_eq!(
+            pending["active"]["workers"],
+            json!(active_http.worker_count)
+        );
+        assert_eq!(pending["desired"]["workers"], json!(desired_workers));
+        assert_eq!(
+            get_metadata(product.state(), RUNTIME_PROCESS_TRANSITION_METADATA_KEY)
+                .unwrap()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                .unwrap()["desired"]["workers"],
+            json!(desired_workers)
+        );
     });
 }

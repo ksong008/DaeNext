@@ -3,27 +3,30 @@ use super::*;
 pub(in crate::daed_product) struct PreparedRuntimeReload {
     pub(in crate::daed_product) plan: RuntimeMaterializationPlan,
     pub(in crate::daed_product) config: Config,
+    pub(in crate::daed_product) process_transition: Option<Value>,
 }
 
 pub(in crate::daed_product) struct AppliedRuntimeReload {
+    pub(in crate::daed_product) applied: bool,
+    pub(in crate::daed_product) coalesced: bool,
     pub(in crate::daed_product) runtime_report: Value,
     pub(in crate::daed_product) materialized_report: Value,
     pub(in crate::daed_product) allocator_reclaim: Value,
+    pub(in crate::daed_product) pending_process_transition: Option<Value>,
 }
 
 #[derive(Debug)]
 pub(in crate::daed_product) enum RuntimeReloadPrepareError {
-    LogPolicy(String),
     Materialize(String),
     BuildConfig(String),
-    RuntimeLogLevel(String),
+    Preflight(String),
 }
 
 impl RuntimeReloadPrepareError {
     pub(in crate::daed_product) fn http_status(&self) -> u16 {
         match self {
             Self::Materialize(_) | Self::BuildConfig(_) => 400,
-            Self::LogPolicy(_) | Self::RuntimeLogLevel(_) => 500,
+            Self::Preflight(_) => 409,
         }
     }
 
@@ -31,8 +34,7 @@ impl RuntimeReloadPrepareError {
         match self {
             Self::Materialize(_) => "[Reload] Failed to materialize runtime preview",
             Self::BuildConfig(_) => "[Reload] Failed to build runtime config",
-            Self::LogPolicy(_) => "[Reload] Failed to prepare reload",
-            Self::RuntimeLogLevel(_) => "[Reload] Failed to apply runtime log level",
+            Self::Preflight(_) => "[Reload] Candidate preflight failed",
         }
     }
 }
@@ -40,10 +42,41 @@ impl RuntimeReloadPrepareError {
 impl std::fmt::Display for RuntimeReloadPrepareError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::LogPolicy(err)
-            | Self::Materialize(err)
-            | Self::BuildConfig(err)
-            | Self::RuntimeLogLevel(err) => formatter.write_str(err),
+            Self::Materialize(err) | Self::BuildConfig(err) | Self::Preflight(err) => {
+                formatter.write_str(err)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(in crate::daed_product) enum CoordinatedRuntimeReloadError {
+    Prepare(RuntimeReloadPrepareError),
+    Apply(String),
+}
+
+impl CoordinatedRuntimeReloadError {
+    pub(in crate::daed_product) fn http_status(&self) -> u16 {
+        match self {
+            Self::Prepare(err) => err.http_status(),
+            Self::Apply(err) if err.contains("superseded by stop") => 409,
+            Self::Apply(_) => 500,
+        }
+    }
+
+    pub(in crate::daed_product) fn api_log_message(&self) -> &'static str {
+        match self {
+            Self::Prepare(err) => err.api_log_message(),
+            Self::Apply(_) => "[Reload] Failed to reload",
+        }
+    }
+}
+
+impl std::fmt::Display for CoordinatedRuntimeReloadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Prepare(err) => std::fmt::Display::fmt(err, formatter),
+            Self::Apply(err) => formatter.write_str(err),
         }
     }
 }
@@ -55,22 +88,11 @@ pub(in crate::daed_product) fn prepare_runtime_reload_config(
         .map_err(|err| RuntimeReloadPrepareError::Materialize(err.to_string()))?;
     let config = build_runtime_config_from_content(&plan.content)
         .map_err(RuntimeReloadPrepareError::BuildConfig)?;
-    Ok(PreparedRuntimeReload { plan, config })
-}
-
-pub(in crate::daed_product) fn prepare_runtime_reload_to_apply(
-    log_config_dir: &Path,
-    state: &Path,
-    runtime: &ProductRuntimeManager,
-) -> Result<PreparedRuntimeReload, RuntimeReloadPrepareError> {
-    refresh_log_policy_and_reset_runtime_cycle_logs(log_config_dir, state, Some(runtime))
-        .map_err(|err| RuntimeReloadPrepareError::LogPolicy(err.to_string()))?;
-    let prepared = prepare_runtime_reload_config(state)?;
-    set_runtime_log_level_from_config(state, &prepared.config)
-        .map_err(|err| RuntimeReloadPrepareError::RuntimeLogLevel(err.to_string()))?;
-    refresh_log_policy_and_reset_runtime_cycle_logs(log_config_dir, state, Some(runtime))
-        .map_err(|err| RuntimeReloadPrepareError::LogPolicy(err.to_string()))?;
-    Ok(prepared)
+    Ok(PreparedRuntimeReload {
+        plan,
+        config,
+        process_transition: None,
+    })
 }
 
 pub(in crate::daed_product) fn apply_prepared_runtime_reload(
@@ -93,11 +115,87 @@ pub(in crate::daed_product) fn apply_prepared_runtime_reload(
         &mut checkpoints,
     )?;
     let allocator_reclaim = allocator_reclaim(reclaim_reason);
+    let pending_process_transition = runtime.pending_process_transition();
     Ok(AppliedRuntimeReload {
+        applied: true,
+        coalesced: false,
         runtime_report,
         materialized_report,
         allocator_reclaim,
+        pending_process_transition,
     })
+}
+
+pub(in crate::daed_product) fn coordinate_runtime_reload(
+    runtime: &ProductRuntimeManager,
+    state: &Path,
+    config_dir: Option<&Path>,
+    intent: RuntimeApplyIntent,
+    latency_seed: &[Value],
+    reclaim_reason: AllocatorReclaimReason,
+) -> Result<AppliedRuntimeReload, CoordinatedRuntimeReloadError> {
+    let permit = runtime
+        .begin_apply(intent)
+        .map_err(CoordinatedRuntimeReloadError::Apply)?;
+    permit.set_phase("reread-desired-state");
+    let modified = runtime_modified_for_running_runtime(state, runtime)
+        .map_err(CoordinatedRuntimeReloadError::Apply)?;
+    if runtime.is_running()
+        && !modified
+        && (permit.waited() || permit.intent().requires_runtime_change())
+    {
+        let runtime_report = runtime.summary();
+        permit.finish_coalesced();
+        return Ok(AppliedRuntimeReload {
+            applied: false,
+            coalesced: true,
+            runtime_report,
+            materialized_report: json!({
+                "applied": false,
+                "coalesced": true,
+                "reason": "active runtime already matches latest desired state",
+            }),
+            allocator_reclaim: Value::Null,
+            pending_process_transition: runtime.pending_process_transition(),
+        });
+    }
+    permit.set_phase("materializing");
+    let mut prepared = match prepare_runtime_reload_config(state) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            permit.finish("prepare-failed");
+            return Err(CoordinatedRuntimeReloadError::Prepare(err));
+        }
+    };
+    permit.set_phase("preflight");
+    if let Err(err) = preflight_product_runtime_candidate(&prepared.config) {
+        permit.finish("preflight-failed");
+        return Err(CoordinatedRuntimeReloadError::Prepare(
+            RuntimeReloadPrepareError::Preflight(err),
+        ));
+    }
+    prepared.process_transition = runtime.process_transition_for_config(&prepared.config);
+    permit.set_phase("applying");
+    let result = apply_prepared_runtime_reload(
+        runtime,
+        state,
+        config_dir,
+        intent.source(),
+        prepared,
+        latency_seed,
+        reclaim_reason,
+    )
+    .map_err(CoordinatedRuntimeReloadError::Apply);
+    match result {
+        Ok(applied) => {
+            permit.finish("succeeded");
+            Ok(applied)
+        }
+        Err(err) => {
+            permit.finish("failed");
+            Err(err)
+        }
+    }
 }
 
 pub(in crate::daed_product) fn runtime_modified_for_running_runtime(

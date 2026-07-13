@@ -59,38 +59,7 @@ fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
         )
     })?;
 
-    let native_ebpf_requested = resident_native_ebpf_enabled();
-    let source_object = if native_ebpf_requested {
-        #[cfg(feature = "native-ebpf")]
-        {
-            PathBuf::from(EMBEDDED_NATIVE_OBJECT_IDENTITY)
-        }
-        #[cfg(not(feature = "native-ebpf"))]
-        {
-            resolve_source_object(&artifact_dir)?
-        }
-    } else {
-        resolve_source_object(&artifact_dir)?
-    };
-    let native_ebpf_embedded_object = native_ebpf_requested;
-    let native_ebpf_backend = resolve_native_backend()?;
-    let netns_link_mode = resolve_netns_link_mode_from_env()?;
-    let options = ProductionRuntimeOwnerOptions {
-        execute: true,
-        ack_root_gate: true,
-        source_object,
-        geodata_asset_dirs: geodata_asset_dirs.into_iter().map(Into::into).collect(),
-        tproxy_port: config.global.tproxy_port,
-        dae_netns_id: DEFAULT_DAE_NETNS_ID,
-        netns_link_mode,
-        peer_section: DEFAULT_PEER_SECTION.to_owned(),
-        host_section: DEFAULT_HOST_SECTION.to_owned(),
-        native_ebpf_requested,
-        native_ebpf_backend,
-        native_ebpf_completed_a3_admission: native_ebpf_requested,
-        native_ebpf_embedded_object,
-        ..ProductionRuntimeOwnerOptions::default()
-    };
+    let options = resident_runtime_options(config, geodata_asset_dirs, &artifact_dir)?;
 
     let start_file = artifact_dir.join("resident-production-runtime-start.json");
     let cleanup_file = artifact_dir.join("resident-production-runtime-cleanup.json");
@@ -109,7 +78,46 @@ fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
     )
 }
 
-fn resident_runtime_artifact_dir(pid: u32) -> PathBuf {
+pub(super) fn resident_runtime_options(
+    config: &Config,
+    geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+    artifact_dir: &Path,
+) -> Result<ProductionRuntimeOwnerOptions, String> {
+    let native_ebpf_requested = resident_native_ebpf_enabled();
+    let source_object = if native_ebpf_requested {
+        #[cfg(feature = "native-ebpf")]
+        {
+            PathBuf::from(EMBEDDED_NATIVE_OBJECT_IDENTITY)
+        }
+        #[cfg(not(feature = "native-ebpf"))]
+        {
+            resolve_source_object(&artifact_dir)?
+        }
+    } else {
+        resolve_source_object(&artifact_dir)?
+    };
+    let native_ebpf_embedded_object = native_ebpf_requested;
+    let native_ebpf_backend = resolve_native_backend()?;
+    let netns_link_mode = resolve_netns_link_mode_from_env()?;
+    Ok(ProductionRuntimeOwnerOptions {
+        execute: true,
+        ack_root_gate: true,
+        source_object,
+        geodata_asset_dirs: geodata_asset_dirs.into_iter().map(Into::into).collect(),
+        tproxy_port: config.global.tproxy_port,
+        dae_netns_id: DEFAULT_DAE_NETNS_ID,
+        netns_link_mode,
+        peer_section: DEFAULT_PEER_SECTION.to_owned(),
+        host_section: DEFAULT_HOST_SECTION.to_owned(),
+        native_ebpf_requested,
+        native_ebpf_backend,
+        native_ebpf_completed_a3_admission: native_ebpf_requested,
+        native_ebpf_embedded_object,
+        ..ProductionRuntimeOwnerOptions::default()
+    })
+}
+
+pub(super) fn resident_runtime_artifact_dir(pid: u32) -> PathBuf {
     PathBuf::from("/run/daed/runtime").join(pid.to_string())
 }
 

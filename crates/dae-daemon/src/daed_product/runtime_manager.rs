@@ -3,7 +3,9 @@ use super::*;
 mod apply_state;
 mod cleanup;
 mod instance;
+mod process_transition;
 mod recovery;
+mod startup_recovery;
 mod stop;
 mod summary;
 
@@ -17,8 +19,8 @@ use cleanup::{
 #[cfg(test)]
 pub(super) use instance::resident_dataplane_admission_detail;
 pub(super) use instance::{
-    product_runtime_fake_start_enabled, runtime_started_at_after_success,
-    start_product_runtime_instance_with_dns_reload_snapshot,
+    preflight_product_runtime_candidate, product_runtime_fake_start_enabled,
+    runtime_started_at_after_success, start_product_runtime_instance_with_dns_reload_snapshot,
 };
 #[cfg(test)]
 pub(super) use instance::{
@@ -27,6 +29,7 @@ pub(super) use instance::{
 use recovery::ProductRuntimeInterfaceRecoverySupervisor;
 #[cfg(test)]
 pub(super) use recovery::resident_interface_recovery_request;
+use startup_recovery::ProductRuntimeStartupRecoverySupervisor;
 use summary::{
     apply_runtime_traffic_metric_carry, runtime_instance_dns_reload_snapshot,
     runtime_instance_node_latencies, runtime_traffic_metric_u64, runtime_traffic_metrics_snapshot,
@@ -35,9 +38,12 @@ use summary::{
 
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
+    coordinator: RuntimeApplyCoordinator,
     lifecycle: Arc<Mutex<()>>,
     pub(super) inner: Arc<Mutex<ProductRuntimeState>>,
     interface_recovery: ProductRuntimeInterfaceRecoverySupervisor,
+    startup_recovery: Mutex<ProductRuntimeStartupRecoverySupervisor>,
+    process_http_config: Mutex<Option<ProductHttpWorkerConfig>>,
 }
 
 #[derive(Debug, Default)]
@@ -55,6 +61,8 @@ pub(super) struct ProductRuntimeState {
     pub(super) traffic_carry: RuntimeTrafficCarry,
     pub(super) cleanup: RuntimeCleanupState,
     pub(super) apply: RuntimeApplyState,
+    pub(super) active_generation: Option<String>,
+    pub(super) pending_process_transition: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -294,6 +302,14 @@ impl ProductRuntimeLifecycleLogMode {
         }
     }
 
+    pub(super) fn apply_intent(self) -> RuntimeApplyIntent {
+        match self {
+            Self::StartupRestore => RuntimeApplyIntent::StartupRestore,
+            Self::ReloadLocalControl => RuntimeApplyIntent::LocalControlReload,
+            Self::ReloadSubscriptionRefresh => RuntimeApplyIntent::SubscriptionRefresh,
+        }
+    }
+
     pub(super) fn is_startup(self) -> bool {
         matches!(self, Self::StartupRestore)
     }
@@ -312,16 +328,21 @@ const PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE: &str = "interface-monitor";
 
 impl ProductRuntimeManager {
     pub(super) fn new() -> Self {
+        let coordinator = RuntimeApplyCoordinator::new();
         let lifecycle = Arc::new(Mutex::new(()));
         let inner = Arc::new(Mutex::new(ProductRuntimeState::default()));
         let interface_recovery = ProductRuntimeInterfaceRecoverySupervisor::start(
+            coordinator.clone(),
             Arc::clone(&lifecycle),
             Arc::clone(&inner),
         );
         Self {
+            coordinator,
             lifecycle,
             inner,
             interface_recovery,
+            startup_recovery: Mutex::new(ProductRuntimeStartupRecoverySupervisor::default()),
+            process_http_config: Mutex::new(None),
         }
     }
 
@@ -348,11 +369,21 @@ impl ProductRuntimeManager {
             .map(|inner| inner.runtime.is_some())
             .unwrap_or(false)
     }
+
+    pub(in crate::daed_product) fn begin_apply(
+        &self,
+        intent: RuntimeApplyIntent,
+    ) -> Result<RuntimeApplyPermit<'_>, String> {
+        self.coordinator.begin_apply(intent)
+    }
 }
 
 impl Drop for ProductRuntimeManager {
     fn drop(&mut self) {
         self.interface_recovery.shutdown();
+        if let Ok(supervisor) = self.startup_recovery.get_mut() {
+            supervisor.shutdown();
+        }
     }
 }
 
@@ -569,6 +600,7 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn summary(&self) -> Value {
+        let coordinator = self.coordinator.summary();
         let Ok(inner) = self.inner.lock() else {
             return json!({
                 "running": false,
@@ -597,6 +629,15 @@ impl ProductRuntimeManager {
                     map.insert("lastReport".to_owned(), json!(inner.last_report.clone()));
                     map.insert("cleanup".to_owned(), inner.cleanup.summary());
                     map.insert("apply".to_owned(), inner.apply.summary());
+                    map.insert("applyCoordinator".to_owned(), coordinator);
+                    map.insert(
+                        "activeGeneration".to_owned(),
+                        json!(inner.active_generation),
+                    );
+                    map.insert(
+                        "pendingProcessTransition".to_owned(),
+                        json!(inner.pending_process_transition),
+                    );
                 }
                 summary
             }
@@ -615,6 +656,9 @@ impl ProductRuntimeManager {
                 "lastReport": inner.last_report,
                 "cleanup": inner.cleanup.summary(),
                 "apply": inner.apply.summary(),
+                "applyCoordinator": coordinator,
+                "activeGeneration": inner.active_generation,
+                "pendingProcessTransition": inner.pending_process_transition,
             }),
             None => json!({
                 "running": false,
@@ -636,6 +680,9 @@ impl ProductRuntimeManager {
                 "lastReport": inner.last_report,
                 "cleanup": inner.cleanup.summary(),
                 "apply": inner.apply.summary(),
+                "applyCoordinator": coordinator,
+                "activeGeneration": inner.active_generation,
+                "pendingProcessTransition": inner.pending_process_transition,
             }),
         }
     }

@@ -10,6 +10,7 @@ pub(in crate::daed_product) fn stop_runtime_and_persist(
     Ok(prepared.commit_background())
 }
 
+#[cfg(test)]
 pub(in crate::daed_product) fn mark_system_stopped(state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
     persist_system_stopped(state)
@@ -34,6 +35,11 @@ fn persist_system_stopped(state: &Path) -> io::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO daed_product_metadata(key, value) VALUES('runtime_running', 'false')",
         [],
+    )
+    .map_err(sqlite_io_error)?;
+    tx.execute(
+        "DELETE FROM daed_product_metadata WHERE key = ?1",
+        params![RUNTIME_PROCESS_TRANSITION_METADATA_KEY],
     )
     .map_err(sqlite_io_error)?;
     tx.commit().map_err(sqlite_io_error)

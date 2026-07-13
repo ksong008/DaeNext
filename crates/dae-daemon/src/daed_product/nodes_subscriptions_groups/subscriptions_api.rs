@@ -272,9 +272,10 @@ pub(crate) fn reload_runtime_after_subscription_refresh(
         ProductRuntimeLifecycleLogMode::ReloadSubscriptionRefresh,
     ) {
         Ok(report) => {
+            let applied = report["applied"].as_bool().unwrap_or(true);
             let mut fields = BTreeMap::new();
             fields.insert("source".to_owned(), "subscription-refresh".to_owned());
-            fields.insert("applied".to_owned(), "true".to_owned());
+            fields.insert("applied".to_owned(), applied.to_string());
             fields.insert(
                 "elapsed".to_owned(),
                 format!("{:?}", reload_started_at.elapsed()),
@@ -286,7 +287,7 @@ pub(crate) fn reload_runtime_after_subscription_refresh(
                 "[Reload] Finished",
                 fields,
             );
-            Ok(Some(report))
+            Ok(applied.then_some(report))
         }
         Err(err) => {
             let mut fields = BTreeMap::new();

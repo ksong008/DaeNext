@@ -1,9 +1,11 @@
-use super::prepare::{PreparedRuntimeGeneration, sync_directory};
+use super::prepare::{PreparedRuntimeGeneration, RuntimeDatabaseSnapshot, sync_directory};
 use super::*;
 use std::fs::OpenOptions;
 
 pub(super) fn rollback_runtime_generation(
     runtime: &ProductRuntimeManager,
+    state: &Path,
+    config_dir: Option<&Path>,
     snapshot: &ProductRuntimeApplySnapshot,
     candidate: &mut PreparedRuntimeGeneration,
     latency_seed: &[Value],
@@ -12,16 +14,82 @@ pub(super) fn rollback_runtime_generation(
     checkpoints
         .checkpoint(RuntimeApplyCheckpoint::Rollback)
         .map_err(|err| format!("runtime rollback checkpoint: {err}"))?;
-    let file_result = restore_previous_materialization(candidate);
-    let runtime_result = runtime.restore_after_failed_apply(snapshot, latency_seed);
-    match (file_result, runtime_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(file_err), Ok(())) => Err(file_err),
-        (Ok(()), Err(runtime_err)) => Err(runtime_err),
-        (Err(file_err), Err(runtime_err)) => Err(format!(
-            "restore materialization failed: {file_err}; restore runtime failed: {runtime_err}"
-        )),
+    let mut errors = Vec::new();
+    if let Err(err) = restore_previous_materialization(candidate) {
+        errors.push(format!("restore materialization failed: {err}"));
     }
+    if let Err(err) = restore_runtime_database(state, &candidate.database_snapshot) {
+        errors.push(format!("restore runtime database failed: {err}"));
+    }
+    if let Err(err) = runtime.restore_after_failed_apply(snapshot, latency_seed) {
+        errors.push(format!("restore runtime failed: {err}"));
+    }
+    if let Some(config_dir) = config_dir
+        && let Err(err) = refresh_log_policy_and_apply_log_limits(config_dir, state, Some(runtime))
+    {
+        errors.push(format!("restore runtime log policy failed: {err}"));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn restore_runtime_database(
+    state: &Path,
+    snapshot: &RuntimeDatabaseSnapshot,
+) -> Result<(), String> {
+    let mut conn = open_state_connection(state)
+        .map_err(|err| format!("open runtime state for rollback: {err}"))?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|err| format!("begin runtime state rollback: {err}"))?;
+    tx.execute("DELETE FROM systems", [])
+        .map_err(|err| format!("clear failed runtime state: {err}"))?;
+    if let Some(system) = snapshot.system.as_ref() {
+        tx.execute(
+            "INSERT INTO systems(
+                running, running_config_version, running_dns_version,
+                running_routing_version, running_group_version_sum, running_group_ids,
+                running_config_id, running_dns_id, running_routing_id,
+                running_external_input_version
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                system.running,
+                system.config_version,
+                system.dns_version,
+                system.routing_version,
+                system.group_version_sum,
+                &system.group_ids,
+                system.config_id,
+                system.dns_id,
+                system.routing_id,
+                system.external_input_version,
+            ],
+        )
+        .map_err(|err| format!("restore previous runtime state: {err}"))?;
+    }
+    for (key, value) in &snapshot.metadata {
+        match value {
+            Some(value) => {
+                tx.execute(
+                    "INSERT OR REPLACE INTO daed_product_metadata(key, value) VALUES(?1, ?2)",
+                    params![key, value],
+                )
+                .map_err(|err| format!("restore runtime metadata {key}: {err}"))?;
+            }
+            None => {
+                tx.execute(
+                    "DELETE FROM daed_product_metadata WHERE key = ?1",
+                    params![key],
+                )
+                .map_err(|err| format!("remove failed runtime metadata {key}: {err}"))?;
+            }
+        }
+    }
+    tx.commit()
+        .map_err(|err| format!("commit runtime state rollback: {err}"))
 }
 
 fn restore_previous_materialization(

@@ -253,6 +253,7 @@ pub(super) fn configure_resident_kernel_parameters(
         },
         "lan": lan_reports,
         "wan": wan_reports,
+        "ownership_policy": "monotonic host networking enablement; runtime rollback does not revert host-wide forwarding values",
         "source_parity": "native NewControlPlane AutoConfigKernelParameter SetIpv4forward(1), setForwarding(all, ipv6, 1), bindLan per-interface forwarding/send_redirects, and WAN accept_ra workaround",
     })
 }
@@ -289,6 +290,7 @@ fn configure_resident_lan_kernel_parameters(steps: &mut Vec<Value>, iface: &str)
         "ipv4_send_redirects_off": ipv4_send_redirects_ok,
         "ipv4_forwarding_on": ipv4_forwarding_ok,
         "ipv6_forwarding_on": ipv6_forwarding_ok,
+        "ownership_policy": "monotonic per-interface forwarding setup; runtime rollback does not revert these host networking values",
         "source_parity": "native bindLan autoConfigKernelParameter SetSendRedirects(iface, 0) and SetForwarding(iface, 1)",
     })
 }
@@ -351,6 +353,7 @@ fn configure_resident_wan_accept_ra(
         "interface": iface,
         "previous": current,
         "set_to": 2,
+        "ownership_policy": "monotonic WAN router-mode workaround; runtime rollback does not rewrite a later host value",
         "source_parity": "native LAN+WAN autoConfigKernelParameter accept_ra workaround",
     })
 }

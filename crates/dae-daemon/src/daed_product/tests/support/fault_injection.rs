@@ -9,11 +9,12 @@ pub(crate) enum RuntimeFaultPoint {
     CommitDatabase,
     StartCandidate,
     CommitPostStart,
+    PublishLogPolicy,
     Rollback,
 }
 
 impl RuntimeFaultPoint {
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::CreateDirectory,
         Self::WriteCandidate,
         Self::SyncCandidate,
@@ -21,6 +22,7 @@ impl RuntimeFaultPoint {
         Self::CommitDatabase,
         Self::StartCandidate,
         Self::CommitPostStart,
+        Self::PublishLogPolicy,
         Self::Rollback,
     ];
 
@@ -33,6 +35,7 @@ impl RuntimeFaultPoint {
             Self::CommitDatabase => "commit-database",
             Self::StartCandidate => "start-candidate",
             Self::CommitPostStart => "commit-post-start",
+            Self::PublishLogPolicy => "publish-log-policy",
             Self::Rollback => "rollback",
         }
     }
@@ -79,6 +82,7 @@ impl RuntimeApplyCheckpoints for RuntimeFaultFixture {
             RuntimeApplyCheckpoint::CommitPostStart => RuntimeFaultPoint::CommitPostStart,
             RuntimeApplyCheckpoint::RenameCandidate => RuntimeFaultPoint::RenameCandidate,
             RuntimeApplyCheckpoint::CommitDatabase => RuntimeFaultPoint::CommitDatabase,
+            RuntimeApplyCheckpoint::PublishLogPolicy => RuntimeFaultPoint::PublishLogPolicy,
             RuntimeApplyCheckpoint::Rollback => RuntimeFaultPoint::Rollback,
         };
         RuntimeFaultFixture::checkpoint(self, point)

@@ -491,7 +491,7 @@ impl ProductHttpProfile {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProductHttpWorkerConfig {
     profile: ProductHttpProfile,
     worker_count: usize,
@@ -578,6 +578,27 @@ impl ProductHttpWorkerConfig {
             "workers": self.worker_count_source,
             "queue": self.queue_capacity_source,
             "workerStackBytes": self.worker_stack_bytes_source,
+        })
+    }
+
+    fn transition_json(self, desired: Self) -> Value {
+        json!({
+            "state": "pending-process-transition",
+            "owner": "product-http-runtime",
+            "active": {
+                "profile": self.profile.name(),
+                "workers": self.worker_count,
+                "queueCapacity": self.queue_capacity,
+                "workerStackBytes": self.worker_stack_bytes,
+                "sources": self.sources_json(),
+            },
+            "desired": {
+                "profile": desired.profile.name(),
+                "workers": desired.worker_count,
+                "queueCapacity": desired.queue_capacity,
+                "workerStackBytes": desired.worker_stack_bytes,
+                "sources": desired.sources_json(),
+            },
         })
     }
 }
