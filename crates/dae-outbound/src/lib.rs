@@ -52,7 +52,7 @@ pub use juicity::JuicityLink;
 pub use latency::LatenciesN;
 pub use link_identity::canonical_link_without_display_name;
 pub use link_parser::{LinkNode, LinkParseResult, parse_link_chain};
-pub use masque::{MasqueAuthentication, MasqueLink, MasqueTransport};
+pub use masque::{MasqueAuthentication, MasqueLink, MasqueTransport, MasqueUriTemplate};
 pub use matrix_extension_capability::{
     ExpandedLiveMatrixValidationBoundaryContract, ExtensionLayerCapabilityContract,
     ExtensionLayerCapabilityRow, PacketSemanticsCapabilityContract, PacketSemanticsCapabilityRow,

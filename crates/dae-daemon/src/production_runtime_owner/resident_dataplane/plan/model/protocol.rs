@@ -21,11 +21,11 @@ pub(crate) enum ResidentProxyProtocolPlan {
     },
     ConnectUdpH2Tls {
         authentication: ResidentConnectUdpAuthPlan,
-        target_template: String,
+        target_template: MasqueUriTemplate,
     },
     ConnectUdpH3Tls {
         authentication: ResidentConnectUdpAuthPlan,
-        target_template: String,
+        target_template: MasqueUriTemplate,
     },
     ShadowsocksAeadTcp {
         cipher: String,
@@ -335,7 +335,7 @@ impl ResidentProxyProtocolPlan {
                 target_template,
             } => {
                 authentication.compact_allocations();
-                compact_string(target_template);
+                target_template.compact_allocations();
             }
             Self::ShadowsocksAeadTcp {
                 cipher, password, ..
