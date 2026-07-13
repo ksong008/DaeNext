@@ -17,6 +17,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUpstreamRoutedTarget
 {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
+    // Retained in the routed value so mixed TCP/UDP candidate plans preserve
+    // the exact transport chosen during selection, even though current
+    // single-transport executors already know it from their call site.
+    #[allow(dead_code)]
     pub(in crate::production_runtime_owner::resident_dataplane::dns) l4proto: L4Proto,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) selection:
         ResidentDnsUpstreamSelection,

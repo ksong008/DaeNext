@@ -56,13 +56,13 @@ fn emit_git_identity_rerun_paths(repo_root: &std::path::Path) {
     let head_path = git_dir.join("HEAD");
     println!("cargo:rerun-if-changed={}", head_path.display());
 
-    if let Ok(head) = std::fs::read_to_string(&head_path) {
-        if let Some(reference) = head.trim().strip_prefix("ref: ") {
-            println!(
-                "cargo:rerun-if-changed={}",
-                git_dir.join(reference).display()
-            );
-        }
+    if let Ok(head) = std::fs::read_to_string(&head_path)
+        && let Some(reference) = head.trim().strip_prefix("ref: ")
+    {
+        println!(
+            "cargo:rerun-if-changed={}",
+            git_dir.join(reference).display()
+        );
     }
 
     println!(

@@ -291,15 +291,17 @@ fn waiting_reload_coalesces_after_the_active_generation_reaches_latest_state() {
         let waiting_runtime = Arc::clone(&runtime);
         let (started_tx, started_rx) = mpsc::channel();
         let waiting = thread::spawn(move || {
-            started_tx.send(()).unwrap();
-            coordinate_runtime_reload(
-                &waiting_runtime,
-                &state,
-                Some(&config_dir_for_waiter),
-                RuntimeApplyIntent::LocalControlReload,
-                &[],
-                AllocatorReclaimReason::ReloadCompleted,
-            )
+            with_product_runtime_fake_start_override(true, || {
+                started_tx.send(()).unwrap();
+                coordinate_runtime_reload(
+                    &waiting_runtime,
+                    &state,
+                    Some(&config_dir_for_waiter),
+                    RuntimeApplyIntent::LocalControlReload,
+                    &[],
+                    AllocatorReclaimReason::ReloadCompleted,
+                )
+            })
         });
         started_rx.recv().unwrap();
         active.finish("succeeded");

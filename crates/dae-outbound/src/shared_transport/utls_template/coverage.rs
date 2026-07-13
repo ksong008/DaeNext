@@ -4,7 +4,7 @@ use crate::shared_transport::{
     SUPPORTED_UTLS_FINGERPRINTS, UtlsFingerprint, resolve_utls_client_hello_id,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct UtlsTemplateCoverage {
     pub supported_fingerprints: usize,
     pub exact_fixtures: usize,
@@ -46,16 +46,4 @@ pub fn utls_template_mode_label(mode: UtlsTemplateMode) -> &'static str {
 
 fn utls_template_mode(fingerprint: &UtlsFingerprint) -> UtlsTemplateMode {
     runtime_template_mode(fingerprint)
-}
-
-impl Default for UtlsTemplateCoverage {
-    fn default() -> Self {
-        Self {
-            supported_fingerprints: 0,
-            exact_fixtures: 0,
-            family_approximations: 0,
-            randomized: 0,
-            unsupported_exact_templates: 0,
-        }
-    }
 }
