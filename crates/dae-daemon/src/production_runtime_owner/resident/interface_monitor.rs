@@ -25,7 +25,7 @@ const INTERFACE_RECOVERY_STABLE_OBSERVATIONS: u32 = 2;
 const SYSFS_INTERFACE_IFINDEX_FILE: &str = "ifindex";
 const SYSFS_INTERFACE_MTU_FILE: &str = "mtu";
 const MONITOR_STATUS_PASS: &str = "pass";
-const MONITOR_STATUS_DEGRADED: &str = "degraded";
+pub(super) const MONITOR_STATUS_DEGRADED: &str = "degraded";
 const INTERFACE_STATE_ATTACHED: &str = "attached";
 const INTERFACE_STATE_MISSING: &str = "missing";
 const INTERFACE_STATE_STALE: &str = "stale";
@@ -108,19 +108,25 @@ pub(super) fn start_resident_interface_monitor(
     config: &Config,
     lan_ifaces: &[String],
     wan_ifaces: &[String],
+    binding_registry: &ResidentDatapathBindingRegistry,
+    binding_postflight: &Value,
 ) -> ResidentInterfaceMonitorRuntime {
     let specs = interface_specs(sys_class_net_path(), lan_ifaces, wan_ifaces);
     let policy = WanMonitorPolicy::from_config(config, wan_ifaces);
     let mut baseline_wan = WanBaselineTracker::new(observe_wan_network_state(&policy));
     let mut debounce = RecoveryDebounce::default();
-    let state = Arc::new(Mutex::new(interface_monitor_snapshot_with_wan_state(
+    let mut binding_monitor =
+        ResidentDatapathBindingMonitor::new(binding_registry, binding_postflight);
+    let mut initial_snapshot = interface_monitor_snapshot_with_wan_state(
         sys_class_net_path(),
         &specs,
         &policy,
         baseline_wan.baseline(),
         baseline_wan.baseline(),
         &mut debounce,
-    )));
+    );
+    merge_datapath_binding_monitor(&mut initial_snapshot, binding_monitor.as_ref());
+    let state = Arc::new(Mutex::new(initial_snapshot));
     let stop = Arc::new(AtomicBool::new(false));
     let thread_state = Arc::clone(&state);
     let thread_stop = Arc::clone(&stop);
@@ -134,7 +140,7 @@ pub(super) fn start_resident_interface_monitor(
                     &current_wan,
                     INTERFACE_RECOVERY_STABLE_OBSERVATIONS,
                 );
-                let snapshot = interface_monitor_snapshot_with_wan_state(
+                let mut snapshot = interface_monitor_snapshot_with_wan_state(
                     sys_class_net_path(),
                     &specs,
                     &policy,
@@ -142,6 +148,10 @@ pub(super) fn start_resident_interface_monitor(
                     &current_wan,
                     &mut debounce,
                 );
+                if let Some(monitor) = binding_monitor.as_mut() {
+                    monitor.observe_if_due();
+                }
+                merge_datapath_binding_monitor(&mut snapshot, binding_monitor.as_ref());
                 if let Ok(mut guard) = thread_state.lock() {
                     *guard = snapshot;
                 }
@@ -168,6 +178,21 @@ pub(super) fn start_resident_interface_monitor(
         stop,
         state,
         handle,
+    }
+}
+
+fn merge_datapath_binding_monitor(
+    snapshot: &mut Value,
+    monitor: Option<&ResidentDatapathBindingMonitor>,
+) {
+    if let Some(monitor) = monitor {
+        monitor.merge_snapshot(snapshot);
+    } else {
+        snapshot["datapathBindingMonitor"] = json!({
+            "schemaVersion": 1,
+            "status": "disabled",
+            "reason": "no native generation-owned datapath bindings are active",
+        });
     }
 }
 

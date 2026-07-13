@@ -24,6 +24,7 @@ use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{
     ResidentDataplaneRuntime, ResidentDnsReloadSnapshot, ResidentManualProbeHandle,
+    next_resident_runtime_generation, resident_datapath_postflight_interval_seconds_default,
     start_resident_dataplane_workers,
 };
 use super::resident_interfaces::{
@@ -63,6 +64,8 @@ mod interface_policy;
 use self::interface_policy::*;
 mod interface_monitor;
 use self::interface_monitor::*;
+mod binding_registry;
+use self::binding_registry::*;
 mod start_flow;
 use self::start_flow::*;
 mod cgroup_attach;

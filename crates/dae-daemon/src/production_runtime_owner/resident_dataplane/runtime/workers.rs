@@ -2,6 +2,7 @@ use super::plan::effective_so_mark_from_dae;
 use super::*;
 pub(crate) fn start_resident_dataplane_workers(
     handoff: &LiveLoadedTproxyListenSocketMap,
+    reload_generation: u64,
     config: &Config,
     artifact_dir: &Path,
     routing_tuple_map_id: Option<u32>,
@@ -46,7 +47,6 @@ pub(crate) fn start_resident_dataplane_workers(
     let sniffing_timeout = plan.sniffing_timeout;
     let dns_plan = plan.dns;
     let mut proxy_groups = plan.proxies;
-    let reload_generation = RESIDENT_RELOAD_GENERATION.fetch_add(1, Ordering::Relaxed);
     for group in proxy_groups.values_mut() {
         group.apply_xhttp_xmux_runtime_generation(reload_generation);
     }

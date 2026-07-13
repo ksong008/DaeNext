@@ -37,6 +37,8 @@ pub(super) fn start_with_options(
         ));
     }
 
+    let runtime_generation = next_resident_runtime_generation();
+
     let before_pin_snapshot = bpf_dae_snapshot();
     let before_map_ids = map_ids()
         .map_err(|err| format!("resident production runtime cannot snapshot BPF map ids: {err}"))?;
@@ -47,6 +49,12 @@ pub(super) fn start_with_options(
     let mut dataplane = None;
     let mut interface_monitor = None;
     let mut native_runtime = NativeEbpfRuntimeState::new();
+    let mut binding_registry = ResidentDatapathBindingRegistry::empty(runtime_generation);
+    let mut binding_registry_postflight = json!({
+        "status": "skipped",
+        "generation": runtime_generation,
+        "reason": "resident startup has not reached datapath binding postflight",
+    });
     let mut discovered_map_id = None;
     let mut discovered_routing_map_ids = Vec::new();
     let mut native_lan_ifaces = Vec::new();
@@ -366,6 +374,7 @@ pub(super) fn start_with_options(
                                 Ok(domain_routing_discovery) => {
                                     let (mut value, runtime) = start_resident_dataplane_workers(
                                         handoff,
+                                        runtime_generation,
                                         config,
                                         &artifact_dir,
                                         discovery.id,
@@ -484,8 +493,64 @@ pub(super) fn start_with_options(
         let attach_outputs_passed = attach_outputs_passed
             || (native_runtime.peer_attached() && native_runtime.host_attached());
         ok &= attach_outputs_passed;
+        if options.native_ebpf_requested {
+            match ResidentDatapathBindingRegistry::from_startup_steps(
+                runtime_generation,
+                &executed_steps,
+            ) {
+                Ok(registry) => {
+                    binding_registry = registry;
+                    if ok && binding_registry.is_empty() {
+                        ok = false;
+                        binding_registry_postflight = json!({
+                            "name": "resident-datapath-binding-postflight",
+                            "status": "fail",
+                            "generation": runtime_generation,
+                            "error": "native eBPF startup produced no generation-owned binding records",
+                        });
+                    } else if ok {
+                        binding_registry_postflight = binding_registry.active_postflight();
+                        binding_registry_postflight["name"] =
+                            json!("resident-datapath-binding-postflight");
+                        ok &= binding_registry_postflight["status"].as_str() == Some("pass");
+                    } else {
+                        binding_registry_postflight = json!({
+                            "name": "resident-datapath-binding-postflight",
+                            "status": "skipped",
+                            "generation": runtime_generation,
+                            "bindingCount": binding_registry.to_value()["bindingCount"],
+                            "reason": "a previous resident startup step failed; registered bindings remain available for rollback verification",
+                        });
+                    }
+                }
+                Err(error) => {
+                    ok = false;
+                    binding_registry_postflight = json!({
+                        "name": "resident-datapath-binding-postflight",
+                        "status": "fail",
+                        "generation": runtime_generation,
+                        "error": error,
+                    });
+                }
+            }
+        } else if ok {
+            binding_registry_postflight = json!({
+                "name": "resident-datapath-binding-postflight",
+                "status": "pass",
+                "generation": runtime_generation,
+                "skipped": true,
+                "reason": "native eBPF backend is not active; command-backend postflight remains owned by existing TC show checks",
+            });
+        }
+        executed_steps.push(binding_registry_postflight.clone());
         let resident_interface_monitor = if ok {
-            let monitor = start_resident_interface_monitor(config, &lan_ifaces, &wan_ifaces);
+            let monitor = start_resident_interface_monitor(
+                config,
+                &lan_ifaces,
+                &wan_ifaces,
+                &binding_registry,
+                &binding_registry_postflight,
+            );
             let snapshot = monitor.snapshot();
             interface_monitor = Some(monitor);
             snapshot
@@ -500,6 +565,8 @@ pub(super) fn start_with_options(
 
         let start_report = json!({
             "name": "resident-production-runtime",
+            "runtime_generation": runtime_generation,
+            "runtimeGeneration": runtime_generation,
             "status": if ok { "pass" } else { "fail" },
             "artifact_dir": path_string(&artifact_dir),
             "start_file": path_string(&start_file),
@@ -534,6 +601,8 @@ pub(super) fn start_with_options(
             "resident_lan_routing": resident_lan_routing,
             "resident_dataplane": resident_dataplane,
             "resident_interface_monitor": resident_interface_monitor,
+            "resident_datapath_binding_registry": binding_registry.to_value(),
+            "resident_datapath_binding_postflight": binding_registry_postflight,
             "host_attach_show": host_attach_show,
             "resident_outbound_connectivity": resident_outbound_connectivity,
             "resident_reusable_maps": resident_reusable_maps,
@@ -560,7 +629,7 @@ pub(super) fn start_with_options(
         }
     })();
 
-    if let Err(err) = result {
+    if let Err(mut err) = result {
         if let Some(dataplane) = dataplane.as_mut() {
             dataplane.shutdown(&mut cleanup_steps);
         }
@@ -571,6 +640,20 @@ pub(super) fn start_with_options(
         let native_peer_attached = native_runtime.peer_attached();
         let native_host_attached = native_runtime.host_attached();
         native_runtime.reset();
+        if !binding_registry.is_empty() {
+            let binding_cleanup_postflight = binding_registry.cleanup_postflight();
+            let cleanup_ok = binding_cleanup_postflight["status"].as_str() == Some("pass");
+            cleanup_steps.push(json!({
+                "name": "resident-startup-rollback-binding-postflight",
+                "status": if cleanup_ok { "pass" } else { "fail" },
+                "report": binding_cleanup_postflight,
+            }));
+            if !cleanup_ok {
+                err = format!(
+                    "{err}; resident startup rollback left an owned datapath binding or changed a foreign binding: {binding_cleanup_postflight}"
+                );
+            }
+        }
         cleanup_resident_lan_programs(&mut cleanup_steps, &lan_ifaces, &native_lan_ifaces);
         cleanup_production_topology(
             &mut cleanup_steps,
@@ -581,6 +664,8 @@ pub(super) fn start_with_options(
     }
 
     Ok(ResidentProductionRuntime {
+        runtime_generation,
+        binding_registry,
         live_handoff,
         native_runtime,
         dataplane,

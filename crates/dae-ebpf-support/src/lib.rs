@@ -66,8 +66,8 @@ pub use aya_loader::{
     AyaCgroupAttachDetachReport, AyaCgroupAttachPreflightLine, AyaCgroupAttachPreflightReport,
     AyaCgroupProgramIdentity, AyaLoadedMapSpec, AyaMapSpecMismatch, AyaNativeRuntimePinReport,
     AyaPinnedObject, AyaPnameBtfOffsets, AyaTargetBtfReport, AyaTargetBtfSelection,
-    AyaTargetBtfSource, AyaTcAttachDetachReport, AyaTcxAttachAnchor, AyaTcxProgramOrderEntry,
-    AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachRingbufSmokeReport,
+    AyaTargetBtfSource, AyaTcAttachDetachReport, AyaTcxAttachAnchor, AyaTcxBindingSnapshot,
+    AyaTcxProgramOrderEntry, AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachRingbufSmokeReport,
     AyaTraceAttachSmokeTrigger, AyaTraceConfig, AyaTraceLoadPinReport, AyaTraceLoaderOptions,
     AyaUserspaceBytesLoaderOptions, AyaUserspaceLoadReport, AyaUserspaceLoadedObject,
     AyaUserspaceLoaderOptions, DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES, PinnedTcAttachOptions,
@@ -78,7 +78,8 @@ pub use aya_loader::{
     load_attach_detach_aya_sched_classifier, load_aya_cgroup_program_for_admission,
     load_aya_userspace_object, load_aya_userspace_object_bytes, load_pin_aya_trace_object,
     pin_aya_loaded_object_for_native_runtime, preflight_aya_cgroup_programs,
-    read_aya_udp_state_metrics, resolve_pname_btf_offsets, resolve_pname_btf_offsets_from_path,
+    query_aya_interface_index, query_aya_tcx_binding, read_aya_udp_state_metrics,
+    resolve_pname_btf_offsets, resolve_pname_btf_offsets_from_path,
 };
 pub use bpf_error::{BpfErrorClass, classify_bpf_io_error, format_bpf_io_error};
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
