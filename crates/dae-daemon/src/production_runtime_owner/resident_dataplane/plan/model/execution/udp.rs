@@ -25,7 +25,6 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentStreamP
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentUdpPolicyClosedReason {
     HttpConnect,
-    ConnectUdpH3Pending,
     PluginWrapper,
     ShadowsocksR,
     TrojanInnerShadowsocks,
@@ -43,7 +42,6 @@ impl ResidentUdpPolicyClosedReason {
     ) -> &'static str {
         match self {
             Self::HttpConnect => "http-connect-udp-protocol-closed",
-            Self::ConnectUdpH3Pending => "connect-udp-h3-executor-pending",
             Self::PluginWrapper => "plugin-udp-policy-closed",
             Self::ShadowsocksR => "legacy-udp-policy-closed",
             Self::TrojanInnerShadowsocks => "inner-encryption-udp-policy-closed",
@@ -59,9 +57,6 @@ impl ResidentUdpPolicyClosedReason {
     pub(in crate::production_runtime_owner::resident_dataplane) fn reason(self) -> &'static str {
         match self {
             Self::HttpConnect => "HTTP CONNECT has no UDP relay semantics in resident dataplane",
-            Self::ConnectUdpH3Pending => {
-                "CONNECT-UDP H3 source shape is explicit but remains policy-closed until its datagram actor passes interoperability admission"
-            }
             Self::PluginWrapper => {
                 "SIP003 plugin UDP is not part of the required plugin contract; resident UDP keeps plugin UDP policy-closed without alternate execution"
             }
@@ -92,7 +87,6 @@ impl ResidentUdpPolicyClosedReason {
         self,
     ) -> UdpPacketSemantics {
         match self {
-            Self::ConnectUdpH3Pending => UdpPacketSemantics::ConnectUdpHttpDatagram,
             Self::PluginWrapper => UdpPacketSemantics::PluginUdpPolicyClosed,
             Self::ShadowsocksR => UdpPacketSemantics::LegacyUdpFailClosed,
             Self::VlessMux => UdpPacketSemantics::MultiplexedStream,
@@ -115,6 +109,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentUdpExec
     TuicPacket,
     JuicityStreamPacket,
     ConnectUdpH2,
+    ConnectUdpH3,
     PolicyClosed(ResidentUdpPolicyClosedReason),
 }
 
@@ -141,6 +136,7 @@ impl ResidentUdpExecutorFactory {
             | Self::Hysteria2Datagram
             | Self::TuicPacket
             | Self::ConnectUdpH2
+            | Self::ConnectUdpH3
             | Self::PolicyClosed(_) => false,
         }
     }
@@ -159,9 +155,7 @@ impl ResidentUdpExecutorFactory {
                 Self::PolicyClosed(Closed::HttpConnect)
             }
             ResidentProxyProtocolPlan::ConnectUdpH2Tls { .. } => Self::ConnectUdpH2,
-            ResidentProxyProtocolPlan::ConnectUdpH3Tls { .. } => {
-                Self::PolicyClosed(Closed::ConnectUdpH3Pending)
-            }
+            ResidentProxyProtocolPlan::ConnectUdpH3Tls { .. } => Self::ConnectUdpH3,
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => Self::ShadowsocksAead,
             ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => Self::Shadowsocks2022,
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
@@ -292,6 +286,7 @@ impl ResidentUdpExecutorFactory {
             Self::TuicPacket => "resident-tuic-quic-packet",
             Self::JuicityStreamPacket => "resident-juicity-quic-stream-packet",
             Self::ConnectUdpH2 => "resident-connect-udp-h2-capsule",
+            Self::ConnectUdpH3 => "resident-connect-udp-h3-http-datagram",
             Self::PolicyClosed(reason) => reason.executor_label(),
         }
     }
@@ -312,6 +307,7 @@ impl ResidentUdpExecutorFactory {
             Self::TuicPacket => UdpPacketSemantics::QuicPacket,
             Self::JuicityStreamPacket => UdpPacketSemantics::QuicStreamPacket,
             Self::ConnectUdpH2 => UdpPacketSemantics::ConnectUdpCapsule,
+            Self::ConnectUdpH3 => UdpPacketSemantics::ConnectUdpHttpDatagram,
             Self::PolicyClosed(reason) => reason.packet_semantics(),
         }
     }

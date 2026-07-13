@@ -18,6 +18,7 @@ impl UdpSessionExecutor {
             Self::AnyTls(session) => session.wait_response().await?,
             Self::VmessAead(session) => session.wait_response().await?,
             Self::ConnectUdpH2(session) => session.wait_response().await?,
+            Self::ConnectUdpH3(session) => session.wait_response().await?,
             Self::Dns | Self::Juicity(_) | Self::FailClosed { .. } => {
                 return std::future::pending().await;
             }

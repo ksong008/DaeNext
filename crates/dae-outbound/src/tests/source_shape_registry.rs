@@ -1,14 +1,14 @@
 use super::*;
 
 #[test]
-fn source_shape_registry_reports_pending_connect_udp_rows() {
+fn source_shape_registry_reports_connect_udp_rows_with_matrix_scope() {
     let contract = source_shape_registry_contract();
 
     assert_eq!(contract.schema, "outbound-source-shape-registry");
     assert_eq!(contract.schema_version, 1);
     assert!(contract.source_shape_registry_open);
     assert!(contract.expanded_source_matrix_open);
-    assert!(!contract.expanded_source_matrix_complete);
+    assert!(contract.expanded_source_matrix_complete);
     assert!(!contract.production_readiness_may_use_current_config_matrix_as_source_matrix);
     assert!(contract.rows.len() >= 20);
     assert!(
@@ -90,21 +90,24 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
 }
 
 #[test]
-fn source_shape_registry_admits_h2_and_keeps_h3_connect_udp_blocked() {
+fn source_shape_registry_admits_h2_and_h3_connect_udp_independently() {
     let rows = source_shape_registry_rows();
-    let blocked = rows
+    let connect_udp = rows
         .iter()
-        .filter(|row| row.resident_status == "blocked")
+        .filter(|row| row.protocol_family == "connect-udp")
         .collect::<Vec<_>>();
 
     assert_eq!(
-        blocked.iter().map(|row| row.shape_id).collect::<Vec<_>>(),
-        ["connect-udp-h3-endpoint"]
+        connect_udp
+            .iter()
+            .map(|row| row.shape_id)
+            .collect::<Vec<_>>(),
+        ["connect-udp-h2-endpoint", "connect-udp-h3-endpoint"]
     );
-    assert!(blocked.iter().all(|row| {
-        row.protocol_family == "connect-udp"
+    assert!(connect_udp.iter().all(|row| {
+        row.resident_status == "admitted-baseline"
             && row.link_schemes == ["masque"]
-            && row.executor_proof.proof_state == "descriptor-only-fail-closed"
+            && row.executor_proof.proof_state == "runtime-executable"
     }));
 }
 

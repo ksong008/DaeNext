@@ -216,9 +216,9 @@ impl ResidentProxyProtocolPlan {
             },
             Self::ConnectUdpH3Tls { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "connect-udp-tcp-policy-closed",
-                udp_executor: "connect-udp-h3-executor-pending",
+                udp_executor: "resident-connect-udp-h3-http-datagram",
                 packet_semantics: "connect-udp-http-datagram",
-                udp_policy_closed: true,
+                udp_policy_closed: false,
             },
             Self::ShadowsocksAeadTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-shadowsocks-aead-stream",

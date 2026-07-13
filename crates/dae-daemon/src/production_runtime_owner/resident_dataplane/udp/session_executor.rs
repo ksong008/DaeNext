@@ -16,6 +16,7 @@ pub(super) enum UdpSessionExecutor {
     Tuic(TuicQuicDatagramSession),
     Juicity(JuicityQuicStreamPacketSession),
     ConnectUdpH2(ConnectUdpH2Session),
+    ConnectUdpH3(ConnectUdpH3Session),
     FailClosed { reason: String },
 }
 
@@ -40,7 +41,9 @@ impl UdpSessionExecutor {
             | Self::Hysteria2(_)
             | Self::Tuic(_)
             | Self::Juicity(_) => Some(ResidentUdpExecutionDisposition::PacketRelay),
-            Self::ConnectUdpH2(_) => Some(ResidentUdpExecutionDisposition::PacketRelay),
+            Self::ConnectUdpH2(_) | Self::ConnectUdpH3(_) => {
+                Some(ResidentUdpExecutionDisposition::PacketRelay)
+            }
         }
     }
 
@@ -67,8 +70,10 @@ mod datagram;
 mod dispatch;
 mod selection;
 mod wait;
-use self::connect_udp::ConnectUdpH2Session;
-pub(in crate::production_runtime_owner::resident_dataplane) use self::connect_udp::clear_connect_udp_h2_pools;
+use self::connect_udp::{ConnectUdpH2Session, ConnectUdpH3Session};
+pub(in crate::production_runtime_owner::resident_dataplane) use self::connect_udp::{
+    clear_connect_udp_h2_pools, clear_connect_udp_h3_pools,
+};
 use self::datagram::*;
 
 mod anytls;

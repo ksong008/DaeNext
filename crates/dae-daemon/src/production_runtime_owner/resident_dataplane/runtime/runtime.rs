@@ -91,6 +91,20 @@ impl ResidentDataplaneRuntime {
             "lockedPools": connect_udp_h2.locked_pools,
             "registryLocked": connect_udp_h2.registry_locked,
         }));
+        let connect_udp_h3 = udp::clear_connect_udp_h3_pools(reload_generation);
+        steps.push(json!({
+            "name": "clear-resident-connect-udp-h3-pools",
+            "reloadGeneration": reload_generation,
+            "status": if !connect_udp_h3.registry_locked && connect_udp_h3.locked_pools == 0 {
+                "pass"
+            } else {
+                "partial"
+            },
+            "pools": connect_udp_h3.pools,
+            "connections": connect_udp_h3.connections,
+            "lockedPools": connect_udp_h3.locked_pools,
+            "registryLocked": connect_udp_h3.registry_locked,
+        }));
         steps.push(json!({
             "name": "clear-resident-udp-reply-socket-cache",
             "status": "pass",

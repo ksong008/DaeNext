@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(super) struct ConnectUdpH2PoolKey {
+pub(super) struct ConnectUdpH3PoolKey {
     pub(super) generation: u64,
     group_name: String,
     node_tag: String,
@@ -14,22 +14,22 @@ pub(super) struct ConnectUdpH2PoolKey {
     authentication_identity: [u8; 32],
     target_template: String,
     mark: u32,
-    mptcp: bool,
 }
 
-impl ConnectUdpH2PoolKey {
+impl ConnectUdpH3PoolKey {
     pub(super) fn from_proxy(
         proxy: &ResidentProxyPlan,
     ) -> Result<(Self, ResidentConnectUdpRuntimePlan), String> {
-        let plan = connect_udp_h2_plan(proxy)?;
-        if proxy.tls != "tls"
-            || proxy.alpn.as_slice() != ["h2"]
+        let plan = connect_udp_h3_plan(proxy)?;
+        if proxy.tls != "quic"
+            || proxy.alpn.as_slice() != ["h3"]
             || proxy.tls_fragment.is_some()
             || proxy.utls_fingerprint.is_some()
             || proxy.reality.is_some()
+            || proxy.mptcp
         {
             return Err(
-                "CONNECT-UDP H2 requires the explicit standard TLS + ALPN h2 source contract"
+                "CONNECT-UDP H3 requires the explicit QUIC TLS + ALPN h3 source contract"
                     .to_owned(),
             );
         }
@@ -47,7 +47,6 @@ impl ConnectUdpH2PoolKey {
                 authentication_identity: connect_udp_authentication_identity(plan.authentication),
                 target_template: plan.target_template.as_str().to_owned(),
                 mark: proxy.mark,
-                mptcp: proxy.mptcp,
             },
             plan.runtime,
         ))

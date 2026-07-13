@@ -832,6 +832,7 @@ mod tests {
         Tuic,
         Juicity,
         ConnectUdpH2,
+        ConnectUdpH3,
         FailClosed,
     }
 
@@ -852,6 +853,7 @@ mod tests {
             UdpSessionExecutor::Tuic(_) => UdpExecutorShape::Tuic,
             UdpSessionExecutor::Juicity(_) => UdpExecutorShape::Juicity,
             UdpSessionExecutor::ConnectUdpH2(_) => UdpExecutorShape::ConnectUdpH2,
+            UdpSessionExecutor::ConnectUdpH3(_) => UdpExecutorShape::ConnectUdpH3,
             UdpSessionExecutor::FailClosed { .. } => UdpExecutorShape::FailClosed,
         }
     }

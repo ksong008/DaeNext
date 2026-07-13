@@ -53,6 +53,18 @@ const HIGH_PERFORMANCE_CONNECT_UDP_SESSIONS_PER_CONNECTION: usize = 1_024;
 const LOW_MEMORY_CONNECT_UDP_H3_COMMAND_QUEUE_DEPTH: usize = 64;
 const BALANCED_CONNECT_UDP_H3_COMMAND_QUEUE_DEPTH: usize = 256;
 const HIGH_PERFORMANCE_CONNECT_UDP_H3_COMMAND_QUEUE_DEPTH: usize = 1_024;
+const LOW_MEMORY_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH: usize = 16;
+const BALANCED_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH: usize = 64;
+const HIGH_PERFORMANCE_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH: usize = 128;
+const LOW_MEMORY_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES: usize = 256 * 1_024;
+const BALANCED_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES: usize = 1_024 * 1_024;
+const HIGH_PERFORMANCE_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES: usize = 4 * 1_024 * 1_024;
+const LOW_MEMORY_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS: u64 = 15;
+const BALANCED_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS: u64 = 10;
+const HIGH_PERFORMANCE_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS: u64 = 5;
+const LOW_MEMORY_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS: u64 = 45;
+const BALANCED_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS: u64 = 60;
+const HIGH_PERFORMANCE_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS: u64 = 90;
 const LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 60;
 const BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 30;
 const HIGH_PERFORMANCE_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 15;
@@ -221,6 +233,38 @@ impl ResidentRuntimeProfile {
         }
     }
 
+    pub(crate) fn connect_udp_h3_session_queue_depth_default(self) -> usize {
+        match self {
+            Self::LowMemory => LOW_MEMORY_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH,
+            Self::Balanced => BALANCED_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH,
+            Self::HighPerformance => HIGH_PERFORMANCE_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH,
+        }
+    }
+
+    pub(crate) fn connect_udp_h3_datagram_buffer_bytes_default(self) -> usize {
+        match self {
+            Self::LowMemory => LOW_MEMORY_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES,
+            Self::Balanced => BALANCED_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES,
+            Self::HighPerformance => HIGH_PERFORMANCE_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES,
+        }
+    }
+
+    pub(crate) fn connect_udp_h3_keep_alive_seconds_default(self) -> u64 {
+        match self {
+            Self::LowMemory => LOW_MEMORY_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS,
+            Self::Balanced => BALANCED_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS,
+            Self::HighPerformance => HIGH_PERFORMANCE_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS,
+        }
+    }
+
+    pub(crate) fn connect_udp_h3_idle_timeout_seconds_default(self) -> u64 {
+        match self {
+            Self::LowMemory => LOW_MEMORY_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS,
+            Self::Balanced => BALANCED_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS,
+            Self::HighPerformance => HIGH_PERFORMANCE_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS,
+        }
+    }
+
     pub(crate) fn datapath_postflight_interval_seconds_default(self) -> u64 {
         match self {
             Self::LowMemory => LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
@@ -276,6 +320,10 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "connectUdpH3PoolConnectionsDefault": LOW_MEMORY_CONNECT_UDP_H3_POOL_CONNECTIONS,
                 "connectUdpSessionsPerConnectionDefault": LOW_MEMORY_CONNECT_UDP_SESSIONS_PER_CONNECTION,
                 "connectUdpH3CommandQueueDepthDefault": LOW_MEMORY_CONNECT_UDP_H3_COMMAND_QUEUE_DEPTH,
+                "connectUdpH3SessionQueueDepthDefault": LOW_MEMORY_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH,
+                "connectUdpH3DatagramBufferBytesDefault": LOW_MEMORY_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES,
+                "connectUdpH3KeepAliveSecondsDefault": LOW_MEMORY_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS,
+                "connectUdpH3IdleTimeoutSecondsDefault": LOW_MEMORY_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS,
                 "datapathPostflightIntervalSecondsDefault": LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
             {
@@ -296,6 +344,10 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "connectUdpH3PoolConnectionsDefault": BALANCED_CONNECT_UDP_H3_POOL_CONNECTIONS,
                 "connectUdpSessionsPerConnectionDefault": BALANCED_CONNECT_UDP_SESSIONS_PER_CONNECTION,
                 "connectUdpH3CommandQueueDepthDefault": BALANCED_CONNECT_UDP_H3_COMMAND_QUEUE_DEPTH,
+                "connectUdpH3SessionQueueDepthDefault": BALANCED_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH,
+                "connectUdpH3DatagramBufferBytesDefault": BALANCED_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES,
+                "connectUdpH3KeepAliveSecondsDefault": BALANCED_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS,
+                "connectUdpH3IdleTimeoutSecondsDefault": BALANCED_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS,
                 "datapathPostflightIntervalSecondsDefault": BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
             {
@@ -316,6 +368,10 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "connectUdpH3PoolConnectionsDefault": HIGH_PERFORMANCE_CONNECT_UDP_H3_POOL_CONNECTIONS,
                 "connectUdpSessionsPerConnectionDefault": HIGH_PERFORMANCE_CONNECT_UDP_SESSIONS_PER_CONNECTION,
                 "connectUdpH3CommandQueueDepthDefault": HIGH_PERFORMANCE_CONNECT_UDP_H3_COMMAND_QUEUE_DEPTH,
+                "connectUdpH3SessionQueueDepthDefault": HIGH_PERFORMANCE_CONNECT_UDP_H3_SESSION_QUEUE_DEPTH,
+                "connectUdpH3DatagramBufferBytesDefault": HIGH_PERFORMANCE_CONNECT_UDP_H3_DATAGRAM_BUFFER_BYTES,
+                "connectUdpH3KeepAliveSecondsDefault": HIGH_PERFORMANCE_CONNECT_UDP_H3_KEEP_ALIVE_SECONDS,
+                "connectUdpH3IdleTimeoutSecondsDefault": HIGH_PERFORMANCE_CONNECT_UDP_H3_IDLE_TIMEOUT_SECONDS,
                 "datapathPostflightIntervalSecondsDefault": HIGH_PERFORMANCE_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
         ],

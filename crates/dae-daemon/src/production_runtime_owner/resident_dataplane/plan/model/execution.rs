@@ -94,13 +94,8 @@ mod tests {
             protocol: ResidentProtocolShape::ConnectUdpH3,
             security: ResidentSecurityUnderlayPlan::QuicTls,
             wrapper: ResidentStreamWrapperPlan::ConnectUdpH3,
-            udp: ResidentUdpExecutorFactory::PolicyClosed(
-                udp::ResidentUdpPolicyClosedReason::ConnectUdpH3Pending,
-            ),
+            udp: ResidentUdpExecutorFactory::ConnectUdpH3,
         };
-        assert_eq!(
-            h3.manual_probe_dispatch(),
-            ResidentManualProbeDispatch::PolicyClosed
-        );
+        assert_eq!(h3.manual_probe_dispatch(), ResidentManualProbeDispatch::Udp);
     }
 }
