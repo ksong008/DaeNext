@@ -118,13 +118,45 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Mutex<ResidentDnsForwarderCacheState>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) udp_executor:
         Arc<ResidentDnsUdpActorExecutor>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) udp_runtime:
+        ResidentDnsUdpRuntimeConfig,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) metrics:
+        Arc<ResidentDataplaneMetrics>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) closing:
+        std::sync::atomic::AtomicBool,
 }
 
 impl Default for ResidentDnsForwarderCache {
     fn default() -> Self {
+        let udp_runtime = ResidentDnsUdpRuntimeConfig::standalone();
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
         Self {
             state: Mutex::new(ResidentDnsForwarderCacheState::default()),
-            udp_executor: Arc::new(ResidentDnsUdpActorExecutor::default()),
+            udp_executor: Arc::new(ResidentDnsUdpActorExecutor::new(
+                udp_runtime.clone(),
+                Arc::clone(&metrics),
+            )),
+            udp_runtime,
+            metrics,
+            closing: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl ResidentDnsForwarderCache {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn new(
+        udp_runtime: ResidentDnsUdpRuntimeConfig,
+        metrics: Arc<ResidentDataplaneMetrics>,
+    ) -> Self {
+        Self {
+            state: Mutex::new(ResidentDnsForwarderCacheState::default()),
+            udp_executor: Arc::new(ResidentDnsUdpActorExecutor::new(
+                udp_runtime.clone(),
+                Arc::clone(&metrics),
+            )),
+            udp_runtime,
+            metrics,
+            closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -138,6 +170,11 @@ impl std::fmt::Debug for ResidentDnsForwarderCache {
             .unwrap_or_default();
         f.debug_struct("ResidentDnsForwarderCache")
             .field("entries", &entries)
+            .field("generation", &self.udp_runtime.generation)
+            .field(
+                "closing",
+                &self.closing.load(std::sync::atomic::Ordering::Relaxed),
+            )
             .finish()
     }
 }
@@ -238,6 +275,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Arc<ResidentDnsUdpActorExecutor>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) shards:
         Vec<ResidentDnsUdpForwarderShard>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) runtime_config:
+        ResidentDnsUdpRuntimeConfig,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpForwarderShard
@@ -359,3 +398,6 @@ impl ResidentDnsUpstreamScheme {
         matches!(self, Self::Udp | Self::Tcp | Self::TcpUdp | Self::Tls)
     }
 }
+use crate::production_runtime_owner::resident_dataplane::{
+    ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
+};

@@ -24,6 +24,7 @@ use dae_runtime_control::ip_to_key;
 use http::Request;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
@@ -48,7 +49,8 @@ use super::udp::{
     ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
 };
 use super::{
-    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, apply_resident_udp_socket_buffer_tuning,
+    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics,
+    ResidentDnsUdpRuntimeConfig, apply_resident_udp_socket_buffer_tuning,
 };
 use super::{ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl};
 
@@ -101,6 +103,10 @@ use self::trace_summary::{
 };
 #[cfg(test)]
 use self::transport::parse_doh_http_response;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::transport::udp_multiplex::{
+    ResidentDnsUdpActorExecutor, ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
+    UdpRequestIdAllocator,
+};
 use self::transport::{
     forward_dns_tcp_asis_async, forward_dns_to_upstream_async, forward_dns_udp_async,
 };
@@ -244,6 +250,19 @@ impl ResidentDnsPlan {
     ) -> Self {
         self.upstream_router = upstream_router;
         self
+    }
+
+    pub(super) fn with_udp_runtime_resources(
+        mut self,
+        runtime: ResidentDnsUdpRuntimeConfig,
+        metrics: Arc<ResidentDataplaneMetrics>,
+    ) -> Self {
+        self.forwarders = Arc::new(ResidentDnsForwarderCache::new(runtime, metrics));
+        self
+    }
+
+    pub(super) async fn shutdown_forwarders(&self, deadline: time::Instant) -> Value {
+        self.forwarders.shutdown(deadline).await
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn reload_handle(

@@ -106,6 +106,25 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentUdpExec
 }
 
 impl ResidentUdpExecutorFactory {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn uses_request_scoped_exchange(
+        self,
+    ) -> bool {
+        match self {
+            Self::JuicityStreamPacket => true,
+            Self::Socks5Associate
+            | Self::ShadowsocksAead
+            | Self::Shadowsocks2022
+            | Self::VlessStandard(_)
+            | Self::VlessVisionXudp
+            | Self::Trojan(_)
+            | Self::Vmess(_)
+            | Self::AnyTlsPacketStream
+            | Self::Hysteria2Datagram
+            | Self::TuicPacket
+            | Self::PolicyClosed(_) => false,
+        }
+    }
+
     pub(super) fn from_proxy(
         proxy: &ResidentProxyPlan,
         wrapper: ResidentStreamWrapperPlan,

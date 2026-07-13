@@ -16,6 +16,7 @@ pub(super) struct UdpExchangeResult {
 }
 
 const UDP_SESSION_OWNERSHIP_MANAGER_OWNED: &str = "manager-owned";
+#[cfg(test)]
 const UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM: &str = "independent-datagram";
 
 impl UdpExchangeResult {
@@ -65,13 +66,10 @@ impl UdpExchangeResult {
         self
     }
 
+    #[cfg(test)]
     pub(super) fn with_session_ownership(mut self, session_ownership: &'static str) -> Self {
         self.session_ownership = session_ownership;
         self
-    }
-
-    pub(super) fn into_independent_datagram(self) -> Self {
-        self.with_session_ownership(UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM)
     }
 
     pub(super) fn append_execution_fields(

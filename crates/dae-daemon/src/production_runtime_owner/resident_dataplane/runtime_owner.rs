@@ -182,7 +182,7 @@ impl ResidentRuntimeOwner {
     }
 
     pub(crate) fn shutdown(&mut self) -> Value {
-        shutdown_resident_runtime_owner(self, shutdown::RESIDENT_RUNTIME_TASK_JOIN_GRACE)
+        shutdown_resident_runtime_owner(self, RESIDENT_RUNTIME_TASK_JOIN_GRACE)
     }
 
     #[cfg(test)]

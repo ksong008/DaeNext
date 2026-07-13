@@ -14,6 +14,8 @@ pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX: usize = 30_000;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT: Duration =
     Duration::from_millis(RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT as u64);
 pub(crate) const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
+pub(crate) const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
+pub(crate) const RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE: Duration = Duration::from_millis(1_500);
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "RESIDENT_TCP_FLOW_STACK_BYTES";
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_LEGACY_ENV: &str =
     "DAE_RESIDENT_TCP_FLOW_STACK_BYTES";
@@ -61,6 +63,13 @@ pub(crate) const RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_ENV: &str =
     "RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT";
 pub(crate) const RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MIN: usize = 16;
 pub(crate) const RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MAX: usize = u16::MAX as usize + 1;
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_ENV: &str =
+    "RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS";
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_MIN: usize = 1;
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_MAX: usize = 8;
+pub(crate) const RESIDENT_DNS_PROXY_UDP_ACTORS_ENV: &str = "RESIDENT_DNS_PROXY_UDP_ACTORS";
+pub(crate) const RESIDENT_DNS_PROXY_UDP_ACTORS_MIN: usize = 1;
+pub(crate) const RESIDENT_DNS_PROXY_UDP_ACTORS_MAX: usize = 64;
 pub(crate) const RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_ENV: &str =
     "RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS";
 pub(crate) const RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_DEFAULT: usize = 60;
@@ -177,6 +186,18 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "defaultPolicy": "runtimeProfile",
                 "min": RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MIN,
                 "max": RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MAX,
+            },
+            "attempts": {
+                "env": RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_ENV,
+                "defaultPolicy": "runtimeProfile",
+                "min": RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_MIN,
+                "max": RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_MAX,
+            },
+            "proxyActors": {
+                "env": RESIDENT_DNS_PROXY_UDP_ACTORS_ENV,
+                "defaultPolicy": "runtimeProfile; only request-scoped proxy UDP executors use more than one actor",
+                "min": RESIDENT_DNS_PROXY_UDP_ACTORS_MIN,
+                "max": RESIDENT_DNS_PROXY_UDP_ACTORS_MAX,
             },
         },
         "eventWriter": {

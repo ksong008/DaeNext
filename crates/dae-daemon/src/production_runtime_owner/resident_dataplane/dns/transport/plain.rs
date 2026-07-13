@@ -6,7 +6,6 @@ use super::route::{
 use super::udp_multiplex::ResidentDnsUdpMultiplexHandle;
 use super::wire::{forward_dns_framed_stream_async, open_dns_tcp_stream_async};
 
-pub(super) const DNS_UDP_FORWARD_ATTEMPTS: usize = 3;
 const DNS_UDP_MAX_STALE_RESPONSES: usize = 8;
 
 pub(super) async fn forward_dns_udp_upstream_async(
@@ -39,12 +38,13 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn forwar
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
+    let runtime = ResidentDnsUdpRuntimeConfig::standalone();
     forward_dns_udp_with_attempts_async(
         target,
         payload,
         mark,
-        DNS_UDP_FORWARD_ATTEMPTS,
-        dns_udp_forward_attempt_timeout(),
+        runtime.attempts,
+        runtime.attempt_timeout,
     )
     .await
 }
@@ -130,15 +130,6 @@ fn validate_dns_udp_response(
         .map_err(|err| format!("validate DNS UDP response for request: {err:?}"))
 }
 
-pub(super) fn dns_udp_forward_attempt_timeout() -> std::time::Duration {
-    let divisor = (DNS_UDP_FORWARD_ATTEMPTS as u128).saturating_add(1);
-    let millis = RESIDENT_UDP_RESPONSE_TIMEOUT
-        .as_millis()
-        .saturating_div(divisor)
-        .max(1);
-    std::time::Duration::from_millis(millis.min(u64::MAX as u128) as u64)
-}
-
 pub(super) async fn forward_dns_tcp_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
@@ -189,7 +180,7 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
                 &target.selection,
             )?;
             forwarder
-                .exchange(payload, DNS_UDP_FORWARD_ATTEMPTS)
+                .exchange(payload)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
         }
@@ -209,12 +200,27 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
 impl ResidentDnsUdpForwarder {
     async fn exchange(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
         let shard_index = self.next_shard_index();
-        let handle = self.handle(shard_index).await?;
-        let result = handle.exchange(payload).await;
-        if result.is_err() && handle.is_closed() {
-            self.clear_closed_handle(shard_index, &handle).await;
+        let mut failures = Vec::new();
+        for attempt in 0..self.runtime_config.attempts {
+            let handle = self.handle(shard_index).await?;
+            if attempt > 0 {
+                handle.record_retry();
+            }
+            match handle.exchange_once(payload).await {
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    failures.push(err);
+                    if handle.is_closed() {
+                        self.clear_closed_handle(shard_index, &handle).await;
+                    }
+                }
+            }
         }
-        result
+        Err(format!(
+            "receive DNS UDP response timeout after {} attempts: {}",
+            self.runtime_config.attempts,
+            failures.join("; ")
+        ))
     }
 
     fn next_shard_index(&self) -> usize {
@@ -232,11 +238,24 @@ impl ResidentDnsUdpForwarder {
             .get(shard_index)
             .ok_or_else(|| format!("DNS UDP forwarder shard {shard_index} is missing"))?;
         let mut handle = shard.handle.lock().await;
+        let replacing_closed = handle
+            .as_ref()
+            .is_some_and(ResidentDnsUdpMultiplexHandle::is_closed);
         if handle
             .as_ref()
             .is_none_or(ResidentDnsUdpMultiplexHandle::is_closed)
         {
-            *handle = Some(self.executor.open_handle(self.target, self.mark).await?);
+            let actor_config = self
+                .runtime_config
+                .actor_partition(shard_index, self.shards.len());
+            *handle = Some(
+                self.executor
+                    .open_handle_with_config(self.target, self.mark, actor_config)
+                    .await?,
+            );
+            if replacing_closed && let Some(opened) = handle.as_ref() {
+                opened.record_recreated();
+            }
         }
         handle
             .as_ref()
@@ -399,6 +418,7 @@ async fn forward_dns_tcp_to_proxy_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     use std::time::Duration;
 
     #[tokio::test]
@@ -515,6 +535,61 @@ mod tests {
 
         assert_eq!(response, dns_a_response_for_query(&query, [192, 0, 2, 2]));
         server.await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn direct_dns_udp_forwarder_recreates_a_fatal_actor_for_the_same_target() {
+        let reserved = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let target = reserved.local_addr().unwrap();
+        drop(reserved);
+        let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+        runtime.direct_shards = 1;
+        runtime.actor_worker_threads = 1;
+        runtime.attempts = 1;
+        runtime.attempt_timeout = Duration::from_millis(500);
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+            runtime.clone(),
+            Arc::clone(&metrics),
+        ));
+        let forwarder = ResidentDnsUdpForwarder {
+            target,
+            mark: 0,
+            next_shard: std::sync::atomic::AtomicUsize::new(0),
+            executor: Arc::clone(&executor),
+            shards: vec![ResidentDnsUdpForwarderShard {
+                handle: AsyncMutex::new(None),
+            }],
+            runtime_config: runtime.clone(),
+        };
+        let query = build_dns_query_packet(0x6161, "fatal-recreate.example", DNS_QTYPE_A).unwrap();
+        let failed_handle = forwarder.handle(0).await.unwrap();
+        assert!(failed_handle.exchange_once(&query).await.is_err());
+        time::timeout(Duration::from_secs(1), async {
+            while !failed_handle.is_closed() {
+                time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("fatal DNS UDP actor did not close");
+
+        let upstream = tokio::net::UdpSocket::bind(target).await.unwrap();
+        let server = tokio::spawn(async move {
+            let mut request = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+            let (read, peer) = upstream.recv_from(&mut request).await.unwrap();
+            let response = dns_a_response_for_query(&request[..read], [192, 0, 2, 44]);
+            upstream.send_to(&response, peer).await.unwrap();
+        });
+        let response = forwarder.exchange(&query).await.unwrap();
+
+        assert_eq!(&response[0..2], &0x6161_u16.to_be_bytes());
+        server.await.unwrap();
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot["dnsUdpActorFatalExits"], 1);
+        assert_eq!(snapshot["dnsUdpForwarderRecreated"], 1);
+        let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+        assert_eq!(executor.shutdown(deadline).await["status"], "pass");
     }
 
     fn dns_a_response_for_query(query: &[u8], address: [u8; 4]) -> Vec<u8> {

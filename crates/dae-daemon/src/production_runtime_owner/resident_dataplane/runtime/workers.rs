@@ -221,6 +221,10 @@ pub(crate) fn start_resident_dataplane_workers(
     ));
     let dns = Arc::new(
         dns_plan
+            .with_udp_runtime_resources(
+                udp_runtime_config.dns_udp_runtime_config(),
+                Arc::clone(&metrics),
+            )
             .with_domain_routing(dns_domain_routing.clone())
             .with_upstream_routing(Some(dns_upstream_router)),
     );

@@ -220,7 +220,6 @@ async fn run_resident_udp_session_manager_async(
         Arc::clone(&metrics),
         dns_fast_path_concurrency,
         runtime_config.dns_fast_path_queue_depth,
-        runtime_config.shutdown_timeout,
     );
     let dns_fast_path = dns_fast_path_dispatcher.handle();
     let session_shards = ResidentUdpSessionShardPool::start(
@@ -282,12 +281,14 @@ async fn run_resident_udp_session_manager_async(
         }
     }
 
+    let shutdown_deadline = time::Instant::now() + runtime_config.shutdown_timeout;
     drop(session_shard_handle);
-    let session_shard_shutdown = session_shards.shutdown().await;
+    let session_shard_shutdown = session_shards.shutdown(shutdown_deadline).await;
     drop(dns_fast_path);
-    let dns_fast_path_shutdown = dns_fast_path_dispatcher.shutdown().await;
+    let dns_fast_path_shutdown = dns_fast_path_dispatcher.shutdown(shutdown_deadline).await;
+    let dns_forwarder_shutdown = dns.shutdown_forwarders(shutdown_deadline).await;
     drop(udp_reply);
-    let reply_shutdown = reply_dispatcher.shutdown().await;
+    let reply_shutdown = reply_dispatcher.shutdown(shutdown_deadline).await;
     append_event(
         &event_file,
         &event_lock,
@@ -299,6 +300,7 @@ async fn run_resident_udp_session_manager_async(
                 Ok(completed) => json!({"status": "pass", "completed": completed}),
                 Err(err) => json!({"status": "fail", "error": err}),
             },
+            "dns_forwarders": dns_forwarder_shutdown,
             "reply_dispatcher": match reply_shutdown {
                 Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
                 Err(err) => json!({"status": "fail", "error": err.to_string()}),

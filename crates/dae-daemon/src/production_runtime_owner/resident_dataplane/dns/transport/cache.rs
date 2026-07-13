@@ -1,6 +1,72 @@
 use super::super::*;
+use serde_json::{Value, json};
 
 impl ResidentDnsForwarderCache {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn shutdown(
+        &self,
+        deadline: time::Instant,
+    ) -> Value {
+        if self.closing.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return json!({
+                "status": "pass",
+                "generation": self.udp_runtime.generation,
+                "alreadyClosed": true,
+            });
+        }
+        let entries = match self.state.lock() {
+            Ok(mut state) => {
+                state.lru.clear();
+                std::mem::take(&mut state.entries)
+            }
+            Err(_) => {
+                return json!({
+                    "status": "fail",
+                    "generation": self.udp_runtime.generation,
+                    "error": "resident DNS forwarder cache lock poisoned",
+                });
+            }
+        };
+        let entry_count = entries.len();
+        let proxy_forwarders = entries
+            .into_values()
+            .filter_map(|entry| match entry.kind {
+                ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => Some(forwarder),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let proxy_count = proxy_forwarders.len();
+        let proxy_shutdown = async move {
+            let mut shutdowns = proxy_forwarders
+                .into_iter()
+                .map(|forwarder| async move { forwarder.shutdown(deadline).await })
+                .collect::<futures_util::stream::FuturesUnordered<_>>();
+            let mut reports = Vec::with_capacity(proxy_count);
+            while let Some(report) = futures_util::StreamExt::next(&mut shutdowns).await {
+                reports.push(report);
+            }
+            reports
+        };
+        let (proxy_reports, direct_report) =
+            tokio::join!(proxy_shutdown, self.udp_executor.shutdown(deadline),);
+        let proxy_failed = proxy_reports
+            .iter()
+            .filter(|report| report["status"].as_str() != Some("pass"))
+            .count();
+        json!({
+            "status": if proxy_failed == 0 && direct_report["status"].as_str() == Some("pass") {
+                "pass"
+            } else {
+                "fail"
+            },
+            "generation": self.udp_runtime.generation,
+            "entriesClosed": entry_count,
+            "proxyUdpForwarders": proxy_count,
+            "proxyUdpFailed": proxy_failed,
+            "proxyUdp": proxy_reports,
+            "directUdpActors": direct_report,
+        })
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn quic_forwarder(
         &self,
         upstream: &ResidentDnsUpstream,
@@ -93,7 +159,7 @@ impl ResidentDnsForwarderCache {
             key,
             "UDP",
             || {
-                let shard_count = super::udp_multiplex::dns_udp_forwarder_shard_count();
+                let shard_count = self.udp_runtime.direct_shards.max(1);
                 Arc::new(ResidentDnsUdpForwarder {
                     target,
                     mark,
@@ -104,6 +170,7 @@ impl ResidentDnsForwarderCache {
                             handle: AsyncMutex::new(None),
                         })
                         .collect(),
+                    runtime_config: self.udp_runtime.clone(),
                 })
             },
             |kind| match kind {
@@ -131,7 +198,15 @@ impl ResidentDnsForwarderCache {
         self.get_or_insert_forwarder_lazy(
             key,
             "proxied UDP",
-            || Arc::new(ResidentProxyDnsUdpForwarder::new(proxy, target)),
+            || {
+                Arc::new(ResidentProxyDnsUdpForwarder::new(
+                    proxy,
+                    target,
+                    self.udp_runtime.clone(),
+                    Arc::clone(&self.metrics),
+                    Arc::clone(&self.udp_executor),
+                ))
+            },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => Some(Arc::clone(forwarder)),
                 _ => None,
@@ -297,10 +372,16 @@ impl ResidentDnsForwarderCache {
         Extract: FnOnce(&ResidentDnsForwarderEntryKind) -> Option<Arc<T>>,
         Wrap: FnOnce(Arc<T>) -> ResidentDnsForwarderEntryKind,
     {
+        if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("resident DNS forwarder cache is closing".to_owned());
+        }
         let mut state = self
             .state
             .lock()
             .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
+        if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("resident DNS forwarder cache is closing".to_owned());
+        }
         if let Some(entry) = state.entries.get(&key) {
             let previous_tick = entry.last_used;
             let forwarder = extract(&entry.kind).ok_or_else(|| {
@@ -395,6 +476,7 @@ fn next_dns_forwarder_tick(state: &mut ResidentDnsForwarderCacheState) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     use std::cell::Cell;
 
     #[test]
@@ -477,5 +559,41 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(builds.get(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cache_shutdown_closes_direct_udp_actors_and_rejects_new_entries() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let cache = ResidentDnsForwarderCache::default();
+        let handle = cache.udp_executor.open_handle(target, 0).await.unwrap();
+        let query = build_dns_query_packet(0x5151, "cache-shutdown.example", DNS_QTYPE_A).unwrap();
+        let request_handle = handle.clone();
+        let request = tokio::spawn(async move { request_handle.exchange_once(&query).await });
+        let mut received = vec![0_u8; 512];
+        upstream.recv_from(&mut received).await.unwrap();
+
+        let report = cache
+            .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+            .await;
+        let request_error = request.await.unwrap().unwrap_err();
+        let second = cache
+            .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+            .await;
+        let upstream_model =
+            parse_dns_upstream(0, "closed", &format!("udp://{target}"), target, 0).unwrap();
+        let selection = ResidentDnsUpstreamSelection::Direct { mark: 0 };
+        let reopen_error = match cache.udp_forwarder(&upstream_model, target, 0, &selection) {
+            Ok(_) => panic!("closed DNS forwarder cache accepted a new entry"),
+            Err(err) => err,
+        };
+
+        assert_eq!(report["status"], "pass");
+        assert!(request_error.contains("shutting down"), "{request_error}");
+        assert!(handle.is_closed());
+        assert_eq!(second["alreadyClosed"], true);
+        assert!(reopen_error.contains("closing"), "{reopen_error}");
     }
 }
