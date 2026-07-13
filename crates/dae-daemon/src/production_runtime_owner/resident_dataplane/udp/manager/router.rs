@@ -328,6 +328,7 @@ pub(super) struct ResidentUdpDirectSelection {
     pub(super) route: ResidentUdpRouteSelection,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ResidentUdpRouteSelection {
     pub(super) initial_outbound: u8,
     pub(super) final_outbound: u8,

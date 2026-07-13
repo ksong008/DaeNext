@@ -10,6 +10,13 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
 use super::*;
 
 #[test]
+fn udp_session_worker_thread_name_stays_functional() {
+    assert_eq!(UDP_SESSION_WORKER_THREAD_NAME, "udp-session");
+    assert!(!UDP_SESSION_WORKER_THREAD_NAME.contains("daed"));
+    assert!(!UDP_SESSION_WORKER_THREAD_NAME.contains("shard"));
+}
+
+#[test]
 fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
     let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
     let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
