@@ -85,29 +85,6 @@ impl ResidentUdpRouter {
         )
     }
 
-    #[cfg(not(test))]
-    #[cfg(test)]
-    fn from_parts(
-        proxy_groups: SharedResidentProxyGroupMap,
-        default_outbound: u8,
-        routing_tuple_map_id: u32,
-        routing_tuple_map_fd: Option<OwnedFd>,
-        routing_matcher: RoutingMatcher,
-        dial_mode: TcpDialMode,
-        so_mark_from_dae: u32,
-    ) -> Result<Self, String> {
-        Self::from_validated_parts(
-            proxy_groups,
-            default_outbound,
-            routing_tuple_map_id,
-            routing_tuple_map_fd,
-            routing_matcher,
-            dial_mode,
-            so_mark_from_dae,
-            None,
-        )
-    }
-
     fn from_validated_parts(
         proxy_groups: SharedResidentProxyGroupMap,
         default_outbound: u8,
