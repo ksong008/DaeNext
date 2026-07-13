@@ -4,12 +4,11 @@ use percent_encoding::percent_decode_str;
 use url::Url;
 
 use crate::error::OutboundError;
+use crate::shared_transport::masque::MasqueUriTemplate;
 
 const MASQUE_SCHEME: &str = "masque";
 const MASQUE_H2_ALPN: &str = "h2";
 const MASQUE_H3_ALPN: &str = "h3";
-const TARGET_HOST_VARIABLE: &str = "{target_host}";
-const TARGET_PORT_VARIABLE: &str = "{target_port}";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum MasqueTransport {
@@ -46,7 +45,7 @@ pub struct MasqueLink {
     pub server: String,
     pub port: u16,
     pub transport: MasqueTransport,
-    pub target_template: String,
+    pub target_template: MasqueUriTemplate,
     pub sni: String,
     pub allow_insecure: bool,
     pub authentication: MasqueAuthentication,
@@ -86,8 +85,8 @@ impl MasqueLink {
                 )));
             }
         };
-        let target_template = required_query(&query, "template")?.to_owned();
-        validate_target_template_shape(&target_template)?;
+        let target_template =
+            MasqueUriTemplate::parse(required_query(&query, "template")?).map_err(bad_masque)?;
         let authentication = parse_authentication(&url, &query)?;
         let allow_insecure = match query.get("allowInsecure") {
             Some(value) => parse_bool(value).ok_or_else(|| {
@@ -157,15 +156,6 @@ fn required_query<'a>(
         .filter(|value| !value.is_empty())
         .map(String::as_str)
         .ok_or_else(|| bad_masque(format!("missing required {key} query parameter")))
-}
-
-fn validate_target_template_shape(template: &str) -> Result<(), OutboundError> {
-    if !template.contains(TARGET_HOST_VARIABLE) || !template.contains(TARGET_PORT_VARIABLE) {
-        return Err(bad_masque(
-            "target URI Template must contain both {target_host} and {target_port}",
-        ));
-    }
-    Ok(())
 }
 
 fn parse_authentication(

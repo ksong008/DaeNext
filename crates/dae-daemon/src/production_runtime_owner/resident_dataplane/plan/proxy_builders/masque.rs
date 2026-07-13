@@ -49,7 +49,7 @@ pub(crate) fn build_masque_proxy_plan(
         flow: String::new(),
         net,
         stream_host: String::new(),
-        stream_path: parsed.target_template,
+        stream_path: parsed.target_template.as_str().to_owned(),
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),

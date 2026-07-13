@@ -24,7 +24,7 @@ fn explicit_h2_basic_shape_parses_without_inference() {
         }
     );
     assert_eq!(
-        link.target_template,
+        link.target_template.as_str(),
         "/.well-known/masque/udp/{target_host}/{target_port}/"
     );
 }
