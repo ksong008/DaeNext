@@ -41,6 +41,52 @@ contracts into a Rust workspace.
 - [x] Build, release, benchmark, and golden-test tooling rooted at the repository
   top level.
 
+## Supported Protocol Combinations
+
+The resident runtime currently supports the combinations below. “UDP over
+stream” means that UDP packets are carried inside the protocol's ordered stream;
+it does not imply that the network underlay itself is UDP.
+
+| Protocol | Transport and security | Supported traffic |
+| --- | --- | --- |
+| Shadowsocks AEAD | Native | TCP stream and AEAD UDP datagram |
+| Shadowsocks 2022 | Native | TCP stream and 2022 UDP datagram |
+| SOCKS5 | CONNECT / UDP ASSOCIATE | TCP and UDP |
+| HTTP proxy | CONNECT | TCP |
+| VLESS Vision | TLS over TCP | TCP and XUDP |
+| VLESS | TLS over WebSocket | TCP and UDP over stream |
+| VLESS | TLS over HTTPUpgrade | TCP and UDP over stream |
+| VLESS | TLS over gRPC | TCP and UDP over stream |
+| VLESS Vision | Reality over TCP | TCP and XUDP |
+| VLESS xHTTP | TLS, H2/H3, auto/stream-up/packet-up | TCP and UDP |
+| VLESS xHTTP | Reality, packet-up | TCP and UDP |
+| VMess AEAD | TCP | TCP and UDP over stream |
+| VMess AEAD | WebSocket | TCP and UDP over stream |
+| VMess AEAD | HTTPUpgrade | TCP and UDP over stream |
+| VMess AEAD | TLS over gRPC | TCP and UDP over stream |
+| Trojan | TLS over TCP | TCP and UDP over TCP |
+| Trojan | TLS over WebSocket | TCP and UDP over stream |
+| Trojan | TLS over HTTPUpgrade | TCP and UDP over stream |
+| Trojan | TLS over gRPC | TCP and UDP over stream |
+| Hysteria2 | QUIC | TCP over QUIC stream and QUIC datagram UDP |
+| TUIC | QUIC | TCP and UDP |
+| Juicity | QUIC | TCP and UDP |
+| AnyTLS | TLS | TCP and packet-stream UDP |
+
+Current limits:
+
+- Ordinary HTTP CONNECT does not provide UDP relay semantics. CONNECT-UDP or
+  MASQUE would require a separate implementation.
+- gRPC wrappers accept uncompressed inbound hunks. Compressed inbound hunks are
+  fail-closed.
+- xHTTP uses the same-listener session model. A separately configured download
+  endpoint must carry its complete transport and security settings.
+- Fingerprint-aware TLS is supported through the resident underlay, but this
+  project does not claim complete Go-uTLS wire parity for every fingerprint
+  mode.
+- Unsupported packet chains fail closed instead of silently falling back to a
+  direct connection or a different transport.
+
 ## Getting Started
 
 DaeNext is a Cargo workspace. Build, test, fixture, and release paths are rooted
