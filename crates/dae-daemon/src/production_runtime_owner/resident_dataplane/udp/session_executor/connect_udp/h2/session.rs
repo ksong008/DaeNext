@@ -171,7 +171,9 @@ impl ConnectUdpH2Session {
             .push(chunk)
             .map_err(|err| format!("decode CONNECT-UDP H2 Capsule: {err}"))?;
         for capsule in capsules {
-            if let MasqueCapsule::Datagram(payload) = capsule {
+            if let MasqueCapsule::Datagram(payload) = capsule
+                && self.responses.len() < self.runtime.h2_session_queue_depth.max(1)
+            {
                 self.responses.push_back(payload);
             }
         }
@@ -242,4 +244,43 @@ async fn send_connect_udp_h2_capsule(
             .map_err(|err| format!("send CONNECT-UDP H2 Capsule data: {err}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoded_response_queue_drops_excess_capsules_at_the_profile_limit() {
+        let runtime = ResidentConnectUdpRuntimePlan {
+            h2_session_queue_depth: 2,
+            ..ResidentConnectUdpRuntimePlan::standalone()
+        };
+        let mut session = ConnectUdpH2Session::new(runtime);
+        let mut encoded = Vec::new();
+        for payload in [
+            b"first".as_slice(),
+            b"second".as_slice(),
+            b"excess".as_slice(),
+        ] {
+            encoded.extend(
+                encode_connect_udp_capsule(payload, runtime.capsule_limits)
+                    .expect("encode bounded H2 response fixture"),
+            );
+        }
+
+        session
+            .decode_chunk(&encoded)
+            .expect("decode bounded H2 response fixture");
+
+        assert_eq!(session.responses.len(), 2);
+        assert_eq!(
+            session.responses.pop_front().as_deref(),
+            Some(b"first".as_slice())
+        );
+        assert_eq!(
+            session.responses.pop_front().as_deref(),
+            Some(b"second".as_slice())
+        );
+    }
 }
