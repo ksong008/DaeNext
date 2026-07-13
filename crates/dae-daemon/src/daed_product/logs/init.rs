@@ -65,6 +65,7 @@ pub(crate) fn refresh_log_policy_and_reset_logs(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn refresh_log_policy_and_reset_runtime_cycle_logs(
     config_dir: &Path,
     state: &Path,

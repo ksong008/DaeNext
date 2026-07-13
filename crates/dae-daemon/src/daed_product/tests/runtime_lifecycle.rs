@@ -668,17 +668,23 @@ pub(crate) fn startup_restore_failure_keeps_server_recoverable() {
 
     record_startup_runtime_restore_failure(&dir, &state, "group proxy has no matched nodes");
 
-    assert!(!should_restore_runtime_on_start(&state).unwrap());
+    assert!(should_restore_runtime_on_start(&state).unwrap());
     assert_eq!(
         get_metadata(&state, "runtime_running").unwrap().as_deref(),
         Some("false")
+    );
+    assert_eq!(
+        get_metadata(&state, "runtime_transition_phase")
+            .unwrap()
+            .as_deref(),
+        Some("waiting-for-host")
     );
     let logs = list_logs_value(&dir, &state, Some("error"), None, 10).unwrap();
     assert!(logs["items"].as_array().unwrap().iter().any(|entry| {
         entry["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("continuing with runtime stopped")
+            .contains("waiting for host readiness")
     }));
 
     fs::remove_dir_all(dir).unwrap();

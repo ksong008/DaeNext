@@ -55,7 +55,13 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             }
         }
     }
+    if let Err(err) =
+        runtime.start_startup_recovery(options.state.clone(), options.config_dir.clone())
+    {
+        return DaedProductOutput::error(format!("start runtime readiness recovery failed: {err}"));
+    }
     let http_config = ProductHttpWorkerConfig::from_config(runtime.current_config().as_ref());
+    runtime.set_process_http_config(http_config);
     let auth_runtime = match ProductAuthRuntime::start_for_http_config(http_config) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -119,9 +125,11 @@ pub(crate) fn record_startup_runtime_restore_failure(config_dir: &Path, state: &
         config_dir,
         state,
         "error",
-        &format!("[Startup] runtime restore failed; continuing with runtime stopped: {err}"),
+        &format!("[Startup] runtime restore waiting for host readiness: {err}"),
     );
-    let _ = mark_system_stopped(state);
+    let _ = set_metadata(state, "runtime_transition_phase", "waiting-for-host");
+    let _ = set_metadata(state, "runtime_running", "false");
+    let _ = set_metadata(state, "runtime_last_apply_error", err);
 }
 
 pub(crate) fn restore_runtime_from_state(
@@ -134,8 +142,6 @@ pub(crate) fn restore_runtime_from_state(
         config_dir.unwrap_or_else(|| state.parent().unwrap_or(Path::new(DEFAULT_CONFIG_DIR)));
     let lifecycle_started_at = Instant::now();
     let source = log_mode.source();
-    let prepared = prepare_runtime_reload_to_apply(log_config_dir, state, runtime)
-        .map_err(|err| err.to_string())?;
     let latency_seed = stored_successful_node_latency_seed_snapshots(state).unwrap_or_default();
     let control_plane_started_at = Instant::now();
     let reclaim_reason = if log_mode.is_startup() {
@@ -143,27 +149,27 @@ pub(crate) fn restore_runtime_from_state(
     } else {
         AllocatorReclaimReason::ReloadCompleted
     };
-    let applied = match apply_prepared_runtime_reload(
+    let applied = match coordinate_runtime_reload(
         runtime,
         state,
         config_dir,
-        source,
-        prepared,
+        log_mode.apply_intent(),
         &latency_seed,
         reclaim_reason,
     ) {
         Ok(applied) => applied,
         Err(err) => {
+            let error = err.to_string();
             let mut fields = BTreeMap::new();
             fields.insert("source".to_owned(), source.to_owned());
-            fields.insert("error".to_owned(), err.clone());
+            fields.insert("error".to_owned(), error.clone());
             if log_mode.is_startup() {
                 let _ = append_startup_step_failed_for_config(
                     log_config_dir,
                     state,
                     "control-plane.create.total",
                     lifecycle_started_at,
-                    &err,
+                    &error,
                     fields.clone(),
                 );
             }
@@ -178,7 +184,7 @@ pub(crate) fn restore_runtime_from_state(
                 },
                 fields,
             );
-            return Err(err);
+            return Err(error);
         }
     };
     if log_mode.is_startup() {
@@ -222,13 +228,19 @@ pub(crate) fn restore_runtime_from_state(
         drop(applied.materialized_report);
         return Ok(json!({
             "restored": true,
+            "applied": applied.applied,
+            "coalesced": applied.coalesced,
             "detailedReport": false,
+            "pendingProcessTransition": applied.pending_process_transition,
             "allocatorReclaim": applied.allocator_reclaim,
         }));
     }
     Ok(json!({
         "restored": true,
+        "applied": applied.applied,
+        "coalesced": applied.coalesced,
         "detailedReport": true,
+        "pendingProcessTransition": applied.pending_process_transition,
         "runtime": applied.runtime_report,
         "materialized": applied.materialized_report,
         "allocatorReclaim": applied.allocator_reclaim,

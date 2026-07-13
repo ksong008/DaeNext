@@ -57,6 +57,8 @@ mod runtime_handle;
 pub use self::runtime_handle::*;
 mod start_entry;
 pub use self::start_entry::*;
+mod candidate_preflight;
+pub(crate) use self::candidate_preflight::preflight_resident_runtime_candidate;
 mod interface_policy;
 use self::interface_policy::*;
 mod interface_monitor;

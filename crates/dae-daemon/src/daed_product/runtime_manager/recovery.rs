@@ -9,6 +9,7 @@ pub(super) struct ProductRuntimeInterfaceRecoverySupervisor {
 
 impl ProductRuntimeInterfaceRecoverySupervisor {
     pub(super) fn start(
+        coordinator: RuntimeApplyCoordinator,
         lifecycle: Arc<Mutex<()>>,
         inner: Arc<Mutex<ProductRuntimeState>>,
     ) -> ProductRuntimeInterfaceRecoverySupervisor {
@@ -27,14 +28,18 @@ impl ProductRuntimeInterfaceRecoverySupervisor {
                     if retry_elapsed
                         && let Some(request) = resident_interface_recovery_request(&inner)
                     {
-                        let _ = reload_product_runtime_with_config_content(
-                            &lifecycle,
-                            &inner,
-                            request.config,
-                            request.config_content,
-                            PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE,
-                            &[],
-                        );
+                        if let Ok(permit) =
+                            coordinator.begin_apply(RuntimeApplyIntent::InterfaceRecovery)
+                        {
+                            permit.set_phase("revalidating-host");
+                            let result =
+                                reload_resident_interface_if_current(&lifecycle, &inner, &request);
+                            permit.finish(if result.is_ok() {
+                                "succeeded"
+                            } else {
+                                "failed"
+                            });
+                        }
                         last_attempt = Some(Instant::now());
                     }
                     sleep_interface_recovery_poll(&thread_stop);
@@ -53,8 +58,8 @@ impl ProductRuntimeInterfaceRecoverySupervisor {
 }
 
 pub(in crate::daed_product) struct ResidentInterfaceRecoveryRequest {
-    config: Config,
-    config_content: Option<String>,
+    lifecycle_epoch: u64,
+    active_generation: Option<String>,
 }
 
 pub(in crate::daed_product) fn resident_interface_recovery_request(
@@ -69,9 +74,53 @@ pub(in crate::daed_product) fn resident_interface_recovery_request(
     };
     runtime.resident_interface_reattach_ready_snapshot()?;
     Some(ResidentInterfaceRecoveryRequest {
-        config: inner.config.clone()?,
-        config_content: inner.config_content.clone(),
+        lifecycle_epoch: inner.lifecycle_epoch,
+        active_generation: inner.active_generation.clone(),
     })
+}
+
+fn reload_resident_interface_if_current(
+    lifecycle: &Arc<Mutex<()>>,
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+    request: &ResidentInterfaceRecoveryRequest,
+) -> Result<(), String> {
+    let (config, config_content) = {
+        let inner = inner
+            .lock()
+            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        if inner.cleanup.running
+            || inner.lifecycle_epoch != request.lifecycle_epoch
+            || inner.active_generation != request.active_generation
+        {
+            return Err("interface recovery intent was superseded by a newer runtime".to_owned());
+        }
+        let ProductRuntimeInstance::Resident(runtime) = inner
+            .runtime
+            .as_ref()
+            .ok_or_else(|| "interface recovery runtime is no longer active".to_owned())?
+        else {
+            return Err("interface recovery requires a resident runtime".to_owned());
+        };
+        runtime
+            .resident_interface_reattach_ready_snapshot()
+            .ok_or_else(|| "interface recovery observation is no longer ready".to_owned())?;
+        (
+            inner
+                .config
+                .clone()
+                .ok_or_else(|| "interface recovery active config is missing".to_owned())?,
+            inner.config_content.clone(),
+        )
+    };
+    reload_product_runtime_with_config_content(
+        lifecycle,
+        inner,
+        config,
+        config_content,
+        PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE,
+        &[],
+    )
+    .map(|_| ())
 }
 
 fn sleep_interface_recovery_poll(stop: &AtomicBool) {

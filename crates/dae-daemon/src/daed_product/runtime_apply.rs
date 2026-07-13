@@ -2,15 +2,39 @@ use super::*;
 
 mod activate;
 mod commit;
+mod coordinator;
 mod prepare;
 mod reconcile;
 mod rollback;
 
 use self::activate::activate_runtime_generation;
 use self::commit::commit_runtime_generation;
+pub(in crate::daed_product) use self::coordinator::{
+    RuntimeApplyCoordinator, RuntimeApplyIntent, RuntimeApplyPermit, RuntimeStopPermit,
+};
 use self::prepare::prepare_runtime_generation;
 use self::reconcile::{record_apply_failure, record_apply_success};
 use self::rollback::rollback_runtime_generation;
+
+const RUNTIME_GENERATION_METADATA_KEY: &str = "runtime_generation_id";
+const RUNTIME_RUNNING_METADATA_KEY: &str = "runtime_running";
+const RUNTIME_TRANSITION_PHASE_METADATA_KEY: &str = "runtime_transition_phase";
+const LAST_MATERIALIZED_AT_METADATA_KEY: &str = "last_materialized_at";
+const LAST_GENERATED_CONFIG_PATH_METADATA_KEY: &str = "last_generated_config_path";
+const RUNTIME_LOG_LEVEL_METADATA_KEY: &str = "runtime_log_level";
+const RUNTIME_LAST_APPLY_ERROR_METADATA_KEY: &str = "runtime_last_apply_error";
+pub(in crate::daed_product) const RUNTIME_PROCESS_TRANSITION_METADATA_KEY: &str =
+    "runtime_pending_process_transition";
+const RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS: &[&str] = &[
+    RUNTIME_GENERATION_METADATA_KEY,
+    RUNTIME_RUNNING_METADATA_KEY,
+    RUNTIME_TRANSITION_PHASE_METADATA_KEY,
+    LAST_MATERIALIZED_AT_METADATA_KEY,
+    LAST_GENERATED_CONFIG_PATH_METADATA_KEY,
+    RUNTIME_LOG_LEVEL_METADATA_KEY,
+    RUNTIME_LAST_APPLY_ERROR_METADATA_KEY,
+    RUNTIME_PROCESS_TRANSITION_METADATA_KEY,
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::daed_product) enum RuntimeApplyCheckpoint {
@@ -21,6 +45,7 @@ pub(in crate::daed_product) enum RuntimeApplyCheckpoint {
     CommitPostStart,
     RenameCandidate,
     CommitDatabase,
+    PublishLogPolicy,
     Rollback,
 }
 
@@ -45,6 +70,8 @@ pub(in crate::daed_product) fn apply_runtime_generation(
     latency_seed: &[Value],
     checkpoints: &mut dyn RuntimeApplyCheckpoints,
 ) -> Result<(Value, Value), String> {
+    let runtime_log_level = runtime_log_level_for_config(&prepared.config);
+    let process_transition = prepared.process_transition.clone();
     let generation = runtime.begin_apply_generation();
     let mut candidate = match prepare_runtime_generation(
         state,
@@ -103,18 +130,33 @@ pub(in crate::daed_product) fn apply_runtime_generation(
                 state,
                 config_dir,
                 &prepared.plan,
+                &runtime_log_level,
+                process_transition.as_ref(),
                 &mut candidate,
                 checkpoints,
             )
+            .and_then(|report| {
+                checkpoints
+                    .checkpoint(RuntimeApplyCheckpoint::PublishLogPolicy)
+                    .map_err(|err| format!("publish runtime log policy checkpoint: {err}"))?;
+                if let Some(config_dir) = config_dir {
+                    refresh_log_policy_and_apply_log_limits(config_dir, state, Some(runtime))
+                        .map_err(|err| format!("publish runtime log policy: {err}"))?;
+                }
+                Ok(report)
+            })
         });
     match commit_result {
         Ok(materialized_report) => {
+            runtime.publish_process_transition(process_transition);
             record_apply_success(runtime, &generation);
             Ok((runtime_report, materialized_report))
         }
         Err(commit_err) => {
             let rollback = rollback_runtime_generation(
                 runtime,
+                state,
+                config_dir,
                 &snapshot,
                 &mut candidate,
                 latency_seed,

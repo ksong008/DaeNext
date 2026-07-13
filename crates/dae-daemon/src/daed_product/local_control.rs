@@ -164,9 +164,12 @@ fn handle_local_control_reload(app: &AppState) -> Value {
         ProductRuntimeLifecycleLogMode::ReloadLocalControl,
     ) {
         Ok(report) => {
+            let applied = report["applied"].as_bool().unwrap_or(true);
+            let coalesced = report["coalesced"].as_bool().unwrap_or(false);
             let mut fields = BTreeMap::new();
             fields.insert("source".to_owned(), "local-control".to_owned());
-            fields.insert("applied".to_owned(), "true".to_owned());
+            fields.insert("applied".to_owned(), applied.to_string());
+            fields.insert("coalesced".to_owned(), coalesced.to_string());
             fields.insert(
                 "elapsed".to_owned(),
                 format!("{:?}", reload_started_at.elapsed()),
@@ -178,7 +181,13 @@ fn handle_local_control_reload(app: &AppState) -> Value {
                 "[Reload] Finished",
                 fields,
             );
-            json!({"ok": true, "applied": true, "skipped": false, "report": report})
+            json!({
+                "ok": true,
+                "applied": applied,
+                "coalesced": coalesced,
+                "skipped": !applied,
+                "report": report
+            })
         }
         Err(err) => {
             let mut fields = BTreeMap::new();

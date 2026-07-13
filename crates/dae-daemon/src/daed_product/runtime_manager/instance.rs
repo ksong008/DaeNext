@@ -98,6 +98,20 @@ pub(in crate::daed_product) fn start_product_runtime_instance_with_dns_reload_sn
     Ok((ProductRuntimeInstance::Resident(runtime), report))
 }
 
+pub(in crate::daed_product) fn preflight_product_runtime_candidate(
+    config: &Config,
+) -> Result<Value, String> {
+    if product_runtime_fake_start_enabled() {
+        return Ok(json!({
+            "status": "pass",
+            "fakeRuntime": true,
+            "hostChecks": "skipped-for-test-runtime",
+        }));
+    }
+    crate::service_contract::validate_resident_runtime_reload_config(config)?;
+    crate::production_runtime_owner::preflight_resident_runtime_candidate(config)
+}
+
 pub(in crate::daed_product) fn product_runtime_fake_start_enabled() -> bool {
     #[cfg(test)]
     if let Some(enabled) = PRODUCT_RUNTIME_FAKE_START_OVERRIDE.with(Cell::get) {

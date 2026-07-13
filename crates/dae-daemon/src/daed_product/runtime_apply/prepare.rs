@@ -6,7 +6,28 @@ pub(super) struct PreparedRuntimeGeneration {
     pub(super) candidate_path: Option<PathBuf>,
     pub(super) output_path: Option<PathBuf>,
     pub(super) previous_content: Option<Vec<u8>>,
+    pub(super) database_snapshot: RuntimeDatabaseSnapshot,
     committed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RuntimeDatabaseSnapshot {
+    pub(super) system: Option<RuntimeSystemSnapshot>,
+    pub(super) metadata: Vec<(String, Option<String>)>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RuntimeSystemSnapshot {
+    pub(super) running: i64,
+    pub(super) config_version: i64,
+    pub(super) dns_version: i64,
+    pub(super) routing_version: i64,
+    pub(super) group_version_sum: i64,
+    pub(super) group_ids: String,
+    pub(super) config_id: i64,
+    pub(super) dns_id: i64,
+    pub(super) routing_id: i64,
+    pub(super) external_input_version: i64,
 }
 
 impl PreparedRuntimeGeneration {
@@ -34,12 +55,14 @@ pub(super) fn prepare_runtime_generation(
     checkpoints: &mut dyn RuntimeApplyCheckpoints,
 ) -> Result<PreparedRuntimeGeneration, String> {
     ensure_state_schema(state).map_err(|err| format!("prepare runtime state: {err}"))?;
+    let database_snapshot = snapshot_runtime_database(state)?;
     let Some(config_dir) = config_dir else {
         return Ok(PreparedRuntimeGeneration {
             generation: generation.to_owned(),
             candidate_path: None,
             output_path: None,
             previous_content: None,
+            database_snapshot,
             committed: false,
         });
     };
@@ -73,6 +96,7 @@ pub(super) fn prepare_runtime_generation(
         candidate_path: Some(candidate_path),
         output_path: Some(output_path),
         previous_content,
+        database_snapshot,
         committed: false,
     };
     let candidate_path = candidate
@@ -112,6 +136,49 @@ pub(super) fn prepare_runtime_generation(
     })?;
     sync_directory(&runtime_dir)?;
     Ok(candidate)
+}
+
+fn snapshot_runtime_database(state: &Path) -> Result<RuntimeDatabaseSnapshot, String> {
+    let conn = open_state_connection(state)
+        .map_err(|err| format!("open runtime state for snapshot: {err}"))?;
+    let system = conn
+        .query_row(
+            "SELECT running, running_config_version, running_dns_version,
+                    running_routing_version, running_group_version_sum, running_group_ids,
+                    running_config_id, running_dns_id, running_routing_id,
+                    running_external_input_version
+             FROM systems ORDER BY id LIMIT 1",
+            [],
+            |row| {
+                Ok(RuntimeSystemSnapshot {
+                    running: row.get(0)?,
+                    config_version: row.get(1)?,
+                    dns_version: row.get(2)?,
+                    routing_version: row.get(3)?,
+                    group_version_sum: row.get(4)?,
+                    group_ids: row.get(5)?,
+                    config_id: row.get(6)?,
+                    dns_id: row.get(7)?,
+                    routing_id: row.get(8)?,
+                    external_input_version: row.get(9)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|err| format!("snapshot running runtime state: {err}"))?;
+    let mut metadata = Vec::with_capacity(RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS.len());
+    for key in RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS {
+        let value = conn
+            .query_row(
+                "SELECT value FROM daed_product_metadata WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|err| format!("snapshot runtime metadata {key}: {err}"))?;
+        metadata.push(((*key).to_owned(), value));
+    }
+    Ok(RuntimeDatabaseSnapshot { system, metadata })
 }
 
 pub(super) fn sync_directory(path: &Path) -> Result<(), String> {

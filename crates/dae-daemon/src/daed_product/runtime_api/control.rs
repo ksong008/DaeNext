@@ -7,29 +7,25 @@ pub(in crate::daed_product) fn api_runtime_reload(
     let reload_started_at = Instant::now();
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
-    let prepared = match if dry {
-        prepare_runtime_reload_config(&app.state)
-    } else {
-        prepare_runtime_reload_to_apply(&app.config_dir, &app.state, &app.runtime)
-    } {
-        Ok(prepared) => prepared,
-        Err(err) => {
-            let mut fields = BTreeMap::new();
-            fields.insert("source".to_owned(), "api".to_owned());
-            fields.insert("dry".to_owned(), dry.to_string());
-            fields.insert("error".to_owned(), err.to_string());
-            let _ = append_lifecycle_log_fields_for_config(
-                &app.config_dir,
-                &app.state,
-                "error",
-                err.api_log_message(),
-                fields,
-            );
-            return HttpResponse::json(err.http_status(), json!({"error": err.to_string()}));
-        }
-    };
-    let preview = prepared.plan.report(Some(&app.config_dir), true);
     if dry {
+        let prepared = match prepare_runtime_reload_config(&app.state) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                let mut fields = BTreeMap::new();
+                fields.insert("source".to_owned(), "api".to_owned());
+                fields.insert("dry".to_owned(), dry.to_string());
+                fields.insert("error".to_owned(), err.to_string());
+                let _ = append_lifecycle_log_fields_for_config(
+                    &app.config_dir,
+                    &app.state,
+                    "error",
+                    err.api_log_message(),
+                    fields,
+                );
+                return HttpResponse::json(err.http_status(), json!({"error": err.to_string()}));
+            }
+        };
+        let preview = prepared.plan.report(Some(&app.config_dir), true);
         let mut fields = BTreeMap::new();
         fields.insert("source".to_owned(), "api".to_owned());
         fields.insert("dry".to_owned(), "true".to_owned());
@@ -51,15 +47,13 @@ pub(in crate::daed_product) fn api_runtime_reload(
         response.insert("runtimeStarted".to_owned(), json!(false));
         return HttpResponse::json(200, Value::Object(response));
     }
-    drop(preview);
     let latency_seed =
         stored_successful_node_latency_seed_snapshots(&app.state).unwrap_or_default();
-    let applied = match apply_prepared_runtime_reload(
+    let applied = match coordinate_runtime_reload(
         &app.runtime,
         &app.state,
         Some(&app.config_dir),
-        "api-runtime-reload",
-        prepared,
+        RuntimeApplyIntent::ApiReload,
         &latency_seed,
         AllocatorReclaimReason::ReloadCompleted,
     ) {
@@ -68,21 +62,22 @@ pub(in crate::daed_product) fn api_runtime_reload(
             let mut fields = BTreeMap::new();
             fields.insert("source".to_owned(), "api".to_owned());
             fields.insert("dry".to_owned(), "false".to_owned());
-            fields.insert("error".to_owned(), err.clone());
+            fields.insert("error".to_owned(), err.to_string());
             let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
                 "error",
-                "[Reload] Failed to reload",
+                err.api_log_message(),
                 fields,
             );
-            return HttpResponse::json(500, json!({"error": err}));
+            return HttpResponse::json(err.http_status(), json!({"error": err.to_string()}));
         }
     };
     let mut fields = BTreeMap::new();
     fields.insert("source".to_owned(), "api".to_owned());
     fields.insert("dry".to_owned(), "false".to_owned());
-    fields.insert("applied".to_owned(), "true".to_owned());
+    fields.insert("applied".to_owned(), applied.applied.to_string());
+    fields.insert("coalesced".to_owned(), applied.coalesced.to_string());
     fields.insert(
         "elapsed".to_owned(),
         format!("{:?}", reload_started_at.elapsed()),
@@ -99,9 +94,17 @@ pub(in crate::daed_product) fn api_runtime_reload(
         .as_object()
         .cloned()
         .unwrap_or_default();
-    response.insert("applied".to_owned(), json!(1));
+    response.insert(
+        "applied".to_owned(),
+        json!(if applied.applied { 1 } else { 0 }),
+    );
     response.insert("dry".to_owned(), json!(false));
-    response.insert("runtimeStarted".to_owned(), json!(true));
+    response.insert("coalesced".to_owned(), json!(applied.coalesced));
+    response.insert("runtimeStarted".to_owned(), json!(app.runtime.is_running()));
+    response.insert(
+        "pendingProcessTransition".to_owned(),
+        json!(applied.pending_process_transition),
+    );
     response.insert("allocatorReclaim".to_owned(), applied.allocator_reclaim);
     HttpResponse::json(200, Value::Object(response))
 }
