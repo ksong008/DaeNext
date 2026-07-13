@@ -1,5 +1,6 @@
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::ResidentConnectUdpRuntimePlan;
+use crate::production_runtime_owner::resident_dataplane::plan::resident_tcp_check_network_type;
 use dae_outbound::NetworkType;
 use serde_json::json;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
@@ -16,6 +17,22 @@ const FLOW_FINAL_OUTBOUND: u8 = 9;
 const FLOW_FINAL_MARK: u32 = 0x55;
 const FLOW_PID: u32 = 1;
 const FLOW_DSCP: u8 = 2;
+
+#[test]
+fn accepted_ipv4_mapped_tcp_endpoints_use_the_ipv4_health_dimension() {
+    let ipv4 = Ipv4Addr::new(198, 51, 100, 20);
+    let mapped = SocketAddrV6::new(ipv4.to_ipv6_mapped(), 443, 0, 0).into();
+    let expected = SocketAddrV4::new(ipv4, 443).into();
+
+    let normalized = resident_tcp_accepted_endpoint(mapped);
+
+    assert_eq!(normalized, expected);
+    assert_eq!(
+        resident_tcp_check_network_type(normalized.ip()),
+        NetworkType::TCP4
+    );
+    assert_eq!(resident_tcp_network_name(normalized), "tcp4");
+}
 
 fn flow_route_selection() -> TcpRouteSelection {
     TcpRouteSelection {

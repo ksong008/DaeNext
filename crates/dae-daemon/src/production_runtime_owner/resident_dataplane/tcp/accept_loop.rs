@@ -144,6 +144,7 @@ fn spawn_async_tcp_flow(
     metrics: Arc<ResidentDataplaneMetrics>,
     admission: ResidentTcpAdmissionGuard,
 ) {
+    let peer = resident_tcp_accepted_endpoint(peer);
     tokio::spawn(async move {
         let _admission = admission;
         match handle_tcp_connection_async_or_handoff(
@@ -178,12 +179,14 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
 ) -> Result<Option<Value>, String> {
-    let original_dst = match inbound
-        .local_addr()
-        .map_err(|err| format!("read original TCP destination: {err}"))?
-    {
-        addr @ (SocketAddr::V4(_) | SocketAddr::V6(_)) => addr,
-    };
+    let original_dst = resident_tcp_accepted_endpoint(
+        match inbound
+            .local_addr()
+            .map_err(|err| format!("read original TCP destination: {err}"))?
+        {
+            addr @ (SocketAddr::V4(_) | SocketAddr::V6(_)) => addr,
+        },
+    );
     inbound
         .set_nodelay(true)
         .map_err(|err| format!("set inbound TCP_NODELAY: {err}"))?;
@@ -303,4 +306,8 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
             result.map(Some)
         }
     }
+}
+
+pub(super) fn resident_tcp_accepted_endpoint(addr: SocketAddr) -> SocketAddr {
+    resident_normalized_socket_addr(addr)
 }
