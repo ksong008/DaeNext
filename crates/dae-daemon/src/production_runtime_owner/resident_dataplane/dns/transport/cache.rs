@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::production_runtime_owner::resident_dataplane::plan::resident_udp_chain_admission;
 use serde_json::{Value, json};
 
 impl ResidentDnsForwarderCache {
@@ -85,7 +86,7 @@ impl ResidentDnsForwarderCache {
             key,
             "QUIC",
             || {
-                Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
+                Ok(Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
                     upstream: upstream.clone(),
                     mark,
                     fixed_remote: None,
@@ -93,7 +94,7 @@ impl ResidentDnsForwarderCache {
                     connection: None,
                     permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
                     open_lock: Arc::new(AsyncMutex::new(())),
-                }))
+                })))
             },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::Quic(forwarder) => Some(Arc::clone(forwarder)),
@@ -121,7 +122,7 @@ impl ResidentDnsForwarderCache {
             key,
             "QUIC",
             || {
-                Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
+                Ok(Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
                     upstream: upstream.clone(),
                     mark,
                     fixed_remote: Some(target),
@@ -129,7 +130,7 @@ impl ResidentDnsForwarderCache {
                     connection: None,
                     permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
                     open_lock: Arc::new(AsyncMutex::new(())),
-                }))
+                })))
             },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::Quic(forwarder) => Some(Arc::clone(forwarder)),
@@ -160,7 +161,7 @@ impl ResidentDnsForwarderCache {
             "UDP",
             || {
                 let shard_count = self.udp_runtime.direct_shards.max(1);
-                Arc::new(ResidentDnsUdpForwarder {
+                Ok(Arc::new(ResidentDnsUdpForwarder {
                     target,
                     mark,
                     next_shard: std::sync::atomic::AtomicUsize::new(0),
@@ -171,7 +172,7 @@ impl ResidentDnsForwarderCache {
                         })
                         .collect(),
                     runtime_config: self.udp_runtime.clone(),
-                })
+                }))
             },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::Udp(forwarder) => Some(Arc::clone(forwarder)),
@@ -188,6 +189,16 @@ impl ResidentDnsForwarderCache {
         proxy: Arc<ResidentProxyPlan>,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
+        proxy
+            .execution_plan()
+            .udp
+            .agreement()
+            .admit_packet_relay("proxy-routed DNS UDP")?;
+        if let Some(reason) = resident_udp_chain_admission(&proxy).unsupported_reason() {
+            return Err(format!(
+                "proxy-routed DNS UDP rejected by typed chain agreement: {reason}"
+            ));
+        }
         let key = routed_dns_forwarder_key(
             upstream,
             target,
@@ -199,13 +210,14 @@ impl ResidentDnsForwarderCache {
             key,
             "proxied UDP",
             || {
-                Arc::new(ResidentProxyDnsUdpForwarder::new(
+                ResidentProxyDnsUdpForwarder::new(
                     proxy,
                     target,
                     self.udp_runtime.clone(),
                     Arc::clone(&self.metrics),
                     Arc::clone(&self.udp_executor),
-                ))
+                )
+                .map(Arc::new)
             },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => Some(Arc::clone(forwarder)),
@@ -233,13 +245,13 @@ impl ResidentDnsForwarderCache {
             key,
             "TCP",
             || {
-                Arc::new(ResidentDnsTcpForwarder {
+                Ok(Arc::new(ResidentDnsTcpForwarder {
                     upstream: upstream.clone(),
                     target,
                     mark,
                     idle: AsyncMutex::new(Vec::new()),
                     permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
-                })
+                }))
             },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::Tcp(forwarder) => Some(Arc::clone(forwarder)),
@@ -267,13 +279,13 @@ impl ResidentDnsForwarderCache {
             key,
             "TLS",
             || {
-                Arc::new(ResidentDnsTlsForwarder {
+                Ok(Arc::new(ResidentDnsTlsForwarder {
                     upstream: upstream.clone(),
                     target,
                     mark,
                     idle: AsyncMutex::new(Vec::new()),
                     permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
-                })
+                }))
             },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::Tls(forwarder) => Some(Arc::clone(forwarder)),
@@ -301,7 +313,7 @@ impl ResidentDnsForwarderCache {
             key,
             "HTTPS",
             || {
-                Arc::new(ResidentDnsHttpsForwarder {
+                Ok(Arc::new(ResidentDnsHttpsForwarder {
                     upstream: upstream.clone(),
                     target,
                     mark,
@@ -311,7 +323,7 @@ impl ResidentDnsForwarderCache {
                     h2: AsyncMutex::new(None),
                     h2_open_lock: AsyncMutex::new(()),
                     h2_recovery: Mutex::new(ResidentDnsH2Recovery::default()),
-                })
+                }))
             },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::Https(forwarder) => Some(Arc::clone(forwarder)),
@@ -339,7 +351,7 @@ impl ResidentDnsForwarderCache {
             key,
             "H3",
             || {
-                Arc::new(AsyncMutex::new(ResidentDnsH3Forwarder {
+                Ok(Arc::new(AsyncMutex::new(ResidentDnsH3Forwarder {
                     upstream: upstream.clone(),
                     target,
                     mark,
@@ -349,7 +361,7 @@ impl ResidentDnsForwarderCache {
                     driver_task: None,
                     permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
                     open_lock: Arc::new(AsyncMutex::new(())),
-                }))
+                })))
             },
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::H3(forwarder) => Some(Arc::clone(forwarder)),
@@ -368,7 +380,7 @@ impl ResidentDnsForwarderCache {
         wrap: Wrap,
     ) -> Result<Arc<T>, String>
     where
-        Build: FnOnce() -> Arc<T>,
+        Build: FnOnce() -> Result<Arc<T>, String>,
         Extract: FnOnce(&ResidentDnsForwarderEntryKind) -> Option<Arc<T>>,
         Wrap: FnOnce(Arc<T>) -> ResidentDnsForwarderEntryKind,
     {
@@ -399,7 +411,7 @@ impl ResidentDnsForwarderCache {
             evict_oldest_dns_forwarder(&mut state);
         }
         let last_used = next_dns_forwarder_tick(&mut state);
-        let forwarder = build();
+        let forwarder = build()?;
         state.entries.insert(
             key.clone(),
             ResidentDnsForwarderEntry {
@@ -477,7 +489,50 @@ fn next_dns_forwarder_tick(state: &mut ResidentDnsForwarderCacheState) -> u64 {
 mod tests {
     use super::*;
     use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    use crate::production_runtime_owner::resident_dataplane::plan::{
+        ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan,
+    };
     use std::cell::Cell;
+
+    fn policy_closed_http_proxy() -> Arc<ResidentProxyPlan> {
+        Arc::new(ResidentProxyPlan {
+            graph_id: "resident-graph:redacted".to_owned(),
+            graph_link_hash: "sha256:redacted".to_owned(),
+            redacted_link_source: "source:<redacted>".to_owned(),
+            protocol: "http-proxy",
+            group_name: "proxy".to_owned(),
+            group_policy: "fixed".to_owned(),
+            node_tag: "redacted".to_owned(),
+            server_host: Ipv4Addr::LOCALHOST.to_string(),
+            server_port: 9,
+            server_name: String::new(),
+            alpn: Vec::new(),
+            flow: String::new(),
+            net: "tcp".to_owned(),
+            stream_host: String::new(),
+            stream_path: String::new(),
+            xhttp_download: None,
+            xhttp_mode: ResidentXhttpMode::PacketUp,
+            xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
+            xhttp_xmux: None,
+            tls: "none".to_owned(),
+            allow_insecure: false,
+            tls_fragment: None,
+            utls_fingerprint: None,
+            reality: None,
+            handler: ResidentProxyProtocolPlan::HttpProxyTcp {
+                username: String::new(),
+                password: String::new(),
+                transport: false,
+                transport_host: String::new(),
+                transport_path: String::new(),
+            },
+            execution: None,
+            chain_parent: None,
+            mark: 0,
+            mptcp: false,
+        })
+    }
 
     #[test]
     fn tcp_udp_upstream_caches_udp_and_tcp_forwarders_separately() {
@@ -503,6 +558,28 @@ mod tests {
     }
 
     #[test]
+    fn policy_closed_proxy_dns_udp_is_rejected_before_cache_or_actor_creation() {
+        let cache = ResidentDnsForwarderCache::default();
+        let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DNS_DEFAULT_PORT);
+        let upstream =
+            parse_dns_upstream(0, "closed", &format!("udp://{target}"), target, 0).unwrap();
+        let proxy = policy_closed_http_proxy();
+        let selection = ResidentDnsUpstreamSelection::Proxy {
+            proxy: Arc::clone(&proxy),
+        };
+
+        let err = cache
+            .proxy_udp_forwarder(&upstream, target, proxy, &selection)
+            .err()
+            .expect("policy-closed DNS UDP must be rejected");
+
+        assert!(err.contains("typed UDP agreement"), "{err}");
+        assert!(err.contains("http-connect-udp-protocol-closed"), "{err}");
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.metrics.snapshot()["dnsUdpActorsOpened"], 0);
+    }
+
+    #[test]
     fn cache_hit_does_not_construct_a_discarded_forwarder() {
         let cache = ResidentDnsForwarderCache::default();
         let upstream = parse_dns_upstream(
@@ -525,13 +602,13 @@ mod tests {
         let builds = Cell::new(0_usize);
         let build = || {
             builds.set(builds.get() + 1);
-            Arc::new(ResidentDnsTcpForwarder {
+            Ok(Arc::new(ResidentDnsTcpForwarder {
                 upstream: upstream.clone(),
                 target,
                 mark: 0,
                 idle: AsyncMutex::new(Vec::new()),
                 permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
-            })
+            }))
         };
         let extract = |kind: &ResidentDnsForwarderEntryKind| match kind {
             ResidentDnsForwarderEntryKind::Tcp(forwarder) => Some(Arc::clone(forwarder)),

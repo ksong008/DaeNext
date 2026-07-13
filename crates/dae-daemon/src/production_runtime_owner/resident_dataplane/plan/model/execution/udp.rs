@@ -1,6 +1,12 @@
 use super::super::*;
 use super::UdpPacketSemantics;
 
+mod agreement;
+pub(in crate::production_runtime_owner::resident_dataplane) use agreement::{
+    RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentUdpExecutionAgreement,
+    ResidentUdpExecutionDisposition,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentStreamPacketTransport {
     PlainTcp,
@@ -106,6 +112,12 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentUdpExec
 }
 
 impl ResidentUdpExecutorFactory {
+    pub(in crate::production_runtime_owner::resident_dataplane) const fn agreement(
+        self,
+    ) -> ResidentUdpExecutionAgreement {
+        ResidentUdpExecutionAgreement::new(self)
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn uses_request_scoped_exchange(
         self,
     ) -> bool {

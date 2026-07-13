@@ -18,6 +18,46 @@ pub(super) enum UdpSessionExecutor {
     FailClosed { reason: String },
 }
 
+impl UdpSessionExecutor {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn runtime_disposition(
+        &self,
+    ) -> Option<ResidentUdpExecutionDisposition> {
+        match self {
+            Self::Dns => None,
+            Self::FailClosed { .. } => Some(ResidentUdpExecutionDisposition::PolicyClosed),
+            Self::ShadowsocksAead(_)
+            | Self::Shadowsocks2022(_)
+            | Self::Socks5(_)
+            | Self::VlessStandard(_)
+            | Self::VlessVision(_)
+            | Self::VlessXhttpH2(_)
+            | Self::VlessXhttpH3(_)
+            | Self::Trojan(_)
+            | Self::VmessAead(_)
+            | Self::AnyTls(_)
+            | Self::Hysteria2(_)
+            | Self::Tuic(_)
+            | Self::Juicity(_) => Some(ResidentUdpExecutionDisposition::PacketRelay),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn agrees_with(
+        &self,
+        agreement: ResidentUdpExecutionAgreement,
+    ) -> bool {
+        self.runtime_disposition() == Some(agreement.disposition())
+            && match self {
+                Self::FailClosed { reason } => {
+                    agreement.unsupported_reason() == Some(reason.as_str())
+                }
+                Self::Dns => false,
+                _ => agreement.unsupported_reason().is_none(),
+            }
+    }
+}
+
 const UDP_DATAGRAM_RESPONSE_CAPACITY: usize = 64 * 1024;
 
 mod datagram;

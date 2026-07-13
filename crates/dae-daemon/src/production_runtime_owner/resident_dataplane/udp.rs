@@ -55,8 +55,9 @@ use super::execution::{append_runtime_execution_descriptor, udp_execution_descri
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
     ResidentHysteria2ObfsPlan, ResidentProtocolShape, ResidentProxyGroupPlan, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentStreamPacketTransport, ResidentUdpExecutorFactory,
-    ResidentXhttpHttpVersion, ResidentXhttpMode, SharedResidentProxyGroupMap, UdpPacketSemantics,
+    ResidentProxyProtocolPlan, ResidentStreamPacketTransport, ResidentUdpExecutionAgreement,
+    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, ResidentXhttpHttpVersion,
+    ResidentXhttpMode, SharedResidentProxyGroupMap, UdpPacketSemantics,
     resident_udp_chain_admission,
 };
 use super::tcp::{

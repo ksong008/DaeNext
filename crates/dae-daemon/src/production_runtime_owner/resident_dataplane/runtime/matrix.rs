@@ -407,12 +407,23 @@ pub(super) fn resident_matrix_candidate_runtime_components_ready(candidate: &Val
         return false;
     }
     let components = &candidate["runtimeComponents"];
+    let udp_agreement = &components["udpExecutionAgreement"];
     component_status_is_admitted(&components["underlayFactory"])
         && component_status_is_admitted(&components["streamWrapperFactory"])
         && component_status_is_admitted(&components["chainExecutor"])
         && generation_cache_contract_ready(&components["generationCache"])
-        && component_status_is_admitted(&components["packetSessionManager"])
         && component_status_is_admitted(&components["probeExecutor"])
+        && udp_execution_agreement_ready(udp_agreement)
+        && udp_component_matches_agreement(
+            udp_agreement,
+            &components["packetSessionManager"],
+            "expectedPacketSessionStatus",
+        )
+        && udp_component_matches_agreement(
+            udp_agreement,
+            &components["probeExecutor"]["udp"],
+            "expectedProbeStatus",
+        )
 }
 
 pub(super) fn component_status_is_admitted(component: &Value) -> bool {
@@ -427,6 +438,61 @@ pub(super) fn generation_cache_contract_ready(component: &Value) -> bool {
         && component["owner"].as_str() == Some("resident-dataplane-runtime")
         && component["cacheScope"].as_str() == Some("graph-and-reload-generation")
         && component["cleanupPolicy"].as_str() == Some("drop-on-graph-diff-or-runtime-stop")
+}
+
+fn udp_execution_agreement_ready(agreement: &Value) -> bool {
+    let disposition = agreement["disposition"].as_str();
+    let policy_closed = agreement["policyClosed"].as_bool();
+    let negative_path_ready = agreement["negativePathReady"].as_bool();
+    let packet_status = agreement["expectedPacketSessionStatus"].as_str();
+    let probe_status = agreement["expectedProbeStatus"].as_str();
+    let unsupported_reason = agreement["unsupportedReason"].as_str();
+    let disposition_ready = match disposition {
+        Some("packet-relay") => {
+            policy_closed == Some(false)
+                && negative_path_ready == Some(false)
+                && packet_status == Some("admitted")
+                && probe_status == Some("admitted")
+                && agreement["unsupportedReason"].is_null()
+        }
+        Some("policy-closed-negative-path") => {
+            policy_closed == Some(true)
+                && negative_path_ready == Some(true)
+                && packet_status == Some("fail-closed")
+                && probe_status == Some("fail-closed")
+                && unsupported_reason.is_some_and(|reason| !reason.is_empty())
+        }
+        _ => false,
+    };
+    disposition_ready
+        && agreement["schemaVersion"].as_i64() == Some(1)
+        && agreement["executor"]
+            .as_str()
+            .is_some_and(|executor| !executor.is_empty())
+        && agreement["packetSemantics"]
+            .as_str()
+            .is_some_and(|semantics| !semantics.is_empty())
+        && agreement["generationOwned"].as_bool() == Some(true)
+        && agreement["cleanupOwner"].as_str() == Some(plan::RESIDENT_UDP_CLEANUP_OWNER)
+        && agreement["cleanupPolicy"].as_str() == Some(plan::RESIDENT_UDP_CLEANUP_POLICY)
+}
+
+fn udp_component_matches_agreement(
+    agreement: &Value,
+    component: &Value,
+    expected_status_field: &str,
+) -> bool {
+    component["schemaVersion"].as_i64() == Some(1)
+        && component["status"] == agreement[expected_status_field]
+        && component["executor"] == agreement["executor"]
+        && component["packetSemantics"] == agreement["packetSemantics"]
+        && component["agreementDisposition"] == agreement["disposition"]
+        && component["policyClosed"] == agreement["policyClosed"]
+        && component["negativePathReady"] == agreement["negativePathReady"]
+        && component["unsupportedReason"] == agreement["unsupportedReason"]
+        && component["generationOwned"] == agreement["generationOwned"]
+        && component["cleanupOwner"] == agreement["cleanupOwner"]
+        && component["cleanupPolicy"] == agreement["cleanupPolicy"]
 }
 
 pub(super) fn resident_matrix_candidate_report(
