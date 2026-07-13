@@ -571,6 +571,7 @@ name = "dae-bench"
 version = "3.1.0"
 dependencies = [
  "base64",
+ "bytes",
  "dae-cli",
  "dae-config",
  "dae-core-types",
