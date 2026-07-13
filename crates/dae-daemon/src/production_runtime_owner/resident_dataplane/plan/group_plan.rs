@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
-use tokio::sync::OnceCell;
 
 const RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Clone, Debug)]
@@ -11,6 +10,7 @@ pub(crate) struct ResidentProxyCandidatePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) annotation_add_latency_ms: i64,
     pub(in crate::production_runtime_owner::resident_dataplane) link: String,
     pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) execution_identity: String,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
     pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
 }
@@ -38,6 +38,7 @@ pub(crate) struct ResidentProxyProbePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) node_tag: String,
     pub(in crate::production_runtime_owner::resident_dataplane) link: String,
     pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) execution_identity: String,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
     pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
@@ -63,15 +64,23 @@ pub(crate) struct ResidentTcpCheckPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) host: String,
     pub(in crate::production_runtime_owner::resident_dataplane) path: String,
     pub(in crate::production_runtime_owner::resident_dataplane) method: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) resolver:
+        ResidentHealthTargetResolver,
 }
 
 impl ResidentTcpCheckPlan {
-    pub(in crate::production_runtime_owner::resident_dataplane) fn primary_target(
-        &self,
-    ) -> &ResidentTcpCheckTarget {
-        self.targets
-            .first()
-            .expect("resident TCP check plan always has at least one target")
+    fn identity(&self, probe_timeout: Duration) -> String {
+        link_hash(
+            &serde_json::json!({
+                "resolver": self.resolver.identity(),
+                "scheme": self.scheme,
+                "host": self.host,
+                "path": self.path,
+                "method": self.method,
+                "probeTimeoutNanos": probe_timeout.as_nanos().to_string(),
+            })
+            .to_string(),
+        )
     }
 }
 
@@ -96,56 +105,50 @@ pub(crate) struct ResidentUdpCheckPlan {
         Vec<ResidentUdpCheckTarget>,
     pub(in crate::production_runtime_owner::resident_dataplane) host: String,
     pub(in crate::production_runtime_owner::resident_dataplane) lookup_host: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) resolver:
+        ResidentHealthTargetResolver,
+}
+
+impl ResidentUdpCheckPlan {
+    fn identity(&self) -> String {
+        link_hash(
+            &serde_json::json!({
+                "resolver": self.resolver.identity(),
+                "lookupHost": self.lookup_host,
+            })
+            .to_string(),
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentUdpCheckTarget {
     authority: String,
-    host: String,
-    port: u16,
     literal_addr: Option<SocketAddr>,
-    fallback_resolver: SocketAddr,
-    resolver_mark: u32,
-    resolved_addr: Arc<OnceCell<SocketAddr>>,
 }
 
 impl ResidentUdpCheckTarget {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         authority: String,
-        host: String,
-        port: u16,
-        fallback_resolver: SocketAddr,
-        resolver_mark: u32,
         literal_addr: Option<SocketAddr>,
     ) -> Self {
         Self {
             authority,
-            host,
-            port,
             literal_addr,
-            fallback_resolver,
-            resolver_mark,
-            resolved_addr: Arc::new(OnceCell::new()),
         }
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn literal(
         addr: SocketAddr,
     ) -> Self {
-        Self::new(
-            addr.to_string(),
-            addr.ip().to_string(),
-            addr.port(),
-            addr,
-            0,
-            Some(addr),
-        )
+        Self::new(addr.to_string(), Some(addr))
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn authority(&self) -> &str {
         &self.authority
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn network_type_hint(
         &self,
     ) -> Option<NetworkType> {
@@ -156,27 +159,6 @@ impl ResidentUdpCheckTarget {
         &self,
     ) -> Option<SocketAddr> {
         self.literal_addr
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve(
-        &self,
-    ) -> Result<SocketAddr, String> {
-        if let Some(addr) = self.literal_addr {
-            return Ok(addr);
-        }
-        self.resolved_addr
-            .get_or_try_init(|| async {
-                resolve_host_with_configured_fallback_dns(
-                    &self.host,
-                    self.port,
-                    self.fallback_resolver,
-                    self.resolver_mark,
-                    "resolve UDP health check",
-                )
-                .await
-            })
-            .await
-            .copied()
     }
 }
 
@@ -216,36 +198,9 @@ fn push_unique_network_type(network_types: &mut Vec<NetworkType>, network_type: 
     }
 }
 
-fn latency_snapshot_tcp_network_types() -> [NetworkType; 2] {
-    [NetworkType::TCP4, NetworkType::TCP6]
-}
-
-fn latency_seed_snapshot_network_type(snapshot: &Value) -> Option<NetworkType> {
-    let raw = snapshot.get("networkType").and_then(Value::as_str)?;
-    latency_snapshot_tcp_network_types()
-        .into_iter()
-        .find(|network_type| network_type.string_without_dns() == raw)
-}
-
-fn latency_seed_network_types_for_snapshot_network(network_type: NetworkType) -> Vec<NetworkType> {
-    vec![
-        NetworkType::TCP4.with_ipversion(network_type.ipversion),
-        NetworkType::DNS_UDP4.with_ipversion(network_type.ipversion),
-    ]
-}
-
-fn legacy_latency_seed_network_types() -> Vec<NetworkType> {
-    latency_seed_network_types_for_snapshot_network(NetworkType::TCP4)
-}
-
 impl PartialEq for ResidentUdpCheckTarget {
     fn eq(&self, other: &Self) -> bool {
-        self.authority == other.authority
-            && self.host == other.host
-            && self.port == other.port
-            && self.literal_addr == other.literal_addr
-            && self.fallback_resolver == other.fallback_resolver
-            && self.resolver_mark == other.resolver_mark
+        self.authority == other.authority && self.literal_addr == other.literal_addr
     }
 }
 
@@ -256,12 +211,18 @@ pub(crate) struct ResidentProxyLatencySnapshot {
     pub(in crate::production_runtime_owner::resident_dataplane) node_tag: String,
     pub(in crate::production_runtime_owner::resident_dataplane) graph_id: String,
     pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) execution_identity: String,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
     pub(in crate::production_runtime_owner::resident_dataplane) network_type: NetworkType,
     pub(in crate::production_runtime_owner::resident_dataplane) latency_ms: Option<i64>,
     pub(in crate::production_runtime_owner::resident_dataplane) alive: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) checked_at_unix: i64,
     pub(in crate::production_runtime_owner::resident_dataplane) message: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) health_state: HealthState,
+    pub(in crate::production_runtime_owner::resident_dataplane) last_success_at_unix: i64,
+    pub(in crate::production_runtime_owner::resident_dataplane) last_failure_at_unix: i64,
+    pub(in crate::production_runtime_owner::resident_dataplane) last_unknown_at_unix: i64,
+    pub(in crate::production_runtime_owner::resident_dataplane) target_identity: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -271,6 +232,10 @@ struct ResidentDialerLatencySnapshotState {
     alive: bool,
     checked_at_unix: i64,
     ok: bool,
+    health_state: HealthState,
+    last_success_at_unix: i64,
+    last_failure_at_unix: i64,
+    last_unknown_at_unix: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -340,16 +305,34 @@ impl ResidentGroupPolicyPlan {
 impl ResidentDialerLatencySnapshotState {
     fn from_dialer(dialer: &Dialer, network_type: NetworkType) -> Self {
         let (latency_ms, alive, checked_at_unix, ok) = dialer.last_latency_snapshot(network_type);
+        let health = dialer.health_snapshot(network_type);
         Self {
             network_type,
             latency_ms,
             alive,
             checked_at_unix,
             ok,
+            health_state: health
+                .as_ref()
+                .map(|snapshot| snapshot.health_state)
+                .unwrap_or(HealthState::Unknown),
+            last_success_at_unix: health
+                .as_ref()
+                .map(|snapshot| snapshot.last_success_at_unix)
+                .unwrap_or(0),
+            last_failure_at_unix: health
+                .as_ref()
+                .map(|snapshot| snapshot.last_failure_at_unix)
+                .unwrap_or(0),
+            last_unknown_at_unix: health
+                .as_ref()
+                .map(|snapshot| snapshot.last_unknown_at_unix)
+                .unwrap_or(0),
         }
     }
 }
 
+#[cfg(test)]
 fn prefer_resident_latency_snapshot_state(
     next: ResidentDialerLatencySnapshotState,
     current: ResidentDialerLatencySnapshotState,
@@ -367,6 +350,7 @@ fn prefer_resident_latency_snapshot_state(
     }
 }
 
+#[cfg(test)]
 fn preferred_resident_tcp_latency_snapshot_state(
     dialer: &Dialer,
     network_types: &[NetworkType],
@@ -388,6 +372,10 @@ fn preferred_resident_tcp_latency_snapshot_state(
             alive: false,
             checked_at_unix: 0,
             ok: false,
+            health_state: HealthState::Unknown,
+            last_success_at_unix: 0,
+            last_failure_at_unix: 0,
+            last_unknown_at_unix: 0,
         })
 }
 
@@ -451,31 +439,10 @@ impl ResidentProxyGroupPlan {
                 push_unique_network_type(&mut network_types, network_type);
             }
         }
-        network_types
-    }
-
-    fn udp_check_network_types(&self) -> Vec<NetworkType> {
-        let mut network_types = Vec::new();
-        for target in &self.udp_check.targets {
-            if let Some(network_type) = target.network_type_hint() {
-                push_unique_network_type(&mut network_types, network_type);
-            }
+        if network_types.is_empty() {
+            network_types.extend([NetworkType::TCP4, NetworkType::TCP6]);
         }
         network_types
-    }
-
-    fn latency_seed_network_types(&self, snapshot: &Value) -> Vec<NetworkType> {
-        let mut configured = self.tcp_check_network_types();
-        for network_type in self.udp_check_network_types() {
-            push_unique_network_type(&mut configured, network_type);
-        }
-        let requested = latency_seed_snapshot_network_type(snapshot)
-            .map(latency_seed_network_types_for_snapshot_network)
-            .unwrap_or_else(legacy_latency_seed_network_types);
-        requested
-            .into_iter()
-            .filter(|network_type| configured.contains(network_type))
-            .collect()
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn latency_state_wired(
@@ -569,6 +536,7 @@ impl ResidentProxyGroupPlan {
                 node_tag: candidate.proxy.node_tag.clone(),
                 link: candidate.link.clone(),
                 link_hash: candidate.link_hash.clone(),
+                execution_identity: candidate.execution_identity.clone(),
                 redacted_link_source: candidate.redacted_link_source.clone(),
                 tcp_check: self.tcp_check.clone(),
                 udp_check: self.udp_check.clone(),
@@ -578,6 +546,7 @@ impl ResidentProxyGroupPlan {
             .collect()
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn latency_snapshots(
         &self,
     ) -> Vec<ResidentProxyLatencySnapshot> {
@@ -601,11 +570,16 @@ impl ResidentProxyGroupPlan {
                         alive: false,
                         checked_at_unix: 0,
                         ok: false,
+                        health_state: HealthState::Unknown,
+                        last_success_at_unix: 0,
+                        last_failure_at_unix: 0,
+                        last_unknown_at_unix: 0,
                     });
                 ResidentProxyLatencySnapshot {
                     node_tag: candidate.proxy.node_tag.clone(),
                     graph_id: candidate.proxy.graph_id.clone(),
                     link_hash: candidate.link_hash.clone(),
+                    execution_identity: candidate.execution_identity.clone(),
                     redacted_link_source: candidate.redacted_link_source.clone(),
                     network_type: snapshot.network_type,
                     latency_ms: snapshot.ok.then_some(snapshot.latency_ms),
@@ -616,9 +590,83 @@ impl ResidentProxyGroupPlan {
                         snapshot.alive,
                         snapshot.latency_ms,
                     ),
+                    health_state: snapshot.health_state,
+                    last_success_at_unix: snapshot.last_success_at_unix,
+                    last_failure_at_unix: snapshot.last_failure_at_unix,
+                    last_unknown_at_unix: snapshot.last_unknown_at_unix,
+                    target_identity: self.health_target_identity(snapshot.network_type),
                 }
             })
             .collect()
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn health_state_snapshots(
+        &self,
+    ) -> Vec<ResidentProxyLatencySnapshot> {
+        let Ok(selector) = self.selector.lock() else {
+            return Vec::new();
+        };
+        let network_types = [
+            NetworkType::TCP4,
+            NetworkType::TCP6,
+            NetworkType::DNS_TCP4,
+            NetworkType::DNS_TCP6,
+            NetworkType::DNS_UDP4,
+            NetworkType::DNS_UDP6,
+            NetworkType::DATA_UDP4,
+            NetworkType::DATA_UDP6,
+        ];
+        self.candidates
+            .iter()
+            .enumerate()
+            .flat_map(|(index, candidate)| {
+                let Some(dialer) = selector.dialers.get(index) else {
+                    return Vec::new();
+                };
+                network_types
+                    .into_iter()
+                    .filter(|network_type| dialer.collection(*network_type).is_some())
+                    .map(|network_type| {
+                        let snapshot =
+                            ResidentDialerLatencySnapshotState::from_dialer(dialer, network_type);
+                        ResidentProxyLatencySnapshot {
+                            node_tag: candidate.proxy.node_tag.clone(),
+                            graph_id: candidate.proxy.graph_id.clone(),
+                            link_hash: candidate.link_hash.clone(),
+                            execution_identity: candidate.execution_identity.clone(),
+                            redacted_link_source: candidate.redacted_link_source.clone(),
+                            network_type,
+                            latency_ms: snapshot.ok.then_some(snapshot.latency_ms),
+                            alive: snapshot.alive,
+                            checked_at_unix: snapshot.checked_at_unix,
+                            message: snapshot.health_state.as_str().to_owned(),
+                            health_state: snapshot.health_state,
+                            last_success_at_unix: snapshot.last_success_at_unix,
+                            last_failure_at_unix: snapshot.last_failure_at_unix,
+                            last_unknown_at_unix: snapshot.last_unknown_at_unix,
+                            target_identity: self.health_target_identity(network_type),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn health_target_identity(
+        &self,
+        network_type: NetworkType,
+    ) -> Option<String> {
+        if network_type == NetworkType::TCP4 || network_type == NetworkType::TCP6 {
+            return Some(self.tcp_check.identity(self.tcp_probe_timeout));
+        }
+        if network_type == NetworkType::DNS_TCP4
+            || network_type == NetworkType::DNS_TCP6
+            || network_type == NetworkType::DNS_UDP4
+            || network_type == NetworkType::DNS_UDP6
+        {
+            return Some(self.udp_check.identity());
+        }
+        None
     }
 
     #[cfg(test)]
@@ -661,6 +709,7 @@ impl ResidentProxyGroupPlan {
             .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp_runtime(
         &self,
         network_type: NetworkType,
@@ -670,6 +719,7 @@ impl ResidentProxyGroupPlan {
             .map(|selection| selection.proxy)
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp_runtime_candidate(
         &self,
         network_type: NetworkType,
@@ -858,6 +908,7 @@ impl ResidentProxyGroupPlan {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn record_check_result(
         &self,
         node_tag: &str,
@@ -887,10 +938,67 @@ impl ResidentProxyGroupPlan {
         Ok(())
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn record_health_state(
+        &self,
+        node_tag: &str,
+        network_type: NetworkType,
+        health_state: HealthState,
+        latency_ms: Option<i64>,
+        checked_at_unix: i64,
+    ) -> Result<(), String> {
+        let Some(index) = self
+            .candidates
+            .iter()
+            .position(|candidate| candidate.proxy.node_tag == node_tag)
+        else {
+            return Err(format!(
+                "resident dataplane group {} has no admitted candidate named {node_tag}",
+                self.group_name
+            ));
+        };
+        let mut selector = self.selector.lock().map_err(|_| {
+            format!(
+                "resident dataplane group {} selector lock is poisoned",
+                self.group_name
+            )
+        })?;
+        record_selector_health_state(
+            &mut selector,
+            index,
+            network_type,
+            health_state,
+            latency_ms,
+            checked_at_unix,
+        )
+        .map_err(|err| format!("resident dataplane group {} {err}", self.group_name))?;
+        Ok(())
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn record_manual_latency_result_for_link(
         &self,
         link: &str,
         network_type: NetworkType,
+        latency_ms: Option<i64>,
+        checked_at_unix: i64,
+    ) -> Result<usize, String> {
+        self.record_manual_health_state_for_link(
+            link,
+            network_type,
+            if latency_ms.is_some() {
+                HealthState::Alive
+            } else {
+                HealthState::Dead
+            },
+            latency_ms,
+            checked_at_unix,
+        )
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn record_manual_health_state_for_link(
+        &self,
+        link: &str,
+        network_type: NetworkType,
+        health_state: HealthState,
         latency_ms: Option<i64>,
         checked_at_unix: i64,
     ) -> Result<usize, String> {
@@ -910,48 +1018,78 @@ impl ResidentProxyGroupPlan {
             )
         })?;
         for index in &indexes {
-            if let Some(latency_ms) = latency_ms {
-                selector.record_check_result(
-                    *index,
-                    network_type,
-                    Some(latency_ms),
-                    checked_at_unix,
-                );
-            } else {
-                selector.record_check_failure_without_latency(
-                    *index,
-                    network_type,
-                    checked_at_unix,
-                );
-            }
+            record_selector_health_state(
+                &mut selector,
+                *index,
+                network_type,
+                health_state,
+                latency_ms,
+                checked_at_unix,
+            )
+            .map_err(|err| format!("resident dataplane group {} {err}", self.group_name))?;
         }
         Ok(indexes.len())
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_successful_latency_seed_snapshot(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_health_seed_snapshot(
         &self,
         snapshot: &Value,
     ) -> Result<usize, String> {
         if !self.group_policy.needs_alive_state() {
             return Ok(0);
         }
-        let Some(link_hash) = latency_seed_snapshot_link_hash(snapshot) else {
+        let execution_identity = snapshot
+            .get("executionIdentity")
+            .and_then(Value::as_str)
+            .filter(|identity| !identity.is_empty());
+        let legacy_link_hash =
+            latency_seed_snapshot_link_hash(snapshot).filter(|identity| !identity.is_empty());
+        if execution_identity.is_none() && legacy_link_hash.is_none() {
+            return Ok(0);
+        }
+        let Some(network_type) = health_seed_snapshot_network_type(snapshot) else {
             return Ok(0);
         };
-        let Some(latency_ms) = latency_seed_snapshot_success_latency_ms(snapshot) else {
+        if let Some(target_identity) = snapshot.get("targetIdentity").and_then(Value::as_str)
+            && self.health_target_identity(network_type).as_deref() != Some(target_identity)
+        {
             return Ok(0);
-        };
+        }
+        let health_state = snapshot
+            .get("healthState")
+            .and_then(Value::as_str)
+            .and_then(HealthState::parse)
+            .unwrap_or_else(|| {
+                if snapshot
+                    .get("alive")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_else(|| snapshot.get("latencyMs").and_then(Value::as_i64).is_some())
+                {
+                    HealthState::Alive
+                } else {
+                    HealthState::Dead
+                }
+            });
+        let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64);
+        if health_state == HealthState::Alive && latency_ms.is_none() {
+            return Ok(0);
+        }
         let indexes = self
             .candidates
             .iter()
             .enumerate()
-            .filter_map(|(index, candidate)| (candidate.link_hash == link_hash).then_some(index))
+            .filter_map(|(index, candidate)| {
+                let matches = execution_identity
+                    .map(|identity| candidate.execution_identity == identity)
+                    .unwrap_or_else(|| {
+                        legacy_link_hash
+                            .map(|identity| candidate.link_hash == identity)
+                            .unwrap_or(false)
+                    });
+                matches.then_some(index)
+            })
             .collect::<Vec<_>>();
         if indexes.is_empty() {
-            return Ok(0);
-        }
-        let network_types = self.latency_seed_network_types(snapshot);
-        if network_types.is_empty() {
             return Ok(0);
         }
         let checked_at_unix = snapshot
@@ -959,6 +1097,43 @@ impl ResidentProxyGroupPlan {
             .and_then(Value::as_i64)
             .filter(|value| *value > 0)
             .unwrap_or(0);
+        let restored = DialerHealthSnapshot {
+            latency_ms,
+            alive: match health_state {
+                HealthState::Alive => true,
+                HealthState::Dead | HealthState::Unavailable => false,
+                HealthState::Unknown => snapshot
+                    .get("alive")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            },
+            checked_at_unix,
+            health_state,
+            last_success_at_unix: snapshot
+                .get("lastSuccessAtUnix")
+                .and_then(Value::as_i64)
+                .unwrap_or_else(|| {
+                    if health_state == HealthState::Alive {
+                        checked_at_unix
+                    } else {
+                        0
+                    }
+                }),
+            last_failure_at_unix: snapshot
+                .get("lastFailureAtUnix")
+                .and_then(Value::as_i64)
+                .unwrap_or_else(|| {
+                    if health_state == HealthState::Dead {
+                        checked_at_unix
+                    } else {
+                        0
+                    }
+                }),
+            last_unknown_at_unix: snapshot
+                .get("lastUnknownAtUnix")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+        };
         let mut selector = self.selector.lock().map_err(|_| {
             format!(
                 "resident dataplane group {} selector lock is poisoned",
@@ -966,14 +1141,7 @@ impl ResidentProxyGroupPlan {
             )
         })?;
         for index in &indexes {
-            for network_type in &network_types {
-                selector.record_check_result(
-                    *index,
-                    *network_type,
-                    Some(latency_ms),
-                    checked_at_unix,
-                );
-            }
+            selector.restore_health_snapshot(*index, network_type, restored);
         }
         Ok(indexes.len())
     }
@@ -986,9 +1154,11 @@ impl ResidentProxyGroupPlan {
             IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT,
         );
+        let tcp_check_addr = SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 80);
+        let tcp_check_host = tcp_check_addr.ip().to_string();
         let tcp_check_target = ResidentTcpCheckTarget {
-            target: "cp.cloudflare.com:80".to_owned(),
-            network_type: None,
+            target: tcp_check_addr.to_string(),
+            network_type: Some(NetworkType::TCP4),
         };
         let udp_check_target = ResidentUdpCheckTarget::literal(udp_check_addr);
         Self {
@@ -1000,6 +1170,7 @@ impl ResidentProxyGroupPlan {
                 annotation_add_latency_ms: 0,
                 link: proxy.node_tag.clone(),
                 link_hash: link_hash(&proxy.node_tag),
+                execution_identity: execution_link_hash(&proxy.node_tag),
                 redacted_link_source: redacted_link_source(&proxy.node_tag),
                 proxy: Arc::new(proxy),
             }],
@@ -1016,20 +1187,62 @@ impl ResidentProxyGroupPlan {
                 scheme: "http".to_owned(),
                 target: tcp_check_target.target.clone(),
                 targets: vec![tcp_check_target],
-                host: "cp.cloudflare.com".to_owned(),
+                host: tcp_check_host.clone(),
                 path: "/".to_owned(),
                 method: "HEAD".to_owned(),
+                resolver: ResidentHealthTargetResolver::new(
+                    tcp_check_host,
+                    80,
+                    vec![tcp_check_addr],
+                    udp_check_addr,
+                    0,
+                    Duration::from_secs(30),
+                ),
             },
             udp_check: ResidentUdpCheckPlan {
                 target: udp_check_target.clone(),
                 targets: vec![udp_check_target],
                 host: "localhost".to_owned(),
                 lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
+                resolver: ResidentHealthTargetResolver::new(
+                    udp_check_addr.ip().to_string(),
+                    udp_check_addr.port(),
+                    vec![udp_check_addr],
+                    udp_check_addr,
+                    0,
+                    Duration::from_secs(30),
+                ),
             },
             tcp_probe_timeout: RESIDENT_TCP_LATENCY_PROBE_TIMEOUT,
             resuscitation_last_unix_ms: Arc::new(AtomicI64::new(0)),
         }
     }
+}
+
+fn record_selector_health_state(
+    selector: &mut DialerGroup,
+    index: usize,
+    network_type: NetworkType,
+    health_state: HealthState,
+    latency_ms: Option<i64>,
+    checked_at_unix: i64,
+) -> Result<(), &'static str> {
+    match health_state {
+        HealthState::Alive => {
+            let Some(latency_ms) = latency_ms else {
+                return Err("alive health result has no latency");
+            };
+            selector.record_check_result(index, network_type, Some(latency_ms), checked_at_unix);
+        }
+        HealthState::Dead => {
+            selector.record_check_failure_without_latency(index, network_type, checked_at_unix)
+        }
+        HealthState::Unavailable => {
+            selector.record_check_unavailable(index, network_type, checked_at_unix)
+        }
+        HealthState::Unknown => selector.record_check_unknown(index, network_type, checked_at_unix),
+    }
+    Ok(())
 }
 
 fn resident_proxy_selection_error(message: String, no_alive: bool) -> ResidentProxySelectionError {
@@ -1043,6 +1256,7 @@ fn resident_group_resuscitation_now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
 pub(crate) fn resident_latency_message(ok: bool, alive: bool, latency_ms: i64) -> String {
     if !ok {
         "no latency result".to_owned()
@@ -1053,7 +1267,7 @@ pub(crate) fn resident_latency_message(ok: bool, alive: bool, latency_ms: i64) -
     }
 }
 
-pub(in crate::production_runtime_owner::resident_dataplane) fn apply_successful_latency_seed_snapshots(
+pub(in crate::production_runtime_owner::resident_dataplane) fn apply_health_seed_snapshots(
     groups: &BTreeMap<u8, ResidentProxyGroupPlan>,
     snapshots: &[Value],
 ) {
@@ -1062,7 +1276,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn apply_successful_
     }
     for snapshot in snapshots {
         for group in groups.values() {
-            let _ = group.apply_successful_latency_seed_snapshot(snapshot);
+            let _ = group.apply_health_seed_snapshot(snapshot);
         }
     }
 }
@@ -1078,11 +1292,15 @@ fn latency_seed_snapshot_link_hash(snapshot: &Value) -> Option<&str> {
         })
 }
 
-fn latency_seed_snapshot_success_latency_ms(snapshot: &Value) -> Option<i64> {
-    let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64)?;
-    let alive = snapshot
-        .get("alive")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    alive.then_some(latency_ms)
+fn health_seed_snapshot_network_type(snapshot: &Value) -> Option<NetworkType> {
+    if let Some(dimension) = snapshot.get("networkDimension").and_then(Value::as_str) {
+        return NetworkType::from_dimension_name(dimension);
+    }
+    let Some(raw) = snapshot.get("networkType").and_then(Value::as_str) else {
+        return (snapshot.get("scope").and_then(Value::as_str) == Some("proxy-tcp-check"))
+            .then_some(NetworkType::TCP4);
+    };
+    [NetworkType::TCP4, NetworkType::TCP6]
+        .into_iter()
+        .find(|network_type| network_type.string_without_dns() == raw)
 }

@@ -28,8 +28,8 @@ pub(crate) use jobs::{
 #[cfg(test)]
 pub(crate) use runtime_snapshots::fake_runtime_tcp_latency_snapshot;
 pub(crate) use runtime_snapshots::{
-    fake_runtime_probe_node_latencies, node_name_from_link, runtime_link_hash,
-    runtime_link_identity_value, runtime_redacted_link_source,
+    fake_runtime_probe_node_latencies, node_name_from_link, runtime_execution_identity,
+    runtime_link_hash, runtime_link_identity_value, runtime_redacted_link_source,
 };
 pub(crate) use storage::{
     NodeLatencyWrite, all_node_ids, native_probe_unavailable_results,

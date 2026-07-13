@@ -574,16 +574,17 @@ pub(super) fn resident_dataplane_latency_seed_selects_dynamic_group_candidate() 
         .unwrap()
         .link_hash;
     group
-        .apply_successful_latency_seed_snapshot(&serde_json::json!({
+        .apply_health_seed_snapshot(&serde_json::json!({
             "linkHash": node_b_hash,
             "latencyMs": 25,
             "alive": true,
             "checkedAtUnix": 42,
+            "scope": "proxy-tcp-check",
         }))
         .unwrap();
 
     assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
-    assert_eq!(group.select_proxy_for_udp().unwrap().node_tag, "node_b");
+    assert_eq!(group.select_proxy_for_udp().unwrap().node_tag, "node_a");
 }
 
 #[test]
@@ -648,7 +649,7 @@ pub(super) fn resident_dataplane_latency_seed_uses_snapshot_ip_family_when_prese
         .unwrap()
         .link_hash;
     let applied = group
-        .apply_successful_latency_seed_snapshot(&serde_json::json!({
+        .apply_health_seed_snapshot(&serde_json::json!({
             "linkHash": node_b_hash,
             "latencyMs": 25,
             "alive": true,
@@ -670,7 +671,7 @@ pub(super) fn resident_dataplane_latency_seed_uses_snapshot_ip_family_when_prese
             .select_proxy_for_udp_network(NetworkType::DNS_UDP6)
             .unwrap()
             .node_tag,
-        "node_b"
+        "node_a"
     );
 }
 
@@ -698,7 +699,7 @@ pub(super) fn resident_dataplane_legacy_latency_seed_does_not_invent_ipv6_state(
         .unwrap()
         .link_hash;
     let applied = group
-        .apply_successful_latency_seed_snapshot(&serde_json::json!({
+        .apply_health_seed_snapshot(&serde_json::json!({
             "linkHash": node_b_hash,
             "latencyMs": 25,
             "alive": true,
@@ -713,6 +714,149 @@ pub(super) fn resident_dataplane_legacy_latency_seed_does_not_invent_ipv6_state(
             .unwrap()
             .node_tag,
         "node_a"
+    );
+}
+
+#[test]
+pub(super) fn resident_dataplane_health_seed_restores_dead_and_unavailable_exact_dimensions() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    let candidate = group
+        .probe_candidates()
+        .into_iter()
+        .find(|candidate| candidate.node_tag == "node_b")
+        .unwrap();
+
+    for (network_type, health_state, checked_at) in [
+        (NetworkType::TCP4, HealthState::Dead, 41),
+        (NetworkType::TCP6, HealthState::Unavailable, 42),
+    ] {
+        let applied = group
+            .apply_health_seed_snapshot(&serde_json::json!({
+                "executionIdentity": candidate.execution_identity,
+                "linkHash": candidate.link_hash,
+                "networkDimension": network_type.dimension_name(),
+                "healthState": health_state.as_str(),
+                "alive": false,
+                "latencyMs": null,
+                "checkedAtUnix": checked_at,
+                "lastFailureAtUnix": if health_state == HealthState::Dead { checked_at } else { 0 },
+                "targetIdentity": group.health_target_identity(network_type),
+            }))
+            .unwrap();
+        assert_eq!(applied, 1);
+    }
+
+    let snapshots = group.health_state_snapshots();
+    let tcp4 = snapshots
+        .iter()
+        .find(|snapshot| {
+            snapshot.node_tag == "node_b" && snapshot.network_type == NetworkType::TCP4
+        })
+        .unwrap();
+    let tcp6 = snapshots
+        .iter()
+        .find(|snapshot| {
+            snapshot.node_tag == "node_b" && snapshot.network_type == NetworkType::TCP6
+        })
+        .unwrap();
+    assert_eq!(tcp4.health_state, HealthState::Dead);
+    assert_eq!(tcp4.latency_ms, None);
+    assert_eq!(tcp4.last_failure_at_unix, 41);
+    assert_eq!(tcp6.health_state, HealthState::Unavailable);
+    assert_eq!(tcp6.latency_ms, None);
+    assert_ne!(tcp4.latency_ms, Some(dae_outbound::dialer::TIMEOUT_MS));
+    assert_ne!(tcp6.latency_ms, Some(dae_outbound::dialer::TIMEOUT_MS));
+}
+
+#[test]
+pub(super) fn resident_dataplane_health_unknown_preserves_last_known_state_and_freshness() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    group
+        .record_health_state(
+            "node_b",
+            NetworkType::TCP4,
+            HealthState::Alive,
+            Some(27),
+            10,
+        )
+        .unwrap();
+    group
+        .record_health_state("node_b", NetworkType::TCP4, HealthState::Unknown, None, 11)
+        .unwrap();
+
+    let snapshot = group
+        .health_state_snapshots()
+        .into_iter()
+        .find(|snapshot| {
+            snapshot.node_tag == "node_b" && snapshot.network_type == NetworkType::TCP4
+        })
+        .unwrap();
+    assert_eq!(snapshot.health_state, HealthState::Alive);
+    assert_eq!(snapshot.latency_ms, Some(27));
+    assert_eq!(snapshot.last_success_at_unix, 10);
+    assert_eq!(snapshot.last_unknown_at_unix, 11);
+}
+
+#[test]
+pub(super) fn resident_dataplane_health_seed_uses_execution_and_target_identity() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        "#,
+    );
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+    let candidate = group
+        .probe_candidates()
+        .into_iter()
+        .find(|candidate| candidate.node_tag == "node_b")
+        .unwrap();
+    let snapshot = serde_json::json!({
+        "executionIdentity": candidate.execution_identity,
+        "linkHash": link_hash("display-name-only-change"),
+        "networkDimension": NetworkType::TCP4.dimension_name(),
+        "healthState": HealthState::Alive.as_str(),
+        "alive": true,
+        "latencyMs": 31,
+        "checkedAtUnix": 15,
+        "targetIdentity": group.health_target_identity(NetworkType::TCP4),
+    });
+    assert_eq!(group.apply_health_seed_snapshot(&snapshot).unwrap(), 1);
+
+    let mut changed_execution = snapshot.clone();
+    changed_execution["executionIdentity"] = serde_json::json!(execution_link_hash(
+        &socks5_endpoint_fixture_url(FixtureEndpoint::Tertiary)
+    ));
+    assert_eq!(
+        group
+            .apply_health_seed_snapshot(&changed_execution)
+            .unwrap(),
+        0
+    );
+
+    let mut changed_target = snapshot;
+    changed_target["targetIdentity"] = serde_json::json!(link_hash("changed-health-target"));
+    assert_eq!(
+        group.apply_health_seed_snapshot(&changed_target).unwrap(),
+        0
     );
 }
 
@@ -736,7 +880,7 @@ pub(super) fn resident_dataplane_latency_seed_does_not_change_fixed_group_select
         .unwrap()
         .link_hash;
     let applied = group
-        .apply_successful_latency_seed_snapshot(&serde_json::json!({
+        .apply_health_seed_snapshot(&serde_json::json!({
             "linkHash": node_b_hash,
             "latencyMs": 1,
             "alive": true,

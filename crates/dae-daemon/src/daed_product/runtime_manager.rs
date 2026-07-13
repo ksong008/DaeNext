@@ -31,9 +31,9 @@ use recovery::ProductRuntimeInterfaceRecoverySupervisor;
 pub(super) use recovery::resident_interface_recovery_request;
 use startup_recovery::ProductRuntimeStartupRecoverySupervisor;
 use summary::{
-    apply_runtime_traffic_metric_carry, runtime_instance_dns_reload_snapshot,
-    runtime_instance_node_latencies, runtime_traffic_metric_u64, runtime_traffic_metrics_snapshot,
-    successful_latency_seed_snapshots,
+    apply_runtime_traffic_metric_carry, runtime_health_seed_snapshots,
+    runtime_instance_dns_reload_snapshot, runtime_instance_health_states,
+    runtime_traffic_metric_u64, runtime_traffic_metrics_snapshot,
 };
 
 #[derive(Debug)]
@@ -435,7 +435,7 @@ fn reload_product_runtime_with_config_content(
 
     let live_latency_seed = previous_runtime
         .as_ref()
-        .map(runtime_instance_node_latencies)
+        .map(runtime_instance_health_states)
         .unwrap_or_default();
     let previous_dns_reload_snapshot = previous_runtime
         .as_ref()
@@ -458,7 +458,7 @@ fn reload_product_runtime_with_config_content(
         .then(|| previous_dns_reload_snapshot.clone())
         .flatten();
     let latency_seed =
-        successful_latency_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
+        runtime_health_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
     let previous_cleanup_report = cleanup_runtime_instance(previous_runtime);
     if previous_runtime_was_running
         && let Ok(mut inner) = inner.lock()

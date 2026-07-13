@@ -38,6 +38,7 @@ pub(crate) fn stored_successful_node_latency_seed_snapshots_from_conn(
             let latency_ms = row.get::<_, i64>(2)?;
             let tested_at = row.get::<_, String>(3)?;
             let link_hash = runtime_link_hash(&link);
+            let execution_identity = runtime_execution_identity(&link);
             let display_name = if display_name.is_empty() {
                 node_name_from_link(&link)
             } else {
@@ -47,6 +48,7 @@ pub(crate) fn stored_successful_node_latency_seed_snapshots_from_conn(
                 "name": display_name,
                 "displayName": display_name,
                 "linkHash": link_hash,
+                "executionIdentity": execution_identity,
                 "linkIdentity": runtime_link_identity_value(
                     &display_name,
                     &link_hash,

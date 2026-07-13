@@ -40,6 +40,27 @@ fn resident_group_selector_snapshot(group: &plan::ResidentProxyGroupPlan) -> Val
 }
 
 fn resident_group_selector_base_snapshot(group: &plan::ResidentProxyGroupPlan) -> Value {
+    let health_dimensions = group
+        .health_state_snapshots()
+        .into_iter()
+        .map(|snapshot| {
+            json!({
+                "nodeTag": snapshot.node_tag,
+                "linkHash": snapshot.link_hash,
+                "executionIdentity": snapshot.execution_identity,
+                "networkType": snapshot.network_type.string_without_dns(),
+                "networkDimension": snapshot.network_type.dimension_name(),
+                "healthState": snapshot.health_state.as_str(),
+                "latencyMs": snapshot.latency_ms,
+                "alive": snapshot.alive,
+                "checkedAtUnix": snapshot.checked_at_unix,
+                "lastSuccessAtUnix": snapshot.last_success_at_unix,
+                "lastFailureAtUnix": snapshot.last_failure_at_unix,
+                "lastUnknownAtUnix": snapshot.last_unknown_at_unix,
+                "targetIdentity": snapshot.target_identity,
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
         "group": group.group_name,
         "policy": group.group_policy_name(),
@@ -49,10 +70,13 @@ fn resident_group_selector_base_snapshot(group: &plan::ResidentProxyGroupPlan) -
         "selectedLinkHash": Value::Null,
         "selectedRedactedLinkSource": Value::Null,
         "selectedNetworkType": Value::Null,
+        "selectedNetworkDimension": Value::Null,
+        "selectedHealthState": Value::Null,
         "selectedLatencyMs": Value::Null,
         "selectedCheckedAtUnix": Value::Null,
         "aliveCandidateCount": Value::Null,
         "selectionSource": RUNTIME_GROUP_SELECTION_SOURCE_UNAVAILABLE,
+        "healthDimensions": health_dimensions,
     })
 }
 
@@ -92,6 +116,8 @@ fn apply_min_group_selection(group: &plan::ResidentProxyGroupPlan, snapshot: &mu
     if let Some(selected) = selected {
         apply_candidate_identity(snapshot, selected.candidate);
         snapshot["selectedNetworkType"] = json!(selected.network_type.string_without_dns());
+        snapshot["selectedNetworkDimension"] = json!(selected.network_type.dimension_name());
+        snapshot["selectedHealthState"] = json!("alive");
         snapshot["selectedLatencyMs"] = json!(selected.latency_ms);
         snapshot["selectedCheckedAtUnix"] = selected
             .checked_at_unix
@@ -160,7 +186,10 @@ fn runtime_group_tcp_network_types(group: &plan::ResidentProxyGroupPlan) -> Vec<
         }
     }
     if network_types.is_empty() {
-        network_types.push(RUNTIME_GROUP_SELECTOR_DEFAULT_NETWORK_TYPE);
+        network_types.extend([
+            RUNTIME_GROUP_SELECTOR_DEFAULT_NETWORK_TYPE,
+            NetworkType::TCP6,
+        ]);
     }
     network_types
 }
@@ -222,8 +251,19 @@ mod tests {
         assert_eq!(snapshot["policy"], json!("min"));
         assert_eq!(snapshot["selectedNodeTag"], json!("node_b"));
         assert_eq!(snapshot["selectedNetworkType"], json!("tcp4"));
+        assert_eq!(snapshot["selectedNetworkDimension"], json!("tcp4"));
+        assert_eq!(snapshot["selectedHealthState"], json!("alive"));
         assert_eq!(snapshot["selectedLatencyMs"], json!(30));
         assert_eq!(snapshot["aliveCandidateCount"], json!(2));
+        assert!(
+            snapshot["healthDimensions"]
+                .as_array()
+                .is_some_and(|dimensions| dimensions.iter().any(|dimension| {
+                    dimension["nodeTag"] == json!("node_b")
+                        && dimension["networkDimension"] == json!("tcp4")
+                        && dimension["healthState"] == json!("alive")
+                }))
+        );
     }
 
     #[test]

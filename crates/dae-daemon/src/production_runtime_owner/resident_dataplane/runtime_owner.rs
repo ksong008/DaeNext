@@ -264,6 +264,13 @@ impl ResidentManualProbeHandle {
             if snapshot.get("admission").is_some() {
                 continue;
             }
+            if snapshot
+                .get("reloadGeneration")
+                .and_then(Value::as_u64)
+                .is_some_and(|generation| generation != self.reload_generation)
+            {
+                continue;
+            }
             let Some(link_hash) = latency_snapshot_link_hash(snapshot) else {
                 continue;
             };
@@ -274,6 +281,33 @@ impl ResidentManualProbeHandle {
                 .get("checkedAtUnix")
                 .and_then(Value::as_i64)
                 .unwrap_or_else(unix_now_secs);
+            if let Some(family_results) = snapshot.get("familyResults").and_then(Value::as_array) {
+                for family_result in family_results {
+                    let Some(network_type) = health_snapshot_network_type(family_result) else {
+                        continue;
+                    };
+                    let Some(health_state) = family_result
+                        .get("healthState")
+                        .and_then(Value::as_str)
+                        .and_then(dae_outbound::HealthState::parse)
+                    else {
+                        continue;
+                    };
+                    let latency_ms = family_result.get("latencyMs").and_then(Value::as_i64);
+                    for link in links {
+                        for group in &self.groups {
+                            let _ = group.record_manual_health_state_for_link(
+                                link,
+                                network_type,
+                                health_state,
+                                latency_ms,
+                                checked_at,
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
             let latency_ms = latency_snapshot_group_latency_ms(snapshot);
             let Some(network_type) = latency_snapshot_group_network_type(snapshot) else {
                 continue;
@@ -302,6 +336,13 @@ fn latency_snapshot_group_latency_ms(snapshot: &Value) -> Option<i64> {
 }
 
 fn latency_snapshot_group_network_type(snapshot: &Value) -> Option<NetworkType> {
+    health_snapshot_network_type(snapshot)
+}
+
+fn health_snapshot_network_type(snapshot: &Value) -> Option<NetworkType> {
+    if let Some(dimension) = snapshot.get("networkDimension").and_then(Value::as_str) {
+        return NetworkType::from_dimension_name(dimension);
+    }
     let raw = snapshot.get("networkType").and_then(Value::as_str)?;
     [NetworkType::TCP4, NetworkType::TCP6]
         .into_iter()
@@ -690,6 +731,91 @@ mod tests {
         assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
         handle.apply_latency_probe_snapshots_to_groups(&snapshots);
         assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    }
+
+    #[test]
+    fn manual_family_results_update_exact_dimensions_and_reject_stale_generation() {
+        let config = parse_test_config(
+            r#"
+            global {
+                lan_interface: daerust0
+            }
+            node {
+                node_a: 'socks5://192.0.2.1:1080#node_a'
+                node_b: 'socks5://192.0.2.2:1081#node_b'
+            }
+            group {
+                proxy {
+                    filter: name(node_a, node_b)
+                    policy: min
+                }
+            }
+            routing {
+                l4proto(tcp) -> proxy
+                fallback: direct
+            }
+            "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = Arc::new(plan.default_proxy_group().unwrap().clone());
+        group
+            .record_check_result("node_a", NetworkType::TCP4, Some(40), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(90), 2)
+            .unwrap();
+        let candidate = group
+            .probe_candidates()
+            .into_iter()
+            .find(|candidate| candidate.node_tag == "node_b")
+            .unwrap();
+        let handle = ResidentManualProbeHandle {
+            groups: vec![Arc::clone(&group)],
+            manual_probe_plans: plan::build_resident_manual_probe_plans(&config),
+            reload_generation: 7,
+            resource_config: ResidentRuntimeResourceConfig::from_config(&config),
+        };
+        let snapshot = json!({
+            "linkHash": candidate.link_hash,
+            "reloadGeneration": 7,
+            "checkedAtUnix": 3,
+            "familyResults": [
+                {
+                    "networkType": "tcp4",
+                    "networkDimension": "tcp4",
+                    "healthState": "alive",
+                    "alive": true,
+                    "latencyMs": 20,
+                },
+                {
+                    "networkType": "tcp6",
+                    "networkDimension": "tcp6",
+                    "healthState": "unavailable",
+                    "alive": false,
+                    "latencyMs": null,
+                }
+            ],
+        });
+        handle.apply_latency_probe_snapshots_to_groups(std::slice::from_ref(&snapshot));
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+        let tcp6 = group
+            .health_state_snapshots()
+            .into_iter()
+            .find(|state| state.node_tag == "node_b" && state.network_type == NetworkType::TCP6)
+            .unwrap();
+        assert_eq!(tcp6.health_state, dae_outbound::HealthState::Unavailable);
+        assert_eq!(tcp6.latency_ms, None);
+
+        let mut stale = snapshot;
+        stale["reloadGeneration"] = json!(6);
+        stale["familyResults"][0]["latencyMs"] = json!(1);
+        handle.apply_latency_probe_snapshots_to_groups(std::slice::from_ref(&stale));
+        let tcp4 = group
+            .health_state_snapshots()
+            .into_iter()
+            .find(|state| state.node_tag == "node_b" && state.network_type == NetworkType::TCP4)
+            .unwrap();
+        assert_eq!(tcp4.latency_ms, Some(20));
     }
 
     fn parse_test_config(input: &str) -> Config {

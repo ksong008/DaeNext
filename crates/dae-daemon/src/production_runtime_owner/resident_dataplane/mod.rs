@@ -10,7 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use dae_config::Config;
 use dae_ebpf_support::LiveLoadedTproxyListenSocketMap;
 use dae_outbound::{
-    NetworkType, SourceShapeRegistryRow, source_shape_registry_contract, source_shape_registry_rows,
+    NetworkType, SourceShapeRegistryRow, canonical_link_without_display_name,
+    source_shape_registry_contract, source_shape_registry_rows,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -60,8 +61,7 @@ pub use self::memory_bench::{
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use self::resolver::{
     ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl,
-    resolve_host_with_configured_fallback_dns, resolve_socket_addr_candidates,
-    try_socket_addr_candidates,
+    resolve_socket_addr_candidates, try_socket_addr_candidates,
 };
 
 #[path = "runtime/defaults.rs"]

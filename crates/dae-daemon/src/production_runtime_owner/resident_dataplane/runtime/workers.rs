@@ -79,7 +79,7 @@ pub(crate) fn start_resident_dataplane_workers(
             None,
         );
     };
-    plan::apply_successful_latency_seed_snapshots(&proxy_groups, latency_seed);
+    plan::apply_health_seed_snapshots(&proxy_groups, latency_seed);
     let proxy_groups = plan::share_resident_proxy_groups(proxy_groups);
     let Some(default_group) = proxy_groups.get(&default_outbound).cloned() else {
         return (

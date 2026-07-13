@@ -116,6 +116,7 @@ pub(crate) fn build_resident_manual_probe_plan(
     Ok(ResidentProxyProbePlan {
         node_tag,
         link_hash: link_hash(&link),
+        execution_identity: execution_link_hash(&link),
         redacted_link_source: redacted_link_source(&link),
         link,
         tcp_check: group_tcp_check_plan(config, &group)?,
@@ -199,6 +200,7 @@ pub(crate) fn resident_proxy_plans(
                 match_index: node.match_index,
                 annotation_add_latency_ms: node.annotation_add_latency_ms,
                 link_hash: link_hash(&link),
+                execution_identity: execution_link_hash(&link),
                 redacted_link_source: redacted_link_source(&link),
                 link,
                 proxy: Arc::new(proxy),
