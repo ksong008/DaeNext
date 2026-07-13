@@ -4,7 +4,10 @@ mod content;
 mod http;
 mod node_stage;
 mod node_sync;
+mod outcome;
 mod source;
+
+pub(super) use outcome::SubscriptionRefreshOutcome;
 
 pub(crate) use self::content::subscription_links_from_content;
 #[cfg(test)]

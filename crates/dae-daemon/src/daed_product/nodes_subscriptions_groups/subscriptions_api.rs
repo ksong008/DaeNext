@@ -207,13 +207,19 @@ pub(crate) fn refresh_subscription(
 ) -> HttpResponse {
     match refresh_subscription_from_remote(state, config_dir, id) {
         Ok(mut report) => {
-            let _ = append_log_for_config(
-                config_dir,
-                state,
-                "info",
-                &format!("subscription {id} refreshed"),
-            );
-            match reload_runtime_after_subscription_refresh(state, config_dir, runtime) {
+            let outcome = SubscriptionRefreshOutcome::from_report(&report);
+            let (level, message) = if outcome.fetched {
+                ("info", format!("subscription {id} refreshed"))
+            } else {
+                ("warn", format!("subscription {id} refresh fetch failed"))
+            };
+            let _ = append_log_for_config(config_dir, state, level, &message);
+            let reload_result = if outcome.requests_runtime_apply() {
+                reload_runtime_after_subscription_refresh(state, config_dir, runtime)
+            } else {
+                Ok(None)
+            };
+            match reload_result {
                 Ok(Some(reload_report)) => {
                     if let Value::Object(map) = &mut report {
                         map.insert("runtimeReloaded".to_owned(), json!(true));
