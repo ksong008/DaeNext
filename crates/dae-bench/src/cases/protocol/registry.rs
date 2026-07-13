@@ -191,5 +191,25 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             default_iters: 100_000,
             run: bench_shared_timer_constants,
         },
+        BenchCase {
+            id: "protocol/masque_parse_link",
+            default_iters: 10_000,
+            run: bench_masque_parse_link,
+        },
+        BenchCase {
+            id: "protocol/masque_uri_template_expand",
+            default_iters: 10_000,
+            run: bench_masque_uri_template_expand,
+        },
+        BenchCase {
+            id: "protocol/masque_h2_capsule_roundtrip",
+            default_iters: 10_000,
+            run: bench_masque_h2_capsule_roundtrip,
+        },
+        BenchCase {
+            id: "protocol/masque_h3_datagram_roundtrip",
+            default_iters: 10_000,
+            run: bench_masque_h3_datagram_roundtrip,
+        },
     ]
 }
