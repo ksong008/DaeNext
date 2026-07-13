@@ -23,7 +23,7 @@ impl ResidentDnsIpversionPreferenceRegistry {
         match time::timeout(timeout, rx).await {
             Ok(Ok(has_ip)) => Some(has_ip),
             _ => {
-                self.remove_closed_waiters(&key);
+                self.remove_closed_waiters(key);
                 None
             }
         }

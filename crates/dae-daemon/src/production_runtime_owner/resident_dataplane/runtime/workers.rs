@@ -1,16 +1,32 @@
 use super::plan::effective_so_mark_from_dae;
 use super::*;
+
+pub(crate) struct ResidentDataplaneStartContext<'a> {
+    pub(crate) handoff: &'a LiveLoadedTproxyListenSocketMap,
+    pub(crate) reload_generation: u64,
+    pub(crate) config: &'a Config,
+    pub(crate) artifact_dir: &'a Path,
+    pub(crate) routing_tuple_map_id: Option<u32>,
+    pub(crate) domain_routing_map_id: Option<u32>,
+    pub(crate) geodata: &'a ResidentGeodataStore,
+    pub(crate) latency_seed: &'a [Value],
+    pub(crate) dns_reload_snapshot: Option<&'a ResidentDnsReloadSnapshot>,
+}
+
 pub(crate) fn start_resident_dataplane_workers(
-    handoff: &LiveLoadedTproxyListenSocketMap,
-    reload_generation: u64,
-    config: &Config,
-    artifact_dir: &Path,
-    routing_tuple_map_id: Option<u32>,
-    domain_routing_map_id: Option<u32>,
-    geodata: &ResidentGeodataStore,
-    latency_seed: &[Value],
-    dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
+    context: ResidentDataplaneStartContext<'_>,
 ) -> (Value, Option<ResidentDataplaneRuntime>) {
+    let ResidentDataplaneStartContext {
+        handoff,
+        reload_generation,
+        config,
+        artifact_dir,
+        routing_tuple_map_id,
+        domain_routing_map_id,
+        geodata,
+        latency_seed,
+        dns_reload_snapshot,
+    } = context;
     let event_file = artifact_dir.join("resident-production-dataplane-events.jsonl");
     let plan = match build_resident_dataplane_plan_with_geodata(config, geodata) {
         Ok(plan) => plan,
@@ -238,7 +254,7 @@ pub(crate) fn start_resident_dataplane_workers(
             .with_domain_routing(dns_domain_routing.clone())
             .with_upstream_routing(Some(dns_upstream_router)),
     );
-    let dns_reload_restore = match dns_reload_snapshot.as_ref() {
+    let dns_reload_restore = match dns_reload_snapshot {
         Some(snapshot) => match dns.restore_reload_snapshot(snapshot) {
             Ok(report) => report.to_value(),
             Err(err) => {

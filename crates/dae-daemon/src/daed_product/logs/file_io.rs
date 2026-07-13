@@ -177,6 +177,10 @@ fn local_product_log_timestamp_text(timestamp: u64) -> Option<String> {
         return None;
     }
     let tm = unsafe { tm.assume_init() };
+    #[cfg(target_pointer_width = "64")]
+    let offset_seconds = tm.tm_gmtoff;
+    #[cfg(target_pointer_width = "32")]
+    let offset_seconds = i64::from(tm.tm_gmtoff);
     Some(format_product_log_timestamp_with_offset(
         i64::from(tm.tm_year) + 1900,
         i64::from(tm.tm_mon) + 1,
@@ -184,7 +188,7 @@ fn local_product_log_timestamp_text(timestamp: u64) -> Option<String> {
         i64::from(tm.tm_hour),
         i64::from(tm.tm_min),
         i64::from(tm.tm_sec),
-        tm.tm_gmtoff as i64,
+        offset_seconds,
     ))
 }
 

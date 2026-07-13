@@ -211,14 +211,14 @@ impl ResidentDnsDomainRouting {
         else {
             return Ok(());
         };
-        if !removed.route_owner_key.is_empty() {
-            if let Err(err) = self.apply_event(
+        if !removed.route_owner_key.is_empty()
+            && let Err(err) = self.apply_event(
                 &mut state.owner,
                 DomainRoutingDnsEvent::remove(&removed.route_owner_key),
-            ) {
-                state.cache.restore_removed_entry(removed_key, removed);
-                return Err(format!("remove resident DNS domain routing owner: {err}"));
-            }
+            )
+        {
+            state.cache.restore_removed_entry(removed_key, removed);
+            return Err(format!("remove resident DNS domain routing owner: {err}"));
         }
         drop(state);
         self.maintenance.notify_deadline_changed();

@@ -638,6 +638,40 @@ async fn forward_dns_https_over_reusable_stream_async(
     })
 }
 
+async fn forward_dns_https_over_close_delimited_stream_async(
+    upstream: &ResidentDnsUpstream,
+    tls: &mut tokio_rustls::client::TlsStream<TokioTcpStream>,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    let doh = build_doh_request(
+        &upstream.target.authority,
+        &upstream.target.authority,
+        &upstream.path,
+        payload,
+    )
+    .map_err(|err| format!("build DoH request: {err}"))?;
+    let request_target = doh_request_target(&upstream.path, doh.dns_query.as_deref());
+    let request = http1_doh_request_bytes(&doh, &request_target);
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        tls.write_all(&request)
+            .await
+            .map_err(|err| format!("write DoH request: {err}"))?;
+        tls.flush()
+            .await
+            .map_err(|err| format!("flush DoH request: {err}"))?;
+        let raw = read_to_end_capped_async(tls, DNS_DOH_RESPONSE_READ_LIMIT).await?;
+        parse_doh_http_response(payload, &raw)
+    })
+    .await
+    .map_err(|_| "DNS HTTPS exchange timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "forward DNS over HTTPS to upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,38 +766,4 @@ mod tests {
         response.extend_from_slice(&address);
         response
     }
-}
-
-async fn forward_dns_https_over_close_delimited_stream_async(
-    upstream: &ResidentDnsUpstream,
-    tls: &mut tokio_rustls::client::TlsStream<TokioTcpStream>,
-    payload: &[u8],
-) -> Result<Vec<u8>, String> {
-    let doh = build_doh_request(
-        &upstream.target.authority,
-        &upstream.target.authority,
-        &upstream.path,
-        payload,
-    )
-    .map_err(|err| format!("build DoH request: {err}"))?;
-    let request_target = doh_request_target(&upstream.path, doh.dns_query.as_deref());
-    let request = http1_doh_request_bytes(&doh, &request_target);
-    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
-        tls.write_all(&request)
-            .await
-            .map_err(|err| format!("write DoH request: {err}"))?;
-        tls.flush()
-            .await
-            .map_err(|err| format!("flush DoH request: {err}"))?;
-        let raw = read_to_end_capped_async(tls, DNS_DOH_RESPONSE_READ_LIMIT).await?;
-        parse_doh_http_response(payload, &raw)
-    })
-    .await
-    .map_err(|_| "DNS HTTPS exchange timeout".to_owned())?
-    .map_err(|err| {
-        format!(
-            "forward DNS over HTTPS to upstream {} {}: {err}",
-            upstream.tag, upstream.target.authority
-        )
-    })
 }

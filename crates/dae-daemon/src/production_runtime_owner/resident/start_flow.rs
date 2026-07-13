@@ -1,15 +1,45 @@
 use super::*;
+
+pub(super) struct ResidentRuntimeArtifactPaths {
+    pub(super) artifact_dir: PathBuf,
+    pub(super) start_file: PathBuf,
+    pub(super) cleanup_file: PathBuf,
+}
+
+pub(super) struct ResidentRuntimeStartInterfaces {
+    pub(super) lan: Vec<String>,
+    pub(super) wan: Vec<String>,
+}
+
+pub(super) struct ResidentRuntimeStartContext<'a> {
+    pub(super) options: ProductionRuntimeOwnerOptions,
+    pub(super) artifacts: ResidentRuntimeArtifactPaths,
+    pub(super) config: &'a Config,
+    pub(super) interfaces: ResidentRuntimeStartInterfaces,
+    pub(super) latency_seed: &'a [Value],
+    pub(super) dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
+}
+
 pub(super) fn start_with_options(
-    options: ProductionRuntimeOwnerOptions,
-    artifact_dir: PathBuf,
-    start_file: PathBuf,
-    cleanup_file: PathBuf,
-    config: &Config,
-    lan_ifaces: Vec<String>,
-    wan_ifaces: Vec<String>,
-    latency_seed: &[Value],
-    dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
+    context: ResidentRuntimeStartContext<'_>,
 ) -> Result<ResidentProductionRuntime, String> {
+    let ResidentRuntimeStartContext {
+        options,
+        artifacts:
+            ResidentRuntimeArtifactPaths {
+                artifact_dir,
+                start_file,
+                cleanup_file,
+            },
+        config,
+        interfaces:
+            ResidentRuntimeStartInterfaces {
+                lan: lan_ifaces,
+                wan: wan_ifaces,
+            },
+        latency_seed,
+        dns_reload_snapshot,
+    } = context;
     let mut checks = preflight_checks(&options);
     checks.extend(resident_interface_validation_checks(
         &lan_ifaces,
@@ -373,15 +403,17 @@ pub(super) fn start_with_options(
                             match discover_domain_routing_map(&native_runtime, handoff) {
                                 Ok(domain_routing_discovery) => {
                                     let (mut value, runtime) = start_resident_dataplane_workers(
-                                        handoff,
-                                        runtime_generation,
-                                        config,
-                                        &artifact_dir,
-                                        discovery.id,
-                                        domain_routing_discovery.id,
-                                        &geodata,
-                                        latency_seed,
-                                        dns_reload_snapshot.clone(),
+                                        ResidentDataplaneStartContext {
+                                            handoff,
+                                            reload_generation: runtime_generation,
+                                            config,
+                                            artifact_dir: &artifact_dir,
+                                            routing_tuple_map_id: discovery.id,
+                                            domain_routing_map_id: domain_routing_discovery.id,
+                                            geodata: &geodata,
+                                            latency_seed,
+                                            dns_reload_snapshot: dns_reload_snapshot.as_ref(),
+                                        },
                                     );
                                     if let Value::Object(map) = &mut value {
                                         map.insert(

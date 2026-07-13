@@ -45,7 +45,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_hos
 
     let authority = authority_from_host_port(host, port);
     match resolve_host_with_system_dns(&authority).await {
-        Ok(addr) => return Ok(addr),
+        Ok(addr) => Ok(addr),
         Err(system_err) => {
             let fallback = resolve_host_with_fallback_dns(host, port, fallback_resolver, mark, context)
                 .await
