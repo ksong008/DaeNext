@@ -1,6 +1,6 @@
 use crate::alive::AliveDialerSet;
 use crate::annotation::Annotation;
-use crate::dialer::{Dialer, TIMEOUT_MS};
+use crate::dialer::{Dialer, DialerHealthSnapshot, TIMEOUT_MS};
 use crate::error::OutboundError;
 use crate::policy::SelectionPolicy;
 use crate::types::{IpVersion, NETWORK_TYPE_COLLECTION_COUNT, NetworkType};
@@ -133,6 +133,40 @@ impl DialerGroup {
     ) {
         self.dialers[index].record_available_traffic(network_type, checked_at_unix);
         self.notify_alive(index, network_type, true);
+    }
+
+    pub fn record_check_unavailable(
+        &mut self,
+        index: usize,
+        network_type: NetworkType,
+        checked_at_unix: i64,
+    ) {
+        self.dialers[index].record_check_unavailable(network_type, checked_at_unix);
+        self.notify_alive(index, network_type, false);
+    }
+
+    pub fn record_check_unknown(
+        &mut self,
+        index: usize,
+        network_type: NetworkType,
+        checked_at_unix: i64,
+    ) {
+        self.dialers[index].record_check_unknown(network_type, checked_at_unix);
+    }
+
+    pub fn restore_health_snapshot(
+        &mut self,
+        index: usize,
+        network_type: NetworkType,
+        snapshot: DialerHealthSnapshot,
+    ) {
+        let alive = match snapshot.health_state {
+            crate::dialer::HealthState::Alive => true,
+            crate::dialer::HealthState::Dead | crate::dialer::HealthState::Unavailable => false,
+            crate::dialer::HealthState::Unknown => snapshot.alive,
+        };
+        self.dialers[index].restore_health_snapshot(network_type, snapshot);
+        self.notify_alive(index, network_type, alive);
     }
 
     pub fn notify_alive(&mut self, index: usize, network_type: NetworkType, alive: bool) {

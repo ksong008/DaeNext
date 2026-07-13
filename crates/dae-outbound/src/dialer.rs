@@ -4,6 +4,47 @@ use crate::types::{NETWORK_TYPE_COLLECTION_COUNT, NetworkType};
 
 pub const TIMEOUT_MS: i64 = 10_000;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum HealthState {
+    Alive,
+    Dead,
+    Unavailable,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DialerHealthSnapshot {
+    pub latency_ms: Option<i64>,
+    pub alive: bool,
+    pub checked_at_unix: i64,
+    pub health_state: HealthState,
+    pub last_success_at_unix: i64,
+    pub last_failure_at_unix: i64,
+    pub last_unknown_at_unix: i64,
+}
+
+impl HealthState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Alive => "alive",
+            Self::Dead => "dead",
+            Self::Unavailable => "unavailable",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "alive" => Some(Self::Alive),
+            "dead" => Some(Self::Dead),
+            "unavailable" => Some(Self::Unavailable),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Collection {
     pub alive_set_refs: usize,
@@ -11,6 +52,10 @@ pub struct Collection {
     pub moving_average_ms: i64,
     pub alive: bool,
     pub checked_at_unix: i64,
+    pub health_state: HealthState,
+    pub last_success_at_unix: i64,
+    pub last_failure_at_unix: i64,
+    pub last_unknown_at_unix: i64,
 }
 
 impl Default for Collection {
@@ -21,6 +66,10 @@ impl Default for Collection {
             moving_average_ms: 0,
             alive: true,
             checked_at_unix: 0,
+            health_state: HealthState::Unknown,
+            last_success_at_unix: 0,
+            last_failure_at_unix: 0,
+            last_unknown_at_unix: 0,
         }
     }
 }
@@ -89,6 +138,37 @@ impl Dialer {
         (latency, collection.alive, collection.checked_at_unix, true)
     }
 
+    pub fn health_snapshot(&self, typ: NetworkType) -> Option<DialerHealthSnapshot> {
+        let collection = self.collection(typ)?;
+        Some(DialerHealthSnapshot {
+            latency_ms: collection.latencies10.last(),
+            alive: collection.alive,
+            checked_at_unix: collection.checked_at_unix,
+            health_state: collection.health_state,
+            last_success_at_unix: collection.last_success_at_unix,
+            last_failure_at_unix: collection.last_failure_at_unix,
+            last_unknown_at_unix: collection.last_unknown_at_unix,
+        })
+    }
+
+    pub fn restore_health_snapshot(&mut self, typ: NetworkType, snapshot: DialerHealthSnapshot) {
+        let collection = self.must_get_collection(typ);
+        if let Some(latency_ms) = snapshot.latency_ms {
+            collection.latencies10.append(latency_ms);
+            collection.moving_average_ms = latency_ms;
+        }
+        collection.alive = match snapshot.health_state {
+            HealthState::Alive => true,
+            HealthState::Dead | HealthState::Unavailable => false,
+            HealthState::Unknown => snapshot.alive,
+        };
+        collection.checked_at_unix = snapshot.checked_at_unix;
+        collection.health_state = snapshot.health_state;
+        collection.last_success_at_unix = snapshot.last_success_at_unix;
+        collection.last_failure_at_unix = snapshot.last_failure_at_unix;
+        collection.last_unknown_at_unix = snapshot.last_unknown_at_unix;
+    }
+
     pub fn set_moving_average(&mut self, typ: NetworkType, latency_ms: i64) {
         self.must_get_collection(typ).moving_average_ms = latency_ms;
     }
@@ -105,18 +185,44 @@ impl Dialer {
         collection.moving_average_ms = (collection.moving_average_ms + latency) / 2;
         collection.alive = latency_ms.is_some();
         collection.checked_at_unix = checked_at_unix;
+        if latency_ms.is_some() {
+            collection.health_state = HealthState::Alive;
+            collection.last_success_at_unix = checked_at_unix;
+        } else {
+            collection.health_state = HealthState::Dead;
+            collection.last_failure_at_unix = checked_at_unix;
+        }
     }
 
     pub fn record_check_failure_without_latency(&mut self, typ: NetworkType, checked_at_unix: i64) {
         let collection = self.must_get_collection(typ);
         collection.alive = false;
         collection.checked_at_unix = checked_at_unix;
+        collection.health_state = HealthState::Dead;
+        collection.last_failure_at_unix = checked_at_unix;
     }
 
     pub fn record_available_traffic(&mut self, typ: NetworkType, checked_at_unix: i64) {
         let collection = self.must_get_collection(typ);
         collection.alive = true;
         collection.checked_at_unix = checked_at_unix;
+        collection.health_state = HealthState::Alive;
+        collection.last_success_at_unix = checked_at_unix;
+    }
+
+    pub fn record_check_unavailable(&mut self, typ: NetworkType, checked_at_unix: i64) {
+        let collection = self.must_get_collection(typ);
+        collection.alive = false;
+        collection.checked_at_unix = checked_at_unix;
+        collection.health_state = HealthState::Unavailable;
+    }
+
+    pub fn record_check_unknown(&mut self, typ: NetworkType, checked_at_unix: i64) {
+        let collection = self.must_get_collection(typ);
+        collection.last_unknown_at_unix = checked_at_unix;
+        if collection.checked_at_unix == 0 {
+            collection.health_state = HealthState::Unknown;
+        }
     }
 
     pub fn register_alive_dialer_set(&mut self, alive_set: Option<&AliveDialerSet>) {

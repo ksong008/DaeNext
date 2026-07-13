@@ -103,10 +103,10 @@ impl ResidentProductionRuntime {
             .map(ResidentDataplaneRuntime::metrics_snapshot)
     }
 
-    pub fn snapshot_node_latencies(&self) -> Vec<Value> {
+    pub(crate) fn snapshot_health_states(&self) -> Vec<Value> {
         self.dataplane
             .as_ref()
-            .map(ResidentDataplaneRuntime::node_latency_snapshots)
+            .map(ResidentDataplaneRuntime::health_state_snapshots)
             .unwrap_or_default()
     }
 

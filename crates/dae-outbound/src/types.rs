@@ -126,4 +126,32 @@ impl NetworkType {
     pub fn string_without_dns(self) -> String {
         format!("{}{}", self.l4proto.as_str(), self.ipversion.as_str())
     }
+
+    pub fn dimension_name(self) -> &'static str {
+        match (self.is_dns, self.l4proto, self.ipversion) {
+            (true, L4Proto::Tcp, IpVersion::V4) => "dns-tcp4",
+            (true, L4Proto::Tcp, IpVersion::V6) => "dns-tcp6",
+            (true, L4Proto::Udp, IpVersion::V4) => "dns-udp4",
+            (true, L4Proto::Udp, IpVersion::V6) => "dns-udp6",
+            (false, L4Proto::Tcp, IpVersion::V4) => "tcp4",
+            (false, L4Proto::Tcp, IpVersion::V6) => "tcp6",
+            (false, L4Proto::Udp, IpVersion::V4) => "data-udp4",
+            (false, L4Proto::Udp, IpVersion::V6) => "data-udp6",
+        }
+    }
+
+    pub fn from_dimension_name(value: &str) -> Option<Self> {
+        [
+            Self::DNS_TCP4,
+            Self::DNS_TCP6,
+            Self::DNS_UDP4,
+            Self::DNS_UDP6,
+            Self::TCP4,
+            Self::TCP6,
+            Self::DATA_UDP4,
+            Self::DATA_UDP6,
+        ]
+        .into_iter()
+        .find(|network_type| network_type.dimension_name() == value)
+    }
 }

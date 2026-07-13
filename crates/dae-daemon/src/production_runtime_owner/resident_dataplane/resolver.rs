@@ -31,6 +31,7 @@ struct FallbackDnsAnswers {
     min_ttl: Option<u32>,
 }
 
+#[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_host_with_configured_fallback_dns(
     host: &str,
     port: u16,
@@ -96,6 +97,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_hos
     }
 }
 
+#[cfg(test)]
 async fn resolve_host_with_system_dns(authority: &str) -> Result<SocketAddr, String> {
     let addrs = resolve_host_addrs_with_system_dns(authority).await?;
     select_first_socket_addr(addrs).ok_or_else(|| format!("resolve {authority}: no IP address"))
@@ -116,6 +118,7 @@ async fn resolve_host_addrs_with_system_dns(authority: &str) -> Result<Vec<Socke
     Ok(addrs)
 }
 
+#[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane) fn select_first_socket_addr(
     addrs: impl IntoIterator<Item = SocketAddr>,
 ) -> Option<SocketAddr> {
@@ -132,6 +135,7 @@ fn unique_socket_addrs(addrs: impl IntoIterator<Item = SocketAddr>) -> Vec<Socke
     unique
 }
 
+#[cfg(test)]
 async fn resolve_host_with_fallback_dns(
     host: &str,
     port: u16,

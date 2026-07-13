@@ -8,8 +8,8 @@ use dae_config::{Config, DynamicFunctionValue, Function, Group, Param};
 use dae_core_types::OutboundIndex;
 use dae_datapath::TcpDialMode;
 use dae_outbound::{
-    Annotation, AnyTLSLink, Dialer, DialerGroup, DialerSet, Filter, FilterParam, NetworkType,
-    OutboundError, SelectionPolicy,
+    Annotation, AnyTLSLink, Dialer, DialerGroup, DialerHealthSnapshot, DialerSet, Filter,
+    FilterParam, HealthState, NetworkType, OutboundError, SelectionPolicy,
     http_proxy::{HttpProxyLink, HttpScheme},
     hysteria2::{
         DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS, Hysteria2Link, build_port_hop_schedule,
@@ -40,8 +40,9 @@ use super::super::resident_routing::ResidentGeodataStore;
 use super::RESIDENT_TCP_LATENCY_PROBE_TIMEOUT;
 use super::{
     dns::{ResidentDnsPlan, build_resident_dns_plan},
-    link_hash, redacted_link_source, resident_tcp_latency_probe_timeout_from_config,
-    resolve_host_with_configured_fallback_dns,
+    execution_link_hash, link_hash, redacted_link_source,
+    resident_tcp_latency_probe_timeout_from_config,
+    resolve_host_addrs_with_configured_fallback_dns_ttl,
 };
 
 mod executable_graph;
@@ -57,6 +58,8 @@ mod transport_defaults;
 use self::transport_defaults::*;
 mod group_plan;
 pub(super) use self::group_plan::*;
+mod health_target;
+pub(super) use self::health_target::*;
 mod dataplane_builder;
 pub(super) use self::dataplane_builder::*;
 mod group_selector;

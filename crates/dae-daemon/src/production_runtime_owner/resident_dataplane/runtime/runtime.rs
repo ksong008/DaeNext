@@ -23,14 +23,13 @@ impl ResidentDataplaneRuntime {
         self.owner.clear_event_log()
     }
 
-    pub(in crate::production_runtime_owner) fn node_latency_snapshots(&self) -> Vec<Value> {
+    pub(in crate::production_runtime_owner) fn health_state_snapshots(&self) -> Vec<Value> {
         let reload_generation = self.owner.reload_generation();
-        preferred_latency_snapshots(
-            self.groups
-                .iter()
-                .flat_map(|group| group.latency_snapshots())
-                .map(|snapshot| resident_latency_snapshot_json(snapshot, reload_generation)),
-        )
+        self.groups
+            .iter()
+            .flat_map(|group| group.health_state_snapshots())
+            .map(|snapshot| resident_latency_snapshot_json(snapshot, reload_generation))
+            .collect()
     }
 
     pub(in crate::production_runtime_owner) fn group_selector_snapshot_map(

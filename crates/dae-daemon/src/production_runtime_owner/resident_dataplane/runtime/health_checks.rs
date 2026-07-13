@@ -1,6 +1,15 @@
 use super::*;
 use crate::allocator::{AllocatorReclaimReason, allocator_reclaim};
-use std::net::SocketAddr;
+
+#[path = "health_checks/family.rs"]
+mod family;
+use family::run_resident_candidate_family_health_checks;
+#[path = "health_checks/tcp_family_probe.rs"]
+mod tcp_family_probe;
+use tcp_family_probe::{
+    ResidentTcpFamilyProbeResult, preferred_tcp_family_probe_result,
+    probe_resident_candidate_tcp_families,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HealthCheckRoundStatus {
@@ -108,62 +117,10 @@ async fn run_resident_candidate_health_check_until_stopped(
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
     }
-    for tcp_target in &candidate.tcp_check.targets {
-        if stop.load(Ordering::Relaxed) {
-            return HealthCheckRoundStatus::Cancelled;
-        }
-        let checked_at = unix_now_secs();
-        let latency_ms = tokio::select! {
-            _ = wait_until_stopped_async(Arc::clone(&stop)) => {
-                return HealthCheckRoundStatus::Cancelled;
-            }
-            result = probe_resident_candidate_tcp_target_endpoint_async(candidate, tcp_target) => {
-                result.ok()
-            },
-        };
-        if stop.load(Ordering::Relaxed) {
-            return HealthCheckRoundStatus::Cancelled;
-        }
-        record_resident_candidate_health_result(
-            group,
-            &candidate.node_tag,
-            tcp_target.network_type_hint(),
-            latency_ms,
-            checked_at,
-        );
-    }
-    for udp_target in &candidate.udp_check.targets {
-        if stop.load(Ordering::Relaxed) {
-            return HealthCheckRoundStatus::Cancelled;
-        }
-        let udp_checked_at = unix_now_secs();
-        let udp_probe = tokio::select! {
-            _ = wait_until_stopped_async(Arc::clone(&stop)) => {
-                return HealthCheckRoundStatus::Cancelled;
-            }
-            result = probe_resident_candidate_udp_target_endpoint_async(candidate, udp_target) => result,
-        };
-        if stop.load(Ordering::Relaxed) {
-            return HealthCheckRoundStatus::Cancelled;
-        }
-        let (network_type, udp_latency_ms) = match udp_probe {
-            Ok((latency_ms, target)) => (
-                Some(plan::resident_udp_check_network_type(target)),
-                Some(latency_ms),
-            ),
-            Err((network_type, _)) => (network_type, None),
-        };
-        record_resident_candidate_health_result(
-            group,
-            &candidate.node_tag,
-            network_type,
-            udp_latency_ms,
-            udp_checked_at,
-        );
-    }
-    HealthCheckRoundStatus::Completed
+    run_resident_candidate_family_health_checks(group, candidate, stop).await
 }
 
+#[cfg(test)]
 fn record_resident_candidate_health_result(
     group: &plan::ResidentProxyGroupPlan,
     node_tag: &str,
@@ -206,17 +163,27 @@ pub(crate) async fn probe_resident_candidate_tcp_latency_snapshot(
     let checked_at = unix_now_secs();
     let probe = probe_resident_candidate_tcp_endpoint_async(&candidate).await;
     let latency_ms = probe.latency_ms;
+    let family_results = probe
+        .family_results
+        .iter()
+        .map(ResidentTcpFamilyProbeResult::to_json)
+        .collect::<Vec<_>>();
+    let preferred_health_state = preferred_tcp_family_probe_result(&probe.family_results)
+        .map(|result| result.health_state.as_str());
     let display_name = candidate.node_tag.as_str();
     let graph_id = candidate.proxy.graph_id.as_str();
     let link_hash = candidate.link_hash.as_str();
+    let execution_identity = candidate.execution_identity.as_str();
     let redacted_source = candidate.redacted_link_source.as_str();
     let network_type = probe.network_type.map(NetworkType::string_without_dns);
+    let network_dimension = probe.network_type.map(NetworkType::dimension_name);
     json!({
         "name": display_name,
         "displayName": display_name,
         "graphId": graph_id,
         "reloadGeneration": reload_generation,
         "linkHash": link_hash,
+        "executionIdentity": execution_identity,
         "linkIdentity": latency_link_identity_value(display_name, link_hash, redacted_source),
         "probeExecutor": resident_probe_executor_value(graph_id, reload_generation),
         "runtimeComponents": candidate
@@ -224,9 +191,12 @@ pub(crate) async fn probe_resident_candidate_tcp_latency_snapshot(
             .runtime_component_evidence_value_for_reload_generation(reload_generation),
         "latencyMs": latency_ms,
         "alive": latency_ms.is_some(),
+        "healthState": preferred_health_state,
         "checkedAtUnix": checked_at,
         "message": probe.message,
         "networkType": network_type,
+        "networkDimension": network_dimension,
+        "familyResults": family_results,
         "scope": "proxy-tcp-check",
     })
 }
@@ -240,6 +210,7 @@ pub(crate) fn manual_probe_unavailable_snapshot(
 ) -> Value {
     let display_name = display_name_from_link(link);
     let link_hash = link_hash(link);
+    let execution_identity = execution_link_hash(link);
     let graph_id = graph_id_from_link_hash(&link_hash);
     let redacted_source = redacted_link_source(link);
     json!({
@@ -248,6 +219,7 @@ pub(crate) fn manual_probe_unavailable_snapshot(
         "graphId": graph_id,
         "reloadGeneration": reload_generation,
         "linkHash": link_hash,
+        "executionIdentity": execution_identity,
         "linkIdentity": latency_link_identity_value(&display_name, &link_hash, &redacted_source),
         "probeExecutor": resident_probe_executor_value(&graph_id, reload_generation),
         "admission": {
@@ -269,6 +241,7 @@ pub(crate) fn resident_latency_snapshot_json(
     let display_name = snapshot.node_tag.as_str();
     let graph_id = snapshot.graph_id.as_str();
     let link_hash = snapshot.link_hash.as_str();
+    let execution_identity = snapshot.execution_identity.as_str();
     let redacted_source = snapshot.redacted_link_source.as_str();
     json!({
         "name": display_name,
@@ -276,12 +249,19 @@ pub(crate) fn resident_latency_snapshot_json(
         "graphId": graph_id,
         "reloadGeneration": reload_generation,
         "linkHash": link_hash,
+        "executionIdentity": execution_identity,
         "linkIdentity": latency_link_identity_value(display_name, link_hash, redacted_source),
         "probeExecutor": resident_probe_executor_value(graph_id, reload_generation),
         "networkType": snapshot.network_type.string_without_dns(),
+        "networkDimension": snapshot.network_type.dimension_name(),
         "latencyMs": snapshot.latency_ms,
         "alive": snapshot.alive,
+        "healthState": snapshot.health_state.as_str(),
         "checkedAtUnix": snapshot.checked_at_unix,
+        "lastSuccessAtUnix": snapshot.last_success_at_unix,
+        "lastFailureAtUnix": snapshot.last_failure_at_unix,
+        "lastUnknownAtUnix": snapshot.last_unknown_at_unix,
+        "targetIdentity": snapshot.target_identity,
         "message": snapshot.message,
     })
 }
@@ -375,6 +355,10 @@ pub(crate) fn link_hash(link: &str) -> String {
     format!("sha256:{}", hex_encode(&Sha256::digest(link.as_bytes())))
 }
 
+pub(crate) fn execution_link_hash(link: &str) -> String {
+    link_hash(&canonical_link_without_display_name(link))
+}
+
 pub(crate) fn graph_id_from_link_hash(link_hash: &str) -> String {
     let graph_hash = link_hash.trim_start_matches("sha256:");
     format!("resident-graph:{}", &graph_hash[..16.min(graph_hash.len())])
@@ -415,8 +399,10 @@ pub(crate) struct ResidentTcpProbeResult {
     pub(in crate::production_runtime_owner::resident_dataplane) network_type: Option<NetworkType>,
     pub(in crate::production_runtime_owner::resident_dataplane) latency_ms: Option<i64>,
     pub(in crate::production_runtime_owner::resident_dataplane) message: Option<String>,
+    family_results: Vec<ResidentTcpFamilyProbeResult>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ResidentTcpTargetProbeResult {
     index: usize,
@@ -429,66 +415,25 @@ struct ResidentTcpTargetProbeResult {
 pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
 ) -> ResidentTcpProbeResult {
-    let targets = &candidate.tcp_check.targets;
-    if targets.len() <= 1 {
-        let target = candidate.tcp_check.primary_target();
-        let network_type = target.network_type_hint();
-        return match probe_resident_candidate_tcp_target_endpoint_async(candidate, target).await {
-            Ok(latency_ms) => ResidentTcpProbeResult {
-                network_type,
-                latency_ms: Some(latency_ms),
-                message: None,
-            },
-            Err(err) => ResidentTcpProbeResult {
-                network_type,
-                latency_ms: None,
-                message: Some(err),
-            },
-        };
+    let family_results = probe_resident_candidate_tcp_families(candidate, None)
+        .await
+        .unwrap_or_default();
+    let preferred = preferred_tcp_family_probe_result(&family_results);
+    ResidentTcpProbeResult {
+        network_type: preferred.map(|result| result.network_type),
+        latency_ms: preferred.and_then(|result| result.latency_ms),
+        message: preferred
+            .and_then(|result| result.message.clone())
+            .or_else(|| {
+                family_results
+                    .is_empty()
+                    .then(|| "all TCP health family probes were cancelled".to_owned())
+            }),
+        family_results,
     }
-
-    let mut handles = tokio::task::JoinSet::new();
-    for (index, target) in targets.iter().cloned().enumerate() {
-        let candidate = candidate.clone();
-        handles.spawn(async move {
-            let network_type = target.network_type_hint();
-            let target_display = target.target.clone();
-            match probe_resident_candidate_tcp_target_endpoint_async(&candidate, &target).await {
-                Ok(latency_ms) => ResidentTcpTargetProbeResult {
-                    index,
-                    target: target_display,
-                    network_type,
-                    latency_ms: Some(latency_ms),
-                    message: None,
-                },
-                Err(err) => ResidentTcpTargetProbeResult {
-                    index,
-                    target: target_display,
-                    network_type,
-                    latency_ms: None,
-                    message: Some(err),
-                },
-            }
-        });
-    }
-
-    let mut results = Vec::with_capacity(targets.len());
-    while let Some(result) = handles.join_next().await {
-        if let Ok(result) = result {
-            results.push(result);
-        }
-    }
-
-    preferred_tcp_probe_result(&results).unwrap_or_else(|| {
-        let network_type = candidate.tcp_check.primary_target().network_type_hint();
-        ResidentTcpProbeResult {
-            network_type,
-            latency_ms: None,
-            message: Some("all TCP check target probes were cancelled".to_owned()),
-        }
-    })
 }
 
+#[cfg(test)]
 fn preferred_tcp_probe_result(
     results: &[ResidentTcpTargetProbeResult],
 ) -> Option<ResidentTcpProbeResult> {
@@ -508,9 +453,11 @@ fn preferred_tcp_probe_result(
         network_type: preferred.network_type,
         latency_ms: preferred.latency_ms,
         message,
+        family_results: Vec::new(),
     })
 }
 
+#[cfg(test)]
 fn prefer_tcp_probe_target(
     next: &ResidentTcpTargetProbeResult,
     current: &ResidentTcpTargetProbeResult,
@@ -526,6 +473,7 @@ fn prefer_tcp_probe_target(
     }
 }
 
+#[cfg(test)]
 fn tcp_probe_failure_message(results: &[ResidentTcpTargetProbeResult]) -> Option<String> {
     let mut failures = results
         .iter()
@@ -563,26 +511,6 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
     )
     .await?;
     Ok(elapsed_millis(started.elapsed()))
-}
-
-async fn probe_resident_candidate_udp_target_endpoint_async(
-    candidate: &plan::ResidentProxyProbePlan,
-    target: &plan::ResidentUdpCheckTarget,
-) -> Result<(i64, SocketAddr), (Option<NetworkType>, String)> {
-    let started = Instant::now();
-    let resolved = target
-        .resolve()
-        .await
-        .map_err(|err| (target.network_type_hint(), err))?;
-    let network_type = plan::resident_udp_check_network_type(resolved);
-    probe_resident_proxy_dns_udp_async(
-        &candidate.proxy,
-        resolved,
-        &candidate.udp_check.lookup_host,
-    )
-    .await
-    .map_err(|err| (Some(network_type), err))?;
-    Ok((elapsed_millis(started.elapsed()), resolved))
 }
 
 pub(crate) fn elapsed_millis(elapsed: Duration) -> i64 {
@@ -693,6 +621,136 @@ mod tests {
                     && snapshot.latency_ms.is_none()
                     && snapshot.checked_at_unix == 0)
         );
+    }
+
+    #[test]
+    fn absent_health_families_become_unavailable_without_fake_timeout_latency() {
+        let config = parse_test_config(
+            r#"
+            global {
+                lan_interface: daerust0
+            }
+            node {
+                node_a: 'socks5://192.0.2.1:1080#node_a'
+            }
+            group {
+                proxy {
+                    filter: name(node_a)
+                    policy: min
+                }
+            }
+            routing {
+                l4proto(tcp) -> proxy
+                fallback: direct
+            }
+            "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        let mut candidates = group.probe_candidates();
+        let absent = plan::ResidentHealthTargetFamilies {
+            ipv4: plan::ResidentHealthTargetFamily::Absent,
+            ipv6: plan::ResidentHealthTargetFamily::Absent,
+        };
+        candidates[0].tcp_check.resolver = candidates[0]
+            .tcp_check
+            .resolver
+            .clone()
+            .with_test_result(absent.clone());
+        candidates[0].udp_check.resolver = candidates[0]
+            .udp_check
+            .resolver
+            .clone()
+            .with_test_result(absent);
+
+        run_resident_group_health_checks(group, &candidates);
+
+        let snapshots = group.health_state_snapshots();
+        for network_type in [
+            NetworkType::TCP4,
+            NetworkType::TCP6,
+            NetworkType::DNS_UDP4,
+            NetworkType::DNS_UDP6,
+        ] {
+            let snapshot = snapshots
+                .iter()
+                .find(|snapshot| snapshot.network_type == network_type)
+                .unwrap();
+            assert_eq!(
+                snapshot.health_state,
+                dae_outbound::HealthState::Unavailable
+            );
+            assert_eq!(snapshot.latency_ms, None);
+            assert_ne!(snapshot.latency_ms, Some(dae_outbound::dialer::TIMEOUT_MS));
+        }
+    }
+
+    #[test]
+    fn transient_resolver_unknown_preserves_a_known_alive_family() {
+        let config = parse_test_config(
+            r#"
+            global {
+                lan_interface: daerust0
+            }
+            node {
+                node_a: 'socks5://192.0.2.1:1080#node_a'
+            }
+            group {
+                proxy {
+                    filter: name(node_a)
+                    policy: min
+                }
+            }
+            routing {
+                l4proto(tcp) -> proxy
+                fallback: direct
+            }
+            "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        group
+            .record_health_state(
+                "node_a",
+                NetworkType::TCP4,
+                dae_outbound::HealthState::Alive,
+                Some(19),
+                10,
+            )
+            .unwrap();
+        let mut candidates = group.probe_candidates();
+        let unknown = plan::ResidentHealthTargetFamilies {
+            ipv4: plan::ResidentHealthTargetFamily::Unknown(
+                "temporary resolver failure".to_owned(),
+            ),
+            ipv6: plan::ResidentHealthTargetFamily::Unknown(
+                "temporary resolver failure".to_owned(),
+            ),
+        };
+        candidates[0].tcp_check.resolver = candidates[0]
+            .tcp_check
+            .resolver
+            .clone()
+            .with_test_result(unknown);
+        candidates[0].udp_check.resolver =
+            candidates[0].udp_check.resolver.clone().with_test_result(
+                plan::ResidentHealthTargetFamilies {
+                    ipv4: plan::ResidentHealthTargetFamily::Absent,
+                    ipv6: plan::ResidentHealthTargetFamily::Absent,
+                },
+            );
+
+        run_resident_group_health_checks(group, &candidates);
+
+        let snapshot = group
+            .health_state_snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.network_type == NetworkType::TCP4)
+            .unwrap();
+        assert_eq!(snapshot.health_state, dae_outbound::HealthState::Alive);
+        assert_eq!(snapshot.latency_ms, Some(19));
+        assert_eq!(snapshot.last_success_at_unix, 10);
+        assert!(snapshot.last_unknown_at_unix >= 10);
     }
 
     #[test]

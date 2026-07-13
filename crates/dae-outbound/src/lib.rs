@@ -12,6 +12,7 @@ pub mod http_proxy;
 pub mod hysteria2;
 pub mod juicity;
 pub mod latency;
+pub mod link_identity;
 pub mod link_parser;
 pub mod matrix_extension_capability;
 pub mod policy;
@@ -36,7 +37,7 @@ pub use alive::AliveDialerSet;
 pub use annotation::Annotation;
 pub use anytls::AnyTLSLink;
 pub use connectivity::{ConnectivityMap, OutboundConnectivityKey};
-pub use dialer::{Collection, Dialer};
+pub use dialer::{Collection, Dialer, DialerHealthSnapshot, HealthState};
 pub use direct::{DirectOption, ResolverChoice, select_direct_resolver};
 pub use error::OutboundError;
 pub use filter::{
@@ -48,6 +49,7 @@ pub use http_proxy::{HttpConnectOptions, HttpProxyLink, HttpScheme, HttpTranspor
 pub use hysteria2::Hysteria2Link;
 pub use juicity::JuicityLink;
 pub use latency::LatenciesN;
+pub use link_identity::canonical_link_without_display_name;
 pub use link_parser::{LinkNode, LinkParseResult, parse_link_chain};
 pub use matrix_extension_capability::{
     ExpandedLiveMatrixValidationBoundaryContract, ExtensionLayerCapabilityContract,

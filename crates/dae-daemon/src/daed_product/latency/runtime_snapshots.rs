@@ -18,11 +18,13 @@ pub(crate) fn fake_runtime_tcp_latency_snapshot(link: &str) -> Value {
         .map(|_| started.elapsed().as_millis() as i64);
     let display_name = node_name_from_link(link);
     let link_hash = runtime_link_hash(link);
+    let execution_identity = runtime_execution_identity(link);
     let redacted_source = runtime_redacted_link_source(link);
     json!({
         "name": display_name.as_str(),
         "displayName": display_name.as_str(),
         "linkHash": link_hash.as_str(),
+        "executionIdentity": execution_identity,
         "linkIdentity": runtime_link_identity_value(&display_name, &link_hash, &redacted_source),
         "latencyMs": latency_ms,
         "alive": latency_ms.is_some(),
@@ -77,6 +79,10 @@ pub(crate) fn runtime_link_identity_value(
 
 pub(crate) fn runtime_link_hash(link: &str) -> String {
     format!("sha256:{}", hex_encode(&Sha256::digest(link.as_bytes())))
+}
+
+pub(crate) fn runtime_execution_identity(link: &str) -> String {
+    runtime_link_hash(&dae_outbound::canonical_link_without_display_name(link))
 }
 
 pub(crate) fn runtime_redacted_link_source(link: &str) -> String {

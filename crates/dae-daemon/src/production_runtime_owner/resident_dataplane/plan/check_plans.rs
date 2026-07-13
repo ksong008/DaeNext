@@ -85,6 +85,18 @@ pub(super) fn group_tcp_check_plan(
         .first()
         .map(|target| target.target.clone())
         .expect("resident TCP check target list is never empty");
+    let fallback_resolver = health_check_fallback_resolver(config, &group.name)?;
+    let resolver = ResidentHealthTargetResolver::new(
+        host.to_owned(),
+        port,
+        targets
+            .iter()
+            .filter_map(|target| target.target.parse::<SocketAddr>().ok())
+            .collect(),
+        fallback_resolver,
+        effective_so_mark_from_dae(config.global.so_mark_from_dae),
+        group_check_interval(config, group),
+    );
     Ok(ResidentTcpCheckPlan {
         scheme: url.scheme().to_owned(),
         target,
@@ -92,6 +104,7 @@ pub(super) fn group_tcp_check_plan(
         host: host.to_owned(),
         path,
         method,
+        resolver,
     })
 }
 
@@ -116,24 +129,8 @@ pub(super) fn group_udp_check_plan(
         )
     })?;
     let explicit_addresses = if values.len() > 1 { &values[1..] } else { &[] };
-    let fallback_resolver = config
-        .global
-        .fallback_resolver
-        .parse::<SocketAddr>()
-        .map_err(|err| {
-            format!(
-                "resident dataplane group {} invalid global.fallback_resolver {:?}: {err}",
-                group.name, config.global.fallback_resolver
-            )
-        })?;
-    let targets = udp_check_targets(
-        &host,
-        port,
-        explicit_addresses,
-        fallback_resolver,
-        effective_so_mark_from_dae(config.global.so_mark_from_dae),
-    )
-    .map_err(|err| {
+    let fallback_resolver = health_check_fallback_resolver(config, &group.name)?;
+    let targets = udp_check_targets(&host, port, explicit_addresses).map_err(|err| {
         format!(
             "resident dataplane group {} udp_check_dns {raw}: {err}",
             group.name
@@ -143,12 +140,37 @@ pub(super) fn group_udp_check_plan(
         .first()
         .cloned()
         .expect("resident UDP check target list is never empty");
+    let resolver = ResidentHealthTargetResolver::new(
+        host.clone(),
+        port,
+        targets
+            .iter()
+            .filter_map(ResidentUdpCheckTarget::literal_addr)
+            .collect(),
+        fallback_resolver,
+        effective_so_mark_from_dae(config.global.so_mark_from_dae),
+        group_check_interval(config, group),
+    );
     Ok(ResidentUdpCheckPlan {
         target,
         targets,
         host,
         lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
+        resolver,
     })
+}
+
+fn health_check_fallback_resolver(config: &Config, group_name: &str) -> Result<SocketAddr, String> {
+    config
+        .global
+        .fallback_resolver
+        .parse::<SocketAddr>()
+        .map_err(|err| {
+            format!(
+                "resident dataplane group {group_name} invalid global.fallback_resolver {:?}: {err}",
+                config.global.fallback_resolver
+            )
+        })
 }
 
 pub(super) fn split_check_host_port(raw: &str) -> Result<(String, u16), String> {
@@ -229,8 +251,6 @@ pub(super) fn udp_check_targets(
     host: &str,
     port: u16,
     explicit_addresses: &[String],
-    fallback_resolver: SocketAddr,
-    resolver_mark: u32,
 ) -> Result<Vec<ResidentUdpCheckTarget>, String> {
     let mut targets = Vec::new();
     for raw in explicit_addresses {
@@ -250,14 +270,7 @@ pub(super) fn udp_check_targets(
         return Ok(targets);
     }
     let authority = authority_from_host_port(host, port);
-    targets.push(ResidentUdpCheckTarget::new(
-        authority,
-        host.to_owned(),
-        port,
-        fallback_resolver,
-        resolver_mark,
-        None,
-    ));
+    targets.push(ResidentUdpCheckTarget::new(authority, None));
     Ok(targets)
 }
 
