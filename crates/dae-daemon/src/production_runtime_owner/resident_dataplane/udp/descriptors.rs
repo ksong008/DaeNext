@@ -48,6 +48,17 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_prox
     ) && !proxy.uses_vless_vision_xudp()
     {
         "vless-udp-protocol-closed"
+    } else if matches!(
+        proxy.handler,
+        ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+    ) {
+        match proxy.net.as_str() {
+            "" | "tcp" => "trojan-udp-over-tcp",
+            "websocket" => "trojan-udp-over-websocket",
+            "httpupgrade" => "trojan-udp-over-httpupgrade",
+            "grpc" => "trojan-udp-over-grpc",
+            _ => "trojan-udp-protocol-closed",
+        }
     } else {
         resident_udp_handler_name(&proxy.handler)
     }
@@ -115,6 +126,11 @@ pub(super) fn udp_packet_semantics(proxy: &ResidentProxyPlan) -> UdpPacketSemant
         }
         ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => {
             UdpPacketSemantics::LegacyUdpFailClosed
+        }
+        ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+            if proxy.executor_contract().udp_policy_closed =>
+        {
+            UdpPacketSemantics::ProtocolClosed
         }
         ResidentProxyProtocolPlan::TrojanTcpTls { .. }
         | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }

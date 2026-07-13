@@ -395,6 +395,18 @@ fn grpc_hunk_read_buffer_rejects_compressed_frames() {
 }
 
 #[test]
+fn grpc_hunk_read_buffer_rejects_oversized_message_before_buffering_payload() {
+    let mut buffer = GrpcHunkReadBuffer::default();
+    let oversized = RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES as u32 + 1;
+    let mut header = vec![0];
+    header.extend_from_slice(&oversized.to_be_bytes());
+    buffer.extend_from_slice(&header);
+
+    let err = buffer.pop_payload().unwrap_err();
+    assert!(err.contains("gRPC hunk exceeds"));
+}
+
+#[test]
 fn resident_vless_response_stripper_handles_split_header() {
     let mut stripper = VlessResponseStripper::default();
     assert!(stripper.consume(&[0]).unwrap().is_empty());

@@ -3,6 +3,7 @@ use super::*;
 mod protocol;
 mod xhttp;
 
+pub(in crate::production_runtime_owner::resident_dataplane) use protocol::ResidentProtocolExecutorContract;
 pub(crate) use protocol::{ResidentHysteria2ObfsPlan, ResidentProxyProtocolPlan};
 pub(crate) use xhttp::{
     ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
@@ -89,6 +90,42 @@ pub(crate) struct ResidentProxyPlan {
 }
 
 impl ResidentProxyPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn executor_contract(
+        &self,
+    ) -> ResidentProtocolExecutorContract {
+        let contract = self.handler.executor_contract();
+        if !matches!(self.handler, ResidentProxyProtocolPlan::TrojanTcpTls { .. }) {
+            return contract;
+        }
+        match self.net.as_str() {
+            "" | "tcp" => contract,
+            "websocket" => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-trojan-websocket-tls-stream",
+                udp_executor: "resident-trojan-udp-over-websocket",
+                packet_semantics: "udp-over-stream",
+                udp_policy_closed: false,
+            },
+            "httpupgrade" => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-trojan-httpupgrade-tls-stream",
+                udp_executor: "resident-trojan-udp-over-httpupgrade",
+                packet_semantics: "udp-over-stream",
+                udp_policy_closed: false,
+            },
+            "grpc" => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-trojan-grpc-tls-stream",
+                udp_executor: "resident-trojan-udp-over-grpc",
+                packet_semantics: "udp-over-stream",
+                udp_policy_closed: false,
+            },
+            _ => ResidentProtocolExecutorContract {
+                tcp_executor: contract.tcp_executor,
+                udp_executor: "transport-udp-policy-closed",
+                packet_semantics: "protocol-closed",
+                udp_policy_closed: true,
+            },
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn compact_allocations(&mut self) {
         compact_string(&mut self.graph_id);
         compact_string(&mut self.graph_link_hash);

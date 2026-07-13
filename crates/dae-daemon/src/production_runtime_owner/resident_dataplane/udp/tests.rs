@@ -512,8 +512,17 @@ mod tests {
             });
             proxy.net = net.to_owned();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
-            assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+            assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::Trojan);
+            assert!(!proxy.executor_contract().udp_policy_closed);
         }
+
+        let mut unsupported_trojan = test_udp_proxy(ResidentProxyProtocolPlan::TrojanTcpTls {
+            password: String::new(),
+        });
+        unsupported_trojan.net = "unsupported-wrapper".to_owned();
+        let executor = UdpSessionExecutor::new_proxy_packet(&unsupported_trojan);
+        assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
+        assert!(unsupported_trojan.executor_contract().udp_policy_closed);
 
         let proxy = test_udp_proxy(ResidentProxyProtocolPlan::Socks5Tcp {
             username: String::new(),

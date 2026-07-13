@@ -25,6 +25,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     stream_host_hash: Option<String>,
     stream_path: String,
     packet_semantics: String,
+    udp_executor: &'static str,
+    udp_policy_closed: bool,
     xhttp_mode: ResidentXhttpMode,
     xhttp_settings: ResidentXhttpSettingsPlan,
     xhttp_download_mode: Option<ResidentXhttpMode>,
@@ -43,6 +45,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
 
 impl ResidentExecutableGraphDescriptor {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
+        let executor_contract = proxy.executor_contract();
         Self {
             graph_id: proxy.graph_id.clone(),
             link_hash: proxy.graph_link_hash.clone(),
@@ -60,6 +63,8 @@ impl ResidentExecutableGraphDescriptor {
             },
             stream_path: proxy.stream_path.clone(),
             packet_semantics: graph_packet_semantics(proxy),
+            udp_executor: executor_contract.udp_executor,
+            udp_policy_closed: executor_contract.udp_policy_closed,
             xhttp_mode: proxy.xhttp_mode,
             xhttp_settings: proxy.xhttp_settings.clone(),
             xhttp_download_mode: proxy.xhttp_download.as_ref().map(|download| download.mode),
@@ -350,15 +355,28 @@ impl ResidentExecutableGraphDescriptor {
     }
 
     fn packet_session_manager_value(&self) -> Value {
-        let unsupported_reason = self
+        let chain_unsupported_reason = self
             .udp_chain_admission
             .unsupported_reason()
             .map(Value::from)
             .unwrap_or(Value::Null);
+        let unsupported_reason = if !chain_unsupported_reason.is_null() {
+            chain_unsupported_reason
+        } else if self.udp_policy_closed {
+            Value::from("protocol transport shape has no resident UDP packet executor")
+        } else {
+            Value::Null
+        };
+        let status = if unsupported_reason.is_null() {
+            self.udp_chain_admission.status()
+        } else {
+            "fail-closed"
+        };
         json!({
             "schemaVersion": 1,
-            "status": self.udp_chain_admission.status(),
+            "status": status,
             "manager": "resident-udp-session-manager",
+            "executor": self.udp_executor,
             "graphId": self.graph_id,
             "packetSemantics": self.packet_semantics,
             "chainCarrier": self.udp_chain_admission.carrier(),
@@ -553,6 +571,9 @@ fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
         | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => {
             "plugin-wrapper-stream".to_owned()
+        }
+        ResidentProxyProtocolPlan::TrojanTcpTls { .. } => {
+            proxy.executor_contract().packet_semantics.to_owned()
         }
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
         | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
