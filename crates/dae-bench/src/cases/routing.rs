@@ -79,10 +79,11 @@ fn bench_routing_domain_matcher_bitmap_reuse(
 ) -> Result<Measurement, String> {
     let matcher = build_domain_matcher()?;
     let mut bitmap = vec![0_u32; matcher.bitmap_words()];
+    let domain = String::from("api12.example.net");
     Ok(measure(
         || {
             let words = matcher
-                .fill_domain_bitmap(black_box("api12.example.net"), black_box(&mut bitmap))
+                .fill_domain_bitmap(black_box(domain.as_str()), black_box(&mut bitmap))
                 .expect("domain bitmap");
             black_box(
                 bitmap[..words]
