@@ -59,6 +59,9 @@ pub(super) fn resident_full_matrix_config_rows(
                 "expanded_source_matrix_state": "generated",
                 "planner_status": planner_status,
                 "wired_ready": entry.wired_ready(),
+                "tcp_live_adapter": entry.tcp_live_adapter,
+                "tcp_semantics": entry.tcp_semantics,
+                "tcp_path_ready": entry.tcp_path_ready(),
                 "runtime_components_ready": runtime_components_ready,
                 "live_ready": entry.wired_ready() && remote_live_matrix && missing.is_empty(),
                 "remote_live_matrix": remote_live_matrix,
@@ -338,7 +341,7 @@ pub(super) fn resident_matrix_solver_value(
     let executable_graph_ready =
         normalized_graph_ready && entry.wired_ready() && runtime_components_ready;
     let admission_fail_closed = blocked_count > 0 || candidate_count == admitted_count;
-    let tcp_loopback_ready = executable_graph_ready && entry.tcp_live_adapter;
+    let tcp_loopback_ready = executable_graph_ready && entry.tcp_path_ready();
     let udp_loopback_ready = executable_graph_ready && entry.udp_path_ready();
     let reload_cleanup_ready = executable_graph_ready;
     let benchmark_ready = false;
@@ -543,6 +546,7 @@ pub(super) fn matrix_row_schemes(formal_matrix_handler: &str) -> &'static [&'sta
         "anytls" => &["anytls"],
         "http-proxy" => &["http", "https"],
         "socks5" => &["socks", "socks5"],
+        "connect-udp" => &["masque"],
         _ => &[],
     }
 }

@@ -23,6 +23,8 @@ pub(super) fn insert_resident_live_adapter_matrix_service_contract_capabilities(
                 "formal_matrix_handler": entry.formal_matrix_handler,
                 "planner_admitted": entry.planner_admitted,
                 "tcp_live_adapter": entry.tcp_live_adapter,
+                "tcp_semantics": entry.tcp_semantics,
+                "tcp_path_ready": entry.tcp_path_ready(),
                 "udp_live_adapter": entry.udp_live_adapter,
                 "udp_semantics": entry.udp_semantics,
                 "udp_path_ready": entry.udp_path_ready(),

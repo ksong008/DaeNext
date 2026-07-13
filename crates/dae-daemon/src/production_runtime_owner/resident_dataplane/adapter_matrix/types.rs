@@ -14,6 +14,7 @@ pub(crate) struct ResidentLiveAdapterMatrixEntry {
     pub(crate) formal_matrix_handler: &'static str,
     pub(crate) planner_admitted: bool,
     pub(crate) tcp_live_adapter: bool,
+    pub(crate) tcp_semantics: &'static str,
     pub(crate) udp_live_adapter: bool,
     pub(crate) udp_semantics: &'static str,
     pub(crate) transport_underlay: bool,
@@ -28,13 +29,17 @@ pub(crate) struct ResidentLiveAdapterMatrixEntry {
 }
 
 impl ResidentLiveAdapterMatrixEntry {
+    pub(crate) fn tcp_path_ready(self) -> bool {
+        self.tcp_live_adapter || self.tcp_semantics == "protocol-closed"
+    }
+
     pub(crate) fn udp_path_ready(self) -> bool {
         self.udp_live_adapter || self.udp_semantics == "protocol-closed"
     }
 
     pub(crate) fn wired_ready(self) -> bool {
         self.planner_admitted
-            && self.tcp_live_adapter
+            && self.tcp_path_ready()
             && self.udp_path_ready()
             && self.transport_underlay
             && self.route_group_connectivity
