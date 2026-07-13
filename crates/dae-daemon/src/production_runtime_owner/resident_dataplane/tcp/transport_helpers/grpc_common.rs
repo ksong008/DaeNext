@@ -110,6 +110,12 @@ impl GrpcHunkReadBuffer {
             return Err("compressed gRPC hunk is not admitted by resident relay".to_owned());
         }
         let len = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
+        if len > RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES {
+            return Err(format!(
+                "gRPC hunk exceeds {} bytes",
+                RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES
+            ));
+        }
         if buffer.len() < 5 + len {
             return Ok(None);
         }

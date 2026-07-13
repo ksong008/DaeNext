@@ -130,16 +130,17 @@ use shadowsocks_stream::{
     AsyncV2rayPluginMuxPayloadState, read_shadowsocks_aead_chunk_from_v2ray_plugin_mux,
     read_shadowsocks_aead_chunk_from_websocket_tls,
 };
-#[cfg(test)]
-use websocket::RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES;
-pub(crate) use websocket::{AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState};
+pub(crate) use websocket::{
+    AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES,
+};
 use websocket::{
     WebSocketBinaryFrameDecoder, httpupgrade_handshake_over_async_stream,
-    httpupgrade_handshake_over_resident_tls_async, websocket_handshake_over_async_stream,
-    websocket_handshake_over_resident_tls_async,
-    write_websocket_binary_frame_over_resident_tls_async,
-    write_websocket_binary_frame_to_async_stream,
+    websocket_handshake_over_async_stream, write_websocket_binary_frame_to_async_stream,
     write_websocket_control_responses_over_resident_tls_async,
+};
+pub(in crate::production_runtime_owner::resident_dataplane) use websocket::{
+    httpupgrade_handshake_over_resident_tls_async, websocket_handshake_over_resident_tls_async,
+    write_websocket_binary_frame_over_resident_tls_async,
 };
 
 mod router;

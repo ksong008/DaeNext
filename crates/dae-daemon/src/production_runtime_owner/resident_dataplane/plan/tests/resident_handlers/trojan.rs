@@ -19,6 +19,7 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
         trojan.handler,
         ResidentProxyProtocolPlan::TrojanTcpTls { .. }
     ));
+    assert_trojan_udp_contract(&trojan, "resident-trojan-udp-over-tcp", "udp-over-stream");
 
     let trojan_websocket = build_resident_proxy_plan_for_node(
         config,
@@ -57,6 +58,11 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
         "/resource"
     );
     assert!(!trojan_websocket_graph.to_string().contains(&authority_host));
+    assert_trojan_udp_contract(
+        &trojan_websocket,
+        "resident-trojan-udp-over-websocket",
+        "udp-over-stream",
+    );
 
     let trojan_httpupgrade = build_resident_proxy_plan_for_node(
         config,
@@ -99,6 +105,11 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
             .to_string()
             .contains(&authority_host)
     );
+    assert_trojan_udp_contract(
+        &trojan_httpupgrade,
+        "resident-trojan-udp-over-httpupgrade",
+        "udp-over-stream",
+    );
 
     let trojan_grpc = build_resident_proxy_plan_for_node(
         config,
@@ -137,6 +148,32 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
         "ServiceEndpoint"
     );
     assert!(!trojan_grpc_graph.to_string().contains(&authority_host));
+    assert_trojan_udp_contract(
+        &trojan_grpc,
+        "resident-trojan-udp-over-grpc",
+        "udp-over-stream",
+    );
 
-    vec![trojan, trojan_websocket, trojan_httpupgrade]
+    vec![trojan, trojan_websocket, trojan_httpupgrade, trojan_grpc]
+}
+
+fn assert_trojan_udp_contract(
+    proxy: &ResidentProxyPlan,
+    expected_executor: &str,
+    expected_semantics: &str,
+) {
+    let contract = proxy.executor_contract();
+    assert_eq!(contract.udp_executor, expected_executor);
+    assert_eq!(contract.packet_semantics, expected_semantics);
+    assert!(!contract.udp_policy_closed);
+    let graph = proxy.executable_graph_value();
+    assert_eq!(graph["packetSemantics"], expected_semantics);
+    assert_eq!(
+        graph["runtimeComponents"]["packetSessionManager"]["executor"],
+        expected_executor
+    );
+    assert_eq!(
+        graph["runtimeComponents"]["packetSessionManager"]["status"],
+        "admitted"
+    );
 }

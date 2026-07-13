@@ -226,7 +226,7 @@ impl ResidentProxyProtocolPlan {
             Self::TrojanTcpTls { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-trojan-tls-stream",
                 udp_executor: "resident-trojan-udp-over-tcp",
-                packet_semantics: "udp-over-stream-or-datagram",
+                packet_semantics: "udp-over-stream",
                 udp_policy_closed: false,
             },
             Self::TrojanInnerShadowsocksTcpTls { .. } => ResidentProtocolExecutorContract {

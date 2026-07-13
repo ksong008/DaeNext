@@ -12,7 +12,6 @@ mod async_payload;
 mod framing;
 pub(super) use async_payload::AsyncWebSocketControlWriter;
 pub(crate) use async_payload::{AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState};
-#[cfg(test)]
 pub(crate) use framing::RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES;
 pub(crate) use framing::WebSocketBinaryFrameDecoder;
 

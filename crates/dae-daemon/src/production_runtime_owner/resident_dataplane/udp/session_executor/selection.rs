@@ -91,10 +91,12 @@ impl UdpSessionExecutor {
                 }
             }
             ResidentProxyProtocolPlan::TrojanTcpTls { password } => match proxy.net.as_str() {
-                "" | "tcp" => Self::Trojan(TrojanUdpStreamSession::new(password.clone())),
-                "websocket" | "httpupgrade" | "grpc" => Self::fail_closed(
-                    "Trojan wrapped-stream UDP requires a matching packet-over-wrapper executor for this transport",
-                ),
+                "" | "tcp" => Self::Trojan(TrojanUdpStreamSession::tls(password.clone())),
+                "websocket" => Self::Trojan(TrojanUdpStreamSession::websocket(password.clone())),
+                "httpupgrade" => {
+                    Self::Trojan(TrojanUdpStreamSession::httpupgrade(password.clone()))
+                }
+                "grpc" => Self::Trojan(TrojanUdpStreamSession::grpc(password.clone())),
                 _ => Self::fail_closed(
                     "Trojan UDP requires a supported stream transport before resident UDP can admit this shape",
                 ),
