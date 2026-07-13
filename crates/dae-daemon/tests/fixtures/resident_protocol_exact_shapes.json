@@ -90,6 +90,54 @@
       "probeDispatch": "quic"
     },
     {
+      "id": "connect-udp-h2",
+      "webGenerator": "masque",
+      "form": {
+        "host": "node-1.fixture.invalid",
+        "port": 28001,
+        "transport": "h2",
+        "authentication": "basic",
+        "username": "identity-1",
+        "password": "credential-1",
+        "targetTemplate": "/.well-known/masque/udp/{target_host}/{target_port}/",
+        "sni": "node-4.fixture.invalid",
+        "name": "fixture-connect-udp-h2"
+      },
+      "protocol": "connect-udp",
+      "webTransport": "h2",
+      "wireSecurity": "tls",
+      "securityUnderlay": "standard-tls",
+      "streamWrapper": "connect-udp-h2",
+      "tcpExecutor": "connect-udp-tcp-policy-closed",
+      "udpExecutor": "connect-udp-h2-executor-pending",
+      "udpStatus": "fail-closed",
+      "runtimeDispatch": "policy-closed",
+      "probeDispatch": "policy-closed"
+    },
+    {
+      "id": "connect-udp-h3",
+      "webGenerator": "masque",
+      "form": {
+        "host": "node-1.fixture.invalid",
+        "port": 28001,
+        "transport": "h3",
+        "authentication": "none",
+        "targetTemplate": "/.well-known/masque/udp/{target_host}/{target_port}/",
+        "sni": "node-4.fixture.invalid",
+        "name": "fixture-connect-udp-h3"
+      },
+      "protocol": "connect-udp",
+      "webTransport": "h3",
+      "wireSecurity": "quic",
+      "securityUnderlay": "quic-tls",
+      "streamWrapper": "connect-udp-h3",
+      "tcpExecutor": "connect-udp-tcp-policy-closed",
+      "udpExecutor": "connect-udp-h3-executor-pending",
+      "udpStatus": "fail-closed",
+      "runtimeDispatch": "policy-closed",
+      "probeDispatch": "policy-closed"
+    },
+    {
       "id": "vless-websocket-tls",
       "webGenerator": "v2ray",
       "form": {

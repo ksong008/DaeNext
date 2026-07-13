@@ -16,6 +16,7 @@ use dae_outbound::{
         server_contract as hysteria2_server_contract,
     },
     juicity::JuicityLink,
+    masque::{MasqueAuthentication, MasqueLink, MasqueTransport},
     parse_link_chain,
     shadowsocks::ss2022::{cipher_conf, validate_psk_list},
     shadowsocks::{CipherFamily, classify_cipher},

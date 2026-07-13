@@ -19,6 +19,7 @@ h3-quinn.workspace = true
 http.workspace = true
 hkdf.workspace = true
 md-5.workspace = true
+percent-encoding.workspace = true
 quinn.workspace = true
 rcgen.workspace = true
 regex.workspace = true

@@ -2,6 +2,7 @@ use crate::anytls::AnyTLSLink;
 use crate::error::OutboundError;
 use crate::hysteria2::Hysteria2Link;
 use crate::juicity::JuicityLink;
+use crate::masque::MasqueLink;
 use crate::shadowsocks::ShadowsocksLink;
 use crate::trojan::TrojanLink;
 use crate::tuic::TuicLink;
@@ -93,6 +94,7 @@ fn classify_link(scheme: &str, raw: &str) -> (&'static str, bool, &'static str) 
         "hysteria2" | "hy2" => ("hysteria2", true, "rust-native"),
         "tuic" => ("tuic", true, "rust-native"),
         "juicity" => ("juicity", true, "rust-native"),
+        "masque" => ("connect-udp", true, "rust-native"),
         "anytls" => ("anytls", true, "rust-native"),
         _ => ("unknown", false, "unsupported"),
     }
@@ -111,6 +113,7 @@ fn scheme_to_protocol(scheme: &str) -> &'static str {
         "trojan-go" => "trojan-go",
         "tuic" => "tuic",
         "juicity" => "juicity",
+        "masque" => "connect-udp",
         "anytls" => "anytls",
         _ => "unknown",
     }
@@ -161,6 +164,9 @@ fn property_address(scheme: &str, raw: &str) -> Option<String> {
     }
     if scheme == "juicity" {
         return JuicityLink::parse(raw).ok().map(|link| link.address());
+    }
+    if scheme == "masque" {
+        return MasqueLink::parse(raw).ok().map(|link| link.address());
     }
     if scheme == "anytls" {
         return AnyTLSLink::parse(raw).ok().map(|link| link.address());

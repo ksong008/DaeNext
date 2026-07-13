@@ -25,6 +25,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentStreamP
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentUdpPolicyClosedReason {
     HttpConnect,
+    ConnectUdpH2Pending,
+    ConnectUdpH3Pending,
     PluginWrapper,
     ShadowsocksR,
     TrojanInnerShadowsocks,
@@ -42,6 +44,8 @@ impl ResidentUdpPolicyClosedReason {
     ) -> &'static str {
         match self {
             Self::HttpConnect => "http-connect-udp-protocol-closed",
+            Self::ConnectUdpH2Pending => "connect-udp-h2-executor-pending",
+            Self::ConnectUdpH3Pending => "connect-udp-h3-executor-pending",
             Self::PluginWrapper => "plugin-udp-policy-closed",
             Self::ShadowsocksR => "legacy-udp-policy-closed",
             Self::TrojanInnerShadowsocks => "inner-encryption-udp-policy-closed",
@@ -57,6 +61,12 @@ impl ResidentUdpPolicyClosedReason {
     pub(in crate::production_runtime_owner::resident_dataplane) fn reason(self) -> &'static str {
         match self {
             Self::HttpConnect => "HTTP CONNECT has no UDP relay semantics in resident dataplane",
+            Self::ConnectUdpH2Pending => {
+                "CONNECT-UDP H2 source shape is explicit but remains policy-closed until its packet executor passes interoperability admission"
+            }
+            Self::ConnectUdpH3Pending => {
+                "CONNECT-UDP H3 source shape is explicit but remains policy-closed until its datagram actor passes interoperability admission"
+            }
             Self::PluginWrapper => {
                 "SIP003 plugin UDP is not part of the required plugin contract; resident UDP keeps plugin UDP policy-closed without alternate execution"
             }
@@ -87,6 +97,8 @@ impl ResidentUdpPolicyClosedReason {
         self,
     ) -> UdpPacketSemantics {
         match self {
+            Self::ConnectUdpH2Pending => UdpPacketSemantics::ConnectUdpCapsule,
+            Self::ConnectUdpH3Pending => UdpPacketSemantics::ConnectUdpHttpDatagram,
             Self::PluginWrapper => UdpPacketSemantics::PluginUdpPolicyClosed,
             Self::ShadowsocksR => UdpPacketSemantics::LegacyUdpFailClosed,
             Self::VlessMux => UdpPacketSemantics::MultiplexedStream,
@@ -149,6 +161,12 @@ impl ResidentUdpExecutorFactory {
             ResidentProxyProtocolPlan::Socks5Tcp { .. } => Self::Socks5Associate,
             ResidentProxyProtocolPlan::HttpProxyTcp { .. } => {
                 Self::PolicyClosed(Closed::HttpConnect)
+            }
+            ResidentProxyProtocolPlan::ConnectUdpH2Tls { .. } => {
+                Self::PolicyClosed(Closed::ConnectUdpH2Pending)
+            }
+            ResidentProxyProtocolPlan::ConnectUdpH3Tls { .. } => {
+                Self::PolicyClosed(Closed::ConnectUdpH3Pending)
             }
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => Self::ShadowsocksAead,
             ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => Self::Shadowsocks2022,

@@ -134,7 +134,12 @@ where
     let mut handle = tokio::spawn(async move {
         let mut inbound = accepted;
         let runtime_dispatch = selection.proxy.execution_plan().protocol.runtime_dispatch();
-        if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
+        if runtime_dispatch == ResidentTcpRuntimeDispatch::PolicyClosed {
+            Err(format!(
+                "resident TCP probe dispatcher policy-closed for UDP-only exact protocol shape {:?}",
+                selection.proxy.execution_plan().protocol
+            ))
+        } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
             handle_proxy_tcp_connection_async(
                 &mut inbound,
                 peer,
