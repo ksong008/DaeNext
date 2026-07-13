@@ -13,15 +13,6 @@ pub(crate) fn resident_udp_socket_buffer_bytes() -> usize {
     )
 }
 
-pub(crate) fn resident_dns_fast_path_concurrency() -> usize {
-    resident_usize_from_env(
-        RESIDENT_DNS_FAST_PATH_CONCURRENCY_ENV,
-        RESIDENT_DNS_FAST_PATH_CONCURRENCY_DEFAULT,
-        RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN,
-        RESIDENT_DNS_FAST_PATH_CONCURRENCY_MAX,
-    )
-}
-
 pub(crate) fn apply_resident_udp_socket_buffer_tuning(socket: &UdpSocket) {
     let bytes = resident_udp_socket_buffer_bytes();
     let _ = set_socket_buffer_bytes(socket.as_raw_fd(), libc::SO_RCVBUF, bytes);
@@ -62,12 +53,5 @@ mod tests {
         let value = resident_udp_socket_buffer_bytes();
         assert!(value >= RESIDENT_UDP_SOCKET_BUFFER_BYTES_MIN);
         assert!(value <= RESIDENT_UDP_SOCKET_BUFFER_BYTES_MAX);
-    }
-
-    #[test]
-    fn resident_dns_fast_path_concurrency_defaults_are_bounded() {
-        let value = resident_dns_fast_path_concurrency();
-        assert!(value >= RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN);
-        assert!(value <= RESIDENT_DNS_FAST_PATH_CONCURRENCY_MAX);
     }
 }

@@ -166,6 +166,8 @@ pub(crate) fn start_resident_dataplane_workers(
         .unwrap_or_else(disabled_dns_bind_listener_report);
 
     let resource_config = ResidentRuntimeResourceConfig::from_config(config);
+    let udp_runtime_config =
+        ResidentUdpRuntimeConfig::from_resources(reload_generation, &resource_config);
     apply_resident_udp_socket_buffer_tuning(&udp_socket);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let udp_sessions_active = Arc::new(AtomicUsize::new(0));
@@ -308,8 +310,8 @@ pub(crate) fn start_resident_dataplane_workers(
         resource_config.tcp_connection_limit.value(),
         tcp_flow_stack_bytes,
     );
-    let udp_session_limit = resource_config.udp_session_limit.value();
-    let udp_session_queue_depth = resource_config.udp_session_queue_depth.value();
+    let udp_session_limit = udp_runtime_config.session_limit;
+    let udp_session_queue_depth = udp_runtime_config.session_queue_depth;
     {
         let stop = owner.stop_handle();
         let tcp_router = Arc::clone(&tcp_router);
@@ -368,7 +370,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
         let active_sessions = owner.udp_sessions_active();
-        let dns_fast_path_concurrency = resource_config.dns_fast_path_concurrency.value();
+        let udp_runtime_config = udp_runtime_config.clone();
         owner.spawn_thread("udp-session-manager", "udp-session-manager", move || {
             resident_udp_loop(
                 udp_socket,
@@ -384,10 +386,8 @@ pub(crate) fn start_resident_dataplane_workers(
                 event_lock,
                 metrics,
                 active_sessions,
-                udp_session_limit,
-                udp_session_queue_depth,
+                udp_runtime_config,
                 health_resuscitation,
-                dns_fast_path_concurrency,
             )
         });
     }
@@ -438,6 +438,10 @@ pub(crate) fn start_resident_dataplane_workers(
         dns_bind_listener_report.clone(),
     );
     start_map.insert("resources".to_owned(), resource_config.json());
+    start_map.insert(
+        "udp_runtime".to_owned(),
+        udp_runtime_config.resource_inventory(),
+    );
     start_map.insert(
         "tcp_flow_stack_bytes".to_owned(),
         json!(tcp_flow_stack_bytes),

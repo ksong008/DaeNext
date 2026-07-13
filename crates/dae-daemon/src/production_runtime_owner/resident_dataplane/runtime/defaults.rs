@@ -35,15 +35,32 @@ pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV: &str = "RESIDENT_UDP_SESS
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT: usize = 128;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN: usize = 1;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_MAX: usize = 256;
+pub(crate) const RESIDENT_UDP_RUNTIME_SHARDS_ENV: &str = "RESIDENT_UDP_RUNTIME_SHARDS";
+pub(crate) const RESIDENT_UDP_RUNTIME_SHARDS_MIN: usize = 1;
+pub(crate) const RESIDENT_UDP_RUNTIME_SHARDS_MAX: usize = 64;
+pub(crate) const RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_ENV: &str = "RESIDENT_UDP_DISPATCH_QUEUE_DEPTH";
+pub(crate) const RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MIN: usize = 16;
+pub(crate) const RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MAX: usize = 65_536;
 pub(crate) const RESIDENT_UDP_SOCKET_BUFFER_BYTES_ENV: &str = "RESIDENT_UDP_SOCKET_BUFFER_BYTES";
 pub(crate) const RESIDENT_UDP_SOCKET_BUFFER_BYTES_DEFAULT: usize = 512 * 1024;
 pub(crate) const RESIDENT_UDP_SOCKET_BUFFER_BYTES_MIN: usize = 64 * 1024;
 pub(crate) const RESIDENT_UDP_SOCKET_BUFFER_BYTES_MAX: usize = 8 * 1024 * 1024;
 pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_ENV: &str =
     "RESIDENT_DNS_FAST_PATH_CONCURRENCY";
-pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_DEFAULT: usize = 512;
 pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN: usize = 16;
 pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_MAX: usize = 4096;
+pub(crate) const RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_ENV: &str =
+    "RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH";
+pub(crate) const RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_MIN: usize = 16;
+pub(crate) const RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_MAX: usize = 65_536;
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_ENV: &str =
+    "RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH";
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_MIN: usize = 16;
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_MAX: usize = 65_536;
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_ENV: &str =
+    "RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT";
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MIN: usize = 16;
+pub(crate) const RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MAX: usize = u16::MAX as usize + 1;
 pub(crate) const RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_ENV: &str =
     "RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS";
 pub(crate) const RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_DEFAULT: usize = 60;
@@ -74,6 +91,7 @@ pub(crate) static RESIDENT_RELOAD_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn resident_runtime_defaults_contract() -> Value {
     json!({
+        "runtimeProfile": resident_runtime_profile_contract(),
         "tcpFlow": {
             "stackBytes": {
                 "configKey": "resident_tcp_flow_stack_bytes",
@@ -85,7 +103,7 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
             "stackScope": "resident TCP runtime OS threads; Tokio tasks do not receive per-flow stacks",
         },
         "tcpRuntime": {
-            "profile": resident_tcp_runtime_profile_contract(),
+            "profileSource": "runtimeProfile",
             "workers": {
                 "configKey": "resident_tcp_runtime_workers",
                 "env": RESIDENT_TCP_RUNTIME_WORKERS_ENV,
@@ -117,9 +135,49 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "min": RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN,
                 "max": RESIDENT_UDP_SESSION_QUEUE_DEPTH_MAX,
             },
+            "runtimeShards": {
+                "env": RESIDENT_UDP_RUNTIME_SHARDS_ENV,
+                "defaultPolicy": "available_parallelism clamped by runtimeProfile",
+                "min": RESIDENT_UDP_RUNTIME_SHARDS_MIN,
+                "max": RESIDENT_UDP_RUNTIME_SHARDS_MAX,
+            },
+            "dispatchQueueDepth": {
+                "env": RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_ENV,
+                "defaultPolicy": "runtimeProfile",
+                "min": RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MIN,
+                "max": RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MAX,
+            },
             "idleTimeoutSeconds": RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_secs(),
             "dnsIdleTimeoutSeconds": RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT.as_secs(),
             "model": "resident UDP session manager keyed by graph id, outbound, peer, original destination, and packet semantics",
+        },
+        "dnsFastPath": {
+            "concurrency": {
+                "env": RESIDENT_DNS_FAST_PATH_CONCURRENCY_ENV,
+                "defaultPolicy": "runtimeProfile",
+                "min": RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN,
+                "max": RESIDENT_DNS_FAST_PATH_CONCURRENCY_MAX,
+            },
+            "queueDepth": {
+                "env": RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_ENV,
+                "defaultPolicy": "runtimeProfile",
+                "min": RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_MIN,
+                "max": RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_MAX,
+            },
+        },
+        "dnsUdpForwarder": {
+            "queueDepth": {
+                "env": RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_ENV,
+                "defaultPolicy": "runtimeProfile",
+                "min": RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_MIN,
+                "max": RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_MAX,
+            },
+            "pendingLimit": {
+                "env": RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_ENV,
+                "defaultPolicy": "runtimeProfile",
+                "min": RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MIN,
+                "max": RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MAX,
+            },
         },
         "eventWriter": {
             "queueDepth": {

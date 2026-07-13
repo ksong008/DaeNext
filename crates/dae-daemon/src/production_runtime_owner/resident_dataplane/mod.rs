@@ -93,9 +93,12 @@ pub(crate) use self::socket_buffers::*;
 #[path = "runtime/resources.rs"]
 mod resources;
 use self::resources::*;
-#[path = "runtime/tcp_profile.rs"]
-mod tcp_profile;
-use self::tcp_profile::*;
+#[path = "runtime/udp_resources.rs"]
+mod udp_resources;
+use self::udp_resources::*;
+#[path = "runtime/resource_profile.rs"]
+mod resource_profile;
+use self::resource_profile::*;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 pub(super) use self::health_checks::*;
