@@ -4,6 +4,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+use futures_util::future::join_all;
 use http::StatusCode;
 use tokio::time::{self, Duration};
 
@@ -200,6 +201,58 @@ async fn h3_pool_multiplexes_ipv4_and_ipv6_target_streams() {
 
     first.shutdown().await;
     second.shutdown().await;
+    clear_generation(runtime);
+}
+
+#[tokio::test]
+async fn h3_burst_reuses_one_target_stream_without_response_crosstalk() {
+    let server = ConnectUdpH3TestServer::start(ConnectUdpH3TestServerConfig::echo()).await;
+    let (proxy, runtime) = test_proxy(&server, None);
+    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53);
+    let mut session = ConnectUdpH3Session::new(runtime);
+
+    for sequence in 0_u32..128 {
+        let payload = sequence.to_be_bytes();
+        let response = exchange(&mut session, &proxy, target, &payload)
+            .await
+            .unwrap();
+        assert_eq!(response.payload, payload);
+    }
+
+    assert_eq!(server.connection_count(), 1);
+    assert_eq!(server.stream_count(), 1);
+    assert_eq!(server.datagram_count(), 128);
+    session.shutdown().await;
+    clear_generation(runtime);
+}
+
+#[tokio::test]
+async fn h3_pool_bounds_and_multiplexes_concurrent_target_sessions() {
+    let server = ConnectUdpH3TestServer::start(ConnectUdpH3TestServerConfig::echo()).await;
+    let (proxy, runtime) = test_proxy(&server, None);
+    let proxy = Arc::new(proxy);
+    let sessions = (0_u16..32).map(|sequence| {
+        let proxy = Arc::clone(&proxy);
+        async move {
+            let target = SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                20_000_u16.saturating_add(sequence),
+            );
+            let payload = sequence.to_be_bytes();
+            let mut session = ConnectUdpH3Session::new(runtime);
+            let response = exchange(&mut session, &proxy, target, &payload)
+                .await
+                .unwrap();
+            session.shutdown().await;
+            (payload, response.payload)
+        }
+    });
+
+    for (expected, actual) in join_all(sessions).await {
+        assert_eq!(actual, expected);
+    }
+    assert!(server.connection_count() <= runtime.h3_pool_connections);
+    assert_eq!(server.stream_count(), 32);
     clear_generation(runtime);
 }
 
