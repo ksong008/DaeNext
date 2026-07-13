@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn direct_route_candidates_keep_resolved_order() {
-        let mut candidates = vec![
+        let mut candidates = [
             route_candidate(
                 0,
                 dns_upstream_target_v4(),
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn proxy_route_candidates_prefer_latency_then_matching_family() {
-        let mut candidates = vec![
+        let mut candidates = [
             route_candidate(
                 0,
                 dns_upstream_target_v4(),
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn proxy_route_candidates_use_matching_family_as_tie_breaker() {
-        let mut candidates = vec![
+        let mut candidates = [
             route_candidate(
                 0,
                 dns_upstream_target_v4(),

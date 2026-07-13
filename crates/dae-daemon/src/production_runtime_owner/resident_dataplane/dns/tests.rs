@@ -1316,7 +1316,7 @@ async fn resident_dns_ipversion_prefer_does_not_synthesize_preferred_lookup() {
     let received = Arc::new(AtomicUsize::new(0));
     let server_received = Arc::clone(&received);
     let query = query_with_qtype(DNS_QTYPE_AAAA);
-    let expected_queries = usize::from(DnsPacketView::parse(&query).unwrap().question_count());
+    let expected_queries = DnsPacketView::parse(&query).unwrap().question_count();
     let server = tokio::spawn(async move {
         let mut buf = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
         loop {
@@ -1773,33 +1773,30 @@ fn dns_live_pressure_config_input(config: &DnsLivePressureConfig) -> String {
         "#;
     let (node, group, routing) = match &config.proxy {
         Some(proxy) => (
-            format!(
-                r#"
-        node {{
+            r#"
+        node {
           __PROXY_NODE_TAG__: '__PROXY_LINK__'
-        }}
+        }
         "#
-            )
+            .to_owned()
             .replace("__PROXY_NODE_TAG__", &proxy.node_tag)
             .replace("__PROXY_LINK__", &proxy.link),
-            format!(
-                r#"
-        group {{
-          __PROXY_GROUP__ {{
+            r#"
+        group {
+          __PROXY_GROUP__ {
             filter: name(__PROXY_NODE_TAG__)
             policy: fixed(0)
-          }}
-        }}
+          }
+        }
         "#
-            )
+            .to_owned()
             .replace("__PROXY_GROUP__", &proxy.group_name)
             .replace("__PROXY_NODE_TAG__", &proxy.node_tag),
-            format!(
-                r#"
+            r#"
           domain(full: __UPSTREAM_HOST_MATCH__) -> __PROXY_GROUP__
           fallback: direct
         "#
-            )
+            .to_owned()
             .replace("__UPSTREAM_HOST_MATCH__", &proxy.upstream_host_match)
             .replace("__PROXY_GROUP__", &proxy.group_name),
         ),

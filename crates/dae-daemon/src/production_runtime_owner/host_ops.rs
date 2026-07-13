@@ -120,19 +120,18 @@ impl HostOpResult {
     fn from_output(
         name: Option<String>,
         spec: HostOpSpec,
-        output: io::Result<Output>,
-        started_at_unix_ms: u64,
-        finished_at_unix_ms: u64,
-        elapsed_ms: u64,
-        timeout_ms: u64,
-        timed_out: bool,
+        command: HostCommandOutput,
+        timing: HostOpTiming,
     ) -> Self {
-        let (status, exit_code, stdout, stderr) = match output {
-            Ok(output) if timed_out => (
+        let (status, exit_code, stdout, stderr) = match command.output {
+            Ok(output) if command.timed_out => (
                 HostOpStatus::Fail,
                 output.status.code(),
                 String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-                timeout_stderr(String::from_utf8_lossy(&output.stderr).trim(), timeout_ms),
+                timeout_stderr(
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                    timing.timeout_ms,
+                ),
             ),
             Ok(output) => (
                 if output.status.success() {
@@ -144,7 +143,9 @@ impl HostOpResult {
                 String::from_utf8_lossy(&output.stdout).trim().to_owned(),
                 String::from_utf8_lossy(&output.stderr).trim().to_owned(),
             ),
-            Err(err) if timed_out => (HostOpStatus::Fail, None, String::new(), err.to_string()),
+            Err(err) if command.timed_out => {
+                (HostOpStatus::Fail, None, String::new(), err.to_string())
+            }
             Err(err) => (HostOpStatus::Fail, None, String::new(), err.to_string()),
         };
         Self {
@@ -155,11 +156,11 @@ impl HostOpResult {
             exit_code,
             stdout,
             stderr,
-            started_at_unix_ms,
-            finished_at_unix_ms,
-            elapsed_ms,
-            timeout_ms,
-            timed_out,
+            started_at_unix_ms: timing.started_at_unix_ms,
+            finished_at_unix_ms: timing.finished_at_unix_ms,
+            elapsed_ms: timing.elapsed_ms,
+            timeout_ms: timing.timeout_ms,
+            timed_out: command.timed_out,
         }
     }
 
@@ -188,6 +189,13 @@ impl HostOpResult {
 struct HostCommandOutput {
     output: io::Result<Output>,
     timed_out: bool,
+}
+
+struct HostOpTiming {
+    started_at_unix_ms: u64,
+    finished_at_unix_ms: u64,
+    elapsed_ms: u64,
+    timeout_ms: u64,
 }
 
 pub(super) struct HostOps;
@@ -231,12 +239,13 @@ impl HostOps {
         HostOpResult::from_output(
             name,
             spec,
-            command_output.output,
-            started_at_unix_ms,
-            finished_at_unix_ms,
-            elapsed_ms,
-            duration_millis(timeout),
-            command_output.timed_out,
+            command_output,
+            HostOpTiming {
+                started_at_unix_ms,
+                finished_at_unix_ms,
+                elapsed_ms,
+                timeout_ms: duration_millis(timeout),
+            },
         )
     }
 }

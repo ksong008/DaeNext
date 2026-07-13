@@ -389,10 +389,10 @@ fn remember_pname_core_admission_failure(reason: &str) {
     if !reason.contains("pname core cgroup admission failed") {
         return;
     }
-    if let Ok(mut cached) = PNAME_CORE_ADMISSION_FAILURE.lock() {
-        if cached.is_none() {
-            *cached = Some(summarize_pname_core_failure(reason));
-        }
+    if let Ok(mut cached) = PNAME_CORE_ADMISSION_FAILURE.lock()
+        && cached.is_none()
+    {
+        *cached = Some(summarize_pname_core_failure(reason));
     }
 }
 

@@ -149,7 +149,7 @@ impl Shadowsocks2022DatagramSession {
             .as_mut()
             .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
         let decoded = codec
-            .decode_server_packet(&response, ss2022_udp_unix_timestamp_now())
+            .decode_server_packet(response, ss2022_udp_unix_timestamp_now())
             .map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
         Ok(
             UdpExchangeResult::new(decoded.payload, "udp-datagram-aead-2022")

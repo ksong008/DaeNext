@@ -65,17 +65,21 @@ fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
     let cleanup_file = artifact_dir.join("resident-production-runtime-cleanup.json");
     let lan_ifaces = configured_lan_ifaces(config);
     let wan_ifaces = configured_wan_ifaces(config)?;
-    start_with_options(
+    start_with_options(ResidentRuntimeStartContext {
         options,
-        artifact_dir,
-        start_file,
-        cleanup_file,
+        artifacts: ResidentRuntimeArtifactPaths {
+            artifact_dir,
+            start_file,
+            cleanup_file,
+        },
         config,
-        lan_ifaces,
-        wan_ifaces,
+        interfaces: ResidentRuntimeStartInterfaces {
+            lan: lan_ifaces,
+            wan: wan_ifaces,
+        },
         latency_seed,
         dns_reload_snapshot,
-    )
+    })
 }
 
 pub(super) fn resident_runtime_options(
@@ -91,10 +95,10 @@ pub(super) fn resident_runtime_options(
         }
         #[cfg(not(feature = "native-ebpf"))]
         {
-            resolve_source_object(&artifact_dir)?
+            resolve_source_object(artifact_dir)?
         }
     } else {
-        resolve_source_object(&artifact_dir)?
+        resolve_source_object(artifact_dir)?
     };
     let native_ebpf_embedded_object = native_ebpf_requested;
     let native_ebpf_backend = resolve_native_backend()?;
