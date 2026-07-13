@@ -1,6 +1,4 @@
 use super::*;
-
-pub(super) const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
 const RESIDENT_RUNTIME_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 #[derive(Debug, Default)]

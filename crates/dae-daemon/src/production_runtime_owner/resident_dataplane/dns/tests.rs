@@ -2478,7 +2478,7 @@ fn resident_dns_forwarder_cache_reuses_proxy_udp_by_selection() {
 
     assert!(Arc::ptr_eq(&first, &second));
     assert!(!Arc::ptr_eq(&first, &different_target));
-    assert!(first.shard_count() > 0);
+    assert!(first.actor_count() > 0);
 }
 
 #[test]

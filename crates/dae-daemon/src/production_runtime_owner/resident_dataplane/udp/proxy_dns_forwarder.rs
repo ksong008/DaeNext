@@ -1,51 +1,99 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::{
+    ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
+    dns::{ResidentDnsUdpActorExecutor, UdpRequestIdAllocator},
+};
+use futures_util::{StreamExt, stream::FuturesUnordered};
+use serde_json::{Value, json};
 
-const RESIDENT_PROXY_DNS_UDP_FORWARDER_MAX_SHARDS: usize = 4;
+mod actor;
+
+use self::actor::{ResidentProxyDnsUdpActorHandle, start_proxy_dns_udp_actor};
 
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxyDnsUdpForwarder {
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
-    next_shard: std::sync::atomic::AtomicUsize,
-    shards: Vec<ResidentProxyDnsUdpForwarderShard>,
+    next_actor: std::sync::atomic::AtomicUsize,
+    actors: Vec<ResidentProxyDnsUdpActorSlot>,
+    runtime_config: ResidentDnsUdpRuntimeConfig,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    actor_executor: Arc<ResidentDnsUdpActorExecutor>,
+    request_scoped_actor_pool: bool,
+    closing: AtomicBool,
 }
 
-struct ResidentProxyDnsUdpForwarderShard {
-    executor: tokio::sync::Mutex<Option<UdpSessionExecutor>>,
+struct ResidentProxyDnsUdpActorSlot {
+    handle: tokio::sync::Mutex<Option<ResidentProxyDnsUdpActorHandle>>,
+    opened: AtomicBool,
+    active: AtomicUsize,
+}
+
+struct ResidentProxyDnsUdpActorLoadGuard<'a> {
+    active: &'a AtomicUsize,
+}
+
+impl Drop for ResidentProxyDnsUdpActorLoadGuard<'_> {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl ResidentProxyDnsUdpForwarder {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         proxy: Arc<ResidentProxyPlan>,
         original_dst: SocketAddr,
+        runtime_config: ResidentDnsUdpRuntimeConfig,
+        metrics: Arc<ResidentDataplaneMetrics>,
+        actor_executor: Arc<ResidentDnsUdpActorExecutor>,
     ) -> Self {
-        let shard_count = resident_proxy_dns_udp_forwarder_shard_count();
+        let request_scoped_actor_pool = proxy.execution_plan().udp.uses_request_scoped_exchange();
+        let actor_count = if request_scoped_actor_pool {
+            runtime_config.proxy_actor_limit.max(1)
+        } else {
+            1
+        };
         Self {
             proxy,
             original_dst,
-            next_shard: std::sync::atomic::AtomicUsize::new(0),
-            shards: (0..shard_count)
-                .map(|_| ResidentProxyDnsUdpForwarderShard {
-                    executor: tokio::sync::Mutex::new(None),
+            next_actor: std::sync::atomic::AtomicUsize::new(0),
+            actors: (0..actor_count)
+                .map(|_| ResidentProxyDnsUdpActorSlot {
+                    handle: tokio::sync::Mutex::new(None),
+                    opened: AtomicBool::new(false),
+                    active: AtomicUsize::new(0),
                 })
                 .collect(),
+            runtime_config,
+            metrics,
+            actor_executor,
+            request_scoped_actor_pool,
+            closing: AtomicBool::new(false),
         }
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) async fn exchange(
         &self,
         payload: &[u8],
-        attempts: usize,
     ) -> Result<Vec<u8>, String> {
-        let attempts = attempts.max(1);
-        let mut failures = Vec::new();
-        for _ in 0..attempts {
-            let shard = self.select_shard();
-            match shard
-                .exchange(&self.proxy, self.original_dst, payload)
-                .await
-            {
+        if self.closing.load(Ordering::Acquire) {
+            return Err("proxied DNS UDP forwarder is closing".to_owned());
+        }
+        let (actor_index, _load_guard) = self.acquire_actor_slot();
+        let attempts = self.runtime_config.attempts;
+        let mut failures = Vec::with_capacity(attempts);
+        for attempt in 0..attempts {
+            if attempt > 0 {
+                self.metrics.dns_udp_retry();
+            }
+            let handle = self.actor_handle(actor_index).await?;
+            match handle.exchange_once(payload).await {
                 Ok(response) => return Ok(response),
-                Err(err) => failures.push(err),
+                Err(err) => {
+                    failures.push(err);
+                    if handle.is_closed() {
+                        self.clear_closed_actor(actor_index, &handle).await;
+                    }
+                }
             }
         }
         Err(format!(
@@ -54,117 +102,156 @@ impl ResidentProxyDnsUdpForwarder {
         ))
     }
 
-    #[cfg(test)]
-    pub(in crate::production_runtime_owner::resident_dataplane) fn shard_count(&self) -> usize {
-        self.shards.len()
+    fn acquire_actor_slot(&self) -> (usize, ResidentProxyDnsUdpActorLoadGuard<'_>) {
+        if self.actors.len() <= 1 {
+            let active = &self.actors[0].active;
+            active.fetch_add(1, Ordering::Relaxed);
+            return (0, ResidentProxyDnsUdpActorLoadGuard { active });
+        }
+        let start = self.next_actor.fetch_add(1, Ordering::Relaxed) % self.actors.len();
+        let mut unopened_idle = None;
+        let mut least_loaded = (usize::MAX, start);
+        let mut selected = None;
+        for offset in 0..self.actors.len() {
+            let index = (start + offset) % self.actors.len();
+            let actor = &self.actors[index];
+            let active = actor.active.load(Ordering::Relaxed);
+            if active == 0 && actor.opened.load(Ordering::Acquire) {
+                selected = Some(index);
+                break;
+            }
+            if active == 0 && unopened_idle.is_none() {
+                unopened_idle = Some(index);
+            }
+            if active < least_loaded.0 {
+                least_loaded = (active, index);
+            }
+        }
+        let index = selected.or(unopened_idle).unwrap_or(least_loaded.1);
+        let active = &self.actors[index].active;
+        active.fetch_add(1, Ordering::Relaxed);
+        (index, ResidentProxyDnsUdpActorLoadGuard { active })
     }
 
-    fn select_shard(&self) -> &ResidentProxyDnsUdpForwarderShard {
-        let shard_count = self.shards.len().max(1);
-        let index = self
-            .next_shard
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            % shard_count;
-        &self.shards[index]
-    }
-}
-
-impl ResidentProxyDnsUdpForwarderShard {
-    async fn exchange(
+    async fn actor_handle(
         &self,
-        proxy: &ResidentProxyPlan,
-        original_dst: SocketAddr,
-        payload: &[u8],
-    ) -> Result<Vec<u8>, String> {
-        let mut executor = self.executor.lock().await;
-        if executor.is_none() {
-            *executor = Some(UdpSessionExecutor::new_proxy_packet(proxy));
+        actor_index: usize,
+    ) -> Result<ResidentProxyDnsUdpActorHandle, String> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err("proxied DNS UDP forwarder is closing".to_owned());
         }
-        let Some(executor_ref) = executor.as_mut() else {
-            return Err("proxied DNS UDP executor was not initialized".to_owned());
+        let actor = self
+            .actors
+            .get(actor_index)
+            .ok_or_else(|| format!("proxied DNS UDP actor {actor_index} is missing"))?;
+        let mut handle = actor.handle.lock().await;
+        if self.closing.load(Ordering::Acquire) {
+            return Err("proxied DNS UDP forwarder is closing".to_owned());
+        }
+        let replacing_closed = handle
+            .as_ref()
+            .is_some_and(ResidentProxyDnsUdpActorHandle::is_closed);
+        if handle
+            .as_ref()
+            .is_none_or(ResidentProxyDnsUdpActorHandle::is_closed)
+        {
+            let proxy = Arc::clone(&self.proxy);
+            let original_dst = self.original_dst;
+            let runtime_config = self
+                .runtime_config
+                .actor_partition(actor_index, self.actors.len());
+            let metrics = Arc::clone(&self.metrics);
+            *handle = Some(
+                self.actor_executor
+                    .spawn_actor(move || async move {
+                        Ok(start_proxy_dns_udp_actor(
+                            proxy,
+                            original_dst,
+                            runtime_config,
+                            metrics,
+                        ))
+                    })
+                    .await?,
+            );
+            actor.opened.store(true, Ordering::Release);
+            if replacing_closed {
+                self.metrics.dns_udp_forwarder_recreated();
+            }
+        }
+        handle
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "proxied DNS UDP actor was not initialized".to_owned())
+    }
+
+    async fn clear_closed_actor(
+        &self,
+        actor_index: usize,
+        failed: &ResidentProxyDnsUdpActorHandle,
+    ) {
+        if !failed.is_closed() {
+            return;
+        }
+        let Some(actor) = self.actors.get(actor_index) else {
+            return;
         };
-        let result = execute_forced_dns_proxy_payload(executor_ref, proxy, original_dst, payload)
-            .await
-            .map(|(_, response)| response.payload);
-        if result.is_err() {
-            executor_ref.shutdown().await;
-            *executor = None;
+        let mut handle = actor.handle.lock().await;
+        if handle
+            .as_ref()
+            .is_some_and(ResidentProxyDnsUdpActorHandle::is_closed)
+        {
+            *handle = None;
+            actor.opened.store(false, Ordering::Release);
         }
-        result
     }
-}
 
-fn resident_proxy_dns_udp_forwarder_shard_count() -> usize {
-    let parallelism = std::thread::available_parallelism()
-        .map(|value| value.get())
-        .unwrap_or(1);
-    resident_proxy_dns_udp_forwarder_shard_count_for_parallelism(parallelism)
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown(
+        &self,
+        deadline: time::Instant,
+    ) -> Value {
+        self.closing.store(true, Ordering::Release);
+        let mut handles = Vec::with_capacity(self.actors.len());
+        for actor in &self.actors {
+            if let Some(handle) = actor.handle.lock().await.take() {
+                handle.close();
+                handles.push(handle);
+            }
+            actor.opened.store(false, Ordering::Release);
+        }
+        let opened = handles.len();
+        let mut waits = handles
+            .into_iter()
+            .map(|handle| async move { handle.wait_closed(deadline).await })
+            .collect::<FuturesUnordered<_>>();
+        let mut closed = 0_usize;
+        let mut timed_out = 0_usize;
+        while let Some(result) = waits.next().await {
+            if result {
+                closed = closed.saturating_add(1);
+            } else {
+                timed_out = timed_out.saturating_add(1);
+            }
+        }
+        json!({
+            "status": if timed_out == 0 { "pass" } else { "fail" },
+            "generation": self.runtime_config.generation,
+            "actors": self.actors.len(),
+            "actorMode": if self.request_scoped_actor_pool {
+                "request-scoped-pool"
+            } else {
+                "multiplexed-session"
+            },
+            "actorsOpened": opened,
+            "actorsClosed": closed,
+            "timedOut": timed_out,
+        })
+    }
+
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane) fn actor_count(&self) -> usize {
+        self.actors.len()
+    }
 }
 
 #[cfg(test)]
-pub(in crate::production_runtime_owner::resident_dataplane) fn resident_proxy_dns_udp_forwarder_shard_count_for_parallelism(
-    parallelism: usize,
-) -> usize {
-    proxy_dns_udp_forwarder_shard_count_for_parallelism(parallelism)
-}
-
-#[cfg(not(test))]
-fn resident_proxy_dns_udp_forwarder_shard_count_for_parallelism(parallelism: usize) -> usize {
-    proxy_dns_udp_forwarder_shard_count_for_parallelism(parallelism)
-}
-
-fn proxy_dns_udp_forwarder_shard_count_for_parallelism(parallelism: usize) -> usize {
-    if parallelism <= 1 {
-        1
-    } else {
-        parallelism.min(RESIDENT_PROXY_DNS_UDP_FORWARDER_MAX_SHARDS)
-    }
-}
-
-async fn execute_forced_dns_proxy_payload(
-    executor: &mut UdpSessionExecutor,
-    proxy: &ResidentProxyPlan,
-    original_dst: SocketAddr,
-    payload: &[u8],
-) -> Result<(&'static str, UdpExchangeResult), String> {
-    let (event, response) = executor
-        .execute_proxy_packet(proxy, original_dst, payload)
-        .await?;
-    if response.reply_forwarded {
-        return Ok((event, response.into_independent_datagram()));
-    }
-    executor
-        .wait_response_with_timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            "receive proxied DNS UDP response",
-        )
-        .await
-        .map(|(event, response)| (event, response.into_independent_datagram()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn proxy_dns_udp_forwarder_shard_count_follows_cpu_parallelism() {
-        assert_eq!(
-            resident_proxy_dns_udp_forwarder_shard_count_for_parallelism(0),
-            1
-        );
-        assert_eq!(
-            resident_proxy_dns_udp_forwarder_shard_count_for_parallelism(1),
-            1
-        );
-        assert_eq!(
-            resident_proxy_dns_udp_forwarder_shard_count_for_parallelism(2),
-            2
-        );
-        assert_eq!(
-            resident_proxy_dns_udp_forwarder_shard_count_for_parallelism(
-                RESIDENT_PROXY_DNS_UDP_FORWARDER_MAX_SHARDS + 1
-            ),
-            RESIDENT_PROXY_DNS_UDP_FORWARDER_MAX_SHARDS
-        );
-    }
-}
+mod tests;

@@ -17,6 +17,22 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) dns_fast_path_queue_depth: usize,
     pub(crate) dns_udp_forwarder_queue_depth: usize,
     pub(crate) dns_udp_forwarder_pending_limit: usize,
+    pub(crate) dns_udp_forwarder_attempts: usize,
+    pub(crate) dns_proxy_udp_actor_limit: usize,
+    pub(crate) shutdown_timeout: Duration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentDnsUdpRuntimeConfig {
+    pub(crate) generation: u64,
+    pub(crate) direct_shards: usize,
+    pub(crate) proxy_actor_limit: usize,
+    pub(crate) actor_worker_threads: usize,
+    pub(crate) worker_stack_bytes: usize,
+    pub(crate) queue_depth: usize,
+    pub(crate) pending_limit: usize,
+    pub(crate) attempts: usize,
+    pub(crate) attempt_timeout: Duration,
     pub(crate) shutdown_timeout: Duration,
 }
 
@@ -64,7 +80,9 @@ impl ResidentUdpRuntimeConfig {
                 .value()
                 .max(1)
                 .min(u16::MAX as usize + 1),
-            shutdown_timeout: RESIDENT_UDP_RESPONSE_TIMEOUT,
+            dns_udp_forwarder_attempts: resources.dns_udp_forwarder_attempts.value().max(1),
+            dns_proxy_udp_actor_limit: resources.dns_proxy_udp_actors.value().max(1),
+            shutdown_timeout: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
         }
     }
 
@@ -86,7 +104,32 @@ impl ResidentUdpRuntimeConfig {
             .max(1)
     }
 
+    pub(crate) fn dns_udp_runtime_config(&self) -> ResidentDnsUdpRuntimeConfig {
+        let direct_shards = self
+            .runtime_shards
+            .min(self.dns_udp_forwarder_queue_depth)
+            .min(self.dns_udp_forwarder_pending_limit)
+            .max(1);
+        ResidentDnsUdpRuntimeConfig {
+            generation: self.generation,
+            direct_shards,
+            proxy_actor_limit: self
+                .dns_proxy_udp_actor_limit
+                .min(self.dns_udp_forwarder_queue_depth)
+                .min(self.dns_udp_forwarder_pending_limit)
+                .max(1),
+            actor_worker_threads: self.runtime_worker_threads.max(1),
+            worker_stack_bytes: self.worker_stack_bytes,
+            queue_depth: self.dns_udp_forwarder_queue_depth,
+            pending_limit: self.dns_udp_forwarder_pending_limit,
+            attempts: self.dns_udp_forwarder_attempts,
+            attempt_timeout: resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts),
+            shutdown_timeout: self.shutdown_timeout,
+        }
+    }
+
     pub(crate) fn resource_inventory(&self) -> Value {
+        let dns_udp = self.dns_udp_runtime_config();
         json!({
             "schemaVersion": 1,
             "generation": self.generation,
@@ -119,8 +162,14 @@ impl ResidentUdpRuntimeConfig {
             },
             "dnsUdpForwarder": {
                 "owner": "resident-dns-udp-forwarder-actors",
+                "directActors": dns_udp.direct_shards,
+                "proxyActorLimit": dns_udp.proxy_actor_limit,
+                "actorWorkerThreads": self.runtime_worker_threads.max(1),
+                "workerStackBytes": self.worker_stack_bytes,
                 "queueDepth": self.dns_udp_forwarder_queue_depth,
                 "pendingLimit": self.dns_udp_forwarder_pending_limit,
+                "attempts": self.dns_udp_forwarder_attempts,
+                "attemptTimeoutMs": resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts).as_millis(),
             },
             "deadlines": {
                 "sessionIdleMs": RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_millis(),
@@ -130,6 +179,59 @@ impl ResidentUdpRuntimeConfig {
             },
         })
     }
+}
+
+impl ResidentDnsUdpRuntimeConfig {
+    pub(crate) fn standalone() -> Self {
+        let available_parallelism = std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(1);
+        let profile = ResidentRuntimeProfile::Balanced;
+        let requested_shards = profile.udp_runtime_shards_default(available_parallelism);
+        let (direct_shards, actor_worker_threads) =
+            resident_udp_runtime_topology(requested_shards, usize::MAX, available_parallelism);
+        Self {
+            generation: 0,
+            direct_shards,
+            proxy_actor_limit: profile.dns_proxy_udp_actors_default(),
+            actor_worker_threads: actor_worker_threads.max(1),
+            worker_stack_bytes: RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+            queue_depth: profile.dns_udp_forwarder_queue_depth_default(),
+            pending_limit: profile.dns_udp_forwarder_pending_limit_default(),
+            attempts: profile.dns_udp_forwarder_attempts_default(),
+            attempt_timeout: resident_dns_udp_attempt_timeout(
+                profile.dns_udp_forwarder_attempts_default(),
+            ),
+            shutdown_timeout: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+        }
+    }
+
+    pub(crate) fn actor_partition(&self, actor_index: usize, actor_count: usize) -> Self {
+        let actor_count = actor_count.max(1);
+        let actor_index = actor_index.min(actor_count - 1);
+        let mut partition = self.clone();
+        partition.queue_depth = partitioned_resource(self.queue_depth, actor_index, actor_count);
+        partition.pending_limit =
+            partitioned_resource(self.pending_limit, actor_index, actor_count);
+        partition
+    }
+}
+
+fn partitioned_resource(total: usize, index: usize, partitions: usize) -> usize {
+    let partitions = partitions.max(1).min(total.max(1));
+    let index = index.min(partitions - 1);
+    let base = total.max(1) / partitions;
+    let remainder = total.max(1) % partitions;
+    base.saturating_add(usize::from(index < remainder)).max(1)
+}
+
+fn resident_dns_udp_attempt_timeout(attempts: usize) -> Duration {
+    let divisor = (attempts.max(1) as u128).saturating_add(1);
+    let millis = RESIDENT_UDP_RESPONSE_TIMEOUT
+        .as_millis()
+        .saturating_div(divisor)
+        .max(1);
+    Duration::from_millis(millis.min(u128::from(u64::MAX)) as u64)
 }
 
 fn resident_udp_runtime_topology(
@@ -172,6 +274,8 @@ mod tests {
             dns_fast_path_queue_depth: 1_024,
             dns_udp_forwarder_queue_depth: 1_024,
             dns_udp_forwarder_pending_limit: 1_024,
+            dns_udp_forwarder_attempts: 3,
+            dns_proxy_udp_actor_limit: 8,
             shutdown_timeout: RESIDENT_UDP_RESPONSE_TIMEOUT,
         };
         assert!(runtime.runtime_shards >= 1);
@@ -191,5 +295,67 @@ mod tests {
     fn udp_runtime_topology_reserves_capacity_for_ingress_owner() {
         assert_eq!(resident_udp_runtime_topology(8, 512, 4), (4, 3));
         assert_eq!(resident_udp_runtime_topology(2, 1, 8), (1, 0));
+    }
+
+    #[test]
+    fn dns_udp_runtime_config_comes_from_the_generation_resource_contract() {
+        let runtime = ResidentUdpRuntimeConfig {
+            generation: 12,
+            profile: "test",
+            session_limit: 64,
+            session_queue_depth: 16,
+            runtime_shards: 3,
+            runtime_worker_threads: 2,
+            worker_stack_bytes: 768 * 1024,
+            dispatch_queue_depth: 96,
+            ingress_drain_budget: 16,
+            reply_queue_depth: 96,
+            reply_socket_cache_capacity: 64,
+            dns_fast_path_concurrency: 32,
+            dns_fast_path_queue_depth: 64,
+            dns_udp_forwarder_queue_depth: 80,
+            dns_udp_forwarder_pending_limit: 72,
+            dns_udp_forwarder_attempts: 4,
+            dns_proxy_udp_actor_limit: 6,
+            shutdown_timeout: Duration::from_millis(900),
+        };
+        let dns = runtime.dns_udp_runtime_config();
+        assert_eq!(dns.generation, 12);
+        assert_eq!(dns.direct_shards, 3);
+        assert_eq!(dns.proxy_actor_limit, 6);
+        assert_eq!(dns.actor_worker_threads, 2);
+        assert_eq!(dns.queue_depth, 80);
+        assert_eq!(dns.pending_limit, 72);
+        assert_eq!(dns.attempts, 4);
+        assert_eq!(dns.attempt_timeout, Duration::from_millis(1_600));
+    }
+
+    #[test]
+    fn generation_resource_drain_finishes_before_the_owner_join_deadline() {
+        assert!(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE < RESIDENT_RUNTIME_TASK_JOIN_GRACE);
+    }
+
+    #[test]
+    fn dns_udp_actor_partitions_preserve_the_generation_limits() {
+        let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+        runtime.queue_depth = 10;
+        runtime.pending_limit = 7;
+        let partitions = (0..3)
+            .map(|index| runtime.actor_partition(index, 3))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            partitions
+                .iter()
+                .map(|item| item.queue_depth)
+                .sum::<usize>(),
+            10
+        );
+        assert_eq!(
+            partitions
+                .iter()
+                .map(|item| item.pending_limit)
+                .sum::<usize>(),
+            7
+        );
     }
 }

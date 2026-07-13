@@ -51,7 +51,6 @@ pub(super) struct ResidentDnsFastPathDispatcher {
     handle: ResidentDnsFastPathHandle,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<usize>,
-    shutdown_timeout: Duration,
 }
 
 impl ResidentDnsFastPathDispatcher {
@@ -61,7 +60,6 @@ impl ResidentDnsFastPathDispatcher {
         metrics: Arc<ResidentDataplaneMetrics>,
         concurrency: usize,
         queue_depth: usize,
-        shutdown_timeout: Duration,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(queue_depth.max(1));
         let (stop, stop_receiver) = oneshot::channel();
@@ -88,7 +86,6 @@ impl ResidentDnsFastPathDispatcher {
             },
             stop: Some(stop),
             task,
-            shutdown_timeout,
         }
     }
 
@@ -96,12 +93,12 @@ impl ResidentDnsFastPathDispatcher {
         self.handle.clone()
     }
 
-    pub(super) async fn shutdown(mut self) -> Result<usize, String> {
+    pub(super) async fn shutdown(mut self, deadline: time::Instant) -> Result<usize, String> {
         self.handle.closing.store(true, Ordering::Release);
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        match time::timeout(self.shutdown_timeout, &mut self.task).await {
+        match time::timeout_at(deadline, &mut self.task).await {
             Ok(Ok(completed)) => Ok(completed),
             Ok(Err(err)) => Err(format!(
                 "resident DNS fast-path dispatcher join failed: {err}"
@@ -109,10 +106,10 @@ impl ResidentDnsFastPathDispatcher {
             Err(_) => {
                 self.task.abort();
                 let _ = (&mut self.task).await;
-                Err(format!(
-                    "resident DNS fast-path dispatcher shutdown timed out after {}ms",
-                    self.shutdown_timeout.as_millis()
-                ))
+                Err(
+                    "resident DNS fast-path dispatcher exceeded the generation shutdown deadline"
+                        .to_owned(),
+                )
             }
         }
     }

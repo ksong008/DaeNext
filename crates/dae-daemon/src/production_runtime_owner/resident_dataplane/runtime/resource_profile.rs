@@ -35,6 +35,12 @@ const HIGH_PERFORMANCE_DNS_UDP_FORWARDER_QUEUE_DEPTH: usize = 4_096;
 const LOW_MEMORY_DNS_UDP_FORWARDER_PENDING_LIMIT: usize = 256;
 const BALANCED_DNS_UDP_FORWARDER_PENDING_LIMIT: usize = 1_024;
 const HIGH_PERFORMANCE_DNS_UDP_FORWARDER_PENDING_LIMIT: usize = 4_096;
+const LOW_MEMORY_DNS_UDP_FORWARDER_ATTEMPTS: usize = 2;
+const BALANCED_DNS_UDP_FORWARDER_ATTEMPTS: usize = 3;
+const HIGH_PERFORMANCE_DNS_UDP_FORWARDER_ATTEMPTS: usize = 3;
+const LOW_MEMORY_DNS_PROXY_UDP_ACTORS: usize = 2;
+const BALANCED_DNS_PROXY_UDP_ACTORS: usize = 8;
+const HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentRuntimeProfile {
@@ -151,6 +157,22 @@ impl ResidentRuntimeProfile {
             Self::HighPerformance => HIGH_PERFORMANCE_DNS_UDP_FORWARDER_PENDING_LIMIT,
         }
     }
+
+    pub(crate) fn dns_udp_forwarder_attempts_default(self) -> usize {
+        match self {
+            Self::LowMemory => LOW_MEMORY_DNS_UDP_FORWARDER_ATTEMPTS,
+            Self::Balanced => BALANCED_DNS_UDP_FORWARDER_ATTEMPTS,
+            Self::HighPerformance => HIGH_PERFORMANCE_DNS_UDP_FORWARDER_ATTEMPTS,
+        }
+    }
+
+    pub(crate) fn dns_proxy_udp_actors_default(self) -> usize {
+        match self {
+            Self::LowMemory => LOW_MEMORY_DNS_PROXY_UDP_ACTORS,
+            Self::Balanced => BALANCED_DNS_PROXY_UDP_ACTORS,
+            Self::HighPerformance => HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS,
+        }
+    }
 }
 
 impl ResidentRuntimeProfileSelection {
@@ -193,6 +215,8 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsFastPathQueueDepthDefault": LOW_MEMORY_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": LOW_MEMORY_DNS_UDP_FORWARDER_QUEUE_DEPTH,
                 "dnsUdpForwarderPendingDefault": LOW_MEMORY_DNS_UDP_FORWARDER_PENDING_LIMIT,
+                "dnsUdpForwarderAttemptsDefault": LOW_MEMORY_DNS_UDP_FORWARDER_ATTEMPTS,
+                "dnsProxyUdpActorsDefault": LOW_MEMORY_DNS_PROXY_UDP_ACTORS,
             },
             {
                 "name": RESIDENT_RUNTIME_PROFILE_BALANCED,
@@ -206,6 +230,8 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsFastPathQueueDepthDefault": BALANCED_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": BALANCED_DNS_UDP_FORWARDER_QUEUE_DEPTH,
                 "dnsUdpForwarderPendingDefault": BALANCED_DNS_UDP_FORWARDER_PENDING_LIMIT,
+                "dnsUdpForwarderAttemptsDefault": BALANCED_DNS_UDP_FORWARDER_ATTEMPTS,
+                "dnsProxyUdpActorsDefault": BALANCED_DNS_PROXY_UDP_ACTORS,
             },
             {
                 "name": RESIDENT_RUNTIME_PROFILE_HIGH_PERFORMANCE,
@@ -219,6 +245,8 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsFastPathQueueDepthDefault": HIGH_PERFORMANCE_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_QUEUE_DEPTH,
                 "dnsUdpForwarderPendingDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_PENDING_LIMIT,
+                "dnsUdpForwarderAttemptsDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_ATTEMPTS,
+                "dnsProxyUdpActorsDefault": HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS,
             },
         ],
     })

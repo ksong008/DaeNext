@@ -59,7 +59,6 @@ pub(super) struct ResidentUdpSessionShardPool {
     handle: ResidentUdpSessionShardHandle,
     stops: Vec<oneshot::Sender<time::Instant>>,
     tasks: Vec<JoinHandle<Value>>,
-    shutdown_timeout: Duration,
 }
 
 impl ResidentUdpSessionShardPool {
@@ -113,7 +112,6 @@ impl ResidentUdpSessionShardPool {
             handle,
             stops,
             tasks,
-            shutdown_timeout: runtime_config.shutdown_timeout,
         }
     }
 
@@ -121,9 +119,8 @@ impl ResidentUdpSessionShardPool {
         self.handle.clone()
     }
 
-    pub(super) async fn shutdown(mut self) -> Value {
+    pub(super) async fn shutdown(mut self, deadline: time::Instant) -> Value {
         self.handle.closing.store(true, Ordering::Release);
-        let deadline = time::Instant::now() + self.shutdown_timeout;
         for stop in self.stops.drain(..) {
             let _ = stop.send(deadline);
         }

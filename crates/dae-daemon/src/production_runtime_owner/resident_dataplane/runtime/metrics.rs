@@ -35,6 +35,20 @@ pub(crate) struct ResidentDataplaneMetrics {
     dns_fast_path_completed: AtomicU64,
     dns_fast_path_failed: AtomicU64,
     dns_fast_path_cancelled: AtomicU64,
+    dns_udp_actors_opened: AtomicU64,
+    dns_udp_actors_closed: AtomicU64,
+    dns_udp_actor_fatal_exits: AtomicU64,
+    dns_udp_forwarder_recreated: AtomicU64,
+    dns_udp_queue_wait_timeouts: AtomicU64,
+    dns_udp_pending_current: AtomicU64,
+    dns_udp_pending_maximum: AtomicU64,
+    dns_udp_pending_rejected: AtomicU64,
+    dns_udp_id_exhausted: AtomicU64,
+    dns_udp_retries: AtomicU64,
+    dns_udp_shutdown_requests_failed: AtomicU64,
+    proxy_dns_udp_executors_opened: AtomicU64,
+    proxy_dns_udp_executors_reused: AtomicU64,
+    proxy_dns_udp_executors_reset: AtomicU64,
     udp_reply_queued: AtomicU64,
     udp_reply_queue_full: AtomicU64,
     udp_reply_sent: AtomicU64,
@@ -188,6 +202,79 @@ impl ResidentDataplaneMetrics {
         self.udp_reply_queued.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(super) fn dns_udp_actor_opened(&self) {
+        self.dns_udp_actors_opened.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_actor_closed(&self, fatal: bool) {
+        self.dns_udp_actors_closed.fetch_add(1, Ordering::Relaxed);
+        if fatal {
+            self.dns_udp_actor_fatal_exits
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn dns_udp_forwarder_recreated(&self) {
+        self.dns_udp_forwarder_recreated
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_queue_wait_timeout(&self) {
+        self.dns_udp_queue_wait_timeouts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_pending_added(&self) {
+        let current = self
+            .dns_udp_pending_current
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.dns_udp_pending_maximum
+            .fetch_max(current, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_pending_removed(&self, count: usize) {
+        let count = count as u64;
+        let _ = self.dns_udp_pending_current.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_sub(count)),
+        );
+    }
+
+    pub(super) fn dns_udp_pending_rejected(&self) {
+        self.dns_udp_pending_rejected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_id_exhausted(&self) {
+        self.dns_udp_id_exhausted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_retry(&self) {
+        self.dns_udp_retries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_shutdown_failed_requests(&self, count: usize) {
+        self.dns_udp_shutdown_requests_failed
+            .fetch_add(count as u64, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_udp_executor_opened(&self) {
+        self.proxy_dns_udp_executors_opened
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_udp_executor_reused(&self) {
+        self.proxy_dns_udp_executors_reused
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_udp_executor_reset(&self) {
+        self.proxy_dns_udp_executors_reset
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(super) fn dns_fast_path_queued(&self) {
         self.dns_fast_path_queued.fetch_add(1, Ordering::Relaxed);
     }
@@ -291,6 +378,20 @@ impl ResidentDataplaneMetrics {
             "dnsFastPathCompleted": self.dns_fast_path_completed.load(Ordering::Relaxed),
             "dnsFastPathFailed": self.dns_fast_path_failed.load(Ordering::Relaxed),
             "dnsFastPathCancelled": self.dns_fast_path_cancelled.load(Ordering::Relaxed),
+            "dnsUdpActorsOpened": self.dns_udp_actors_opened.load(Ordering::Relaxed),
+            "dnsUdpActorsClosed": self.dns_udp_actors_closed.load(Ordering::Relaxed),
+            "dnsUdpActorFatalExits": self.dns_udp_actor_fatal_exits.load(Ordering::Relaxed),
+            "dnsUdpForwarderRecreated": self.dns_udp_forwarder_recreated.load(Ordering::Relaxed),
+            "dnsUdpQueueWaitTimeouts": self.dns_udp_queue_wait_timeouts.load(Ordering::Relaxed),
+            "dnsUdpPendingCurrent": self.dns_udp_pending_current.load(Ordering::Relaxed),
+            "dnsUdpPendingMaximum": self.dns_udp_pending_maximum.load(Ordering::Relaxed),
+            "dnsUdpPendingRejected": self.dns_udp_pending_rejected.load(Ordering::Relaxed),
+            "dnsUdpIdExhausted": self.dns_udp_id_exhausted.load(Ordering::Relaxed),
+            "dnsUdpRetries": self.dns_udp_retries.load(Ordering::Relaxed),
+            "dnsUdpShutdownRequestsFailed": self.dns_udp_shutdown_requests_failed.load(Ordering::Relaxed),
+            "proxyDnsUdpExecutorsOpened": self.proxy_dns_udp_executors_opened.load(Ordering::Relaxed),
+            "proxyDnsUdpExecutorsReused": self.proxy_dns_udp_executors_reused.load(Ordering::Relaxed),
+            "proxyDnsUdpExecutorsReset": self.proxy_dns_udp_executors_reset.load(Ordering::Relaxed),
             "udpReplyQueued": self.udp_reply_queued.load(Ordering::Relaxed),
             "udpReplyQueueFull": self.udp_reply_queue_full.load(Ordering::Relaxed),
             "udpReplySent": self.udp_reply_sent.load(Ordering::Relaxed),

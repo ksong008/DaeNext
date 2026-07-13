@@ -15,6 +15,8 @@ pub(crate) struct ResidentRuntimeResourceConfig {
     pub(crate) dns_fast_path_queue_depth: EffectiveResidentUsize,
     pub(crate) dns_udp_forwarder_queue_depth: EffectiveResidentUsize,
     pub(crate) dns_udp_forwarder_pending_limit: EffectiveResidentUsize,
+    pub(crate) dns_udp_forwarder_attempts: EffectiveResidentUsize,
+    pub(crate) dns_proxy_udp_actors: EffectiveResidentUsize,
     pub(crate) dns_upstream_refresh_seconds: EffectiveResidentUsize,
     pub(crate) event_queue_depth: EffectiveResidentUsize,
     pub(crate) manual_probe_concurrency: EffectiveResidentUsize,
@@ -51,6 +53,9 @@ impl ResidentRuntimeResourceConfig {
         let dns_udp_forwarder_pending_limit_default = runtime_profile
             .profile
             .dns_udp_forwarder_pending_limit_default();
+        let dns_udp_forwarder_attempts_default =
+            runtime_profile.profile.dns_udp_forwarder_attempts_default();
+        let dns_proxy_udp_actors_default = runtime_profile.profile.dns_proxy_udp_actors_default();
         Self {
             runtime_profile,
             tcp_flow_stack_bytes: effective_resident_usize(
@@ -161,6 +166,24 @@ impl ResidentRuntimeResourceConfig {
                 RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MIN,
                 RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MAX,
             ),
+            dns_udp_forwarder_attempts: effective_resident_usize(
+                "resident_dns_udp_forwarder_attempts",
+                Some(RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_ENV),
+                None,
+                None,
+                dns_udp_forwarder_attempts_default,
+                RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_MIN,
+                RESIDENT_DNS_UDP_FORWARDER_ATTEMPTS_MAX,
+            ),
+            dns_proxy_udp_actors: effective_resident_usize(
+                "resident_dns_proxy_udp_actors",
+                Some(RESIDENT_DNS_PROXY_UDP_ACTORS_ENV),
+                None,
+                None,
+                dns_proxy_udp_actors_default,
+                RESIDENT_DNS_PROXY_UDP_ACTORS_MIN,
+                RESIDENT_DNS_PROXY_UDP_ACTORS_MAX,
+            ),
             dns_upstream_refresh_seconds: effective_resident_usize(
                 "resident_dns_upstream_refresh_seconds",
                 Some(RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_ENV),
@@ -237,6 +260,8 @@ impl ResidentRuntimeResourceConfig {
             "dnsUdpForwarder": {
                 "queueDepth": self.dns_udp_forwarder_queue_depth.json(),
                 "pendingLimit": self.dns_udp_forwarder_pending_limit.json(),
+                "attempts": self.dns_udp_forwarder_attempts.json(),
+                "proxyActors": self.dns_proxy_udp_actors.json(),
             },
             "dnsUpstreamResolver": {
                 "refreshSeconds": self.dns_upstream_refresh_seconds.json(),

@@ -178,12 +178,15 @@ impl UdpReplyDispatcher {
         self.handle.clone()
     }
 
-    pub(in super::super) async fn shutdown(mut self) -> Result<usize, UdpReplyError> {
+    pub(in super::super) async fn shutdown(
+        mut self,
+        deadline: time::Instant,
+    ) -> Result<usize, UdpReplyError> {
         self.handle.closing.store(true, Ordering::Release);
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        match time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, &mut self.task).await {
+        match time::timeout_at(deadline, &mut self.task).await {
             Ok(Ok(socket_count)) => Ok(socket_count),
             Ok(Err(err)) => Err(UdpReplyError::Socket(format!(
                 "resident UDP reply actor join failed: {err}"
@@ -230,12 +233,19 @@ async fn run_udp_reply_actor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 
     #[tokio::test]
     async fn reply_dispatcher_shutdown_joins_without_open_sockets() {
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
         let dispatcher = UdpReplyDispatcher::start(2, 2, metrics);
-        assert_eq!(dispatcher.shutdown().await.unwrap(), 0);
+        assert_eq!(
+            dispatcher
+                .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
