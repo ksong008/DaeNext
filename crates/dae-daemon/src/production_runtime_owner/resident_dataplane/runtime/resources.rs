@@ -2,14 +2,19 @@ use super::*;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentRuntimeResourceConfig {
-    pub(crate) tcp_runtime_profile: ResidentTcpRuntimeProfileSelection,
+    pub(crate) runtime_profile: ResidentRuntimeProfileSelection,
     pub(crate) tcp_flow_stack_bytes: EffectiveResidentUsize,
     pub(crate) tcp_runtime_workers: EffectiveResidentUsize,
     pub(crate) tcp_connection_limit: EffectiveResidentUsize,
     pub(crate) udp_session_limit: EffectiveResidentUsize,
     pub(crate) udp_session_queue_depth: EffectiveResidentUsize,
+    pub(crate) udp_runtime_shards: EffectiveResidentUsize,
+    pub(crate) udp_dispatch_queue_depth: EffectiveResidentUsize,
     pub(crate) udp_socket_buffer_bytes: EffectiveResidentUsize,
     pub(crate) dns_fast_path_concurrency: EffectiveResidentUsize,
+    pub(crate) dns_fast_path_queue_depth: EffectiveResidentUsize,
+    pub(crate) dns_udp_forwarder_queue_depth: EffectiveResidentUsize,
+    pub(crate) dns_udp_forwarder_pending_limit: EffectiveResidentUsize,
     pub(crate) dns_upstream_refresh_seconds: EffectiveResidentUsize,
     pub(crate) event_queue_depth: EffectiveResidentUsize,
     pub(crate) manual_probe_concurrency: EffectiveResidentUsize,
@@ -20,17 +25,34 @@ pub(crate) struct ResidentRuntimeResourceConfig {
 impl ResidentRuntimeResourceConfig {
     pub(crate) fn from_config(config: &Config) -> Self {
         let global = &config.global;
-        let tcp_runtime_profile = ResidentTcpRuntimeProfileSelection::selected();
+        let runtime_profile = ResidentRuntimeProfileSelection::selected();
         let available_parallelism = std::thread::available_parallelism()
             .map(|parallelism| parallelism.get())
             .unwrap_or(1);
-        let tcp_runtime_workers_default = tcp_runtime_profile
+        let tcp_runtime_workers_default = runtime_profile
             .profile
             .tcp_runtime_workers_default(available_parallelism);
-        let tcp_connection_limit_default =
-            tcp_runtime_profile.profile.tcp_connection_limit_default();
+        let tcp_connection_limit_default = runtime_profile.profile.tcp_connection_limit_default();
+        let udp_session_limit_default = runtime_profile.profile.udp_session_limit_default();
+        let udp_session_queue_depth_default =
+            runtime_profile.profile.udp_session_queue_depth_default();
+        let udp_runtime_shards_default = runtime_profile
+            .profile
+            .udp_runtime_shards_default(available_parallelism);
+        let udp_dispatch_queue_depth_default =
+            runtime_profile.profile.udp_dispatch_queue_depth_default();
+        let dns_fast_path_concurrency_default =
+            runtime_profile.profile.dns_fast_path_concurrency_default();
+        let dns_fast_path_queue_depth_default =
+            runtime_profile.profile.dns_fast_path_queue_depth_default();
+        let dns_udp_forwarder_queue_depth_default = runtime_profile
+            .profile
+            .dns_udp_forwarder_queue_depth_default();
+        let dns_udp_forwarder_pending_limit_default = runtime_profile
+            .profile
+            .dns_udp_forwarder_pending_limit_default();
         Self {
-            tcp_runtime_profile,
+            runtime_profile,
             tcp_flow_stack_bytes: effective_resident_usize(
                 "resident_tcp_flow_stack_bytes",
                 Some(RESIDENT_TCP_FLOW_STACK_BYTES_ENV),
@@ -63,7 +85,7 @@ impl ResidentRuntimeResourceConfig {
                 Some(RESIDENT_UDP_SESSION_LIMIT_ENV),
                 Some(RESIDENT_UDP_SESSION_LIMIT_LEGACY_ENV),
                 global.resident_udp_session_limit,
-                RESIDENT_UDP_SESSION_LIMIT_DEFAULT,
+                udp_session_limit_default,
                 RESIDENT_UDP_SESSION_LIMIT_MIN,
                 RESIDENT_UDP_SESSION_LIMIT_MAX,
             ),
@@ -72,9 +94,27 @@ impl ResidentRuntimeResourceConfig {
                 Some(RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV),
                 None,
                 global.resident_udp_session_queue_depth,
-                RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT,
+                udp_session_queue_depth_default,
                 RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN,
                 RESIDENT_UDP_SESSION_QUEUE_DEPTH_MAX,
+            ),
+            udp_runtime_shards: effective_resident_usize(
+                "resident_udp_runtime_shards",
+                Some(RESIDENT_UDP_RUNTIME_SHARDS_ENV),
+                None,
+                None,
+                udp_runtime_shards_default,
+                RESIDENT_UDP_RUNTIME_SHARDS_MIN,
+                RESIDENT_UDP_RUNTIME_SHARDS_MAX,
+            ),
+            udp_dispatch_queue_depth: effective_resident_usize(
+                "resident_udp_dispatch_queue_depth",
+                Some(RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_ENV),
+                None,
+                None,
+                udp_dispatch_queue_depth_default,
+                RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MIN,
+                RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MAX,
             ),
             udp_socket_buffer_bytes: effective_resident_usize(
                 "resident_udp_socket_buffer_bytes",
@@ -90,9 +130,36 @@ impl ResidentRuntimeResourceConfig {
                 Some(RESIDENT_DNS_FAST_PATH_CONCURRENCY_ENV),
                 None,
                 None,
-                resident_dns_fast_path_concurrency(),
+                dns_fast_path_concurrency_default,
                 RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN,
                 RESIDENT_DNS_FAST_PATH_CONCURRENCY_MAX,
+            ),
+            dns_fast_path_queue_depth: effective_resident_usize(
+                "resident_dns_fast_path_queue_depth",
+                Some(RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_ENV),
+                None,
+                None,
+                dns_fast_path_queue_depth_default,
+                RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_MIN,
+                RESIDENT_DNS_FAST_PATH_QUEUE_DEPTH_MAX,
+            ),
+            dns_udp_forwarder_queue_depth: effective_resident_usize(
+                "resident_dns_udp_forwarder_queue_depth",
+                Some(RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_ENV),
+                None,
+                None,
+                dns_udp_forwarder_queue_depth_default,
+                RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_MIN,
+                RESIDENT_DNS_UDP_FORWARDER_QUEUE_DEPTH_MAX,
+            ),
+            dns_udp_forwarder_pending_limit: effective_resident_usize(
+                "resident_dns_udp_forwarder_pending_limit",
+                Some(RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_ENV),
+                None,
+                None,
+                dns_udp_forwarder_pending_limit_default,
+                RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MIN,
+                RESIDENT_DNS_UDP_FORWARDER_PENDING_LIMIT_MAX,
             ),
             dns_upstream_refresh_seconds: effective_resident_usize(
                 "resident_dns_upstream_refresh_seconds",
@@ -144,13 +211,14 @@ impl ResidentRuntimeResourceConfig {
 
     pub(crate) fn json(&self) -> Value {
         json!({
+            "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 1,
             "tcpFlow": {
                 "stackBytes": self.tcp_flow_stack_bytes.json(),
                 "stackScope": "resident TCP runtime OS threads; Tokio tasks do not receive per-flow stacks",
             },
             "tcpRuntime": {
-                "profile": self.tcp_runtime_profile.json(),
+                "profileSource": "runtimeProfile",
                 "workers": self.tcp_runtime_workers.json(),
                 "connectionLimit": self.tcp_connection_limit.json(),
                 "admission": "active-flow semaphore before accept; excess connections remain in the kernel listen backlog",
@@ -158,10 +226,17 @@ impl ResidentRuntimeResourceConfig {
             "udpSessions": {
                 "limit": self.udp_session_limit.json(),
                 "queueDepth": self.udp_session_queue_depth.json(),
+                "runtimeShards": self.udp_runtime_shards.json(),
+                "dispatchQueueDepth": self.udp_dispatch_queue_depth.json(),
                 "socketBufferBytes": self.udp_socket_buffer_bytes.json(),
             },
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),
+                "queueDepth": self.dns_fast_path_queue_depth.json(),
+            },
+            "dnsUdpForwarder": {
+                "queueDepth": self.dns_udp_forwarder_queue_depth.json(),
+                "pendingLimit": self.dns_udp_forwarder_pending_limit.json(),
             },
             "dnsUpstreamResolver": {
                 "refreshSeconds": self.dns_upstream_refresh_seconds.json(),

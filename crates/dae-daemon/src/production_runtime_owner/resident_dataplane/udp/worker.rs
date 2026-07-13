@@ -17,10 +17,8 @@ pub(crate) fn resident_udp_loop(
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
     active_sessions: Arc<AtomicUsize>,
-    session_limit: usize,
-    session_queue_depth: usize,
+    runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
-    dns_fast_path_concurrency: usize,
 ) {
     run_resident_udp_session_manager(
         socket,
@@ -36,9 +34,7 @@ pub(crate) fn resident_udp_loop(
         event_lock,
         metrics,
         active_sessions,
-        session_limit,
-        session_queue_depth,
+        runtime_config,
         health_resuscitation,
-        dns_fast_path_concurrency,
     );
 }

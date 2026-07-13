@@ -58,10 +58,8 @@ pub(super) fn run_resident_udp_session_manager(
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
     active_sessions: Arc<AtomicUsize>,
-    session_limit: usize,
-    session_queue_depth: usize,
+    runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
-    dns_fast_path_concurrency: usize,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -92,10 +90,8 @@ pub(super) fn run_resident_udp_session_manager(
         event_lock,
         metrics,
         active_sessions,
-        session_limit.max(1),
-        session_queue_depth.max(1),
+        runtime_config,
         health_resuscitation,
-        dns_fast_path_concurrency.max(1),
     ));
 }
 
@@ -113,11 +109,12 @@ async fn run_resident_udp_session_manager_async(
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
     active_sessions: Arc<AtomicUsize>,
-    session_limit: usize,
-    session_queue_depth: usize,
+    runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
-    dns_fast_path_concurrency: usize,
 ) {
+    let session_limit = runtime_config.session_limit;
+    let session_queue_depth = runtime_config.session_queue_depth;
+    let dns_fast_path_concurrency = runtime_config.dns_fast_path_concurrency;
     if let Err(err) = socket.set_nonblocking(true) {
         append_event(
             &event_file,
@@ -170,14 +167,16 @@ async fn run_resident_udp_session_manager_async(
             "routing_tuple_map_id": router.routing_tuple_map_id(),
             "session_limit": session_limit,
             "dns_fast_path_concurrency": dns_fast_path_concurrency,
+            "generation": runtime_config.generation,
+            "runtimeProfile": runtime_config.profile,
             "packetSessionManager": {
                 "schemaVersion": 1,
                 "manager": "resident-udp-session-manager",
                 "runtime": "tokio-current-thread",
                 "sessionLimit": session_limit,
                 "perSessionQueueDepth": session_queue_depth,
-                "replyQueueDepth": session_queue_depth,
-                "replySocketCacheCapacity": session_limit,
+                "replyQueueDepth": runtime_config.reply_queue_depth,
+                "replySocketCacheCapacity": runtime_config.reply_socket_cache_capacity,
                 "keyFields": [
                     "graphIdentityHash",
                     "outbound",
@@ -193,17 +192,16 @@ async fn run_resident_udp_session_manager_async(
     let mut direct_sessions: HashMap<UdpDirectSessionKey, UdpDirectSessionEntry> = HashMap::new();
     let mut sniffers: HashMap<UdpSniffKey, UdpPendingSniffer> = HashMap::new();
     let dns_fast_path_permits = Arc::new(Semaphore::new(dns_fast_path_concurrency));
-    let reply_dispatcher =
-        UdpReplyDispatcher::start(session_queue_depth, session_limit, Arc::clone(&metrics));
+    let reply_dispatcher = UdpReplyDispatcher::start(
+        runtime_config.reply_queue_depth,
+        runtime_config.reply_socket_cache_capacity,
+        Arc::clone(&metrics),
+    );
     let udp_reply = reply_dispatcher.handle();
     let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<UdpSessionKey>(session_limit);
     let (direct_cleanup_tx, mut direct_cleanup_rx) =
         mpsc::channel::<UdpDirectSessionKey>(session_limit);
-    let payload_pool = UdpPayloadPool::new(
-        session_limit
-            .saturating_mul(session_queue_depth)
-            .clamp(16, 1024),
-    );
+    let payload_pool = UdpPayloadPool::new(runtime_config.payload_pool_capacity());
 
     let mut stop_listener = stop.listener();
     while !stop.load(Ordering::Relaxed) {
@@ -221,7 +219,7 @@ async fn run_resident_udp_session_manager_async(
             batch = recv_udp_batch_with_original_dst_async(
                 &socket,
                 &payload_pool,
-                session_queue_depth,
+                runtime_config.ingress_drain_budget,
             ) => {
                 match batch {
                     Ok(batch) => {

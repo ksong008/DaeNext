@@ -781,8 +781,12 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         "RESIDENT_TCP_FLOW_STACK_BYTES"
     );
     assert_eq!(
-        defaults["residentDataplane"]["tcpRuntime"]["profile"]["default"],
+        defaults["residentDataplane"]["runtimeProfile"]["default"],
         json!("balanced")
+    );
+    assert_eq!(
+        defaults["residentDataplane"]["tcpRuntime"]["profileSource"],
+        json!("runtimeProfile")
     );
     assert_eq!(
         defaults["residentDataplane"]["tcpRuntime"]["workers"]["env"],
