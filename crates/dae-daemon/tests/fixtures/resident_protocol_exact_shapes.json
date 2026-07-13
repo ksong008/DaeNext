@@ -109,8 +109,8 @@
       "securityUnderlay": "standard-tls",
       "streamWrapper": "connect-udp-h2",
       "tcpExecutor": "connect-udp-tcp-policy-closed",
-      "udpExecutor": "connect-udp-h2-executor-pending",
-      "udpStatus": "fail-closed",
+      "udpExecutor": "resident-connect-udp-h2-capsule",
+      "udpStatus": "admitted",
       "runtimeDispatch": "policy-closed",
       "probeDispatch": "policy-closed"
     },

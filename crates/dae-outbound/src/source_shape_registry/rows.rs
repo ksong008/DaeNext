@@ -101,14 +101,13 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "udp-associate",
         "registry:baseline-socks-endpoint",
     ),
-    blocked_row(
+    admitted_row(
         "connect-udp-h2-endpoint",
         "connect-udp",
         &["masque"],
         "standard-tls",
         "connect-udp-h2",
         "connect-udp-capsule",
-        "connect-udp-h2-executor-pending",
         "registry:connect-udp-h2-endpoint",
     ),
     blocked_row(

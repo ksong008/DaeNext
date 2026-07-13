@@ -1,0 +1,245 @@
+use std::collections::VecDeque;
+use std::task::Poll;
+
+use futures_util::future::poll_fn;
+
+use super::pool::{ConnectUdpH2ConnectionLease, acquire_connect_udp_h2_connection};
+use super::request::{connect_udp_h2_request, validate_connect_udp_h2_response};
+use super::*;
+
+pub(in crate::production_runtime_owner::resident_dataplane::udp) struct ConnectUdpH2Session {
+    runtime: ResidentConnectUdpRuntimePlan,
+    tunnel: Option<ConnectUdpH2Tunnel>,
+    decoder: MasqueCapsuleDecoder,
+    responses: VecDeque<Bytes>,
+}
+
+struct ConnectUdpH2Tunnel {
+    target: SocketAddr,
+    send: ::h2::SendStream<Bytes>,
+    receive: ::h2::RecvStream,
+    _connection_lease: ConnectUdpH2ConnectionLease,
+}
+
+impl ConnectUdpH2Session {
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new(
+        runtime: ResidentConnectUdpRuntimePlan,
+    ) -> Self {
+        Self {
+            runtime,
+            tunnel: None,
+            decoder: MasqueCapsuleDecoder::new(runtime.capsule_limits),
+            responses: VecDeque::new(),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn exchange(
+        &mut self,
+        proxy: &ResidentProxyPlan,
+        original_dst: SocketAddr,
+        payload: &[u8],
+    ) -> Result<UdpExchangeResult, String> {
+        if self.tunnel.is_none() {
+            self.open(proxy, original_dst).await?;
+        }
+        if self
+            .tunnel
+            .as_ref()
+            .is_some_and(|tunnel| tunnel.target != original_dst)
+        {
+            return Err(format!(
+                "CONNECT-UDP H2 session target changed from {} to {}; cross-target tunnel reuse is forbidden",
+                self.tunnel
+                    .as_ref()
+                    .map(|tunnel| tunnel.target)
+                    .unwrap_or(original_dst),
+                original_dst,
+            ));
+        }
+        let capsule = encode_connect_udp_capsule(payload, self.runtime.capsule_limits)
+            .map_err(|err| format!("encode CONNECT-UDP H2 DATAGRAM Capsule: {err}"))?;
+        let tunnel = self
+            .tunnel
+            .as_mut()
+            .ok_or_else(|| "CONNECT-UDP H2 tunnel is not initialized".to_owned())?;
+        send_connect_udp_h2_capsule(&mut tunnel.send, Bytes::from(capsule)).await?;
+        if let Some(response) = self.poll_response().await? {
+            Ok(response)
+        } else {
+            Ok(self.pending_response_result())
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn poll_response(
+        &mut self,
+    ) -> Result<Option<UdpExchangeResult>, String> {
+        if let Some(payload) = self.responses.pop_front() {
+            return Ok(Some(self.response_result(payload)));
+        }
+        let Some(tunnel) = self.tunnel.as_mut() else {
+            return Ok(None);
+        };
+        let chunk = poll_fn(|cx| match tunnel.receive.poll_data(cx) {
+            Poll::Ready(value) => Poll::Ready(Some(value)),
+            Poll::Pending => Poll::Ready(None),
+        })
+        .await;
+        match chunk {
+            None => Ok(None),
+            Some(Some(Ok(chunk))) => {
+                release_h2_receive_capacity(&mut tunnel.receive, chunk.len())?;
+                self.decode_chunk(&chunk)?;
+                Ok(self
+                    .responses
+                    .pop_front()
+                    .map(|payload| self.response_result(payload)))
+            }
+            Some(Some(Err(err))) => Err(format!("read CONNECT-UDP H2 Capsule DATA: {err}")),
+            Some(None) => Err(self.stream_closed_error()),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn wait_response(
+        &mut self,
+    ) -> Result<Option<UdpExchangeResult>, String> {
+        loop {
+            if let Some(payload) = self.responses.pop_front() {
+                return Ok(Some(self.response_result(payload)));
+            }
+            let tunnel = match self.tunnel.as_mut() {
+                Some(tunnel) => tunnel,
+                None => return std::future::pending().await,
+            };
+            match tunnel.receive.data().await {
+                Some(Ok(chunk)) => {
+                    release_h2_receive_capacity(&mut tunnel.receive, chunk.len())?;
+                    self.decode_chunk(&chunk)?;
+                }
+                Some(Err(err)) => {
+                    return Err(format!("read CONNECT-UDP H2 Capsule DATA: {err}"));
+                }
+                None => return Err(self.stream_closed_error()),
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn shutdown(&mut self) {
+        if let Some(mut tunnel) = self.tunnel.take() {
+            tunnel.send.send_reset(::h2::Reason::CANCEL);
+        }
+        self.responses.clear();
+    }
+
+    async fn open(
+        &mut self,
+        proxy: &ResidentProxyPlan,
+        original_dst: SocketAddr,
+    ) -> Result<(), String> {
+        let lease = acquire_connect_udp_h2_connection(proxy).await?;
+        let mut sender = time::timeout(RESIDENT_CONNECT_TIMEOUT, lease.sender.clone().ready())
+            .await
+            .map_err(|_| "CONNECT-UDP H2 stream capacity timeout".to_owned())?
+            .map_err(|err| format!("CONNECT-UDP H2 stream capacity: {err}"))?;
+        if !sender.is_extended_connect_protocol_enabled() {
+            return Err(
+                "CONNECT-UDP H2 peer disabled extended CONNECT before stream creation".to_owned(),
+            );
+        }
+        let request = connect_udp_h2_request(proxy, original_dst)?;
+        let (response, send) = sender
+            .send_request(request, false)
+            .map_err(|err| format!("send CONNECT-UDP H2 request headers: {err}"))?;
+        let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
+            .await
+            .map_err(|_| "CONNECT-UDP H2 response headers timeout".to_owned())?
+            .map_err(|err| format!("read CONNECT-UDP H2 response headers: {err}"))?;
+        validate_connect_udp_h2_response(&response)?;
+        self.decoder = MasqueCapsuleDecoder::new(self.runtime.capsule_limits);
+        self.responses.clear();
+        self.tunnel = Some(ConnectUdpH2Tunnel {
+            target: original_dst,
+            send,
+            receive: response.into_body(),
+            _connection_lease: lease,
+        });
+        Ok(())
+    }
+
+    fn decode_chunk(&mut self, chunk: &[u8]) -> Result<(), String> {
+        let capsules = self
+            .decoder
+            .push(chunk)
+            .map_err(|err| format!("decode CONNECT-UDP H2 Capsule: {err}"))?;
+        for capsule in capsules {
+            if let MasqueCapsule::Datagram(payload) = capsule {
+                self.responses.push_back(payload);
+            }
+        }
+        Ok(())
+    }
+
+    fn stream_closed_error(&self) -> String {
+        if self.decoder.buffered_len() == 0 {
+            "CONNECT-UDP H2 Capsule stream closed".to_owned()
+        } else {
+            format!(
+                "CONNECT-UDP H2 Capsule stream closed with {} buffered byte(s)",
+                self.decoder.buffered_len()
+            )
+        }
+    }
+
+    fn response_result(&self, payload: Bytes) -> UdpExchangeResult {
+        UdpExchangeResult::new(payload.to_vec(), "connect-udp-h2-capsule")
+            .with_session_executor("http2-extended-connect")
+            .with_underlay_reuse("generation-owned-h2-connection-reused")
+            .with_tls_underlay("rustls")
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("connect-udp-h2-capsule")
+            .with_session_executor("http2-extended-connect")
+            .with_underlay_reuse("generation-owned-h2-connection-reused")
+            .with_tls_underlay("rustls")
+    }
+}
+
+fn release_h2_receive_capacity(receive: &mut ::h2::RecvStream, bytes: usize) -> Result<(), String> {
+    receive
+        .flow_control()
+        .release_capacity(bytes)
+        .map_err(|err| format!("release CONNECT-UDP H2 receive capacity: {err}"))
+}
+
+async fn send_connect_udp_h2_capsule(
+    send: &mut ::h2::SendStream<Bytes>,
+    mut data: Bytes,
+) -> Result<(), String> {
+    while !data.is_empty() {
+        send.reserve_capacity(data.len());
+        let capacity = loop {
+            let available = send.capacity();
+            if available > 0 {
+                break available;
+            }
+            let Some(capacity) = time::timeout(
+                RESIDENT_CONNECT_TIMEOUT,
+                poll_fn(|cx| send.poll_capacity(cx)),
+            )
+            .await
+            .map_err(|_| "CONNECT-UDP H2 Capsule send capacity wait timeout".to_owned())?
+            else {
+                return Err(
+                    "CONNECT-UDP H2 Capsule send stream closed before capacity became available"
+                        .to_owned(),
+                );
+            };
+            capacity
+                .map_err(|err| format!("reserve CONNECT-UDP H2 Capsule send capacity: {err}"))?;
+        };
+        let chunk = data.split_to(capacity.min(data.len()));
+        send.send_data(chunk, false)
+            .map_err(|err| format!("send CONNECT-UDP H2 Capsule data: {err}"))?;
+    }
+    Ok(())
+}

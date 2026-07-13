@@ -8,9 +8,9 @@ mod xhttp;
 
 pub(in crate::production_runtime_owner::resident_dataplane) use execution::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentExecutionPlan,
-    ResidentProtocolShape, ResidentStreamPacketTransport, ResidentTcpProbeDispatch,
-    ResidentTcpRuntimeDispatch, ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition,
-    ResidentUdpExecutorFactory, UdpPacketSemantics,
+    ResidentManualProbeDispatch, ResidentProtocolShape, ResidentStreamPacketTransport,
+    ResidentTcpProbeDispatch, ResidentTcpRuntimeDispatch, ResidentUdpExecutionAgreement,
+    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, UdpPacketSemantics,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use protocol::ResidentProtocolExecutorContract;
 pub(crate) use protocol::{
@@ -173,9 +173,10 @@ impl ResidentProxyPlan {
         }
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_xhttp_xmux_runtime_generation(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
         &mut self,
         runtime_generation: u64,
+        connect_udp_runtime: ResidentConnectUdpRuntimePlan,
     ) {
         if let Some(xmux) = &mut self.xhttp_xmux {
             xmux.apply_runtime_generation(runtime_generation);
@@ -185,8 +186,10 @@ impl ResidentProxyPlan {
         {
             xmux.apply_runtime_generation(runtime_generation);
         }
+        self.handler
+            .apply_connect_udp_runtime_plan(connect_udp_runtime);
         if let Some(parent) = self.chain_parent.as_mut() {
-            Arc::make_mut(parent).apply_xhttp_xmux_runtime_generation(runtime_generation);
+            Arc::make_mut(parent).apply_runtime_generation(runtime_generation, connect_udp_runtime);
         }
     }
 

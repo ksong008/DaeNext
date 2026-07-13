@@ -90,7 +90,7 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
 }
 
 #[test]
-fn source_shape_registry_keeps_only_explicit_connect_udp_rows_blocked() {
+fn source_shape_registry_admits_h2_and_keeps_h3_connect_udp_blocked() {
     let rows = source_shape_registry_rows();
     let blocked = rows
         .iter()
@@ -99,7 +99,7 @@ fn source_shape_registry_keeps_only_explicit_connect_udp_rows_blocked() {
 
     assert_eq!(
         blocked.iter().map(|row| row.shape_id).collect::<Vec<_>>(),
-        ["connect-udp-h2-endpoint", "connect-udp-h3-endpoint"]
+        ["connect-udp-h3-endpoint"]
     );
     assert!(blocked.iter().all(|row| {
         row.protocol_family == "connect-udp"

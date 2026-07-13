@@ -1,4 +1,5 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::ResidentConnectUdpRuntimePlan;
 use dae_outbound::NetworkType;
 use serde_json::json;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
@@ -332,12 +333,12 @@ fn xhttp_h1_request_uses_official_packet_up_shape() {
 }
 
 #[test]
-fn xhttp_runtime_generation_reaches_primary_and_download_xmux_keys() {
+fn runtime_generation_reaches_primary_and_download_xmux_keys() {
     let mut proxy = dummy_proxy_plan();
     proxy.xhttp_xmux = Some(ResidentXhttpXmuxPlan::official_default());
     proxy.xhttp_download = Some(ResidentXhttpEndpointPlan::from_proxy(&proxy));
 
-    proxy.apply_xhttp_xmux_runtime_generation(73);
+    proxy.apply_runtime_generation(73, ResidentConnectUdpRuntimePlan::standalone());
 
     assert_eq!(proxy.xhttp_xmux.as_ref().unwrap().runtime_generation, 73);
     assert_eq!(

@@ -831,6 +831,7 @@ mod tests {
         Hysteria2,
         Tuic,
         Juicity,
+        ConnectUdpH2,
         FailClosed,
     }
 
@@ -850,6 +851,7 @@ mod tests {
             UdpSessionExecutor::Hysteria2(_) => UdpExecutorShape::Hysteria2,
             UdpSessionExecutor::Tuic(_) => UdpExecutorShape::Tuic,
             UdpSessionExecutor::Juicity(_) => UdpExecutorShape::Juicity,
+            UdpSessionExecutor::ConnectUdpH2(_) => UdpExecutorShape::ConnectUdpH2,
             UdpSessionExecutor::FailClosed { .. } => UdpExecutorShape::FailClosed,
         }
     }

@@ -575,7 +575,7 @@ fn fill_manual_probe_join_set(
             break;
         };
         handles.spawn(async move {
-            probe_resident_candidate_tcp_latency_snapshot(candidate, reload_generation).await
+            probe_resident_candidate_manual_latency_snapshot(candidate, reload_generation).await
         });
     }
 }

@@ -22,10 +22,12 @@ pub(crate) enum ResidentProxyProtocolPlan {
     ConnectUdpH2Tls {
         authentication: ResidentConnectUdpAuthPlan,
         target_template: MasqueUriTemplate,
+        runtime: ResidentConnectUdpRuntimePlan,
     },
     ConnectUdpH3Tls {
         authentication: ResidentConnectUdpAuthPlan,
         target_template: MasqueUriTemplate,
+        runtime: ResidentConnectUdpRuntimePlan,
     },
     ShadowsocksAeadTcp {
         cipher: String,
@@ -161,6 +163,18 @@ impl ResidentHysteria2ObfsPlan {
 }
 
 impl ResidentProxyProtocolPlan {
+    pub(super) fn apply_connect_udp_runtime_plan(
+        &mut self,
+        runtime_plan: ResidentConnectUdpRuntimePlan,
+    ) {
+        match self {
+            Self::ConnectUdpH2Tls { runtime, .. } | Self::ConnectUdpH3Tls { runtime, .. } => {
+                *runtime = runtime_plan
+            }
+            _ => {}
+        }
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::production_runtime_owner::resident_dataplane) fn executor_contract(
         &self,
@@ -196,9 +210,9 @@ impl ResidentProxyProtocolPlan {
             },
             Self::ConnectUdpH2Tls { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "connect-udp-tcp-policy-closed",
-                udp_executor: "connect-udp-h2-executor-pending",
+                udp_executor: "resident-connect-udp-h2-capsule",
                 packet_semantics: "connect-udp-capsule",
-                udp_policy_closed: true,
+                udp_policy_closed: false,
             },
             Self::ConnectUdpH3Tls { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "connect-udp-tcp-policy-closed",
@@ -329,10 +343,12 @@ impl ResidentProxyProtocolPlan {
             Self::ConnectUdpH2Tls {
                 authentication,
                 target_template,
+                ..
             }
             | Self::ConnectUdpH3Tls {
                 authentication,
                 target_template,
+                ..
             } => {
                 authentication.compact_allocations();
                 target_template.compact_allocations();

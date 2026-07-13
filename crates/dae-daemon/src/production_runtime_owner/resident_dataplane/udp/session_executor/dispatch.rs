@@ -81,6 +81,10 @@ impl UdpSessionExecutor {
                 .exchange(proxy, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
+            Self::ConnectUdpH2(session) => session
+                .exchange(proxy, original_dst, payload)
+                .await
+                .map(|response| ("udp_packet_finished", response)),
             Self::FailClosed { reason } => Err(format!(
                 "unsupported_udp_handler: {reason}; handler={}; protocol={}; policy-closed without alternate execution",
                 resident_udp_proxy_handler_name(proxy),
@@ -101,6 +105,7 @@ impl UdpSessionExecutor {
             Self::VlessStandard(session) => session.shutdown().await,
             Self::VlessXhttpH2(session) => session.shutdown().await,
             Self::VlessXhttpH3(session) => session.shutdown().await,
+            Self::ConnectUdpH2(session) => session.shutdown().await,
             Self::Dns
             | Self::ShadowsocksAead(_)
             | Self::Shadowsocks2022(_)
@@ -155,6 +160,10 @@ impl UdpSessionExecutor {
                 .await
                 .map(|response| response.map(|response| ("udp_packet_finished", response))),
             Self::VmessAead(session) => session
+                .poll_response()
+                .await
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::ConnectUdpH2(session) => session
                 .poll_response()
                 .await
                 .map(|response| response.map(|response| ("udp_packet_finished", response))),

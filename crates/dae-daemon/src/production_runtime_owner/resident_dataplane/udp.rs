@@ -22,7 +22,8 @@ use dae_outbound::{
         ss2022_udp_unix_timestamp_now,
     },
     shared_transport::{
-        HttpUpgradeOptions, http_upgrade_request, validate_http_status,
+        HttpUpgradeOptions, MasqueCapsule, MasqueCapsuleDecoder, MasqueUriTemplate,
+        encode_connect_udp_capsule, http_upgrade_request, validate_http_status,
         websocket_client_binary_frame_with_random_mask, websocket_client_handshake_request,
     },
     socks5::{Socks5Address, udp_packet},
@@ -54,11 +55,11 @@ use super::execution::{append_runtime_execution_descriptor, udp_execution_descri
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentHysteria2ObfsPlan, ResidentProtocolShape, ResidentProxyGroupPlan, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentStreamPacketTransport, ResidentUdpExecutionAgreement,
-    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, ResidentXhttpHttpVersion,
-    ResidentXhttpMode, SharedResidentProxyGroupMap, UdpPacketSemantics,
-    resident_udp_chain_admission,
+    ResidentConnectUdpAuthPlan, ResidentHysteria2ObfsPlan, ResidentProtocolShape,
+    ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentStreamPacketTransport, ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition,
+    ResidentUdpExecutorFactory, ResidentXhttpHttpVersion, ResidentXhttpMode,
+    SharedResidentProxyGroupMap, UdpPacketSemantics, resident_udp_chain_admission,
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,
@@ -76,12 +77,13 @@ use super::tcp::{
 };
 use super::vision::{VisionUnpadder, vision_padding_block};
 use super::{
-    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT, RESIDENT_UDP_RESPONSE_TIMEOUT,
-    RESIDENT_UDP_SESSION_IDLE_TIMEOUT, ResidentDataplaneMetrics, ResidentHealthResuscitationHandle,
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT,
+    RESIDENT_UDP_RESPONSE_TIMEOUT, RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+    ResidentConnectUdpRuntimePlan, ResidentDataplaneMetrics, ResidentHealthResuscitationHandle,
     ResidentUdpRuntimeConfig, VISION_COMMAND_CONTINUE, VLESS_RESPONSE_VERSION, XUDP_COMMAND_KEEP,
     XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
-    apply_resident_udp_socket_buffer_tuning, resident_socket_addr_display,
-    resident_udp_network_name,
+    apply_resident_udp_socket_buffer_tuning, authority_from_host_port,
+    resident_socket_addr_display, resident_udp_network_name,
 };
 
 mod worker;
@@ -95,6 +97,7 @@ use self::session_actor::*;
 mod direct_session;
 use self::direct_session::*;
 mod session_executor;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::clear_connect_udp_h2_pools;
 use self::session_executor::*;
 mod vmess_session;
 use self::vmess_session::*;
