@@ -1,4 +1,6 @@
 use super::*;
+#[path = "matrix/connect_udp.rs"]
+mod connect_udp;
 #[path = "matrix/httpupgrade_source.rs"]
 mod httpupgrade_source;
 #[path = "matrix/initial_rows.rs"]

@@ -3,7 +3,7 @@ pub(crate) fn resident_live_adapter_matrix_contract() -> ResidentLiveAdapterMatr
     let entries = resident_live_adapter_matrix_entries();
     let evidence = resident_live_matrix_evidence_from_env();
     let planner_admission_ready = entries.iter().all(|entry| entry.planner_admitted);
-    let tcp_live_adapter_ready = entries.iter().all(|entry| entry.tcp_live_adapter);
+    let tcp_live_adapter_ready = entries.iter().all(|entry| entry.tcp_path_ready());
     let udp_live_adapter_ready = entries.iter().all(|entry| entry.udp_path_ready());
     let transport_underlay_ready = entries.iter().all(|entry| entry.transport_underlay);
     let route_group_connectivity_ready = entries.iter().all(|entry| entry.route_group_connectivity);

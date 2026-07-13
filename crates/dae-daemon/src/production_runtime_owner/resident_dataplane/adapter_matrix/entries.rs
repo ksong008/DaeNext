@@ -3,12 +3,13 @@ pub(crate) fn resident_live_adapter_matrix_entries() -> &'static [ResidentLiveAd
     &RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES
 }
 
-pub(crate) const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10] = [
+pub(crate) const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 11] = [
     ResidentLiveAdapterMatrixEntry {
         handler: "vless-vision-tcp-tls",
         formal_matrix_handler: "vless",
         planner_admitted: true,
         tcp_live_adapter: true,
+        tcp_semantics: "relay",
         udp_live_adapter: true,
         udp_semantics: "relay",
         transport_underlay: true,
@@ -111,6 +112,17 @@ pub(crate) const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatri
             "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
+    connect_udp_remote_live_entry(
+        "connect-udp",
+        "explicit masque:// H2 and H3 endpoints admit UDP only; TCP remains policy-closed and no fingerprint is inferred from ordinary HTTP or TLS configuration",
+        &[
+            "resident_dataplane::plan admits only explicit masque:// H2 or H3 CONNECT-UDP source contracts",
+            "resident_dataplane::udp dispatches H2 DATAGRAM Capsules and H3 HTTP Datagrams through generation-owned bounded pools",
+            "resident_dataplane::tcp returns the explicit connect-udp-tcp-policy-closed result",
+            "manual UDP health uses the same admitted CONNECT-UDP executor",
+            "live-evidence-ledger must record independent H2 and H3 UDP matrix evidence before this row is live-ready",
+        ],
+    ),
     protocol_closed_remote_live_entry(
         "http-proxy",
         "plain HTTP CONNECT endpoints use the resident TCP relay; UDP has no HTTP CONNECT relay semantics and remains policy-closed without alternate execution",
@@ -144,6 +156,32 @@ pub(crate) const fn udp_remote_live_entry(
         formal_matrix_handler,
         planner_admitted: true,
         tcp_live_adapter: true,
+        tcp_semantics: "relay",
+        udp_live_adapter: true,
+        udp_semantics: "relay",
+        transport_underlay: true,
+        route_group_connectivity: true,
+        selected_node_fail_closed: true,
+        fingerprint_underlay: true,
+        remote_live_matrix: false,
+        native_executor_ready: true,
+        fingerprint_behavior,
+        evidence,
+        missing: &["remote live matrix evidence not recorded by live-evidence-ledger"],
+    }
+}
+
+pub(crate) const fn connect_udp_remote_live_entry(
+    formal_matrix_handler: &'static str,
+    fingerprint_behavior: &'static str,
+    evidence: &'static [&'static str],
+) -> ResidentLiveAdapterMatrixEntry {
+    ResidentLiveAdapterMatrixEntry {
+        handler: formal_matrix_handler,
+        formal_matrix_handler,
+        planner_admitted: true,
+        tcp_live_adapter: false,
+        tcp_semantics: "protocol-closed",
         udp_live_adapter: true,
         udp_semantics: "relay",
         transport_underlay: true,
@@ -168,6 +206,7 @@ pub(crate) const fn protocol_closed_remote_live_entry(
         formal_matrix_handler,
         planner_admitted: true,
         tcp_live_adapter: true,
+        tcp_semantics: "relay",
         udp_live_adapter: false,
         udp_semantics: "protocol-closed",
         transport_underlay: true,

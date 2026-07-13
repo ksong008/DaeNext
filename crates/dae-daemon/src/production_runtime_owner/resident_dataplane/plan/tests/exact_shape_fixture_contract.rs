@@ -141,5 +141,20 @@ fn rust_execution_plan_matches_shared_web_exact_shape_contract() {
             fixture_field(shape, "udpExecutor"),
             "{id}"
         );
+        assert_eq!(
+            graph["runtimeComponents"]["streamWrapperFactory"]["status"], "admitted",
+            "{id}"
+        );
+        match id {
+            "connect-udp-h2" => assert_eq!(
+                graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+                "resident-connect-udp-h2-capsule-session"
+            ),
+            "connect-udp-h3" => assert_eq!(
+                graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+                "resident-connect-udp-h3-datagram-session"
+            ),
+            _ => {}
+        }
     }
 }

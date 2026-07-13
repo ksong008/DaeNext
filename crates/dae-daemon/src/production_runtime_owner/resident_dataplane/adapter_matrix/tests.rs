@@ -93,6 +93,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn connect_udp_matrix_records_udp_relay_and_tcp_policy_closed_independently() {
+        let entry = resident_live_adapter_matrix_entries()
+            .iter()
+            .find(|entry| entry.formal_matrix_handler == "connect-udp")
+            .expect("missing CONNECT-UDP matrix row");
+
+        assert!(!entry.tcp_live_adapter);
+        assert_eq!(entry.tcp_semantics, "protocol-closed");
+        assert!(entry.tcp_path_ready());
+        assert!(entry.udp_live_adapter);
+        assert_eq!(entry.udp_semantics, "relay");
+        assert!(entry.udp_path_ready());
+        assert!(entry.wired_ready());
+    }
+
     fn live_row(row: &str) -> Value {
         json!({
             "row": row,

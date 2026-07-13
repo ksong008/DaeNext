@@ -44,10 +44,38 @@ pub(super) fn stream_wrapper_runtime_limits_value(stream_wrapper: &str) -> Value
             "carrierScope": "configuration-dependent-xmux",
             "crossFlowCarrierReuse": "configuration-dependent",
         }),
+        "connect-udp-h2" => json!({
+            "carrierScope": "generation-owned-h2-connection-pool",
+            "sessionScope": "per-target-extended-connect-stream",
+            "crossFlowCarrierReuse": true,
+            "crossTargetSessionReuse": false,
+        }),
+        "connect-udp-h3" => json!({
+            "carrierScope": "generation-owned-h3-actor-pool",
+            "sessionScope": "per-target-extended-connect-stream",
+            "crossFlowCarrierReuse": true,
+            "crossTargetSessionReuse": false,
+        }),
         _ => json!({
             "carrierScope": "per-flow",
             "crossFlowCarrierReuse": false,
         }),
+    }
+}
+
+pub(super) fn shared_provider_cache_labels(stream_wrapper: &str) -> &'static [&'static str] {
+    match stream_wrapper {
+        "connect-udp-h2" => &[
+            "tls-client-config",
+            "connect-udp-h2-connection-pool",
+            "connect-udp-h2-session-capacity",
+        ],
+        "connect-udp-h3" => &[
+            "quic-client-config",
+            "connect-udp-h3-actor-pool",
+            "connect-udp-h3-session-capacity",
+        ],
+        _ => &["tls-client-config", "fingerprint-aware-tls-connector"],
     }
 }
 

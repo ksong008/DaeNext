@@ -258,6 +258,16 @@ impl ResidentExecutableGraphDescriptor {
             "http-transport" => ("admitted", "resident-http-connect-transport", Value::Null),
             "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
             "h2" => ("admitted", "resident-http2-body-stream", Value::Null),
+            "connect-udp-h2" => (
+                "admitted",
+                "resident-connect-udp-h2-capsule-session",
+                Value::Null,
+            ),
+            "connect-udp-h3" => (
+                "admitted",
+                "resident-connect-udp-h3-datagram-session",
+                Value::Null,
+            ),
             "meek" => ("admitted", "resident-meek-polling", Value::Null),
             "mux" => ("admitted", "resident-vless-mux-framing", Value::Null),
             "xhttp" => (
@@ -351,10 +361,7 @@ impl ResidentExecutableGraphDescriptor {
             "cacheScope": "graph-and-reload-generation",
             "survivesReload": false,
             "cleanupPolicy": "drop-on-graph-diff-or-runtime-stop",
-            "sharedProviderCaches": [
-                "tls-client-config",
-                "fingerprint-aware-tls-connector"
-            ],
+            "sharedProviderCaches": shared_provider_cache_labels(&self.stream_wrapper),
             "perFlowProviders": per_flow_provider_labels(self.quic_per_flow),
         })
     }
