@@ -86,6 +86,7 @@ impl ResidentUdpRouter {
     }
 
     #[cfg(not(test))]
+    #[cfg(test)]
     fn from_parts(
         proxy_groups: SharedResidentProxyGroupMap,
         default_outbound: u8,
