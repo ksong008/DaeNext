@@ -23,6 +23,27 @@ fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
 }
 
 #[test]
+fn forced_dns_session_lanes_are_distinct_and_observable() {
+    let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
+    let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
+    let dns_dst = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53);
+    let first = UdpSessionKey::with_dispatch_lane(&proxy, peer, dns_dst, 1);
+    let second = UdpSessionKey::with_dispatch_lane(&proxy, peer, dns_dst, 2);
+    let lane_zero = UdpSessionKey::with_dispatch_lane(&proxy, peer, dns_dst, 0);
+    let unsharded = UdpSessionKey::new(&proxy, peer, dns_dst);
+
+    assert_ne!(first, second);
+    assert_ne!(lane_zero, unsharded);
+    assert_eq!(lane_zero.to_value()["dispatchLane"], 0);
+    assert_eq!(first.to_value()["dispatchLane"], 1);
+    assert_eq!(second.to_value()["dispatchLane"], 2);
+    assert_ne!(
+        first.to_value()["sessionHash"],
+        second.to_value()["sessionHash"]
+    );
+}
+
+#[test]
 fn udp_session_key_separates_packet_semantics() {
     let peer = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 10).into(), 53000);
     let original_dst = SocketAddr::new(Ipv4Addr::new(8, 8, 8, 8).into(), 443);
@@ -395,7 +416,7 @@ fn udp_dns_fast_path_route_event_keeps_proxy_fields_without_packet_session() {
 }
 
 #[test]
-fn udp_router_keeps_must_dns_proxy_route_for_independent_datagram() {
+fn udp_router_keeps_must_dns_proxy_route_for_reusable_session_lanes() {
     let router = test_udp_router();
     let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53);
     let block = router
@@ -448,6 +469,7 @@ fn udp_route_chosen_event_exposes_route_and_session_fields() {
         original_dst,
         &route,
         Some(&proxy),
+        None,
         "video.example.com",
         46,
         true,
@@ -496,6 +518,7 @@ fn udp_route_chosen_event_exposes_route_and_session_fields() {
         original_dst,
         &block,
         None,
+        None,
         "",
         0,
         false,
@@ -513,6 +536,7 @@ fn udp_route_chosen_event_exposes_route_and_session_fields() {
         v6_original_dst,
         &route,
         Some(&proxy),
+        None,
         "video.example.com",
         46,
         true,

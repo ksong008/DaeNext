@@ -15,6 +15,7 @@ pub(super) struct UdpSessionKey {
     peer: SocketAddr,
     original_destination: SocketAddr,
     packet_semantics: UdpPacketSemantics,
+    dispatch_lane: Option<u16>,
 }
 
 impl UdpSessionKey {
@@ -22,6 +23,24 @@ impl UdpSessionKey {
         proxy: &ResidentProxyPlan,
         peer: SocketAddr,
         original_dst: SocketAddr,
+    ) -> Self {
+        Self::build(proxy, peer, original_dst, None)
+    }
+
+    pub(super) fn with_dispatch_lane(
+        proxy: &ResidentProxyPlan,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
+        dispatch_lane: u16,
+    ) -> Self {
+        Self::build(proxy, peer, original_dst, Some(dispatch_lane))
+    }
+
+    fn build(
+        proxy: &ResidentProxyPlan,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
+        dispatch_lane: Option<u16>,
     ) -> Self {
         Self {
             graph_id: proxy.graph_id.clone(),
@@ -32,11 +51,12 @@ impl UdpSessionKey {
             peer,
             original_destination: original_dst,
             packet_semantics: udp_packet_semantics_for_destination(proxy, original_dst),
+            dispatch_lane,
         }
     }
 
     pub(super) fn to_value(&self) -> Value {
-        packet_session_value(
+        let mut value = packet_session_value(
             UdpPacketSessionIdentity {
                 graph_id: self.graph_id.clone(),
                 graph_identity_hash: self.graph_identity_hash.clone(),
@@ -57,7 +77,22 @@ impl UdpSessionKey {
                 ),
             },
             None,
-        )
+        );
+        if let Some(dispatch_lane) = self.dispatch_lane {
+            let lane_hash = session_lane_hash(
+                &self.graph_identity_hash,
+                &self.outbound,
+                self.peer,
+                self.original_destination,
+                self.packet_semantics,
+                dispatch_lane,
+            );
+            value["dispatchLane"] = json!(dispatch_lane);
+            value["sessionHash"] = json!(&lane_hash);
+            value["sessionIdentity"]["dispatchLane"] = json!(dispatch_lane);
+            value["sessionIdentity"]["sessionHash"] = json!(lane_hash);
+        }
+        value
     }
 
     pub(super) fn peer(&self) -> SocketAddr {
@@ -83,6 +118,7 @@ impl PartialEq for UdpSessionKey {
             && self.peer == other.peer
             && self.original_destination == other.original_destination
             && self.packet_semantics == other.packet_semantics
+            && self.dispatch_lane == other.dispatch_lane
     }
 }
 
@@ -95,7 +131,21 @@ impl Hash for UdpSessionKey {
         self.peer.hash(state);
         self.original_destination.hash(state);
         self.packet_semantics.hash(state);
+        self.dispatch_lane.hash(state);
     }
+}
+
+pub(super) fn dns_request_dispatch_lane(payload: &[u8], lane_count: usize) -> u16 {
+    let lane_count = lane_count.max(1).min(u16::MAX as usize + 1);
+    if lane_count == 1 {
+        return 0;
+    }
+    let transaction_id = match payload {
+        [high, low, ..] => u16::from_be_bytes([*high, *low]) as usize,
+        [byte] => *byte as usize,
+        [] => 0,
+    };
+    (transaction_id % lane_count) as u16
 }
 
 pub(super) struct UdpPacketSessionIdentity {
@@ -234,6 +284,27 @@ fn session_hash(
     )
 }
 
+fn session_lane_hash(
+    graph_identity_hash: &str,
+    outbound: &str,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    packet_semantics: UdpPacketSemantics,
+    dispatch_lane: u16,
+) -> String {
+    full_sha256(
+        "udp-session-lane",
+        &[
+            graph_identity_hash,
+            outbound,
+            &peer.to_string(),
+            &original_dst.to_string(),
+            packet_semantics.as_str(),
+            &dispatch_lane.to_string(),
+        ],
+    )
+}
+
 fn probe_session_hash(
     graph_identity_hash: &str,
     outbound: &str,
@@ -279,4 +350,19 @@ fn sha256_digest(domain: &str, parts: &[&str]) -> String {
 fn update_hash_part(hasher: &mut Sha256, part: &str) {
     hasher.update((part.len() as u64).to_be_bytes());
     hasher.update(part.as_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dns_transaction_ids_distribute_stably_across_bounded_lanes() {
+        assert_eq!(dns_request_dispatch_lane(&[0x00, 0x05], 1), 0);
+        assert_eq!(dns_request_dispatch_lane(&[0x00, 0x05], 4), 1);
+        assert_eq!(dns_request_dispatch_lane(&[0x00, 0x09], 4), 1);
+        assert_eq!(dns_request_dispatch_lane(&[0x00, 0x06], 4), 2);
+        assert_eq!(dns_request_dispatch_lane(&[0x03], 4), 3);
+        assert_eq!(dns_request_dispatch_lane(&[], 4), 0);
+    }
 }

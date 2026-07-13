@@ -693,6 +693,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn resident_dns_fast_path_uses_one_bounded_dispatcher_task() {
+        let manager = include_str!("manager.rs");
+        let dispatcher = include_str!("manager/dns_dispatcher.rs");
+        let production_dispatcher = dispatcher.split("#[cfg(test)]").next().unwrap();
+
+        assert!(!manager.contains("spawn_resident_dns_datagram_handler"));
+        assert!(!manager.contains("spawn_forced_resident_dns_proxy_datagram_handler"));
+        assert_eq!(production_dispatcher.matches("tokio::spawn").count(), 1);
+        assert!(production_dispatcher.contains("FuturesUnordered"));
+        assert!(production_dispatcher.contains("mpsc::channel(queue_depth.max(1))"));
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum UdpExecutorShape {
         Dns,
