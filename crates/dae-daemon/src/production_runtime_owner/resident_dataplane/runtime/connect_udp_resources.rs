@@ -12,6 +12,7 @@ pub(crate) struct ResidentConnectUdpRuntimePlan {
     pub(crate) h2_pool_connections: usize,
     pub(crate) h3_pool_connections: usize,
     pub(crate) sessions_per_connection: usize,
+    pub(crate) h2_session_queue_depth: usize,
     pub(crate) h3_command_queue_depth: usize,
     pub(crate) h3_session_queue_depth: usize,
     pub(crate) h3_datagram_buffer_bytes: usize,
@@ -28,6 +29,7 @@ impl ResidentConnectUdpRuntimePlan {
             h2_pool_connections: profile.connect_udp_h2_pool_connections_default(),
             h3_pool_connections: profile.connect_udp_h3_pool_connections_default(),
             sessions_per_connection: profile.connect_udp_sessions_per_connection_default(),
+            h2_session_queue_depth: profile.connect_udp_h2_session_queue_depth_default(),
             h3_command_queue_depth: profile.connect_udp_h3_command_queue_depth_default(),
             h3_session_queue_depth: profile.connect_udp_h3_session_queue_depth_default(),
             h3_datagram_buffer_bytes: profile.connect_udp_h3_datagram_buffer_bytes_default(),
@@ -57,6 +59,7 @@ impl ResidentConnectUdpRuntimePlan {
             "h2PoolConnections": self.h2_pool_connections,
             "h3PoolConnections": self.h3_pool_connections,
             "sessionsPerConnection": self.sessions_per_connection,
+            "h2SessionQueueDepth": self.h2_session_queue_depth,
             "h3CommandQueueDepth": self.h3_command_queue_depth,
             "h3SessionQueueDepth": self.h3_session_queue_depth,
             "h3DatagramBufferBytes": self.h3_datagram_buffer_bytes,
@@ -84,6 +87,8 @@ mod tests {
         assert!(balanced.h2_pool_connections <= high.h2_pool_connections);
         assert!(low.sessions_per_connection <= balanced.sessions_per_connection);
         assert!(balanced.sessions_per_connection <= high.sessions_per_connection);
+        assert!(low.h2_session_queue_depth <= balanced.h2_session_queue_depth);
+        assert!(balanced.h2_session_queue_depth <= high.h2_session_queue_depth);
         assert!(low.h3_session_queue_depth <= balanced.h3_session_queue_depth);
         assert!(balanced.h3_session_queue_depth <= high.h3_session_queue_depth);
         assert!(low.h3_datagram_buffer_bytes <= balanced.h3_datagram_buffer_bytes);
