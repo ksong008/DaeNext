@@ -23,6 +23,7 @@ pub(crate) fn build_masque_proxy_plan(
             ResidentProxyProtocolPlan::ConnectUdpH2Tls {
                 authentication,
                 target_template: parsed.target_template.clone(),
+                runtime: ResidentConnectUdpRuntimePlan::standalone(),
             },
         ),
         MasqueTransport::H3 => (
@@ -31,6 +32,7 @@ pub(crate) fn build_masque_proxy_plan(
             ResidentProxyProtocolPlan::ConnectUdpH3Tls {
                 authentication,
                 target_template: parsed.target_template.clone(),
+                runtime: ResidentConnectUdpRuntimePlan::standalone(),
             },
         ),
     };

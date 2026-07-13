@@ -60,8 +60,9 @@ pub use self::memory_bench::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use self::resolver::{
-    ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl,
-    resolve_socket_addr_candidates, try_socket_addr_candidates,
+    ResolvedHostAddrs, authority_from_host_port,
+    resolve_host_addrs_with_configured_fallback_dns_ttl, resolve_socket_addr_candidates,
+    try_socket_addr_candidates,
 };
 
 #[path = "runtime/defaults.rs"]
@@ -100,6 +101,9 @@ use self::udp_resources::*;
 mod resource_profile;
 pub(super) use self::resource_profile::resident_datapath_postflight_interval_seconds_default;
 use self::resource_profile::*;
+#[path = "runtime/connect_udp_resources.rs"]
+mod connect_udp_resources;
+use self::connect_udp_resources::*;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 pub(super) use self::health_checks::*;

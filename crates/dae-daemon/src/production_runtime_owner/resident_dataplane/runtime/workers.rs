@@ -41,6 +41,11 @@ pub(crate) fn start_resident_dataplane_workers(
             None,
         );
     }
+    let resource_config = ResidentRuntimeResourceConfig::from_config(config);
+    let connect_udp_runtime = ResidentConnectUdpRuntimePlan::from_profile(
+        reload_generation,
+        resource_config.runtime_profile.profile,
+    );
     let so_mark_from_dae = effective_so_mark_from_dae(config.global.so_mark_from_dae);
     let default_outbound = plan.default_outbound;
     let tcp_dial_mode = plan.tcp_dial_mode;
@@ -48,7 +53,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let dns_plan = plan.dns;
     let mut proxy_groups = plan.proxies;
     for group in proxy_groups.values_mut() {
-        group.apply_xhttp_xmux_runtime_generation(reload_generation);
+        group.apply_runtime_generation(reload_generation, connect_udp_runtime);
     }
     let Some(default_outbound) = default_outbound else {
         return (
@@ -165,7 +170,6 @@ pub(crate) fn start_resident_dataplane_workers(
         .map(ResidentDnsBindListener::report)
         .unwrap_or_else(disabled_dns_bind_listener_report);
 
-    let resource_config = ResidentRuntimeResourceConfig::from_config(config);
     let udp_runtime_config =
         ResidentUdpRuntimeConfig::from_resources(reload_generation, &resource_config);
     apply_resident_udp_socket_buffer_tuning(&udp_socket);
@@ -182,7 +186,13 @@ pub(crate) fn start_resident_dataplane_workers(
     );
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::clone(&default_group);
-    let manual_probe_plans = plan::build_resident_manual_probe_plans(config);
+    let mut manual_probe_plans = plan::build_resident_manual_probe_plans(config);
+    for probe in manual_probe_plans
+        .values_mut()
+        .filter_map(|probe| probe.as_mut().ok())
+    {
+        probe.apply_runtime_generation(reload_generation, connect_udp_runtime);
+    }
     let manual_probe_plan_count = manual_probe_plans
         .values()
         .filter(|plan| plan.is_ok())

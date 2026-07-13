@@ -41,10 +41,6 @@ pub(super) async fn probe_resident_candidate_tcp_families(
         }
         None => candidate.tcp_check.resolver.resolve().await,
     };
-    if targets.is_cancelled() {
-        return Err(HealthCheckRoundStatus::Cancelled);
-    }
-
     let (ipv4, ipv6) = tokio::join!(
         Box::pin(probe_tcp_family(
             candidate,
@@ -131,7 +127,6 @@ async fn probe_tcp_family(
             latency_ms: None,
             message: Some(err),
         }),
-        plan::ResidentHealthTargetFamily::Cancelled => Err(HealthCheckRoundStatus::Cancelled),
     }
 }
 

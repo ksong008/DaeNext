@@ -681,6 +681,7 @@ dependencies = [
  "libc",
  "quinn",
  "quinn-udp",
+ "rcgen",
  "regex",
  "rusqlite",
  "rustls",

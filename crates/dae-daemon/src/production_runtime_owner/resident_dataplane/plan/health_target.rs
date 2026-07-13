@@ -6,27 +6,12 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentHealthT
     Present(Vec<SocketAddr>),
     Absent,
     Unknown(String),
-    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentHealthTargetFamilies {
     pub(in crate::production_runtime_owner::resident_dataplane) ipv4: ResidentHealthTargetFamily,
     pub(in crate::production_runtime_owner::resident_dataplane) ipv6: ResidentHealthTargetFamily,
-}
-
-impl ResidentHealthTargetFamilies {
-    pub(in crate::production_runtime_owner::resident_dataplane) fn cancelled() -> Self {
-        Self {
-            ipv4: ResidentHealthTargetFamily::Cancelled,
-            ipv6: ResidentHealthTargetFamily::Cancelled,
-        }
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn is_cancelled(&self) -> bool {
-        matches!(self.ipv4, ResidentHealthTargetFamily::Cancelled)
-            || matches!(self.ipv6, ResidentHealthTargetFamily::Cancelled)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -264,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn resolver_error_and_cancellation_remain_distinct_from_absent_family() {
+    fn resolver_error_remains_distinct_from_absent_family() {
         let unknown = ResidentHealthTargetFamilies {
             ipv4: ResidentHealthTargetFamily::Unknown("temporary resolver failure".to_owned()),
             ipv6: ResidentHealthTargetFamily::Unknown("temporary resolver failure".to_owned()),
@@ -272,12 +257,6 @@ mod tests {
         assert!(matches!(
             unknown.ipv4,
             ResidentHealthTargetFamily::Unknown(_)
-        ));
-        let cancelled = ResidentHealthTargetFamilies::cancelled();
-        assert!(cancelled.is_cancelled());
-        assert!(!matches!(
-            cancelled.ipv4,
-            ResidentHealthTargetFamily::Absent
         ));
     }
 }

@@ -47,6 +47,15 @@ pub(crate) struct ResidentProxyProbePlan {
 }
 
 impl ResidentProxyProbePlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
+        &mut self,
+        runtime_generation: u64,
+        connect_udp_runtime: ResidentConnectUdpRuntimePlan,
+    ) {
+        Arc::make_mut(&mut self.proxy)
+            .apply_runtime_generation(runtime_generation, connect_udp_runtime);
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn apply_latency_probe_control_mark(
         &mut self,
         mark: u32,
@@ -397,13 +406,14 @@ pub(crate) struct ResidentProxyGroupPlan {
 }
 
 impl ResidentProxyGroupPlan {
-    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_xhttp_xmux_runtime_generation(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
         &mut self,
         runtime_generation: u64,
+        connect_udp_runtime: ResidentConnectUdpRuntimePlan,
     ) {
         for candidate in &mut self.candidates {
             Arc::make_mut(&mut candidate.proxy)
-                .apply_xhttp_xmux_runtime_generation(runtime_generation);
+                .apply_runtime_generation(runtime_generation, connect_udp_runtime);
         }
     }
 

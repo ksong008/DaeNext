@@ -39,6 +39,7 @@ use url::Url;
 use super::super::resident_routing::ResidentGeodataStore;
 #[cfg(test)]
 use super::RESIDENT_TCP_LATENCY_PROBE_TIMEOUT;
+pub(super) use super::connect_udp_resources::ResidentConnectUdpRuntimePlan;
 use super::{
     dns::{ResidentDnsPlan, build_resident_dns_plan},
     execution_link_hash, link_hash, redacted_link_source,

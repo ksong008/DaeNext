@@ -22,6 +22,13 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     pub(in crate::production_runtime_owner::resident_dataplane) udp: ResidentUdpExecutorFactory,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentManualProbeDispatch {
+    Tcp,
+    Udp,
+    PolicyClosed,
+}
+
 impl ResidentExecutionPlan {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
         let security = ResidentSecurityUnderlayPlan::from_proxy(proxy);
@@ -46,6 +53,21 @@ impl ResidentExecutionPlan {
             udp_policy_closed: self.udp.policy_closed(),
         }
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn manual_probe_dispatch(
+        self,
+    ) -> ResidentManualProbeDispatch {
+        match self.protocol {
+            ResidentProtocolShape::ConnectUdpH2 | ResidentProtocolShape::ConnectUdpH3 => {
+                if self.udp.policy_closed() {
+                    ResidentManualProbeDispatch::PolicyClosed
+                } else {
+                    ResidentManualProbeDispatch::Udp
+                }
+            }
+            _ => ResidentManualProbeDispatch::Tcp,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -56,5 +78,29 @@ mod tests {
     fn materialized_execution_plan_stays_compact() {
         assert!(std::mem::size_of::<ResidentExecutionPlan>() <= 8);
         assert!(std::mem::size_of::<Option<ResidentExecutionPlan>>() <= 8);
+    }
+
+    #[test]
+    fn connect_udp_manual_probe_follows_udp_admission_independently() {
+        let h2 = ResidentExecutionPlan {
+            protocol: ResidentProtocolShape::ConnectUdpH2,
+            security: ResidentSecurityUnderlayPlan::StandardTls,
+            wrapper: ResidentStreamWrapperPlan::ConnectUdpH2,
+            udp: ResidentUdpExecutorFactory::ConnectUdpH2,
+        };
+        assert_eq!(h2.manual_probe_dispatch(), ResidentManualProbeDispatch::Udp);
+
+        let h3 = ResidentExecutionPlan {
+            protocol: ResidentProtocolShape::ConnectUdpH3,
+            security: ResidentSecurityUnderlayPlan::QuicTls,
+            wrapper: ResidentStreamWrapperPlan::ConnectUdpH3,
+            udp: ResidentUdpExecutorFactory::PolicyClosed(
+                udp::ResidentUdpPolicyClosedReason::ConnectUdpH3Pending,
+            ),
+        };
+        assert_eq!(
+            h3.manual_probe_dispatch(),
+            ResidentManualProbeDispatch::PolicyClosed
+        );
     }
 }
