@@ -11,6 +11,7 @@ pub(super) async fn stream_runtime_events_async(
 ) -> io::Result<()> {
     write_sse_headers(stream, request).await?;
     write_sse_retry(stream).await?;
+    let mut last_runtime_identity = app.runtime.runtime_event_identity();
     let first = runtime_overview_report(app, request);
     let mut last_reload_count = first
         .pointer("/runtime/reloadCount")
@@ -34,13 +35,15 @@ pub(super) async fn stream_runtime_events_async(
             _ = interval.tick() => {}
         }
         let delta = runtime_overview_delta_report(app, request);
+        let runtime_identity = app.runtime.runtime_event_identity();
         let reload_count = delta["reloadCount"].as_u64().unwrap_or(last_reload_count);
-        if reload_count != last_reload_count {
+        if reload_count != last_reload_count || runtime_identity != last_runtime_identity {
             let full = runtime_overview_report(app, request);
             last_reload_count = full
                 .pointer("/runtime/reloadCount")
                 .and_then(Value::as_u64)
                 .unwrap_or(reload_count);
+            last_runtime_identity = runtime_identity;
             write_sse_event(stream, "runtime.overview", &full).await?;
         } else {
             write_sse_event(stream, "runtime.overview.delta", &delta).await?;
