@@ -133,7 +133,7 @@ fn subscription_field_save_is_atomic() {
 }
 
 #[test]
-fn removed_subscription_nodes_invalidate_live_group_bindings() {
+fn empty_refresh_preserves_nodes_until_the_subscription_is_explicitly_deleted() {
     let fixture = FreshProductState::new("subscription-live-group-binding");
     seed_subscription(&fixture);
     apply_subscription_refresh_result(
@@ -177,7 +177,37 @@ fn removed_subscription_nodes_invalidate_live_group_bindings() {
 
     let (changed, _) =
         apply_subscription_refresh_result(fixture.state(), 7, "second-refresh", &[]).unwrap();
-    assert!(changed);
+    assert!(!changed);
+    let conn = fixture.connection();
+    assert_eq!(count_nodes_for_subscription(&conn, 7).unwrap(), 1);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM group_nodes WHERE group_id = 9",
+            [],
+            |row| { row.get::<_, i64>(0) }
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM node_latency_results WHERE node_id = ?1",
+            params![node_id],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+    drop(conn);
+
+    assert_eq!(delete_subscription(fixture.state(), 7).unwrap(), 1);
     let conn = fixture.connection();
     assert_eq!(count_nodes_for_subscription(&conn, 7).unwrap(), 0);
     assert_eq!(
@@ -205,6 +235,160 @@ fn removed_subscription_nodes_invalidate_live_group_bindings() {
         .unwrap(),
         1
     );
+}
+
+#[test]
+fn unsupported_subscription_sources_do_not_replace_healthy_nodes() {
+    let fixture = FreshProductState::new("subscription-not-admitted-preserved");
+    seed_subscription(&fixture);
+    apply_subscription_refresh_result(
+        fixture.state(),
+        7,
+        "first-refresh",
+        &["socks://127.0.0.1:1080#healthy".to_owned()],
+    )
+    .unwrap();
+
+    let (changed, items) = apply_subscription_refresh_result(
+        fixture.state(),
+        7,
+        "rejected-refresh",
+        &["unknown://127.0.0.1:9#unsupported".to_owned()],
+    )
+    .unwrap();
+
+    assert!(!changed);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["classification"], json!("not-admitted"));
+    let conn = fixture.connection();
+    assert_eq!(count_nodes_for_subscription(&conn, 7).unwrap(), 1);
+    assert_eq!(
+        conn.query_row(
+            "SELECT link FROM nodes WHERE subscription_id = 7",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "socks://127.0.0.1:1080#healthy"
+    );
+}
+
+#[test]
+fn bulk_subscription_delete_uses_one_revision_and_one_group_version_change() {
+    let fixture = FreshProductState::new("subscription-bulk-delete-transaction");
+    for id in [7_i64, 8_i64] {
+        fixture
+            .connection()
+            .execute(
+                "INSERT INTO subscriptions(
+                    id, updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy
+                 ) VALUES(?1, 'old-time', ?2, ?3, 0, 'fetched', '', ?4, 0)",
+                params![
+                    id,
+                    format!("https://example.invalid/{id}"),
+                    DEFAULT_SUBSCRIPTION_CRON_EXP,
+                    format!("sub-{id}")
+                ],
+            )
+            .unwrap();
+        apply_subscription_refresh_result(
+            fixture.state(),
+            id,
+            "first-refresh",
+            &[format!("socks://127.0.0.1:{}#node-{id}", 10_000 + id)],
+        )
+        .unwrap();
+    }
+    let conn = fixture.connection();
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, 'bulk-group', 'min', 0)",
+        [],
+    )
+    .unwrap();
+    for id in [7_i64, 8_i64] {
+        conn.execute(
+            "INSERT INTO group_subscriptions(group_id, subscription_id, name_filter_regex)
+             VALUES(9, ?1, '.*')",
+            params![id],
+        )
+        .unwrap();
+    }
+    let revision_before = current_runtime_external_input_version(&conn).unwrap();
+    drop(conn);
+
+    assert_eq!(
+        delete_subscriptions_by_ids(fixture.state(), &[7, 8, 8]).unwrap(),
+        2
+    );
+
+    let conn = fixture.connection();
+    assert_eq!(
+        current_runtime_external_input_version(&conn).unwrap(),
+        revision_before + 1
+    );
+    assert_eq!(
+        conn.query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM subscriptions", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn create_and_delete_auto_apply_when_runtime_is_running() {
+    with_product_runtime_fake_start_override(true, || {
+        let fixture = FreshProductState::new("subscription-create-delete-auto-apply");
+        fixture.seed_selected_resources();
+        let subscription_path = fixture.root().join("auto.sub");
+        fs::write(&subscription_path, b"socks://127.0.0.1:1080#auto-applied\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&subscription_path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let runtime = ProductRuntimeManager::new();
+        restore_runtime_from_state(
+            &runtime,
+            fixture.state(),
+            Some(fixture.root()),
+            ProductRuntimeLifecycleLogMode::StartupRestore,
+        )
+        .unwrap();
+        let create_request = HttpRequest {
+            method: "POST".to_owned(),
+            path: "/api/subscriptions".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: br#"{"link":"file://auto.sub","tag":"auto","cronEnable":false}"#.to_vec(),
+        };
+
+        let created =
+            create_subscription(fixture.state(), fixture.root(), &runtime, &create_request);
+        assert_eq!(created.status, 201);
+        let created: Value = serde_json::from_slice(&created.body).unwrap();
+        assert_eq!(created["runtimeApplyRequested"], json!(true));
+        assert_eq!(created["runtimeReloaded"], json!(true));
+        let subscription_id = created["subscription"]["id"].as_i64().unwrap();
+
+        let deleted =
+            delete_subscription_by_id(fixture.state(), fixture.root(), &runtime, subscription_id);
+        assert_eq!(deleted.status, 200);
+        let deleted: Value = serde_json::from_slice(&deleted.body).unwrap();
+        assert_eq!(deleted["runtimeApplyRequested"], json!(true));
+        assert_eq!(deleted["runtimeReloaded"], json!(true));
+        assert_eq!(runtime.summary()["reloadCount"], json!(3));
+        runtime
+            .stop_and_wait_for_cleanup("subscription-auto-apply-test")
+            .unwrap();
+    });
 }
 
 #[test]

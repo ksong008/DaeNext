@@ -72,6 +72,10 @@ mod proxy_builders;
 use self::proxy_builders::*;
 mod public_helpers;
 pub(super) use self::public_helpers::*;
+mod source_admission;
+pub(crate) use self::source_admission::{
+    ResidentNodeSourceAdmission, resident_node_source_admissions,
+};
 mod fingerprint_dial;
 use self::fingerprint_dial::*;
 mod selection_policy;

@@ -38,6 +38,7 @@ pub(crate) fn list_subscriptions_value(state: &Path, expand_nodes: bool) -> io::
 pub(crate) fn create_subscription(
     state: &Path,
     config_dir: &Path,
+    runtime: &ProductRuntimeManager,
     request: &HttpRequest,
 ) -> HttpResponse {
     let body = match json_body(request) {
@@ -95,6 +96,10 @@ pub(crate) fn create_subscription(
         refresh_subscription_from_remote(state, config_dir, id).unwrap_or_else(|err| {
             json!({
                 "link": link,
+                "fetched": false,
+                "refreshOutcome": "refresh-error-preserved",
+                "preservedExistingNodes": true,
+                "runtimeInputChanged": false,
                 "nodeImportResult": [{
                     "link": link,
                     "error": err.to_string(),
@@ -102,14 +107,22 @@ pub(crate) fn create_subscription(
                 }]
             })
         });
-    HttpResponse::json(
-        201,
-        subscription_import_result::subscription_import_response_value(
-            id,
-            link,
-            import_report["nodeImportResult"].clone(),
-        ),
+    let mut response = subscription_import_result::subscription_import_response_value(
+        id,
+        link,
+        import_report["nodeImportResult"].clone(),
+    );
+    copy_subscription_refresh_fields(&import_report, &mut response);
+    let outcome = SubscriptionRefreshOutcome::from_report(&import_report);
+    apply_runtime_after_subscription_change(
+        state,
+        config_dir,
+        runtime,
+        outcome.requests_runtime_apply(),
+        "subscription-create",
     )
+    .insert_into(&mut response);
+    HttpResponse::json(201, response)
 }
 
 pub(crate) fn get_subscription(state: &Path, id: i64) -> HttpResponse {
@@ -214,25 +227,14 @@ pub(crate) fn refresh_subscription(
                 ("warn", format!("subscription {id} refresh fetch failed"))
             };
             let _ = append_log_for_config(config_dir, state, level, &message);
-            let reload_result = if outcome.requests_runtime_apply() {
-                reload_runtime_after_subscription_refresh(state, config_dir, runtime)
-            } else {
-                Ok(None)
-            };
-            match reload_result {
-                Ok(Some(reload_report)) => {
-                    if let Value::Object(map) = &mut report {
-                        map.insert("runtimeReloaded".to_owned(), json!(true));
-                        map.insert("runtimeReload".to_owned(), reload_report);
-                    }
-                }
-                Ok(None) => {
-                    if let Value::Object(map) = &mut report {
-                        map.insert("runtimeReloaded".to_owned(), json!(false));
-                    }
-                }
-                Err(err) => return HttpResponse::json(500, json!({"error": err})),
-            }
+            apply_runtime_after_subscription_change(
+                state,
+                config_dir,
+                runtime,
+                outcome.requests_runtime_apply(),
+                "subscription-refresh",
+            )
+            .insert_into(&mut report);
             if let Some(subscription) = get_subscription_value(state, id)
                 .ok()
                 .flatten()
@@ -252,134 +254,73 @@ pub(crate) fn refresh_subscription(
     }
 }
 
-pub(crate) fn reload_runtime_after_subscription_refresh(
+pub(crate) fn delete_subscriptions(
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
-) -> Result<Option<Value>, String> {
-    if !runtime.is_running() {
-        return Ok(None);
-    }
-    if !runtime_modified_for_running_runtime(state, runtime)? {
-        return Ok(None);
-    }
-
-    let reload_started_at = Instant::now();
-    match restore_runtime_from_state(
-        runtime,
-        state,
-        Some(config_dir),
-        ProductRuntimeLifecycleLogMode::ReloadSubscriptionRefresh,
-    ) {
-        Ok(report) => {
-            let applied = report["applied"].as_bool().unwrap_or(true);
-            let mut fields = BTreeMap::new();
-            fields.insert("source".to_owned(), "subscription-refresh".to_owned());
-            fields.insert("applied".to_owned(), applied.to_string());
-            fields.insert(
-                "elapsed".to_owned(),
-                format!("{:?}", reload_started_at.elapsed()),
-            );
-            let _ = append_lifecycle_log_fields_for_config(
-                config_dir,
-                state,
-                "info",
-                "[Reload] Finished",
-                fields,
-            );
-            Ok(applied.then_some(report))
-        }
-        Err(err) => {
-            let mut fields = BTreeMap::new();
-            fields.insert("source".to_owned(), "subscription-refresh".to_owned());
-            fields.insert("error".to_owned(), err.clone());
-            let _ = append_lifecycle_log_fields_for_config(
-                config_dir,
-                state,
-                "error",
-                "[Reload] Failed to reload",
-                fields,
-            );
-            Err(format!(
-                "failed to reload runtime after subscription refresh: {err}"
-            ))
-        }
-    }
-}
-
-pub(crate) fn delete_subscriptions(state: &Path, request: &HttpRequest) -> HttpResponse {
+    request: &HttpRequest,
+) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
-    let mut removed = 0_usize;
-    for id in ids {
-        if let Ok(value) = delete_subscription(state, id) {
-            removed += value;
-        }
-    }
-    HttpResponse::json(200, json!({"removed": removed}))
+    let removed = match delete_subscriptions_by_ids(state, &ids) {
+        Ok(removed) => removed,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    let mut response = json!({"removed": removed});
+    apply_runtime_after_subscription_change(
+        state,
+        config_dir,
+        runtime,
+        removed != 0,
+        "subscription-delete-bulk",
+    )
+    .insert_into(&mut response);
+    HttpResponse::json(200, response)
 }
 
-pub(crate) fn delete_subscription_by_id(state: &Path, id: i64) -> HttpResponse {
+pub(crate) fn delete_subscription_by_id(
+    state: &Path,
+    config_dir: &Path,
+    runtime: &ProductRuntimeManager,
+    id: i64,
+) -> HttpResponse {
     match delete_subscription(state, id) {
-        Ok(removed) => HttpResponse::json(200, json!({"removed": removed})),
+        Ok(removed) => {
+            let mut response = json!({"removed": removed});
+            apply_runtime_after_subscription_change(
+                state,
+                config_dir,
+                runtime,
+                removed != 0,
+                "subscription-delete",
+            )
+            .insert_into(&mut response);
+            HttpResponse::json(200, response)
+        }
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-pub(crate) fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
-    let removed = {
-        let _guard = subscription_write_guard()?;
-        let mut conn = open_state_connection(state)?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_io_error)?;
-        tx.execute(
-            "UPDATE groups
-             SET version = version + 1
-             WHERE id IN (
-                 SELECT group_id FROM group_subscriptions WHERE subscription_id = ?1
-                 UNION
-                 SELECT group_id FROM group_nodes
-                 WHERE node_id IN (
-                     SELECT id FROM nodes WHERE subscription_id = ?1
-                 )
-             )",
-            params![id],
-        )
-        .map_err(sqlite_io_error)?;
-        tx.execute(
-            "DELETE FROM group_nodes
-             WHERE node_id IN (
-                 SELECT id FROM nodes WHERE subscription_id = ?1
-             )",
-            params![id],
-        )
-        .map_err(sqlite_io_error)?;
-        tx.execute(
-            "DELETE FROM node_latency_results
-             WHERE node_id IN (
-                 SELECT id FROM nodes WHERE subscription_id = ?1
-             )",
-            params![id],
-        )
-        .map_err(sqlite_io_error)?;
-        tx.execute(
-            "DELETE FROM group_subscriptions WHERE subscription_id = ?1",
-            params![id],
-        )
-        .map_err(sqlite_io_error)?;
-        tx.execute("DELETE FROM nodes WHERE subscription_id = ?1", params![id])
-            .map_err(sqlite_io_error)?;
-        let removed = tx
-            .execute("DELETE FROM subscriptions WHERE id = ?1", params![id])
-            .map_err(sqlite_io_error)?;
-        if removed > 0 {
-            bump_runtime_external_input_version_with_connection(&tx)?;
-        }
-        tx.commit().map_err(sqlite_io_error)?;
-        removed
+fn copy_subscription_refresh_fields(source: &Value, target: &mut Value) {
+    let (Value::Object(source), Value::Object(target)) = (source, target) else {
+        return;
     };
-    Ok(removed)
+    for key in [
+        "fetched",
+        "fetchedAt",
+        "refreshOutcome",
+        "sourceKind",
+        "sourceNodeCount",
+        "admittedNodeCount",
+        "invalidNodeCount",
+        "notAdmittedNodeCount",
+        "preservedExistingNodes",
+        "runtimeInputChanged",
+    ] {
+        if let Some(value) = source.get(key) {
+            target.insert(key.to_owned(), value.clone());
+        }
+    }
 }
 
 pub(crate) fn subscription_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {

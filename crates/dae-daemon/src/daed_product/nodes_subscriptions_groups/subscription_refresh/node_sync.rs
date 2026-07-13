@@ -7,7 +7,8 @@ pub(crate) fn replace_subscription_nodes(
     links: &[String],
 ) -> io::Result<Vec<Value>> {
     let prepared = super::node_stage::prepare_subscription_nodes(links);
-    replace_prepared_subscription_nodes(conn, subscription_id, &prepared).map(|result| result.items)
+    replace_prepared_subscription_nodes(conn, subscription_id, &prepared.admitted)
+        .map(|result| result.items)
 }
 
 pub(super) struct SubscriptionNodeSyncResult {

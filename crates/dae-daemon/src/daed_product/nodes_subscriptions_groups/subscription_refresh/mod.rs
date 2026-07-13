@@ -6,9 +6,11 @@ mod node_stage;
 mod node_sync;
 mod outcome;
 mod source;
+mod transaction;
 
 pub(super) use outcome::SubscriptionRefreshOutcome;
 
+#[cfg(test)]
 pub(crate) use self::content::subscription_links_from_content;
 #[cfg(test)]
 pub(crate) use self::http::{
@@ -51,24 +53,33 @@ pub(crate) fn refresh_subscription_from_remote(
         proxy_config.as_ref(),
     ) {
         Ok(content) => {
-            let links = subscription_links_from_content(&content);
-            let (runtime_input_changed, node_import_result) =
-                apply_subscription_refresh_result(state, id, &fetched_at, &links)?;
+            let content = content::parse_subscription_content(&content);
+            let applied =
+                transaction::apply_subscription_refresh_report(state, id, &fetched_at, &content)?;
             Ok(json!({
                 "link": source.link,
                 "fetched": true,
                 "fetchedAt": fetched_at,
-                "runtimeInputChanged": runtime_input_changed,
-                "nodeImportResult": node_import_result,
+                "refreshOutcome": applied.refresh_outcome,
+                "sourceKind": applied.source_kind,
+                "sourceNodeCount": applied.source_node_count,
+                "admittedNodeCount": applied.admitted_node_count,
+                "invalidNodeCount": applied.invalid_node_count,
+                "notAdmittedNodeCount": applied.not_admitted_node_count,
+                "preservedExistingNodes": applied.preserved_existing_nodes,
+                "runtimeInputChanged": applied.runtime_input_changed,
+                "nodeImportResult": applied.node_import_result,
             }))
         }
         Err(err) => {
             let error = err.to_string();
-            record_subscription_fetch_error(state, id, &fetched_at, &error)?;
+            transaction::record_subscription_fetch_error(state, id, &fetched_at, &error)?;
             Ok(json!({
                 "link": source.link,
                 "fetched": false,
                 "fetchedAt": fetched_at,
+                "refreshOutcome": "fetch-failed-preserved",
+                "preservedExistingNodes": true,
                 "runtimeInputChanged": false,
                 "nodeImportResult": [{
                     "link": source.link,
@@ -98,76 +109,16 @@ fn subscription_source_by_id(state: &Path, id: i64) -> io::Result<SubscriptionSo
     .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "subscription not found"))
 }
 
+#[cfg(test)]
 pub(in crate::daed_product) fn apply_subscription_refresh_result(
     state: &Path,
     id: i64,
     fetched_at: &str,
     links: &[String],
 ) -> io::Result<(bool, Vec<Value>)> {
-    let prepared_nodes = node_stage::prepare_subscription_nodes(links);
-    let _guard = subscription_write_guard()?;
-    let mut conn = open_state_connection(state)?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sqlite_io_error)?;
-    ensure_subscription_exists(&tx, id)?;
-    let sync_result = node_sync::replace_prepared_subscription_nodes(&tx, id, &prepared_nodes)?;
-    let runtime_input_changed = sync_result.runtime_input_changed;
-    let node_import_result = sync_result.items;
-    tx.execute(
-        "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
-        params![
-            fetched_at,
-            "fetched",
-            format!("{} node links fetched by Rust daed", links.len()),
-            id
-        ],
-    )
-    .map_err(sqlite_io_error)?;
-    if runtime_input_changed {
-        bump_runtime_external_input_version_with_connection(&tx)?;
-    }
-    tx.commit().map_err(sqlite_io_error)?;
-    Ok((runtime_input_changed, node_import_result))
-}
-
-fn record_subscription_fetch_error(
-    state: &Path,
-    id: i64,
-    fetched_at: &str,
-    error: &str,
-) -> io::Result<()> {
-    let _guard = subscription_write_guard()?;
-    let mut conn = open_state_connection(state)?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sqlite_io_error)?;
-    let updated = tx
-        .execute(
-            "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
-            params![fetched_at, "fetch_error", error, id],
-        )
-        .map_err(sqlite_io_error)?;
-    if updated == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "subscription not found",
-        ));
-    }
-    tx.commit().map_err(sqlite_io_error)?;
-    Ok(())
-}
-
-fn ensure_subscription_exists(conn: &Connection, id: i64) -> io::Result<()> {
-    conn.query_row(
-        "SELECT 1 FROM subscriptions WHERE id = ?1",
-        params![id],
-        |row| row.get::<_, i64>(0),
-    )
-    .optional()
-    .map_err(sqlite_io_error)?
-    .map(|_| ())
-    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "subscription not found"))
+    let content = content::SubscriptionContentReport::from_links(links);
+    let applied = transaction::apply_subscription_refresh_report(state, id, fetched_at, &content)?;
+    Ok((applied.runtime_input_changed, applied.node_import_result))
 }
 
 fn subscription_http_body_limit() -> usize {
