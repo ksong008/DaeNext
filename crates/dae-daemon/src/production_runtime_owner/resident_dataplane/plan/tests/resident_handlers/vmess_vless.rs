@@ -331,6 +331,14 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         vmess_h2_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-http2-body-stream"
     );
+    assert_eq!(
+        vmess_h2_graph["runtimeComponents"]["packetSessionManager"]["status"],
+        "fail-closed"
+    );
+    assert_eq!(
+        vmess_h2_graph["runtimeComponents"]["packetSessionManager"]["executor"],
+        "vmess-h2-udp-policy-closed"
+    );
     assert!(
         vmess_h2_graph["streamWrapperEndpoint"]["hostHash"]
             .as_str()
@@ -371,6 +379,10 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     let vless_websocket_graph = vless_websocket.executable_graph_value();
     assert_eq!(vless_websocket_graph["streamWrapper"], "websocket");
     assert_eq!(vless_websocket_graph["packetSemantics"], "udp-over-stream");
+    assert_eq!(
+        vless_websocket_graph["runtimeComponents"]["packetSessionManager"]["executor"],
+        "resident-vless-udp-over-websocket"
+    );
     assert_eq!(
         vless_websocket_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-websocket-binary-frame"
@@ -505,7 +517,10 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         vmess,
         vmess_tls,
         vmess_websocket,
+        vmess_websocket_tls,
         vmess_httpupgrade,
+        vmess_httpupgrade_tls,
+        vmess_grpc,
         vmess_h2,
         vless_websocket,
         vless_httpupgrade,

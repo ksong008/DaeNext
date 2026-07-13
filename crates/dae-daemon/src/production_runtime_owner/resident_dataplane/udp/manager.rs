@@ -990,7 +990,7 @@ fn udp_route_chosen_event(
         );
         map.insert(
             "protocol".to_owned(),
-            serde_json::Value::String(proxy.protocol.clone()),
+            serde_json::Value::String(proxy.protocol.to_owned()),
         );
         map.insert(
             "handler".to_owned(),

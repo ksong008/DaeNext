@@ -18,7 +18,7 @@ impl VlessXudpStreamSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if !is_xtls_rprx_vision_flow(&proxy.flow) {
+        if proxy.execution_plan().protocol != ResidentProtocolShape::VlessVision {
             return Err(
                 "VLESS Vision XUDP stream executor requires an official Vision flow; other admitted VLESS UDP shapes use their own executor"
                     .to_owned(),
@@ -199,7 +199,7 @@ impl VlessXhttpH2UdpSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if !proxy.flow.is_empty() {
+        if proxy.execution_plan().protocol != ResidentProtocolShape::VlessStandard {
             return Err(
                 "VLESS xHTTP UDP uses the standard VLESS UDP-over-stream command; flow must be empty"
                     .to_owned(),

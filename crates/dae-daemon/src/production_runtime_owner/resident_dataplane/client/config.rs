@@ -24,7 +24,8 @@ pub(super) fn boring_vless_connector(
     });
     builder.set_read_ahead(boring_read_ahead_enabled(proxy));
     if proxy.utls_fingerprint.is_none()
-        && (proxy.reality.is_some() || is_xtls_rprx_vision_flow(&proxy.flow))
+        && (proxy.reality.is_some()
+            || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision)
     {
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))
@@ -141,7 +142,7 @@ fn build_rustls_vless_client_config(
         ClientConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|err| format!("create VLESS Reality rustls provider: {err}"))?
-    } else if is_xtls_rprx_vision_flow(&proxy.flow) {
+    } else if proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision {
         ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
     } else {
         ClientConfig::builder()
@@ -426,14 +427,10 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
     }
     let mut protocols = proxy.alpn.clone();
     if protocols.is_empty()
-        && proxy
-            .utls_fingerprint
-            .as_ref()
-            .is_some_and(|fingerprint| fingerprint.alpn_policy == UTLS_ALPN_POLICY_RANDOMIZED_ALPN)
+        && let Some(fingerprint) = proxy.utls_fingerprint.as_ref()
+        && fingerprint.alpn_policy == UTLS_ALPN_POLICY_RANDOMIZED_ALPN
     {
-        if let Some(fingerprint) = proxy.utls_fingerprint.as_ref() {
-            protocols.extend(fingerprint.default_alpn.iter().cloned());
-        }
+        protocols.extend(fingerprint.default_alpn.iter().cloned());
     }
     let mut out = Vec::new();
     for protocol in protocols {
@@ -451,7 +448,7 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
 }
 
 pub(super) fn boring_read_ahead_enabled(proxy: &ResidentProxyPlan) -> bool {
-    !is_xtls_rprx_vision_flow(&proxy.flow)
+    proxy.execution_plan().protocol != ResidentProtocolShape::VlessVision
 }
 
 #[cfg(test)]
@@ -623,7 +620,7 @@ mod tests {
             graph_id: "resident-graph:test".to_owned(),
             graph_link_hash: "sha256:test".to_owned(),
             redacted_link_source: "source:<redacted>".to_owned(),
-            protocol: "trojan".to_owned(),
+            protocol: "trojan",
             group_name: "proxy".to_owned(),
             group_policy: "fixed".to_owned(),
             node_tag: "test".to_owned(),
@@ -645,6 +642,7 @@ mod tests {
             utls_fingerprint: None,
             reality: None,
             handler,
+            execution: None,
             chain_parent: None,
             mark: 0,
             mptcp: false,

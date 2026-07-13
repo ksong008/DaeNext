@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
 use super::super::super::client::open_async_resident_tls_client_with_flow;
-use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::super::super::plan::{
+    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
+};
 use super::super::super::tcp::{
     http_proxy_connect_async, http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async,
     socks5_connect_async,
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
-use super::tunnel::NativeTcpTunnel;
+use super::tunnel::{NativeTcpTunnel, PrefixedNativeTcpTunnel};
 
 pub(super) async fn open_basic_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
@@ -31,7 +33,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             transport,
             transport_host,
             transport_path,
-        } if selection.proxy.tls == "none" => {
+        } if selection.proxy.execution_plan().security == ResidentSecurityUnderlayPlan::None => {
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -54,7 +56,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             transport,
             transport_host,
             transport_path,
-        } if selection.proxy.tls == "tls" => {
+        } if selection.proxy.execution_plan().security.is_tls_stream() => {
             let mut stream = open_async_resident_tls_client_with_flow(
                 &selection.proxy,
                 selection.mark,
@@ -62,7 +64,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
-            http_proxy_connect_async(
+            let response_leftover = http_proxy_connect_async(
                 &mut stream,
                 target,
                 username,
@@ -73,7 +75,10 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
-            Ok(Box::new(stream))
+            Ok(Box::new(PrefixedNativeTcpTunnel::new(
+                response_leftover,
+                stream,
+            )))
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }

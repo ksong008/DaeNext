@@ -133,11 +133,8 @@ where
     let original_dst = listen_addr;
     let mut handle = tokio::spawn(async move {
         let mut inbound = accepted;
-        if matches!(
-            &selection.proxy.handler,
-            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
-                | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
-        ) {
+        let runtime_dispatch = selection.proxy.execution_plan().protocol.runtime_dispatch();
+        if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
             handle_proxy_tcp_connection_async(
                 &mut inbound,
                 peer,
@@ -148,12 +145,7 @@ where
                 &handler_metrics,
             )
             .await
-        } else if matches!(
-            &selection.proxy.handler,
-            ResidentProxyProtocolPlan::TrojanTcpTls { .. }
-                | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
-                | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
-        ) {
+        } else if runtime_dispatch == ResidentTcpRuntimeDispatch::FrameTls {
             handle_frame_tls_tcp_connection_async(
                 &mut inbound,
                 peer,
@@ -164,12 +156,7 @@ where
                 &handler_metrics,
             )
             .await
-        } else if matches!(
-            &selection.proxy.handler,
-            ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
-                | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-                | ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
-        ) {
+        } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Quic {
             handle_quic_tcp_connection_async(
                 &mut inbound,
                 peer,

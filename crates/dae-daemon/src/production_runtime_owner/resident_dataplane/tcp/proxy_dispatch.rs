@@ -1,6 +1,8 @@
 use super::*;
 mod entry;
 pub(super) use self::entry::*;
+mod stream;
+pub(super) use self::stream::*;
 mod trojan_handlers;
 pub(super) use self::trojan_handlers::*;
 mod anytls;

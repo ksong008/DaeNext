@@ -5,7 +5,9 @@ use dae_outbound::{shared_transport::HttpUpgradeOptions, trojan::packet as troja
 use super::super::super::ResidentStopSignal;
 
 use super::super::super::client::open_async_resident_tls_client_with_flow;
-use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::super::super::plan::{
+    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentStreamWrapperPlan,
+};
 use super::super::super::{
     ResidentDataplaneMetrics,
     tcp::{
@@ -26,6 +28,7 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let selection = native_tcp_probe_selection(proxy, target);
+    let wrapper = selection.proxy.execution_plan().wrapper;
     let password = match selection.proxy.handler.clone() {
         ResidentProxyProtocolPlan::TrojanTcpTls { password } => password.clone(),
         ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {
@@ -45,8 +48,11 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
         _ => return Err(NativeTcpProbeError::NotAdmitted),
     };
     if !matches!(
-        selection.proxy.net.as_str(),
-        "tcp" | "websocket" | "httpupgrade" | "grpc"
+        wrapper,
+        ResidentStreamWrapperPlan::None
+            | ResidentStreamWrapperPlan::WebSocket
+            | ResidentStreamWrapperPlan::HttpUpgrade
+            | ResidentStreamWrapperPlan::Grpc
     ) {
         return Err(NativeTcpProbeError::NotAdmitted);
     }
@@ -64,8 +70,8 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
     let relay_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
 
-    match selection.proxy.net.as_str() {
-        "websocket" => {
+    match wrapper {
+        ResidentStreamWrapperPlan::WebSocket => {
             native_websocket_handshake_over_resident_tls_async(&mut client, &options)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -88,7 +94,7 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        "httpupgrade" => {
+        ResidentStreamWrapperPlan::HttpUpgrade => {
             native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -108,7 +114,7 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
-        "grpc" => {
+        ResidentStreamWrapperPlan::Grpc => {
             let (mut h2_send, mut h2_recv, connection_task) =
                 open_grpc_h2_stream(client, &selection.proxy, &request)
                     .await
@@ -156,7 +162,7 @@ async fn open_trojan_inner_shadowsocks_native_tcp_tunnel(
     inner_cipher: String,
     inner_password: String,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    if selection.proxy.net != "websocket" {
+    if selection.proxy.execution_plan().wrapper != ResidentStreamWrapperPlan::WebSocket {
         return Err(NativeTcpProbeError::NotAdmitted);
     }
     let mut client =

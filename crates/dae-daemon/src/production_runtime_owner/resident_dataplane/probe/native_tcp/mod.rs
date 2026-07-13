@@ -24,7 +24,7 @@ use self::trojan::open_trojan_native_tcp_tunnel;
 use self::tunnel::NativeTcpTunnel;
 use self::vless::open_vless_native_tcp_tunnel;
 use self::vmess::open_vmess_native_tcp_tunnel;
-use super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::super::plan::{ResidentProxyPlan, ResidentTcpProbeDispatch};
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_native_proxy_tcp_async(
     proxy: Arc<ResidentProxyPlan>,
@@ -66,39 +66,16 @@ async fn open_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    match &proxy.handler {
-        ResidentProxyProtocolPlan::Socks5Tcp { .. }
-        | ResidentProxyProtocolPlan::HttpProxyTcp { .. } => {
-            open_basic_native_tcp_tunnel(proxy, target).await
-        }
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
-        | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => {
-            open_vless_native_tcp_tunnel(proxy, target).await
-        }
-        ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {
-            open_vmess_native_tcp_tunnel(proxy, target).await
-        }
-        ResidentProxyProtocolPlan::TrojanTcpTls { .. }
-        | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => {
-            open_trojan_native_tcp_tunnel(proxy, target).await
-        }
-        ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => {
-            open_frame_tls_native_tcp_tunnel(proxy, target).await
-        }
-        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => {
+    match proxy.execution_plan().protocol.probe_dispatch() {
+        ResidentTcpProbeDispatch::Basic => open_basic_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::Vless => open_vless_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::Vmess => open_vmess_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::Trojan => open_trojan_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::AnyTls => open_frame_tls_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::Shadowsocks => {
             open_shadowsocks_native_tcp_tunnel(proxy, target).await
         }
-        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
-        | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-        | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
-            open_quic_stream_native_tcp_tunnel(proxy, target).await
-        }
+        ResidentTcpProbeDispatch::Quic => open_quic_stream_native_tcp_tunnel(proxy, target).await,
     }
 }
 

@@ -91,7 +91,8 @@ use super::plan::ResidentProxyGroupPlan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentHysteria2ObfsPlan, ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentHysteria2ObfsPlan, ResidentProtocolShape, ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan, ResidentTcpRuntimeDispatch,
     ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion, ResidentXhttpMetaPlacement,
     ResidentXhttpMode, ResidentXhttpPaddingMethod, ResidentXhttpPaddingPlacement,
     ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement, ResidentXhttpXmuxPlan,
@@ -187,6 +188,8 @@ pub(crate) use self::transport_helpers::{
 };
 mod stream_helpers;
 use self::stream_helpers::*;
+mod http_connect_head;
+use self::http_connect_head::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::stream_helpers::{
     http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async, socks5_connect_async,
 };

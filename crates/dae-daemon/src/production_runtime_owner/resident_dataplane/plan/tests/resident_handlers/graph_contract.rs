@@ -53,6 +53,29 @@ pub(super) fn assert_common_resident_graph_contracts(proxies: &[ResidentProxyPla
             graph["runtimeComponents"]["probeExecutor"]["executor"],
             "resident-executable-graph"
         );
+        let execution = proxy.execution_plan();
+        assert_eq!(
+            graph["transportUnderlay"],
+            execution.security.transport_label()
+        );
+        assert_eq!(graph["securityUnderlay"], execution.security.graph_label());
+        assert_eq!(graph["streamWrapper"], execution.wrapper.graph_label());
+        assert_eq!(
+            graph["packetSemantics"],
+            execution.udp.packet_semantics().as_str()
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["executor"],
+            execution.udp.executor_label()
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["status"],
+            if execution.udp.policy_closed() {
+                "fail-closed"
+            } else {
+                "admitted"
+            }
+        );
         assert!(
             graph["linkIdentity"]["linkHash"]
                 .as_str()

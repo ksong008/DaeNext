@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use dae_outbound::{
     shared_transport::{HttpUpgradeOptions, MeekRoundTripOptions, MuxFrameOptions, mux_new_frame},
-    vless::{contract::is_xtls_rprx_vision_flow, packet},
+    vless::packet,
     vmess::VMessMetadata,
 };
 
@@ -18,8 +18,10 @@ use tokio::time;
 use super::super::super::client::{
     open_async_vless_tls_client_with_flow, open_proxy_tcp_stream_async_with_flow,
 };
-use super::super::super::plan::ResidentProxyPlan;
-use super::super::super::plan::{ResidentProxyProtocolPlan, ResidentXhttpMode};
+use super::super::super::plan::{
+    ResidentProtocolShape, ResidentProxyPlan, ResidentSecurityUnderlayPlan,
+    ResidentStreamWrapperPlan, ResidentXhttpMode,
+};
 use super::super::super::{
     ResidentDataplaneMetrics, VLESS_RESPONSE_VERSION,
     tcp::{
@@ -44,9 +46,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let selection = native_tcp_probe_selection(proxy, target);
-    if !vless_native_tcp_net_admitted(&selection) {
-        return Err(NativeTcpProbeError::NotAdmitted);
-    }
+    let execution = selection.proxy.execution_plan();
     let key = selection
         .proxy
         .vless_key()
@@ -56,13 +56,10 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             NativeTcpProbeError::Open(format!("build native VLESS TCP request: {err}"))
         })?;
 
-    if matches!(
-        selection.proxy.handler,
-        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
-    ) {
+    if execution.protocol == ResidentProtocolShape::VlessMux {
         return open_vless_mux_native_tcp_tunnel(selection, key, target).await;
     }
-    if matches!(selection.proxy.tls.as_str(), "" | "none") {
+    if execution.security == ResidentSecurityUnderlayPlan::None {
         let mut stream = open_proxy_tcp_stream_async_with_flow(
             &selection.proxy,
             selection.mark,
@@ -78,14 +75,14 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         return Ok(Box::new(VlessNativeTunnel::new(stream)));
     }
 
-    if selection.proxy.net == "meek" {
+    if execution.wrapper == ResidentStreamWrapperPlan::Meek {
         let meek_request =
             packet::first_write_bytes(&key, "", "tcp", target, false, &[]).map_err(|err| {
                 NativeTcpProbeError::Open(format!("build native VLESS Meek request: {err}"))
             })?;
         return open_vless_meek_native_tcp_tunnel(selection, target, meek_request).await;
     }
-    if selection.proxy.net == "xhttp" {
+    if matches!(execution.wrapper, ResidentStreamWrapperPlan::Xhttp(_)) {
         return open_vless_xhttp_native_tcp_tunnel(selection, request).await;
     }
 
@@ -93,8 +90,8 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
             .await
             .map_err(NativeTcpProbeError::Open)?;
-    match selection.proxy.net.as_str() {
-        "grpc" => {
+    match execution.wrapper {
+        ResidentStreamWrapperPlan::Grpc => {
             let (mut h2_send, mut h2_recv, connection_task) =
                 open_grpc_h2_stream(client, &selection.proxy, &request)
                     .await
@@ -119,7 +116,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             });
             return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
         }
-        "h2" => {
+        ResidentStreamWrapperPlan::H2 => {
             let (mut h2_send, response_task, connection_task) =
                 open_h2_body_stream_with_deferred_response(
                     client,
@@ -152,7 +149,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         }
         _ => {}
     }
-    if selection.proxy.net == "websocket" {
+    if execution.wrapper == ResidentStreamWrapperPlan::WebSocket {
         let options =
             HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
         native_websocket_handshake_over_resident_tls_async(&mut client, &options)
@@ -182,7 +179,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         });
         return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
     }
-    if selection.proxy.net == "httpupgrade" {
+    if execution.wrapper == ResidentStreamWrapperPlan::HttpUpgrade {
         let options =
             HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
         native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
@@ -193,7 +190,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         .write_plain_all(&request, "write native VLESS TLS request")
         .await
         .map_err(NativeTcpProbeError::Open)?;
-    if is_xtls_rprx_vision_flow(&selection.proxy.flow) {
+    if execution.protocol == ResidentProtocolShape::VlessVision {
         let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
         let stop = ResidentStopSignal::shared();
         let relay_stop = Arc::clone(&stop);
@@ -215,16 +212,6 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
     }
     Ok(Box::new(VlessNativeTunnel::new(client)))
-}
-
-fn vless_native_tcp_net_admitted(selection: &TcpProxySelection) -> bool {
-    match selection.proxy.net.as_str() {
-        "websocket" => !is_xtls_rprx_vision_flow(&selection.proxy.flow),
-        "httpupgrade" => true,
-        "grpc" | "h2" | "xhttp" => true,
-        "meek" => true,
-        _ => true,
-    }
 }
 
 async fn open_vless_meek_native_tcp_tunnel(

@@ -1095,7 +1095,7 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         graph_id: "resident-graph:test-flow".to_owned(),
         graph_link_hash: "sha256:test-flow".to_owned(),
         redacted_link_source: "vless:<redacted>#flow".to_owned(),
-        protocol: "vless".to_owned(),
+        protocol: "vless",
         group_name: FLOW_OUTBOUND.to_owned(),
         group_policy: FLOW_POLICY.to_owned(),
         node_tag: FLOW_DIALER.to_owned(),
@@ -1117,8 +1117,56 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         utls_fingerprint: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] },
+        execution: None,
         chain_parent: None,
         mark: 0,
         mptcp: false,
     }
+}
+
+#[test]
+fn plain_http_connect_preserves_tunneled_bytes_read_with_response_head() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\nearly")
+                .await
+                .unwrap();
+        });
+
+        let mut client = TokioTcpStream::connect(address).await.unwrap();
+        http_proxy_connect_plain_async(
+            &mut client,
+            "target.fixture.invalid:443",
+            "",
+            "",
+            false,
+            "",
+            "",
+        )
+        .await
+        .unwrap();
+        let mut payload = [0_u8; 5];
+        time::timeout(Duration::from_secs(1), client.read_exact(&mut payload))
+            .await
+            .expect("early tunneled bytes must remain readable")
+            .unwrap();
+        assert_eq!(&payload, b"early");
+        server.await.unwrap();
+    });
 }

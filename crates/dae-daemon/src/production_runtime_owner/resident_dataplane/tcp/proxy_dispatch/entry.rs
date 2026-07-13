@@ -8,10 +8,11 @@ pub(crate) async fn handle_frame_tls_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
+    let wrapper = selection.proxy.execution_plan().wrapper;
     match &selection.proxy.handler {
         ResidentProxyProtocolPlan::TrojanTcpTls { password } => {
             let password = password.clone();
-            if selection.proxy.net == "websocket" {
+            if wrapper == ResidentStreamWrapperPlan::WebSocket {
                 handle_trojan_websocket_tls_tcp_connection_async(
                     inbound,
                     peer,
@@ -23,7 +24,7 @@ pub(crate) async fn handle_frame_tls_tcp_connection_async(
                     &password,
                 )
                 .await
-            } else if selection.proxy.net == "httpupgrade" {
+            } else if wrapper == ResidentStreamWrapperPlan::HttpUpgrade {
                 handle_trojan_httpupgrade_tls_tcp_connection_async(
                     inbound,
                     peer,
@@ -35,7 +36,7 @@ pub(crate) async fn handle_frame_tls_tcp_connection_async(
                     &password,
                 )
                 .await
-            } else if selection.proxy.net == "grpc" {
+            } else if wrapper == ResidentStreamWrapperPlan::Grpc {
                 handle_trojan_grpc_tls_tcp_connection_async(
                     inbound,
                     peer,
@@ -69,7 +70,7 @@ pub(crate) async fn handle_frame_tls_tcp_connection_async(
             let password = password.clone();
             let inner_cipher = inner_cipher.clone();
             let inner_password = inner_password.clone();
-            if selection.proxy.net != "websocket" {
+            if wrapper != ResidentStreamWrapperPlan::WebSocket {
                 return Err(
                     "trojan inner Shadowsocks dispatcher admits WebSocket transport only"
                         .to_owned(),

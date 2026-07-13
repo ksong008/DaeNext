@@ -358,7 +358,10 @@ fn udp_exchange_base_event(
         "ip".to_owned(),
         Value::String(resident_socket_addr_display(original_dst)),
     );
-    map.insert("protocol".to_owned(), Value::String(proxy.protocol.clone()));
+    map.insert(
+        "protocol".to_owned(),
+        Value::String(proxy.protocol.to_owned()),
+    );
     map.insert("handler".to_owned(), Value::String(handler.to_owned()));
     map.insert("graphId".to_owned(), Value::String(proxy.graph_id.clone()));
     if session_scope.include_packet_session() {

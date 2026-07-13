@@ -191,5 +191,16 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
         ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
     ));
 
-    vec![socks, http, https, shadowsocks, shadowsocks_plugin]
+    vec![
+        socks,
+        http,
+        http_transport,
+        https,
+        shadowsocks,
+        shadowsocks_2022,
+        shadowsocks_plugin,
+        shadowsocks_obfs_tls,
+        shadowsocks_v2ray_plugin,
+        shadowsocks_2022_plugin,
+    ]
 }

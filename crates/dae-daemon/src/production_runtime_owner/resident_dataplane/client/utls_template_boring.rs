@@ -70,7 +70,8 @@ pub(super) fn configure_utls_template_boring_ssl(
         return Ok(());
     };
     if template.key_share_groups.is_empty()
-        && (proxy.reality.is_some() || is_xtls_rprx_vision_flow(&proxy.flow))
+        && (proxy.reality.is_some()
+            || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision)
     {
         return Err(format!(
             "uTLS template {} cannot be used with TLS 1.3-only VLESS flow",

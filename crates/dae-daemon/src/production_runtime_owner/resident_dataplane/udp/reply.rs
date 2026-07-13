@@ -1,6 +1,8 @@
 #[cfg(test)]
 use super::super::vision::VisionUnpadState;
 use super::*;
+#[cfg(test)]
+use dae_outbound::vless::contract::is_xtls_rprx_vision_flow;
 
 mod actor;
 pub(super) use actor::{UdpReplyDispatcher, UdpReplyHandle};

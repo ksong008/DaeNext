@@ -1,6 +1,9 @@
-use super::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::{
+    ResidentProtocolShape, ResidentProxyPlan, ResidentSecurityUnderlayPlan,
+    ResidentStreamWrapperPlan,
+};
 #[cfg(test)]
-use super::{ResidentXhttpMode, ResidentXhttpSettingsPlan};
+use super::{ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentUdpChainAdmission {
@@ -46,10 +49,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_chai
         return ResidentUdpChainAdmission::NotChained;
     }
 
-    match &proxy.handler {
-        ResidentProxyProtocolPlan::VmessAeadTcp { .. }
-            if matches!(proxy.tls.as_str(), "" | "none")
-                && matches!(proxy.net.as_str(), "" | "tcp" | "websocket" | "httpupgrade") =>
+    let execution = proxy.execution_plan();
+    match execution.protocol {
+        ResidentProtocolShape::VmessAead
+            if execution.security == ResidentSecurityUnderlayPlan::None
+                && matches!(
+                    execution.wrapper,
+                    ResidentStreamWrapperPlan::None
+                        | ResidentStreamWrapperPlan::WebSocket
+                        | ResidentStreamWrapperPlan::HttpUpgrade
+                ) =>
         {
             ResidentUdpChainAdmission::ParentStream
         }
@@ -69,7 +78,7 @@ mod tests {
             graph_id: "graph".to_owned(),
             graph_link_hash: "hash".to_owned(),
             redacted_link_source: "source".to_owned(),
-            protocol: "test".to_owned(),
+            protocol: "test",
             group_name: "group".to_owned(),
             group_policy: "fixed".to_owned(),
             node_tag: "node".to_owned(),
@@ -91,6 +100,7 @@ mod tests {
             utls_fingerprint: None,
             reality: None,
             handler,
+            execution: None,
             chain_parent: None,
             mark: 0,
             mptcp: false,

@@ -60,7 +60,7 @@ pub(crate) fn build_trojan_proxy_plan(
         graph_id: graph.graph_id,
         graph_link_hash: graph.link_hash,
         redacted_link_source: graph.redacted_link_source,
-        protocol: "trojan".to_owned(),
+        protocol: "trojan",
         group_name,
         group_policy: String::new(),
         node_tag,
@@ -92,6 +92,7 @@ pub(crate) fn build_trojan_proxy_plan(
                 password: parsed.password,
             }
         },
+        execution: None,
         chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,

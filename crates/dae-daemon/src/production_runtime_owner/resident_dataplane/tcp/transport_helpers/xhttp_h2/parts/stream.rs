@@ -43,11 +43,7 @@ async fn open_xhttp_stream_one_parts(
     initial_payload: Bytes,
 ) -> Result<XhttpStreamParts, String> {
     let endpoint = ResidentXhttpEndpointPlan::from_proxy(proxy);
-    let upload_http_version = if proxy.tls == "reality" {
-        ResidentXhttpHttpVersion::H2
-    } else {
-        endpoint.http_version()
-    };
+    let upload_http_version = proxy.xhttp_primary_http_version();
     match upload_http_version {
         ResidentXhttpHttpVersion::H1 => {
             let mut client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
@@ -182,11 +178,7 @@ async fn open_xhttp_stream_up_parts(
         .clone()
         .unwrap_or_else(|| upload_endpoint.clone());
     let download_separate = proxy.xhttp_download.is_some();
-    let upload_http_version = if proxy.tls == "reality" {
-        ResidentXhttpHttpVersion::H2
-    } else {
-        upload_endpoint.http_version()
-    };
+    let upload_http_version = proxy.xhttp_primary_http_version();
     if !download_separate
         && upload_http_version == ResidentXhttpHttpVersion::H2
         && download_endpoint.http_version() == ResidentXhttpHttpVersion::H2

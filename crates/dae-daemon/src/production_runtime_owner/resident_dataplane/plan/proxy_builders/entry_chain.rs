@@ -26,6 +26,7 @@ pub(crate) fn build_proxy_plan(
         )),
     }?;
     plan.apply_effective_so_mark_from_dae();
+    plan.materialize_execution();
     plan.compact_allocations();
     Ok(plan)
 }
@@ -86,26 +87,39 @@ pub(crate) fn build_chained_proxy_plan(
 }
 
 pub(crate) fn resident_chain_parent_supported(parent: &ResidentProxyPlan) -> bool {
-    match &parent.handler {
-        ResidentProxyProtocolPlan::Socks5Tcp { .. } => parent.tls == "none",
-        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => parent.tls == "none",
+    let execution = parent.execution_plan();
+    match execution.protocol {
+        ResidentProtocolShape::Socks5 => execution.security == ResidentSecurityUnderlayPlan::None,
+        ResidentProtocolShape::HttpProxy => {
+            execution.security == ResidentSecurityUnderlayPlan::None
+                && execution.wrapper == ResidentStreamWrapperPlan::None
+        }
         _ => false,
     }
 }
 
 pub(crate) fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool {
-    match &child.handler {
-        ResidentProxyProtocolPlan::Socks5Tcp { .. } => true,
-        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => child.tls == "none",
-        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => true,
-        ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {
-            matches!(child.net.as_str(), "tcp" | "websocket" | "httpupgrade") && child.tls == "none"
+    let execution = child.execution_plan();
+    match execution.protocol {
+        ResidentProtocolShape::Socks5 => true,
+        ResidentProtocolShape::HttpProxy => {
+            execution.security == ResidentSecurityUnderlayPlan::None
+        }
+        ResidentProtocolShape::ShadowsocksAead
+        | ResidentProtocolShape::Shadowsocks2022
+        | ResidentProtocolShape::ShadowsocksSimpleObfsHttp
+        | ResidentProtocolShape::ShadowsocksSimpleObfsTls
+        | ResidentProtocolShape::ShadowsocksV2rayPluginTlsWebSocket
+        | ResidentProtocolShape::Shadowsocks2022SimpleObfsHttp
+        | ResidentProtocolShape::ShadowsocksRHttpSimple => true,
+        ResidentProtocolShape::VmessAead => {
+            execution.security == ResidentSecurityUnderlayPlan::None
+                && matches!(
+                    execution.wrapper,
+                    ResidentStreamWrapperPlan::None
+                        | ResidentStreamWrapperPlan::WebSocket
+                        | ResidentStreamWrapperPlan::HttpUpgrade
+                )
         }
         _ => false,
     }

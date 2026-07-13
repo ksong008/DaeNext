@@ -2,9 +2,9 @@ use serde_json::{Value, json};
 
 use super::super::{link_hash, redacted_link_source};
 use super::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentUdpChainAdmission,
-    ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
-    ResidentXhttpSettingsPlan, resident_udp_chain_admission,
+    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
+    ResidentUdpChainAdmission, ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion,
+    ResidentXhttpMode, ResidentXhttpSettingsPlan, resident_udp_chain_admission,
 };
 
 mod runtime_limits;
@@ -16,7 +16,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     graph_id: String,
     link_hash: String,
     redacted_link_source: String,
-    protocol_framing: String,
+    protocol_framing: &'static str,
     endpoint_host_hash: String,
     endpoint_port: u16,
     transport_underlay: String,
@@ -27,6 +27,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     packet_semantics: String,
     udp_executor: &'static str,
     udp_policy_closed: bool,
+    udp_policy_closed_reason: Option<&'static str>,
     xhttp_mode: ResidentXhttpMode,
     xhttp_settings: ResidentXhttpSettingsPlan,
     xhttp_download_mode: Option<ResidentXhttpMode>,
@@ -45,26 +46,28 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
 
 impl ResidentExecutableGraphDescriptor {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
+        let execution = proxy.execution_plan();
         let executor_contract = proxy.executor_contract();
         Self {
             graph_id: proxy.graph_id.clone(),
             link_hash: proxy.graph_link_hash.clone(),
             redacted_link_source: proxy.redacted_link_source.clone(),
-            protocol_framing: proxy.protocol.clone(),
+            protocol_framing: proxy.protocol,
             endpoint_host_hash: link_hash(&proxy.server_host),
             endpoint_port: proxy.server_port,
-            transport_underlay: graph_transport_underlay(proxy),
-            security_underlay: graph_security_underlay(proxy),
-            stream_wrapper: graph_stream_wrapper(proxy),
+            transport_underlay: execution.security.transport_label().to_owned(),
+            security_underlay: execution.security.graph_label().to_owned(),
+            stream_wrapper: execution.wrapper.graph_label().to_owned(),
             stream_host_hash: if proxy.stream_host.is_empty() {
                 None
             } else {
                 Some(link_hash(&proxy.stream_host))
             },
             stream_path: proxy.stream_path.clone(),
-            packet_semantics: graph_packet_semantics(proxy),
+            packet_semantics: execution.udp.packet_semantics().as_str().to_owned(),
             udp_executor: executor_contract.udp_executor,
             udp_policy_closed: executor_contract.udp_policy_closed,
+            udp_policy_closed_reason: execution.udp.policy_closed_reason(),
             xhttp_mode: proxy.xhttp_mode,
             xhttp_settings: proxy.xhttp_settings.clone(),
             xhttp_download_mode: proxy.xhttp_download.as_ref().map(|download| download.mode),
@@ -251,6 +254,7 @@ impl ResidentExecutableGraphDescriptor {
             "packet-stream" => ("admitted", "resident-packet-stream", Value::Null),
             "websocket" => ("admitted", "resident-websocket-binary-frame", Value::Null),
             "httpupgrade" => ("admitted", "resident-http-upgrade-stream", Value::Null),
+            "http-transport" => ("admitted", "resident-http-connect-transport", Value::Null),
             "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
             "h2" => ("admitted", "resident-http2-body-stream", Value::Null),
             "meek" => ("admitted", "resident-meek-polling", Value::Null),
@@ -363,7 +367,10 @@ impl ResidentExecutableGraphDescriptor {
         let unsupported_reason = if !chain_unsupported_reason.is_null() {
             chain_unsupported_reason
         } else if self.udp_policy_closed {
-            Value::from("protocol transport shape has no resident UDP packet executor")
+            Value::from(
+                self.udp_policy_closed_reason
+                    .unwrap_or("protocol transport shape has no resident UDP packet executor"),
+            )
         } else {
             Value::Null
         };
@@ -484,31 +491,6 @@ fn chain_parent_count(proxy: &ResidentProxyPlan) -> usize {
     count
 }
 
-fn graph_transport_underlay(proxy: &ResidentProxyPlan) -> String {
-    match proxy.tls.as_str() {
-        "quic" => "quic".to_owned(),
-        _ => "tcp".to_owned(),
-    }
-}
-
-fn graph_security_underlay(proxy: &ResidentProxyPlan) -> String {
-    if proxy.tls == "reality" {
-        "reality".to_owned()
-    } else if proxy.utls_fingerprint.is_some() {
-        "fingerprint-aware-tls".to_owned()
-    } else {
-        match proxy.tls.as_str() {
-            "" | "none" => "none".to_owned(),
-            "aead" => "aead".to_owned(),
-            "quic" => "quic-tls".to_owned(),
-            "tls" if proxy.allow_insecure => "insecure-tls".to_owned(),
-            "tls" if proxy.tls_fragment.is_some() => "tls-fragment".to_owned(),
-            "tls" => "standard-tls".to_owned(),
-            other => other.to_owned(),
-        }
-    }
-}
-
 fn graph_verification_policy(proxy: &ResidentProxyPlan) -> String {
     match &proxy.handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { allow_insecure, .. } if *allow_insecure => {
@@ -526,58 +508,17 @@ fn graph_verification_policy(proxy: &ResidentProxyPlan) -> String {
             pinned_certchain_sha256,
             ..
         } if !pinned_certchain_sha256.is_empty() => "pinned-certchain-sha256".to_owned(),
-        _ if matches!(proxy.tls.as_str(), "" | "none") => "none".to_owned(),
+        _ if matches!(
+            proxy.execution_plan().security,
+            ResidentSecurityUnderlayPlan::None
+                | ResidentSecurityUnderlayPlan::Aead
+                | ResidentSecurityUnderlayPlan::Aead2022
+                | ResidentSecurityUnderlayPlan::LegacyCipher
+        ) =>
+        {
+            "none".to_owned()
+        }
         _ if proxy.allow_insecure => "explicit-insecure".to_owned(),
         _ => "system-roots".to_owned(),
-    }
-}
-
-fn graph_stream_wrapper(proxy: &ResidentProxyPlan) -> String {
-    match proxy.handler {
-        ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => return "frame-stream".to_owned(),
-        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => return "mux".to_owned(),
-        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
-        | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-        | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => return "quic-stream".to_owned(),
-        _ => {}
-    }
-    match proxy.net.as_str() {
-        "" | "tcp" | "udp" => "none".to_owned(),
-        "grpc" => "grpc".to_owned(),
-        "httpupgrade" => "httpupgrade".to_owned(),
-        other => other.to_owned(),
-    }
-}
-
-fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
-    match proxy.handler {
-        ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate".to_owned(),
-        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed".to_owned(),
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
-            if proxy.uses_standard_vless_udp_over_stream() =>
-        {
-            "udp-over-stream".to_owned()
-        }
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } if proxy.uses_vless_vision_xudp() => {
-            "xudp".to_owned()
-        }
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "protocol-closed".to_owned(),
-        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => "multiplexed-stream".to_owned(),
-        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead".to_owned(),
-        ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => "datagram-aead-2022".to_owned(),
-        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => {
-            "plugin-wrapper-stream".to_owned()
-        }
-        ResidentProxyProtocolPlan::TrojanTcpTls { .. } => {
-            proxy.executor_contract().packet_semantics.to_owned()
-        }
-        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
-        | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-        | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => "quic-datagram-or-stream".to_owned(),
-        _ => "udp-over-stream-or-datagram".to_owned(),
     }
 }

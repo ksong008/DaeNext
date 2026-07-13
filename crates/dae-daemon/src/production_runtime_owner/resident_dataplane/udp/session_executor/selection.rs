@@ -18,128 +18,69 @@ impl UdpSessionExecutor {
         if let Some(reason) = resident_udp_chain_admission(proxy).unsupported_reason() {
             return Self::fail_closed(reason);
         }
-        match &proxy.handler {
-            ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
-                cipher,
-                password,
-                salt_len,
-            } => Self::ShadowsocksAead(ShadowsocksAeadDatagramSession::new(
+
+        let factory = proxy.execution_plan().udp;
+        match (&proxy.handler, factory) {
+            (
+                ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
+                    cipher,
+                    password,
+                    salt_len,
+                },
+                ResidentUdpExecutorFactory::ShadowsocksAead,
+            ) => Self::ShadowsocksAead(ShadowsocksAeadDatagramSession::new(
                 cipher.clone(),
                 password.clone(),
                 *salt_len,
             )),
-            ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
-                cipher,
-                password,
-                packet_nonce_len,
-                ..
-            } => Self::Shadowsocks2022(Shadowsocks2022DatagramSession::new(
+            (
+                ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+                    cipher,
+                    password,
+                    packet_nonce_len,
+                    ..
+                },
+                ResidentUdpExecutorFactory::Shadowsocks2022,
+            ) => Self::Shadowsocks2022(Shadowsocks2022DatagramSession::new(
                 cipher.clone(),
                 password.clone(),
                 *packet_nonce_len,
             )),
-            ResidentProxyProtocolPlan::Socks5Tcp { .. } => {
-                Self::Socks5(Socks5UdpAssociateSession::default())
-            }
-            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
-                if matches!(proxy.net.as_str(), "" | "tcp") && is_xtls_rprx_vision_flow(&proxy.flow)
-                {
-                    Self::VlessVision(VlessXudpStreamSession::default())
-                } else if proxy.flow.is_empty() {
-                    match (proxy.net.as_str(), proxy.tls.as_str()) {
-                        ("" | "tcp", "" | "none") => {
-                            Self::VlessStandard(VlessStandardUdpOverStreamSession::plain())
-                        }
-                        ("" | "tcp", _) => {
-                            Self::VlessStandard(VlessStandardUdpOverStreamSession::tls())
-                        }
-                        ("websocket", "" | "none") => {
-                            Self::VlessStandard(VlessStandardUdpOverStreamSession::websocket_plain())
-                        }
-                        ("websocket", _) => {
-                            Self::VlessStandard(VlessStandardUdpOverStreamSession::websocket_tls())
-                        }
-                        ("httpupgrade", "" | "none") => Self::VlessStandard(
-                            VlessStandardUdpOverStreamSession::httpupgrade_plain(),
-                        ),
-                        ("httpupgrade", _) => {
-                            Self::VlessStandard(VlessStandardUdpOverStreamSession::httpupgrade_tls())
-                        }
-                        ("grpc", "" | "none") | ("h2", "" | "none") => Self::fail_closed(
-                            "VLESS HTTP/2 UDP transport requires a TLS or Reality underlay",
-                        ),
-                        ("grpc", _) => {
-                            Self::VlessStandard(VlessStandardUdpOverStreamSession::grpc_tls())
-                        }
-                        ("h2", _) => {
-                            Self::VlessStandard(VlessStandardUdpOverStreamSession::h2_tls())
-                        }
-                        _ if proxy.net == "xhttp" && resident_xhttp_uses_h3(proxy) => {
-                            Self::VlessXhttpH3(VlessXhttpH3UdpSession::default())
-                        }
-                        _ if proxy.net == "xhttp" => {
-                            Self::VlessXhttpH2(VlessXhttpH2UdpSession::default())
-                        }
-                        _ => Self::fail_closed(
-                            "VLESS wrapped-stream UDP requires a matching packet-over-wrapper executor for this transport and flow combination",
-                        ),
-                    }
-                } else {
-                    Self::fail_closed(
-                        "VLESS wrapped-stream UDP requires a matching packet-over-wrapper executor for this transport and flow combination",
-                    )
-                }
-            }
-            ResidentProxyProtocolPlan::TrojanTcpTls { password } => match proxy.net.as_str() {
-                "" | "tcp" => Self::Trojan(TrojanUdpStreamSession::tls(password.clone())),
-                "websocket" => Self::Trojan(TrojanUdpStreamSession::websocket(password.clone())),
-                "httpupgrade" => {
-                    Self::Trojan(TrojanUdpStreamSession::httpupgrade(password.clone()))
-                }
-                "grpc" => Self::Trojan(TrojanUdpStreamSession::grpc(password.clone())),
-                _ => Self::fail_closed(
-                    "Trojan UDP requires a supported stream transport before resident UDP can admit this shape",
-                ),
-            },
-            ResidentProxyProtocolPlan::VmessAeadTcp { id } => {
-                match (proxy.net.as_str(), proxy.tls.as_str()) {
-                    ("" | "tcp", "" | "none") => {
-                        Self::VmessAead(VmessAeadUdpOverTcpSession::plain(id.clone()))
-                    }
-                    ("" | "tcp", "tls") => {
-                        Self::VmessAead(VmessAeadUdpOverTcpSession::tls(id.clone()))
-                    }
-                    ("websocket", "" | "none") => {
-                        Self::VmessAead(VmessAeadUdpOverTcpSession::websocket_plain(id.clone()))
-                    }
-                    ("websocket", "tls") => {
-                        Self::VmessAead(VmessAeadUdpOverTcpSession::websocket_tls(id.clone()))
-                    }
-                    ("httpupgrade", "" | "none") => {
-                        Self::VmessAead(VmessAeadUdpOverTcpSession::httpupgrade_plain(id.clone()))
-                    }
-                    ("httpupgrade", "tls") => {
-                        Self::VmessAead(VmessAeadUdpOverTcpSession::httpupgrade_tls(id.clone()))
-                    }
-                    ("grpc", "tls") => {
-                        Self::VmessAead(VmessAeadUdpOverTcpSession::grpc_tls(id.clone()))
-                    }
-                    _ => Self::fail_closed(
-                        "VMess UDP wrapper requires a matching packet-over-wrapper executor for this transport and security combination",
-                    ),
-                }
-            }
-            ResidentProxyProtocolPlan::AnyTlsTcpTls { auth } => {
-                Self::AnyTls(AnyTlsPacketStreamSession::new(auth.clone()))
-            }
-            ResidentProxyProtocolPlan::Hysteria2QuicTcp {
-                auth,
-                allow_insecure,
-                pin_sha256,
-                max_rx,
-                obfs,
-                port_hop_ports,
-            } => Self::Hysteria2(Hysteria2QuicDatagramSession::new(
+            (
+                ResidentProxyProtocolPlan::Socks5Tcp { .. },
+                ResidentUdpExecutorFactory::Socks5Associate,
+            ) => Self::Socks5(Socks5UdpAssociateSession::default()),
+            (
+                ResidentProxyProtocolPlan::VlessVisionTcpTls { .. },
+                ResidentUdpExecutorFactory::VlessVisionXudp,
+            ) => Self::VlessVision(VlessXudpStreamSession::default()),
+            (
+                ResidentProxyProtocolPlan::VlessVisionTcpTls { .. },
+                ResidentUdpExecutorFactory::VlessStandard(transport),
+            ) => Self::new_vless_standard(transport),
+            (
+                ResidentProxyProtocolPlan::TrojanTcpTls { password },
+                ResidentUdpExecutorFactory::Trojan(transport),
+            ) => Self::new_trojan(password, transport),
+            (
+                ResidentProxyProtocolPlan::VmessAeadTcp { id },
+                ResidentUdpExecutorFactory::Vmess(transport),
+            ) => Self::new_vmess(id, transport),
+            (
+                ResidentProxyProtocolPlan::AnyTlsTcpTls { auth },
+                ResidentUdpExecutorFactory::AnyTlsPacketStream,
+            ) => Self::AnyTls(AnyTlsPacketStreamSession::new(auth.clone())),
+            (
+                ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+                    auth,
+                    allow_insecure,
+                    pin_sha256,
+                    max_rx,
+                    obfs,
+                    port_hop_ports,
+                },
+                ResidentUdpExecutorFactory::Hysteria2Datagram,
+            ) => Self::Hysteria2(Hysteria2QuicDatagramSession::new(
                 auth.clone(),
                 *allow_insecure,
                 pin_sha256.clone(),
@@ -147,49 +88,114 @@ impl UdpSessionExecutor {
                 obfs.clone(),
                 port_hop_ports.clone(),
             )),
-            ResidentProxyProtocolPlan::TuicQuicTcp {
-                uuid,
-                password,
-                alpn,
-                allow_insecure,
-            } => Self::Tuic(TuicQuicDatagramSession::new(
+            (
+                ResidentProxyProtocolPlan::TuicQuicTcp {
+                    uuid,
+                    password,
+                    alpn,
+                    allow_insecure,
+                },
+                ResidentUdpExecutorFactory::TuicPacket,
+            ) => Self::Tuic(TuicQuicDatagramSession::new(
                 uuid.clone(),
                 password.clone(),
                 alpn.clone(),
                 *allow_insecure,
             )),
-            ResidentProxyProtocolPlan::JuicityQuicTcp {
-                uuid,
-                password,
-                allow_insecure,
-                pinned_certchain_sha256,
-            } => Self::Juicity(JuicityQuicStreamPacketSession::new(
+            (
+                ResidentProxyProtocolPlan::JuicityQuicTcp {
+                    uuid,
+                    password,
+                    allow_insecure,
+                    pinned_certchain_sha256,
+                },
+                ResidentUdpExecutorFactory::JuicityStreamPacket,
+            ) => Self::Juicity(JuicityQuicStreamPacketSession::new(
                 uuid.clone(),
                 password.clone(),
                 *allow_insecure,
                 pinned_certchain_sha256.clone(),
             )),
-            ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => Self::fail_closed(
-                "resident VLESS mux handler does not admit UDP packets; mux row is TCP stream scoped",
-            ),
-            ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
-            | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
-            | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-            | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
-                Self::fail_closed(
-                    "SIP003 plugin UDP is not part of the required plugin contract; resident UDP keeps plugin UDP policy-closed without alternate execution",
-                )
+            (_, ResidentUdpExecutorFactory::PolicyClosed(reason)) => {
+                Self::fail_closed(reason.reason())
             }
-            ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => Self::fail_closed(
-                "ShadowsocksR legacy UDP requires an SSR protocol and obfs packet executor before resident UDP can admit this shape",
+            _ => Self::fail_closed(
+                "resident UDP executor factory does not match materialized protocol credentials",
             ),
-            ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => Self::fail_closed(
-                "Trojan inner-encryption UDP requires inner-encrypted packet semantics before resident UDP can admit this shape",
-            ),
-            ResidentProxyProtocolPlan::HttpProxyTcp { .. } => {
-                Self::fail_closed("HTTP CONNECT has no UDP relay semantics in resident dataplane")
-            }
         }
+    }
+
+    fn new_vless_standard(transport: ResidentStreamPacketTransport) -> Self {
+        let session = match transport {
+            ResidentStreamPacketTransport::PlainTcp => VlessStandardUdpOverStreamSession::plain(),
+            ResidentStreamPacketTransport::TlsTcp => VlessStandardUdpOverStreamSession::tls(),
+            ResidentStreamPacketTransport::WebSocketPlain => {
+                VlessStandardUdpOverStreamSession::websocket_plain()
+            }
+            ResidentStreamPacketTransport::WebSocketTls => {
+                VlessStandardUdpOverStreamSession::websocket_tls()
+            }
+            ResidentStreamPacketTransport::HttpUpgradePlain => {
+                VlessStandardUdpOverStreamSession::httpupgrade_plain()
+            }
+            ResidentStreamPacketTransport::HttpUpgradeTls => {
+                VlessStandardUdpOverStreamSession::httpupgrade_tls()
+            }
+            ResidentStreamPacketTransport::GrpcTls => VlessStandardUdpOverStreamSession::grpc_tls(),
+            ResidentStreamPacketTransport::H2Tls => VlessStandardUdpOverStreamSession::h2_tls(),
+            ResidentStreamPacketTransport::XhttpH1 | ResidentStreamPacketTransport::XhttpH2 => {
+                return Self::VlessXhttpH2(VlessXhttpH2UdpSession::default());
+            }
+            ResidentStreamPacketTransport::XhttpH3 => {
+                return Self::VlessXhttpH3(VlessXhttpH3UdpSession::default());
+            }
+        };
+        Self::VlessStandard(session)
+    }
+
+    fn new_trojan(password: &str, transport: ResidentStreamPacketTransport) -> Self {
+        let session = match transport {
+            ResidentStreamPacketTransport::TlsTcp => {
+                TrojanUdpStreamSession::tls(password.to_owned())
+            }
+            ResidentStreamPacketTransport::WebSocketTls => {
+                TrojanUdpStreamSession::websocket(password.to_owned())
+            }
+            ResidentStreamPacketTransport::HttpUpgradeTls => {
+                TrojanUdpStreamSession::httpupgrade(password.to_owned())
+            }
+            ResidentStreamPacketTransport::GrpcTls => {
+                TrojanUdpStreamSession::grpc(password.to_owned())
+            }
+            _ => return Self::fail_closed("materialized Trojan UDP transport is invalid"),
+        };
+        Self::Trojan(session)
+    }
+
+    fn new_vmess(id: &str, transport: ResidentStreamPacketTransport) -> Self {
+        let session = match transport {
+            ResidentStreamPacketTransport::PlainTcp => {
+                VmessAeadUdpOverTcpSession::plain(id.to_owned())
+            }
+            ResidentStreamPacketTransport::TlsTcp => VmessAeadUdpOverTcpSession::tls(id.to_owned()),
+            ResidentStreamPacketTransport::WebSocketPlain => {
+                VmessAeadUdpOverTcpSession::websocket_plain(id.to_owned())
+            }
+            ResidentStreamPacketTransport::WebSocketTls => {
+                VmessAeadUdpOverTcpSession::websocket_tls(id.to_owned())
+            }
+            ResidentStreamPacketTransport::HttpUpgradePlain => {
+                VmessAeadUdpOverTcpSession::httpupgrade_plain(id.to_owned())
+            }
+            ResidentStreamPacketTransport::HttpUpgradeTls => {
+                VmessAeadUdpOverTcpSession::httpupgrade_tls(id.to_owned())
+            }
+            ResidentStreamPacketTransport::GrpcTls => {
+                VmessAeadUdpOverTcpSession::grpc_tls(id.to_owned())
+            }
+            _ => return Self::fail_closed("materialized VMess UDP transport is invalid"),
+        };
+        Self::VmessAead(session)
     }
 
     fn fail_closed(reason: &str) -> Self {
