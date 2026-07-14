@@ -30,11 +30,18 @@ pub(crate) fn assert_live_release_and_runtime_state_contract(report: &Value) {
             .as_bool()
             .unwrap()
     );
+    let matrix_entries = report["resident_live_adapter_matrix_entries"]
+        .as_array()
+        .unwrap();
+    let wired_handler_count = matrix_entries
+        .iter()
+        .filter(|entry| entry["wired_ready"].as_bool().unwrap_or(false))
+        .count() as u64;
     assert_eq!(
         report["resident_live_adapter_wired_handler_count"]
             .as_u64()
             .unwrap(),
-        10
+        wired_handler_count
     );
     assert_eq!(
         report["resident_live_adapter_live_ready_handler_count"]
@@ -48,18 +55,18 @@ pub(crate) fn assert_live_release_and_runtime_state_contract(report: &Value) {
             .unwrap(),
         "resident-live-adapter-matrix"
     );
-    assert!(
-        report["resident_live_adapter_matrix_entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| {
-                entry["handler"].as_str().unwrap() == "vless-vision-tcp-tls"
-                    && entry["wired_ready"].as_bool().unwrap()
-                    && !entry["live_ready"].as_bool().unwrap()
-                    && !entry["missing"].as_array().unwrap().is_empty()
-            })
-    );
+    assert!(matrix_entries.iter().any(|entry| {
+        entry["handler"].as_str().unwrap() == "vless-vision-tcp-tls"
+            && entry["wired_ready"].as_bool().unwrap()
+            && !entry["live_ready"].as_bool().unwrap()
+            && !entry["missing"].as_array().unwrap().is_empty()
+    }));
+    assert!(matrix_entries.iter().any(|entry| {
+        entry["handler"].as_str().unwrap() == "connect-udp"
+            && entry["wired_ready"].as_bool().unwrap()
+            && !entry["live_ready"].as_bool().unwrap()
+            && !entry["missing"].as_array().unwrap().is_empty()
+    }));
     assert_eq!(
         report["resident_live_adapter_matrix_typed_report"]["status"]
             .as_str()
