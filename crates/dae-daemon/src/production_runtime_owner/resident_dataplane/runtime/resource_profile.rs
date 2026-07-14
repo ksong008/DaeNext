@@ -27,6 +27,15 @@ const HIGH_PERFORMANCE_UDP_RUNTIME_SHARDS_MAX: usize = 8;
 const LOW_MEMORY_UDP_DISPATCH_QUEUE_DEPTH: usize = 128;
 const BALANCED_UDP_DISPATCH_QUEUE_DEPTH: usize = 512;
 const HIGH_PERFORMANCE_UDP_DISPATCH_QUEUE_DEPTH: usize = 2_048;
+const LOW_MEMORY_UDP_REPLY_SOCKET_IDLE_SECONDS: u64 = 60;
+const BALANCED_UDP_REPLY_SOCKET_IDLE_SECONDS: u64 = 180;
+const HIGH_PERFORMANCE_UDP_REPLY_SOCKET_IDLE_SECONDS: u64 = 300;
+const LOW_MEMORY_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS: u64 = 15;
+const BALANCED_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS: u64 = 30;
+const HIGH_PERFORMANCE_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS: u64 = 60;
+const LOW_MEMORY_UDP_QUEUED_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
+const BALANCED_UDP_QUEUED_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
+const HIGH_PERFORMANCE_UDP_QUEUED_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
 const LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY: usize = 64;
 const BALANCED_DNS_FAST_PATH_CONCURRENCY: usize = 512;
 const HIGH_PERFORMANCE_DNS_FAST_PATH_CONCURRENCY: usize = 1_024;
@@ -161,6 +170,30 @@ impl ResidentRuntimeProfile {
             Self::LowMemory => LOW_MEMORY_UDP_DISPATCH_QUEUE_DEPTH,
             Self::Balanced => BALANCED_UDP_DISPATCH_QUEUE_DEPTH,
             Self::HighPerformance => HIGH_PERFORMANCE_UDP_DISPATCH_QUEUE_DEPTH,
+        }
+    }
+
+    pub(crate) fn udp_reply_socket_idle_timeout(self) -> Duration {
+        Duration::from_secs(match self {
+            Self::LowMemory => LOW_MEMORY_UDP_REPLY_SOCKET_IDLE_SECONDS,
+            Self::Balanced => BALANCED_UDP_REPLY_SOCKET_IDLE_SECONDS,
+            Self::HighPerformance => HIGH_PERFORMANCE_UDP_REPLY_SOCKET_IDLE_SECONDS,
+        })
+    }
+
+    pub(crate) fn udp_direct_response_buffer_idle_timeout(self) -> Duration {
+        Duration::from_secs(match self {
+            Self::LowMemory => LOW_MEMORY_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS,
+            Self::Balanced => BALANCED_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS,
+            Self::HighPerformance => HIGH_PERFORMANCE_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS,
+        })
+    }
+
+    pub(crate) fn udp_queued_payload_bytes_default(self) -> usize {
+        match self {
+            Self::LowMemory => LOW_MEMORY_UDP_QUEUED_PAYLOAD_BYTES,
+            Self::Balanced => BALANCED_UDP_QUEUED_PAYLOAD_BYTES,
+            Self::HighPerformance => HIGH_PERFORMANCE_UDP_QUEUED_PAYLOAD_BYTES,
         }
     }
 
@@ -313,6 +346,10 @@ impl ResidentRuntimeProfileSelection {
             "invalidValue": self.invalid_value,
         })
     }
+}
+
+pub(crate) fn selected_resident_runtime_profile_name() -> &'static str {
+    ResidentRuntimeProfileSelection::selected().profile.name()
 }
 
 pub(crate) fn resident_runtime_profile_contract() -> Value {

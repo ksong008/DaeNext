@@ -44,6 +44,7 @@ struct ResidentUdpSessionShardContext {
     admission: Arc<Semaphore>,
     session_queue_depth: usize,
     cleanup_queue_depth: usize,
+    direct_response_buffer_idle_timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -86,6 +87,7 @@ impl ResidentUdpSessionShardPool {
             admission,
             session_queue_depth: runtime_config.session_queue_depth,
             cleanup_queue_depth: runtime_config.per_shard_cleanup_queue_depth(),
+            direct_response_buffer_idle_timeout: runtime_config.direct_response_buffer_idle_timeout,
         };
         let mut senders = Vec::with_capacity(shard_count);
         let mut stops = Vec::with_capacity(shard_count);

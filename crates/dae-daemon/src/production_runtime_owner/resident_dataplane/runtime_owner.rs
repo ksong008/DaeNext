@@ -1,8 +1,10 @@
 use super::*;
 
+mod cleanup_inventory;
 mod shutdown;
 mod task;
 
+use self::cleanup_inventory::*;
 use self::shutdown::shutdown_resident_runtime_owner;
 use self::task::*;
 
@@ -14,8 +16,10 @@ pub(crate) struct ResidentRuntimeOwner {
     reload_generation: u64,
     metrics: Arc<ResidentDataplaneMetrics>,
     udp_sessions_active: Arc<AtomicUsize>,
+    udp_payload_admission: ResidentUdpPayloadAdmission,
     resource_config: ResidentRuntimeResourceConfig,
     event_writer: ResidentEventWriterRuntime,
+    cleanup_inventory: ResidentRuntimeCleanupInventory,
 }
 
 #[derive(Clone)]
@@ -47,6 +51,7 @@ impl ResidentRuntimeOwner {
         metrics: Arc<ResidentDataplaneMetrics>,
         udp_sessions_active: Arc<AtomicUsize>,
         resource_config: ResidentRuntimeResourceConfig,
+        udp_payload_admission: ResidentUdpPayloadAdmission,
     ) -> Self {
         let event_writer = ResidentEventWriterRuntime::start(
             event_file.clone(),
@@ -61,8 +66,10 @@ impl ResidentRuntimeOwner {
             reload_generation,
             metrics,
             udp_sessions_active,
+            udp_payload_admission,
             resource_config,
             event_writer,
+            cleanup_inventory: ResidentRuntimeCleanupInventory::default(),
         }
     }
 
@@ -80,6 +87,10 @@ impl ResidentRuntimeOwner {
 
     pub(crate) fn metrics(&self) -> Arc<ResidentDataplaneMetrics> {
         Arc::clone(&self.metrics)
+    }
+
+    pub(crate) fn cleanup_reporter(&self, owner: &'static str) -> ResidentRuntimeCleanupReporter {
+        self.cleanup_inventory.reporter(owner)
     }
 
     pub(crate) fn udp_sessions_active(&self) -> Arc<AtomicUsize> {
@@ -617,6 +628,7 @@ mod tests {
             metrics,
             Arc::clone(&udp_sessions_active),
             ResidentRuntimeResourceConfig::from_config(&config),
+            ResidentUdpPayloadAdmission::new(9, 1024),
         );
         owner.spawn_thread("test-worker", "runtime-lifecycle-test", || {});
         let registry = owner.task_registry_value();

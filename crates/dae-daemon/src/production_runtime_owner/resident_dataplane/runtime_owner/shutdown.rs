@@ -27,9 +27,14 @@ pub(super) fn shutdown_resident_runtime_owner(
     let active_udp = metrics["activeUdpSessions"].as_u64().unwrap_or(0);
     let legacy_udp_active = owner.udp_sessions_active.load(Ordering::Relaxed);
     let event_writer = owner.event_writer.shutdown_until(deadline);
+    let owned_cleanup = owner.cleanup_inventory.snapshot();
+    let udp_payload_admission = owner.udp_payload_admission.snapshot();
+    let udp_payload_released = udp_payload_admission["currentBytes"].as_u64() == Some(0);
     let shutdown_elapsed_ns = elapsed_nanos(started);
     let shutdown_passed = task_shutdown.panicked == 0
         && task_shutdown.timed_out == 0
+        && udp_payload_released
+        && owned_cleanup["status"].as_str() == Some("pass")
         && event_writer["status"].as_str() == Some("pass");
 
     json!({
@@ -51,6 +56,8 @@ pub(super) fn shutdown_resident_runtime_owner(
         "active_tcp_connections_at_shutdown": active_tcp,
         "active_udp_sessions_at_shutdown": active_udp,
         "udp_sessions_active_at_shutdown": legacy_udp_active,
+        "udp_payload_admission": udp_payload_admission,
+        "owned_cleanup": owned_cleanup,
         "runtime_handle_owner": "resident-runtime-owner",
         "manual_probe_runtime_available": true,
         "manual_probe_runtime_persistent": false,

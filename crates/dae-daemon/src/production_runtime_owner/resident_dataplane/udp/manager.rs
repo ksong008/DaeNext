@@ -11,6 +11,7 @@ use dae_datapath::TcpDialMode;
 use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode};
 use dae_ebpf_support::BpfRoutingResult;
 use dae_routing::RoutingMatcher;
+use serde_json::Value;
 use tokio::io::unix::AsyncFd;
 
 use super::super::plan::resident_data_udp_network_type;
@@ -45,6 +46,7 @@ const UDP_ROUTE_REASON_BLOCK: &str = "selected block outbound";
 const UDP_ROUTE_REASON_LIMIT: &str = "session limit reached";
 const UDP_ROUTE_REASON_QUEUE_FULL: &str = "session queue full";
 const UDP_ROUTE_REASON_DISPATCH_QUEUE_FULL: &str = "session dispatch queue full";
+const UDP_ROUTE_REASON_SESSION_UNAVAILABLE: &str = "session actor closed during recreation";
 const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
 const UDP_ROUTE_REASON_DNS_FAST_PATH: &str = "handled resident DNS packet without UDP session";
 const UDP_SESSION_WORKER_THREAD_NAME: &str = "udp-session";
@@ -65,7 +67,7 @@ pub(super) fn run_resident_udp_session_manager(
     active_sessions: Arc<AtomicUsize>,
     runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
-) {
+) -> Value {
     let mut runtime_builder = if runtime_config.runtime_worker_threads > 0 {
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder
@@ -79,12 +81,13 @@ pub(super) fn run_resident_udp_session_manager(
     let runtime = match runtime_builder.enable_io().enable_time().build() {
         Ok(runtime) => runtime,
         Err(err) => {
+            let report = udp_session_manager_start_failure("runtime-build", err.to_string());
             append_event(
                 &event_file,
                 &event_lock,
-                json!({"event": "udp_session_manager_start_failed", "error": err.to_string()}),
+                udp_session_manager_event("udp_session_manager_start_failed", &report),
             );
-            return;
+            return report;
         }
     };
     runtime.block_on(run_resident_udp_session_manager_async(
@@ -103,7 +106,7 @@ pub(super) fn run_resident_udp_session_manager(
         active_sessions,
         runtime_config,
         health_resuscitation,
-    ));
+    ))
 }
 
 async fn run_resident_udp_session_manager_async(
@@ -122,27 +125,29 @@ async fn run_resident_udp_session_manager_async(
     active_sessions: Arc<AtomicUsize>,
     runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
-) {
+) -> Value {
     let session_limit = runtime_config.session_limit;
     let session_queue_depth = runtime_config.session_queue_depth;
     let dns_fast_path_concurrency = runtime_config.dns_fast_path_concurrency;
     if let Err(err) = socket.set_nonblocking(true) {
+        let report = udp_session_manager_start_failure("socket-nonblocking", err.to_string());
         append_event(
             &event_file,
             &event_lock,
-            json!({"event": "udp_socket_nonblocking_failed", "error": err.to_string()}),
+            udp_session_manager_event("udp_socket_nonblocking_failed", &report),
         );
-        return;
+        return report;
     }
     let socket = match AsyncFd::new(socket) {
         Ok(socket) => socket,
         Err(err) => {
+            let report = udp_session_manager_start_failure("async-fd", err.to_string());
             append_event(
                 &event_file,
                 &event_lock,
-                json!({"event": "udp_session_manager_async_fd_failed", "error": err.to_string()}),
+                udp_session_manager_event("udp_session_manager_async_fd_failed", &report),
             );
-            return;
+            return report;
         }
     };
     let router = match ResidentUdpRouter::new(
@@ -156,12 +161,13 @@ async fn run_resident_udp_session_manager_async(
     ) {
         Ok(router) => router,
         Err(err) => {
+            let report = udp_session_manager_start_failure("router-build", err);
             append_event(
                 &event_file,
                 &event_lock,
-                json!({"event": "udp_session_manager_start_failed", "error": err}),
+                udp_session_manager_event("udp_session_manager_start_failed", &report),
             );
-            return;
+            return report;
         }
     };
     let default_proxy_group = router.default_proxy_group();
@@ -182,6 +188,7 @@ async fn run_resident_udp_session_manager_async(
             "forced_dns_session_lanes": runtime_config.runtime_shards,
             "generation": runtime_config.generation,
             "runtimeProfile": runtime_config.profile,
+            "queuedPayloadAdmission": runtime_config.payload_admission.snapshot(),
             "packetSessionManager": {
                 "schemaVersion": 1,
                 "manager": "resident-udp-session-manager",
@@ -211,6 +218,8 @@ async fn run_resident_udp_session_manager_async(
     let reply_dispatcher = UdpReplyDispatcher::start(
         runtime_config.reply_queue_depth,
         runtime_config.reply_socket_cache_capacity,
+        runtime_config.reply_socket_idle_timeout,
+        runtime_config.payload_admission.clone(),
         Arc::clone(&metrics),
     );
     let udp_reply = reply_dispatcher.handle();
@@ -250,7 +259,14 @@ async fn run_resident_udp_session_manager_async(
                             batch.truncated,
                             batch.budget_hit,
                         );
-                        for packet in batch.packets {
+                        for mut packet in batch.packets {
+                            if packet
+                                .payload
+                                .admit(&runtime_config.payload_admission)
+                                .is_err()
+                            {
+                                continue;
+                            }
                             handle_manager_packet(
                                 packet,
                                 &router,
@@ -282,6 +298,7 @@ async fn run_resident_udp_session_manager_async(
     }
 
     let shutdown_deadline = time::Instant::now() + runtime_config.shutdown_timeout;
+    drop(sniffers);
     drop(session_shard_handle);
     let session_shard_shutdown = session_shards.shutdown(shutdown_deadline).await;
     drop(dns_fast_path);
@@ -289,24 +306,57 @@ async fn run_resident_udp_session_manager_async(
     let dns_forwarder_shutdown = dns.shutdown_forwarders(shutdown_deadline).await;
     drop(udp_reply);
     let reply_shutdown = reply_dispatcher.shutdown(shutdown_deadline).await;
+    let dns_fast_path_shutdown = match dns_fast_path_shutdown {
+        Ok(completed) => json!({"status": "pass", "completed": completed}),
+        Err(err) => json!({"status": "fail", "error": err}),
+    };
+    let reply_shutdown = match reply_shutdown {
+        Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
+        Err(err) => json!({"status": "fail", "error": err.to_string()}),
+    };
+    let active_sessions = active_sessions.load(Ordering::Acquire);
+    let queued_payload_admission = runtime_config.payload_admission.snapshot();
+    let cleanup_passed = active_sessions == 0
+        && runtime_config.payload_admission.current() == 0
+        && cleanup_report_passed(&session_shard_shutdown)
+        && cleanup_report_passed(&dns_fast_path_shutdown)
+        && cleanup_report_passed(&dns_forwarder_shutdown)
+        && cleanup_report_passed(&reply_shutdown);
+    let report = json!({
+        "status": if cleanup_passed { "pass" } else { "fail" },
+        "activeSessions": active_sessions,
+        "queuedPayloadAdmission": queued_payload_admission,
+        "sessionShards": session_shard_shutdown,
+        "dnsFastPathDispatcher": dns_fast_path_shutdown,
+        "dnsForwarders": dns_forwarder_shutdown,
+        "replyDispatcher": reply_shutdown,
+    });
     append_event(
         &event_file,
         &event_lock,
-        json!({
-            "event": "udp_session_manager_stopped",
-            "active_sessions": active_sessions.load(Ordering::Relaxed),
-            "session_shards": session_shard_shutdown,
-            "dns_fast_path_dispatcher": match dns_fast_path_shutdown {
-                Ok(completed) => json!({"status": "pass", "completed": completed}),
-                Err(err) => json!({"status": "fail", "error": err}),
-            },
-            "dns_forwarders": dns_forwarder_shutdown,
-            "reply_dispatcher": match reply_shutdown {
-                Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
-                Err(err) => json!({"status": "fail", "error": err.to_string()}),
-            },
-        }),
+        udp_session_manager_event("udp_session_manager_stopped", &report),
     );
+    report
+}
+
+fn udp_session_manager_start_failure(stage: &'static str, error: String) -> Value {
+    json!({
+        "status": "fail",
+        "stage": stage,
+        "error": error,
+    })
+}
+
+fn cleanup_report_passed(report: &Value) -> bool {
+    report["status"].as_str() == Some("pass")
+}
+
+fn udp_session_manager_event(event: &'static str, report: &Value) -> Value {
+    let mut value = report.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.insert("event".to_owned(), json!(event));
+    }
+    value
 }
 
 fn handle_manager_packet(

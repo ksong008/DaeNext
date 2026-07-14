@@ -11,6 +11,7 @@ pub(super) struct UdpReplySocketCache {
 struct UdpReplySocketEntry {
     socket: Arc<tokio::net::UdpSocket>,
     last_used: u64,
+    last_used_at: time::Instant,
 }
 
 impl UdpReplySocketCache {
@@ -30,6 +31,7 @@ impl UdpReplySocketCache {
         self.tick = self.tick.wrapping_add(1);
         let entry = self.entries.get_mut(&original_dst)?;
         entry.last_used = self.tick;
+        entry.last_used_at = time::Instant::now();
         Some(Arc::clone(&entry.socket))
     }
 
@@ -41,6 +43,7 @@ impl UdpReplySocketCache {
         self.tick = self.tick.wrapping_add(1);
         if let Some(entry) = self.entries.get_mut(&original_dst) {
             entry.last_used = self.tick;
+            entry.last_used_at = time::Instant::now();
             return Arc::clone(&entry.socket);
         }
         if self.entries.len() >= self.capacity {
@@ -51,6 +54,7 @@ impl UdpReplySocketCache {
             UdpReplySocketEntry {
                 socket: Arc::clone(&socket),
                 last_used: self.tick,
+                last_used_at: time::Instant::now(),
             },
         );
         socket
@@ -70,6 +74,13 @@ impl UdpReplySocketCache {
             return;
         };
         self.entries.remove(&oldest);
+    }
+
+    pub(super) fn evict_idle(&mut self, now: time::Instant, idle_timeout: Duration) -> usize {
+        let before = self.entries.len();
+        self.entries
+            .retain(|_, entry| now.saturating_duration_since(entry.last_used_at) < idle_timeout);
+        before.saturating_sub(self.entries.len())
     }
 }
 
@@ -166,5 +177,33 @@ async fn send_udp_reply_when_writable(
             }
             Err(err) => return Err(err),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reply_socket_cache_evicts_idle_entries_without_capacity_pressure() {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let socket = Arc::new(tokio::net::UdpSocket::from_std(socket).unwrap());
+        let original_dst: SocketAddr = "127.0.0.1:53".parse().unwrap();
+        let mut cache = UdpReplySocketCache::new(4);
+        cache.insert(original_dst, socket);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache.evict_idle(time::Instant::now(), Duration::from_secs(30)),
+            0
+        );
+        assert_eq!(
+            cache.evict_idle(
+                time::Instant::now() + Duration::from_secs(31),
+                Duration::from_secs(30),
+            ),
+            1
+        );
+        assert_eq!(cache.len(), 0);
     }
 }

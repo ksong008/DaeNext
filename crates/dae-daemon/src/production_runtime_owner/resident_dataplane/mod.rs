@@ -16,6 +16,8 @@ use dae_outbound::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::udp_payload_admission::ResidentUdpPayloadAdmission;
+
 pub(crate) use self::adapter_matrix::{
     resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
     resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
@@ -100,8 +102,10 @@ mod udp_resources;
 use self::udp_resources::*;
 #[path = "runtime/resource_profile.rs"]
 mod resource_profile;
-pub(super) use self::resource_profile::resident_datapath_postflight_interval_seconds_default;
 use self::resource_profile::*;
+pub(super) use self::resource_profile::{
+    resident_datapath_postflight_interval_seconds_default, selected_resident_runtime_profile_name,
+};
 #[path = "runtime/connect_udp_resources.rs"]
 mod connect_udp_resources;
 use self::connect_udp_resources::*;

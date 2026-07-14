@@ -118,25 +118,34 @@ pub(super) struct UdpDirectSessionActorContext {
     pub(super) metrics: Arc<ResidentDataplaneMetrics>,
     pub(super) udp_reply: UdpReplyHandle,
     pub(super) active_sessions: Arc<AtomicUsize>,
+    pub(super) response_buffer_idle_timeout: Duration,
 }
 
 pub(super) fn spawn_udp_direct_session_actor(
     key: UdpDirectSessionKey,
+    actor_id: u64,
     context: UdpDirectSessionActorContext,
     receiver: mpsc::Receiver<ManagedDirectUdpPacket>,
-    cleanup_tx: mpsc::Sender<UdpDirectSessionKey>,
+    cleanup_tx: mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        run_udp_direct_session_actor(key, context, receiver, cleanup_tx).await;
+        run_udp_direct_session_actor(key, actor_id, context, receiver, cleanup_tx).await;
     })
 }
 
 async fn run_udp_direct_session_actor(
     key: UdpDirectSessionKey,
+    actor_id: u64,
     context: UdpDirectSessionActorContext,
     mut receiver: mpsc::Receiver<ManagedDirectUdpPacket>,
-    cleanup_tx: mpsc::Sender<UdpDirectSessionKey>,
+    cleanup_tx: mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
 ) {
+    let _cleanup_guard = UdpSessionCleanupGuard::new(
+        key.clone(),
+        actor_id,
+        cleanup_tx,
+        Arc::clone(&context.metrics),
+    );
     let _guard = UdpManagedSessionGuard::new(
         Arc::clone(&context.active_sessions),
         Arc::clone(&context.metrics),
@@ -244,6 +253,17 @@ async fn run_udp_direct_session_actor(
                 stop_reason = "idle-timeout".to_owned();
                 break;
             }
+            _ = wait_direct_udp_response_buffer_reclaim(
+                session.as_ref(),
+                context.response_buffer_idle_timeout,
+            ), if session.as_ref().is_some_and(DirectUdpSession::has_response_buffer) => {
+                if let Some(session) = session.as_mut() {
+                    session.reclaim_response_buffer_if_idle(
+                        time::Instant::now(),
+                        context.response_buffer_idle_timeout,
+                    );
+                }
+            }
         }
     }
 
@@ -257,7 +277,6 @@ async fn run_udp_direct_session_actor(
             "packetSession": key.to_value(),
         }),
     );
-    let _ = cleanup_tx.send(key).await;
 }
 
 async fn wait_direct_udp_session_response(
@@ -267,6 +286,18 @@ async fn wait_direct_udp_session_response(
         Some(session) => session.wait_readable().await,
         None => std::future::pending().await,
     }
+}
+
+async fn wait_direct_udp_response_buffer_reclaim(
+    session: Option<&DirectUdpSession>,
+    idle_timeout: Duration,
+) {
+    let Some(deadline) =
+        session.and_then(|session| session.response_buffer_reclaim_deadline(idle_timeout))
+    else {
+        return std::future::pending().await;
+    };
+    time::sleep_until(deadline).await;
 }
 
 async fn drain_direct_udp_session_responses(
@@ -312,6 +343,7 @@ async fn drain_direct_udp_session_responses(
 struct DirectUdpSession {
     socket: tokio::net::UdpSocket,
     response_buf: Vec<u8>,
+    response_buffer_last_used: Option<time::Instant>,
 }
 
 impl DirectUdpSession {
@@ -331,6 +363,7 @@ impl DirectUdpSession {
         Ok(Self {
             socket,
             response_buf: Vec::new(),
+            response_buffer_last_used: None,
         })
     }
 
@@ -353,6 +386,7 @@ impl DirectUdpSession {
         if self.response_buf.len() < UDP_DIRECT_RESPONSE_CAPACITY {
             self.response_buf.resize(UDP_DIRECT_RESPONSE_CAPACITY, 0);
         }
+        self.response_buffer_last_used = Some(time::Instant::now());
         match self.socket.try_recv_from(&mut self.response_buf) {
             Ok((read, peer)) => Ok(Some((peer, self.response_buf[..read].to_vec()))),
             Err(err)
@@ -367,6 +401,31 @@ impl DirectUdpSession {
             }
             Err(err) => Err(format!("receive direct UDP datagram: {err}")),
         }
+    }
+
+    fn has_response_buffer(&self) -> bool {
+        self.response_buf.capacity() != 0
+    }
+
+    fn response_buffer_reclaim_deadline(&self, idle_timeout: Duration) -> Option<time::Instant> {
+        self.response_buffer_last_used
+            .and_then(|last_used| last_used.checked_add(idle_timeout))
+    }
+
+    fn reclaim_response_buffer_if_idle(
+        &mut self,
+        now: time::Instant,
+        idle_timeout: Duration,
+    ) -> bool {
+        let Some(deadline) = self.response_buffer_reclaim_deadline(idle_timeout) else {
+            return false;
+        };
+        if now < deadline {
+            return false;
+        }
+        self.response_buf = Vec::new();
+        self.response_buffer_last_used = None;
+        true
     }
 }
 
@@ -494,6 +553,31 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn direct_udp_session_preserves_near_maximum_datagram() {
+        const PAYLOAD_BYTES: usize = 60 * 1024;
+        let upstream = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let payload = vec![0x5a; PAYLOAD_BYTES];
+        let expected = payload.clone();
+        let server = thread::spawn(move || {
+            let mut buf = vec![0_u8; UDP_DIRECT_RESPONSE_CAPACITY];
+            let (read, peer) = upstream.recv_from(&mut buf).unwrap();
+            assert_eq!(read, PAYLOAD_BYTES);
+            upstream.send_to(&buf[..read], peer).unwrap();
+        });
+
+        let mut session = DirectUdpSession::open(upstream_addr, 0).await.unwrap();
+        session.send(&payload, upstream_addr).await.unwrap();
+        time::timeout(Duration::from_secs(2), session.wait_readable())
+            .await
+            .expect("near-maximum direct UDP response readiness timeout")
+            .unwrap();
+        let (_, response) = session.try_recv_response().unwrap().unwrap();
+        assert_eq!(response, expected);
+        server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn direct_udp_session_waits_for_socket_readiness_without_polling() {
         let upstream = StdUdpSocket::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
@@ -505,6 +589,21 @@ mod tests {
                 .is_err(),
             "an idle direct UDP socket must remain pending"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn direct_udp_session_releases_idle_max_datagram_buffer() {
+        let upstream = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut session = DirectUdpSession::open(upstream.local_addr().unwrap(), 0)
+            .await
+            .unwrap();
+        session.response_buf.resize(UDP_DIRECT_RESPONSE_CAPACITY, 0);
+        let timeout = Duration::from_secs(30);
+        let now = time::Instant::now();
+        session.response_buffer_last_used = now.checked_sub(timeout + Duration::from_secs(1));
+        assert!(session.reclaim_response_buffer_if_idle(now, timeout));
+        assert_eq!(session.response_buf.capacity(), 0);
+        assert!(session.response_buffer_last_used.is_none());
     }
 
     #[test]
