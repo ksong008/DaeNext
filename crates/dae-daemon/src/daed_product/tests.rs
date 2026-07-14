@@ -42,4 +42,6 @@ mod runtime_lifecycle;
 #[cfg(test)]
 mod runtime_stop;
 #[cfg(test)]
+mod state_lifecycle;
+#[cfg(test)]
 mod subscription_transactions;
