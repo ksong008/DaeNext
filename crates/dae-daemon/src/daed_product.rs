@@ -668,6 +668,8 @@ fn product_runtime_defaults() -> Value {
                     "pressureBytesConfigKey": "allocator_idle_reclaim_pressure_threshold_bytes",
                     "pressureBytesEnv": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
                     "pressureBytesDefault": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT.to_string(),
+                    "pressureMetric": "allocator-resident-minus-active",
+                    "retainedMetric": "diagnostic-virtual-address-space",
                     "maxTrafficRateBytesPerSecondConfigKey": "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
                     "maxTrafficRateBytesPerSecondEnv": ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
                     "maxTrafficRateBytesPerSecondDefault": ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT.to_string(),
