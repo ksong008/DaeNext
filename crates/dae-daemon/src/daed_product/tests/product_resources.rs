@@ -782,7 +782,7 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     );
     assert_eq!(
         defaults["residentDataplane"]["runtimeProfile"]["default"],
-        json!("balanced")
+        json!("auto")
     );
     assert_eq!(
         defaults["residentDataplane"]["tcpRuntime"]["profileSource"],

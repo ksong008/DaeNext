@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "resource_profile/auto.rs"]
+mod auto;
+use self::auto::*;
+
 pub(crate) const RESIDENT_RUNTIME_PROFILE_ENV: &str = "RESIDENT_RUNTIME_PROFILE";
 const RESIDENT_RUNTIME_PROFILE_LOW_MEMORY: &str = "low-memory";
 const RESIDENT_RUNTIME_PROFILE_BALANCED: &str = "balanced";
@@ -83,6 +87,10 @@ pub(crate) enum ResidentRuntimeProfile {
 pub(crate) struct ResidentRuntimeProfileSelection {
     pub(crate) profile: ResidentRuntimeProfile,
     source: &'static str,
+    capacity_source: Option<&'static str>,
+    effective_memory_bytes: Option<u64>,
+    host_memory_bytes: Option<u64>,
+    cgroup_limit_bytes: Option<u64>,
     invalid_value: Option<String>,
 }
 
@@ -90,7 +98,7 @@ impl ResidentRuntimeProfile {
     fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "low" | "low_memory" | RESIDENT_RUNTIME_PROFILE_LOW_MEMORY => Some(Self::LowMemory),
-            "" | "standard" | RESIDENT_RUNTIME_PROFILE_BALANCED => Some(Self::Balanced),
+            "standard" | RESIDENT_RUNTIME_PROFILE_BALANCED => Some(Self::Balanced),
             "high" | "high_performance" | RESIDENT_RUNTIME_PROFILE_HIGH_PERFORMANCE => {
                 Some(Self::HighPerformance)
             }
@@ -288,7 +296,7 @@ impl ResidentRuntimeProfile {
 impl ResidentRuntimeProfileSelection {
     pub(crate) fn selected() -> Self {
         if let Ok(value) = std::env::var(RESIDENT_RUNTIME_PROFILE_ENV) {
-            return parsed_profile_selection(&value, "env");
+            return select_resident_runtime_profile(Some(&value));
         }
         select_resident_runtime_profile(None)
     }
@@ -297,6 +305,10 @@ impl ResidentRuntimeProfileSelection {
         json!({
             "name": self.profile.name(),
             "source": self.source,
+            "capacitySource": self.capacity_source,
+            "effectiveMemoryBytes": self.effective_memory_bytes.map(|value| value.to_string()),
+            "hostMemoryBytes": self.host_memory_bytes.map(|value| value.to_string()),
+            "cgroupLimitBytes": self.cgroup_limit_bytes.map(|value| value.to_string()),
             "env": RESIDENT_RUNTIME_PROFILE_ENV,
             "invalidValue": self.invalid_value,
         })
@@ -306,12 +318,21 @@ impl ResidentRuntimeProfileSelection {
 pub(crate) fn resident_runtime_profile_contract() -> Value {
     json!({
         "env": RESIDENT_RUNTIME_PROFILE_ENV,
-        "default": RESIDENT_RUNTIME_PROFILE_BALANCED,
+        "default": RESIDENT_RUNTIME_PROFILE_AUTO,
         "supported": [
+            RESIDENT_RUNTIME_PROFILE_AUTO,
             RESIDENT_RUNTIME_PROFILE_LOW_MEMORY,
             RESIDENT_RUNTIME_PROFILE_BALANCED,
             RESIDENT_RUNTIME_PROFILE_HIGH_PERFORMANCE,
         ],
+        "automaticSelection": {
+            "capacityPolicy": "minimum finite cgroup memory limit and host MemTotal",
+            "lowMemoryAtOrBelowBytes": AUTO_LOW_MEMORY_MAX_BYTES.to_string(),
+            "balancedAboveBytes": AUTO_LOW_MEMORY_MAX_BYTES.to_string(),
+            "highPerformanceFromBytes": AUTO_HIGH_PERFORMANCE_LOWER_BOUND_BYTES.to_string(),
+            "fallback": RESIDENT_RUNTIME_PROFILE_BALANCED,
+            "stableForProcessLifetime": true,
+        },
         "profiles": [
             {
                 "name": RESIDENT_RUNTIME_PROFILE_LOW_MEMORY,
@@ -400,26 +421,47 @@ pub(in crate::production_runtime_owner) fn resident_datapath_postflight_interval
 }
 
 fn select_resident_runtime_profile(configured: Option<&str>) -> ResidentRuntimeProfileSelection {
-    if let Some(value) = configured {
-        return parsed_profile_selection(value, "env");
-    }
-    ResidentRuntimeProfileSelection {
-        profile: ResidentRuntimeProfile::Balanced,
-        source: "default",
-        invalid_value: None,
-    }
+    select_resident_runtime_profile_with_auto(configured, automatic_profile_decision())
 }
 
-fn parsed_profile_selection(value: &str, source: &'static str) -> ResidentRuntimeProfileSelection {
+fn select_resident_runtime_profile_with_auto(
+    configured: Option<&str>,
+    automatic: AutomaticProfileDecision,
+) -> ResidentRuntimeProfileSelection {
+    let Some(value) = configured else {
+        return automatic.into_selection(None);
+    };
+    parsed_profile_selection(value, "env", automatic)
+}
+
+fn parsed_profile_selection(
+    value: &str,
+    source: &'static str,
+    automatic: AutomaticProfileDecision,
+) -> ResidentRuntimeProfileSelection {
+    if matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | RESIDENT_RUNTIME_PROFILE_AUTO
+    ) {
+        return automatic.into_selection(None);
+    }
     match ResidentRuntimeProfile::parse(value) {
         Some(profile) => ResidentRuntimeProfileSelection {
             profile,
             source,
+            capacity_source: None,
+            effective_memory_bytes: None,
+            host_memory_bytes: None,
+            cgroup_limit_bytes: None,
             invalid_value: None,
         },
         None => ResidentRuntimeProfileSelection {
             profile: ResidentRuntimeProfile::Balanced,
             source: "invalid-env-fallback",
+            capacity_source: None,
+            effective_memory_bytes: None,
+            host_memory_bytes: None,
+            cgroup_limit_bytes: None,
             invalid_value: Some(value.to_owned()),
         },
     }
@@ -475,11 +517,15 @@ mod tests {
 
     #[test]
     fn resident_runtime_profile_reports_invalid_values() {
-        let selected = select_resident_runtime_profile(Some("high"));
+        let automatic = automatic_profile_decision_for_capacities(
+            Some(16 * GIBIBYTE),
+            Some((512 * MEBIBYTE, "cgroup-v2-memory.max")),
+        );
+        let selected = select_resident_runtime_profile_with_auto(Some("high"), automatic.clone());
         assert_eq!(selected.profile, ResidentRuntimeProfile::HighPerformance);
         assert_eq!(selected.source, "env");
 
-        let invalid = select_resident_runtime_profile(Some("unknown"));
+        let invalid = select_resident_runtime_profile_with_auto(Some("unknown"), automatic);
         assert_eq!(invalid.profile, ResidentRuntimeProfile::Balanced);
         assert_eq!(invalid.source, "invalid-env-fallback");
         assert_eq!(invalid.invalid_value.as_deref(), Some("unknown"));
