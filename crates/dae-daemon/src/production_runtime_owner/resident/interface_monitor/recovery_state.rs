@@ -16,7 +16,15 @@ pub(super) struct RecoveryCandidate {
 #[derive(Debug, Default)]
 pub(super) struct RecoveryDebounce {
     candidate: Option<RecoveryCandidate>,
+    candidate_revision: u64,
     stable_observations: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RecoveryDebounceObservation {
+    pub(super) candidate_revision: Option<u64>,
+    pub(super) stable_observations: u32,
+    pub(super) stable_ready: bool,
 }
 
 impl RecoveryDebounce {
@@ -24,23 +32,29 @@ impl RecoveryDebounce {
         &mut self,
         candidate: Option<RecoveryCandidate>,
         required_stable_observations: u32,
-    ) -> (u32, bool) {
+    ) -> RecoveryDebounceObservation {
         let required_stable_observations = required_stable_observations.max(1);
         let Some(candidate) = candidate else {
             self.candidate = None;
             self.stable_observations = 0;
-            return (0, false);
+            return RecoveryDebounceObservation {
+                candidate_revision: None,
+                stable_observations: 0,
+                stable_ready: false,
+            };
         };
         if self.candidate.as_ref() == Some(&candidate) {
             self.stable_observations = self.stable_observations.saturating_add(1);
         } else {
             self.candidate = Some(candidate);
+            self.candidate_revision = self.candidate_revision.wrapping_add(1).max(1);
             self.stable_observations = 1;
         }
-        (
-            self.stable_observations,
-            self.stable_observations >= required_stable_observations,
-        )
+        RecoveryDebounceObservation {
+            candidate_revision: Some(self.candidate_revision),
+            stable_observations: self.stable_observations,
+            stable_ready: self.stable_observations >= required_stable_observations,
+        }
     }
 }
 
@@ -140,9 +154,18 @@ mod tests {
             wan: Some(state("192.0.2.10", "192.0.2.1", "wan0")),
         };
         let mut debounce = RecoveryDebounce::default();
-        assert_eq!(debounce.observe(Some(candidate.clone()), 2), (1, false));
-        assert_eq!(debounce.observe(Some(candidate), 2), (2, true));
-        assert_eq!(debounce.observe(None, 2), (0, false));
+        let first = debounce.observe(Some(candidate.clone()), 2);
+        let second = debounce.observe(Some(candidate), 2);
+        let absent = debounce.observe(None, 2);
+
+        assert_eq!(first.stable_observations, 1);
+        assert!(!first.stable_ready);
+        assert_eq!(second.candidate_revision, first.candidate_revision);
+        assert_eq!(second.stable_observations, 2);
+        assert!(second.stable_ready);
+        assert_eq!(absent.candidate_revision, None);
+        assert_eq!(absent.stable_observations, 0);
+        assert!(!absent.stable_ready);
     }
 
     #[test]
@@ -157,9 +180,22 @@ mod tests {
         };
         let mut debounce = RecoveryDebounce::default();
 
-        assert_eq!(debounce.observe(Some(first), 2), (1, false));
-        assert_eq!(debounce.observe(Some(second.clone()), 2), (1, false));
-        assert_eq!(debounce.observe(Some(second), 2), (2, true));
+        let first_observation = debounce.observe(Some(first), 2);
+        let changed_observation = debounce.observe(Some(second.clone()), 2);
+        let stable_observation = debounce.observe(Some(second), 2);
+
+        assert_eq!(first_observation.stable_observations, 1);
+        assert_eq!(changed_observation.stable_observations, 1);
+        assert_ne!(
+            changed_observation.candidate_revision,
+            first_observation.candidate_revision
+        );
+        assert_eq!(
+            stable_observation.candidate_revision,
+            changed_observation.candidate_revision
+        );
+        assert_eq!(stable_observation.stable_observations, 2);
+        assert!(stable_observation.stable_ready);
     }
 
     #[test]

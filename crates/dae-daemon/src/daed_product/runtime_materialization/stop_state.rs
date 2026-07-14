@@ -7,6 +7,7 @@ pub(in crate::daed_product) fn stop_runtime_and_persist(
     ensure_state_schema(state).map_err(|err| format!("prepare runtime stop state: {err}"))?;
     let prepared = runtime.prepare_stop()?;
     persist_system_stopped(state).map_err(|err| format!("persist runtime stop state: {err}"))?;
+    runtime.set_runtime_required_for_readiness(false);
     Ok(prepared.commit_background())
 }
 

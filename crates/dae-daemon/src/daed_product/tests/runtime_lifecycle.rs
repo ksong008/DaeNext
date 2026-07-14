@@ -24,6 +24,7 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
         web_root: dir.clone(),
         api_only: true,
         control_socket: dir.join("control.sock"),
+        shutdown: Arc::new(ProductShutdown::default()),
         runtime: Arc::new(ProductRuntimeManager::new()),
         runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),
@@ -252,6 +253,34 @@ pub(crate) fn runtime_cleanup_interlock_blocks_failed_cleanup() {
 }
 
 #[test]
+pub(crate) fn stuck_runtime_thread_cleanup_prevents_replacement_publication() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.cleanup.begin(8, "reload-replace");
+        inner.cleanup.finish(Some(json!({
+            "status": "fail",
+            "cleanup_step_failed": true,
+            "cleanup_steps": [{
+                "name": "stop-resident-dataplane-runtime",
+                "status": "fail",
+                "task_count_timed_out": 1,
+                "task_count_detached": 1
+            }],
+            "loaded_map_cleaned": true,
+            "cleanup_command_timed_out": false,
+            "leftovers_after_cleanup": [],
+            "sys_fs_bpf_dae_mutated": false,
+        })));
+    }
+
+    let error = manager.ensure_cleanup_allows_start().unwrap_err();
+    assert!(error.contains("previous product runtime cleanup failed"));
+    assert!(error.contains("stop-resident-dataplane-runtime"));
+    assert!(!manager.is_running());
+}
+
+#[test]
 pub(crate) fn runtime_interface_recovery_ignores_fake_runtime() {
     let manager = ProductRuntimeManager::new();
     {
@@ -386,6 +415,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
         web_root: dir.clone(),
         api_only: true,
         control_socket: dir.join("control.sock"),
+        shutdown: Arc::new(ProductShutdown::default()),
         runtime: Arc::new(ProductRuntimeManager::new()),
         runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),

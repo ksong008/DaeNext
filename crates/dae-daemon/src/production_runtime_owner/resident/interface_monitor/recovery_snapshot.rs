@@ -115,14 +115,17 @@ pub(super) fn interface_monitor_snapshot_with_wan_state(
         interfaces: candidate_interfaces,
         wan: current_wan.verified().then(|| current_wan.clone()),
     });
-    let (stable_observations, stable_ready) =
-        debounce.observe(candidate, INTERFACE_RECOVERY_STABLE_OBSERVATIONS);
-    let reattach_ready = reattach_required && structurally_ready && stable_ready;
+    let debounce_observation = debounce.observe(candidate, INTERFACE_RECOVERY_STABLE_OBSERVATIONS);
+    let reattach_ready =
+        reattach_required && structurally_ready && debounce_observation.stable_ready;
+    let poll_interval =
+        poll_policy::interval(reattach_required, structurally_ready, reattach_ready);
     json!({
         "schemaVersion": 2,
         "status": if reattach_required || !baseline_wan.verified() || !current_wan.verified() { MONITOR_STATUS_DEGRADED } else { MONITOR_STATUS_PASS },
         "checkedAtUnix": unix_now_secs(),
-        "pollIntervalMs": INTERFACE_MONITOR_POLL_MS,
+        "pollIntervalMs": poll_policy::duration_millis(poll_interval),
+        "pollPolicy": poll_policy::report(),
         "monitorRunning": true,
         "reattachImplemented": true,
         "reattachRequired": reattach_required,
@@ -132,7 +135,8 @@ pub(super) fn interface_monitor_snapshot_with_wan_state(
             "structurallyReady": structurally_ready,
             "baselineVerified": baseline_wan.verified(),
             "observationVerified": current_wan.verified(),
-            "stableObservations": stable_observations,
+            "candidateRevision": debounce_observation.candidate_revision,
+            "stableObservations": debounce_observation.stable_observations,
             "requiredStableObservations": INTERFACE_RECOVERY_STABLE_OBSERVATIONS,
         },
         "startupLazyBindAllowed": false,

@@ -455,7 +455,8 @@ pub(super) fn help_text() -> String {
   daed --version
   daed run -c /etc/daed --listen 0.0.0.0:2023 [--api-only] [--web-root PATH] [--control PATH]
   daed reload [--control PATH] [--timeout 60s] [--json]
-  daed validate -c /etc/daed/|/etc/dae/config.dae [--runtime] [--json]
+  daed wait-ready [--control PATH] [--timeout 60s] [--json]
+  daed validate -c /etc/daed/|/etc/dae/config.dae [--state /etc/daed/daed.db] [--runtime] [--json]
   daed service-contract [--json]
   daed package-info [--json]
   daed resident-adapter-matrix -c /etc/dae/config.dae [--json]

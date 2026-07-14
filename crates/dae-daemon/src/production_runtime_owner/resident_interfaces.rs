@@ -13,10 +13,17 @@ use super::native_ebpf::{NativeEbpfRuntimeState, NativeInterfaceAttachRole};
 const SYS_CLASS_NET: &str = "/sys/class/net";
 pub(super) const SYSFS_INTERFACE_TYPE_FILE: &str = "type";
 
+// Linux UAPI include/uapi/linux/if_arp.h. Keep each name paired with its
+// actual ARPHRD value because this classification selects the L2 or L3 parser.
 #[cfg(test)]
 pub(super) const ARPHRD_ETHER: u16 = 1;
+pub(super) const ARPHRD_SLIP: u16 = 256;
+pub(super) const ARPHRD_CSLIP: u16 = 257;
+pub(super) const ARPHRD_SLIP6: u16 = 258;
+pub(super) const ARPHRD_CSLIP6: u16 = 259;
 pub(super) const ARPHRD_PPP: u16 = 512;
-pub(super) const ARPHRD_SLIP: u16 = 768;
+pub(super) const ARPHRD_TUNNEL: u16 = 768;
+pub(super) const ARPHRD_TUNNEL6: u16 = 769;
 #[cfg(test)]
 pub(super) const ARPHRD_LOOPBACK: u16 = 772;
 pub(super) const ARPHRD_NONE: u16 = 65_534;
@@ -360,7 +367,8 @@ fn configure_resident_wan_accept_ra(
 
 pub(super) fn link_layer_from_arphrd(arphrd: u16) -> TcAttachLayer {
     match arphrd {
-        ARPHRD_PPP | ARPHRD_SLIP | ARPHRD_NONE => TcAttachLayer::L3,
+        ARPHRD_SLIP | ARPHRD_CSLIP | ARPHRD_SLIP6 | ARPHRD_CSLIP6 | ARPHRD_PPP | ARPHRD_TUNNEL
+        | ARPHRD_TUNNEL6 | ARPHRD_NONE => TcAttachLayer::L3,
         _ => TcAttachLayer::L2,
     }
 }
@@ -581,8 +589,15 @@ mod tests {
     #[test]
     fn link_layer_detection_matches_compatible_l2_l3_program_selection() {
         assert_eq!(link_layer_from_arphrd(ARPHRD_ETHER), TcAttachLayer::L2);
-        assert_eq!(link_layer_from_arphrd(ARPHRD_PPP), TcAttachLayer::L3);
+        assert_eq!(ARPHRD_SLIP, 256);
+        assert_eq!(ARPHRD_TUNNEL, 768);
         assert_eq!(link_layer_from_arphrd(ARPHRD_SLIP), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_CSLIP), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_SLIP6), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_CSLIP6), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_PPP), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_TUNNEL), TcAttachLayer::L3);
+        assert_eq!(link_layer_from_arphrd(ARPHRD_TUNNEL6), TcAttachLayer::L3);
         assert_eq!(link_layer_from_arphrd(ARPHRD_NONE), TcAttachLayer::L3);
         assert_eq!(link_layer_from_arphrd(ARPHRD_LOOPBACK), TcAttachLayer::L2);
     }
