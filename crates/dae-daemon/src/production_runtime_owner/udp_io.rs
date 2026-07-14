@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 use dae_datapath::UdpDirectSocketReport;
 use serde_json::{Value, json};
 
+use super::udp_payload_admission::{
+    ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
+};
+
 pub(super) const UDP_RECV_DEFAULT_CAPACITY: usize = 2048;
 const UDP_RECV_MAX_RETAINED_CAPACITY: usize = 64 * 1024;
 const UDP_RECV_MAX_DATAGRAM_CAPACITY: usize = u16::MAX as usize;
@@ -116,22 +120,39 @@ impl UdpPayloadPool {
 pub(super) struct UdpPayload {
     bytes: Vec<u8>,
     pool: Option<UdpPayloadPool>,
+    admission: Option<ResidentUdpPayloadPermit>,
 }
 
 impl UdpPayload {
     fn from_vec(bytes: Vec<u8>) -> Self {
-        Self { bytes, pool: None }
+        Self {
+            bytes,
+            pool: None,
+            admission: None,
+        }
     }
 
     fn from_pool(bytes: Vec<u8>, pool: &UdpPayloadPool) -> Self {
         Self {
             bytes,
             pool: Some(pool.clone()),
+            admission: None,
         }
     }
 
     pub(super) fn as_slice(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub(super) fn admit(
+        &mut self,
+        admission: &ResidentUdpPayloadAdmission,
+    ) -> Result<(), ResidentUdpPayloadAdmissionError> {
+        if self.admission.is_some() {
+            return Ok(());
+        }
+        self.admission = Some(admission.try_acquire(self.bytes.len())?);
+        Ok(())
     }
 }
 
@@ -404,5 +425,15 @@ mod tests {
             state.retained_bytes,
             2_usize.saturating_mul(UDP_RECV_DEFAULT_CAPACITY)
         );
+    }
+
+    #[test]
+    fn udp_payload_returns_generation_byte_admission_when_dropped() {
+        let admission = ResidentUdpPayloadAdmission::new(3, 1024);
+        let mut payload = UdpPayload::from_vec(vec![0_u8; 768]);
+        payload.admit(&admission).unwrap();
+        assert_eq!(admission.current(), 768);
+        drop(payload);
+        assert_eq!(admission.current(), 0);
     }
 }

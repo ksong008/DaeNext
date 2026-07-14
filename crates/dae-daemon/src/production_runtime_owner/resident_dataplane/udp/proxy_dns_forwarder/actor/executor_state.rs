@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn wait_proxy_dns_udp_response(
-    executor: &mut Option<UdpSessionExecutor>,
+    executor: &mut Option<Box<UdpSessionExecutor>>,
     enabled: bool,
 ) -> Result<Option<(&'static str, UdpExchangeResult)>, String> {
     if !enabled {
@@ -14,7 +14,7 @@ pub(super) async fn wait_proxy_dns_udp_response(
 }
 
 pub(super) async fn reset_proxy_dns_udp_executor(
-    executor: &mut Option<UdpSessionExecutor>,
+    executor: &mut Option<Box<UdpSessionExecutor>>,
     timeout: Duration,
     metrics: &ResidentDataplaneMetrics,
 ) {

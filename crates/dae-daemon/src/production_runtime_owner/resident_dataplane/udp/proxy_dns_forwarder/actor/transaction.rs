@@ -34,7 +34,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
     deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
     id_allocator: &mut UdpRequestIdAllocator,
     next_generation: &mut u64,
-    executor: &mut Option<UdpSessionExecutor>,
+    executor: &mut Option<Box<UdpSessionExecutor>>,
     runtime_config: &ResidentDnsUdpRuntimeConfig,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<(), String> {
@@ -93,7 +93,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
         deadline,
     });
     if executor.is_none() {
-        *executor = Some(UdpSessionExecutor::new_proxy_packet(proxy));
+        *executor = Some(Box::new(UdpSessionExecutor::new_proxy_packet(proxy)));
         metrics.proxy_dns_udp_executor_opened();
     } else {
         metrics.proxy_dns_udp_executor_reused();

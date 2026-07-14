@@ -23,6 +23,9 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_session_reused: AtomicU64,
     udp_session_admission_rejected: AtomicU64,
     udp_session_queue_full: AtomicU64,
+    udp_session_stale_recreated: AtomicU64,
+    udp_session_actor_panicked: AtomicU64,
+    udp_session_cleanup_notification_failed: AtomicU64,
     udp_session_shutdown_deadline_hits: AtomicU64,
     udp_ingress_packets: AtomicU64,
     udp_ingress_drain_batches: AtomicU64,
@@ -54,6 +57,7 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_reply_sent: AtomicU64,
     udp_reply_send_would_block: AtomicU64,
     udp_reply_socket_recreated: AtomicU64,
+    udp_reply_socket_idle_evicted: AtomicU64,
     udp_reply_failed: AtomicU64,
 }
 
@@ -160,6 +164,21 @@ impl ResidentDataplaneMetrics {
 
     pub(super) fn udp_session_queue_full(&self) {
         self.udp_session_queue_full.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_stale_recreated(&self) {
+        self.udp_session_stale_recreated
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_actor_panicked(&self) {
+        self.udp_session_actor_panicked
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_session_cleanup_notification_failed(&self) {
+        self.udp_session_cleanup_notification_failed
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(super) fn udp_session_shutdown_deadline_hit(&self) {
@@ -338,6 +357,11 @@ impl ResidentDataplaneMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(super) fn udp_reply_socket_idle_evicted(&self, count: usize) {
+        self.udp_reply_socket_idle_evicted
+            .fetch_add(count as u64, Ordering::Relaxed);
+    }
+
     pub(super) fn udp_reply_failed(&self) {
         self.udp_reply_failed.fetch_add(1, Ordering::Relaxed);
     }
@@ -366,6 +390,9 @@ impl ResidentDataplaneMetrics {
             "udpSessionReused": self.udp_session_reused.load(Ordering::Relaxed),
             "udpSessionAdmissionRejected": self.udp_session_admission_rejected.load(Ordering::Relaxed),
             "udpSessionQueueFull": self.udp_session_queue_full.load(Ordering::Relaxed),
+            "udpSessionStaleRecreated": self.udp_session_stale_recreated.load(Ordering::Relaxed),
+            "udpSessionActorPanicked": self.udp_session_actor_panicked.load(Ordering::Relaxed),
+            "udpSessionCleanupNotificationFailed": self.udp_session_cleanup_notification_failed.load(Ordering::Relaxed),
             "udpSessionShutdownDeadlineHits": self.udp_session_shutdown_deadline_hits.load(Ordering::Relaxed),
             "udpIngressPackets": self.udp_ingress_packets.load(Ordering::Relaxed),
             "udpIngressDrainBatches": self.udp_ingress_drain_batches.load(Ordering::Relaxed),
@@ -397,6 +424,7 @@ impl ResidentDataplaneMetrics {
             "udpReplySent": self.udp_reply_sent.load(Ordering::Relaxed),
             "udpReplySendWouldBlock": self.udp_reply_send_would_block.load(Ordering::Relaxed),
             "udpReplySocketRecreated": self.udp_reply_socket_recreated.load(Ordering::Relaxed),
+            "udpReplySocketIdleEvicted": self.udp_reply_socket_idle_evicted.load(Ordering::Relaxed),
             "udpReplyFailed": self.udp_reply_failed.load(Ordering::Relaxed),
         })
     }

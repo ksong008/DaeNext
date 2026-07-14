@@ -17,6 +17,7 @@ fn test_owner(reload_generation: u64, name: &str) -> ResidentRuntimeOwner {
         Arc::new(ResidentDataplaneMetrics::default()),
         Arc::new(AtomicUsize::new(0)),
         ResidentRuntimeResourceConfig::from_config(&config),
+        ResidentUdpPayloadAdmission::new(reload_generation, 1024),
     )
 }
 
@@ -58,4 +59,17 @@ fn resident_runtime_shutdown_reports_worker_panics_without_blocking_join() {
     assert_eq!(evidence["task_count_panicked"], 1);
     assert_eq!(evidence["task_count_timed_out"], 0);
     assert_eq!(evidence["tasks"][0]["status"], "panicked");
+}
+
+#[test]
+fn resident_runtime_shutdown_reports_retained_queued_payload_bytes() {
+    let mut owner = test_owner(3, "resident-runtime-owner-payload-test");
+    let retained = owner.udp_payload_admission.try_acquire(256).unwrap();
+
+    let evidence = owner.shutdown_with_grace(Duration::from_millis(25));
+
+    assert_eq!(evidence["status"], "fail");
+    assert_eq!(evidence["udp_payload_admission"]["currentBytes"], 256);
+    drop(retained);
+    assert_eq!(owner.udp_payload_admission.current(), 0);
 }

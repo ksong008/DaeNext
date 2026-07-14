@@ -5,6 +5,9 @@ use std::time::Duration;
 use crate::production_runtime_owner::resident_dataplane::{
     ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
 };
+use crate::production_runtime_owner::udp_payload_admission::{
+    ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit,
+};
 
 use super::super::*;
 
@@ -27,6 +30,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 {
     sender: tokio::sync::mpsc::Sender<UdpMultiplexRequest>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    payload_admission: ResidentUdpPayloadAdmission,
     _lifecycle: Arc<ResidentDnsUdpActorLifecycle>,
     #[cfg(test)]
     attempts: usize,
@@ -105,6 +109,7 @@ impl UdpMultiplexActorConfig {
 
 struct UdpMultiplexRequest {
     payload: Vec<u8>,
+    _payload_admission: ResidentUdpPayloadPermit,
     response: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
 }
 
@@ -185,6 +190,7 @@ fn start_udp_multiplex_actor(
         handle: ResidentDnsUdpMultiplexHandle {
             sender,
             metrics,
+            payload_admission: runtime.payload_admission.clone(),
             _lifecycle: Arc::clone(&lifecycle),
             #[cfg(test)]
             attempts: runtime.attempts,
@@ -235,10 +241,19 @@ impl ResidentDnsUdpMultiplexHandle {
         payload: &[u8],
     ) -> Result<Vec<u8>, String> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let payload_admission = self.payload_admission.try_acquire(payload.len()).map_err(
+            |error| {
+                format!(
+                    "DNS UDP queued payload byte limit reached: requested={}, current={}, limit={}",
+                    error.requested, error.current, error.limit
+                )
+            },
+        )?;
         let queued = time::timeout(
             self.attempt_timeout,
             self.sender.send(UdpMultiplexRequest {
                 payload: payload.to_vec(),
+                _payload_admission: payload_admission,
                 response: response_tx,
             }),
         )

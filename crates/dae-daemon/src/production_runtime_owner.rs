@@ -27,6 +27,7 @@ mod resident_routing;
 mod topology;
 mod udp_dns_datapath_contract;
 mod udp_io;
+mod udp_payload_admission;
 
 use command::{
     bpf_dae_snapshot, ensure_safe_run_root, path_string, runtime_resource_leftovers,

@@ -38,21 +38,29 @@ pub(super) struct UdpSessionActorContext {
 
 pub(super) fn spawn_udp_session_actor(
     key: UdpSessionKey,
+    actor_id: u64,
     context: UdpSessionActorContext,
     receiver: mpsc::Receiver<ManagedUdpPacket>,
-    cleanup_tx: mpsc::Sender<UdpSessionKey>,
+    cleanup_tx: mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        run_udp_session_actor(key, context, receiver, cleanup_tx).await;
+        run_udp_session_actor(key, actor_id, context, receiver, cleanup_tx).await;
     })
 }
 
 async fn run_udp_session_actor(
     key: UdpSessionKey,
+    actor_id: u64,
     context: UdpSessionActorContext,
     mut receiver: mpsc::Receiver<ManagedUdpPacket>,
-    cleanup_tx: mpsc::Sender<UdpSessionKey>,
+    cleanup_tx: mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
 ) {
+    let _cleanup_guard = UdpSessionCleanupGuard::new(
+        key.clone(),
+        actor_id,
+        cleanup_tx,
+        Arc::clone(&context.metrics),
+    );
     let _guard = UdpManagedSessionGuard::new(
         Arc::clone(&context.active_sessions),
         Arc::clone(&context.metrics),
@@ -181,7 +189,6 @@ async fn run_udp_session_actor(
             "packetSession": key.to_value(),
         }),
     );
-    let _ = cleanup_tx.send(key).await;
 }
 
 pub(super) struct UdpManagedSessionGuard {

@@ -1,6 +1,8 @@
 // UDP worker startup keeps socket, routing, session, shutdown, and metrics ownership explicit.
 #![allow(clippy::too_many_arguments)]
 
+use serde_json::Value;
+
 use super::*;
 
 pub(crate) fn resident_udp_loop(
@@ -19,7 +21,7 @@ pub(crate) fn resident_udp_loop(
     active_sessions: Arc<AtomicUsize>,
     runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
-) {
+) -> Value {
     run_resident_udp_session_manager(
         socket,
         proxy_groups,
@@ -36,5 +38,5 @@ pub(crate) fn resident_udp_loop(
         active_sessions,
         runtime_config,
         health_resuscitation,
-    );
+    )
 }

@@ -4,6 +4,9 @@ use super::*;
 use crate::production_runtime_owner::resident_dataplane::dns::{
     ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
 };
+use crate::production_runtime_owner::udp_payload_admission::{
+    ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit,
+};
 
 mod executor_state;
 mod pending;
@@ -25,10 +28,12 @@ pub(super) struct ResidentProxyDnsUdpActorHandle {
     lifecycle: Arc<ResidentDnsUdpActorLifecycle>,
     metrics: Arc<ResidentDataplaneMetrics>,
     attempt_timeout: Duration,
+    payload_admission: ResidentUdpPayloadAdmission,
 }
 
 pub(super) struct ResidentProxyDnsUdpRequest {
     pub(super) payload: Vec<u8>,
+    pub(super) _payload_admission: ResidentUdpPayloadPermit,
     pub(super) response: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
 }
 
@@ -83,6 +88,7 @@ pub(super) fn start_proxy_dns_udp_actor(
             lifecycle: Arc::clone(&lifecycle),
             metrics,
             attempt_timeout: runtime_config.attempt_timeout,
+            payload_admission: runtime_config.payload_admission.clone(),
         },
         lifecycle: Arc::downgrade(&lifecycle),
         task,
@@ -109,10 +115,20 @@ impl ResidentProxyDnsUdpActorHandle {
 
     pub(super) async fn exchange_once(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let payload_admission = self
+            .payload_admission
+            .try_acquire(payload.len())
+            .map_err(|error| {
+                format!(
+                    "proxied DNS UDP queued payload byte limit reached: requested={}, current={}, limit={}",
+                    error.requested, error.current, error.limit
+                )
+            })?;
         match time::timeout(
             self.attempt_timeout,
             self.sender.send(ResidentProxyDnsUdpRequest {
                 payload: payload.to_vec(),
+                _payload_admission: payload_admission,
                 response: response_tx,
             }),
         )
@@ -144,7 +160,10 @@ async fn run_proxy_dns_udp_actor(
     let mut pending = HashMap::<u16, PendingProxyDnsUdpRequest>::new();
     let mut deadlines = VecDeque::<PendingProxyDnsDeadline>::new();
     let mut id_allocator = UdpRequestIdAllocator::new(runtime_config.attempt_timeout);
-    let mut executor = None::<UdpSessionExecutor>;
+    // Protocol executors contain mutually exclusive transport state. Keep the selected
+    // executor off the actor worker stack so adding one protocol variant cannot silently
+    // raise the stack requirement of every DNS UDP worker.
+    let mut executor = None::<Box<UdpSessionExecutor>>;
     let mut next_generation = 1_u64;
     loop {
         expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator, &metrics);

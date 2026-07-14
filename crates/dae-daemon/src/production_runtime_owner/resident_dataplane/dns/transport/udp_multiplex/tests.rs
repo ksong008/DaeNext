@@ -246,10 +246,15 @@ async fn udp_multiplex_queue_saturation_fails_with_a_bounded_wait_and_counter() 
 
     let second_query = build_dns_query_packet(0x7102, "second-full.example", DNS_QTYPE_A).unwrap();
     let (second_response, second_receiver) = tokio::sync::oneshot::channel();
+    let second_admission = handle
+        .payload_admission
+        .try_acquire(second_query.len())
+        .unwrap();
     handle
         .sender
         .send(UdpMultiplexRequest {
             payload: second_query,
+            _payload_admission: second_admission,
             response: second_response,
         })
         .await

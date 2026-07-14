@@ -94,6 +94,8 @@ mod manager;
 use self::manager::*;
 mod session_actor;
 use self::session_actor::*;
+mod session_cleanup;
+use self::session_cleanup::*;
 mod direct_session;
 use self::direct_session::*;
 mod session_executor;

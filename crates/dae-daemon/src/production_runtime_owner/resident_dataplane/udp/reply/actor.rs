@@ -3,6 +3,10 @@ use std::fmt;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::production_runtime_owner::udp_payload_admission::{
+    ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
+};
+
 mod socket;
 use socket::{UdpReplySocketCache, send_udp_reply};
 
@@ -10,6 +14,7 @@ use socket::{UdpReplySocketCache, send_udp_reply};
 pub(in super::super) enum UdpReplyError {
     Closing,
     QueueFull,
+    PayloadLimit(ResidentUdpPayloadAdmissionError),
     DispatcherClosed,
     TimedOut,
     Socket(String),
@@ -26,6 +31,11 @@ impl fmt::Display for UdpReplyError {
         match self {
             Self::Closing => formatter.write_str("resident UDP reply dispatcher is closing"),
             Self::QueueFull => formatter.write_str("resident UDP reply queue is full"),
+            Self::PayloadLimit(error) => write!(
+                formatter,
+                "resident UDP queued payload byte limit reached: requested={}, current={}, limit={}",
+                error.requested, error.current, error.limit
+            ),
             Self::DispatcherClosed => formatter.write_str("resident UDP reply dispatcher stopped"),
             Self::TimedOut => write!(
                 formatter,
@@ -41,6 +51,7 @@ struct UdpReplyRequest {
     original_dst: SocketAddr,
     peer: SocketAddr,
     payload: Vec<u8>,
+    _payload_admission: ResidentUdpPayloadPermit,
     deadline: time::Instant,
     response: Option<oneshot::Sender<Result<(), UdpReplyError>>>,
     download_bytes_on_success: usize,
@@ -51,6 +62,7 @@ pub(in super::super) struct UdpReplyHandle {
     sender: mpsc::Sender<UdpReplyRequest>,
     closing: Arc<AtomicBool>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    payload_admission: ResidentUdpPayloadAdmission,
 }
 
 impl UdpReplyHandle {
@@ -63,6 +75,10 @@ impl UdpReplyHandle {
         if self.closing.load(Ordering::Acquire) {
             return Err(UdpReplyError::Closing);
         }
+        let payload_admission = self
+            .payload_admission
+            .try_acquire(payload.len())
+            .map_err(UdpReplyError::PayloadLimit)?;
         let deadline = time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT;
         let (response, receiver) = oneshot::channel();
         let permit = match self.sender.try_reserve() {
@@ -89,6 +105,7 @@ impl UdpReplyHandle {
             original_dst,
             peer,
             payload,
+            _payload_admission: payload_admission,
             deadline,
             response: Some(response),
             download_bytes_on_success: 0,
@@ -111,6 +128,10 @@ impl UdpReplyHandle {
         if self.closing.load(Ordering::Acquire) {
             return Err(UdpReplyError::Closing);
         }
+        let payload_admission = self
+            .payload_admission
+            .try_acquire(payload.len())
+            .map_err(UdpReplyError::PayloadLimit)?;
         let download_bytes_on_success = if count_download_on_success {
             payload.len()
         } else {
@@ -121,6 +142,7 @@ impl UdpReplyHandle {
                 original_dst,
                 peer,
                 payload,
+                _payload_admission: payload_admission,
                 deadline: time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT,
                 response: None,
                 download_bytes_on_success,
@@ -148,6 +170,8 @@ impl UdpReplyDispatcher {
     pub(in super::super) fn start(
         queue_depth: usize,
         socket_cache_capacity: usize,
+        socket_idle_timeout: Duration,
+        payload_admission: ResidentUdpPayloadAdmission,
         metrics: Arc<ResidentDataplaneMetrics>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(queue_depth.max(1));
@@ -159,6 +183,7 @@ impl UdpReplyDispatcher {
                 receiver,
                 stop_receiver,
                 socket_cache_capacity.max(1),
+                socket_idle_timeout,
                 task_metrics,
             )
             .await
@@ -168,6 +193,7 @@ impl UdpReplyDispatcher {
                 sender,
                 closing,
                 metrics,
+                payload_admission,
             },
             stop: Some(stop),
             task,
@@ -203,13 +229,26 @@ async fn run_udp_reply_actor(
     mut receiver: mpsc::Receiver<UdpReplyRequest>,
     mut stop: oneshot::Receiver<()>,
     socket_cache_capacity: usize,
+    socket_idle_timeout: Duration,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> usize {
     let mut cache = UdpReplySocketCache::new(socket_cache_capacity);
+    let socket_idle_timeout = socket_idle_timeout.max(Duration::from_millis(1));
+    let mut eviction = time::interval_at(
+        time::Instant::now() + socket_idle_timeout,
+        socket_idle_timeout,
+    );
+    eviction.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
             _ = &mut stop => break,
+            _ = eviction.tick() => {
+                let evicted = cache.evict_idle(time::Instant::now(), socket_idle_timeout);
+                if evicted != 0 {
+                    metrics.udp_reply_socket_idle_evicted(evicted);
+                }
+            }
             request = receiver.recv() => {
                 let Some(request) = request else {
                     break;
@@ -238,7 +277,13 @@ mod tests {
     #[tokio::test]
     async fn reply_dispatcher_shutdown_joins_without_open_sockets() {
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
-        let dispatcher = UdpReplyDispatcher::start(2, 2, metrics);
+        let dispatcher = UdpReplyDispatcher::start(
+            2,
+            2,
+            Duration::from_secs(1),
+            ResidentUdpPayloadAdmission::new(1, 1024),
+            metrics,
+        );
         assert_eq!(
             dispatcher
                 .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
@@ -256,6 +301,7 @@ mod tests {
             sender,
             closing: Arc::new(AtomicBool::new(false)),
             metrics: Arc::clone(&metrics),
+            payload_admission: ResidentUdpPayloadAdmission::new(1, 1024),
         };
         let target: SocketAddr = "127.0.0.1:53".parse().unwrap();
         let peer: SocketAddr = "127.0.0.1:10000".parse().unwrap();
@@ -266,6 +312,9 @@ mod tests {
                 original_dst: target,
                 peer,
                 payload: vec![1],
+                _payload_admission: ResidentUdpPayloadAdmission::new(1, 1024)
+                    .try_acquire(1)
+                    .unwrap(),
                 deadline: time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT,
                 response: Some(response),
                 download_bytes_on_success: 0,
@@ -289,6 +338,14 @@ mod tests {
     #[test]
     fn only_socket_errors_are_emitted_as_per_packet_events() {
         assert!(!UdpReplyError::QueueFull.should_log());
+        assert!(
+            !UdpReplyError::PayloadLimit(ResidentUdpPayloadAdmissionError {
+                requested: 2,
+                current: 1,
+                limit: 1,
+            })
+            .should_log()
+        );
         assert!(!UdpReplyError::TimedOut.should_log());
         assert!(UdpReplyError::Socket("fatal".to_owned()).should_log());
     }
@@ -297,10 +354,12 @@ mod tests {
     async fn detached_reply_uses_the_bounded_queue_without_a_waiter_task() {
         let (sender, mut receiver) = mpsc::channel(1);
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let payload_admission = ResidentUdpPayloadAdmission::new(1, 1024);
         let handle = UdpReplyHandle {
             sender,
             closing: Arc::new(AtomicBool::new(false)),
             metrics,
+            payload_admission: payload_admission.clone(),
         };
         let target: SocketAddr = "127.0.0.1:53".parse().unwrap();
         let peer: SocketAddr = "127.0.0.1:10000".parse().unwrap();
@@ -309,7 +368,10 @@ mod tests {
             .try_send_detached(target, peer, vec![1, 2, 3], true)
             .unwrap();
         let request = receiver.recv().await.unwrap();
+        assert_eq!(payload_admission.current(), 3);
         assert!(request.response.is_none());
         assert_eq!(request.download_bytes_on_success, 3);
+        drop(request);
+        assert_eq!(payload_admission.current(), 0);
     }
 }

@@ -13,6 +13,9 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) ingress_drain_budget: usize,
     pub(crate) reply_queue_depth: usize,
     pub(crate) reply_socket_cache_capacity: usize,
+    pub(crate) reply_socket_idle_timeout: Duration,
+    pub(crate) direct_response_buffer_idle_timeout: Duration,
+    pub(crate) payload_admission: ResidentUdpPayloadAdmission,
     pub(crate) dns_fast_path_concurrency: usize,
     pub(crate) dns_fast_path_queue_depth: usize,
     pub(crate) dns_udp_forwarder_queue_depth: usize,
@@ -34,12 +37,14 @@ pub(crate) struct ResidentDnsUdpRuntimeConfig {
     pub(crate) attempts: usize,
     pub(crate) attempt_timeout: Duration,
     pub(crate) shutdown_timeout: Duration,
+    pub(crate) payload_admission: ResidentUdpPayloadAdmission,
 }
 
 impl ResidentUdpRuntimeConfig {
     pub(crate) fn from_resources(
         generation: u64,
         resources: &ResidentRuntimeResourceConfig,
+        payload_admission: ResidentUdpPayloadAdmission,
     ) -> Self {
         let session_limit = resources.udp_session_limit.value().max(1);
         let session_queue_depth = resources.udp_session_queue_depth.value().max(1);
@@ -72,6 +77,15 @@ impl ResidentUdpRuntimeConfig {
             ingress_drain_budget: session_queue_depth,
             reply_queue_depth: dispatch_queue_depth,
             reply_socket_cache_capacity: session_limit,
+            reply_socket_idle_timeout: resources
+                .runtime_profile
+                .profile
+                .udp_reply_socket_idle_timeout(),
+            direct_response_buffer_idle_timeout: resources
+                .runtime_profile
+                .profile
+                .udp_direct_response_buffer_idle_timeout(),
+            payload_admission,
             dns_fast_path_concurrency: resources.dns_fast_path_concurrency.value().max(1),
             dns_fast_path_queue_depth: resources.dns_fast_path_queue_depth.value().max(1),
             dns_udp_forwarder_queue_depth: resources.dns_udp_forwarder_queue_depth.value().max(1),
@@ -99,9 +113,7 @@ impl ResidentUdpRuntimeConfig {
     }
 
     pub(crate) fn per_shard_cleanup_queue_depth(&self) -> usize {
-        self.session_limit
-            .div_ceil(self.runtime_shards.max(1))
-            .max(1)
+        self.session_limit.max(1)
     }
 
     pub(crate) fn dns_udp_runtime_config(&self) -> ResidentDnsUdpRuntimeConfig {
@@ -125,6 +137,7 @@ impl ResidentUdpRuntimeConfig {
             attempts: self.dns_udp_forwarder_attempts,
             attempt_timeout: resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts),
             shutdown_timeout: self.shutdown_timeout,
+            payload_admission: self.payload_admission.clone(),
         }
     }
 
@@ -154,6 +167,10 @@ impl ResidentUdpRuntimeConfig {
                 "owner": "resident-udp-reply-actor",
                 "queueDepth": self.reply_queue_depth,
                 "socketCacheCapacity": self.reply_socket_cache_capacity,
+                "socketIdleTimeoutMs": self.reply_socket_idle_timeout.as_millis(),
+            },
+            "queuedPayload": {
+                "limitBytes": self.payload_admission.limit(),
             },
             "dnsFastPath": {
                 "owner": "resident-dns-fast-path-dispatcher",
@@ -203,6 +220,10 @@ impl ResidentDnsUdpRuntimeConfig {
                 profile.dns_udp_forwarder_attempts_default(),
             ),
             shutdown_timeout: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+            payload_admission: ResidentUdpPayloadAdmission::new(
+                0,
+                profile.udp_queued_payload_bytes_default(),
+            ),
         }
     }
 
@@ -270,6 +291,9 @@ mod tests {
             ingress_drain_budget: 128,
             reply_queue_depth: 512,
             reply_socket_cache_capacity: 512,
+            reply_socket_idle_timeout: Duration::from_secs(180),
+            direct_response_buffer_idle_timeout: Duration::from_secs(30),
+            payload_admission: ResidentUdpPayloadAdmission::new(9, 32 * 1024 * 1024),
             dns_fast_path_concurrency: 512,
             dns_fast_path_queue_depth: 1_024,
             dns_udp_forwarder_queue_depth: 1_024,
@@ -311,6 +335,9 @@ mod tests {
             ingress_drain_budget: 16,
             reply_queue_depth: 96,
             reply_socket_cache_capacity: 64,
+            reply_socket_idle_timeout: Duration::from_secs(180),
+            direct_response_buffer_idle_timeout: Duration::from_secs(30),
+            payload_admission: ResidentUdpPayloadAdmission::new(12, 32 * 1024 * 1024),
             dns_fast_path_concurrency: 32,
             dns_fast_path_queue_depth: 64,
             dns_udp_forwarder_queue_depth: 80,

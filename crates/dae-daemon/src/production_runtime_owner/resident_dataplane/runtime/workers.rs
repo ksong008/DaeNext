@@ -186,10 +186,20 @@ pub(crate) fn start_resident_dataplane_workers(
         .map(ResidentDnsBindListener::report)
         .unwrap_or_else(disabled_dns_bind_listener_report);
 
-    let udp_runtime_config =
-        ResidentUdpRuntimeConfig::from_resources(reload_generation, &resource_config);
-    apply_resident_udp_socket_buffer_tuning(&udp_socket);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let udp_payload_admission = ResidentUdpPayloadAdmission::new(
+        reload_generation,
+        resource_config
+            .runtime_profile
+            .profile
+            .udp_queued_payload_bytes_default(),
+    );
+    let udp_runtime_config = ResidentUdpRuntimeConfig::from_resources(
+        reload_generation,
+        &resource_config,
+        udp_payload_admission.clone(),
+    );
+    apply_resident_udp_socket_buffer_tuning(&udp_socket);
     let udp_sessions_active = Arc::new(AtomicUsize::new(0));
     let event_lock = Arc::new(Mutex::new(()));
     let mut owner = ResidentRuntimeOwner::new(
@@ -199,6 +209,7 @@ pub(crate) fn start_resident_dataplane_workers(
         Arc::clone(&metrics),
         Arc::clone(&udp_sessions_active),
         resource_config.clone(),
+        udp_payload_admission,
     );
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::clone(&default_group);
@@ -401,8 +412,9 @@ pub(crate) fn start_resident_dataplane_workers(
         let metrics = owner.metrics();
         let active_sessions = owner.udp_sessions_active();
         let udp_runtime_config = udp_runtime_config.clone();
+        let cleanup_reporter = owner.cleanup_reporter("udp-session-manager");
         owner.spawn_thread("udp-session-manager", "udp-session-manager", move || {
-            resident_udp_loop(
+            let report = resident_udp_loop(
                 udp_socket,
                 udp_proxy_groups,
                 default_outbound,
@@ -418,7 +430,8 @@ pub(crate) fn start_resident_dataplane_workers(
                 active_sessions,
                 udp_runtime_config,
                 health_resuscitation,
-            )
+            );
+            cleanup_reporter.finish(report);
         });
     }
     if let Some(dns_bind_listener) = dns_bind_listener {
