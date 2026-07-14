@@ -18,7 +18,6 @@ const TC_ACT_OK: i32 = 0;
 const TC_ACT_SHOT: i32 = 2;
 const BPF_ANY: u64 = 0;
 const BPF_F_INGRESS: u64 = 1;
-const BPF_ADJ_ROOM_MAC: u32 = 1;
 const PACKET_HOST: u32 = 0;
 const PACKET_OTHERHOST: u32 = 3;
 const BPF_TCP_LISTEN: u32 = 10;
@@ -43,18 +42,13 @@ fn redirect_link_layer_for_header_len(link_h_len: u32) -> u8 {
 }
 
 #[inline(always)]
-fn redirect_entry_requires_l3_strip(entry: *const BpfRedirectEntry) -> bool {
+fn redirect_entry_requires_l2_restore(entry: *const BpfRedirectEntry) -> bool {
+    unsafe { (*entry).link_layer == REDIRECT_LINK_LAYER_L2 }
+}
+
+#[inline(always)]
+fn redirect_entry_uses_l3_no_mac_redirect(entry: *const BpfRedirectEntry) -> bool {
     unsafe { (*entry).link_layer == REDIRECT_LINK_LAYER_L3 }
-}
-
-#[inline(always)]
-fn redirect_entry_l3_strip_delta() -> i32 {
-    -(ETH_HLEN as i32)
-}
-
-#[inline(always)]
-fn redirect_entry_l3_strip_mode() -> u32 {
-    BPF_ADJ_ROOM_MAC
 }
 
 pub fn chain_next() -> i32 {
@@ -321,17 +315,7 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
     }
 
     unsafe {
-        if redirect_entry_requires_l3_strip(entry) {
-            if helpers::bpf_skb_adjust_room(
-                skb.cast::<c_void>(),
-                redirect_entry_l3_strip_delta(),
-                redirect_entry_l3_strip_mode(),
-                0,
-            ) != 0
-            {
-                return TC_ACT_SHOT;
-            }
-        } else {
+        if redirect_entry_requires_l2_restore(entry) {
             if !redirect_vlan::restore(skb, entry, info.h_proto as u16) {
                 return TC_ACT_SHOT;
             }
@@ -349,7 +333,13 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
                 6,
                 0,
             );
+        } else if !redirect_entry_uses_l3_no_mac_redirect(entry) {
+            return TC_ACT_SHOT;
         }
+        // L3 devices such as PPP are handled by bpf_redirect() through the
+        // kernel's no-MAC redirect path. BPF_ADJ_ROOM_MAC changes the room
+        // between L2 and L3; using it here would remove bytes from the L3
+        // header instead of removing the temporary Ethernet header.
         let packet_type = if (*entry).from_wan != 0 {
             PACKET_HOST
         } else {
@@ -683,9 +673,10 @@ mod tests {
     }
 
     #[test]
-    fn l3_wan_egress_return_path_records_and_strips_temporary_mac_header() {
+    fn l3_wan_egress_return_path_defers_temporary_mac_removal_to_kernel_redirect() {
         let l2 = redirect_entry(REDIRECT_LINK_LAYER_L2);
         let l3 = redirect_entry(REDIRECT_LINK_LAYER_L3);
+        let unsupported = redirect_entry(0);
 
         assert_eq!(
             redirect_link_layer_for_header_len(ETH_HLEN),
@@ -695,9 +686,11 @@ mod tests {
             redirect_link_layer_for_header_len(0),
             REDIRECT_LINK_LAYER_L3
         );
-        assert!(!redirect_entry_requires_l3_strip(&l2));
-        assert!(redirect_entry_requires_l3_strip(&l3));
-        assert_eq!(redirect_entry_l3_strip_delta(), -(ETH_HLEN as i32));
-        assert_eq!(redirect_entry_l3_strip_mode(), BPF_ADJ_ROOM_MAC);
+        assert!(redirect_entry_requires_l2_restore(&l2));
+        assert!(!redirect_entry_uses_l3_no_mac_redirect(&l2));
+        assert!(!redirect_entry_requires_l2_restore(&l3));
+        assert!(redirect_entry_uses_l3_no_mac_redirect(&l3));
+        assert!(!redirect_entry_requires_l2_restore(&unsupported));
+        assert!(!redirect_entry_uses_l3_no_mac_redirect(&unsupported));
     }
 }
