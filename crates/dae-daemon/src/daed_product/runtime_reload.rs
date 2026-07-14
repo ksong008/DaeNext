@@ -140,8 +140,15 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
     permit.set_phase("reread-desired-state");
     let modified = runtime_modified_for_running_runtime(state, runtime)
         .map_err(CoordinatedRuntimeReloadError::Apply)?;
+    let activation_identity_consistent = if runtime.is_running() {
+        runtime_activation_identity_consistent(state, runtime)
+            .map_err(|err| CoordinatedRuntimeReloadError::Apply(err.to_string()))?
+    } else {
+        true
+    };
     if runtime.is_running()
         && !modified
+        && activation_identity_consistent
         && (permit.waited() || permit.intent().requires_runtime_change())
     {
         let runtime_report = runtime.summary();

@@ -210,6 +210,56 @@ fn runtime_generation_commit_faults_restore_runtime_file_and_database() {
 }
 
 #[test]
+fn runtime_generation_rollback_persists_the_restored_probe_identity() {
+    with_product_runtime_fake_start_override(true, || {
+        let fixture = CommittedRuntimeFixture::new("rollback-probe-identity");
+        set_metadata(
+            fixture.product.state(),
+            RUNTIME_PROBE_GENERATION_METADATA_KEY,
+            "41",
+        )
+        .unwrap();
+        let prepared = fixture.prepare_changed_generation();
+        let mut faults = RuntimeFaultFixture::default();
+        faults.fail_next(RuntimeFaultPoint::CommitDatabase);
+
+        let error = apply_runtime_generation(
+            &fixture.runtime,
+            fixture.product.state(),
+            Some(&fixture.config_dir),
+            "runtime-generation-test",
+            prepared,
+            &[],
+            &mut faults,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.contains("rollback restored previous runtime generation"),
+            "{error}"
+        );
+        assert_eq!(
+            get_metadata(
+                fixture.product.state(),
+                RUNTIME_PROBE_GENERATION_METADATA_KEY
+            )
+            .unwrap(),
+            None
+        );
+        let state = general_state_report(
+            fixture.product.state(),
+            fixture.product.root(),
+            &fixture.runtime,
+        )
+        .unwrap();
+        assert_eq!(
+            state["runtimeRevision"]["activationIdentityConsistent"],
+            json!(true)
+        );
+    });
+}
+
+#[test]
 fn runtime_generation_rollback_failure_is_reported_as_reconciliation_required() {
     with_product_runtime_fake_start_override(true, || {
         let fixture = CommittedRuntimeFixture::new("rollback-fault");
@@ -313,6 +363,56 @@ fn waiting_reload_coalesces_after_the_active_generation_reaches_latest_state() {
         assert_eq!(
             runtime.summary()["applyCoordinator"]["coalescedCount"],
             json!(1)
+        );
+    });
+}
+
+#[test]
+fn unchanged_desired_state_repairs_an_inconsistent_activation_identity() {
+    with_product_runtime_fake_start_override(true, || {
+        let product = FreshProductState::new("repair-inconsistent-activation-identity");
+        product.seed_selected_resources();
+        let config_dir = product.root().join("config");
+        let runtime = ProductRuntimeManager::new();
+        let initial = coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(&config_dir),
+            RuntimeApplyIntent::ApiReload,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+        assert!(initial.applied);
+        set_metadata(product.state(), RUNTIME_PROBE_GENERATION_METADATA_KEY, "41").unwrap();
+
+        let inconsistent = general_state_report(product.state(), product.root(), &runtime).unwrap();
+        assert_eq!(
+            inconsistent["runtimeRevision"]["activationIdentityConsistent"],
+            json!(false)
+        );
+
+        let repaired = coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(&config_dir),
+            RuntimeApplyIntent::SubscriptionRefresh,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+        assert!(repaired.applied);
+        assert!(!repaired.coalesced);
+        assert_eq!(runtime.summary()["reloadCount"], json!(2));
+
+        let consistent = general_state_report(product.state(), product.root(), &runtime).unwrap();
+        assert_eq!(
+            consistent["runtimeRevision"]["activationIdentityConsistent"],
+            json!(true)
+        );
+        assert_eq!(
+            get_metadata(product.state(), RUNTIME_PROBE_GENERATION_METADATA_KEY).unwrap(),
+            None
         );
     });
 }

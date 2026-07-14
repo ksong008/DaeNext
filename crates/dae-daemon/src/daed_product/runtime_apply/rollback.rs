@@ -18,11 +18,20 @@ pub(super) fn rollback_runtime_generation(
     if let Err(err) = restore_previous_materialization(candidate) {
         errors.push(format!("restore materialization failed: {err}"));
     }
-    if let Err(err) = restore_runtime_database(state, &candidate.database_snapshot) {
+    let restored_probe_generation = match runtime.restore_after_failed_apply(snapshot, latency_seed)
+    {
+        Ok(()) => Some(runtime.current_probe_generation()),
+        Err(err) => {
+            errors.push(format!("restore runtime failed: {err}"));
+            None
+        }
+    };
+    if let Err(err) = restore_runtime_database(
+        state,
+        &candidate.database_snapshot,
+        restored_probe_generation,
+    ) {
         errors.push(format!("restore runtime database failed: {err}"));
-    }
-    if let Err(err) = runtime.restore_after_failed_apply(snapshot, latency_seed) {
-        errors.push(format!("restore runtime failed: {err}"));
     }
     if let Some(config_dir) = config_dir
         && let Err(err) = refresh_log_policy_and_apply_log_limits(config_dir, state, Some(runtime))
@@ -39,6 +48,7 @@ pub(super) fn rollback_runtime_generation(
 fn restore_runtime_database(
     state: &Path,
     snapshot: &RuntimeDatabaseSnapshot,
+    restored_probe_generation: Option<Option<u64>>,
 ) -> Result<(), String> {
     let mut conn = open_state_connection(state)
         .map_err(|err| format!("open runtime state for rollback: {err}"))?;
@@ -71,6 +81,14 @@ fn restore_runtime_database(
         .map_err(|err| format!("restore previous runtime state: {err}"))?;
     }
     for (key, value) in &snapshot.metadata {
+        if key == RUNTIME_PROBE_GENERATION_METADATA_KEY
+            && let Some(generation) = restored_probe_generation
+        {
+            super::super::runtime_manager::activation_identity::write_probe_generation(
+                &tx, generation,
+            )?;
+            continue;
+        }
         match value {
             Some(value) => {
                 tx.execute(

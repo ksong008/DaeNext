@@ -74,6 +74,52 @@ fn runtime_revision_report_from_connection(
         .as_ref()
         .is_some_and(|active| active_runtime_revision_matches(active, &desired));
     let runtime_product_generation = runtime_state["activeGeneration"].as_str();
+    let identity = compare_runtime_activation_identity(
+        conn,
+        runtime,
+        runtime_product_generation.map(str::to_owned),
+    )?;
+    let activation_identity_consistent =
+        !running || (identity.product_generation_matches && identity.probe_generation_matches);
+
+    Ok(json!({
+        "desired": desired,
+        "active": active,
+        "desiredMatchesActive": desired_matches_active,
+        "pending": running && !desired_matches_active,
+        "activeProductGeneration": runtime_product_generation,
+        "persistedProductGeneration": identity.persisted_product_generation,
+        "activeResidentProbeGeneration": identity.runtime_probe_generation,
+        "persistedResidentProbeGeneration": identity.persisted_probe_generation,
+        "productGenerationMatches": if running { json!(identity.product_generation_matches) } else { Value::Null },
+        "probeGenerationMatches": identity.probe_generation_matches,
+        "activationIdentityConsistent": activation_identity_consistent,
+    }))
+}
+
+pub(in crate::daed_product) fn runtime_activation_identity_consistent(
+    state: &Path,
+    runtime: &ProductRuntimeManager,
+) -> io::Result<bool> {
+    let conn = open_state_connection(state)?;
+    let identity =
+        compare_runtime_activation_identity(&conn, runtime, runtime.active_generation())?;
+    Ok(identity.product_generation_matches && identity.probe_generation_matches)
+}
+
+struct RuntimeActivationIdentityComparison {
+    persisted_product_generation: Option<String>,
+    runtime_probe_generation: Option<u64>,
+    persisted_probe_generation: Option<u64>,
+    product_generation_matches: bool,
+    probe_generation_matches: bool,
+}
+
+fn compare_runtime_activation_identity(
+    conn: &Connection,
+    runtime: &ProductRuntimeManager,
+    runtime_product_generation: Option<String>,
+) -> io::Result<RuntimeActivationIdentityComparison> {
     let persisted_product_generation =
         metadata_value_from_connection(conn, RUNTIME_GENERATION_METADATA_KEY)?;
     let runtime_probe_generation = runtime.current_probe_generation();
@@ -89,25 +135,17 @@ fn runtime_revision_report_from_connection(
             })
             .transpose()?;
     let product_generation_matches = runtime_product_generation
+        .as_deref()
         .zip(persisted_product_generation.as_deref())
         .is_some_and(|(runtime, persisted)| runtime == persisted);
     let probe_generation_matches = runtime_probe_generation == persisted_probe_generation;
-    let activation_identity_consistent =
-        !running || (product_generation_matches && probe_generation_matches);
-
-    Ok(json!({
-        "desired": desired,
-        "active": active,
-        "desiredMatchesActive": desired_matches_active,
-        "pending": running && !desired_matches_active,
-        "activeProductGeneration": runtime_product_generation,
-        "persistedProductGeneration": persisted_product_generation,
-        "activeResidentProbeGeneration": runtime_probe_generation,
-        "persistedResidentProbeGeneration": persisted_probe_generation,
-        "productGenerationMatches": if running { json!(product_generation_matches) } else { Value::Null },
-        "probeGenerationMatches": probe_generation_matches,
-        "activationIdentityConsistent": activation_identity_consistent,
-    }))
+    Ok(RuntimeActivationIdentityComparison {
+        persisted_product_generation,
+        runtime_probe_generation,
+        persisted_probe_generation,
+        product_generation_matches,
+        probe_generation_matches,
+    })
 }
 
 fn section_revision_value(section: Option<RuntimeSectionState>) -> Value {
