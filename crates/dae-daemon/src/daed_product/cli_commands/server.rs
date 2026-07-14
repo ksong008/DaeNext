@@ -31,7 +31,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         }
     };
     register_resident_event_product_log_sink(&options.config_dir, &options.state);
-    let runtime = Arc::new(ProductRuntimeManager::new());
+    let runtime = Arc::new(ProductRuntimeManager::new_for_state(options.state.clone()));
     if let Err(err) = install_product_signal_thread(
         Arc::clone(&runtime),
         options.state.clone(),

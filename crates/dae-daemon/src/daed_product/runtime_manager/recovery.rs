@@ -12,6 +12,7 @@ impl ProductRuntimeInterfaceRecoverySupervisor {
         coordinator: RuntimeApplyCoordinator,
         lifecycle: Arc<Mutex<()>>,
         inner: Arc<Mutex<ProductRuntimeState>>,
+        state: Option<PathBuf>,
     ) -> ProductRuntimeInterfaceRecoverySupervisor {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
@@ -32,8 +33,12 @@ impl ProductRuntimeInterfaceRecoverySupervisor {
                             coordinator.begin_apply(RuntimeApplyIntent::InterfaceRecovery)
                         {
                             permit.set_phase("revalidating-host");
-                            let result =
-                                reload_resident_interface_if_current(&lifecycle, &inner, &request);
+                            let result = reload_resident_interface_if_current(
+                                &lifecycle,
+                                &inner,
+                                &request,
+                                state.as_deref(),
+                            );
                             permit.finish(if result.is_ok() {
                                 "succeeded"
                             } else {
@@ -83,6 +88,7 @@ fn reload_resident_interface_if_current(
     lifecycle: &Arc<Mutex<()>>,
     inner: &Arc<Mutex<ProductRuntimeState>>,
     request: &ResidentInterfaceRecoveryRequest,
+    state: Option<&Path>,
 ) -> Result<(), String> {
     let (config, config_content) = {
         let inner = inner
@@ -119,8 +125,42 @@ fn reload_resident_interface_if_current(
         config_content,
         PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE,
         &[],
-    )
-    .map(|_| ())
+    )?;
+    let identity = recovered_runtime_identity(inner, request)?;
+    if let Some(state) = state {
+        super::activation_identity::persist_recovered_runtime_identity(state, &identity)?;
+    }
+    Ok(())
+}
+
+fn recovered_runtime_identity(
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+    request: &ResidentInterfaceRecoveryRequest,
+) -> Result<super::activation_identity::RuntimeActivationIdentity, String> {
+    let inner = inner
+        .lock()
+        .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+    if inner.active_generation != request.active_generation {
+        return Err("interface recovery identity was superseded by a newer runtime".to_owned());
+    }
+    let product_generation = inner
+        .active_generation
+        .clone()
+        .ok_or_else(|| "interface recovery active product generation is missing".to_owned())?;
+    let ProductRuntimeInstance::Resident(runtime) = inner
+        .runtime
+        .as_ref()
+        .ok_or_else(|| "interface recovery runtime is no longer active".to_owned())?
+    else {
+        return Err("interface recovery requires a resident runtime".to_owned());
+    };
+    let probe_generation = runtime
+        .manual_probe_handle()
+        .map(|handle| handle.reload_generation());
+    Ok(super::activation_identity::RuntimeActivationIdentity {
+        product_generation,
+        probe_generation,
+    })
 }
 
 fn sleep_interface_recovery_poll(stop: &AtomicBool) {

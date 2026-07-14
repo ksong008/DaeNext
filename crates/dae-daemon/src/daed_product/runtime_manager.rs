@@ -1,5 +1,6 @@
 use super::*;
 
+pub(in crate::daed_product) mod activation_identity;
 mod apply_state;
 mod cleanup;
 pub(in crate::daed_product) mod event_identity;
@@ -328,7 +329,16 @@ const PRODUCT_RUNTIME_INTERFACE_RECOVERY_RETRY: Duration = Duration::from_secs(3
 const PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE: &str = "interface-monitor";
 
 impl ProductRuntimeManager {
+    #[cfg(test)]
     pub(super) fn new() -> Self {
+        Self::new_with_state(None)
+    }
+
+    pub(super) fn new_for_state(state: PathBuf) -> Self {
+        Self::new_with_state(Some(state))
+    }
+
+    fn new_with_state(state: Option<PathBuf>) -> Self {
         let coordinator = RuntimeApplyCoordinator::new();
         let lifecycle = Arc::new(Mutex::new(()));
         let inner = Arc::new(Mutex::new(ProductRuntimeState::default()));
@@ -336,6 +346,7 @@ impl ProductRuntimeManager {
             coordinator.clone(),
             Arc::clone(&lifecycle),
             Arc::clone(&inner),
+            state,
         );
         Self {
             coordinator,
@@ -760,6 +771,13 @@ impl ProductRuntimeManager {
                 .map(|handle| handle.reload_generation()),
             Some(ProductRuntimeInstance::Fake(_)) | None => None,
         }
+    }
+
+    pub(super) fn active_generation(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|inner| inner.active_generation.clone())
     }
 
     pub(super) fn prune_resident_event_log(&self) -> io::Result<()> {
