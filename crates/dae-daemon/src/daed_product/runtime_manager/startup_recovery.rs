@@ -74,12 +74,13 @@ impl ProductRuntimeStartupRecoverySupervisor {
 }
 
 fn sleep_startup_recovery_poll(stop: &AtomicBool) {
-    let sleep_step = PRODUCT_RUNTIME_INTERFACE_RECOVERY_POLL / 20;
-    for _ in 0..20 {
-        if stop.load(AtomicOrdering::Relaxed) {
+    let deadline = Instant::now() + PRODUCT_RUNTIME_STARTUP_RECOVERY_POLL;
+    while !stop.load(AtomicOrdering::Relaxed) {
+        let now = Instant::now();
+        if now >= deadline {
             return;
         }
-        thread::sleep(sleep_step);
+        thread::sleep((deadline - now).min(PRODUCT_RUNTIME_RECOVERY_STOP_CHECK_INTERVAL));
     }
 }
 

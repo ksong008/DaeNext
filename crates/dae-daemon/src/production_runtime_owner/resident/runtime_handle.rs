@@ -83,7 +83,9 @@ impl ResidentProductionRuntime {
     }
 
     pub(crate) fn resident_interface_reattach_ready_snapshot(&self) -> Option<Value> {
-        let snapshot = self.resident_interface_state_snapshot();
+        let monitor = self.interface_monitor.as_ref()?;
+        let ready_revision = monitor.ready_recovery_revision()?;
+        let snapshot = monitor.snapshot();
         if snapshot
             .get("reattachRequired")
             .and_then(Value::as_bool)
@@ -92,6 +94,10 @@ impl ResidentProductionRuntime {
                 .get("reattachReady")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
+            && snapshot
+                .pointer("/recoveryDebounce/candidateRevision")
+                .and_then(Value::as_u64)
+                == Some(ready_revision)
         {
             Some(snapshot)
         } else {
@@ -292,8 +298,14 @@ impl ResidentProductionRuntime {
             .cleanup_steps
             .iter()
             .any(|step| step["timed_out"].as_bool().unwrap_or(false));
+        let cleanup_step_failed = self.cleanup_steps.iter().any(|step| {
+            matches!(
+                step["status"].as_str(),
+                Some("fail" | "partial" | "timed_out")
+            )
+        });
         let mut cleanup_report = json!({
-            "status": if binding_cleanup_ok && loaded_map_cleaned && leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated && !cleanup_command_timed_out {
+            "status": if binding_cleanup_ok && loaded_map_cleaned && leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated && !cleanup_command_timed_out && !cleanup_step_failed {
                 "pass"
             } else {
                 "fail"
@@ -303,6 +315,7 @@ impl ResidentProductionRuntime {
             "cleanup_elapsed_ns": cleanup_elapsed_ns,
             "cleanup_elapsed_ms": cleanup_elapsed_ns / 1_000_000,
             "cleanup_command_timed_out": cleanup_command_timed_out,
+            "cleanup_step_failed": cleanup_step_failed,
             "binding_cleanup_postflight": binding_cleanup_postflight,
             "after_map_ids": after_map_ids,
             "loaded_map_cleaned": loaded_map_cleaned,

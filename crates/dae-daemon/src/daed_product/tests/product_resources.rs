@@ -605,6 +605,7 @@ fn product_test_app(dir: &Path, state: &Path) -> AppState {
         web_root: dir.to_owned(),
         api_only: true,
         control_socket: dir.join("control.sock"),
+        shutdown: Arc::new(ProductShutdown::default()),
         runtime: Arc::new(ProductRuntimeManager::new()),
         runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),

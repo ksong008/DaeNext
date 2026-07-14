@@ -117,8 +117,32 @@ pub(super) fn cleanup_report_error(report: Option<&Value>) -> Option<String> {
     if report.get("status").and_then(Value::as_str) == Some("pass") {
         return None;
     }
+    let failed_steps = report
+        .get("cleanup_steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|step| {
+            matches!(
+                step["status"].as_str(),
+                Some("fail" | "partial" | "timed_out")
+            )
+        })
+        .filter_map(|step| step["name"].as_str())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(",");
     Some(format!(
-        "runtime cleanup failed: loaded_map_cleaned={}, cleanup_command_timed_out={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
+        "runtime cleanup failed: cleanup_step_failed={}, failed_steps={}, loaded_map_cleaned={}, cleanup_command_timed_out={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
+        report
+            .get("cleanup_step_failed")
+            .map(Value::to_string)
+            .unwrap_or_else(|| "null".to_owned()),
+        if failed_steps.is_empty() {
+            "none"
+        } else {
+            &failed_steps
+        },
         report
             .get("loaded_map_cleaned")
             .map(Value::to_string)

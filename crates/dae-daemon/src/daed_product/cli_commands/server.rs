@@ -32,14 +32,10 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     };
     register_resident_event_product_log_sink(&options.config_dir, &options.state);
     let runtime = Arc::new(ProductRuntimeManager::new_for_state(options.state.clone()));
-    if let Err(err) = install_product_signal_thread(
-        Arc::clone(&runtime),
-        options.state.clone(),
-        options.config_dir.clone(),
-    ) {
-        return DaedProductOutput::error(format!("install signal control failed: {err}"));
-    }
-    if should_restore_runtime_on_start(&options.state).unwrap_or(false) {
+    let runtime_required_for_readiness =
+        should_restore_runtime_on_start(&options.state).unwrap_or(false);
+    runtime.set_runtime_required_for_readiness(runtime_required_for_readiness);
+    if runtime_required_for_readiness {
         match restore_runtime_from_state(
             &runtime,
             &options.state,
@@ -74,13 +70,15 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             return DaedProductOutput::error(format!("start runtime sampler failed: {err}"));
         }
     };
+    let shutdown = Arc::new(ProductShutdown::default());
     let mut app = AppState {
         config_dir: options.config_dir,
         state: options.state,
         web_root: options.web_root,
         api_only: options.api_only,
         control_socket: options.control_socket,
-        runtime,
+        shutdown: Arc::clone(&shutdown),
+        runtime: Arc::clone(&runtime),
         runtime_sampler: Some(runtime_sampler),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
@@ -108,15 +106,90 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             return DaedProductOutput::error(format!("start subscription scheduler failed: {err}"));
         }
     };
-    let server_result = serve_forever(&options.listen, app, startup_started_at);
-    let scheduler_result = subscription_scheduler.shutdown();
-    drop(product_log_runtime);
-    match (server_result, scheduler_result) {
-        (Ok(()), Ok(())) => DaedProductOutput::ok(String::new()),
-        (Err(err), _) => DaedProductOutput::error(format!("run failed: {err}")),
-        (Ok(()), Err(err)) => {
-            DaedProductOutput::error(format!("stop subscription scheduler failed: {err}"))
+    let signal_thread = match install_product_signal_thread(Arc::clone(&shutdown)) {
+        Ok(signal_thread) => signal_thread,
+        Err(err) => {
+            shutdown.request(0);
+            let _ = subscription_scheduler.shutdown();
+            return DaedProductOutput::error(format!("install signal control failed: {err}"));
         }
+    };
+    let state = app.state.clone();
+    let config_dir = app.config_dir.clone();
+    let app = Arc::new(app);
+    let server_result = serve_forever(&options.listen, Arc::clone(&app), startup_started_at);
+    shutdown.request(0);
+    let scheduler_result = subscription_scheduler.shutdown();
+    let signal_result = signal_thread.shutdown();
+    let recovery_result = runtime.shutdown_recovery_supervisors();
+    let app_release_result = Arc::try_unwrap(app).map(drop).map_err(|_| {
+        "product application owners remained referenced after HTTP shutdown".to_owned()
+    });
+    let stop_result = runtime.stop_and_wait_for_cleanup("product-shutdown");
+    let metadata_result = mark_runtime_process_stopped(&state);
+    let mut fields = BTreeMap::new();
+    if let Some(signal) = shutdown.signal() {
+        fields.insert("signal".to_owned(), signal.to_string());
+    }
+    match &stop_result {
+        Ok(report) => {
+            fields.insert(
+                "was_running".to_owned(),
+                report["wasRunning"].as_bool().unwrap_or(false).to_string(),
+            );
+            if let Some(status) = report
+                .pointer("/cleanupReport/status")
+                .and_then(Value::as_str)
+            {
+                fields.insert("cleanup_status".to_owned(), status.to_owned());
+            }
+        }
+        Err(err) => {
+            fields.insert("cleanup_error".to_owned(), err.clone());
+        }
+    }
+    let shutdown_ok = server_result.is_ok()
+        && scheduler_result.is_ok()
+        && signal_result.is_ok()
+        && recovery_result.is_ok()
+        && app_release_result.is_ok()
+        && stop_result.is_ok()
+        && metadata_result.is_ok();
+    let _ = append_lifecycle_log_fields_for_config(
+        &config_dir,
+        &state,
+        if shutdown_ok { "info" } else { "error" },
+        "[Stop] product shutdown completed",
+        fields,
+    );
+    drop(runtime);
+    drop(product_log_runtime);
+    let mut errors = Vec::new();
+    if let Err(err) = server_result {
+        errors.push(format!("HTTP server: {err}"));
+    }
+    if let Err(err) = scheduler_result {
+        errors.push(format!("subscription scheduler: {err}"));
+    }
+    if let Err(err) = signal_result {
+        errors.push(format!("signal thread: {err}"));
+    }
+    if let Err(err) = recovery_result {
+        errors.push(format!("runtime recovery: {err}"));
+    }
+    if let Err(err) = app_release_result {
+        errors.push(err);
+    }
+    if let Err(err) = stop_result {
+        errors.push(format!("resident runtime: {err}"));
+    }
+    if let Err(err) = metadata_result {
+        errors.push(format!("stopped metadata: {err}"));
+    }
+    if errors.is_empty() {
+        DaedProductOutput::ok(String::new())
+    } else {
+        DaedProductOutput::error(format!("run shutdown failed: {}", errors.join("; ")))
     }
 }
 
@@ -260,58 +333,78 @@ pub(crate) fn should_restore_runtime_on_start(state: &Path) -> io::Result<bool> 
     .map_err(sqlite_io_error)
 }
 
-pub(crate) fn install_product_signal_thread(
-    runtime: Arc<ProductRuntimeManager>,
-    state: PathBuf,
-    config_dir: PathBuf,
-) -> io::Result<()> {
-    block_product_signals()?;
-    thread::spawn(move || {
-        while let Ok(signal) = wait_product_signal() {
-            match signal {
-                libc::SIGHUP | libc::SIGUSR1 => continue,
-                libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
-                    let stop = runtime.stop_and_wait_for_cleanup("signal-stop");
-                    let _ = mark_runtime_process_stopped(&state);
-                    let mut fields = BTreeMap::new();
-                    fields.insert("signal".to_owned(), signal.to_string());
-                    match &stop {
-                        Ok(report) => {
-                            fields.insert(
-                                "was_running".to_owned(),
-                                report["wasRunning"].as_bool().unwrap_or(false).to_string(),
-                            );
-                            if let Some(status) = report
-                                .pointer("/cleanupReport/status")
-                                .and_then(Value::as_str)
-                            {
-                                fields.insert("cleanup_status".to_owned(), status.to_owned());
-                            }
-                        }
-                        Err(err) => {
-                            fields.insert("cleanup_error".to_owned(), err.clone());
-                        }
-                    }
-                    let _ = append_lifecycle_log_for_config(
-                        &config_dir,
-                        &state,
-                        "info",
-                        "[Stop] runtime process stopped by signal",
-                    );
-                    let _ = append_lifecycle_log_fields_for_config(
-                        &config_dir,
-                        &state,
-                        if stop.is_ok() { "info" } else { "error" },
-                        "[Stop] runtime signal cleanup completed",
-                        fields,
-                    );
-                    std::process::exit(0);
+pub(crate) struct ProductSignalThread {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl ProductSignalThread {
+    fn shutdown(mut self) -> io::Result<()> {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.as_ref() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::thread::JoinHandleExt;
+                let status = unsafe { libc::pthread_kill(handle.as_pthread_t(), libc::SIGUSR1) };
+                if status != 0 && status != libc::ESRCH {
+                    return Err(io::Error::from_raw_os_error(status));
                 }
-                _ => {}
             }
         }
-    });
-    Ok(())
+        if let Some(handle) = self.handle.take() {
+            handle
+                .join()
+                .map_err(|_| io::Error::other("product signal thread panicked"))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProductSignalThread {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::thread::JoinHandleExt;
+            let _ = unsafe { libc::pthread_kill(handle.as_pthread_t(), libc::SIGUSR1) };
+        }
+        let _ = handle.join();
+    }
+}
+
+pub(crate) fn install_product_signal_thread(
+    shutdown: Arc<ProductShutdown>,
+) -> io::Result<ProductSignalThread> {
+    block_product_signals()?;
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let handle = thread::Builder::new()
+        .name("daed-product-signal".to_owned())
+        .spawn(move || {
+            while !thread_stop.load(Ordering::Acquire) {
+                let Ok(signal) = wait_product_signal() else {
+                    return;
+                };
+                if thread_stop.load(Ordering::Acquire) {
+                    return;
+                }
+                match signal {
+                    libc::SIGHUP | libc::SIGUSR1 => continue,
+                    libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
+                        shutdown.request(signal);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        })?;
+    Ok(ProductSignalThread {
+        stop,
+        handle: Some(handle),
+    })
 }
 
 pub(crate) fn block_product_signals() -> io::Result<()> {

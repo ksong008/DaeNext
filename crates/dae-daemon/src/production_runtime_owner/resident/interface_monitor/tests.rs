@@ -23,6 +23,7 @@ fn monitor_marks_unchanged_interfaces_attached() {
     assert_eq!(snapshot["status"], json!(MONITOR_STATUS_PASS));
     assert_eq!(snapshot["reattachRequired"], json!(false));
     assert_eq!(snapshot["reattachReady"], json!(false));
+    assert_eq!(snapshot["pollIntervalMs"], json!(2_000));
     let interfaces = snapshot["interfaces"].as_array().unwrap();
     assert_eq!(interfaces.len(), 2);
     assert!(interfaces.iter().all(|iface| {
@@ -57,6 +58,7 @@ fn monitor_requires_reattach_when_interface_disappears() {
     assert_eq!(snapshot["status"], json!(MONITOR_STATUS_DEGRADED));
     assert_eq!(snapshot["reattachRequired"], json!(true));
     assert_eq!(snapshot["reattachReady"], json!(false));
+    assert_eq!(snapshot["pollIntervalMs"], json!(250));
     assert_eq!(iface["state"], json!(INTERFACE_STATE_MISSING));
     assert_eq!(iface["reattachRequired"], json!(true));
     assert_eq!(iface["reattachReady"], json!(false));
@@ -216,6 +218,7 @@ fn same_ifindex_wan_address_change_waits_for_stability_then_recovers() {
     );
     assert_eq!(first["reattachRequired"], json!(true));
     assert_eq!(first["reattachReady"], json!(false));
+    assert_eq!(first["pollIntervalMs"], json!(1_000));
     assert_eq!(first["recoveryDebounce"]["stableObservations"], json!(1));
     assert!(
         first["reattachReasons"]
@@ -233,6 +236,11 @@ fn same_ifindex_wan_address_change_waits_for_stability_then_recovers() {
         &mut debounce,
     );
     assert_eq!(second["reattachReady"], json!(true));
+    assert_eq!(second["pollIntervalMs"], json!(250));
+    assert_eq!(
+        second["recoveryDebounce"]["candidateRevision"],
+        first["recoveryDebounce"]["candidateRevision"]
+    );
     assert_eq!(second["recoveryDebounce"]["stableObservations"], json!(2));
     let _ = fs::remove_dir_all(dir);
 }
@@ -595,6 +603,28 @@ fn unchanged_schema_two_state_remains_pass_without_arming_recovery() {
     assert_eq!(snapshot["reattachReady"], json!(false));
     assert_eq!(snapshot["recoveryDebounce"]["stableObservations"], 0);
     let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn recovery_signal_is_published_only_for_the_matching_ready_candidate() {
+    let revision = AtomicU64::new(0);
+    publish_recovery_signal(
+        &json!({
+            "reattachReady": true,
+            "recoveryDebounce": {"candidateRevision": 17},
+        }),
+        &revision,
+    );
+    assert_eq!(revision.load(Ordering::Acquire), 17);
+
+    publish_recovery_signal(
+        &json!({
+            "reattachReady": false,
+            "recoveryDebounce": {"candidateRevision": 18},
+        }),
+        &revision,
+    );
+    assert_eq!(revision.load(Ordering::Acquire), 0);
 }
 
 fn explicit_policy(iface: &str) -> WanMonitorPolicy {

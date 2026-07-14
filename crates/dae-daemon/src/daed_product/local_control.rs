@@ -7,17 +7,52 @@ use std::os::unix::net::{UnixListener, UnixStream};
 const LOCAL_CONTROL_DIR_MODE: u32 = 0o700;
 const LOCAL_CONTROL_SOCKET_MODE: u32 = 0o600;
 const LOCAL_CONTROL_MAX_REQUEST_BYTES: u64 = 16 * 1024;
+const LOCAL_CONTROL_MAX_RESPONSE_BYTES: u64 = 16 * 1024;
 const LOCAL_CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const LOCAL_CONTROL_SERVER_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const LOCAL_CONTROL_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const LOCAL_CONTROL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const LOCAL_CONTROL_OP_RELOAD: &str = "reload";
+const LOCAL_CONTROL_OP_STATUS: &str = "status";
 
-pub(in crate::daed_product) fn spawn_local_control_socket(app: Arc<AppState>) -> io::Result<()> {
+pub(in crate::daed_product) struct ProductLocalControlRuntime {
+    socket_path: PathBuf,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl ProductLocalControlRuntime {
+    pub(in crate::daed_product) fn shutdown(mut self) -> io::Result<()> {
+        if let Some(join) = self.join.take() {
+            join.join()
+                .map_err(|_| io::Error::other("local control thread panicked"))?;
+        }
+        remove_owned_local_control_socket(&self.socket_path)
+    }
+}
+
+impl Drop for ProductLocalControlRuntime {
+    fn drop(&mut self) {
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        let _ = remove_owned_local_control_socket(&self.socket_path);
+    }
+}
+
+pub(in crate::daed_product) fn spawn_local_control_socket(
+    app: Arc<AppState>,
+) -> io::Result<ProductLocalControlRuntime> {
     let listener = bind_local_control_socket(&app.control_socket)?;
-    thread::Builder::new()
+    listener.set_nonblocking(true)?;
+    let socket_path = app.control_socket.clone();
+    let join = thread::Builder::new()
         .name("daed-control".to_owned())
         .stack_size(PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT)
         .spawn(move || local_control_accept_loop(listener, app))?;
-    Ok(())
+    Ok(ProductLocalControlRuntime {
+        socket_path,
+        join: Some(join),
+    })
 }
 
 pub(in crate::daed_product) fn run_local_control_reload_command(
@@ -82,6 +117,57 @@ pub(in crate::daed_product) fn run_local_control_reload_command(
     }
 }
 
+pub(in crate::daed_product) fn run_local_control_wait_ready_command(
+    args: &[String],
+) -> DaedProductOutput {
+    let mut socket = std::env::var_os(PRODUCT_CONTROL_SOCKET_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONTROL_SOCKET));
+    let mut timeout = LOCAL_CONTROL_IO_TIMEOUT;
+    let mut json_output = false;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--control" | "--control-socket" => {
+                let Some(value) = iter.next() else {
+                    return DaedProductOutput::usage("missing wait-ready --control value");
+                };
+                socket = value.into();
+            }
+            _ if arg.starts_with("--control=") => {
+                socket = arg.split_once('=').unwrap().1.into();
+            }
+            _ if arg.starts_with("--control-socket=") => {
+                socket = arg.split_once('=').unwrap().1.into();
+            }
+            "--timeout" => {
+                let Some(value) = iter.next() else {
+                    return DaedProductOutput::usage("missing wait-ready --timeout value");
+                };
+                timeout = match parse_local_control_timeout(value) {
+                    Ok(value) => value,
+                    Err(err) => return DaedProductOutput::usage(err),
+                };
+            }
+            _ if arg.starts_with("--timeout=") => {
+                timeout = match parse_local_control_timeout(arg.split_once('=').unwrap().1) {
+                    Ok(value) => value,
+                    Err(err) => return DaedProductOutput::usage(err),
+                };
+            }
+            "--json" => json_output = true,
+            _ => {
+                return DaedProductOutput::usage(format!("unsupported wait-ready argument: {arg}"));
+            }
+        }
+    }
+    match wait_for_local_control_ready(&socket, timeout) {
+        Ok(report) if json_output => DaedProductOutput::ok(format!("{report}\n")),
+        Ok(_) => DaedProductOutput::ok("READY\n".to_owned()),
+        Err(err) => DaedProductOutput::error(format!("wait-ready failed: {err}")),
+    }
+}
+
 fn bind_local_control_socket(path: &Path) -> io::Result<UnixListener> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -118,13 +204,30 @@ fn remove_stale_local_control_socket(path: &Path) -> io::Result<()> {
     fs::remove_file(path)
 }
 
+fn remove_owned_local_control_socket(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_socket() => fs::remove_file(path),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 fn local_control_accept_loop(listener: UnixListener, app: Arc<AppState>) {
-    for accepted in listener.incoming() {
-        match accepted {
-            Ok(mut stream) => {
+    while !app.shutdown.is_requested() {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                if app.shutdown.is_requested() {
+                    break;
+                }
                 let response = handle_local_control_stream(&app, &mut stream);
                 let _ = write_local_control_response(&mut stream, response);
             }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                app.shutdown
+                    .wait_timeout(LOCAL_CONTROL_ACCEPT_POLL_INTERVAL);
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
     }
@@ -139,6 +242,7 @@ fn handle_local_control_stream(app: &AppState, stream: &mut UnixStream) -> Value
         Err(err) => return json!({"ok": false, "error": err.to_string()}),
     };
     match request.get("op").and_then(Value::as_str) {
+        Some(LOCAL_CONTROL_OP_STATUS) => handle_local_control_status(app),
         Some(LOCAL_CONTROL_OP_RELOAD) => handle_local_control_reload(app),
         Some(op) => {
             json!({"ok": false, "error": format!("unsupported local control operation: {op}")})
@@ -147,7 +251,27 @@ fn handle_local_control_stream(app: &AppState, stream: &mut UnixStream) -> Value
     }
 }
 
+fn handle_local_control_status(app: &AppState) -> Value {
+    let shutting_down = app.shutdown.is_requested();
+    let product_ready = app.shutdown.is_ready();
+    let runtime_running = app.runtime.is_running();
+    let runtime_required = app.runtime.runtime_required_for_readiness();
+    let ready = product_ready && (!runtime_required || runtime_running) && !shutting_down;
+    json!({
+        "ok": ready,
+        "ready": ready,
+        "productReady": product_ready,
+        "shuttingDown": shutting_down,
+        "runtimeRunning": runtime_running,
+        "runtimeRequired": runtime_required,
+        "contract": "local-control-readiness-v1",
+    })
+}
+
 fn handle_local_control_reload(app: &AppState) -> Value {
+    if app.shutdown.is_requested() {
+        return json!({"ok": false, "error": "product shutdown is in progress"});
+    }
     let reload_started_at = Instant::now();
     if !app.runtime.is_running() {
         return json!({
@@ -209,8 +333,14 @@ fn read_local_control_request(stream: &mut UnixStream) -> io::Result<Value> {
     stream.set_read_timeout(Some(LOCAL_CONTROL_SERVER_READ_TIMEOUT))?;
     let mut text = String::new();
     stream
-        .take(LOCAL_CONTROL_MAX_REQUEST_BYTES)
+        .take(LOCAL_CONTROL_MAX_REQUEST_BYTES.saturating_add(1))
         .read_to_string(&mut text)?;
+    if text.len() as u64 > LOCAL_CONTROL_MAX_REQUEST_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "local control request exceeds the bounded message contract",
+        ));
+    }
     serde_json::from_str(text.trim()).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -220,29 +350,89 @@ fn read_local_control_request(stream: &mut UnixStream) -> io::Result<Value> {
 }
 
 fn write_local_control_response(stream: &mut UnixStream, response: Value) -> io::Result<()> {
-    let mut bytes = serde_json::to_vec(&response).map_err(io::Error::other)?;
-    bytes.push(b'\n');
+    let bytes = bounded_local_control_response_bytes(response)?;
     stream.write_all(&bytes)?;
     stream.flush()
 }
 
+fn bounded_local_control_response_bytes(response: Value) -> io::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(&response).map_err(io::Error::other)?;
+    if bytes.len() as u64 > LOCAL_CONTROL_MAX_RESPONSE_BYTES {
+        bytes = serde_json::to_vec(&json!({
+            "ok": false,
+            "error": "local control response exceeds the bounded message contract",
+        }))
+        .map_err(io::Error::other)?;
+    }
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn request_local_control_reload(path: &Path, timeout: Duration) -> io::Result<Value> {
+    request_local_control(path, timeout, json!({"op": LOCAL_CONTROL_OP_RELOAD}))
+}
+
+fn request_local_control_status(path: &Path, timeout: Duration) -> io::Result<Value> {
+    request_local_control(path, timeout, json!({"op": LOCAL_CONTROL_OP_STATUS}))
+}
+
+fn request_local_control(path: &Path, timeout: Duration, request: Value) -> io::Result<Value> {
     let mut stream = UnixStream::connect(path)?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
-    stream.write_all(br#"{"op":"reload"}"#)?;
+    serde_json::to_writer(&mut stream, &request).map_err(io::Error::other)?;
     stream.write_all(b"\n")?;
     stream.shutdown(Shutdown::Write)?;
     let mut text = String::new();
     stream
-        .take(LOCAL_CONTROL_MAX_REQUEST_BYTES)
+        .take(LOCAL_CONTROL_MAX_RESPONSE_BYTES.saturating_add(1))
         .read_to_string(&mut text)?;
+    if text.len() as u64 > LOCAL_CONTROL_MAX_RESPONSE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "local control response exceeds the bounded message contract",
+        ));
+    }
     serde_json::from_str(text.trim()).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("invalid local control response: {err}"),
         )
     })
+}
+
+fn wait_for_local_control_ready(path: &Path, timeout: Duration) -> io::Result<Value> {
+    let started = Instant::now();
+    let mut last_error = None;
+    loop {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "control socket did not become ready within {}ms{}",
+                    timeout.as_millis(),
+                    last_error
+                        .as_deref()
+                        .map(|error| format!("; last error: {error}"))
+                        .unwrap_or_default()
+                ),
+            ));
+        }
+        match request_local_control_status(path, remaining.min(Duration::from_secs(1))) {
+            Ok(report) if report["ready"].as_bool() == Some(true) => return Ok(report),
+            Ok(report) => {
+                last_error = Some(
+                    report["error"]
+                        .as_str()
+                        .unwrap_or("product is not ready")
+                        .to_owned(),
+                );
+            }
+            Err(err) => last_error = Some(err.to_string()),
+        }
+        thread::sleep(remaining.min(LOCAL_CONTROL_READY_POLL_INTERVAL));
+    }
 }
 
 fn ensure_local_control_peer_is_root(stream: &UnixStream) -> io::Result<()> {
@@ -334,6 +524,7 @@ mod tests {
             web_root: dir.clone(),
             api_only: true,
             control_socket: dir.join("control.sock"),
+            shutdown: Arc::new(ProductShutdown::default()),
             runtime: Arc::new(ProductRuntimeManager::new()),
             runtime_sampler: None,
             latency_jobs: Arc::new(LatencyJobManager::default()),
@@ -344,6 +535,23 @@ mod tests {
             geodata_update_runtime: None,
         };
 
+        assert!(app.shutdown.mark_ready());
+        let fresh_status = handle_local_control_status(&app);
+        assert_eq!(fresh_status["ready"], json!(true));
+        assert_eq!(fresh_status["productReady"], json!(true));
+        assert_eq!(fresh_status["runtimeRequired"], json!(false));
+        assert_eq!(fresh_status["runtimeRunning"], json!(false));
+
+        app.runtime.set_runtime_required_for_readiness(true);
+        let status = handle_local_control_status(&app);
+        assert_eq!(status["ready"], json!(false));
+        assert_eq!(status["productReady"], json!(true));
+        assert_eq!(status["runtimeRequired"], json!(true));
+        assert_eq!(status["runtimeRunning"], json!(false));
+        assert_eq!(status["contract"], json!("local-control-readiness-v1"));
+        assert!(status.get("runtime").is_none());
+        assert!(serde_json::to_vec(&status).unwrap().len() < 1024);
+
         let response = handle_local_control_reload(&app);
         assert_eq!(response["ok"], json!(true));
         assert_eq!(response["applied"], json!(false));
@@ -351,5 +559,22 @@ mod tests {
         assert_eq!(response["reason"], json!("runtime is stopped"));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn oversized_local_control_response_fails_as_compact_valid_json() {
+        let bytes = bounded_local_control_response_bytes(json!({
+            "ok": true,
+            "report": "x".repeat(LOCAL_CONTROL_MAX_RESPONSE_BYTES as usize),
+        }))
+        .unwrap();
+        let response: Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(response["ok"], json!(false));
+        assert_eq!(
+            response["error"],
+            json!("local control response exceeds the bounded message contract")
+        );
+        assert!(bytes.len() as u64 <= LOCAL_CONTROL_MAX_RESPONSE_BYTES);
     }
 }

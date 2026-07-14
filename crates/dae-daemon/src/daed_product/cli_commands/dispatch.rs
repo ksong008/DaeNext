@@ -16,6 +16,7 @@ pub fn run_daed_product_with_args_and_version(
         Some("state") => run_state_command(&args[1..]),
         Some("run") => run_product_server_command(&args[1..], version),
         Some("reload") => run_local_control_reload_command(&args[1..]),
+        Some("wait-ready") => run_local_control_wait_ready_command(&args[1..]),
         Some("export") => run_export_command(&args[1..]),
         Some("resetpass") => run_resetpass_command(&args[1..]),
         Some("latency-probe-helper") => run_latency_probe_helper_command(&args[1..]),

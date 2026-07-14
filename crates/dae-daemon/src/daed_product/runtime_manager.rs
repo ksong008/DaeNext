@@ -6,6 +6,7 @@ mod cleanup;
 pub(in crate::daed_product) mod event_identity;
 mod instance;
 mod process_transition;
+mod readiness;
 mod recovery;
 mod startup_recovery;
 mod stop;
@@ -43,9 +44,10 @@ pub(super) struct ProductRuntimeManager {
     coordinator: RuntimeApplyCoordinator,
     lifecycle: Arc<Mutex<()>>,
     pub(super) inner: Arc<Mutex<ProductRuntimeState>>,
-    interface_recovery: ProductRuntimeInterfaceRecoverySupervisor,
+    interface_recovery: Mutex<ProductRuntimeInterfaceRecoverySupervisor>,
     startup_recovery: Mutex<ProductRuntimeStartupRecoverySupervisor>,
     process_http_config: Mutex<Option<ProductHttpWorkerConfig>>,
+    runtime_required_for_readiness: AtomicBool,
 }
 
 #[derive(Debug, Default)]
@@ -324,7 +326,9 @@ impl ProductRuntimeLifecycleLogMode {
 pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "PRODUCT_RUNTIME_FAKE_START";
 pub(super) const PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
 const PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT: Duration = Duration::from_secs(5);
-const PRODUCT_RUNTIME_INTERFACE_RECOVERY_POLL: Duration = Duration::from_secs(2);
+const PRODUCT_RUNTIME_INTERFACE_RECOVERY_POLL: Duration = Duration::from_millis(250);
+const PRODUCT_RUNTIME_STARTUP_RECOVERY_POLL: Duration = Duration::from_secs(2);
+const PRODUCT_RUNTIME_RECOVERY_STOP_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const PRODUCT_RUNTIME_INTERFACE_RECOVERY_RETRY: Duration = Duration::from_secs(30);
 const PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE: &str = "interface-monitor";
 
@@ -352,9 +356,10 @@ impl ProductRuntimeManager {
             coordinator,
             lifecycle,
             inner,
-            interface_recovery,
+            interface_recovery: Mutex::new(interface_recovery),
             startup_recovery: Mutex::new(ProductRuntimeStartupRecoverySupervisor::default()),
             process_http_config: Mutex::new(None),
+            runtime_required_for_readiness: AtomicBool::new(false),
         }
     }
 
@@ -382,6 +387,18 @@ impl ProductRuntimeManager {
             .unwrap_or(false)
     }
 
+    pub(super) fn shutdown_recovery_supervisors(&self) -> Result<(), String> {
+        self.interface_recovery
+            .lock()
+            .map_err(|_| "interface recovery supervisor lock poisoned".to_owned())?
+            .shutdown();
+        self.startup_recovery
+            .lock()
+            .map_err(|_| "startup recovery supervisor lock poisoned".to_owned())?
+            .shutdown();
+        Ok(())
+    }
+
     pub(in crate::daed_product) fn begin_apply(
         &self,
         intent: RuntimeApplyIntent,
@@ -392,7 +409,9 @@ impl ProductRuntimeManager {
 
 impl Drop for ProductRuntimeManager {
     fn drop(&mut self) {
-        self.interface_recovery.shutdown();
+        if let Ok(supervisor) = self.interface_recovery.get_mut() {
+            supervisor.shutdown();
+        }
         if let Ok(supervisor) = self.startup_recovery.get_mut() {
             supervisor.shutdown();
         }

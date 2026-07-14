@@ -114,6 +114,7 @@ pub(in crate::daed_product) fn apply_prepared_runtime_reload(
         latency_seed,
         &mut checkpoints,
     )?;
+    runtime.set_runtime_required_for_readiness(true);
     let allocator_reclaim = allocator_reclaim(reclaim_reason);
     let pending_process_transition = runtime.pending_process_transition();
     Ok(AppliedRuntimeReload {

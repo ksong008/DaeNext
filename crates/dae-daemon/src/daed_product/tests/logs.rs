@@ -250,6 +250,7 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
         web_root: dir.clone(),
         api_only: true,
         control_socket: dir.join("control.sock"),
+        shutdown: Arc::new(ProductShutdown::default()),
         runtime: Arc::new(ProductRuntimeManager::new()),
         runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),

@@ -3,13 +3,14 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 mod baseline_state;
 mod network_state;
+mod poll_policy;
 mod recovery_snapshot;
 mod recovery_state;
 #[cfg(test)]
@@ -20,7 +21,6 @@ use network_state::{WanMonitorPolicy, observe_wan_network_state};
 use recovery_snapshot::interface_monitor_snapshot_with_wan_state;
 use recovery_state::RecoveryDebounce;
 
-const INTERFACE_MONITOR_POLL_MS: u64 = 2_000;
 const INTERFACE_RECOVERY_STABLE_OBSERVATIONS: u32 = 2;
 const SYSFS_INTERFACE_IFINDEX_FILE: &str = "ifindex";
 const SYSFS_INTERFACE_MTU_FILE: &str = "mtu";
@@ -61,6 +61,7 @@ struct InterfaceObservation {
 pub(super) struct ResidentInterfaceMonitorRuntime {
     stop: Arc<AtomicBool>,
     state: Arc<Mutex<Value>>,
+    recovery_revision: Arc<AtomicU64>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -95,6 +96,11 @@ impl ResidentInterfaceMonitorRuntime {
             "joined": joined,
         }));
     }
+
+    pub(super) fn ready_recovery_revision(&self) -> Option<u64> {
+        let revision = self.recovery_revision.load(Ordering::Acquire);
+        (revision != 0).then_some(revision)
+    }
 }
 
 impl Drop for ResidentInterfaceMonitorRuntime {
@@ -128,8 +134,13 @@ pub(super) fn start_resident_interface_monitor(
     merge_datapath_binding_monitor(&mut initial_snapshot, binding_monitor.as_ref());
     let state = Arc::new(Mutex::new(initial_snapshot));
     let stop = Arc::new(AtomicBool::new(false));
+    let recovery_revision = Arc::new(AtomicU64::new(0));
+    if let Ok(snapshot) = state.lock() {
+        publish_recovery_signal(&snapshot, &recovery_revision);
+    }
     let thread_state = Arc::clone(&state);
     let thread_stop = Arc::clone(&stop);
+    let thread_recovery_revision = Arc::clone(&recovery_revision);
     let handle = match thread::Builder::new()
         .name("resident-interface-monitor".to_owned())
         .spawn(move || {
@@ -152,15 +163,14 @@ pub(super) fn start_resident_interface_monitor(
                     monitor.observe_if_due();
                 }
                 merge_datapath_binding_monitor(&mut snapshot, binding_monitor.as_ref());
+                let next_poll = poll_policy::interval_from_snapshot(&snapshot);
                 if let Ok(mut guard) = thread_state.lock() {
                     *guard = snapshot;
+                    publish_recovery_signal(&guard, &thread_recovery_revision);
+                } else {
+                    thread_recovery_revision.store(0, Ordering::Release);
                 }
-                for _ in 0..20 {
-                    if thread_stop.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    thread::sleep(Duration::from_millis(INTERFACE_MONITOR_POLL_MS / 20));
-                }
+                poll_policy::sleep_interruptibly(&thread_stop, next_poll);
             }
         }) {
         Ok(handle) => Some(handle),
@@ -177,8 +187,18 @@ pub(super) fn start_resident_interface_monitor(
     ResidentInterfaceMonitorRuntime {
         stop,
         state,
+        recovery_revision,
         handle,
     }
+}
+
+fn publish_recovery_signal(snapshot: &Value, revision: &AtomicU64) {
+    let candidate_revision = snapshot["recoveryDebounce"]["candidateRevision"]
+        .as_u64()
+        .filter(|revision| *revision != 0)
+        .filter(|_| snapshot["reattachReady"].as_bool() == Some(true))
+        .unwrap_or(0);
+    revision.store(candidate_revision, Ordering::Release);
 }
 
 fn merge_datapath_binding_monitor(
@@ -268,7 +288,12 @@ fn interface_monitor_snapshot(sys_class_net: &Path, specs: &[InterfaceMonitorSpe
         "schemaVersion": 1,
         "status": if reattach_required { MONITOR_STATUS_DEGRADED } else { MONITOR_STATUS_PASS },
         "checkedAtUnix": unix_now_secs(),
-        "pollIntervalMs": INTERFACE_MONITOR_POLL_MS,
+        "pollIntervalMs": poll_policy::duration_millis(poll_policy::interval(
+            reattach_required,
+            reattach_ready,
+            reattach_ready,
+        )),
+        "pollPolicy": poll_policy::report(),
         "reattachImplemented": true,
         "reattachRequired": reattach_required,
         "reattachReady": reattach_ready,

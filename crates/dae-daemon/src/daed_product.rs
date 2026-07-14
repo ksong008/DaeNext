@@ -4,7 +4,7 @@ use std::io::{self, BufRead, BufWriter, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -236,6 +236,7 @@ struct AppState {
     web_root: PathBuf,
     api_only: bool,
     control_socket: PathBuf,
+    shutdown: Arc<ProductShutdown>,
     runtime: Arc<ProductRuntimeManager>,
     runtime_sampler: Option<Arc<ProductRuntimeSampler>>,
     latency_jobs: Arc<LatencyJobManager>,
@@ -817,6 +818,8 @@ mod cli_commands;
 pub use self::cli_commands::*;
 mod service_metadata;
 use self::service_metadata::*;
+mod product_shutdown;
+use self::product_shutdown::*;
 mod state_connection;
 use self::state_connection::*;
 mod state_integrity;
@@ -825,6 +828,8 @@ mod state_migration;
 use self::state_migration::*;
 mod state_schema;
 use self::state_schema::*;
+mod http_connections;
+use self::http_connections::*;
 mod http_server;
 use self::http_server::*;
 mod sse_runtime;

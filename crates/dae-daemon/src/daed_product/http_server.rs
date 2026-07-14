@@ -1,38 +1,72 @@
 use super::*;
 pub(super) fn serve_forever(
     listen: &str,
-    app: AppState,
+    app: Arc<AppState>,
     startup_started_at: Instant,
 ) -> io::Result<()> {
     let listen_started_at = Instant::now();
     let listener = TcpListener::bind(listen)?;
-    let app = Arc::new(app);
-    spawn_local_control_socket(Arc::clone(&app))?;
-    spawn_allocator_idle_reclaim_monitor(&app);
+    listener.set_nonblocking(true)?;
+    let local_control = spawn_local_control_socket(Arc::clone(&app))?;
+    let allocator_monitor = match spawn_allocator_idle_reclaim_monitor(&app) {
+        Ok(monitor) => monitor,
+        Err(err) => {
+            app.shutdown.request(0);
+            let _ = local_control.shutdown();
+            return Err(err);
+        }
+    };
     let runtime_config = app.runtime.current_config();
     let config = ProductHttpWorkerConfig::from_config(runtime_config.as_ref());
     app.http_metrics.configure(config);
     let sse_runtime =
-        ProductSseRuntime::start(config, Arc::downgrade(&app), Arc::clone(&app.http_metrics))?;
+        match ProductSseRuntime::start(config, Arc::downgrade(&app), Arc::clone(&app.http_metrics))
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                app.shutdown.request(0);
+                if let Some(monitor) = allocator_monitor {
+                    let _ = monitor.shutdown();
+                }
+                let _ = local_control.shutdown();
+                return Err(err);
+            }
+        };
     let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
     let receiver = Arc::new(Mutex::new(receiver));
+    let connections = Arc::new(ProductHttpConnectionRegistry::default());
     let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(config.worker_count);
     for index in 0..config.worker_count {
         let receiver = Arc::clone(&receiver);
-        let app = Arc::clone(&app);
+        let worker_app = Arc::clone(&app);
         let metrics = Arc::clone(&app.http_metrics);
-        let sse_runtime = Arc::clone(&sse_runtime);
+        let worker_sse_runtime = Arc::clone(&sse_runtime);
+        let worker_connections = Arc::clone(&connections);
         let handle = match thread::Builder::new()
             .name(format!("daed-http-{index}"))
             .stack_size(config.worker_stack_bytes)
-            .spawn(move || product_http_worker_loop(index, receiver, app, metrics, sse_runtime))
-        {
+            .spawn(move || {
+                product_http_worker_loop(
+                    index,
+                    receiver,
+                    worker_app,
+                    metrics,
+                    worker_sse_runtime,
+                    worker_connections,
+                )
+            }) {
             Ok(handle) => handle,
             Err(err) => {
+                app.shutdown.request(0);
                 drop(sender);
                 for handle in handles {
                     let _ = handle.join();
                 }
+                drop(sse_runtime);
+                if let Some(monitor) = allocator_monitor {
+                    let _ = monitor.shutdown();
+                }
+                let _ = local_control.shutdown();
                 return Err(err);
             }
         };
@@ -73,9 +107,27 @@ pub(super) fn serve_forever(
         "[Startup] Finished",
         fields,
     );
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    if !app.shutdown.mark_ready() {
+        drop(sender);
+        for handle in handles {
+            let _ = handle.join();
+        }
+        drop(sse_runtime);
+        if let Some(monitor) = allocator_monitor {
+            monitor.shutdown()?;
+        }
+        local_control.shutdown()?;
+        return Ok(());
+    }
+
+    let mut accept_error = None;
+    while !app.shutdown.is_requested() {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if app.shutdown.is_requested() {
+                    let _ = write_http_shutting_down(stream);
+                    break;
+                }
                 app.http_metrics.accepted();
                 match sender.try_send(ProductHttpJob { stream }) {
                     Ok(()) => app.http_metrics.enqueued(),
@@ -86,23 +138,43 @@ pub(super) fn serve_forever(
                     Err(TrySendError::Disconnected(job)) => {
                         app.http_metrics.rejected();
                         let _ = write_http_rejected(job.stream);
+                        app.shutdown.request(0);
                         break;
                     }
                 }
             }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                app.shutdown.wait();
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
-                drop(sender);
-                for handle in handles {
-                    let _ = handle.join();
-                }
-                return Err(err);
+                accept_error = Some(err);
+                app.shutdown.request(0);
+                break;
             }
         }
     }
+    let connection_shutdown = connections.shutdown_all();
     drop(sender);
+    let mut worker_panicked = false;
     for handle in handles {
-        let _ = handle.join();
+        worker_panicked |= handle.join().is_err();
     }
+    drop(sse_runtime);
+    let allocator_result = match allocator_monitor {
+        Some(monitor) => monitor.shutdown(),
+        None => Ok(()),
+    };
+    let local_control_result = local_control.shutdown();
+    if let Some(err) = accept_error {
+        return Err(err);
+    }
+    if worker_panicked {
+        return Err(io::Error::other("one or more HTTP workers panicked"));
+    }
+    connection_shutdown?;
+    allocator_result?;
+    local_control_result?;
     Ok(())
 }
 
@@ -116,6 +188,7 @@ pub(super) fn product_http_worker_loop(
     app: Arc<AppState>,
     metrics: Arc<ProductHttpMetrics>,
     sse_runtime: Arc<ProductSseRuntime>,
+    connections: Arc<ProductHttpConnectionRegistry>,
 ) {
     loop {
         let recv_result = {
@@ -128,6 +201,19 @@ pub(super) fn product_http_worker_loop(
             Ok(job) => {
                 metrics.dequeued();
                 metrics.opened();
+                if app.shutdown.is_requested() {
+                    let _ = write_http_shutting_down(job.stream);
+                    metrics.closed();
+                    continue;
+                }
+                let _connection = match connections.register(&job.stream) {
+                    Ok(connection) => connection,
+                    Err(_) => {
+                        let _ = write_http_shutting_down(job.stream);
+                        metrics.closed();
+                        continue;
+                    }
+                };
                 if matches!(
                     handle_stream(
                         job.stream,
@@ -165,12 +251,26 @@ pub(super) fn write_http_rejected(mut stream: TcpStream) -> io::Result<()> {
     )
 }
 
+fn write_http_shutting_down(mut stream: TcpStream) -> io::Result<()> {
+    let response = HttpResponse::json(503, json!({"error": "daed is shutting down"}));
+    write_http_response_with_timeout(
+        &mut stream,
+        &response,
+        false,
+        PRODUCT_HTTP_REJECT_WRITE_TIMEOUT,
+    )
+}
+
 pub(super) fn handle_stream(
     mut stream: TcpStream,
     app: Arc<AppState>,
     metrics: Arc<ProductHttpMetrics>,
     sse_runtime: Option<Arc<ProductSseRuntime>>,
 ) -> io::Result<ProductHttpConnectionResult> {
+    if app.shutdown.is_requested() {
+        write_http_shutting_down(stream)?;
+        return Ok(ProductHttpConnectionResult::Closed);
+    }
     let context = ProductHttpRequestContext {
         peer_ip: stream.peer_addr().ok().map(|peer| peer.ip()),
     };
@@ -287,3 +387,6 @@ fn detach_sse_stream(
         }
     }
 }
+
+#[cfg(test)]
+mod shutdown_tests;

@@ -225,6 +225,7 @@ fn dae_config_file_api_reports_the_resources_it_imported() {
         web_root: fixture.root().to_path_buf(),
         api_only: true,
         control_socket: fixture.root().join("control.sock"),
+        shutdown: Arc::new(ProductShutdown::default()),
         runtime: Arc::new(ProductRuntimeManager::new()),
         runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),
