@@ -105,6 +105,8 @@ impl AllocatorIdleReclaimPolicy {
             "minIntervalSeconds": self.min_interval.as_secs(),
             "lowTrafficSeconds": self.low_traffic_duration.as_secs(),
             "pressureThresholdBytes": self.pressure_threshold_bytes.to_string(),
+            "pressureMetric": "allocator-resident-minus-active",
+            "retainedMetric": "diagnostic-virtual-address-space",
             "maxTrafficRateBytesPerSecond": self.max_traffic_rate_bytes_per_second.to_string(),
             "sessionCountGate": false,
             "sources": {
@@ -158,28 +160,68 @@ struct AllocatorLowTrafficWindow {
 
 static ALLOCATOR_IDLE_RECLAIM_STATE: OnceLock<Mutex<AllocatorIdleReclaimState>> = OnceLock::new();
 
-pub(crate) fn spawn_allocator_idle_reclaim_monitor(app: &Arc<AppState>) {
+struct AllocatorIdleReclaimStartedGuard;
+
+impl Drop for AllocatorIdleReclaimStartedGuard {
+    fn drop(&mut self) {
+        if let Ok(mut state) = ALLOCATOR_IDLE_RECLAIM_STATE
+            .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
+            .lock()
+        {
+            state.started = false;
+        }
+    }
+}
+
+pub(crate) struct ProductAllocatorIdleReclaimMonitor {
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl ProductAllocatorIdleReclaimMonitor {
+    pub(crate) fn shutdown(mut self) -> io::Result<()> {
+        if let Some(join) = self.join.take() {
+            join.join()
+                .map_err(|_| io::Error::other("allocator idle reclaim monitor panicked"))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProductAllocatorIdleReclaimMonitor {
+    fn drop(&mut self) {
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+pub(crate) fn spawn_allocator_idle_reclaim_monitor(
+    app: &Arc<AppState>,
+) -> io::Result<Option<ProductAllocatorIdleReclaimMonitor>> {
     {
         let state_lock =
             ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
         let Ok(mut state) = state_lock.lock() else {
-            return;
+            return Ok(None);
         };
         if state.started {
-            return;
+            return Ok(None);
         }
         state.started = true;
     }
 
     let app = Arc::clone(app);
-    let _ = thread::Builder::new()
+    let join = thread::Builder::new()
         .name("allocator-idle-reclaim".to_owned())
         .stack_size(ALLOCATOR_IDLE_RECLAIM_MONITOR_STACK_BYTES)
         .spawn(move || {
-            loop {
+            let _started = AllocatorIdleReclaimStartedGuard;
+            while !app.shutdown.is_requested() {
                 let config = app.runtime.current_config();
                 let policy = AllocatorIdleReclaimPolicy::from_config(config.as_ref());
-                thread::sleep(policy.sample_interval);
+                if app.shutdown.wait_timeout(policy.sample_interval) {
+                    break;
+                }
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     allocator_idle_reclaim_tick(&app, policy);
                 }))
@@ -189,6 +231,21 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(app: &Arc<AppState>) {
                 }
             }
         });
+    let join = match join {
+        Ok(join) => join,
+        Err(err) => {
+            if let Ok(mut state) = ALLOCATOR_IDLE_RECLAIM_STATE
+                .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
+                .lock()
+            {
+                state.started = false;
+            }
+            return Err(err);
+        }
+    };
+    Ok(Some(ProductAllocatorIdleReclaimMonitor {
+        join: Some(join),
+    }))
 }
 
 pub(crate) fn allocator_idle_reclaim_snapshot_json(app: &AppState) -> Value {
@@ -218,11 +275,13 @@ fn allocator_idle_reclaim_tick(app: &AppState, policy: AllocatorIdleReclaimPolic
 
 fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimPolicy) -> Value {
     if !policy.enabled {
+        reset_idle_reclaim_observation();
         return json!({"status": "skipped", "reason": "disabled"});
     }
 
     let now = Instant::now();
     let Some(observation) = idle_reclaim_observation(app) else {
+        reset_idle_reclaim_observation();
         return json!({"status": "skipped", "reason": "runtime_metrics_unavailable"});
     };
     let Some(traffic_rate) = idle_reclaim_traffic_rate(now, observation) else {
@@ -278,7 +337,10 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
             "status": "skipped",
             "reason": "pressure_below_threshold",
             "pressureBytes": pressure.to_string(),
+            "pressureMetric": "allocator-resident-minus-active",
             "pressureThresholdBytes": policy.pressure_threshold_bytes.to_string(),
+            "allocatorResidentMinusActiveBytes": stats.resident_minus_active().to_string(),
+            "allocatorRetainedBytes": stats.retained.to_string(),
             "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
             "trafficRateSource": "resident_dataplane_total_counter_delta",
             "lowTrafficElapsedMillis": low_traffic.elapsed.as_millis().to_string(),
@@ -293,6 +355,9 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
         "status": "reclaimed",
         "reason": "idle_memory_pressure",
         "pressureBytes": pressure.to_string(),
+        "pressureMetric": "allocator-resident-minus-active",
+        "allocatorResidentMinusActiveBytes": stats.resident_minus_active().to_string(),
+        "allocatorRetainedBytes": stats.retained.to_string(),
         "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
         "trafficRateSource": "resident_dataplane_total_counter_delta",
         "lowTrafficElapsedMillis": low_traffic.elapsed.as_millis().to_string(),
@@ -349,12 +414,28 @@ fn idle_reclaim_traffic_rate(
     let state_lock =
         ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
     let mut state = state_lock.lock().ok()?;
+    idle_reclaim_traffic_rate_from_state(&mut state, now, observation)
+}
+
+fn idle_reclaim_traffic_rate_from_state(
+    state: &mut AllocatorIdleReclaimState,
+    now: Instant,
+    observation: AllocatorIdleObservation,
+) -> Option<AllocatorIdleTrafficRate> {
     let previous = state.last_sample.replace(AllocatorIdleTrafficSample {
         upload_total_counter: observation.upload_total_counter,
         download_total_counter: observation.download_total_counter,
         observed_at: now,
-    })?;
-    idle_reclaim_traffic_rate_from_samples(previous, now, observation)
+    });
+    let Some(previous) = previous else {
+        state.low_traffic_since = None;
+        return None;
+    };
+    let rate = idle_reclaim_traffic_rate_from_samples(previous, now, observation);
+    if rate.is_none() {
+        state.low_traffic_since = None;
+    }
+    rate
 }
 
 fn idle_reclaim_traffic_rate_from_samples(
@@ -450,6 +531,16 @@ fn reset_idle_reclaim_low_traffic_window() {
         .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
         .lock()
     {
+        state.low_traffic_since = None;
+    }
+}
+
+fn reset_idle_reclaim_observation() {
+    if let Ok(mut state) = ALLOCATOR_IDLE_RECLAIM_STATE
+        .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
+        .lock()
+    {
+        state.last_sample = None;
         state.low_traffic_since = None;
     }
 }
@@ -564,6 +655,32 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn idle_reclaim_counter_reset_clears_the_previous_low_traffic_window() {
+        let previous_at = Instant::now();
+        let mut state = default_idle_reclaim_state();
+        state.last_sample = Some(AllocatorIdleTrafficSample {
+            upload_total_counter: 1_000_000,
+            download_total_counter: 2_000_000,
+            observed_at: previous_at,
+        });
+        state.low_traffic_since = Some(previous_at - Duration::from_secs(300));
+
+        let rate = idle_reclaim_traffic_rate_from_state(
+            &mut state,
+            previous_at + Duration::from_secs(60),
+            AllocatorIdleObservation {
+                active_tcp: 0,
+                active_udp: 0,
+                upload_total_counter: 100,
+                download_total_counter: 200,
+            },
+        );
+
+        assert_eq!(rate, None);
+        assert_eq!(state.low_traffic_since, None);
     }
 
     #[test]
