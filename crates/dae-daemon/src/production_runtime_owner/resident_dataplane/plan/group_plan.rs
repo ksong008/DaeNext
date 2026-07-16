@@ -4,6 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::*;
 
 const RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL: Duration = Duration::from_secs(1);
+const RESIDENT_GROUP_RESUSCITATION_MAX_INTERVAL: Duration = Duration::from_secs(30);
+const RESIDENT_GROUP_RESUSCITATION_INTERVAL_DIVISOR: u32 = 8;
+const RESIDENT_HEALTH_DATABASE_SEED_TTL_INTERVALS: u32 = 2;
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentProxyCandidatePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) match_index: usize,
@@ -402,7 +405,9 @@ pub(crate) struct ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) tcp_probe_timeout: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) resuscitation_last_unix_ms:
-        Arc<AtomicI64>,
+        Arc<Vec<AtomicI64>>,
+    pub(in crate::production_runtime_owner::resident_dataplane) health_bootstrap:
+        ResidentGroupHealthBootstrap,
 }
 
 impl ResidentProxyGroupPlan {
@@ -501,6 +506,23 @@ impl ResidentProxyGroupPlan {
         self.group_policy.needs_alive_state()
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn begin_health_bootstrap(&self) {
+        self.health_bootstrap.begin();
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn complete_health_bootstrap(
+        &self,
+        cancelled: bool,
+    ) {
+        self.health_bootstrap.complete(cancelled);
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn health_bootstrap_snapshot_json(
+        &self,
+    ) -> Value {
+        self.health_bootstrap.snapshot_json()
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn check_interval(
         &self,
     ) -> Duration {
@@ -509,23 +531,29 @@ impl ResidentProxyGroupPlan {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn try_begin_resuscitation(
         &self,
+        network_type: NetworkType,
     ) -> bool {
         if !self.group_policy.needs_alive_state() {
             return false;
         }
         let now_ms = resident_group_resuscitation_now_ms();
-        let interval = if self.check_interval < RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL {
-            RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL
-        } else {
-            self.check_interval
-        };
+        let interval = (self.check_interval / RESIDENT_GROUP_RESUSCITATION_INTERVAL_DIVISOR).clamp(
+            RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL,
+            RESIDENT_GROUP_RESUSCITATION_MAX_INTERVAL,
+        );
         let interval_ms = interval.as_millis().min(i64::MAX as u128) as i64;
-        let mut last_ms = self.resuscitation_last_unix_ms.load(Ordering::Relaxed);
+        let Some(last_resuscitation) = self
+            .resuscitation_last_unix_ms
+            .get(network_type.collection_index())
+        else {
+            return false;
+        };
+        let mut last_ms = last_resuscitation.load(Ordering::Relaxed);
         loop {
             if now_ms.saturating_sub(last_ms) < interval_ms {
                 return false;
             }
-            match self.resuscitation_last_unix_ms.compare_exchange(
+            match last_resuscitation.compare_exchange(
                 last_ms,
                 now_ms,
                 Ordering::AcqRel,
@@ -694,13 +722,23 @@ impl ResidentProxyGroupPlan {
             .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_tcp_runtime(
         &self,
         network_type: NetworkType,
         strict_ip_version: bool,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
-        self.select_candidate(network_type, strict_ip_version)
-            .map(|candidate| Arc::clone(&candidate.proxy))
+        self.select_proxy_for_tcp_runtime_detail(network_type, strict_ip_version)
+            .map_err(|err| err.message)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_tcp_runtime_detail(
+        &self,
+        network_type: NetworkType,
+        strict_ip_version: bool,
+    ) -> Result<Arc<ResidentProxyPlan>, ResidentProxySelectionError> {
+        self.select_candidate_with_selection_detail(network_type, strict_ip_version)
+            .map(|candidate| Arc::clone(&candidate.candidate.proxy))
     }
 
     #[cfg(test)]
@@ -781,6 +819,7 @@ impl ResidentProxyGroupPlan {
                 )
             })?
             .record_available_traffic(index, network_type, checked_at_unix);
+        self.health_bootstrap.observe(index, HealthState::Alive);
         Ok(())
     }
 
@@ -793,11 +832,20 @@ impl ResidentProxyGroupPlan {
             .map(|selection| selection.proxy)
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_dns_upstream_candidate(
         &self,
         network_type: NetworkType,
     ) -> Result<ResidentProxySelection, String> {
-        let selected = self.select_candidate_with_selection(network_type, false)?;
+        self.select_proxy_for_dns_upstream_candidate_detail(network_type)
+            .map_err(|err| err.message)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_dns_upstream_candidate_detail(
+        &self,
+        network_type: NetworkType,
+    ) -> Result<ResidentProxySelection, ResidentProxySelectionError> {
+        let selected = self.select_candidate_with_selection_detail(network_type, false)?;
         Ok(ResidentProxySelection {
             proxy: Arc::clone(&selected.candidate.proxy),
             network_type: selected.network_type,
@@ -981,6 +1029,8 @@ impl ResidentProxyGroupPlan {
             checked_at_unix,
         )
         .map_err(|err| format!("resident dataplane group {} {err}", self.group_name))?;
+        drop(selector);
+        self.health_bootstrap.observe(index, health_state);
         Ok(())
     }
 
@@ -1037,6 +1087,7 @@ impl ResidentProxyGroupPlan {
                 checked_at_unix,
             )
             .map_err(|err| format!("resident dataplane group {} {err}", self.group_name))?;
+            self.health_bootstrap.observe(*index, health_state);
         }
         Ok(indexes.len())
     }
@@ -1060,6 +1111,16 @@ impl ResidentProxyGroupPlan {
         let Some(network_type) = health_seed_snapshot_network_type(snapshot) else {
             return Ok(0);
         };
+        let checked_at_unix = snapshot
+            .get("checkedAtUnix")
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0)
+            .unwrap_or(0);
+        if snapshot.get("seedSource").and_then(Value::as_str) == Some("database")
+            && !self.database_health_seed_is_fresh(checked_at_unix)
+        {
+            return Ok(0);
+        }
         if let Some(target_identity) = snapshot.get("targetIdentity").and_then(Value::as_str)
             && self.health_target_identity(network_type).as_deref() != Some(target_identity)
         {
@@ -1102,11 +1163,6 @@ impl ResidentProxyGroupPlan {
         if indexes.is_empty() {
             return Ok(0);
         }
-        let checked_at_unix = snapshot
-            .get("checkedAtUnix")
-            .and_then(Value::as_i64)
-            .filter(|value| *value > 0)
-            .unwrap_or(0);
         let restored = DialerHealthSnapshot {
             latency_ms,
             alive: match health_state {
@@ -1152,8 +1208,21 @@ impl ResidentProxyGroupPlan {
         })?;
         for index in &indexes {
             selector.restore_health_snapshot(*index, network_type, restored);
+            self.health_bootstrap.observe(*index, health_state);
         }
         Ok(indexes.len())
+    }
+
+    fn database_health_seed_is_fresh(&self, checked_at_unix: i64) -> bool {
+        if checked_at_unix <= 0 || self.check_interval.is_zero() {
+            return false;
+        }
+        let ttl_seconds = self
+            .check_interval
+            .saturating_mul(RESIDENT_HEALTH_DATABASE_SEED_TTL_INTERVALS)
+            .as_secs()
+            .min(i64::MAX as u64) as i64;
+        resident_group_now_secs().saturating_sub(checked_at_unix) <= ttl_seconds
     }
 
     #[cfg(test)]
@@ -1224,7 +1293,12 @@ impl ResidentProxyGroupPlan {
                 ),
             },
             tcp_probe_timeout: RESIDENT_TCP_LATENCY_PROBE_TIMEOUT,
-            resuscitation_last_unix_ms: Arc::new(AtomicI64::new(0)),
+            resuscitation_last_unix_ms: Arc::new(
+                (0..NETWORK_TYPE_COLLECTION_COUNT)
+                    .map(|_| AtomicI64::new(0))
+                    .collect(),
+            ),
+            health_bootstrap: ResidentGroupHealthBootstrap::new(1),
         }
     }
 }
@@ -1263,6 +1337,13 @@ fn resident_group_resuscitation_now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+fn resident_group_now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
         .unwrap_or(0)
 }
 

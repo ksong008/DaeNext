@@ -227,19 +227,26 @@ pub(crate) fn start_resident_dataplane_workers(
     let manual_probe_unavailable_count = manual_probe_plans
         .len()
         .saturating_sub(manual_probe_plan_count);
+    let manual_probe_index = Arc::new(ResidentManualProbeIndex::new(manual_probe_plans));
     let runtime_groups = proxy_groups.values().cloned().collect::<Vec<_>>();
-    let health_groups = runtime_groups
-        .iter()
-        .filter(|group| group.needs_background_checks())
-        .cloned()
-        .collect::<Vec<_>>();
+    let health_groups = runtime_groups.clone();
     let health_group_count = health_groups.len();
+    let health_candidate_count = health_groups
+        .iter()
+        .map(|group| group.admitted_candidate_count())
+        .fold(0_usize, usize::saturating_add);
     let health_check_concurrency = resource_config.health_check_concurrency.value();
-    let health_runtime_config =
-        ResidentHealthRuntimeConfig::detect(health_group_count, health_check_concurrency);
+    let health_runtime_config = ResidentHealthRuntimeConfig::detect(
+        health_group_count,
+        health_check_concurrency,
+        health_candidate_count,
+    );
+    let health_bootstrap_concurrency = health_runtime_config
+        .bootstrap_concurrency(health_candidate_count, health_check_concurrency);
     let health_scheduler_report = resident_health_scheduler_value(
         health_group_count,
         health_check_concurrency,
+        health_bootstrap_concurrency,
         health_runtime_config,
     );
     let (health_resuscitation, health_resuscitation_rx) =
@@ -255,6 +262,7 @@ pub(crate) fn start_resident_dataplane_workers(
         routing_matcher.clone(),
         Arc::clone(&udp_proxy_groups),
         so_mark_from_dae,
+        Some(health_resuscitation.clone()),
     ));
     let dns = Arc::new(
         dns_plan
@@ -301,6 +309,7 @@ pub(crate) fn start_resident_dataplane_workers(
         sniffing_timeout,
         so_mark_from_dae,
         config.global.mptcp,
+        health_resuscitation.clone(),
     ) {
         Ok(router) => Arc::new(router),
         Err(err) => {
@@ -395,6 +404,7 @@ pub(crate) fn start_resident_dataplane_workers(
                     event_lock,
                     metrics,
                     health_check_concurrency,
+                    health_bootstrap_concurrency,
                     health_runtime_config,
                 )
             },
@@ -626,7 +636,7 @@ pub(crate) fn start_resident_dataplane_workers(
         Some(ResidentDataplaneRuntime {
             owner,
             groups: runtime_groups,
-            manual_probe_plans,
+            manual_probe_index,
             dns_reload_handle,
             domain_routing_maintenance,
         }),

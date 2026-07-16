@@ -1,4 +1,5 @@
 use super::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn two_node_latency_config(global_extra: &str, group_body: &str) -> Config {
     let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
@@ -565,7 +566,7 @@ pub(super) fn resident_dataplane_latency_seed_selects_dynamic_group_candidate() 
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
-    assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
+    assert!(group.select_proxy_for_tcp().is_err());
 
     let node_b_hash = group
         .probe_candidates()
@@ -584,7 +585,60 @@ pub(super) fn resident_dataplane_latency_seed_selects_dynamic_group_candidate() 
         .unwrap();
 
     assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
-    assert_eq!(group.select_proxy_for_udp().unwrap().node_tag, "node_a");
+    assert!(group.select_proxy_for_udp().is_err());
+}
+
+#[test]
+pub(super) fn resident_dataplane_database_health_seed_is_bounded_by_check_interval() {
+    let config = two_node_latency_config(
+        "check_interval: 30s",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
+        "#,
+    );
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let fresh_plan = build_resident_dataplane_plan(&config).unwrap();
+    let fresh_group = fresh_plan.default_proxy_group().unwrap();
+    let candidate = fresh_group
+        .probe_candidates()
+        .into_iter()
+        .find(|candidate| candidate.node_tag == "node_b")
+        .unwrap();
+    assert_eq!(
+        fresh_group
+            .apply_health_seed_snapshot(&serde_json::json!({
+                "executionIdentity": candidate.execution_identity,
+                "networkDimension": NetworkType::TCP4.dimension_name(),
+                "latencyMs": 25,
+                "alive": true,
+                "checkedAtUnix": now,
+                "seedSource": "database",
+            }))
+            .unwrap(),
+        1
+    );
+
+    let expired_plan = build_resident_dataplane_plan(&config).unwrap();
+    let expired_group = expired_plan.default_proxy_group().unwrap();
+    assert_eq!(
+        expired_group
+            .apply_health_seed_snapshot(&serde_json::json!({
+                "executionIdentity": candidate.execution_identity,
+                "networkDimension": NetworkType::TCP4.dimension_name(),
+                "latencyMs": 25,
+                "alive": true,
+                "checkedAtUnix": now - 61,
+                "seedSource": "database",
+            }))
+            .unwrap(),
+        0
+    );
+    assert!(expired_group.select_proxy_for_tcp().is_err());
 }
 
 #[test]
@@ -634,12 +688,10 @@ pub(super) fn resident_dataplane_latency_seed_uses_snapshot_ip_family_when_prese
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
-    assert_eq!(
+    assert!(
         group
             .select_proxy_for_tcp_network(NetworkType::TCP6)
-            .unwrap()
-            .node_tag,
-        "node_a"
+            .is_err()
     );
 
     let node_b_hash = group
@@ -666,12 +718,10 @@ pub(super) fn resident_dataplane_latency_seed_uses_snapshot_ip_family_when_prese
             .node_tag,
         "node_b"
     );
-    assert_eq!(
+    assert!(
         group
             .select_proxy_for_udp_network(NetworkType::DNS_UDP6)
-            .unwrap()
-            .node_tag,
-        "node_a"
+            .is_err()
     );
 }
 
@@ -708,12 +758,10 @@ pub(super) fn resident_dataplane_legacy_latency_seed_does_not_invent_ipv6_state(
         .unwrap();
 
     assert_eq!(applied, 0);
-    assert_eq!(
+    assert!(
         group
             .select_proxy_for_tcp_network(NetworkType::TCP6)
-            .unwrap()
-            .node_tag,
-        "node_a"
+            .is_err()
     );
 }
 
@@ -905,8 +953,9 @@ pub(super) fn resident_dataplane_resuscitation_is_rate_limited_and_skips_fixed()
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
 
-    assert!(group.try_begin_resuscitation());
-    assert!(!group.try_begin_resuscitation());
+    assert!(group.try_begin_resuscitation(NetworkType::DATA_UDP4));
+    assert!(!group.try_begin_resuscitation(NetworkType::DATA_UDP4));
+    assert!(group.try_begin_resuscitation(NetworkType::TCP4));
 
     let fixed_config = two_node_latency_config(
         "",
@@ -918,5 +967,5 @@ pub(super) fn resident_dataplane_resuscitation_is_rate_limited_and_skips_fixed()
     let fixed_plan = build_resident_dataplane_plan(&fixed_config).unwrap();
     let fixed_group = fixed_plan.default_proxy_group().unwrap();
 
-    assert!(!fixed_group.try_begin_resuscitation());
+    assert!(!fixed_group.try_begin_resuscitation(NetworkType::DATA_UDP4));
 }

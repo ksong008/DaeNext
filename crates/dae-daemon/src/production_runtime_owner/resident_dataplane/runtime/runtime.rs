@@ -3,8 +3,7 @@ use super::*;
 pub(crate) struct ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) owner: ResidentRuntimeOwner,
     pub(in crate::production_runtime_owner) groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
-    pub(in crate::production_runtime_owner) manual_probe_plans:
-        BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+    pub(in crate::production_runtime_owner) manual_probe_index: Arc<ResidentManualProbeIndex>,
     pub(in crate::production_runtime_owner) dns_reload_handle: dns::ResidentDnsReloadHandle,
     pub(in crate::production_runtime_owner) domain_routing_maintenance:
         Option<dns::ResidentDnsDomainRoutingMaintenanceHandle>,
@@ -42,7 +41,7 @@ impl ResidentDataplaneRuntime {
         &self,
     ) -> ResidentManualProbeHandle {
         self.owner
-            .manual_probe_handle(&self.groups, &self.manual_probe_plans)
+            .manual_probe_handle(&self.groups, &self.manual_probe_index)
     }
 
     pub(in crate::production_runtime_owner) fn dns_reload_snapshot(

@@ -1,6 +1,6 @@
 use crate::alive::AliveDialerSet;
 use crate::annotation::Annotation;
-use crate::dialer::{Dialer, DialerHealthSnapshot, TIMEOUT_MS};
+use crate::dialer::{Dialer, DialerHealthSnapshot};
 use crate::error::OutboundError;
 use crate::policy::SelectionPolicy;
 use crate::types::{IpVersion, NETWORK_TYPE_COLLECTION_COUNT, NetworkType};
@@ -39,14 +39,13 @@ impl DialerGroup {
                 NetworkType::DATA_UDP4,
                 NetworkType::DATA_UDP6,
             ] {
-                let set_alive = !network_type.is_data_udp();
                 alive_sets[network_type.collection_index()] = Some(AliveDialerSet::new(
                     network_type,
                     policy.clone(),
                     &dialers,
                     &annotations,
                     tolerance_ms,
-                    set_alive,
+                    false,
                 ));
             }
             if check_dns_tcp {
@@ -57,7 +56,7 @@ impl DialerGroup {
                         &dialers,
                         &annotations,
                         tolerance_ms,
-                        true,
+                        false,
                     ));
                 }
             }
@@ -84,12 +83,6 @@ impl DialerGroup {
                 });
                 self.select_with_policy(fallback, self.policy.clone())
             }
-            Err(OutboundError::NoAliveDialer) if self.dialers.len() == 1 => self
-                .select_with_policy(network_type, SelectionPolicy::Fixed { index: 0 })
-                .map(|mut selected| {
-                    selected.latency_ms = TIMEOUT_MS;
-                    selected
-                }),
             Err(err) => Err(err),
         }
     }

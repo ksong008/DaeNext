@@ -1,10 +1,12 @@
 use super::*;
 
 mod cleanup_inventory;
+mod manual_probe_index;
 mod shutdown;
 mod task;
 
 use self::cleanup_inventory::*;
+pub(crate) use self::manual_probe_index::ResidentManualProbeIndex;
 use self::shutdown::shutdown_resident_runtime_owner;
 use self::task::*;
 
@@ -25,7 +27,7 @@ pub(crate) struct ResidentRuntimeOwner {
 #[derive(Clone)]
 pub(crate) struct ResidentManualProbeHandle {
     groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
-    manual_probe_plans: BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+    manual_probe_index: Arc<ResidentManualProbeIndex>,
     reload_generation: u64,
     resource_config: ResidentRuntimeResourceConfig,
 }
@@ -104,11 +106,11 @@ impl ResidentRuntimeOwner {
     pub(crate) fn manual_probe_handle(
         &self,
         groups: &[Arc<plan::ResidentProxyGroupPlan>],
-        manual_probe_plans: &BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+        manual_probe_index: &Arc<ResidentManualProbeIndex>,
     ) -> ResidentManualProbeHandle {
         ResidentManualProbeHandle {
             groups: groups.to_vec(),
-            manual_probe_plans: manual_probe_plans.clone(),
+            manual_probe_index: Arc::clone(manual_probe_index),
             reload_generation: self.reload_generation,
             resource_config: self.resource_config.clone(),
         }
@@ -250,7 +252,7 @@ impl ResidentManualProbeHandle {
 
     pub(crate) fn probe_node_latencies_without_group_update(&self, links: &[String]) -> Vec<Value> {
         probe_resident_manual_latency_snapshots(
-            &self.manual_probe_plans,
+            self.manual_probe_index.plans(),
             links,
             self.reload_generation,
             self.probe_concurrency(),
@@ -259,19 +261,6 @@ impl ResidentManualProbeHandle {
 
     pub(crate) fn apply_latency_probe_snapshots_to_groups(&self, snapshots: &[Value]) {
         if self.groups.is_empty() || snapshots.is_empty() {
-            return;
-        }
-        let mut links_by_hash = BTreeMap::<&str, Vec<&str>>::new();
-        for (link, candidate) in &self.manual_probe_plans {
-            let Ok(candidate) = candidate else {
-                continue;
-            };
-            links_by_hash
-                .entry(candidate.link_hash.as_str())
-                .or_default()
-                .push(link.as_str());
-        }
-        if links_by_hash.is_empty() {
             return;
         }
         for snapshot in snapshots {
@@ -288,7 +277,7 @@ impl ResidentManualProbeHandle {
             let Some(link_hash) = latency_snapshot_link_hash(snapshot) else {
                 continue;
             };
-            let Some(links) = links_by_hash.get(link_hash) else {
+            let Some(links) = self.manual_probe_index.links_for_hash(link_hash) else {
                 continue;
             };
             let checked_at = snapshot
@@ -369,7 +358,7 @@ pub(crate) fn run_resident_manual_latency_probe_helper(
     reload_generation: u64,
     concurrency: usize,
 ) -> Vec<Value> {
-    let manual_probe_plans = plan::build_resident_manual_probe_plans_for_helper(config);
+    let manual_probe_plans = plan::build_resident_manual_probe_plans_for_helper(config, links);
     probe_resident_manual_latency_snapshots(
         &manual_probe_plans,
         links,
@@ -388,7 +377,7 @@ pub(crate) fn run_resident_manual_latency_probe_helper_streaming<F>(
 where
     F: FnMut(Value) -> Result<(), String>,
 {
-    let manual_probe_plans = plan::build_resident_manual_probe_plans_for_helper(config);
+    let manual_probe_plans = plan::build_resident_manual_probe_plans_for_helper(config, links);
     probe_resident_manual_latency_snapshots_streaming(
         &manual_probe_plans,
         links,
@@ -738,7 +727,9 @@ mod tests {
         })];
         let handle = ResidentManualProbeHandle {
             groups: vec![Arc::clone(&group)],
-            manual_probe_plans: plan::build_resident_manual_probe_plans(&config),
+            manual_probe_index: Arc::new(ResidentManualProbeIndex::new(
+                plan::build_resident_manual_probe_plans(&config),
+            )),
             reload_generation: 7,
             resource_config: ResidentRuntimeResourceConfig::from_config(&config),
         };
@@ -786,7 +777,9 @@ mod tests {
             .unwrap();
         let handle = ResidentManualProbeHandle {
             groups: vec![Arc::clone(&group)],
-            manual_probe_plans: plan::build_resident_manual_probe_plans(&config),
+            manual_probe_index: Arc::new(ResidentManualProbeIndex::new(
+                plan::build_resident_manual_probe_plans(&config),
+            )),
             reload_generation: 7,
             resource_config: ResidentRuntimeResourceConfig::from_config(&config),
         };

@@ -3,6 +3,7 @@
 
 use super::super::plan::{effective_so_mark_from_dae, resident_tcp_check_network_type};
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::ResidentHealthResuscitationHandle;
 pub(crate) const BPF_L4_TCP: u8 = 6;
 pub(crate) const ROUTING_L4_TCP: u8 = 1;
 pub(crate) const ROUTING_IP_VERSION_4: u8 = 1;
@@ -23,6 +24,8 @@ pub(crate) struct ResidentTcpRouter {
     pub(in crate::production_runtime_owner::resident_dataplane) sniffing_timeout: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) so_mark_from_dae: u32,
     pub(in crate::production_runtime_owner::resident_dataplane) mptcp: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) health_resuscitation:
+        Option<ResidentHealthResuscitationHandle>,
 }
 
 impl ResidentTcpRouter {
@@ -36,6 +39,7 @@ impl ResidentTcpRouter {
         sniffing_timeout: Duration,
         so_mark_from_dae: u32,
         mptcp: bool,
+        health_resuscitation: ResidentHealthResuscitationHandle,
     ) -> Result<Self, String> {
         if proxies.is_empty() {
             return Err("resident TCP router needs at least one proxy outbound".to_owned());
@@ -58,6 +62,7 @@ impl ResidentTcpRouter {
             sniffing_timeout,
             so_mark_from_dae,
             mptcp,
+            Some(health_resuscitation),
         )
     }
 
@@ -72,6 +77,7 @@ impl ResidentTcpRouter {
         sniffing_timeout: Duration,
         so_mark_from_dae: u32,
         mptcp: bool,
+        health_resuscitation: Option<ResidentHealthResuscitationHandle>,
     ) -> Result<Self, String> {
         if proxies.is_empty() {
             return Err("resident TCP router needs at least one proxy outbound".to_owned());
@@ -87,6 +93,7 @@ impl ResidentTcpRouter {
             sniffing_timeout,
             so_mark_from_dae: effective_so_mark_from_dae(so_mark_from_dae),
             mptcp,
+            health_resuscitation,
         })
     }
 
@@ -113,6 +120,7 @@ impl ResidentTcpRouter {
             sniffing_timeout,
             so_mark_from_dae,
             mptcp,
+            None,
         )
     }
 
@@ -139,6 +147,7 @@ impl ResidentTcpRouter {
             sniffing_timeout,
             so_mark_from_dae,
             mptcp,
+            None,
         )
     }
 
@@ -275,8 +284,19 @@ impl ResidentTcpRouter {
                     ));
                 };
                 let network_type = resident_tcp_check_network_type(original_dst.ip());
-                let proxy =
-                    proxy_group.select_proxy_for_tcp_runtime(network_type, final_choose.dial_ip)?;
+                let proxy = match proxy_group
+                    .select_proxy_for_tcp_runtime_detail(network_type, final_choose.dial_ip)
+                {
+                    Ok(proxy) => proxy,
+                    Err(err) => {
+                        if err.no_alive
+                            && let Some(resuscitator) = self.health_resuscitation.as_ref()
+                        {
+                            resuscitator.trigger(final_outbound, network_type);
+                        }
+                        return Err(err.message);
+                    }
+                };
                 Ok(TcpSelection::Proxy(TcpProxySelection {
                     mark: route.final_mark,
                     mptcp: self.mptcp,

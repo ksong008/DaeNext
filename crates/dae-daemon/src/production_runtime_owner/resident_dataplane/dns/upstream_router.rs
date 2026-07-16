@@ -1,4 +1,5 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::ResidentHealthResuscitationHandle;
 
 #[derive(Clone, Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUpstreamRouter {
@@ -7,6 +8,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUp
     pub(in crate::production_runtime_owner::resident_dataplane::dns) proxy_groups:
         SharedResidentProxyGroupMap,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) so_mark_from_dae: u32,
+    health_resuscitation: Option<ResidentHealthResuscitationHandle>,
 }
 
 #[derive(Clone, Debug)]
@@ -29,11 +31,13 @@ impl ResidentDnsUpstreamRouter {
         routing_matcher: RoutingMatcher,
         proxy_groups: SharedResidentProxyGroupMap,
         so_mark_from_dae: u32,
+        health_resuscitation: Option<ResidentHealthResuscitationHandle>,
     ) -> Self {
         Self {
             routing_matcher,
             proxy_groups,
             so_mark_from_dae: effective_so_mark_from_dae(so_mark_from_dae),
+            health_resuscitation,
         }
     }
 
@@ -85,8 +89,19 @@ impl ResidentDnsUpstreamRouter {
                         OutboundIndex(outbound)
                     ));
                 };
-                let proxy =
-                    proxy_group.select_proxy_for_dns_upstream_candidate(proxy_network_type)?;
+                let proxy = match proxy_group
+                    .select_proxy_for_dns_upstream_candidate_detail(proxy_network_type)
+                {
+                    Ok(proxy) => proxy,
+                    Err(err) => {
+                        if err.no_alive
+                            && let Some(resuscitator) = self.health_resuscitation.as_ref()
+                        {
+                            resuscitator.trigger(outbound, proxy_network_type);
+                        }
+                        return Err(err.message);
+                    }
+                };
                 Ok(ResidentDnsUpstreamSelectionCandidate {
                     selection: ResidentDnsUpstreamSelection::Proxy {
                         proxy: proxy_with_dns_upstream_mark(proxy.proxy, mark),

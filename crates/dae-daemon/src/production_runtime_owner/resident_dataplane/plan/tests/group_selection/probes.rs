@@ -2,6 +2,40 @@ use super::*;
 use std::net::{IpAddr, SocketAddr};
 
 #[test]
+pub(super) fn latency_probe_helper_materializes_only_requested_links() {
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let config_text = r#"
+        global {
+            lan_interface: daerust0
+        }
+        node {
+            node_a: '__NODE_A__'
+            node_b: '__NODE_B__'
+        }
+        group {
+            proxy {
+                filter: name(node_a, node_b)
+                policy: min
+            }
+        }
+        routing {
+            fallback: proxy
+        }
+        "#
+    .replace("__NODE_A__", &node_a)
+    .replace("__NODE_B__", &node_b);
+    let config = parse_config(&config_text);
+
+    let plans =
+        build_resident_manual_probe_plans_for_helper(&config, std::slice::from_ref(&node_b));
+
+    assert_eq!(plans.len(), 1);
+    assert!(!plans.contains_key(&node_a));
+    assert!(plans.contains_key(&node_b));
+}
+
+#[test]
 pub(super) fn resident_dataplane_group_tcp_check_uses_group_override() {
     let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
     let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);

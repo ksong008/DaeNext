@@ -1,6 +1,6 @@
 use super::tcp::{QuicEndpointCallerClass, scope_quic_endpoint_observation};
 use super::*;
-use crate::allocator::{AllocatorReclaimReason, allocator_reclaim};
+use crate::allocator::{AllocatorReclaimReason, allocator_request_reclaim};
 
 #[path = "health_checks/family.rs"]
 mod family;
@@ -34,6 +34,7 @@ pub(super) async fn run_resident_group_health_check_round_async(
     group: Arc<plan::ResidentProxyGroupPlan>,
     stop: SharedResidentStopSignal,
     concurrency: usize,
+    candidate_admission: Arc<tokio::sync::Semaphore>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -47,10 +48,11 @@ pub(super) async fn run_resident_group_health_check_round_async(
         &candidates,
         concurrency.max(1),
         stop,
+        candidate_admission,
     )
     .await;
     drop(candidates);
-    let _ = allocator_reclaim(AllocatorReclaimReason::GroupHealthProbe);
+    allocator_request_reclaim(AllocatorReclaimReason::GroupHealthProbe);
     status
 }
 
@@ -59,12 +61,19 @@ async fn run_resident_group_health_checks_concurrent_async(
     candidates: &[plan::ResidentProxyProbePlan],
     concurrency: usize,
     stop: SharedResidentStopSignal,
+    candidate_admission: Arc<tokio::sync::Semaphore>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
     }
     if concurrency <= 1 {
-        return run_resident_group_health_checks_until_stopped(&group, candidates, stop).await;
+        return run_resident_group_health_checks_until_stopped(
+            &group,
+            candidates,
+            stop,
+            candidate_admission,
+        )
+        .await;
     }
     for chunk in candidates.chunks(concurrency.max(1)) {
         if stop.load(Ordering::Relaxed) {
@@ -75,8 +84,15 @@ async fn run_resident_group_health_checks_concurrent_async(
             let candidate = candidate.clone();
             let group = Arc::clone(&group);
             let stop = Arc::clone(&stop);
+            let candidate_admission = Arc::clone(&candidate_admission);
             handles.push(tokio::spawn(async move {
-                run_resident_candidate_health_check_until_stopped(&group, &candidate, stop).await
+                run_resident_candidate_health_check_until_stopped(
+                    &group,
+                    &candidate,
+                    stop,
+                    candidate_admission,
+                )
+                .await
             }));
         }
         for handle in handles {
@@ -94,20 +110,28 @@ pub(crate) async fn run_resident_group_health_checks_async(
     candidates: &[plan::ResidentProxyProbePlan],
 ) {
     let stop = ResidentStopSignal::shared();
-    let _ = run_resident_group_health_checks_until_stopped(group, candidates, stop).await;
+    let admission = Arc::new(tokio::sync::Semaphore::new(candidates.len().max(1)));
+    let _ =
+        run_resident_group_health_checks_until_stopped(group, candidates, stop, admission).await;
 }
 
 async fn run_resident_group_health_checks_until_stopped(
     group: &plan::ResidentProxyGroupPlan,
     candidates: &[plan::ResidentProxyProbePlan],
     stop: SharedResidentStopSignal,
+    candidate_admission: Arc<tokio::sync::Semaphore>,
 ) -> HealthCheckRoundStatus {
     for candidate in candidates {
         if stop.load(Ordering::Relaxed) {
             return HealthCheckRoundStatus::Cancelled;
         }
-        if run_resident_candidate_health_check_until_stopped(group, candidate, Arc::clone(&stop))
-            .await
+        if run_resident_candidate_health_check_until_stopped(
+            group,
+            candidate,
+            Arc::clone(&stop),
+            Arc::clone(&candidate_admission),
+        )
+        .await
             == HealthCheckRoundStatus::Cancelled
         {
             return HealthCheckRoundStatus::Cancelled;
@@ -120,11 +144,36 @@ async fn run_resident_candidate_health_check_until_stopped(
     group: &plan::ResidentProxyGroupPlan,
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
+    candidate_admission: Arc<tokio::sync::Semaphore>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
     }
-    run_resident_candidate_family_health_checks(group, candidate, stop).await
+    let permit =
+        match acquire_health_candidate_permit_until_stopped(Arc::clone(&stop), candidate_admission)
+            .await
+        {
+            Ok(permit) => permit,
+            Err(status) => return status,
+        };
+    let status = run_resident_candidate_family_health_checks(group, candidate, stop).await;
+    drop(permit);
+    status
+}
+
+async fn acquire_health_candidate_permit_until_stopped(
+    stop: SharedResidentStopSignal,
+    candidate_admission: Arc<tokio::sync::Semaphore>,
+) -> Result<tokio::sync::OwnedSemaphorePermit, HealthCheckRoundStatus> {
+    tokio::select! {
+        _ = wait_until_stopped_async(Arc::clone(&stop)) => {
+            Err(HealthCheckRoundStatus::Cancelled)
+        }
+        permit = candidate_admission.acquire_owned() => match permit {
+            Ok(permit) => Ok(permit),
+            Err(_) => Err(HealthCheckRoundStatus::Cancelled),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -631,6 +680,38 @@ pub(crate) fn unix_now_secs() -> i64 {
 mod tests {
     use super::*;
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn global_health_candidate_admission_bounds_waiting_probe_execution() {
+        let admission = Arc::new(tokio::sync::Semaphore::new(2));
+        let stop = ResidentStopSignal::shared();
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum_active = Arc::new(AtomicUsize::new(0));
+        let mut tasks = tokio::task::JoinSet::new();
+
+        for _ in 0..12 {
+            let admission = Arc::clone(&admission);
+            let stop = Arc::clone(&stop);
+            let active = Arc::clone(&active);
+            let maximum_active = Arc::clone(&maximum_active);
+            tasks.spawn(async move {
+                let permit = acquire_health_candidate_permit_until_stopped(stop, admission)
+                    .await
+                    .unwrap();
+                let current = active.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                maximum_active.fetch_max(current, Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(2)).await;
+                active.fetch_sub(1, Ordering::Relaxed);
+                drop(permit);
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
+
+        assert_eq!(maximum_active.load(Ordering::Relaxed), 2);
+        assert_eq!(admission.available_permits(), 2);
+    }
+
     #[test]
     fn hostname_check_target_does_not_invent_ipv4_family() {
         let target = plan::ResidentTcpCheckTarget {
@@ -713,6 +794,7 @@ mod tests {
             &candidates,
             2,
             stop,
+            Arc::new(tokio::sync::Semaphore::new(2)),
         ));
 
         assert_eq!(status, HealthCheckRoundStatus::Cancelled);

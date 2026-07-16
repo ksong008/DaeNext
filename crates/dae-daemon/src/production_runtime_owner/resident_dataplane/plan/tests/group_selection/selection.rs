@@ -159,8 +159,11 @@ pub(super) fn resident_dataplane_plan_keeps_non_fixed_group_candidates() {
     assert_eq!(group.candidate_count(), 2);
     assert_eq!(group.admitted_candidate_count(), 2);
     assert!(group.alive_state_wired());
-    let selected = group.select_proxy_for_tcp().unwrap();
-    assert!(matches!(selected.node_tag.as_str(), "node_a" | "node_b"));
+    assert!(group.select_proxy_for_tcp().is_err());
+    group
+        .record_check_result("node_b", NetworkType::TCP4, Some(20), 1)
+        .unwrap();
+    assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
 }
 
 #[test]
@@ -202,5 +205,9 @@ pub(super) fn resident_dataplane_plan_wires_min_policy_latency_state() {
     assert_eq!(group.admitted_candidate_count(), 2);
     assert!(group.alive_state_wired());
     assert!(group.latency_state_wired());
+    assert!(group.select_proxy_for_tcp().is_err());
+    group
+        .record_check_result("node_a", NetworkType::TCP4, Some(30), 1)
+        .unwrap();
     assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
 }

@@ -1,6 +1,7 @@
 use super::plan::SharedResidentProxyGroupMap;
 use super::*;
 use tokio::sync::{
+    Semaphore,
     mpsc::{self, Receiver, Sender, error::TrySendError},
     watch,
 };
@@ -27,7 +28,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
     })
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentHealthResuscitationHandle
 {
     sender: Sender<ResidentHealthResuscitationRequest>,
@@ -81,6 +82,7 @@ fn resident_health_resuscitation_channel_with_depth(
 pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_scheduler_value(
     group_count: usize,
     per_group_candidate_concurrency: usize,
+    bootstrap_candidate_concurrency: usize,
     runtime_config: ResidentHealthRuntimeConfig,
 ) -> Value {
     json!({
@@ -96,6 +98,10 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
         "scheduledGroupCount": group_count,
         "scheduledTasks": group_count,
         "perGroupCandidateConcurrency": per_group_candidate_concurrency.max(1),
+        "bootstrapCandidateConcurrency": bootstrap_candidate_concurrency.max(1),
+        "globalCandidateAdmission": bootstrap_candidate_concurrency
+            .max(per_group_candidate_concurrency)
+            .max(1),
         "resuscitationQueueDepth": RESIDENT_HEALTH_RESUSCITATION_QUEUE_DEPTH,
         "roundAdmission": "one static schedule task per materialized group; one sequential bounded resuscitation consumer",
         "stopSignal": "one atomic monitor with watch broadcast; no per-group idle polling timer",
@@ -113,9 +119,15 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
     per_group_candidate_concurrency: usize,
+    bootstrap_candidate_concurrency: usize,
     runtime_config: ResidentHealthRuntimeConfig,
 ) {
     let per_group_candidate_concurrency = per_group_candidate_concurrency.max(1);
+    let bootstrap_candidate_concurrency = bootstrap_candidate_concurrency.max(1);
+    let needs_resuscitation_runtime = groups.iter().any(|group| group.needs_background_checks());
+    let global_candidate_admission = Arc::new(Semaphore::new(
+        bootstrap_candidate_concurrency.max(per_group_candidate_concurrency),
+    ));
     let runtime = match build_resident_health_runtime(runtime_config) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -135,6 +147,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
             "runtime": resident_health_scheduler_value(
                 groups.len(),
                 per_group_candidate_concurrency,
+                bootstrap_candidate_concurrency,
                 runtime_config,
             ),
         }),
@@ -142,29 +155,38 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
     runtime.block_on(async {
         let mut tasks = JoinSet::new();
         let (stop_tx, stop_rx) = watch::channel(stop.load(Ordering::Relaxed));
-        tasks.spawn(run_resident_health_stop_monitor(
-            Arc::clone(&stop),
-            stop_tx,
-        ));
+        if needs_resuscitation_runtime {
+            tasks.spawn(run_resident_health_stop_monitor(
+                Arc::clone(&stop),
+                stop_tx,
+            ));
+        }
         for group in groups {
             tasks.spawn(run_resident_health_group_schedule(
                 group,
-                Arc::clone(&stop),
                 stop_rx.clone(),
-                event_file.clone(),
-                Arc::clone(&event_lock),
-                Arc::clone(&metrics),
-                per_group_candidate_concurrency,
+                ResidentHealthScheduleContext {
+                    stop: Arc::clone(&stop),
+                    event_file: event_file.clone(),
+                    event_lock: Arc::clone(&event_lock),
+                    metrics: Arc::clone(&metrics),
+                    periodic_candidate_concurrency: per_group_candidate_concurrency,
+                    bootstrap_candidate_concurrency,
+                    candidate_admission: Arc::clone(&global_candidate_admission),
+                },
             ));
         }
-        tasks.spawn(run_resident_health_resuscitation_dispatcher(
-            proxy_groups,
-            resuscitation_rx,
-            Arc::clone(&stop),
-            stop_rx,
-            Arc::clone(&metrics),
-            per_group_candidate_concurrency,
-        ));
+        if needs_resuscitation_runtime {
+            tasks.spawn(run_resident_health_resuscitation_dispatcher(
+                proxy_groups,
+                resuscitation_rx,
+                Arc::clone(&stop),
+                stop_rx,
+                Arc::clone(&metrics),
+                per_group_candidate_concurrency,
+                Arc::clone(&global_candidate_admission),
+            ));
+        }
         while let Some(result) = tasks.join_next().await {
             if let Err(err) = result {
                 append_event(
