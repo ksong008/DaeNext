@@ -77,7 +77,8 @@ use super::client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, async_resident_tls_underlay_name,
     async_tls_underlay_name, open_async_resident_tls_client,
     open_async_resident_tls_client_with_flow, open_async_vless_tls_client_with_flow,
-    open_async_xhttp_endpoint_tls_client, open_proxy_tcp_stream_async_with_flow,
+    open_async_vless_tls_client_with_flow_at_candidates, open_async_xhttp_endpoint_tls_client,
+    open_async_xhttp_endpoint_tls_client_at_candidates, open_proxy_tcp_stream_async_with_flow,
 };
 use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,

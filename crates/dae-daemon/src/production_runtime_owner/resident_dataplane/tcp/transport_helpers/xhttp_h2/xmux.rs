@@ -11,28 +11,20 @@ pub(super) use self::h2_manager::select_xhttp_h2_xmux_client;
 mod h3_manager;
 pub(super) use self::h3_manager::select_xhttp_h3_xmux_client;
 
+mod capacity;
+use self::capacity::{XhttpXmuxConnectionCapacity, can_release_retiring_owner};
+
 mod lifecycle;
 use self::lifecycle::{XhttpXmuxManagerHandle, XhttpXmuxManagerLifecycle, XhttpXmuxOpeningLease};
 
 mod state_signal;
 use self::state_signal::{XhttpXmuxStateSignal, XhttpXmuxStateWait};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(super) struct XhttpXmuxKey {
-    origin: String,
-    server_host: String,
-    server_port: u16,
-    server_name: String,
-    alpn: Vec<String>,
-    stream_host: String,
-    stream_path: String,
-    mode: ResidentXhttpMode,
-    allow_insecure: bool,
-    tls_fragment: Option<(usize, usize, u64, u64)>,
-    xmux: ResidentXhttpXmuxPlan,
-    mark: u32,
-    mptcp: bool,
-}
+mod key;
+pub(super) use self::key::XhttpXmuxKey;
+
+#[cfg(test)]
+mod test_support;
 
 pub(super) struct XhttpXmuxUsage {
     pub(super) open_usage: AtomicI32,
@@ -59,79 +51,6 @@ pub(super) struct XhttpXmuxH2SelectedClient {
 pub(super) struct XhttpXmuxH3SelectedClient {
     pub(super) client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     pub(super) lease: XhttpXmuxClientLease,
-}
-
-impl XhttpXmuxKey {
-    pub(super) fn primary(
-        proxy: &ResidentProxyPlan,
-        endpoint: &ResidentXhttpEndpointPlan,
-        xmux: &ResidentXhttpXmuxPlan,
-        mark: u32,
-        mptcp: bool,
-    ) -> Self {
-        let fingerprint = proxy
-            .utls_fingerprint
-            .as_ref()
-            .map(|fingerprint| fingerprint.canonical.as_str())
-            .unwrap_or_default();
-        Self::new(
-            format!(
-                "primary:{}:{}:{}:{}",
-                proxy.graph_link_hash,
-                proxy.tls,
-                fingerprint,
-                proxy.reality.is_some()
-            ),
-            endpoint,
-            xmux,
-            mark,
-            mptcp,
-        )
-    }
-
-    pub(super) fn endpoint(
-        endpoint: &ResidentXhttpEndpointPlan,
-        xmux: &ResidentXhttpXmuxPlan,
-        mark: u32,
-        mptcp: bool,
-    ) -> Self {
-        Self::new("endpoint".to_owned(), endpoint, xmux, mark, mptcp)
-    }
-
-    fn new(
-        origin: String,
-        endpoint: &ResidentXhttpEndpointPlan,
-        xmux: &ResidentXhttpXmuxPlan,
-        mark: u32,
-        mptcp: bool,
-    ) -> Self {
-        Self {
-            origin,
-            server_host: endpoint.server_host.clone(),
-            server_port: endpoint.server_port,
-            server_name: endpoint.server_name.clone(),
-            alpn: endpoint.alpn.clone(),
-            stream_host: endpoint.stream_host.clone(),
-            stream_path: endpoint.stream_path.clone(),
-            mode: endpoint.mode,
-            allow_insecure: endpoint.allow_insecure,
-            tls_fragment: endpoint.tls_fragment.as_ref().map(|fragment| {
-                (
-                    fragment.min_length,
-                    fragment.max_length,
-                    fragment.min_interval_ms,
-                    fragment.max_interval_ms,
-                )
-            }),
-            xmux: xmux.clone().official_normalized(),
-            mark,
-            mptcp,
-        }
-    }
-
-    fn runtime_generation(&self) -> u64 {
-        self.xmux.runtime_generation
-    }
 }
 
 impl XhttpXmuxClientLease {

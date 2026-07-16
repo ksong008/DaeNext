@@ -287,7 +287,7 @@ async fn open_xhttp_download_client(
         }
         ResidentXhttpHttpVersion::H2 => {
             let mut endpoint_sender = if separate_endpoint {
-                open_xhttp_h2_endpoint_sender(endpoint, mark, mptcp).await?
+                open_xhttp_h2_endpoint_sender(proxy, endpoint, mark, mptcp).await?
             } else {
                 open_xhttp_h2_proxy_sender(proxy, endpoint, mark, mptcp).await?
             };
@@ -307,7 +307,7 @@ async fn open_xhttp_download_client(
         }
         ResidentXhttpHttpVersion::H3 => {
             let endpoint_client = if separate_endpoint {
-                open_xhttp_h3_endpoint_client(endpoint, mark).await?
+                open_xhttp_h3_endpoint_client(proxy, endpoint, mark).await?
             } else {
                 open_xhttp_h3_proxy_client(proxy, endpoint, mark).await?
             };

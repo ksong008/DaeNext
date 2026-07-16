@@ -51,7 +51,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H2) => {
             let mut download_sender =
-                open_xhttp_h2_endpoint_sender(&download_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_endpoint_sender(proxy, &download_endpoint, mark, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut download_sender.sender,
                 &download_endpoint,
@@ -79,7 +79,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             })
         }
         (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H3) => {
-            let download_client = open_xhttp_h3_endpoint_client(&download_endpoint, mark).await?;
+            let download_client =
+                open_xhttp_h3_endpoint_client(proxy, &download_endpoint, mark).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
                 download_client.client.clone(),
@@ -181,7 +182,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             let upload_sender =
                 open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
             let mut download_sender =
-                open_xhttp_h2_endpoint_sender(&download_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_endpoint_sender(proxy, &download_endpoint, mark, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut download_sender.sender,
                 &download_endpoint,
@@ -219,7 +220,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
             let upload_sender =
                 open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
-            let download_client = open_xhttp_h3_endpoint_client(&download_endpoint, mark).await?;
+            let download_client =
+                open_xhttp_h3_endpoint_client(proxy, &download_endpoint, mark).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
                 download_client.client.clone(),
@@ -288,7 +290,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             let upload_underlay = "quinn-h3";
             let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
             let mut download_sender =
-                open_xhttp_h2_endpoint_sender(&download_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_endpoint_sender(proxy, &download_endpoint, mark, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut download_sender.sender,
                 &download_endpoint,
@@ -358,7 +360,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H3) => {
             let upload_underlay = "quinn-h3";
             let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
-            let download_client = open_xhttp_h3_endpoint_client(&download_endpoint, mark).await?;
+            let download_client =
+                open_xhttp_h3_endpoint_client(proxy, &download_endpoint, mark).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
                 download_client.client.clone(),

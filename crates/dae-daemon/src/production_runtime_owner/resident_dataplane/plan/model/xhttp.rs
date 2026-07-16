@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "xhttp/capacity.rs"]
+mod capacity;
+use self::capacity::selected_xhttp_physical_connection_limit;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentUtlsFingerprintPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) source: &'static str,
@@ -345,6 +349,7 @@ impl ResidentXhttpMode {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentXhttpXmuxPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) runtime_generation: u64,
+    pub(in crate::production_runtime_owner::resident_dataplane) physical_connection_limit: usize,
     pub(in crate::production_runtime_owner::resident_dataplane) max_concurrency: Option<(i32, i32)>,
     pub(in crate::production_runtime_owner::resident_dataplane) max_connections: Option<(i32, i32)>,
     pub(in crate::production_runtime_owner::resident_dataplane) c_max_reuse_times:
@@ -360,6 +365,7 @@ impl ResidentXhttpXmuxPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn official_default() -> Self {
         Self {
             runtime_generation: 0,
+            physical_connection_limit: selected_xhttp_physical_connection_limit(),
             max_concurrency: Some((1, 1)),
             max_connections: None,
             c_max_reuse_times: None,
@@ -388,6 +394,9 @@ impl ResidentXhttpXmuxPlan {
             self
         };
         normalized.runtime_generation = runtime_generation;
+        if normalized.physical_connection_limit == 0 {
+            normalized.physical_connection_limit = selected_xhttp_physical_connection_limit();
+        }
         normalized
     }
 
@@ -421,6 +430,22 @@ impl ResidentXhttpXmuxPlan {
             return from;
         }
         fastrand::i32(from..=to)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn sampled_connection_target(
+        &self,
+    ) -> usize {
+        let sampled = Self::sample_range(self.max_connections);
+        usize::try_from(sampled)
+            .ok()
+            .filter(|value| *value > 0)
+            .map_or(0, |value| value.min(self.physical_connection_limit.max(1)))
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn physical_connection_limit(
+        &self,
+    ) -> usize {
+        self.physical_connection_limit.max(1)
     }
 
     fn range_to(&self, range: Option<(i32, i32)>) -> i32 {
@@ -552,6 +577,7 @@ mod tests {
     fn official_xmux_normalization_preserves_runtime_generation() {
         let mut xmux = ResidentXhttpXmuxPlan {
             runtime_generation: 0,
+            physical_connection_limit: 0,
             max_concurrency: None,
             max_connections: None,
             c_max_reuse_times: None,
@@ -563,6 +589,7 @@ mod tests {
 
         let normalized = xmux.official_normalized();
         assert_eq!(normalized.runtime_generation, 42);
+        assert!(normalized.physical_connection_limit > 0);
         assert_eq!(normalized.max_concurrency, Some((1, 1)));
     }
 }

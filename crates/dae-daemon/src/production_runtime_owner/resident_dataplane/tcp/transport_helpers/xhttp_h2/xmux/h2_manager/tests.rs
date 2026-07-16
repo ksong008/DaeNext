@@ -1,32 +1,90 @@
+use super::super::test_support::{download_test_key, download_test_plan};
 use super::*;
 
 fn cancellation_test_key(runtime_generation: u64) -> XhttpXmuxKey {
-    XhttpXmuxKey {
-        origin: format!("h2-opening-cancel-{}", fastrand::u64(..)),
-        server_host: "xmux.invalid".to_owned(),
-        server_port: 443,
-        server_name: "xmux.invalid".to_owned(),
-        alpn: vec!["h2".to_owned()],
-        stream_host: "xmux.invalid".to_owned(),
-        stream_path: "/xhttp".to_owned(),
-        mode: ResidentXhttpMode::PacketUp,
-        allow_insecure: false,
-        tls_fragment: None,
-        xmux: cancellation_test_plan(runtime_generation),
-        mark: 0,
-        mptcp: false,
-    }
+    XhttpXmuxKey::isolated_test(
+        fastrand::u64(..),
+        ResidentXhttpHttpVersion::H2,
+        cancellation_test_plan(runtime_generation),
+    )
 }
 
 fn cancellation_test_plan(runtime_generation: u64) -> ResidentXhttpXmuxPlan {
     ResidentXhttpXmuxPlan {
         runtime_generation,
+        physical_connection_limit: 1,
         max_concurrency: None,
         max_connections: Some((1, 1)),
         c_max_reuse_times: None,
         h_max_request_times: None,
         h_max_reusable_secs: None,
         h_keep_alive_period: 0,
+    }
+}
+
+fn registered_download_manager(
+    key: XhttpXmuxKey,
+    runtime_generation: u64,
+) -> XhttpXmuxManagerHandle<XhttpXmuxH2Manager> {
+    XHTTP_XMUX_H2_MANAGERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .entry(key)
+        .or_insert_with(|| {
+            XhttpXmuxManagerHandle::new(|lifecycle| {
+                XhttpXmuxH2Manager::new(download_test_plan(runtime_generation), lifecycle)
+            })
+        })
+        .clone()
+}
+
+#[test]
+fn h2_download_manager_reuses_equivalent_keys_and_partitions_physical_identity() {
+    let generation = fastrand::u64(..);
+    let graph = format!("sha256:{}", fastrand::u64(..));
+    let equivalent_key = download_test_key(
+        generation,
+        &graph,
+        1,
+        "192.0.2.20:443",
+        ResidentXhttpHttpVersion::H2,
+    );
+    let keys = [
+        equivalent_key.clone(),
+        download_test_key(
+            generation,
+            &format!("{graph}-other"),
+            1,
+            "192.0.2.20:443",
+            ResidentXhttpHttpVersion::H2,
+        ),
+        download_test_key(
+            generation,
+            &graph,
+            2,
+            "192.0.2.20:443",
+            ResidentXhttpHttpVersion::H2,
+        ),
+        download_test_key(
+            generation,
+            &graph,
+            1,
+            "[2001:db8::20]:443",
+            ResidentXhttpHttpVersion::H2,
+        ),
+    ];
+    let base = registered_download_manager(keys[0].clone(), generation);
+    let equivalent = registered_download_manager(equivalent_key, generation);
+    assert!(Arc::ptr_eq(&base.manager, &equivalent.manager));
+    for key in &keys[1..] {
+        let partitioned = registered_download_manager(key.clone(), generation);
+        assert!(!Arc::ptr_eq(&base.manager, &partitioned.manager));
+    }
+
+    let mut managers = XHTTP_XMUX_H2_MANAGERS.get().unwrap().lock().unwrap();
+    for key in keys {
+        managers.remove(&key);
     }
 }
 
