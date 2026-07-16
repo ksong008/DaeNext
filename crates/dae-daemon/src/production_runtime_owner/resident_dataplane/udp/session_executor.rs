@@ -108,7 +108,7 @@ mod datagram_udp_pending_tests {
         );
         let pending = session.pending_response_result();
         assert!(!pending.reply_forwarded);
-        assert!(pending.payload.is_empty());
+        assert!(pending.payload_for_test().is_empty());
         assert_eq!(pending.execution_label, "udp-datagram-aead");
         assert_eq!(pending.session_executor, Some("tokio-datagram-relay"));
         assert_eq!(pending.underlay_reuse, Some("udp-socket-reused"));
@@ -123,7 +123,7 @@ mod datagram_udp_pending_tests {
         );
         let pending = session.pending_response_result();
         assert!(!pending.reply_forwarded);
-        assert!(pending.payload.is_empty());
+        assert!(pending.payload_for_test().is_empty());
         assert_eq!(pending.execution_label, "udp-datagram-aead-2022");
         assert_eq!(pending.session_executor, Some("tokio-datagram-relay"));
         assert_eq!(
@@ -137,7 +137,7 @@ mod datagram_udp_pending_tests {
         let session = Socks5UdpAssociateSession::default();
         let pending = session.pending_response_result();
         assert!(!pending.reply_forwarded);
-        assert!(pending.payload.is_empty());
+        assert!(pending.payload_for_test().is_empty());
         assert_eq!(pending.execution_label, "socks5-udp-associate");
         assert_eq!(pending.session_executor, Some("tokio-socks5-udp-associate"));
         assert_eq!(

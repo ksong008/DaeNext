@@ -508,7 +508,7 @@ mod tests {
         )
         .pending_response_result();
         assert!(!hysteria2.reply_forwarded);
-        assert!(hysteria2.payload.is_empty());
+        assert!(hysteria2.payload_for_test().is_empty());
         assert_eq!(hysteria2.execution_label, "quic-udp-datagram");
         assert_eq!(hysteria2.quic_underlay, Some("quinn-h3"));
         assert_eq!(
@@ -524,7 +524,7 @@ mod tests {
         )
         .pending_response_result();
         assert!(!tuic.reply_forwarded);
-        assert!(tuic.payload.is_empty());
+        assert!(tuic.payload_for_test().is_empty());
         assert_eq!(tuic.execution_label, "quic-udp-datagram");
         assert_eq!(tuic.quic_underlay, Some("quinn"));
         assert_eq!(

@@ -203,7 +203,7 @@ mod tests {
         let session = AnyTlsPacketStreamSession::new("auth".to_owned());
         let pending = session.pending_response_result();
         assert!(!pending.reply_forwarded);
-        assert!(pending.payload.is_empty());
+        assert!(pending.payload_for_test().is_empty());
         assert_eq!(pending.execution_label, "frame-tls-udp-packet-stream");
         assert_eq!(pending.session_executor, Some("tokio-stream-session"));
         assert_eq!(pending.underlay_reuse, Some("tls-frame-stream-reused"));

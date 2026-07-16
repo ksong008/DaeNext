@@ -8,7 +8,7 @@ const UDP_SESSION_OWNERSHIP_MANAGER_OWNED: &str = "manager-owned";
 
 #[derive(Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct UdpResponseEnvelope {
-    pub(in crate::production_runtime_owner::resident_dataplane::udp) payload: Vec<u8>,
+    payload: Vec<u8>,
     identity: UdpResponseIdentityEvidence,
     pub(in crate::production_runtime_owner::resident_dataplane::udp) execution_label: &'static str,
     pub(in crate::production_runtime_owner::resident_dataplane::udp) tls_underlay:
@@ -151,7 +151,6 @@ impl UdpResponseEnvelope {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn into_payload_for_test(
         self,
     ) -> Vec<u8> {
