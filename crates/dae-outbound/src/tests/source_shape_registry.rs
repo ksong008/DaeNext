@@ -5,14 +5,14 @@ fn source_shape_registry_reports_connect_udp_rows_with_matrix_scope() {
     let contract = source_shape_registry_contract();
 
     assert_eq!(contract.schema, "outbound-source-shape-registry");
-    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.schema_version, 2);
     assert!(contract.source_shape_registry_open);
     assert!(contract.expanded_source_matrix_open);
-    assert!(contract.expanded_source_matrix_complete);
+    assert!(!contract.expanded_source_matrix_complete);
     assert!(!contract.production_readiness_may_use_current_config_matrix_as_source_matrix);
     assert!(contract.rows.len() >= 20);
     assert!(
-        contract
+        !contract
             .scoped_expanded_source_matrix_evidence
             .production_ready
     );
@@ -57,9 +57,11 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
         "juicity",
         "masque",
         "ss",
+        "shadowsocks",
         "socks",
         "socks5",
         "ssr",
+        "shadowsocksr",
         "trojan",
         "trojan-go",
         "tuic",
@@ -118,15 +120,12 @@ fn source_shape_registry_marks_expanded_rows_with_scoped_live_evidence() {
         "insecure-secure-endpoint-underlay",
         "fingerprint-secure-endpoint-underlay",
         "insecure-frame-stream-underlay",
-        "full-utls-security-underlay",
         "tls-fragment-security-underlay",
         "reality-security-underlay",
         "shared-reality-security-underlay",
         "mux-transport-wrapper",
-        "passthrough-udp-transport",
         "legacy-cipher-protocol-shape",
         "xhttp-h3-wrapper",
-        "xhttp-extended-settings-wrapper",
     ] {
         let row = rows
             .iter()
@@ -353,8 +352,14 @@ fn source_shape_registry_rows_have_explicit_security_underlay_policy() {
         if row.security_underlay.contains("reality") {
             assert!(policy.reality_support, "{}", row.shape_id);
         }
-        if row.security_underlay.contains("fingerprint") || row.security_underlay == "full-utls" {
+        if (row.security_underlay.contains("fingerprint")
+            && !row.security_underlay.contains("without-fingerprint"))
+            || row.security_underlay == "full-utls"
+        {
             assert!(policy.fingerprint_utls_support, "{}", row.shape_id);
+        }
+        if row.security_underlay.contains("without-fingerprint") {
+            assert!(!policy.fingerprint_utls_support, "{}", row.shape_id);
         }
         if row.security_underlay == "tls-fragment" {
             assert!(policy.tls_fragment_support, "{}", row.shape_id);
@@ -658,7 +663,16 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
         !MATERIALIZED_CHAIN_OWNERSHIP
             .accepts_materialized(RuntimeOwnershipModel::SourceAdmissionRejected)
     );
+    assert!(
+        MATERIALIZED_CHAIN_OWNERSHIP
+            .accepts_materialized(RuntimeOwnershipModel::FlowStreamAndPacketSession)
+    );
+    assert!(
+        MATERIALIZED_CHAIN_OWNERSHIP
+            .accepts_materialized(RuntimeOwnershipModel::FlowStreamWithPacketPolicyClosed)
+    );
     for impossible_chain_model in [
+        RuntimeOwnershipModel::FlowStreamAndAssociation,
         RuntimeOwnershipModel::CallerScopedHysteria2Transport,
         RuntimeOwnershipModel::CallerScopedTuicTransport,
         RuntimeOwnershipModel::CallerScopedJuicityTransport,
@@ -750,16 +764,16 @@ fn source_shape_registry_records_scoped_production_readiness_evidence() {
 
     assert_eq!(evidence.schema, "scoped-expanded-source-evidence");
     assert_eq!(evidence.schema_version, 1);
-    assert_eq!(evidence.scope_id, "full-expanded-source-scope");
-    assert_eq!(evidence.source_scope, "expanded-source-closure-rows");
+    assert_eq!(evidence.scope_id, "validated-expanded-source-subset");
+    assert_eq!(evidence.source_scope, "historical-live-evidence-subset");
     assert!(evidence.excluded_stream_wrappers.is_empty());
     assert_eq!(
         evidence.validation_boundary,
         "external-client-through-resident-proxy"
     );
     assert_eq!(evidence.upstream_boundary, "external-proxy-server-path");
-    assert_eq!(evidence.row_count, 27);
-    assert_eq!(evidence.pass_count, 27);
+    assert_eq!(evidence.row_count, 23);
+    assert_eq!(evidence.pass_count, 23);
     assert!(evidence.all_pass);
     assert!(evidence.large_page_all_pass);
     assert!(evidence.proxy_evidence_all_pass);
@@ -772,12 +786,11 @@ fn source_shape_registry_records_scoped_production_readiness_evidence() {
     assert!(!evidence.raw_links_retained);
     assert!(!evidence.raw_bodies_retained);
     assert!(!evidence.raw_state_retained);
-    assert!(evidence.production_ready);
+    assert!(!evidence.production_ready);
     for expected in [
         "secure-endpoint-capability",
         "nested-chain-shape",
         "plugin-wrapper-layer",
-        "legacy-layer-shape",
         "stream-wrapper-meek",
         "stream-wrapper-xhttp",
         "secure-websocket-framed-endpoint",
@@ -792,15 +805,12 @@ fn source_shape_registry_records_scoped_production_readiness_evidence() {
         "insecure-secure-endpoint-underlay",
         "fingerprint-secure-endpoint-underlay",
         "insecure-frame-stream-underlay",
-        "full-utls-security-underlay",
         "tls-fragment-security-underlay",
         "reality-security-underlay",
         "shared-reality-security-underlay",
         "mux-transport-wrapper",
-        "passthrough-udp-transport",
         "legacy-cipher-protocol-shape",
         "xhttp-h3-wrapper",
-        "xhttp-extended-settings-wrapper",
     ] {
         assert!(evidence.opened_rows.contains(&expected), "{expected}");
     }

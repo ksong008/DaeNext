@@ -38,6 +38,17 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         source_shape_registry_policy_rejected_row_count(source_registry.rows);
     let expanded_source_matrix_release_evidence_incomplete =
         !source_registry.expanded_source_matrix_complete;
+    let mut expanded_source_matrix_blocker_ids = Vec::new();
+    if runtime_blocked_source_shape_row_count > 0 {
+        expanded_source_matrix_blocker_ids.push("runtime-fail-closed-rows");
+    }
+    if expanded_source_matrix_release_evidence_incomplete {
+        expanded_source_matrix_blocker_ids.push("release-evidence-incomplete");
+    }
+    let expanded_source_matrix_status_reason = expanded_source_matrix_blocker_ids
+        .first()
+        .copied()
+        .unwrap_or("pass");
     let stream_wrapper_rows = stream_wrapper
         .rows
         .iter()
@@ -216,10 +227,6 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
             json!(expanded_source_matrix_production_ready),
         );
         report.insert(
-            "expanded_source_matrix_production_ready".to_owned(),
-            json!(expanded_source_matrix_production_ready),
-        );
-        report.insert(
             "expanded_source_matrix_final_state_ready".to_owned(),
             json!(expanded_source_matrix_final_state_ready),
         );
@@ -241,13 +248,11 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         );
         report.insert(
             "expanded_source_matrix_status_reason".to_owned(),
-            json!(if expanded_source_matrix_release_evidence_incomplete {
-                "release-evidence-incomplete"
-            } else if runtime_blocked_source_shape_row_count > 0 {
-                "runtime-fail-closed-rows"
-            } else {
-                "pass"
-            }),
+            json!(expanded_source_matrix_status_reason),
+        );
+        report.insert(
+            "expanded_source_matrix_blocker_ids".to_owned(),
+            json!(expanded_source_matrix_blocker_ids.clone()),
         );
         report.insert(
             "excluded_stream_wrapper_source_matrix_open".to_owned(),
@@ -256,10 +261,6 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         report.insert(
             "excluded_stream_wrapper_source_matrix_complete".to_owned(),
             json!(excluded_stream_wrapper_source_matrix_complete),
-        );
-        report.insert(
-            "excluded_stream_wrapper_source_matrix_production_ready".to_owned(),
-            json!(excluded_stream_wrapper_source_matrix_production_ready),
         );
         report.insert(
             "excluded_stream_wrapper_source_matrix_production_ready".to_owned(),
@@ -279,17 +280,17 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         );
         report.insert(
             "expanded_source_matrix_completion_blocker".to_owned(),
-            json!(
+            if expanded_source_matrix_complete {
+                Value::Null
+            } else {
+                json!(
                 "full expanded source matrix is not complete until unscoped live evidence is aggregated and final policy boundaries remain fail-closed"
-            ),
+                )
+            },
         );
         report.insert(
             "scoped_expanded_source_matrix_complete".to_owned(),
             json!(scoped_expanded_source_matrix_complete),
-        );
-        report.insert(
-            "scoped_expanded_source_matrix_production_ready".to_owned(),
-            json!(scoped_expanded_source_matrix_production_ready),
         );
         report.insert(
             "scoped_expanded_source_matrix_production_ready".to_owned(),
@@ -332,7 +333,6 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
                 "raw_bodies_retained": scoped_source_evidence.raw_bodies_retained,
                 "raw_state_retained": scoped_source_evidence.raw_state_retained,
                 "production_ready": scoped_expanded_source_matrix_production_ready,
-                "production_ready": scoped_expanded_source_matrix_production_ready,
                 "final_state_ready": scoped_expanded_source_matrix_final_state_ready,
                 "current_report_schema": true,
             }),
@@ -341,28 +341,21 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
             "expanded_source_matrix_typed_report".to_owned(),
             json!({
                 "schema": "expanded-source-matrix-typed-report",
+                "schemaVersion": 2,
                 "status": if expanded_source_matrix_complete { "pass" } else { "blocked" },
                 "source_shape_registry_open": source_registry.source_shape_registry_open,
                 "expanded_source_matrix_open": source_registry.expanded_source_matrix_open,
                 "expanded_source_matrix_complete": expanded_source_matrix_complete,
                 "production_ready": expanded_source_matrix_production_ready,
-                "production_ready": expanded_source_matrix_production_ready,
                 "final_state_ready": expanded_source_matrix_final_state_ready,
                 "scoped_production_ready": scoped_expanded_source_matrix_production_ready,
-                "scoped_production_ready": scoped_expanded_source_matrix_production_ready,
-                "excluded_stream_wrapper_source_matrix_production_ready": excluded_stream_wrapper_source_matrix_production_ready,
                 "excluded_stream_wrapper_source_matrix_production_ready": excluded_stream_wrapper_source_matrix_production_ready,
                 "blocked_rows_visible": runtime_blocked_source_shape_row_count > 0,
                 "runtime_blocked_row_count": runtime_blocked_source_shape_row_count,
                 "policy_rejected_row_count": policy_rejected_source_shape_row_count,
                 "release_evidence_incomplete": expanded_source_matrix_release_evidence_incomplete,
-                "status_reason": if expanded_source_matrix_release_evidence_incomplete {
-                    "release-evidence-incomplete"
-                } else if runtime_blocked_source_shape_row_count > 0 {
-                    "runtime-fail-closed-rows"
-                } else {
-                    "pass"
-                },
+                "status_reason": expanded_source_matrix_status_reason,
+                "blocker_ids": expanded_source_matrix_blocker_ids,
                 "status_counts": source_shape_registry_status_counts(source_registry.rows),
                 "current_report_schema": true,
             }),

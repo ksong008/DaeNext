@@ -20,3 +20,5 @@ mod matrix_blocked;
 mod resident_handlers;
 #[cfg(test)]
 mod socket_mark;
+#[cfg(test)]
+mod source_shape_reconciliation;

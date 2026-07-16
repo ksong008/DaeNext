@@ -1,4 +1,9 @@
 use super::*;
+
+#[path = "source_transport/reconciliation.rs"]
+mod reconciliation;
+use self::reconciliation::assert_source_reconciliation_contract;
+
 pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value) {
     assert!(
         report["source_shape_registry_contract_ready"]
@@ -6,20 +11,21 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(report["source_shape_registry_open"].as_bool().unwrap());
+    assert_eq!(report["source_shape_registry_schema_version"], 2);
     assert!(report["expanded_source_matrix_open"].as_bool().unwrap());
-    assert!(report["expanded_source_matrix_complete"].as_bool().unwrap());
+    assert!(!report["expanded_source_matrix_complete"].as_bool().unwrap());
     assert!(
-        !report["expanded_source_matrix_blocked_rows_visible"]
+        report["expanded_source_matrix_blocked_rows_visible"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["expanded_source_matrix_production_ready"]
+        !report["expanded_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["expanded_source_matrix_final_state_ready"]
+        !report["expanded_source_matrix_final_state_ready"]
             .as_bool()
             .unwrap()
     );
@@ -29,32 +35,32 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_complete"]
+        !report["excluded_stream_wrapper_source_matrix_complete"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_production_ready"]
+        !report["excluded_stream_wrapper_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_final_state_ready"]
+        !report["excluded_stream_wrapper_source_matrix_final_state_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["scoped_expanded_source_matrix_complete"]
+        !report["scoped_expanded_source_matrix_complete"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["scoped_expanded_source_matrix_production_ready"]
+        !report["scoped_expanded_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["scoped_expanded_source_matrix_final_state_ready"]
+        !report["scoped_expanded_source_matrix_final_state_ready"]
             .as_bool()
             .unwrap()
     );
@@ -85,6 +91,9 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
                 && row["runtimeOwnershipLedger"]["schemaVersion"]
                     .as_u64()
                     .is_some_and(|version| version == 2)
+                && row["sourceShapeReconciliation"]["schemaVersion"]
+                    .as_u64()
+                    .is_some_and(|version| version == 1)
                 && [
                     "dataTcp",
                     "dataUdp",
@@ -103,32 +112,10 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
                             .is_string()
                 }))
     );
-    assert_eq!(
-        report["expanded_source_matrix_status_counts"]["blocked"]
-            .as_u64()
-            .unwrap_or(0),
-        0
-    );
+
+    assert_source_reconciliation_contract(report);
     assert!(
-        report["expanded_source_matrix_status_counts"]["not-source-supported"]
-            .as_u64()
-            .unwrap_or(0)
-            > 0
-    );
-    assert_eq!(
-        report["expanded_source_matrix_runtime_blocked_row_count"]
-            .as_u64()
-            .unwrap(),
-        0
-    );
-    assert!(
-        report["expanded_source_matrix_policy_rejected_row_count"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
-    assert!(
-        !report["expanded_source_matrix_release_evidence_incomplete"]
+        report["expanded_source_matrix_release_evidence_incomplete"]
             .as_bool()
             .unwrap()
     );
@@ -136,19 +123,28 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["expanded_source_matrix_status_reason"]
             .as_str()
             .unwrap(),
-        "pass"
+        "runtime-fail-closed-rows"
+    );
+    assert_eq!(
+        report["expanded_source_matrix_blocker_ids"],
+        json!(["runtime-fail-closed-rows", "release-evidence-incomplete"])
+    );
+    assert!(report["expanded_source_matrix_completion_blocker"].is_string());
+    assert_eq!(
+        report["expanded_source_matrix_typed_report"]["schemaVersion"],
+        2
     );
     assert_eq!(
         report["expanded_source_matrix_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "pass"
+        "blocked"
     );
-    assert_eq!(
+    assert!(
         report["expanded_source_matrix_typed_report"]["runtime_blocked_row_count"]
             .as_u64()
-            .unwrap(),
-        0
+            .unwrap()
+            >= 3
     );
     assert!(
         report["expanded_source_matrix_typed_report"]["policy_rejected_row_count"]
@@ -157,7 +153,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             > 0
     );
     assert!(
-        !report["expanded_source_matrix_typed_report"]["release_evidence_incomplete"]
+        report["expanded_source_matrix_typed_report"]["release_evidence_incomplete"]
             .as_bool()
             .unwrap()
     );
@@ -165,20 +161,44 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["expanded_source_matrix_typed_report"]["status_reason"]
             .as_str()
             .unwrap(),
-        "pass"
+        "runtime-fail-closed-rows"
+    );
+    assert_eq!(
+        report["expanded_source_matrix_typed_report"]["blocker_ids"],
+        json!(["runtime-fail-closed-rows", "release-evidence-incomplete"])
+    );
+    assert_eq!(
+        report["expanded_source_matrix_typed_report"]["runtime_blocked_row_count"],
+        report["expanded_source_matrix_runtime_blocked_row_count"]
+    );
+    assert_eq!(
+        report["expanded_source_matrix_typed_report"]["policy_rejected_row_count"],
+        report["expanded_source_matrix_policy_rejected_row_count"]
+    );
+    assert_eq!(
+        report["expanded_source_matrix_typed_report"]["status_counts"],
+        report["expanded_source_matrix_status_counts"]
+    );
+    assert_eq!(
+        report["expanded_source_matrix_typed_report"]["status_reason"],
+        report["expanded_source_matrix_typed_report"]["blocker_ids"][0]
+    );
+    assert_eq!(
+        report["expanded_source_matrix_completion_blocker"].is_null(),
+        report["expanded_source_matrix_complete"].as_bool().unwrap()
     );
     assert!(
-        !report["expanded_source_matrix_typed_report"]["blocked_rows_visible"]
+        report["expanded_source_matrix_typed_report"]["blocked_rows_visible"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["expanded_source_matrix_typed_report"]["scoped_production_ready"]
+        !report["expanded_source_matrix_typed_report"]["scoped_production_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["expanded_source_matrix_typed_report"]
+        !report["expanded_source_matrix_typed_report"]
             ["excluded_stream_wrapper_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
@@ -193,39 +213,11 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["excluded_stream_wrapper_source_matrix_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "pass"
-    );
-    assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
-            .as_u64()
-            .unwrap()
-            > 20
+        "blocked"
     );
     assert_eq!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["admitted_row_count"]
-            .as_u64()
-            .unwrap(),
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
-            .as_u64()
-            .unwrap()
-    );
-    assert_eq!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]
-            ["explicit_fail_closed_row_count"]
-            .as_u64()
-            .unwrap(),
-        0
-    );
-    assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]
-            ["all_source_supported_rows_admitted"]
-            .as_bool()
-            .unwrap()
-    );
-    assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
-            .as_bool()
-            .unwrap()
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["schemaVersion"],
+        2
     );
     assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["protocol_variant_row_count"]
@@ -239,12 +231,12 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .as_bool()
             .unwrap()
     );
-    assert_eq!(
+    assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]
             ["blocked_protocol_variant_count"]
             .as_u64()
-            .unwrap(),
-        0
+            .unwrap()
+            >= 3
     );
     assert_eq!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]
@@ -258,51 +250,6 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             ["official_common_source_shapes_fully_represented"]
             .as_bool()
             .unwrap()
-    );
-    assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]
-            ["official_common_source_shapes_all_resolved"]
-            .as_bool()
-            .unwrap()
-    );
-    assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["blocked_protocol_variant_ids"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    for admitted_underlay in [
-        "insecure-secure-endpoint-underlay",
-        "fingerprint-secure-endpoint-underlay",
-        "insecure-frame-stream-underlay",
-        "full-utls-security-underlay",
-        "tls-fragment-security-underlay",
-        "reality-security-underlay",
-        "shared-reality-security-underlay",
-        "mux-transport-wrapper",
-        "passthrough-udp-transport",
-        "legacy-cipher-protocol-shape",
-    ] {
-        assert!(
-            !report["excluded_stream_wrapper_source_matrix_typed_report"]
-                ["blocked_protocol_variant_ids"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|shape| shape.as_str().unwrap() == admitted_underlay),
-            "{admitted_underlay}"
-        );
-    }
-    assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["protocol_variant_rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(
-                |row| row["variantId"].as_str().unwrap() == "baseline-aead-2022-cipher-endpoint"
-                    && row["residentStatus"].as_str().unwrap() == "admitted"
-                    && row["securityUnderlay"].as_str().unwrap() == "aead-2022"
-            )
     );
     assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["excluded_shape_ids"]
@@ -323,13 +270,13 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]
+        !report["excluded_stream_wrapper_source_matrix_typed_report"]
             ["full_expanded_source_matrix_complete"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["final_state_ready"]
+        !report["excluded_stream_wrapper_source_matrix_typed_report"]["final_state_ready"]
             .as_bool()
             .unwrap()
     );
@@ -343,7 +290,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["scoped_expanded_source_matrix_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "pass"
+        "blocked"
     );
     let scoped_row_count = report["scoped_expanded_source_matrix_typed_report"]["row_count"]
         .as_u64()
@@ -389,7 +336,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        report["scoped_expanded_source_matrix_typed_report"]["final_state_ready"]
+        !report["scoped_expanded_source_matrix_typed_report"]["final_state_ready"]
             .as_bool()
             .unwrap()
     );

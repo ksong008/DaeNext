@@ -53,10 +53,7 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
             .unwrap()
             .starts_with("sha256:")
     );
-    assert_eq!(
-        trojan_websocket_graph["streamWrapperEndpoint"]["path"],
-        "/resource"
-    );
+    assert_stream_path_evidence(&trojan_websocket_graph, &trojan_websocket.stream_path);
     assert!(!trojan_websocket_graph.to_string().contains(&authority_host));
     assert_trojan_udp_contract(
         &trojan_websocket,
@@ -96,10 +93,7 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
             .unwrap()
             .starts_with("sha256:")
     );
-    assert_eq!(
-        trojan_httpupgrade_graph["streamWrapperEndpoint"]["path"],
-        "/resource"
-    );
+    assert_stream_path_evidence(&trojan_httpupgrade_graph, &trojan_httpupgrade.stream_path);
     assert!(
         !trojan_httpupgrade_graph
             .to_string()
@@ -143,10 +137,7 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
             .unwrap()
             .starts_with("sha256:")
     );
-    assert_eq!(
-        trojan_grpc_graph["streamWrapperEndpoint"]["path"],
-        "ServiceEndpoint"
-    );
+    assert_stream_path_evidence(&trojan_grpc_graph, &trojan_grpc.stream_path);
     assert!(!trojan_grpc_graph.to_string().contains(&authority_host));
     assert_trojan_udp_contract(
         &trojan_grpc,

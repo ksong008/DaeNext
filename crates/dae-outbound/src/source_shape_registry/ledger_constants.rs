@@ -1,5 +1,5 @@
 use super::*;
-pub(super) const CAPABILITY_REASON_TAXONOMY: [&str; 9] = [
+pub(super) const CAPABILITY_REASON_TAXONOMY: [&str; 12] = [
     "missing-security-underlay",
     "missing-stream-wrapper",
     "missing-packet-semantics",
@@ -9,20 +9,22 @@ pub(super) const CAPABILITY_REASON_TAXONOMY: [&str; 9] = [
     "missing-benchmark-evidence",
     "unsupported-source-policy",
     "materialization-mismatch",
+    "full-utls-wire-parity-not-proven",
+    "legacy-vmess-wire-parity-not-proven",
+    "extended-xhttp-shape-not-exactly-classified",
 ];
 
 pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMatrixEvidence =
     ScopedExpandedSourceMatrixEvidence {
         schema: "scoped-expanded-source-evidence",
         schema_version: 1,
-        scope_id: "full-expanded-source-scope",
-        source_scope: "expanded-source-closure-rows",
+        scope_id: "validated-expanded-source-subset",
+        source_scope: "historical-live-evidence-subset",
         excluded_stream_wrappers: &[],
         opened_rows: &[
             "secure-endpoint-capability",
             "nested-chain-shape",
             "plugin-wrapper-layer",
-            "legacy-layer-shape",
             "stream-wrapper-meek",
             "stream-wrapper-xhttp",
             "secure-websocket-framed-endpoint",
@@ -37,21 +39,17 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
             "insecure-secure-endpoint-underlay",
             "fingerprint-secure-endpoint-underlay",
             "insecure-frame-stream-underlay",
-            "full-utls-security-underlay",
             "tls-fragment-security-underlay",
             "reality-security-underlay",
             "shared-reality-security-underlay",
             "mux-transport-wrapper",
-            "passthrough-udp-transport",
             "legacy-cipher-protocol-shape",
             "xhttp-h3-wrapper",
-            "xhttp-extended-settings-wrapper",
         ],
         source_formats: &[
             "https-proxy-uri",
             "chain-expression",
             "shadowsocks-uri",
-            "legacy-vmess-uri",
             "vless-uri",
             "vmess-wss-uri",
             "vmess-httpupgrade-uri",
@@ -65,16 +63,13 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
             "https-proxy-insecure-uri",
             "https-proxy-utls-uri",
             "anytls-insecure-uri",
-            "vless-tls-global-utls-uri",
             "https-proxy-tls-fragment-uri",
             "vless-reality-uri",
             "shared-vless-reality-underlay-uri",
             "vless-mux-uri",
-            "resident-udp-passthrough-source-shape",
             "shadowsocksr-origin-http-simple-uri",
             "vless-xhttp-h2-uri",
             "vless-xhttp-h3-uri",
-            "vless-xhttp-download-settings-uri",
         ],
         candidate_sha256: "merged-evidence:3ea6efd5022e5079de4ffc654482dbeae6194a052ff0e6b7cce7c3f513b384a5+12a1622fdff29d95e954ba80a865c01fbb17dcacb345eb7468dae0ac818bab0b+3e33e9d1d620ce21d9f76976855297d7a42d9c82a26ab4adba78370ff9b83817+544198ea15e00a2e92ec56d35c816e1e7c7a44073842b9253eca44a448806912+aae0b211392a04f23b444a7097527b0ea8dd1e96955c2ef4a0ee3a13a8dea759",
         validation_boundary: "external-client-through-resident-proxy",
@@ -82,8 +77,8 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
         evidence_root: "capability-live-evidence-set",
         summary_artifact: "capability-live-summary.json",
         cleanup_artifact: "capability-live-cleanup.sh",
-        row_count: 27,
-        pass_count: 27,
+        row_count: 23,
+        pass_count: 23,
         all_pass: true,
         large_page_all_pass: true,
         proxy_evidence_all_pass: true,
@@ -93,7 +88,7 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
         raw_links_retained: false,
         raw_bodies_retained: false,
         raw_state_retained: false,
-        production_ready: true,
+        production_ready: false,
     };
 
 pub(super) const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
@@ -183,7 +178,7 @@ pub(super) const PLUGIN_WRAPPER_CAPABILITY: CapabilityLedger = CapabilityLedger 
     graph_composition: "single-graph-admitted",
     security_underlay: "baseline-admitted",
     stream_wrapper: "resident-simple-obfs-http",
-    packet_semantics: "tcp-stream-wrapper",
+    packet_semantics: "plugin-udp-policy-closed",
     plugin_wrapper: "resident-simple-obfs-http",
     legacy_layer: "none",
     quic_option: "baseline-admitted",
@@ -192,9 +187,9 @@ pub(super) const PLUGIN_WRAPPER_CAPABILITY: CapabilityLedger = CapabilityLedger 
 
 pub(super) const INNER_ENCRYPTION_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
-    security_underlay: "baseline-admitted",
+    security_underlay: "tls-stream-variants-without-fingerprint",
     stream_wrapper: "websocket",
-    packet_semantics: "inner-encryption-stream",
+    packet_semantics: "protocol-closed",
     plugin_wrapper: "none",
     legacy_layer: "none",
     quic_option: "baseline-admitted",
@@ -205,7 +200,7 @@ pub(super) const PLUGIN_WRAPPER_STREAM_CAPABILITY: CapabilityLedger = Capability
     graph_composition: "single-graph-admitted",
     security_underlay: "aead-or-aead-2022",
     stream_wrapper: "resident-plugin-wrapper",
-    packet_semantics: "tcp-stream-wrapper",
+    packet_semantics: "plugin-udp-policy-closed",
     plugin_wrapper: "resident-plugin-wrapper",
     legacy_layer: "none",
     quic_option: "baseline-admitted",
@@ -214,7 +209,7 @@ pub(super) const PLUGIN_WRAPPER_STREAM_CAPABILITY: CapabilityLedger = Capability
 
 pub(super) const PROXY_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
-    security_underlay: "plain-or-standard-tls",
+    security_underlay: "plain-or-tls-stream-variants",
     stream_wrapper: "http-proxy-transport",
     packet_semantics: "tcp-stream",
     plugin_wrapper: "none",
@@ -225,7 +220,7 @@ pub(super) const PROXY_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger
 
 pub(super) const FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
-    security_underlay: "fingerprint-aware-tls",
+    security_underlay: "fingerprint-aware-tls-variants",
     stream_wrapper: "baseline-or-stream-wrapper",
     packet_semantics: "tcp-stream-or-packet-wrapper",
     plugin_wrapper: "none",
@@ -236,7 +231,7 @@ pub(super) const FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = Ca
 
 pub(super) const INSECURE_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
-    security_underlay: "explicit-insecure-tls",
+    security_underlay: "insecure-tls-variants",
     stream_wrapper: "baseline-or-frame-stream",
     packet_semantics: "tcp-stream-or-packet-wrapper",
     plugin_wrapper: "none",
@@ -269,7 +264,7 @@ pub(super) const REALITY_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = Capabi
 
 pub(super) const MUX_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
-    security_underlay: "plain-or-standard-tls",
+    security_underlay: "tls-stream-variants",
     stream_wrapper: "resident-vless-mux-framing",
     packet_semantics: "multiplexed-stream",
     plugin_wrapper: "none",
@@ -278,22 +273,11 @@ pub(super) const MUX_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-pub(super) const PASSTHROUGH_UDP_CAPABILITY: CapabilityLedger = CapabilityLedger {
-    graph_composition: "single-graph-admitted",
-    security_underlay: "plain-or-native-underlay",
-    stream_wrapper: "baseline-or-stream-wrapper",
-    packet_semantics: "resident-passthrough-udp",
-    plugin_wrapper: "none",
-    legacy_layer: "none",
-    quic_option: "baseline-admitted",
-    secure_endpoint: "plain-or-native-underlay",
-};
-
 pub(super) const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
-    security_underlay: "standard-tls",
+    security_underlay: "tls-stream-variants",
     stream_wrapper: "secure-frame-stream",
-    packet_semantics: "udp-over-stream-or-datagram",
+    packet_semantics: "udp-over-stream",
     plugin_wrapper: "none",
     legacy_layer: "none",
     quic_option: "baseline-admitted",
@@ -302,9 +286,9 @@ pub(super) const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLe
 
 pub(super) const VERIFIED_QUIC_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
-    security_underlay: "verified-quic-tls",
+    security_underlay: "quic-tls",
     stream_wrapper: "quic-stream",
-    packet_semantics: "quic-datagram-or-stream",
+    packet_semantics: "quic-packet",
     plugin_wrapper: "none",
     legacy_layer: "none",
     quic_option: "verified-quic-admitted",
@@ -314,8 +298,8 @@ pub(super) const VERIFIED_QUIC_CAPABILITY: CapabilityLedger = CapabilityLedger {
 pub(super) const QUIC_PORT_HOPPING_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "quic-tls",
-    stream_wrapper: "quic-port-hopping",
-    packet_semantics: "quic-datagram-or-stream",
+    stream_wrapper: "quic-stream",
+    packet_semantics: "quic-datagram",
     plugin_wrapper: "none",
     legacy_layer: "none",
     quic_option: "port-hopping-admitted",
@@ -324,7 +308,7 @@ pub(super) const QUIC_PORT_HOPPING_CAPABILITY: CapabilityLedger = CapabilityLedg
 
 pub(super) const CHAIN_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "parent-connect-chain-admitted",
-    security_underlay: "baseline-admitted",
+    security_underlay: "plain-parent-connect-with-child-security-variants",
     stream_wrapper: "baseline-admitted",
     packet_semantics: "tcp-resident-chain",
     plugin_wrapper: "none",
@@ -333,22 +317,11 @@ pub(super) const CHAIN_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-pub(super) const LEGACY_IMPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
-    graph_composition: "single-graph-admitted",
-    security_underlay: "baseline-admitted",
-    stream_wrapper: "baseline-admitted",
-    packet_semantics: "baseline-admitted",
-    plugin_wrapper: "none",
-    legacy_layer: "legacy-import-normalizer",
-    quic_option: "baseline-admitted",
-    secure_endpoint: "plain-or-native-underlay",
-};
-
 pub(super) const LEGACY_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "legacy-cipher",
     stream_wrapper: "resident-legacy-obfs-http-simple",
-    packet_semantics: "tcp-stream",
+    packet_semantics: "legacy-udp-fail-closed",
     plugin_wrapper: "none",
     legacy_layer: "resident-legacy-stream-codec",
     quic_option: "baseline-admitted",

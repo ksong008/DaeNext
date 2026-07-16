@@ -34,8 +34,32 @@ pub(crate) fn resident_live_adapter_config_assessment(
         .filter(|row| row["planner_status"].as_str() == Some("admitted"))
         .count();
     let source_shape_registry = source_shape_registry_contract();
-    let expanded_source_matrix_rows =
-        resident_expanded_source_matrix_rows(config, &node_shapes, &full_matrix_rows);
+    let expanded_source_matrix =
+        resident_expanded_source_matrix(config, &node_shapes, &full_matrix_rows);
+    let expanded_source_matrix_rows = expanded_source_matrix.rows;
+    let source_admission_diagnostics = expanded_source_matrix.source_admission_diagnostics;
+    let source_materialization_failure_count = source_admission_diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic["status"] == "source-materialization-failed")
+        .count();
+    let unclassified_source_materialization_count = source_admission_diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic["status"] == "unclassified-materialized-shape")
+        .count();
+    let source_ownership_mismatch_count = source_admission_diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic["status"] == "source-ownership-mismatch")
+        .count();
+    let mut source_admission_reason_ids = Vec::new();
+    if source_materialization_failure_count > 0 {
+        source_admission_reason_ids.push("source-materialization-failed");
+    }
+    if unclassified_source_materialization_count > 0 {
+        source_admission_reason_ids.push("unclassified-materialized-shape");
+    }
+    if source_ownership_mismatch_count > 0 {
+        source_admission_reason_ids.push("source-ownership-mismatch");
+    }
     let expanded_source_matrix_status_counts =
         resident_matrix_status_counts(&expanded_source_matrix_rows);
     let expanded_source_matrix_complete = false;
@@ -57,7 +81,9 @@ pub(crate) fn resident_live_adapter_config_assessment(
     });
     let mut report = json!({
         "schema": "resident-live-adapter-config-assessment",
-        "config": config_path.map(path_string),
+        "schemaVersion": 2,
+        "config": config_path.map(redacted_path_identity),
+        "configPathRedacted": config_path.is_some(),
         "read_only": true,
         "host_mutation_executed": false,
         "network_io_executed": false,
@@ -66,19 +92,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
         "resident_live_adapter_matrix_ready": matrix.matrix_ready,
         "resident_live_adapter_wired_matrix_ready": matrix.wired_matrix_ready,
         "resident_live_adapter_remote_live_matrix_ready": matrix.remote_live_matrix_ready,
-        "resident_live_adapter_remote_live_matrix_evidence": {
-            "env": live_evidence.env,
-            "source": live_evidence.source,
-            "schema": live_evidence.schema,
-            "schemaVersion": live_evidence.schema_version,
-            "candidateSha256": live_evidence.candidate_sha256,
-            "rowCount": live_evidence.row_count,
-            "passCount": live_evidence.pass_count,
-            "allPass": live_evidence.all_pass,
-            "valid": live_evidence.valid,
-            "readyHandlers": live_evidence.ready_handlers.iter().cloned().collect::<Vec<_>>(),
-            "error": live_evidence.error,
-        },
+        "resident_live_adapter_remote_live_matrix_evidence": live_evidence.redacted_report(),
         "resident_live_adapter_entries": matrix_entries,
     });
     report["matrix_scope"] = json!(matrix_scope);
@@ -111,6 +125,19 @@ pub(crate) fn resident_live_adapter_config_assessment(
     report["source_shape_registry_contract"] = source_shape_registry.to_value();
     report["expanded_source_matrix_row_count"] = json!(expanded_source_matrix_rows.len());
     report["expanded_source_matrix_status_counts"] = expanded_source_matrix_status_counts;
+    report["source_admission_diagnostic_count"] = json!(source_admission_diagnostics.len());
+    report["source_materialization_failure_count"] = json!(source_materialization_failure_count);
+    report["unclassified_source_materialization_count"] =
+        json!(unclassified_source_materialization_count);
+    report["source_ownership_mismatch_count"] = json!(source_ownership_mismatch_count);
+    report["current_config_source_admission_status"] =
+        json!(if source_admission_reason_ids.is_empty() {
+            "resolved"
+        } else {
+            "blocked"
+        });
+    report["current_config_source_admission_reason_ids"] = json!(source_admission_reason_ids);
+    report["source_admission_diagnostics"] = json!(source_admission_diagnostics);
     report["expanded_source_matrix_production_ready"] = json!(false);
     report["expanded_source_matrix_final_state_ready"] = json!(false);
     report["source_matrix_completion_blocker"] = json!(
@@ -166,7 +193,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
             report["planner_admitted"] = json!(false);
             report["selected_node_fail_closed"] = json!(true);
             report["resident_dataplane_enabled_by_config"] = json!(false);
-            report["planner_error"] = json!(err);
+            report["planner_error"] = json!(sanitize_matrix_error(&err));
             report["blockers"] =
                 json!(["selected node shape is not admitted by the live resident adapter"]);
         }

@@ -4,6 +4,8 @@ mod types;
 pub use self::types::*;
 mod typed_contract;
 pub use self::typed_contract::*;
+mod reconciliation;
+pub use self::reconciliation::*;
 mod runtime_ownership;
 pub use self::runtime_ownership::*;
 mod api;

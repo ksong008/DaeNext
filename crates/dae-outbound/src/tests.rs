@@ -76,5 +76,6 @@ mod security_underlay_capability;
 mod shared_transport_contract;
 mod shared_transport_dataplane;
 mod shared_transport_tls_underlay;
+mod source_shape_reconciliation;
 mod source_shape_registry;
 mod stream_wrapper_capability;

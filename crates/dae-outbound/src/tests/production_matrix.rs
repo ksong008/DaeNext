@@ -78,6 +78,33 @@ fn outbound_production_matrix_ready_entries_are_backed_by_source_shapes() {
                 row.security_underlay_policy_contract().is_some(),
                 "{shape_id}"
             );
+            assert_eq!(
+                source_shape_reconciliation(shape_id)
+                    .unwrap_or_else(|| panic!("missing reconciliation for {shape_id}"))
+                    .kind,
+                SourceShapeReconciliationKind::ProductionWitness,
+                "aggregate or deferred row cannot back production matrix entry {shape_id}"
+            );
         }
+    }
+}
+
+#[test]
+fn aggregate_and_deferred_rows_do_not_back_production_matrix_entries() {
+    const AGGREGATE: &[&str] = &["quic-option-surface"];
+    const DEFERRED: &[&str] = &["full-utls-security-underlay"];
+    let baseline = production_matrix_entries()[0];
+    let rows = source_shape_registry_rows();
+
+    for source_shape_ids in [AGGREGATE, DEFERRED] {
+        let entry = OutboundProductionMatrixEntry {
+            source_shape_ids,
+            ..baseline
+        };
+        assert!(
+            !production_matrix_entries_are_source_registry_backed(&[entry], rows),
+            "non-production reconciliation row backed production matrix entry {}",
+            source_shape_ids[0]
+        );
     }
 }

@@ -105,6 +105,12 @@ impl SourceShapeRegistryRow {
             _ if self.security_underlay == "standard-or-fingerprint-aware-tls-or-reality" => {
                 "reality-public-key-when-reality-selected"
             }
+            _ if self.security_underlay == "tls-stream-variants-or-reality" => {
+                "reality-public-key-when-reality-selected"
+            }
+            _ if self.security_underlay == "plain-or-tls-stream-variants-or-reality" => {
+                "reality-public-key-when-reality-selected"
+            }
             _ => "none",
         }
     }

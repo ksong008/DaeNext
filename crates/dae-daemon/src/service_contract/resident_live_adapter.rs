@@ -124,19 +124,7 @@ pub(super) fn insert_resident_live_adapter_matrix_service_contract_capabilities(
         );
         report.insert(
             "resident_live_adapter_remote_live_matrix_evidence".to_owned(),
-            json!({
-                "env": live_evidence.env,
-                "source": live_evidence.source,
-                "schema": live_evidence.schema,
-                "schemaVersion": live_evidence.schema_version,
-                "candidateSha256": live_evidence.candidate_sha256,
-                "rowCount": live_evidence.row_count,
-                "passCount": live_evidence.pass_count,
-                "allPass": live_evidence.all_pass,
-                "valid": live_evidence.valid,
-                "readyHandlers": live_evidence.ready_handlers.iter().cloned().collect::<Vec<_>>(),
-                "error": live_evidence.error,
-            }),
+            live_evidence.redacted_report(),
         );
         report.insert(
             "resident_live_adapter_wired_handler_count".to_owned(),

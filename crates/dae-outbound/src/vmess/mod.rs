@@ -34,7 +34,7 @@ pub use dataplane::{
     read_http_transport_request_head_from_stream, vmess_cmd_key_from_uuid,
     write_aead_grpc_http2_hunk_response, write_aead_xhttp_http2_response,
 };
-pub use link::VMessLink;
+pub use link::{VMessLink, VMessSourceFormat};
 pub use metadata::{
     VMESS_PACKET_ADDR_MAGIC_ADDRESS, VMessMetadata, VMessMetadataType, VMessNetwork,
     packet_addr_magic_target, parse_packet_addr_payload, put_packet_addr_payload,

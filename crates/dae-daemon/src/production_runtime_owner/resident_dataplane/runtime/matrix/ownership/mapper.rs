@@ -50,6 +50,12 @@ const STANDARD_OR_REALITY_SECURITY: &[SecurityDimension] = &[
     SecurityDimension::RealityFingerprint,
 ];
 
+pub(super) fn materialized_execution_shape(
+    execution: plan::ResidentExecutionPlan,
+) -> dae_outbound::MaterializedExecutionShape {
+    project_materialized_execution_shape(execution)
+}
+
 pub(super) fn materialized_runtime_ownership(
     execution: plan::ResidentExecutionPlan,
 ) -> RuntimeOwnershipProfile {

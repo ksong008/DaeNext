@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolFraming {
     Shadowsocks,
+    ShadowsocksR,
     Trojan,
     TrojanGo,
     Vmess,
@@ -26,6 +27,7 @@ impl ProtocolFraming {
     pub fn as_report_str(self) -> &'static str {
         match self {
             Self::Shadowsocks => "shadowsocks",
+            Self::ShadowsocksR => "shadowsocksr",
             Self::Trojan => "trojan",
             Self::TrojanGo => "trojan-go",
             Self::Vmess => "vmess",
@@ -51,6 +53,7 @@ impl ProtocolFraming {
     pub fn from_report_str(value: &str) -> Option<Self> {
         match value {
             "shadowsocks" => Some(Self::Shadowsocks),
+            "shadowsocksr" => Some(Self::ShadowsocksR),
             "trojan" => Some(Self::Trojan),
             "trojan-go" => Some(Self::TrojanGo),
             "vmess" => Some(Self::Vmess),
@@ -79,17 +82,27 @@ impl ProtocolFraming {
 pub enum SecurityUnderlay {
     None,
     StandardTls,
+    StandardOrInsecureTls,
     StandardOrFingerprintAwareTls,
     StandardOrFingerprintAwareTlsOrReality,
+    StandardOrFragmentedTls,
+    TlsStreamVariants,
+    TlsStreamVariantsWithoutFingerprint,
+    TlsStreamVariantsOrReality,
     FingerprintAwareTls,
+    FingerprintAwareTlsVariants,
     InsecureTls,
+    InsecureTlsVariants,
     Reality,
     QuicTls,
     VerifiedQuicTls,
     Aead,
     Aead2022,
     PlainParentConnect,
+    PlainParentConnectWithChildSecurityVariants,
     PlainOrStandardTls,
+    PlainOrTlsStreamVariants,
+    PlainOrTlsStreamVariantsOrReality,
     PlainOrNativeUnderlay,
     FullUtls,
     TlsFragment,
@@ -104,19 +117,31 @@ impl SecurityUnderlay {
         match self {
             Self::None => "none",
             Self::StandardTls => "standard-tls",
+            Self::StandardOrInsecureTls => "standard-or-insecure-tls",
             Self::StandardOrFingerprintAwareTls => "standard-or-fingerprint-aware-tls",
             Self::StandardOrFingerprintAwareTlsOrReality => {
                 "standard-or-fingerprint-aware-tls-or-reality"
             }
+            Self::StandardOrFragmentedTls => "standard-or-fragmented-tls",
+            Self::TlsStreamVariants => "tls-stream-variants",
+            Self::TlsStreamVariantsWithoutFingerprint => "tls-stream-variants-without-fingerprint",
+            Self::TlsStreamVariantsOrReality => "tls-stream-variants-or-reality",
             Self::FingerprintAwareTls => "fingerprint-aware-tls",
+            Self::FingerprintAwareTlsVariants => "fingerprint-aware-tls-variants",
             Self::InsecureTls => "insecure-tls",
+            Self::InsecureTlsVariants => "insecure-tls-variants",
             Self::Reality => "reality",
             Self::QuicTls => "quic-tls",
             Self::VerifiedQuicTls => "verified-quic-tls",
             Self::Aead => "aead",
             Self::Aead2022 => "aead-2022",
             Self::PlainParentConnect => "plain-parent-connect",
+            Self::PlainParentConnectWithChildSecurityVariants => {
+                "plain-parent-connect-with-child-security-variants"
+            }
             Self::PlainOrStandardTls => "plain-or-standard-tls",
+            Self::PlainOrTlsStreamVariants => "plain-or-tls-stream-variants",
+            Self::PlainOrTlsStreamVariantsOrReality => "plain-or-tls-stream-variants-or-reality",
             Self::PlainOrNativeUnderlay => "plain-or-native-underlay",
             Self::FullUtls => "full-utls",
             Self::TlsFragment => "tls-fragment",
@@ -131,19 +156,35 @@ impl SecurityUnderlay {
         match value {
             "none" => Some(Self::None),
             "standard-tls" => Some(Self::StandardTls),
+            "standard-or-insecure-tls" => Some(Self::StandardOrInsecureTls),
             "standard-or-fingerprint-aware-tls" => Some(Self::StandardOrFingerprintAwareTls),
             "standard-or-fingerprint-aware-tls-or-reality" => {
                 Some(Self::StandardOrFingerprintAwareTlsOrReality)
             }
+            "standard-or-fragmented-tls" => Some(Self::StandardOrFragmentedTls),
+            "tls-stream-variants" => Some(Self::TlsStreamVariants),
+            "tls-stream-variants-without-fingerprint" => {
+                Some(Self::TlsStreamVariantsWithoutFingerprint)
+            }
+            "tls-stream-variants-or-reality" => Some(Self::TlsStreamVariantsOrReality),
             "fingerprint-aware-tls" => Some(Self::FingerprintAwareTls),
+            "fingerprint-aware-tls-variants" => Some(Self::FingerprintAwareTlsVariants),
             "insecure-tls" => Some(Self::InsecureTls),
+            "insecure-tls-variants" => Some(Self::InsecureTlsVariants),
             "reality" => Some(Self::Reality),
             "quic-tls" => Some(Self::QuicTls),
             "verified-quic-tls" => Some(Self::VerifiedQuicTls),
             "aead" => Some(Self::Aead),
             "aead-2022" => Some(Self::Aead2022),
             "plain-parent-connect" => Some(Self::PlainParentConnect),
+            "plain-parent-connect-with-child-security-variants" => {
+                Some(Self::PlainParentConnectWithChildSecurityVariants)
+            }
             "plain-or-standard-tls" => Some(Self::PlainOrStandardTls),
+            "plain-or-tls-stream-variants" => Some(Self::PlainOrTlsStreamVariants),
+            "plain-or-tls-stream-variants-or-reality" => {
+                Some(Self::PlainOrTlsStreamVariantsOrReality)
+            }
             "plain-or-native-underlay" => Some(Self::PlainOrNativeUnderlay),
             "full-utls" => Some(Self::FullUtls),
             "tls-fragment" => Some(Self::TlsFragment),
@@ -156,13 +197,29 @@ impl SecurityUnderlay {
     }
 
     pub fn supports_allow_insecure(self) -> bool {
-        matches!(self, Self::InsecureTls | Self::PlainOrStandardTls)
+        matches!(
+            self,
+            Self::InsecureTls
+                | Self::InsecureTlsVariants
+                | Self::FingerprintAwareTlsVariants
+                | Self::QuicTls
+                | Self::StandardOrInsecureTls
+                | Self::PlainOrStandardTls
+                | Self::TlsStreamVariants
+                | Self::TlsStreamVariantsWithoutFingerprint
+                | Self::TlsStreamVariantsOrReality
+                | Self::PlainOrTlsStreamVariants
+                | Self::PlainOrTlsStreamVariantsOrReality
+        )
     }
 
     pub fn supports_reality(self) -> bool {
         matches!(
             self,
-            Self::Reality | Self::StandardOrFingerprintAwareTlsOrReality
+            Self::Reality
+                | Self::StandardOrFingerprintAwareTlsOrReality
+                | Self::TlsStreamVariantsOrReality
+                | Self::PlainOrTlsStreamVariantsOrReality
         )
     }
 
@@ -172,12 +229,30 @@ impl SecurityUnderlay {
             Self::StandardOrFingerprintAwareTls
                 | Self::StandardOrFingerprintAwareTlsOrReality
                 | Self::FingerprintAwareTls
+                | Self::FingerprintAwareTlsVariants
+                | Self::Reality
+                | Self::TlsStreamVariants
+                | Self::TlsStreamVariantsOrReality
+                | Self::PlainOrTlsStreamVariants
+                | Self::PlainOrTlsStreamVariantsOrReality
                 | Self::FullUtls
         )
     }
 
     pub fn supports_tls_fragment(self) -> bool {
-        matches!(self, Self::TlsFragment)
+        matches!(
+            self,
+            Self::StandardOrFragmentedTls
+                | Self::FingerprintAwareTlsVariants
+                | Self::InsecureTlsVariants
+                | Self::TlsFragment
+                | Self::PlainParentConnectWithChildSecurityVariants
+                | Self::TlsStreamVariants
+                | Self::TlsStreamVariantsWithoutFingerprint
+                | Self::TlsStreamVariantsOrReality
+                | Self::PlainOrTlsStreamVariants
+                | Self::PlainOrTlsStreamVariantsOrReality
+        )
     }
 }
 
@@ -186,6 +261,7 @@ pub enum StreamWrapper {
     None,
     Websocket,
     Grpc,
+    H2,
     HttpUpgrade,
     Xhttp,
     Meek,
@@ -194,6 +270,8 @@ pub enum StreamWrapper {
     QuicPortHopping,
     BaselineOrPluginWrapper,
     SimpleObfsHttp,
+    SimpleObfsTls,
+    V2rayPluginTlsWebSocket,
     TlsWebsocketPlugin,
     ObfsTls,
     PluginWrapper,
@@ -215,6 +293,7 @@ impl StreamWrapper {
             Self::None => "none",
             Self::Websocket => "websocket",
             Self::Grpc => "grpc",
+            Self::H2 => "h2",
             Self::HttpUpgrade => "httpupgrade",
             Self::Xhttp => "xhttp",
             Self::Meek => "meek",
@@ -223,6 +302,8 @@ impl StreamWrapper {
             Self::QuicPortHopping => "quic-port-hopping",
             Self::BaselineOrPluginWrapper => "baseline-or-plugin-wrapper",
             Self::SimpleObfsHttp => "simple-obfs-http",
+            Self::SimpleObfsTls => "simple-obfs-tls",
+            Self::V2rayPluginTlsWebSocket => "v2ray-plugin-tls-websocket",
             Self::TlsWebsocketPlugin => "tls-websocket-plugin",
             Self::ObfsTls => "obfs-tls",
             Self::PluginWrapper => "plugin-wrapper",
@@ -244,6 +325,7 @@ impl StreamWrapper {
             "none" => Some(Self::None),
             "websocket" => Some(Self::Websocket),
             "grpc" => Some(Self::Grpc),
+            "h2" => Some(Self::H2),
             "httpupgrade" => Some(Self::HttpUpgrade),
             "xhttp" => Some(Self::Xhttp),
             "meek" => Some(Self::Meek),
@@ -252,6 +334,8 @@ impl StreamWrapper {
             "quic-port-hopping" => Some(Self::QuicPortHopping),
             "baseline-or-plugin-wrapper" => Some(Self::BaselineOrPluginWrapper),
             "simple-obfs-http" => Some(Self::SimpleObfsHttp),
+            "simple-obfs-tls" => Some(Self::SimpleObfsTls),
+            "v2ray-plugin-tls-websocket" => Some(Self::V2rayPluginTlsWebSocket),
             "tls-websocket-plugin" => Some(Self::TlsWebsocketPlugin),
             "obfs-tls" => Some(Self::ObfsTls),
             "plugin-wrapper" => Some(Self::PluginWrapper),
@@ -274,13 +358,20 @@ impl StreamWrapper {
 pub enum PacketSemantics {
     DatagramAead,
     DatagramAead2022,
+    UdpOverStream,
     UdpOverStreamOrDatagram,
+    UdpOverStreamOrProtocolClosed,
     Xudp,
     QuicDatagramOrStream,
+    QuicDatagram,
+    QuicPacket,
+    QuicStreamPacket,
     UdpAssociate,
     ConnectUdpCapsule,
     ConnectUdpHttpDatagram,
     ProtocolClosed,
+    PluginUdpPolicyClosed,
+    LegacyUdpFailClosed,
     TcpStreamH2PacketUp,
     TcpStreamH3PacketUp,
     ExtendedXhttp,
@@ -298,13 +389,20 @@ impl PacketSemantics {
         match self {
             Self::DatagramAead => "datagram-aead",
             Self::DatagramAead2022 => "datagram-aead-2022",
+            Self::UdpOverStream => "udp-over-stream",
             Self::UdpOverStreamOrDatagram => "udp-over-stream-or-datagram",
+            Self::UdpOverStreamOrProtocolClosed => "udp-over-stream-or-protocol-closed",
             Self::Xudp => "xudp",
             Self::QuicDatagramOrStream => "quic-datagram-or-stream",
+            Self::QuicDatagram => "quic-datagram",
+            Self::QuicPacket => "quic-packet",
+            Self::QuicStreamPacket => "quic-stream-packet",
             Self::UdpAssociate => "udp-associate",
             Self::ConnectUdpCapsule => "connect-udp-capsule",
             Self::ConnectUdpHttpDatagram => "connect-udp-http-datagram",
             Self::ProtocolClosed => "protocol-closed",
+            Self::PluginUdpPolicyClosed => "plugin-udp-policy-closed",
+            Self::LegacyUdpFailClosed => "legacy-udp-fail-closed",
             Self::TcpStreamH2PacketUp => "tcp-stream-h2-packet-up",
             Self::TcpStreamH3PacketUp => "tcp-stream-h3-packet-up",
             Self::ExtendedXhttp => "extended-xhttp",
@@ -322,13 +420,20 @@ impl PacketSemantics {
         match value {
             "datagram-aead" => Some(Self::DatagramAead),
             "datagram-aead-2022" => Some(Self::DatagramAead2022),
+            "udp-over-stream" => Some(Self::UdpOverStream),
             "udp-over-stream-or-datagram" => Some(Self::UdpOverStreamOrDatagram),
+            "udp-over-stream-or-protocol-closed" => Some(Self::UdpOverStreamOrProtocolClosed),
             "xudp" => Some(Self::Xudp),
             "quic-datagram-or-stream" => Some(Self::QuicDatagramOrStream),
+            "quic-datagram" => Some(Self::QuicDatagram),
+            "quic-packet" => Some(Self::QuicPacket),
+            "quic-stream-packet" => Some(Self::QuicStreamPacket),
             "udp-associate" => Some(Self::UdpAssociate),
             "connect-udp-capsule" => Some(Self::ConnectUdpCapsule),
             "connect-udp-http-datagram" => Some(Self::ConnectUdpHttpDatagram),
             "protocol-closed" => Some(Self::ProtocolClosed),
+            "plugin-udp-policy-closed" => Some(Self::PluginUdpPolicyClosed),
+            "legacy-udp-fail-closed" => Some(Self::LegacyUdpFailClosed),
             "tcp-stream-h2-packet-up" => Some(Self::TcpStreamH2PacketUp),
             "tcp-stream-h3-packet-up" => Some(Self::TcpStreamH3PacketUp),
             "extended-xhttp" => Some(Self::ExtendedXhttp),
@@ -379,17 +484,23 @@ impl ExecutorKind {
             PacketSemantics::DatagramAead | PacketSemantics::DatagramAead2022 => {
                 Self::DatagramRelay
             }
-            PacketSemantics::UdpOverStreamOrDatagram
+            PacketSemantics::UdpOverStream
+            | PacketSemantics::UdpOverStreamOrDatagram
+            | PacketSemantics::UdpOverStreamOrProtocolClosed
             | PacketSemantics::Xudp
             | PacketSemantics::TcpStreamH2PacketUp
             | PacketSemantics::TcpStreamH3PacketUp
             | PacketSemantics::ExtendedXhttp
             | PacketSemantics::ConnectUdpCapsule
             | PacketSemantics::UdpAssociate => Self::PacketOverStream,
-            PacketSemantics::QuicDatagramOrStream | PacketSemantics::ConnectUdpHttpDatagram => {
-                Self::QuicPacketRelay
-            }
-            PacketSemantics::ProtocolClosed => Self::TcpStream,
+            PacketSemantics::QuicDatagramOrStream
+            | PacketSemantics::QuicDatagram
+            | PacketSemantics::QuicPacket
+            | PacketSemantics::QuicStreamPacket
+            | PacketSemantics::ConnectUdpHttpDatagram => Self::QuicPacketRelay,
+            PacketSemantics::ProtocolClosed
+            | PacketSemantics::PluginUdpPolicyClosed
+            | PacketSemantics::LegacyUdpFailClosed => Self::TcpStream,
             PacketSemantics::TcpStreamWrapper => Self::StreamWrapper,
             PacketSemantics::TcpResidentChain => Self::ResidentChain,
             PacketSemantics::MultiplexedStream => Self::MultiplexedStream,

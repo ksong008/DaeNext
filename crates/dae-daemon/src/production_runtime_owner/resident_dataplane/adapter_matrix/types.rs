@@ -1,4 +1,6 @@
 use super::*;
+use serde_json::json;
+
 pub(crate) const RESIDENT_LIVE_MATRIX_EVIDENCE_ENV: &str = "RESIDENT_LIVE_MATRIX_EVIDENCE";
 pub(crate) const RESIDENT_LIVE_MATRIX_EVIDENCE_LEGACY_ENV: &str =
     "DAE_RESIDENT_LIVE_MATRIX_EVIDENCE";
@@ -7,6 +9,8 @@ pub(crate) const REMOTE_LIVE_MATRIX_MISSING: &str =
     "remote live matrix evidence not recorded by live-evidence-ledger";
 pub(crate) const REMOTE_LIVE_MATRIX_INVALID: &str =
     "remote live matrix evidence is invalid or incomplete";
+pub(crate) const REDACTED_REMOTE_LIVE_MATRIX_ERROR: &str =
+    "remote live matrix evidence is invalid; source detail redacted";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentLiveAdapterMatrixEntry {
@@ -99,6 +103,32 @@ impl ResidentLiveMatrixEvidence {
 
     pub(crate) fn handler_ready(&self, handler: &str) -> bool {
         self.valid && self.ready_handlers.contains(handler)
+    }
+
+    pub(crate) fn redacted_error(&self) -> Option<&'static str> {
+        self.error
+            .as_ref()
+            .map(|_| REDACTED_REMOTE_LIVE_MATRIX_ERROR)
+    }
+
+    pub(crate) fn redacted_report(&self) -> Value {
+        json!({
+            "env": self.env,
+            "source": self
+                .source
+                .as_deref()
+                .map(super::super::link_hash),
+            "sourceRedacted": self.source.is_some(),
+            "schema": self.schema.as_deref(),
+            "schemaVersion": self.schema_version,
+            "candidateSha256": self.candidate_sha256.as_deref(),
+            "rowCount": self.row_count,
+            "passCount": self.pass_count,
+            "allPass": self.all_pass,
+            "valid": self.valid,
+            "readyHandlers": self.ready_handlers.iter().cloned().collect::<Vec<_>>(),
+            "error": self.redacted_error(),
+        })
     }
 }
 

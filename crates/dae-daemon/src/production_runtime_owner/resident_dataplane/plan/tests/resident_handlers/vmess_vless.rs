@@ -393,10 +393,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
             .unwrap()
             .starts_with("sha256:")
     );
-    assert_eq!(
-        vless_websocket_graph["streamWrapperEndpoint"]["path"],
-        "/ws"
-    );
+    assert_stream_path_evidence(&vless_websocket_graph, &vless_websocket.stream_path);
     assert!(!vless_websocket_graph.to_string().contains(&authority_host));
 
     let vless_websocket_host_sni = build_resident_proxy_plan_for_node(
@@ -464,10 +461,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
             .unwrap()
             .starts_with("sha256:")
     );
-    assert_eq!(
-        vless_httpupgrade_graph["streamWrapperEndpoint"]["path"],
-        "/vless-upgrade"
-    );
+    assert_stream_path_evidence(&vless_httpupgrade_graph, &vless_httpupgrade.stream_path);
     assert!(
         !vless_httpupgrade_graph
             .to_string()
@@ -509,7 +503,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         vless_h2_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-http2-body-stream"
     );
-    assert_eq!(vless_h2_graph["streamWrapperEndpoint"]["path"], "/vless-h2");
+    assert_stream_path_evidence(&vless_h2_graph, &vless_h2.stream_path);
     assert!(!vless_h2_graph.to_string().contains(&authority_host));
 
     vec![
