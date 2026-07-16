@@ -2,6 +2,34 @@ use super::*;
 
 pub(crate) const RESIDENT_TCP_FAILED_HANDLER_JOIN_GRACE: Duration = Duration::from_millis(100);
 
+mod dns;
+
+pub(crate) use self::dns::{
+    exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_dns_tcp_stream_async,
+};
+
+struct ResidentProxyTcpHandlerGuard {
+    stop: SharedResidentStopSignal,
+    handle: tokio::task::JoinHandle<Result<Value, String>>,
+}
+
+impl ResidentProxyTcpHandlerGuard {
+    fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    fn handle_mut(&mut self) -> &mut tokio::task::JoinHandle<Result<Value, String>> {
+        &mut self.handle
+    }
+}
+
+impl Drop for ResidentProxyTcpHandlerGuard {
+    fn drop(&mut self) {
+        self.stop();
+        self.handle.abort();
+    }
+}
+
 pub(crate) async fn fetch_resident_proxy_http_response_async(
     proxy: Arc<ResidentProxyPlan>,
     tls: bool,
@@ -101,6 +129,48 @@ where
         .map_err(|_| "accept resident proxy TCP loopback stream: timeout".to_owned())?
         .map_err(|err| format!("accept resident proxy TCP loopback stream: {err}"))?;
 
+    let mut handler = start_resident_proxy_tcp_handler(
+        proxy,
+        target,
+        dial_ip,
+        sniff_payload,
+        sniff_domain,
+        accepted,
+        peer,
+        listen_addr,
+    );
+
+    let response_result = exchange(client).await;
+    handler.stop();
+    let handler_result = join_resident_tcp_handler_after_exchange_async(
+        handler.handle_mut(),
+        timeout,
+        response_result.is_err(),
+    )
+    .await;
+    match response_result {
+        Ok(response) => Ok(response),
+        Err(response_err) => match handler_result {
+            Ok(event) => Err(format!(
+                "{response_err}; handler_event={}",
+                sanitize_probe_event(event)
+            )),
+            Err(handler_err) => Err(format!("{response_err}; handler_error={handler_err}")),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_resident_proxy_tcp_handler(
+    proxy: Arc<ResidentProxyPlan>,
+    target: &str,
+    dial_ip: bool,
+    sniff_payload: Vec<u8>,
+    sniff_domain: String,
+    accepted: TokioTcpStream,
+    peer: SocketAddr,
+    listen_addr: SocketAddr,
+) -> ResidentProxyTcpHandlerGuard {
     let selection = TcpProxySelection {
         mark: proxy.mark,
         mptcp: proxy.mptcp,
@@ -131,7 +201,7 @@ where
     let handler_stop = Arc::clone(&stop);
     let handler_metrics = Arc::clone(&metrics);
     let original_dst = listen_addr;
-    let mut handle = tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let mut inbound = accepted;
         let runtime_dispatch = selection.proxy.execution_plan().protocol.runtime_dispatch();
         if runtime_dispatch == ResidentTcpRuntimeDispatch::PolicyClosed {
@@ -185,47 +255,7 @@ where
             .await
         }
     });
-
-    let response_result = exchange(client).await;
-    stop.store(true, Ordering::Relaxed);
-    let handler_result = join_resident_tcp_handler_after_exchange_async(
-        &mut handle,
-        timeout,
-        response_result.is_err(),
-    )
-    .await;
-    match response_result {
-        Ok(response) => Ok(response),
-        Err(response_err) => match handler_result {
-            Ok(event) => Err(format!(
-                "{response_err}; handler_event={}",
-                sanitize_probe_event(event)
-            )),
-            Err(handler_err) => Err(format!("{response_err}; handler_error={handler_err}")),
-        },
-    }
-}
-
-pub(crate) async fn exchange_resident_proxy_dns_tcp_async(
-    proxy: Arc<ResidentProxyPlan>,
-    target: &str,
-    payload: &[u8],
-    response_limit: usize,
-    timeout: Duration,
-) -> Result<Vec<u8>, String> {
-    exchange_resident_proxy_tcp_stream_async(
-        proxy,
-        target,
-        true,
-        Vec::new(),
-        String::new(),
-        timeout,
-        |client| async move {
-            exchange_resident_proxy_dns_tcp_loopback_async(client, payload, response_limit, timeout)
-                .await
-        },
-    )
-    .await
+    ResidentProxyTcpHandlerGuard { stop, handle }
 }
 
 async fn bind_resident_proxy_fetch_loopback_listener(
@@ -302,47 +332,6 @@ async fn fetch_resident_proxy_https_response_async(
         read_resident_proxy_fetch_response_async(&mut tls, response_limit, timeout).await;
     let _ = tls.shutdown().await;
     response
-}
-
-async fn exchange_resident_proxy_dns_tcp_loopback_async(
-    mut stream: TokioTcpStream,
-    payload: &[u8],
-    response_limit: usize,
-    timeout: Duration,
-) -> Result<Vec<u8>, String> {
-    let len = u16::try_from(payload.len())
-        .map_err(|_| format!("DNS request exceeds TCP frame limit: {}", payload.len()))?;
-    time::timeout(timeout, stream.write_all(&len.to_be_bytes()))
-        .await
-        .map_err(|_| "write resident proxy DNS TCP frame length: timeout".to_owned())?
-        .map_err(|err| format!("write resident proxy DNS TCP frame length: {err}"))?;
-    time::timeout(timeout, stream.write_all(payload))
-        .await
-        .map_err(|_| "write resident proxy DNS TCP frame payload: timeout".to_owned())?
-        .map_err(|err| format!("write resident proxy DNS TCP frame payload: {err}"))?;
-    time::timeout(timeout, stream.flush())
-        .await
-        .map_err(|_| "flush resident proxy DNS TCP request: timeout".to_owned())?
-        .map_err(|err| format!("flush resident proxy DNS TCP request: {err}"))?;
-
-    let mut len = [0_u8; 2];
-    time::timeout(timeout, stream.read_exact(&mut len))
-        .await
-        .map_err(|_| "read resident proxy DNS TCP response length: timeout".to_owned())?
-        .map_err(|err| format!("read resident proxy DNS TCP response length: {err}"))?;
-    let len = u16::from_be_bytes(len) as usize;
-    if len > response_limit {
-        return Err(format!(
-            "resident proxy DNS TCP response length {len} exceeds {response_limit}"
-        ));
-    }
-    let mut response = vec![0_u8; len];
-    time::timeout(timeout, stream.read_exact(&mut response))
-        .await
-        .map_err(|_| "read resident proxy DNS TCP response payload: timeout".to_owned())?
-        .map_err(|err| format!("read resident proxy DNS TCP response payload: {err}"))?;
-    let _ = stream.shutdown().await;
-    Ok(response)
 }
 
 async fn read_resident_proxy_fetch_response_async(

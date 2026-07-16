@@ -1,4 +1,5 @@
 use super::super::*;
+use super::ResidentDnsTransportError;
 use super::plain::{
     forward_dns_tcp_to_routed_target_async, forward_dns_udp_to_routed_target_async,
 };
@@ -13,8 +14,11 @@ pub(super) async fn forward_dns_tcp_udp_async(
     payload: &[u8],
     plan: &ResidentDnsPlan,
     forwarders: &Arc<ResidentDnsForwarderCache>,
-) -> Result<Vec<u8>, String> {
-    let resolved_targets = resolved_upstream_targets(upstream).await?;
+    context: ProxyDnsRequestContext,
+) -> Result<Vec<u8>, ResidentDnsTransportError> {
+    let resolved_targets = resolved_upstream_targets(upstream)
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
     let mut failures = Vec::new();
     match select_dns_upstream_targets(plan, upstream, resolved_targets.clone(), L4Proto::Udp) {
         Ok((targets, selection_failures)) => {
@@ -30,8 +34,9 @@ pub(super) async fn forward_dns_tcp_udp_async(
                 targets,
                 &mut failures,
                 forwarders,
+                context,
             )
-            .await
+            .await?
             {
                 return Ok(response);
             }
@@ -48,8 +53,9 @@ pub(super) async fn forward_dns_tcp_udp_async(
                 tcp_targets,
                 &mut failures,
                 forwarders,
+                context,
             )
-            .await
+            .await?
             {
                 return Ok(response);
             }
@@ -57,10 +63,8 @@ pub(super) async fn forward_dns_tcp_udp_async(
         Err(err) => failures.push(format!("select TCP fallback phase: {err}")),
     }
 
-    Err(dns_upstream_targets_failed(
-        upstream,
-        "forward DNS tcp+udp to",
-        failures,
+    Err(ResidentDnsTransportError::message(
+        dns_upstream_targets_failed(upstream, "forward DNS tcp+udp to", failures),
     ))
 }
 
@@ -70,16 +74,24 @@ async fn forward_dns_udp_candidates_async(
     targets: Vec<ResidentDnsUpstreamRoutedTarget>,
     failures: &mut Vec<String>,
     forwarders: &Arc<ResidentDnsForwarderCache>,
-) -> Option<Vec<u8>> {
+    context: ProxyDnsRequestContext,
+) -> Result<Option<Vec<u8>>, ResidentDnsTransportError> {
     for target in targets {
         let target_text = target.target.to_string();
-        match forward_dns_udp_to_routed_target_async(upstream, target, payload, forwarders).await {
-            Ok(response) if !dns_response_truncated(&response) => return Some(response),
+        match forward_dns_udp_to_routed_target_async(upstream, target, payload, forwarders, context)
+            .await
+        {
+            Ok(response) if !dns_response_truncated(&response) => return Ok(Some(response)),
             Ok(_) => failures.push(format!("{target_text} UDP response truncated")),
-            Err(err) => failures.push(format!("UDP: {err}")),
+            Err(error) => {
+                if !error.allows_next_candidate() {
+                    return Err(error);
+                }
+                failures.push(format!("UDP: {error}"));
+            }
         }
     }
-    None
+    Ok(None)
 }
 
 async fn forward_dns_tcp_candidates_async(
@@ -88,12 +100,20 @@ async fn forward_dns_tcp_candidates_async(
     targets: Vec<ResidentDnsUpstreamRoutedTarget>,
     failures: &mut Vec<String>,
     forwarders: &Arc<ResidentDnsForwarderCache>,
-) -> Option<Vec<u8>> {
+    context: ProxyDnsRequestContext,
+) -> Result<Option<Vec<u8>>, ResidentDnsTransportError> {
     let attempted = !targets.is_empty();
     for target in targets {
-        match forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders).await {
-            Ok(response) => return Some(response),
-            Err(err) => failures.push(format!("TCP fallback: {err}")),
+        match forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders, context)
+            .await
+        {
+            Ok(response) => return Ok(Some(response)),
+            Err(error) => {
+                if !error.allows_next_candidate() {
+                    return Err(error);
+                }
+                failures.push(format!("TCP fallback: {error}"));
+            }
         }
     }
     if !attempted {
@@ -102,5 +122,5 @@ async fn forward_dns_tcp_candidates_async(
             upstream.tag, upstream.target.authority
         ));
     }
-    None
+    Ok(None)
 }

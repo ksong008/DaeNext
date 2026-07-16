@@ -1,4 +1,5 @@
 use super::super::*;
+use super::ResidentDnsTransportError;
 use super::route::{
     ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
     select_dns_upstream_targets,
@@ -13,23 +14,32 @@ pub(super) async fn forward_dns_udp_upstream_async(
     payload: &[u8],
     plan: &ResidentDnsPlan,
     forwarders: &Arc<ResidentDnsForwarderCache>,
-) -> Result<Vec<u8>, String> {
+    context: ProxyDnsRequestContext,
+) -> Result<Vec<u8>, ResidentDnsTransportError> {
     let (targets, mut failures) = select_dns_upstream_targets(
         plan,
         upstream,
-        resolved_upstream_targets(upstream).await?,
+        resolved_upstream_targets(upstream)
+            .await
+            .map_err(ResidentDnsTransportError::message)?,
         L4Proto::Udp,
-    )?;
+    )
+    .map_err(ResidentDnsTransportError::message)?;
     for target in targets {
-        match forward_dns_udp_to_routed_target_async(upstream, target, payload, forwarders).await {
+        match forward_dns_udp_to_routed_target_async(upstream, target, payload, forwarders, context)
+            .await
+        {
             Ok(response) => return Ok(response),
-            Err(err) => failures.push(err),
+            Err(error) => {
+                if !error.allows_next_candidate() {
+                    return Err(error);
+                }
+                failures.push(error.to_string());
+            }
         }
     }
-    Err(dns_upstream_targets_failed(
-        upstream,
-        "forward DNS UDP to",
-        failures,
+    Err(ResidentDnsTransportError::message(
+        dns_upstream_targets_failed(upstream, "forward DNS UDP to", failures),
     ))
 }
 
@@ -135,23 +145,32 @@ pub(super) async fn forward_dns_tcp_async(
     payload: &[u8],
     plan: &ResidentDnsPlan,
     forwarders: &Arc<ResidentDnsForwarderCache>,
-) -> Result<Vec<u8>, String> {
+    context: ProxyDnsRequestContext,
+) -> Result<Vec<u8>, ResidentDnsTransportError> {
     let (targets, mut failures) = select_dns_upstream_targets(
         plan,
         upstream,
-        resolved_upstream_targets(upstream).await?,
+        resolved_upstream_targets(upstream)
+            .await
+            .map_err(ResidentDnsTransportError::message)?,
         L4Proto::Tcp,
-    )?;
+    )
+    .map_err(ResidentDnsTransportError::message)?;
     for target in targets {
-        match forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders).await {
+        match forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders, context)
+            .await
+        {
             Ok(response) => return Ok(response),
-            Err(err) => failures.push(err),
+            Err(error) => {
+                if !error.allows_next_candidate() {
+                    return Err(error);
+                }
+                failures.push(error.to_string());
+            }
         }
     }
-    Err(dns_upstream_targets_failed(
-        upstream,
-        "forward DNS TCP to",
-        failures,
+    Err(ResidentDnsTransportError::message(
+        dns_upstream_targets_failed(upstream, "forward DNS TCP to", failures),
     ))
 }
 
@@ -160,29 +179,36 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
     forwarders: &Arc<ResidentDnsForwarderCache>,
-) -> Result<Vec<u8>, String> {
+    context: ProxyDnsRequestContext,
+) -> Result<Vec<u8>, ResidentDnsTransportError> {
     let started_at = std::time::Instant::now();
     let remote = target.target;
     let route = dns_transport_route_name(&target.selection);
     let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            let forwarder = forwarders.udp_forwarder(upstream, remote, *mark, &target.selection)?;
+            let forwarder = forwarders
+                .udp_forwarder(upstream, remote, *mark, &target.selection)
+                .map_err(ResidentDnsTransportError::message)?;
             forwarder
                 .exchange(payload)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
+                .map_err(ResidentDnsTransportError::message)
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            let forwarder = forwarders.proxy_udp_forwarder(
-                upstream,
-                remote,
-                Arc::clone(proxy),
-                &target.selection,
-            )?;
+            let forwarder = forwarders
+                .proxy_udp_forwarder(upstream, remote, Arc::clone(proxy), &target.selection)
+                .map_err(|error| {
+                    ResidentDnsTransportError::proxy(ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::OwnerAcquire,
+                        ProxyDnsRequestFailure::Protocol,
+                        error,
+                    ))
+                })?;
             forwarder
-                .exchange(payload)
+                .exchange_with_context(payload, context)
                 .await
-                .map_err(|err| format!("{remote}: {err}"))
+                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote)))
         }
     };
     record_dns_transport_trace(ResidentDnsTransportTraceInput {
@@ -192,7 +218,7 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
         l4proto: L4Proto::Udp,
         route,
         started_at,
-        error: result.as_ref().err().cloned(),
+        error: result.as_ref().err().map(ToString::to_string),
     });
     result
 }
@@ -289,22 +315,26 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
     target: ResidentDnsUpstreamRoutedTarget,
     payload: &[u8],
     forwarders: &Arc<ResidentDnsForwarderCache>,
-) -> Result<Vec<u8>, String> {
+    context: ProxyDnsRequestContext,
+) -> Result<Vec<u8>, ResidentDnsTransportError> {
     let started_at = std::time::Instant::now();
     let remote = target.target;
     let route = dns_transport_route_name(&target.selection);
     let result = match &target.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
-            let forwarder = forwarders.tcp_forwarder(upstream, remote, *mark, &target.selection)?;
+            let forwarder = forwarders
+                .tcp_forwarder(upstream, remote, *mark, &target.selection)
+                .map_err(ResidentDnsTransportError::message)?;
             forwarder
                 .exchange(payload)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
+                .map_err(ResidentDnsTransportError::message)
         }
         ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_tcp_to_proxy_async(upstream, remote, payload, Arc::clone(proxy))
+            forward_dns_tcp_to_proxy_async(upstream, remote, payload, Arc::clone(proxy), context)
                 .await
-                .map_err(|err| format!("{remote}: {err}"))
+                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote)))
         }
     };
     record_dns_transport_trace(ResidentDnsTransportTraceInput {
@@ -314,7 +344,7 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
         l4proto: L4Proto::Tcp,
         route,
         started_at,
-        error: result.as_ref().err().cloned(),
+        error: result.as_ref().err().map(ToString::to_string),
     });
     result
 }
@@ -398,20 +428,21 @@ async fn forward_dns_tcp_to_proxy_async(
     target: SocketAddr,
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
-) -> Result<Vec<u8>, String> {
+    context: ProxyDnsRequestContext,
+) -> Result<Vec<u8>, ProxyDnsRequestError> {
     exchange_resident_proxy_dns_tcp_async(
         proxy,
         &target.to_string(),
         payload,
         DNS_TCP_MESSAGE_READ_LIMIT,
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        context,
     )
     .await
-    .map_err(|err| {
-        format!(
-            "forward DNS over proxied TCP to upstream {} {} via {}: {err}",
-            upstream.tag, upstream.target.authority, target
-        )
+    .map_err(|error| {
+        error.with_context(format_args!(
+            "forward DNS over proxied TCP to upstream {} {} via {}",
+            upstream.tag, upstream.target.authority, target,
+        ))
     })
 }
 
@@ -659,9 +690,15 @@ mod tests {
 
         let plan = ResidentDnsPlan::asis(0);
         let forwarders = Arc::new(ResidentDnsForwarderCache::default());
-        let response = forward_dns_tcp_async(&upstream, b"fixture-query", &plan, &forwarders)
-            .await
-            .unwrap();
+        let response = forward_dns_tcp_async(
+            &upstream,
+            b"fixture-query",
+            &plan,
+            &forwarders,
+            ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(response, b"fixture-query");
         server.await.unwrap();

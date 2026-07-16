@@ -94,9 +94,7 @@ impl ResidentDnsUdpActorExecutor {
         }
         let runtime_handle = self.pool().await?.runtime_handle()?;
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        runtime_handle.spawn(async move {
-            let _ = ready_tx.send(build().await);
-        });
+        runtime_handle.spawn(run_dns_udp_actor_build(ready_tx, build));
         let opened = ready_rx
             .await
             .map_err(|_| "shared DNS UDP actor exited before initialization".to_owned())??;
@@ -234,6 +232,27 @@ impl ResidentDnsUdpActorExecutor {
             .as_ref()
             .map(|pool| Arc::as_ptr(pool) as usize)
     }
+}
+
+async fn run_dns_udp_actor_build<T, Build, BuildFuture>(
+    mut ready: tokio::sync::oneshot::Sender<Result<ResidentDnsUdpActorRegistration<T>, String>>,
+    build: Build,
+) where
+    T: Send + 'static,
+    Build: FnOnce() -> BuildFuture + Send + 'static,
+    BuildFuture: std::future::Future<Output = Result<ResidentDnsUdpActorRegistration<T>, String>>
+        + Send
+        + 'static,
+{
+    if ready.is_closed() {
+        return;
+    }
+    let opened = tokio::select! {
+        biased;
+        _ = ready.closed() => return,
+        opened = build() => opened,
+    };
+    let _ = ready.send(opened);
 }
 
 impl Drop for ResidentDnsUdpActorExecutor {

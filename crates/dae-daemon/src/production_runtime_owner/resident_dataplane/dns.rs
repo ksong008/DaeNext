@@ -43,7 +43,9 @@ use super::plan::build_resident_dataplane_plan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{ResidentProxyPlan, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
-use super::tcp::{exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_tcp_stream_async};
+use super::tcp::{
+    exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_dns_tcp_stream_async,
+};
 use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
 use super::udp::{
     ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
@@ -59,6 +61,7 @@ mod domain_routing;
 mod error_response;
 mod ipversion_preference;
 mod reload;
+mod request;
 mod routing;
 mod tcp_wire;
 mod trace_summary;
@@ -89,6 +92,11 @@ use self::ipversion_preference::{
 pub(in crate::production_runtime_owner) use self::reload::ResidentDnsReloadHandle;
 use self::reload::ResidentDnsReloadRestoreReport;
 pub(crate) use self::reload::ResidentDnsReloadSnapshot;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::request::{
+    ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
+    ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
+    exchange_proxy_dns_framed_stream,
+};
 #[cfg(test)]
 use self::routing::parse_dns_upstream;
 use self::routing::{
@@ -726,6 +734,7 @@ async fn handle_resident_dns_request_without_preference(
     {
         return Ok(cached_response);
     }
+    let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
     match action {
         ResidentDnsRequestAction::AsIs => {
             let response = forward_dns_asis_async(
@@ -749,13 +758,24 @@ async fn handle_resident_dns_request_without_preference(
                 }
                 ResidentDnsResponseAction::Reject => build_reject_response(payload, request),
                 ResidentDnsResponseAction::Upstream(upstream) => {
-                    resolve_dns_response_routing(plan, payload, request, upstream, &cache_key).await
+                    resolve_dns_response_routing(
+                        plan, payload, request, upstream, &cache_key, context,
+                    )
+                    .await
                 }
             }
         }
         ResidentDnsRequestAction::Reject => unreachable!("reject handled before cache lookup"),
         ResidentDnsRequestAction::Upstream(ref upstream) => {
-            resolve_dns_response_routing(plan, payload, request, upstream.clone(), &cache_key).await
+            resolve_dns_response_routing(
+                plan,
+                payload,
+                request,
+                upstream.clone(),
+                &cache_key,
+                context,
+            )
+            .await
         }
     }
 }
@@ -811,6 +831,7 @@ async fn handle_resident_dns_request_without_preference_trace(
     }
     trace.add_cache_elapsed(cache_started);
     trace.cache = DNS_TRACE_CACHE_MISS.to_owned();
+    let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
     match action {
         ResidentDnsRequestAction::AsIs => {
             trace.push_asis_attempt();
@@ -845,7 +866,7 @@ async fn handle_resident_dns_request_without_preference_trace(
                 ResidentDnsResponseAction::Upstream(upstream) => {
                     trace.reroutes += 1;
                     resolve_dns_response_routing_trace(
-                        plan, payload, request, upstream, &cache_key, trace,
+                        plan, payload, request, upstream, &cache_key, trace, context,
                     )
                     .await
                 }
@@ -860,6 +881,7 @@ async fn handle_resident_dns_request_without_preference_trace(
                 upstream.clone(),
                 &cache_key,
                 trace,
+                context,
             )
             .await
         }
@@ -957,11 +979,18 @@ async fn resolve_dns_response_routing(
     request: &DnsPacketView<'_>,
     mut upstream: ResidentDnsUpstream,
     cache_key: &ResidentDnsResponseCacheKey,
+    context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, String> {
     for _ in 0..DNS_RESPONSE_REROUTE_LIMIT {
-        let response =
-            forward_dns_to_upstream_async(&upstream, request_payload, plan, &plan.forwarders)
-                .await?;
+        let response = forward_dns_to_upstream_async(
+            &upstream,
+            request_payload,
+            plan,
+            &plan.forwarders,
+            context,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         validate_dns_response_for_request(
             request,
             &response,
@@ -991,12 +1020,19 @@ async fn resolve_dns_response_routing_trace(
     mut upstream: ResidentDnsUpstream,
     cache_key: &ResidentDnsResponseCacheKey,
     mut trace: ResidentDnsTraceSummary,
+    context: ProxyDnsRequestContext,
 ) -> Result<ResidentDnsQueryResult, String> {
     for _ in 0..DNS_RESPONSE_REROUTE_LIMIT {
         trace.push_upstream_attempt(&upstream);
-        let response =
-            forward_dns_to_upstream_async(&upstream, request_payload, plan, &plan.forwarders)
-                .await?;
+        let response = forward_dns_to_upstream_async(
+            &upstream,
+            request_payload,
+            plan,
+            &plan.forwarders,
+            context,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         validate_dns_response_for_request(
             request,
             &response,

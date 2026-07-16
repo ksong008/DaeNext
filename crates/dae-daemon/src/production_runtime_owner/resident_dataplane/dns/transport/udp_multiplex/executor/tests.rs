@@ -5,6 +5,8 @@ use std::net::Ipv4Addr;
 
 const TEST_UPSTREAM_COUNT: usize = 24;
 
+mod cancellation;
+
 #[tokio::test(flavor = "current_thread")]
 async fn shared_executor_is_lazy_and_reuses_one_worker_pool() {
     let executor = ResidentDnsUdpActorExecutor::for_test_worker_count(2);
