@@ -848,6 +848,7 @@ dependencies = [
  "dae-routing",
  "libc",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
