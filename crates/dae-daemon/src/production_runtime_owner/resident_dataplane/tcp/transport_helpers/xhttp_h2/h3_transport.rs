@@ -4,7 +4,6 @@ use super::xmux::{
     select_xhttp_h3_xmux_client,
 };
 use super::*;
-use crate::production_runtime_owner::resident_dataplane::resolve_socket_addr_candidates;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -28,16 +27,18 @@ pub(super) async fn open_xhttp_h3_proxy_client(
     mark: u32,
 ) -> Result<XhttpH3EndpointClient, String> {
     let Some(xmux) = &proxy.xhttp_xmux else {
-        let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+        let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
+        let connection = open_xhttp_h3_connection(endpoint, resolved.candidates(), mark).await?;
         return Ok(XhttpH3EndpointClient {
             client: connection.client.clone(),
             connection: Some(connection),
             xmux_lease: None,
         });
     };
-    let key = XhttpXmuxKey::primary(proxy, endpoint, xmux, mark, false);
+    let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
+    let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, false);
     let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
-        let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+        let connection = open_xhttp_h3_connection(endpoint, resolved.candidates(), mark).await?;
         Ok(XhttpH3EndpointClient {
             client: connection.client.clone(),
             connection: Some(connection),
@@ -53,20 +54,23 @@ pub(super) async fn open_xhttp_h3_proxy_client(
 }
 
 pub(super) async fn open_xhttp_h3_endpoint_client(
+    proxy: &ResidentProxyPlan,
     endpoint: &ResidentXhttpEndpointPlan,
     mark: u32,
 ) -> Result<XhttpH3EndpointClient, String> {
     let Some(xmux) = &endpoint.xmux else {
-        let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+        let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
+        let connection = open_xhttp_h3_connection(endpoint, resolved.candidates(), mark).await?;
         return Ok(XhttpH3EndpointClient {
             client: connection.client.clone(),
             connection: Some(connection),
             xmux_lease: None,
         });
     };
-    let key = XhttpXmuxKey::endpoint(endpoint, xmux, mark, false);
+    let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
+    let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, false);
     let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
-        let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+        let connection = open_xhttp_h3_connection(endpoint, resolved.candidates(), mark).await?;
         Ok(XhttpH3EndpointClient {
             client: connection.client.clone(),
             connection: Some(connection),
@@ -83,12 +87,12 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
 
 async fn open_xhttp_h3_connection(
     endpoint: &ResidentXhttpEndpointPlan,
+    candidates: &[SocketAddr],
     mark: u32,
 ) -> Result<XhttpH3Connection, String> {
-    let candidates = resolve_xhttp_endpoint_udp_addr_candidates_async(endpoint).await?;
     let client_config = build_xhttp_h3_client_config(endpoint)?;
     let (_, quic_endpoint, connection) = connect_quic_endpoint_candidates_async(
-        &candidates,
+        candidates,
         &endpoint.server_name,
         RESIDENT_CONNECT_TIMEOUT,
         "connect xHTTP H3 QUIC endpoint",
@@ -114,18 +118,6 @@ async fn open_xhttp_h3_connection(
         client,
         driver_task,
     })
-}
-
-async fn resolve_xhttp_endpoint_udp_addr_candidates_async(
-    endpoint: &ResidentXhttpEndpointPlan,
-) -> Result<Vec<SocketAddr>, String> {
-    let target = format!("{}:{}", endpoint.server_host, endpoint.server_port);
-    resolve_socket_addr_candidates(
-        &target,
-        RESIDENT_CONNECT_TIMEOUT,
-        "resolve xHTTP H3 endpoint",
-    )
-    .await
 }
 
 impl XhttpH3Connection {

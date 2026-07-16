@@ -125,3 +125,7 @@ pub(crate) fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool 
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "entry_chain/tests.rs"]
+mod tests;

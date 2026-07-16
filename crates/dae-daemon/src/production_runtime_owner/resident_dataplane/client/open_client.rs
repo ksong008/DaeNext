@@ -20,6 +20,29 @@ pub(crate) async fn open_async_resident_tls_client_with_flow(
     mptcp: bool,
 ) -> Result<AsyncResidentTlsClient, String> {
     let tcp = open_proxy_tcp_stream_async_with_flow(proxy, mark, mptcp).await?;
+    open_async_resident_tls_client_over_stream(proxy, tcp).await
+}
+
+pub(crate) async fn open_async_vless_tls_client_with_flow_at_candidates(
+    proxy: &ResidentProxyPlan,
+    candidates: &[SocketAddr],
+    mark: u32,
+    mptcp: bool,
+) -> Result<AsyncVlessTlsClient, String> {
+    if proxy.chain_parent.is_some() {
+        return Err(
+            "xHTTP shared transport parent chains are rejected by the typed chain contract"
+                .to_owned(),
+        );
+    }
+    let tcp = open_proxy_tcp_stream_at_candidates(proxy, candidates, mark, mptcp).await?;
+    open_async_resident_tls_client_over_stream(proxy, tcp).await
+}
+
+async fn open_async_resident_tls_client_over_stream(
+    proxy: &ResidentProxyPlan,
+    tcp: TokioTcpStream,
+) -> Result<AsyncResidentTlsClient, String> {
     match ResidentTlsProvider::from_proxy(proxy)? {
         ResidentTlsProvider::FingerprintAwareBoring => {
             open_async_boring_resident_tls_client(proxy, tcp).await
@@ -42,6 +65,24 @@ pub(crate) async fn open_async_xhttp_endpoint_tls_client(
     mptcp: bool,
 ) -> Result<AsyncResidentTlsClient, String> {
     let tcp = open_xhttp_endpoint_tcp_stream_async(endpoint, mark, mptcp).await?;
+    open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp).await
+}
+
+pub(crate) async fn open_async_xhttp_endpoint_tls_client_at_candidates(
+    endpoint: &ResidentXhttpEndpointPlan,
+    candidates: &[SocketAddr],
+    mark: u32,
+    mptcp: bool,
+) -> Result<AsyncResidentTlsClient, String> {
+    let tcp =
+        open_xhttp_endpoint_tcp_stream_at_candidates(endpoint, candidates, mark, mptcp).await?;
+    open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp).await
+}
+
+async fn open_async_xhttp_endpoint_tls_client_over_stream(
+    endpoint: &ResidentXhttpEndpointPlan,
+    tcp: TokioTcpStream,
+) -> Result<AsyncResidentTlsClient, String> {
     let config = rustls_xhttp_endpoint_client_config(endpoint)?;
     let server_name = ServerName::try_from(endpoint.server_name.clone()).map_err(|err| {
         format!(
@@ -113,6 +154,79 @@ pub(crate) async fn open_xhttp_endpoint_tcp_stream_async(
         .map_err(|err| format!("clear xHTTP endpoint TCP write timeout: {err}"))?;
     TokioTcpStream::from_std(connected.stream)
         .map_err(|err| format!("adopt async xHTTP endpoint TCP stream: {err}"))
+}
+
+async fn open_proxy_tcp_stream_at_candidates(
+    proxy: &ResidentProxyPlan,
+    candidates: &[SocketAddr],
+    mark: u32,
+    mptcp: bool,
+) -> Result<TokioTcpStream, String> {
+    let protocol = proxy.protocol;
+    let connected = open_direct_tcp_connection_at_candidates(
+        candidates,
+        mark,
+        mptcp,
+        &format!("connect resolved {protocol} server"),
+    )
+    .await?;
+    adopt_direct_tcp_connection(
+        connected,
+        &format!("clear {protocol} TCP read timeout"),
+        &format!("clear {protocol} TCP write timeout"),
+        "adopt async proxy TCP stream",
+    )
+}
+
+async fn open_xhttp_endpoint_tcp_stream_at_candidates(
+    _endpoint: &ResidentXhttpEndpointPlan,
+    candidates: &[SocketAddr],
+    mark: u32,
+    mptcp: bool,
+) -> Result<TokioTcpStream, String> {
+    let connected = open_direct_tcp_connection_at_candidates(
+        candidates,
+        mark,
+        mptcp,
+        "connect resolved xHTTP endpoint",
+    )
+    .await?;
+    adopt_direct_tcp_connection(
+        connected,
+        "clear xHTTP endpoint TCP read timeout",
+        "clear xHTTP endpoint TCP write timeout",
+        "adopt async xHTTP endpoint TCP stream",
+    )
+}
+
+async fn open_direct_tcp_connection_at_candidates(
+    candidates: &[SocketAddr],
+    mark: u32,
+    mptcp: bool,
+    context: &str,
+) -> Result<DirectTcpConnection, String> {
+    let (_, connected) = try_socket_addr_candidates(candidates, context, |candidate| {
+        open_direct_tcp_connection_async(candidate.to_string(), mark, mptcp)
+    })
+    .await?;
+    Ok(connected)
+}
+
+fn adopt_direct_tcp_connection(
+    connected: DirectTcpConnection,
+    read_context: &str,
+    write_context: &str,
+    adopt_context: &str,
+) -> Result<TokioTcpStream, String> {
+    connected
+        .stream
+        .set_read_timeout(None)
+        .map_err(|err| format!("{read_context}: {err}"))?;
+    connected
+        .stream
+        .set_write_timeout(None)
+        .map_err(|err| format!("{write_context}: {err}"))?;
+    TokioTcpStream::from_std(connected.stream).map_err(|err| format!("{adopt_context}: {err}"))
 }
 
 pub(crate) async fn open_async_rustls_resident_tls_client(

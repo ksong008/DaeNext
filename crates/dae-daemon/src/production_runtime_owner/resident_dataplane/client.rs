@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
@@ -24,12 +25,12 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio::time;
 
 use super::RESIDENT_CONNECT_TIMEOUT;
-use super::direct::open_direct_tcp_connection_async;
+use super::direct::{DirectTcpConnection, open_direct_tcp_connection_async};
 use super::plan::{
     ResidentProtocolShape, ResidentProxyPlan, ResidentRealityUnderlayPlan,
     ResidentSecurityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
 };
-use super::resolver::authority_from_host_port;
+use super::resolver::{authority_from_host_port, try_socket_addr_candidates};
 
 mod types;
 pub(super) use self::types::*;

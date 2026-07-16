@@ -3,6 +3,9 @@
 
 use super::*;
 
+mod resolved_endpoint;
+use self::resolved_endpoint::XhttpResolvedEndpoint;
+
 mod xmux;
 
 mod request;

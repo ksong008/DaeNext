@@ -22,7 +22,7 @@ struct PendingXhttpH2Sender(Option<XhttpH2EndpointSender>);
 struct XhttpXmuxH2Manager {
     config: ResidentXhttpXmuxPlan,
     concurrency: i32,
-    connections: i32,
+    connection_capacity: XhttpXmuxConnectionCapacity,
     clients: Vec<XhttpXmuxH2ClientEntry>,
     lifecycle: Arc<XhttpXmuxManagerLifecycle>,
 }
@@ -39,7 +39,7 @@ impl XhttpXmuxH2Manager {
         let config = config.official_normalized();
         Self {
             concurrency: ResidentXhttpXmuxPlan::sample_range(config.max_concurrency),
-            connections: ResidentXhttpXmuxPlan::sample_range(config.max_connections),
+            connection_capacity: XhttpXmuxConnectionCapacity::from_plan(&config),
             config,
             clients: Vec::new(),
             lifecycle,
@@ -52,13 +52,15 @@ impl XhttpXmuxH2Manager {
         }
         self.prune();
 
+        let live_len = self.clients.len();
         let reusable_len = self.reusable_len();
         if reusable_len == 0 {
-            return self.reserve_new_or_wait(reusable_len);
+            return self.reserve_new_or_wait(live_len);
         }
 
-        if self.connections > 0
-            && reusable_len.saturating_add(self.lifecycle.opening()) < self.connections as usize
+        if self
+            .connection_capacity
+            .should_fill_preferred(live_len, self.lifecycle.opening())
         {
             return self.reserve_opening();
         }
@@ -80,7 +82,7 @@ impl XhttpXmuxH2Manager {
             .collect::<Vec<_>>();
 
         if candidates.is_empty() {
-            return self.reserve_new_or_wait(reusable_len);
+            return self.reserve_new_or_wait(live_len);
         }
 
         let index = candidates[fastrand::usize(..candidates.len())];
@@ -96,17 +98,15 @@ impl XhttpXmuxH2Manager {
         XhttpXmuxH2SelectAction::Selected(selected)
     }
 
-    fn reserve_new_or_wait(&mut self, reusable_len: usize) -> XhttpXmuxH2SelectAction {
+    fn reserve_new_or_wait(&mut self, live_len: usize) -> XhttpXmuxH2SelectAction {
         let opening = self.lifecycle.opening();
-        if self.connections > 0 && reusable_len.saturating_add(opening) >= self.connections as usize
+        if !self
+            .connection_capacity
+            .can_start_opening(live_len, opening)
         {
             return XhttpXmuxH2SelectAction::WaitForState(self.state_waiter());
         }
-        if opening == 0 || self.connections > 0 {
-            self.reserve_opening()
-        } else {
-            XhttpXmuxH2SelectAction::WaitForState(self.state_waiter())
-        }
+        self.reserve_opening()
     }
 
     fn reserve_opening(&self) -> XhttpXmuxH2SelectAction {
@@ -181,12 +181,14 @@ impl XhttpXmuxH2Manager {
                         .unreusable_at
                         .is_some_and(|deadline| now > deadline)
             };
-            if should_retire {
+            if should_retire
+                && can_release_retiring_owner(
+                    self.clients[index].usage.open_usage.load(Ordering::Acquire),
+                )
+            {
                 let client = self.clients.swap_remove(index);
                 changed = true;
-                if client.usage.open_usage.load(Ordering::Acquire) <= 0 {
-                    client.connection_task.abort();
-                }
+                client.connection_task.abort();
             } else {
                 index += 1;
             }
