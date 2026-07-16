@@ -105,7 +105,13 @@ async fn resident_proxy_udp_bridge_loop(
                 match executor.execute_proxy_packet(&proxy, original_dst, &payload).await {
                     Ok((_, response)) if response.reply_forwarded => {
                         if let Err(err) =
-                            send_resident_proxy_udp_bridge_response(&socket, peer, response).await
+                            send_resident_proxy_udp_bridge_response(
+                                &socket,
+                                peer,
+                                original_dst,
+                                response,
+                            )
+                            .await
                         {
                             record_resident_proxy_udp_bridge_error(&last_error, err);
                         }
@@ -121,7 +127,13 @@ async fn resident_proxy_udp_bridge_loop(
                 match response {
                     Ok(Some((_, response))) => {
                         if let Err(err) =
-                            send_resident_proxy_udp_bridge_response(&socket, peer, response).await
+                            send_resident_proxy_udp_bridge_response(
+                                &socket,
+                                peer,
+                                original_dst,
+                                response,
+                            )
+                            .await
                         {
                             record_resident_proxy_udp_bridge_error(&last_error, err);
                         }
@@ -138,10 +150,12 @@ async fn resident_proxy_udp_bridge_loop(
 async fn send_resident_proxy_udp_bridge_response(
     socket: &tokio::net::UdpSocket,
     peer: SocketAddr,
-    response: UdpExchangeResult,
+    expected_source: SocketAddr,
+    mut response: UdpExchangeResult,
 ) -> Result<(), String> {
+    let payload = take_udp_response_for_fixed_target(&mut response, expected_source)?;
     socket
-        .send_to(&response.payload, peer)
+        .send_to(&payload, peer)
         .await
         .map(|_| ())
         .map_err(|err| format!("send resident proxy UDP bridge response: {err}"))
@@ -198,9 +212,13 @@ pub(crate) async fn probe_resident_proxy_udp_async(
         exchange = wait_for_udp_probe_response(&mut executor).await;
     }
     executor.shutdown().await;
+    let exchange = exchange.and_then(|mut response| {
+        let payload = take_udp_response_for_fixed_target(&mut response, original_dst)?;
+        Ok((response, payload))
+    });
     match exchange {
-        Ok(response) => {
-            let payload_match = response.payload == payload;
+        Ok((response, response_payload)) => {
+            let payload_match = response_payload == payload;
             let mut report = json!({
                 "status": if payload_match { "pass" } else { "fail" },
                 "ok": payload_match,
@@ -210,7 +228,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
                 "agreement_disposition": agreement.disposition().as_str(),
                 "handler": handler,
                 "request_len": payload.len(),
-                "response_len": response.payload.len(),
+                "response_len": response_payload.len(),
                 "payload_match": payload_match,
                 "elapsed_ms": started.elapsed().as_millis(),
                 "graphId": proxy.graph_id,
@@ -224,7 +242,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
                 report["quic_underlay"] = json!(quic_underlay);
             }
             if include_response_hex {
-                report["responsePayloadHex"] = json!(udp_probe_hex_encode(&response.payload));
+                report["responsePayloadHex"] = json!(udp_probe_hex_encode(&response_payload));
             }
             report
         }
@@ -288,7 +306,24 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
         response = wait_for_udp_probe_response(&mut executor).await;
     }
     executor.shutdown().await;
-    dns_a_response_has_answer(id, &response?.payload)
+    let mut response = response?;
+    let payload = take_udp_response_for_fixed_target(&mut response, original_dst)?;
+    dns_a_response_has_answer(id, &payload)
+}
+
+fn take_udp_response_for_fixed_target(
+    response: &mut UdpExchangeResult,
+    expected_source: SocketAddr,
+) -> Result<Vec<u8>, String> {
+    response
+        .take_fixed_target_payload(expected_source)
+        .into_payload()
+        .map_err(|reason| {
+            format!(
+                "drop UDP response that violates fixed-target identity: {}",
+                reason.label()
+            )
+        })
 }
 
 pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {

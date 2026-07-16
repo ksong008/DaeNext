@@ -3,103 +3,6 @@
 
 use super::*;
 use serde_json::Value;
-#[derive(Debug)]
-pub(super) struct UdpExchangeResult {
-    pub(super) payload: Vec<u8>,
-    pub(super) execution_label: &'static str,
-    pub(super) tls_underlay: Option<&'static str>,
-    pub(super) quic_underlay: Option<&'static str>,
-    pub(super) session_executor: Option<&'static str>,
-    pub(super) underlay_reuse: Option<&'static str>,
-    pub(super) session_ownership: &'static str,
-    pub(super) reply_forwarded: bool,
-}
-
-const UDP_SESSION_OWNERSHIP_MANAGER_OWNED: &str = "manager-owned";
-#[cfg(test)]
-const UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM: &str = "independent-datagram";
-
-impl UdpExchangeResult {
-    pub(super) fn new(payload: Vec<u8>, execution_label: &'static str) -> Self {
-        Self {
-            payload,
-            execution_label,
-            tls_underlay: None,
-            quic_underlay: None,
-            session_executor: None,
-            underlay_reuse: None,
-            session_ownership: UDP_SESSION_OWNERSHIP_MANAGER_OWNED,
-            reply_forwarded: true,
-        }
-    }
-
-    pub(super) fn pending_response(execution_label: &'static str) -> Self {
-        Self {
-            payload: Vec::new(),
-            execution_label,
-            tls_underlay: None,
-            quic_underlay: None,
-            session_executor: None,
-            underlay_reuse: None,
-            session_ownership: UDP_SESSION_OWNERSHIP_MANAGER_OWNED,
-            reply_forwarded: false,
-        }
-    }
-
-    pub(super) fn with_tls_underlay(mut self, tls_underlay: &'static str) -> Self {
-        self.tls_underlay = Some(tls_underlay);
-        self
-    }
-
-    pub(super) fn with_quic_underlay(mut self, quic_underlay: &'static str) -> Self {
-        self.quic_underlay = Some(quic_underlay);
-        self
-    }
-
-    pub(super) fn with_session_executor(mut self, session_executor: &'static str) -> Self {
-        self.session_executor = Some(session_executor);
-        self
-    }
-
-    pub(super) fn with_underlay_reuse(mut self, underlay_reuse: &'static str) -> Self {
-        self.underlay_reuse = Some(underlay_reuse);
-        self
-    }
-
-    #[cfg(test)]
-    pub(super) fn with_session_ownership(mut self, session_ownership: &'static str) -> Self {
-        self.session_ownership = session_ownership;
-        self
-    }
-
-    pub(super) fn append_execution_fields(
-        &self,
-        value: &mut serde_json::Value,
-        protocol_framing: &str,
-        graph_id: &str,
-    ) {
-        let mut descriptor = udp_execution_descriptor(self.execution_label)
-            .with_protocol_framing(protocol_framing)
-            .with_session_ownership(self.session_ownership)
-            .with_graph_id(graph_id);
-        if let Some(tls_underlay) = self.tls_underlay {
-            descriptor = descriptor.with_security_underlay(tls_underlay);
-        }
-        if let Some(quic_underlay) = self.quic_underlay {
-            descriptor = descriptor.with_transport_underlay(quic_underlay);
-        }
-        append_runtime_execution_descriptor(value, descriptor);
-    }
-
-    pub(super) fn append_session_fields(&self, value: &mut serde_json::Value) {
-        if let Some(session_executor) = self.session_executor {
-            value["sessionExecutor"] = json!(session_executor);
-        }
-        if let Some(underlay_reuse) = self.underlay_reuse {
-            value["underlayReuse"] = json!(underlay_reuse);
-        }
-    }
-}
 
 #[derive(Clone, Copy)]
 enum UdpExchangeSessionScope {
@@ -198,12 +101,28 @@ async fn record_udp_session_exchange_result(
     }
     match exchange {
         Ok((event, mut response)) => {
-            let response_len = response.payload.len();
-            if response.reply_forwarded {
-                if let Err(err) = udp_reply
-                    .send(original_dst, peer, std::mem::take(&mut response.payload))
-                    .await
-                {
+            let response_len = response.payload_len();
+            let (response_validation, forwarded_payload) = if response.reply_forwarded {
+                let payload = response.take_fixed_target_payload(original_dst);
+                let validation = payload.validation();
+                (Some(validation), payload.into_payload().ok())
+            } else {
+                (None, None)
+            };
+            if let Some(validation) = response_validation {
+                match validation {
+                    UdpFixedTargetValidation::Validated => metrics.udp_response_validated(),
+                    UdpFixedTargetValidation::CompatibilityUnverified => {
+                        metrics.udp_response_compatibility_unverified()
+                    }
+                    UdpFixedTargetValidation::Dropped(_) => {
+                        metrics.udp_response_dropped(response_len)
+                    }
+                }
+                response.reply_forwarded = validation.should_forward();
+            }
+            if let Some(payload) = forwarded_payload {
+                if let Err(err) = udp_reply.send(original_dst, peer, payload).await {
                     if err.should_log() {
                         append_event(
                             &event_file,
@@ -236,6 +155,18 @@ async fn record_udp_session_exchange_result(
                     "reply_forwarded".to_owned(),
                     Value::from(response.reply_forwarded),
                 );
+                if let Some(validation) = response_validation {
+                    map.insert(
+                        "response_identity_validation".to_owned(),
+                        Value::from(validation.label()),
+                    );
+                    if let Some(reason) = validation.drop_reason() {
+                        map.insert(
+                            "response_drop_reason".to_owned(),
+                            Value::from(reason.label()),
+                        );
+                    }
+                }
                 if let Some(dscp) = dscp {
                     map.insert("dscp".to_owned(), Value::from(dscp));
                 }
@@ -345,6 +276,9 @@ fn udp_exchange_base_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const UDP_SESSION_OWNERSHIP_MANAGER_OWNED: &str = "manager-owned";
+    const UDP_SESSION_OWNERSHIP_INDEPENDENT_DATAGRAM: &str = "independent-datagram";
 
     #[test]
     fn udp_exchange_result_uses_structured_session_execution_fields() {
