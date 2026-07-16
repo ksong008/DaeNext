@@ -74,7 +74,6 @@ pub(crate) fn build_hysteria2_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed = Hysteria2Link::parse(&link)
         .map_err(|err| format!("parse Hysteria2 node {node_tag}: {err}"))?;
-    let allow_insecure = parsed.insecure || config.global.allow_insecure;
     let auth = if parsed.password.is_empty() {
         parsed.user.clone()
     } else {
@@ -111,6 +110,14 @@ pub(crate) fn build_hysteria2_proxy_plan(
     } else {
         parsed.sni.clone()
     };
+    let tls_identity = dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+        server_name.clone(),
+        parsed.insecure,
+        config.global.allow_insecure,
+        &parsed.pin_sha256,
+    )
+    .map_err(|err| format!("build Hysteria2 TLS policy for node {node_tag}: {err}"))?;
+    let allow_insecure = tls_identity.policy().allow_insecure();
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -139,8 +146,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
         reality: None,
         handler: ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
-            allow_insecure,
-            pin_sha256: parsed.pin_sha256,
+            tls_identity,
             max_rx: parsed.max_rx,
             obfs,
             port_hop_ports,

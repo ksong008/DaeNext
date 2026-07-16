@@ -30,8 +30,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
     match selection.proxy.handler.clone() {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
-            allow_insecure,
-            pin_sha256,
+            tls_identity,
             max_rx,
             obfs,
             port_hop_ports,
@@ -45,8 +44,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 selection.mark,
                 &obfs,
                 &port_hop_ports,
-                allow_insecure,
-                &pin_sha256,
+                &tls_identity,
                 RESIDENT_CONNECT_TIMEOUT,
             )
             .await

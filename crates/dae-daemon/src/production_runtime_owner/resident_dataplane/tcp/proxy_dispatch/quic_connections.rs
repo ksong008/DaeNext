@@ -11,17 +11,15 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
     mark: u32,
     obfs: &ResidentHysteria2ObfsPlan,
     port_hop_ports: &[u16],
-    allow_insecure: bool,
-    pin_sha256: &str,
+    tls_identity: &dae_outbound::hysteria2::Hysteria2TlsIdentity,
     timeout: Duration,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
     let candidates = resolve_hysteria2_quic_remote_candidates_async(proxy, port_hop_ports).await?;
-    let client_config =
-        build_hysteria2_runtime_client_config(allow_insecure, pin_sha256.to_owned())
-            .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?;
+    let client_config = build_hysteria2_runtime_client_config(tls_identity)
+        .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?;
     let (remote, endpoint, connection) = connect_quic_endpoint_candidates_async(
         &candidates,
-        &proxy.server_name,
+        tls_identity.server_name(),
         timeout,
         "connect Hysteria2 QUIC endpoint",
         |remote| {

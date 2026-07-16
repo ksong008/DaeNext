@@ -31,10 +31,10 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     assert!(matches!(
         hysteria2_insecure.handler,
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
-            allow_insecure: true,
-            ref pin_sha256,
+            ref tls_identity,
             ..
-        } if pin_sha256.is_empty()
+        } if tls_identity.policy().allow_insecure()
+            && !tls_identity.policy().has_leaf_certificate_pin()
     ));
 
     let hysteria2_obfs = build_resident_proxy_plan_for_node(

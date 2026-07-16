@@ -89,8 +89,7 @@ pub(crate) enum ResidentProxyProtocolPlan {
     },
     Hysteria2QuicTcp {
         auth: String,
-        allow_insecure: bool,
-        pin_sha256: String,
+        tls_identity: dae_outbound::hysteria2::Hysteria2TlsIdentity,
         max_rx: u64,
         obfs: ResidentHysteria2ObfsPlan,
         port_hop_ports: Vec<u16>,
@@ -422,14 +421,11 @@ impl ResidentProxyProtocolPlan {
             }
             Self::Hysteria2QuicTcp {
                 auth,
-                allow_insecure: _,
-                pin_sha256,
                 obfs,
                 port_hop_ports,
                 ..
             } => {
                 compact_string(auth);
-                compact_string(pin_sha256);
                 compact_string(&mut obfs.mode);
                 compact_string(&mut obfs.password);
                 port_hop_ports.shrink_to_fit();

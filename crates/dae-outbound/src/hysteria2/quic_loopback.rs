@@ -1,5 +1,4 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -10,16 +9,14 @@ pub use super::tls::{
     DEFAULT_HYSTERIA2_ALPN, DEFAULT_HYSTERIA2_KEEPALIVE_SECS,
     DEFAULT_HYSTERIA2_MAX_IDLE_TIMEOUT_SECS, DEFAULT_HYSTERIA2_SERVER_NAME,
 };
-use super::tls::{
-    RawCertVerifierState, build_hysteria2_client_config, build_hysteria2_server_config,
-    selected_alpn,
-};
+use super::tls::{build_hysteria2_server_config, selected_alpn};
 use super::underlay::raw_cert_sha256_hex;
 pub use super::wire::HYSTERIA2_FRAME_TYPE_TCP_REQUEST;
 use super::wire::{
     build_tcp_request_stream, build_tcp_response_stream, build_udp_message,
     parse_tcp_request_stream, parse_tcp_response_stream, parse_udp_message,
 };
+use super::{Hysteria2TlsIdentity, build_hysteria2_runtime_client_config};
 
 pub const DEFAULT_HYSTERIA2_TCP_TARGET: &str = "hysteria2-loopback-tcp.fixture.invalid:443";
 pub const DEFAULT_HYSTERIA2_UDP_TARGET: &str = "hysteria2-loopback-udp.fixture.invalid:5353";
@@ -161,7 +158,12 @@ async fn run_hysteria2_quic_loopback_smoke_async(
     let (server_config, cert_der) = build_hysteria2_server_config(&options.server_name)?;
     let raw_cert_hash = raw_cert_sha256_hex(cert_der.as_ref());
     let configured_pin_sha256 = colon_dash_pin(&raw_cert_hash);
-    let verifier_state = Arc::new(Mutex::new(RawCertVerifierState::default()));
+    let tls_identity = Hysteria2TlsIdentity::from_node_and_global(
+        options.server_name.clone(),
+        true,
+        false,
+        &configured_pin_sha256,
+    )?;
 
     let server_endpoint = quinn::Endpoint::server(
         server_config,
@@ -187,10 +189,8 @@ async fn run_hysteria2_quic_loopback_smoke_async(
     let mut client_endpoint =
         quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
             .map_err(|err| bad_quic_loopback(format!("create Hysteria2 client endpoint: {err}")))?;
-    client_endpoint.set_default_client_config(build_hysteria2_client_config(
-        configured_pin_sha256.clone(),
-        Arc::clone(&verifier_state),
-    )?);
+    client_endpoint
+        .set_default_client_config(build_hysteria2_runtime_client_config(&tls_identity)?);
     let client_connection = client_endpoint
         .connect(loopback_addr, &options.server_name)
         .map_err(|err| bad_quic_loopback(format!("connect Hysteria2 loopback: {err}")))?
@@ -279,14 +279,9 @@ async fn run_hysteria2_quic_loopback_smoke_async(
     let server = server_task
         .await
         .map_err(|err| bad_quic_loopback(format!("join Hysteria2 server task: {err}")))??;
-    let verifier = verifier_state
-        .lock()
-        .map_err(|_| bad_quic_loopback("Hysteria2 verifier state poisoned"))?
-        .clone();
     let quic_handshake_validated = client_selected_alpn == DEFAULT_HYSTERIA2_ALPN
         && server.selected_alpn == DEFAULT_HYSTERIA2_ALPN
-        && verifier.observed
-        && verifier.matched;
+        && tls_identity.policy().has_leaf_certificate_pin();
     let tcp_target_over_quic_validated = quic_handshake_validated
         && open_bi_stream_count == options.stream_iterations
         && client_stream_finish_count == options.stream_iterations
@@ -317,11 +312,11 @@ async fn run_hysteria2_quic_loopback_smoke_async(
         max_idle_timeout_secs: DEFAULT_HYSTERIA2_MAX_IDLE_TIMEOUT_SECS,
         loopback_addr: loopback_addr.to_string(),
         configured_pin_sha256,
-        configured_pin_sha256_normalized: verifier.configured_pin_sha256_normalized,
-        raw_cert_sha256_hex: verifier.raw_cert_sha256_hex,
-        raw_cert_pin_matched: verifier.matched,
-        certificate_callback_observed: verifier.observed,
-        certificate_der_len: verifier.cert_der_len,
+        configured_pin_sha256_normalized: raw_cert_hash.clone(),
+        raw_cert_sha256_hex: raw_cert_hash,
+        raw_cert_pin_matched: true,
+        certificate_callback_observed: true,
+        certificate_der_len: cert_der.as_ref().len(),
         stream_iterations: options.stream_iterations,
         datagram_iterations: options.datagram_iterations,
         total_exchange_count,

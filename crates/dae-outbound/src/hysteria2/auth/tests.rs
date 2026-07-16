@@ -6,12 +6,10 @@ use h3::server;
 use http::{Response, StatusCode};
 
 use super::*;
-use crate::hysteria2::tls::{
-    DEFAULT_HYSTERIA2_SERVER_NAME, build_hysteria2_pinned_client_config,
-    build_hysteria2_server_config,
-};
+use crate::hysteria2::tls::{DEFAULT_HYSTERIA2_SERVER_NAME, build_hysteria2_server_config};
 use crate::hysteria2::underlay::raw_cert_sha256_hex;
 use crate::hysteria2::wire::{build_tcp_request_stream, build_tcp_response_stream};
+use crate::hysteria2::{Hysteria2TlsIdentity, build_hysteria2_runtime_client_config};
 
 const AUTH: &str = "hysteria2-auth-session-fixture";
 const TCP_TARGET: &str = "hysteria2-auth-session-target.invalid:443";
@@ -31,8 +29,15 @@ async fn authenticated_session_keeps_quic_open_for_hysteria2_streams() {
 
         let mut client_endpoint =
             quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+        let tls_identity = Hysteria2TlsIdentity::from_node_and_global(
+            DEFAULT_HYSTERIA2_SERVER_NAME,
+            true,
+            false,
+            &raw_cert_sha256_hex(cert_der.as_ref()),
+        )
+        .unwrap();
         client_endpoint.set_default_client_config(
-            build_hysteria2_pinned_client_config(raw_cert_sha256_hex(cert_der.as_ref())).unwrap(),
+            build_hysteria2_runtime_client_config(&tls_identity).unwrap(),
         );
         let connection = client_endpoint
             .connect(server_addr, DEFAULT_HYSTERIA2_SERVER_NAME)

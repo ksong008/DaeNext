@@ -279,8 +279,13 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
         },
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth: fixture_secret(),
-            allow_insecure: false,
-            pin_sha256: "sha256:fixture".to_owned(),
+            tls_identity: dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+                fixture_host(FixtureEndpoint::Authority),
+                false,
+                false,
+                &fixture_pin_sha256(),
+            )
+            .unwrap(),
             max_rx: 0,
             obfs: ResidentHysteria2ObfsPlan::none(),
             port_hop_ports: vec![fixture_port(1)],

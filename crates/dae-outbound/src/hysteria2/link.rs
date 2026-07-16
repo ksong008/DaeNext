@@ -4,6 +4,8 @@ use crate::error::OutboundError;
 
 use super::port_hopping::parse_port_union;
 
+const UNSUPPORTED_TLS_QUERY_FIELDS: [&str; 4] = ["ca", "clientCertificate", "clientKey", "ech"];
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hysteria2Link {
     pub name: String,
@@ -44,6 +46,7 @@ impl Hysteria2Link {
         let (userinfo, server) = authority.rsplit_once('@').unwrap_or(("", authority));
         let (user, password) = parse_userinfo(userinfo)?;
         let query = url::form_urlencoded::parse(query_raw.as_bytes()).collect::<Vec<_>>();
+        reject_unsupported_tls_fields(&query)?;
         let insecure = match query_value(&query, "insecure") {
             Some(value) if !value.is_empty() => parse_bool(&value)
                 .ok_or_else(|| OutboundError::BadHysteria2("invalid insecure".to_owned()))?,
@@ -123,6 +126,22 @@ impl Hysteria2Link {
     pub fn property_address(&self) -> String {
         self.server.clone()
     }
+}
+
+fn reject_unsupported_tls_fields(
+    query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)],
+) -> Result<(), OutboundError> {
+    for field in UNSUPPORTED_TLS_QUERY_FIELDS {
+        if query
+            .iter()
+            .any(|(candidate, _)| candidate.as_ref() == field)
+        {
+            return Err(OutboundError::BadHysteria2(format!(
+                "unsupported Hysteria2 TLS field: {field}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn normalize_pin_sha256(input: &str) -> String {

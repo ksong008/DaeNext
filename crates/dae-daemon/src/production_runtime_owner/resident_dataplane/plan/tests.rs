@@ -13,6 +13,8 @@ mod group_selection;
 #[cfg(test)]
 mod http_proxy_application_protocol;
 #[cfg(test)]
+mod hysteria2_tls;
+#[cfg(test)]
 mod matrix_blocked;
 #[cfg(test)]
 mod resident_handlers;

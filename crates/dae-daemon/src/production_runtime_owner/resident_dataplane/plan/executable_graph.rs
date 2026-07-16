@@ -535,13 +535,8 @@ fn chain_parent_count(proxy: &ResidentProxyPlan) -> usize {
 
 fn graph_verification_policy(proxy: &ResidentProxyPlan) -> String {
     match &proxy.handler {
-        ResidentProxyProtocolPlan::Hysteria2QuicTcp { allow_insecure, .. } if *allow_insecure => {
-            "explicit-insecure".to_owned()
-        }
-        ResidentProxyProtocolPlan::Hysteria2QuicTcp { pin_sha256, .. }
-            if !pin_sha256.is_empty() =>
-        {
-            "pinned-raw-cert-sha256".to_owned()
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { tls_identity, .. } => {
+            tls_identity.verification_label().to_owned()
         }
         ResidentProxyProtocolPlan::JuicityQuicTcp { allow_insecure, .. } if *allow_insecure => {
             "explicit-insecure".to_owned()
