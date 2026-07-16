@@ -1,11 +1,15 @@
 use super::super::*;
 use super::plain::dns_transport_route_name;
-use super::quic::{append_dns_proxy_udp_bridge_error, connect_dns_quic_endpoint_async};
+use super::quic::connect_dns_quic_endpoint_async;
 use super::route::{
     ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
     select_dns_upstream_targets,
 };
 use super::wire::{doh_request_target, restore_dns_response_id};
+
+mod proxied;
+
+use self::proxied::forward_dns_h3_to_proxy_async;
 
 pub(super) async fn forward_dns_h3_async(
     upstream: &ResidentDnsUpstream,
@@ -160,57 +164,6 @@ async fn cached_dns_h3_client(
 async fn close_cached_dns_h3_client(forwarder: &Arc<AsyncMutex<ResidentDnsH3Forwarder>>) {
     let mut forwarder = forwarder.lock().await;
     forwarder.close();
-}
-
-async fn forward_dns_h3_to_proxy_async(
-    upstream: &ResidentDnsUpstream,
-    remote: SocketAddr,
-    payload: &[u8],
-    proxy: Arc<ResidentProxyPlan>,
-) -> Result<Vec<u8>, String> {
-    let bridge = open_resident_proxy_udp_bridge_async(Arc::clone(&proxy), remote).await?;
-    let (endpoint, connection) = match connect_dns_quic_endpoint_async(
-        upstream,
-        bridge.local_addr(),
-        proxy.mark,
-        DNS_DOH3_ALPN,
-        "connect DoH3 endpoint",
-        "DNS H3 handshake timeout",
-        "connect DNS H3 upstream",
-    )
-    .await
-    {
-        Ok(connection) => connection,
-        Err(err) => {
-            let err = append_dns_proxy_udp_bridge_error(err, &bridge);
-            bridge.shutdown().await;
-            return Err(format!("connect DNS H3 via proxied UDP {remote}: {err}"));
-        }
-    };
-    let result =
-        forward_dns_h3_over_connection_async(upstream, payload, endpoint, connection).await;
-    bridge.shutdown().await;
-    result
-}
-
-async fn forward_dns_h3_over_connection_async(
-    upstream: &ResidentDnsUpstream,
-    payload: &[u8],
-    endpoint: quinn::Endpoint,
-    connection: quinn::Connection,
-) -> Result<Vec<u8>, String> {
-    let h3_connection = h3_quinn::Connection::new(connection.clone());
-    let (mut driver, mut client) = h3::client::new(h3_connection)
-        .await
-        .map_err(|err| format!("create DNS H3 client: {err:?}"))?;
-    let driver_task = tokio::spawn(async move { poll_fn(|cx| driver.poll_close(cx)).await });
-
-    let response = forward_dns_h3_with_client_async(upstream, payload, &mut client).await?;
-    drop(client);
-    connection.close(0_u32.into(), b"dns-query done");
-    endpoint.wait_idle().await;
-    let _ = driver_task.await;
-    Ok(response)
 }
 
 async fn forward_dns_h3_with_client_async(
