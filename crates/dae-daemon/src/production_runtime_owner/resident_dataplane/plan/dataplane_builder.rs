@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentDataplanePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) enabled: bool,
@@ -84,8 +85,21 @@ pub(crate) fn build_resident_manual_probe_plans(
 
 pub(crate) fn build_resident_manual_probe_plans_for_helper(
     config: &Config,
+    requested_links: &[String],
 ) -> BTreeMap<String, Result<ResidentProxyProbePlan, String>> {
-    let mut plans = build_resident_manual_probe_plans(config);
+    let requested = requested_links
+        .iter()
+        .filter(|link| !link.is_empty())
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut plans = BTreeMap::new();
+    for (node_tag, link) in tagged_node_links(config) {
+        if !requested.contains(link.as_str()) {
+            continue;
+        }
+        let plan = build_resident_manual_probe_plan(config, node_tag, link.clone());
+        plans.entry(link).or_insert(plan);
+    }
     for plan in plans.values_mut().filter_map(|plan| plan.as_mut().ok()) {
         plan.apply_latency_probe_control_mark(RESIDENT_CONTROL_PLANE_SO_MARK);
     }
@@ -218,6 +232,7 @@ pub(crate) fn resident_proxy_plans(
             &candidates,
             group_check_tolerance_ms(config, group),
         );
+        let admitted_candidate_count = candidates.len();
         let group_plan = ResidentProxyGroupPlan {
             group_name: group.name.clone(),
             group_policy,
@@ -228,7 +243,12 @@ pub(crate) fn resident_proxy_plans(
             tcp_check: group_tcp_check_plan(config, group)?,
             udp_check: group_udp_check_plan(config, group)?,
             tcp_probe_timeout: resident_tcp_latency_probe_timeout_from_config(config),
-            resuscitation_last_unix_ms: Arc::new(AtomicI64::new(0)),
+            resuscitation_last_unix_ms: Arc::new(
+                (0..NETWORK_TYPE_COLLECTION_COUNT)
+                    .map(|_| AtomicI64::new(0))
+                    .collect(),
+            ),
+            health_bootstrap: ResidentGroupHealthBootstrap::new(admitted_candidate_count),
         };
         default_outbound.get_or_insert(outbound_index);
         proxies.insert(outbound_index, group_plan);

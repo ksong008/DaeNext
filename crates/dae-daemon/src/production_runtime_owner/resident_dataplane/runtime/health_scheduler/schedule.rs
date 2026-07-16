@@ -12,6 +12,17 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentHealt
     pub(super) network_type: NetworkType,
 }
 
+#[derive(Clone)]
+pub(super) struct ResidentHealthScheduleContext {
+    pub(super) stop: SharedResidentStopSignal,
+    pub(super) event_file: PathBuf,
+    pub(super) event_lock: Arc<Mutex<()>>,
+    pub(super) metrics: Arc<ResidentDataplaneMetrics>,
+    pub(super) periodic_candidate_concurrency: usize,
+    pub(super) bootstrap_candidate_concurrency: usize,
+    pub(super) candidate_admission: Arc<tokio::sync::Semaphore>,
+}
+
 struct ResidentHealthRoundGuard {
     metrics: Arc<ResidentDataplaneMetrics>,
     active: bool,
@@ -42,13 +53,18 @@ impl Drop for ResidentHealthRoundGuard {
 
 pub(super) async fn run_resident_health_group_schedule(
     group: Arc<plan::ResidentProxyGroupPlan>,
-    stop: SharedResidentStopSignal,
     mut stop_rx: watch::Receiver<bool>,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    concurrency: usize,
+    context: ResidentHealthScheduleContext,
 ) {
+    let ResidentHealthScheduleContext {
+        stop,
+        event_file,
+        event_lock,
+        metrics,
+        periodic_candidate_concurrency: concurrency,
+        bootstrap_candidate_concurrency: bootstrap_concurrency,
+        candidate_admission,
+    } = context;
     let interval = group.check_interval();
     let initial_jitter =
         resident_health_initial_jitter(&group.group_name, group.candidate_count(), interval);
@@ -72,7 +88,22 @@ pub(super) async fn run_resident_health_group_schedule(
             "scheduler": "shared-resident-health-runtime",
         }),
     );
-    if wait_for_resident_health_delay_or_stop(&mut stop_rx, initial_jitter).await {
+    group.begin_health_bootstrap();
+    let bootstrap_status = run_resident_health_round(
+        Arc::clone(&group),
+        Arc::clone(&stop),
+        Arc::clone(&metrics),
+        bootstrap_concurrency,
+        Arc::clone(&candidate_admission),
+    )
+    .await;
+    group.complete_health_bootstrap(bootstrap_status.is_cancelled());
+    if bootstrap_status.is_cancelled() || interval.is_zero() || !group.needs_background_checks() {
+        return;
+    }
+
+    let first_periodic_delay = interval.saturating_add(initial_jitter);
+    if wait_for_resident_health_delay_or_stop(&mut stop_rx, first_periodic_delay).await {
         return;
     }
     loop {
@@ -81,9 +112,10 @@ pub(super) async fn run_resident_health_group_schedule(
             Arc::clone(&stop),
             Arc::clone(&metrics),
             concurrency,
+            Arc::clone(&candidate_admission),
         )
         .await;
-        if status.is_cancelled() || interval.is_zero() {
+        if status.is_cancelled() {
             return;
         }
         if wait_for_resident_health_delay_or_stop(&mut stop_rx, interval).await {
@@ -99,6 +131,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
     mut stop_rx: watch::Receiver<bool>,
     metrics: Arc<ResidentDataplaneMetrics>,
     concurrency: usize,
+    candidate_admission: Arc<tokio::sync::Semaphore>,
 ) {
     loop {
         let request = tokio::select! {
@@ -108,18 +141,21 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
                 None => return,
             },
         };
-        if !request.network_type.is_data_udp() {
-            continue;
-        }
         let Some(group) = proxy_groups.get(&request.outbound).cloned() else {
             continue;
         };
-        if !group.try_begin_resuscitation() {
+        if !group.try_begin_resuscitation(request.network_type) {
             continue;
         }
-        if run_resident_health_round(group, Arc::clone(&stop), Arc::clone(&metrics), concurrency)
-            .await
-            .is_cancelled()
+        if run_resident_health_round(
+            group,
+            Arc::clone(&stop),
+            Arc::clone(&metrics),
+            concurrency,
+            Arc::clone(&candidate_admission),
+        )
+        .await
+        .is_cancelled()
         {
             return;
         }
@@ -141,12 +177,19 @@ async fn run_resident_health_round(
     stop: SharedResidentStopSignal,
     metrics: Arc<ResidentDataplaneMetrics>,
     concurrency: usize,
+    candidate_admission: Arc<tokio::sync::Semaphore>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
     }
     let guard = ResidentHealthRoundGuard::new(metrics);
-    let status = run_resident_group_health_check_round_async(group, stop, concurrency.max(1)).await;
+    let status = run_resident_group_health_check_round_async(
+        group,
+        stop,
+        concurrency.max(1),
+        candidate_admission,
+    )
+    .await;
     guard.finish(status);
     status
 }

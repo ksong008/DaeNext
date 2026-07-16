@@ -363,7 +363,8 @@ pub(super) fn latency_probe_helper_preserves_fingerprint_and_adds_control_mark_w
     assert_eq!(normal.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
     assert!(normal.proxy.utls_fingerprint.is_some());
 
-    let helper_plans = build_resident_manual_probe_plans_for_helper(&config);
+    let helper_plans =
+        build_resident_manual_probe_plans_for_helper(&config, std::slice::from_ref(&link));
     let helper = helper_plans.get(&link).unwrap().as_ref().unwrap();
     assert_eq!(helper.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
     let utls = helper.proxy.utls_fingerprint.as_ref().unwrap();
@@ -383,7 +384,8 @@ pub(super) fn latency_probe_helper_preserves_reality_fingerprint_and_adds_contro
     assert!(normal.proxy.reality.is_some());
     assert!(normal.proxy.utls_fingerprint.is_some());
 
-    let helper_plans = build_resident_manual_probe_plans_for_helper(&config);
+    let helper_plans =
+        build_resident_manual_probe_plans_for_helper(&config, std::slice::from_ref(&link));
     let helper = helper_plans.get(&link).unwrap().as_ref().unwrap();
     assert_eq!(helper.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
     assert_eq!(helper.proxy.tls, "reality");

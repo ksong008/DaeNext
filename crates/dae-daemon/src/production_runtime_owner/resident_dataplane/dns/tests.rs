@@ -221,6 +221,7 @@ fn dns_upstream_router_for_config(
         matcher,
         share_resident_proxy_groups(runtime_plan.proxies.clone()),
         config.global.so_mark_from_dae,
+        None,
     );
     let ResidentDnsRequestAction::Upstream(upstream) = dns_plan.request_default_action else {
         panic!("expected upstream default action");
@@ -1544,6 +1545,7 @@ async fn resident_dns_live_upstream_pressure_uses_parameterized_upstream() {
             matcher,
             share_resident_proxy_groups(runtime_plan.proxies.clone()),
             parsed.global.so_mark_from_dae,
+            None,
         );
         plan = plan.with_upstream_routing(Some(Arc::new(router)));
     }

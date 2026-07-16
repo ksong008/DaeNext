@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, atomic::AtomicI64};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use dae_config::{Config, DynamicFunctionValue, Function, Group, Param};
 use dae_core_types::OutboundIndex;
 use dae_datapath::TcpDialMode;
+use dae_outbound::types::NETWORK_TYPE_COLLECTION_COUNT;
 use dae_outbound::{
     Annotation, AnyTLSLink, Dialer, DialerGroup, DialerHealthSnapshot, DialerSet, Filter,
     FilterParam, HealthState, NetworkType, OutboundError, SelectionPolicy,
@@ -33,7 +34,7 @@ use dae_outbound::{
     vless::{VLESSLink, contract::is_xtls_rprx_vision_flow, password_to_key},
     vmess::VMessLink,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use url::Url;
 
 use super::super::resident_routing::ResidentGeodataStore;
@@ -60,6 +61,8 @@ mod transport_defaults;
 use self::transport_defaults::*;
 mod group_plan;
 pub(super) use self::group_plan::*;
+mod group_health_bootstrap;
+use self::group_health_bootstrap::*;
 mod health_target;
 pub(super) use self::health_target::*;
 mod dataplane_builder;

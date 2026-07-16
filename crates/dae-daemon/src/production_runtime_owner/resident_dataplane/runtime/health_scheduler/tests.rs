@@ -38,8 +38,8 @@ fn health_resuscitation_admission_is_bounded_and_observable() {
 
 #[test]
 fn health_scheduler_reports_one_runtime_for_many_groups() {
-    let runtime_config = ResidentHealthRuntimeConfig::from_parallelism(64, 128, 8);
-    let report = resident_health_scheduler_value(128, 8, runtime_config);
+    let runtime_config = ResidentHealthRuntimeConfig::from_parallelism(64, 128, 8, 1_024);
+    let report = resident_health_scheduler_value(128, 8, 8, runtime_config);
     assert_eq!(report["runtimeInstances"], 1);
     assert_eq!(report["osThreadCount"], 5);
     assert_eq!(report["maximumOsThreadCount"], 9);
@@ -102,7 +102,8 @@ fn health_scheduler_retains_shared_group_arcs_and_stops_without_a_round() {
         Arc::new(Mutex::new(())),
         Arc::clone(&metrics),
         2,
-        ResidentHealthRuntimeConfig::from_parallelism(1, 2, 2),
+        2,
+        ResidentHealthRuntimeConfig::from_parallelism(1, 2, 2, 2),
     );
     assert_eq!(metrics.snapshot()["healthRoundsStartedTotal"], 0);
     assert_eq!(metrics.snapshot()["healthRoundsActive"], 0);
@@ -146,12 +147,16 @@ async fn shared_health_schedule_runs_one_zero_interval_round_and_updates_selecto
 
     run_resident_health_group_schedule(
         Arc::clone(&group),
-        stop,
         stop_rx,
-        std::env::temp_dir().join("daed-health-scheduler-round-test-events.jsonl"),
-        Arc::new(Mutex::new(())),
-        Arc::clone(&metrics),
-        1,
+        ResidentHealthScheduleContext {
+            stop,
+            event_file: std::env::temp_dir().join("daed-health-scheduler-round-test-events.jsonl"),
+            event_lock: Arc::new(Mutex::new(())),
+            metrics: Arc::clone(&metrics),
+            periodic_candidate_concurrency: 1,
+            bootstrap_candidate_concurrency: 1,
+            candidate_admission: Arc::new(tokio::sync::Semaphore::new(1)),
+        },
     )
     .await;
 
@@ -166,6 +171,82 @@ async fn shared_health_schedule_runs_one_zero_interval_round_and_updates_selecto
     assert_eq!(snapshot["healthRoundsCompletedTotal"], 1);
     assert_eq!(snapshot["healthRoundsCancelledTotal"], 0);
     assert_eq!(snapshot["healthRoundsActive"], 0);
+    let bootstrap = group.health_bootstrap_snapshot_json();
+    assert_eq!(bootstrap["state"], json!("completed-no-alive"));
+    assert_eq!(bootstrap["observedCandidates"], json!(1));
+    assert!(group.select_proxy_for_tcp().is_err());
+}
+
+#[test]
+fn fixed_group_runs_one_bootstrap_round_without_retaining_health_runtime() {
+    let closed_port = {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let config = parse_test_config(&format!(
+        r#"
+        global {{
+            lan_interface: daerust0
+            resident_tcp_probe_timeout_ms: 100
+            tcp_check_url: 'http://127.0.0.1:{closed_port}/'
+            udp_check_dns: '127.0.0.1:{closed_port}'
+        }}
+        node {{
+            node_a: 'socks5://127.0.0.1:{closed_port}#node_a'
+        }}
+        group {{
+            proxy {{
+                filter: name(node_a)
+                policy: fixed(0)
+            }}
+        }}
+        routing {{
+            fallback: proxy
+        }}
+        "#
+    ));
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let shared = plan::share_resident_proxy_groups(plan.proxies);
+    let group = Arc::clone(shared.values().next().unwrap());
+    assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
+    let stop = ResidentStopSignal::shared();
+    let stop_for_failure = Arc::clone(&stop);
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let metrics_for_scheduler = Arc::clone(&metrics);
+    let (_handle, receiver) = resident_health_resuscitation_channel(Arc::clone(&metrics));
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let join = std::thread::spawn(move || {
+        resident_health_scheduler_loop(
+            vec![Arc::clone(&group)],
+            shared,
+            receiver,
+            stop,
+            std::env::temp_dir().join("daed-fixed-health-bootstrap-test-events.jsonl"),
+            Arc::new(Mutex::new(())),
+            metrics_for_scheduler,
+            1,
+            1,
+            ResidentHealthRuntimeConfig::from_parallelism(1, 1, 1, 1),
+        );
+        let _ = done_tx.send(group);
+    });
+
+    let group = match done_rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(group) => group,
+        Err(err) => {
+            stop_for_failure.store(true, Ordering::Relaxed);
+            let _ = join.join();
+            panic!("fixed bootstrap health runtime did not exit: {err}");
+        }
+    };
+    join.join().unwrap();
+
+    assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
+    assert_eq!(
+        group.health_bootstrap_snapshot_json()["state"],
+        json!("completed-no-alive")
+    );
+    assert_eq!(metrics.snapshot()["healthRoundsCompletedTotal"], 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -210,6 +291,7 @@ async fn udp_resuscitation_runs_on_the_shared_health_runtime() {
         stop_rx,
         Arc::clone(&metrics),
         1,
+        Arc::new(tokio::sync::Semaphore::new(1)),
     ));
 
     handle.trigger(outbound, NetworkType::DATA_UDP4);

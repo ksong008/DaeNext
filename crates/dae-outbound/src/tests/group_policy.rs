@@ -199,7 +199,9 @@ fn random_and_ipversion_fallback_match_golden_fixtures() {
         SelectionPolicy::Random,
     );
     let dead_index = random["dead_index"].as_u64().unwrap() as usize;
-    group.notify_alive(dead_index, NetworkType::TCP4, false);
+    for index in 0..group.dialers.len() {
+        group.notify_alive(index, NetworkType::TCP4, index != dead_index);
+    }
     let mut count = vec![0usize; group.dialers.len()];
     for _ in 0..random["selection_attempts"].as_u64().unwrap() {
         let selected = group.select(NetworkType::TCP4, false).unwrap();

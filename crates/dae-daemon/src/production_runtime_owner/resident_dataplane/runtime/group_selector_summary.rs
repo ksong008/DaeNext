@@ -76,6 +76,7 @@ fn resident_group_selector_base_snapshot(group: &plan::ResidentProxyGroupPlan) -
         "selectedCheckedAtUnix": Value::Null,
         "aliveCandidateCount": Value::Null,
         "selectionSource": RUNTIME_GROUP_SELECTION_SOURCE_UNAVAILABLE,
+        "healthBootstrap": group.health_bootstrap_snapshot_json(),
         "healthDimensions": health_dimensions,
     })
 }
@@ -91,8 +92,54 @@ fn apply_fixed_group_selection(
         .find(|candidate| candidate.match_index == fixed_index);
     if let Some(candidate) = selected {
         apply_candidate_identity(snapshot, candidate);
-        snapshot["aliveCandidateCount"] = json!(group.admitted_candidate_count());
         snapshot["selectionSource"] = json!(RUNTIME_GROUP_SELECTION_SOURCE_FIXED);
+        if let Some(health) = preferred_fixed_candidate_health(group, &candidate.proxy.node_tag) {
+            snapshot["selectedNetworkType"] = json!(health.network_type.string_without_dns());
+            snapshot["selectedNetworkDimension"] = json!(health.network_type.dimension_name());
+            snapshot["selectedHealthState"] = json!(health.health_state.as_str());
+            snapshot["selectedLatencyMs"] = json!(health.latency_ms);
+            snapshot["selectedCheckedAtUnix"] = json!(health.checked_at_unix);
+            snapshot["aliveCandidateCount"] = match health.health_state {
+                dae_outbound::HealthState::Alive => json!(1),
+                dae_outbound::HealthState::Dead | dae_outbound::HealthState::Unavailable => {
+                    json!(0)
+                }
+                dae_outbound::HealthState::Unknown => Value::Null,
+            };
+        }
+    }
+}
+
+fn preferred_fixed_candidate_health(
+    group: &plan::ResidentProxyGroupPlan,
+    node_tag: &str,
+) -> Option<plan::ResidentProxyLatencySnapshot> {
+    group
+        .health_state_snapshots()
+        .into_iter()
+        .filter(|snapshot| {
+            snapshot.node_tag == node_tag
+                && matches!(snapshot.network_type, NetworkType::TCP4 | NetworkType::TCP6)
+        })
+        .reduce(|current, next| {
+            let current_rank = runtime_health_state_rank(current.health_state);
+            let next_rank = runtime_health_state_rank(next.health_state);
+            if next_rank < current_rank
+                || (next_rank == current_rank && next.checked_at_unix > current.checked_at_unix)
+            {
+                next
+            } else {
+                current
+            }
+        })
+}
+
+fn runtime_health_state_rank(state: dae_outbound::HealthState) -> u8 {
+    match state {
+        dae_outbound::HealthState::Alive => 0,
+        dae_outbound::HealthState::Dead => 1,
+        dae_outbound::HealthState::Unknown => 2,
+        dae_outbound::HealthState::Unavailable => 3,
     }
 }
 
@@ -343,7 +390,7 @@ mod tests {
         assert_eq!(snapshot["group"], json!("proxy"));
         assert_eq!(snapshot["policy"], json!("random"));
         assert!(snapshot["selectedNodeTag"].is_null());
-        assert_eq!(snapshot["aliveCandidateCount"], json!(2));
+        assert_eq!(snapshot["aliveCandidateCount"], json!(0));
         assert_eq!(
             snapshot["selectionSource"],
             json!(RUNTIME_GROUP_SELECTION_SOURCE_RANDOM)

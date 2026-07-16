@@ -2,6 +2,7 @@ use super::*;
 
 const RESIDENT_HEALTH_RUNTIME_WORKERS_MAX: usize = 4;
 const RESIDENT_HEALTH_RUNTIME_BLOCKING_THREADS_MAX: usize = 4;
+const RESIDENT_HEALTH_BOOTSTRAP_CONCURRENCY_MAX: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResidentHealthExecutor {
@@ -31,6 +32,7 @@ impl ResidentHealthRuntimeConfig {
     pub(in crate::production_runtime_owner::resident_dataplane) fn detect(
         group_count: usize,
         per_group_candidate_concurrency: usize,
+        bootstrap_candidate_count: usize,
     ) -> Self {
         let available_parallelism = std::thread::available_parallelism()
             .map(|parallelism| parallelism.get())
@@ -39,6 +41,7 @@ impl ResidentHealthRuntimeConfig {
             available_parallelism,
             group_count,
             per_group_candidate_concurrency,
+            bootstrap_candidate_count,
         )
     }
 
@@ -46,13 +49,13 @@ impl ResidentHealthRuntimeConfig {
         available_parallelism: usize,
         group_count: usize,
         per_group_candidate_concurrency: usize,
+        bootstrap_candidate_count: usize,
     ) -> Self {
         let available_parallelism = available_parallelism.max(1);
-        let runnable_probe_tasks = if group_count == 0 {
-            1
-        } else {
-            group_count.saturating_mul(per_group_candidate_concurrency.max(1))
-        };
+        let periodic_probe_tasks = group_count
+            .saturating_mul(per_group_candidate_concurrency.max(1))
+            .max(1);
+        let runnable_probe_tasks = periodic_probe_tasks.max(bootstrap_candidate_count.max(1));
         let worker_threads = available_parallelism
             .min(runnable_probe_tasks)
             .clamp(1, RESIDENT_HEALTH_RUNTIME_WORKERS_MAX);
@@ -102,6 +105,17 @@ impl ResidentHealthRuntimeConfig {
         self.os_thread_count()
             .saturating_add(self.max_blocking_threads)
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn bootstrap_concurrency(
+        self,
+        candidate_count: usize,
+        configured_periodic_concurrency: usize,
+    ) -> usize {
+        self.available_parallelism
+            .min(candidate_count.max(1))
+            .min(RESIDENT_HEALTH_BOOTSTRAP_CONCURRENCY_MAX)
+            .max(configured_periodic_concurrency.max(1))
+    }
 }
 
 pub(super) fn build_resident_health_runtime(
@@ -146,21 +160,21 @@ mod tests {
 
     #[test]
     fn health_runtime_workers_follow_cpu_and_static_work_bounds() {
-        let single = ResidentHealthRuntimeConfig::from_parallelism(1, 128, 8);
+        let single = ResidentHealthRuntimeConfig::from_parallelism(1, 128, 8, 1_024);
         assert_eq!(single.executor, ResidentHealthExecutor::CurrentThread);
         assert_eq!(single.worker_threads, 1);
         assert_eq!(single.owner_threads, 0);
         assert_eq!(single.max_blocking_threads, 1);
 
-        let small = ResidentHealthRuntimeConfig::from_parallelism(8, 1, 1);
+        let small = ResidentHealthRuntimeConfig::from_parallelism(8, 1, 1, 1);
         assert_eq!(small.executor, ResidentHealthExecutor::CurrentThread);
         assert_eq!(small.worker_threads, 1);
 
-        let disabled = ResidentHealthRuntimeConfig::from_parallelism(64, 0, 128);
+        let disabled = ResidentHealthRuntimeConfig::from_parallelism(64, 0, 128, 0);
         assert_eq!(disabled.executor, ResidentHealthExecutor::CurrentThread);
         assert_eq!(disabled.worker_threads, 1);
 
-        let bounded = ResidentHealthRuntimeConfig::from_parallelism(64, 128, 8);
+        let bounded = ResidentHealthRuntimeConfig::from_parallelism(64, 128, 8, 1_024);
         assert_eq!(bounded.executor, ResidentHealthExecutor::MultiThread);
         assert_eq!(bounded.worker_threads, RESIDENT_HEALTH_RUNTIME_WORKERS_MAX);
         assert_eq!(bounded.owner_threads, 1);
@@ -176,7 +190,7 @@ mod tests {
             .map(|parallelism| parallelism.get())
             .unwrap_or(1)
             .max(1);
-        let detected = ResidentHealthRuntimeConfig::detect(128, 8);
+        let detected = ResidentHealthRuntimeConfig::detect(128, 8, 1_024);
         assert_eq!(
             detected.worker_threads,
             available.min(RESIDENT_HEALTH_RUNTIME_WORKERS_MAX)
@@ -191,12 +205,12 @@ mod tests {
     fn health_runtime_builds_current_and_multi_thread_executors() {
         #[cfg(target_os = "linux")]
         let _guard = HEALTH_RUNTIME_TEST_LOCK.lock().unwrap();
-        let current = ResidentHealthRuntimeConfig::from_parallelism(1, 4, 4);
+        let current = ResidentHealthRuntimeConfig::from_parallelism(1, 4, 4, 16);
         let runtime = build_resident_health_runtime(current).unwrap();
         assert_eq!(runtime.block_on(async { 3 }), 3);
         drop(runtime);
 
-        let multi = ResidentHealthRuntimeConfig::from_parallelism(4, 4, 4);
+        let multi = ResidentHealthRuntimeConfig::from_parallelism(4, 4, 4, 16);
         let runtime = build_resident_health_runtime(multi).unwrap();
         let result = runtime.block_on(async { tokio::spawn(async { 7 }).await.unwrap() });
         assert_eq!(result, 7);
@@ -206,7 +220,7 @@ mod tests {
     #[test]
     fn health_runtime_worker_and_blocking_thread_counts_match_detected_bounds() {
         let _guard = HEALTH_RUNTIME_TEST_LOCK.lock().unwrap();
-        let config = ResidentHealthRuntimeConfig::from_parallelism(64, 128, 8);
+        let config = ResidentHealthRuntimeConfig::from_parallelism(64, 128, 8, 1_024);
         let runtime = build_resident_health_runtime(config).unwrap();
         let active = Arc::new(AtomicUsize::new(0));
         let maximum_active = Arc::new(AtomicUsize::new(0));

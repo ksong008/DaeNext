@@ -928,6 +928,22 @@ mod tests {
             graph["runtimeComponents"]["packetSessionManager"]["chainCarrier"],
             "unsupported"
         );
+        assert_eq!(
+            graph["runtimeComponents"]["udpExecutionAgreement"]["policyClosed"],
+            true
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["negativePathReady"],
+            true
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["transientExchangeCompatible"],
+            false
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["probeExecutor"]["udp"]["status"],
+            "fail-closed"
+        );
         assert!(
             graph["runtimeComponents"]["packetSessionManager"]["unsupportedReason"]
                 .as_str()
@@ -954,6 +970,14 @@ mod tests {
         assert_eq!(
             graph["runtimeComponents"]["packetSessionManager"]["chainCarrier"],
             "parent-connect-stream"
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["udpExecutionAgreement"]["policyClosed"],
+            false
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["packetSessionManager"]["transientExchangeCompatible"],
+            true
         );
     }
 }
