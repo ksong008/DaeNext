@@ -197,7 +197,7 @@ mod tests {
         ] {
             let pending = session.pending_response_result();
             assert!(!pending.reply_forwarded);
-            assert!(pending.payload.is_empty());
+            assert!(pending.payload_for_test().is_empty());
             assert_eq!(pending.execution_label, "tls-udp-over-tcp");
             assert_eq!(pending.session_executor, Some(expected_executor));
             assert_eq!(pending.underlay_reuse, Some(expected_reuse));

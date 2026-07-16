@@ -114,7 +114,7 @@ async fn h2_extended_connect_round_trips_ipv4_and_reuses_stream() {
         let response = exchange(&mut session, &proxy, target, payload)
             .await
             .unwrap();
-        assert_eq!(response.payload, payload);
+        assert_eq!(response.payload_for_test(), payload);
         assert_eq!(response.execution_label, "connect-udp-h2-capsule");
     }
 
@@ -150,14 +150,14 @@ async fn h2_pool_multiplexes_independent_ipv4_and_ipv6_target_streams() {
         exchange(&mut first, &proxy, ipv4_target, b"ipv4")
             .await
             .unwrap()
-            .payload,
+            .into_payload_for_test(),
         b"ipv4"
     );
     assert_eq!(
         exchange(&mut second, &proxy, ipv6_target, b"ipv6")
             .await
             .unwrap()
-            .payload,
+            .into_payload_for_test(),
         b"ipv6"
     );
 
@@ -192,7 +192,7 @@ async fn h2_burst_reuses_one_target_stream_without_response_crosstalk() {
         let response = exchange(&mut session, &proxy, target, &payload)
             .await
             .unwrap();
-        assert_eq!(response.payload, payload);
+        assert_eq!(response.payload_for_test(), payload);
     }
 
     assert_eq!(server.connection_count(), 1);
@@ -219,7 +219,7 @@ async fn h2_pool_bounds_and_multiplexes_concurrent_target_sessions() {
                 .await
                 .unwrap();
             session.shutdown().await;
-            (payload, response.payload)
+            (payload, response.into_payload_for_test())
         }
     });
 
@@ -245,7 +245,7 @@ async fn h2_basic_auth_is_sensitive_and_server_enforced() {
         exchange(&mut accepted, &accepted_proxy, target, b"authenticated")
             .await
             .unwrap()
-            .payload,
+            .into_payload_for_test(),
         b"authenticated"
     );
     accepted.shutdown().await;
@@ -315,7 +315,7 @@ async fn h2_stream_failure_is_local_and_cross_target_reuse_is_rejected() {
         exchange(&mut session, &proxy, first_target, b"first")
             .await
             .unwrap()
-            .payload,
+            .into_payload_for_test(),
         b"first"
     );
     let err = session
@@ -371,7 +371,7 @@ async fn h2_generation_cleanup_removes_owned_pool_once() {
         exchange(&mut session, &proxy, target, b"cleanup")
             .await
             .unwrap()
-            .payload,
+            .into_payload_for_test(),
         b"cleanup"
     );
 
@@ -398,7 +398,7 @@ async fn h2_maximum_bounded_capsule_crosses_flow_control_windows_without_stall()
     let response = exchange(&mut session, &proxy, target, &payload)
         .await
         .unwrap();
-    assert_eq!(response.payload, payload);
+    assert_eq!(response.payload_for_test(), payload);
 
     session.shutdown().await;
     clear_generation(runtime);
@@ -456,7 +456,7 @@ async fn h2_goaway_keeps_existing_stream_and_reconnects_new_session() {
         exchange(&mut existing, &proxy, target, b"before-goaway")
             .await
             .unwrap()
-            .payload,
+            .into_payload_for_test(),
         b"before-goaway"
     );
 
@@ -465,14 +465,14 @@ async fn h2_goaway_keeps_existing_stream_and_reconnects_new_session() {
         exchange(&mut replacement, &proxy, target, b"after-goaway")
             .await
             .unwrap()
-            .payload,
+            .into_payload_for_test(),
         b"after-goaway"
     );
     assert_eq!(
         exchange(&mut existing, &proxy, target, b"existing-still-open")
             .await
             .unwrap()
-            .payload,
+            .into_payload_for_test(),
         b"existing-still-open"
     );
     assert!(server.connection_count() >= 2);
