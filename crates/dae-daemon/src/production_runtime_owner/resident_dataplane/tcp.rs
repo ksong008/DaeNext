@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::io::ErrorKind;
 use std::mem::size_of;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -162,10 +162,13 @@ use self::vless_handlers::*;
 mod proxy_dispatch;
 pub(super) use self::proxy_dispatch::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::proxy_dispatch::{
-    ResidentConnectedQuicEndpoint, connect_quic_endpoint_candidates_async,
+    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
+    QuicEndpointOpenContext, QuicEndpointProtocol, ResidentConnectedQuicEndpoint,
+    connect_quic_endpoint_candidates_async, inherit_quic_endpoint_observation,
     open_hysteria2_quic_connection_candidates_async, open_juicity_quic_connection_candidates_async,
     open_marked_quic_endpoint_for_remote, open_tuic_quic_connection_candidates_async,
-    relay_tcp_over_anytls_async, wait_anytls_synack, write_anytls_frame,
+    quic_endpoint_metrics_snapshot, relay_tcp_over_anytls_async, scope_quic_endpoint_observation,
+    wait_anytls_synack, write_anytls_frame,
 };
 mod plain_handlers;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::plain_handlers::http_proxy_connect_async;

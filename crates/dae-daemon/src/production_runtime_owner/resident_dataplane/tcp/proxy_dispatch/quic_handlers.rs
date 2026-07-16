@@ -118,13 +118,20 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
         port_hop_ports,
         tls_identity,
         RESIDENT_CONNECT_TIMEOUT,
+        QuicEndpointCallerClass::TcpData,
     )
     .await?;
     let port_hopping = !port_hop_ports.is_empty();
-    let auth_session = authenticate_hysteria2_connection(connection.clone(), auth, max_rx)
-        .await
-        .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
+    let auth_session =
+        match authenticate_hysteria2_connection(connection.clone(), auth, max_rx).await {
+            Ok(session) => session,
+            Err(err) => {
+                endpoint.mark_failed();
+                return Err(format!("authenticate Hysteria2 QUIC connection: {err}"));
+            }
+        };
     if !auth_session.report().auth_ok {
+        endpoint.mark_failed();
         connection.close(0x101_u32.into(), b"resident hysteria2 auth failed");
         let mut event = generic_proxy_tcp_failed_event(
             peer,
@@ -147,6 +154,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
         );
         return Ok(event);
     }
+    endpoint.mark_ready();
     let (mut send, mut recv) = connection
         .open_bi()
         .await
@@ -271,11 +279,17 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
         alpn,
         allow_insecure,
         RESIDENT_CONNECT_TIMEOUT,
+        QuicEndpointCallerClass::TcpData,
     )
     .await?;
-    let auth_report = authenticate_tuic_connection(&connection, uuid, password)
-        .await
-        .map_err(|err| format!("authenticate TUIC QUIC connection: {err}"))?;
+    let auth_report = match authenticate_tuic_connection(&connection, uuid, password).await {
+        Ok(report) => report,
+        Err(err) => {
+            endpoint.mark_failed();
+            return Err(format!("authenticate TUIC QUIC connection: {err}"));
+        }
+    };
+    endpoint.mark_ready();
     let (mut send, mut recv) = connection
         .open_bi()
         .await
@@ -370,12 +384,18 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
         allow_insecure,
         pinned_certchain_sha256,
         RESIDENT_CONNECT_TIMEOUT,
+        QuicEndpointCallerClass::TcpData,
     )
     .await?;
     let (auth_report, mut auth_stream) =
-        authenticate_juicity_connection(&connection, uuid, password)
-            .await
-            .map_err(|err| format!("authenticate Juicity QUIC connection: {err}"))?;
+        match authenticate_juicity_connection(&connection, uuid, password).await {
+            Ok(auth) => auth,
+            Err(err) => {
+                endpoint.mark_failed();
+                return Err(format!("authenticate Juicity QUIC connection: {err}"));
+            }
+        };
+    endpoint.mark_ready();
     let (mut send, mut recv) = connection
         .open_bi()
         .await

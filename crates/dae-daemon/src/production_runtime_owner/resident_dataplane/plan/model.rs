@@ -178,6 +178,9 @@ impl ResidentProxyPlan {
         runtime_generation: u64,
         connect_udp_runtime: ResidentConnectUdpRuntimePlan,
     ) {
+        self.execution = Some(self.execution_plan().with_runtime_generation(
+            dae_runtime_control::OwnerGeneration::new(runtime_generation),
+        ));
         if let Some(xmux) = &mut self.xhttp_xmux {
             xmux.apply_runtime_generation(runtime_generation);
         }

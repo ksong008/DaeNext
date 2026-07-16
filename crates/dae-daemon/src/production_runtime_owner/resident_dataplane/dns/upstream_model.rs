@@ -255,11 +255,12 @@ impl ResidentDnsForwarderSelectionKey {
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsQuicForwarder {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) generation: u64,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fixed_remote:
         Option<SocketAddr>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) endpoint:
-        Option<quinn::Endpoint>,
+        Option<ObservedQuicEndpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
@@ -327,10 +328,11 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsH3Forwarder {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) generation: u64,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) endpoint:
-        Option<quinn::Endpoint>,
+        Option<ObservedQuicEndpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) client:

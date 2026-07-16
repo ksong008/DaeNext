@@ -15,8 +15,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use super::super::super::RESIDENT_CONNECT_TIMEOUT;
 use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::super::super::tcp::{
-    ResidentConnectedQuicEndpoint, open_hysteria2_quic_connection_candidates_async,
-    open_juicity_quic_connection_candidates_async, open_tuic_quic_connection_candidates_async,
+    ObservedQuicEndpoint, QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
+    open_hysteria2_quic_connection_candidates_async, open_juicity_quic_connection_candidates_async,
+    open_tuic_quic_connection_candidates_async,
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
@@ -46,23 +47,27 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 &port_hop_ports,
                 &tls_identity,
                 RESIDENT_CONNECT_TIMEOUT,
+                QuicEndpointCallerClass::BackgroundHealth,
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
             let auth_session = authenticate_hysteria2_connection(connection.clone(), &auth, max_rx)
                 .await
                 .map_err(|err| {
+                    endpoint.mark_failed();
                     NativeTcpProbeError::Open(format!(
                         "authenticate native Hysteria2 connection: {err}"
                     ))
                 })?;
             if !auth_session.report().auth_ok {
+                endpoint.mark_failed();
                 connection.close(0x101_u32.into(), b"native hysteria2 auth failed");
                 return Err(NativeTcpProbeError::Open(format!(
                     "native Hysteria2 auth status {}",
                     auth_session.report().status
                 )));
             }
+            endpoint.mark_ready();
             let (mut send, recv) = connection.open_bi().await.map_err(|err| {
                 NativeTcpProbeError::Open(format!("open native Hysteria2 TCP stream: {err}"))
             })?;
@@ -109,14 +114,17 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 &alpn,
                 allow_insecure,
                 RESIDENT_CONNECT_TIMEOUT,
+                QuicEndpointCallerClass::BackgroundHealth,
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
             authenticate_tuic_connection(&connection, &uuid, &password)
                 .await
                 .map_err(|err| {
+                    endpoint.mark_failed();
                     NativeTcpProbeError::Open(format!("authenticate native TUIC connection: {err}"))
                 })?;
+            endpoint.mark_ready();
             let (mut send, recv) = connection.open_bi().await.map_err(|err| {
                 NativeTcpProbeError::Open(format!("open native TUIC TCP stream: {err}"))
             })?;
@@ -145,16 +153,19 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 allow_insecure,
                 &pinned_certchain_sha256,
                 RESIDENT_CONNECT_TIMEOUT,
+                QuicEndpointCallerClass::BackgroundHealth,
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
             let (_, auth_stream) = authenticate_juicity_connection(&connection, &uuid, &password)
                 .await
                 .map_err(|err| {
+                    endpoint.mark_failed();
                     NativeTcpProbeError::Open(format!(
                         "authenticate native Juicity connection: {err}"
                     ))
                 })?;
+            endpoint.mark_ready();
             let (mut send, recv) = connection.open_bi().await.map_err(|err| {
                 NativeTcpProbeError::Open(format!("open native Juicity TCP stream: {err}"))
             })?;
@@ -180,7 +191,7 @@ struct QuicStreamNativeTcpTunnel {
     send: quinn::SendStream,
     recv: quinn::RecvStream,
     connection: quinn::Connection,
-    endpoint: quinn::Endpoint,
+    endpoint: ObservedQuicEndpoint,
     _hysteria2_auth_session: Option<Hysteria2AuthenticatedSession>,
     _juicity_auth_stream: Option<JuicityAuthStream>,
 }
@@ -190,7 +201,7 @@ impl QuicStreamNativeTcpTunnel {
         send: quinn::SendStream,
         recv: quinn::RecvStream,
         connection: quinn::Connection,
-        endpoint: quinn::Endpoint,
+        endpoint: ObservedQuicEndpoint,
         hysteria2_auth_session: Option<Hysteria2AuthenticatedSession>,
         juicity_auth_stream: Option<JuicityAuthStream>,
     ) -> Self {

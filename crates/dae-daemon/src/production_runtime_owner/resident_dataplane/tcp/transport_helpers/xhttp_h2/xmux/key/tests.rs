@@ -130,6 +130,39 @@ fn equivalent_primary_endpoints_reuse_the_same_key() {
     let mut second_hash = DefaultHasher::new();
     second.hash(&mut second_hash);
     assert_eq!(first_hash.finish(), second_hash.finish());
+    assert_eq!(
+        first.quic_provenance_identity(),
+        second.quic_provenance_identity()
+    );
+}
+
+#[test]
+fn quic_provenance_identity_partitions_every_hashed_transport_key_change() {
+    let endpoint = endpoint(Some(reality(1)));
+    let proxy = test_proxy(&endpoint);
+    let resolved = resolved(&["192.0.2.1:443"]);
+    let base = primary_key(&proxy, &endpoint, &resolved, 9, false);
+
+    let mut changed_reality = endpoint.clone();
+    changed_reality.reality = Some(reality(2));
+    let reality_key = primary_key(
+        &test_proxy(&changed_reality),
+        &changed_reality,
+        &resolved,
+        9,
+        false,
+    );
+    let mark_key = primary_key(&proxy, &endpoint, &resolved, 10, false);
+    assert_ne!(base, reality_key);
+    assert_ne!(base, mark_key);
+    assert_ne!(
+        base.quic_provenance_identity(),
+        reality_key.quic_provenance_identity()
+    );
+    assert_ne!(
+        base.quic_provenance_identity(),
+        mark_key.quic_provenance_identity()
+    );
 }
 
 #[test]

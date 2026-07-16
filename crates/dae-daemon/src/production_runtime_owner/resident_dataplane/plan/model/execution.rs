@@ -1,4 +1,7 @@
 use super::*;
+use dae_runtime_control::OwnerGeneration;
+
+const UNMATERIALIZED_RESIDENT_PLAN_GENERATION: OwnerGeneration = OwnerGeneration::new(0);
 
 mod protocol;
 mod semantics;
@@ -20,6 +23,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
         ResidentSecurityUnderlayPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) wrapper: ResidentStreamWrapperPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) udp: ResidentUdpExecutorFactory,
+    pub(in crate::production_runtime_owner::resident_dataplane) runtime_generation: OwnerGeneration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +34,11 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentManualP
 }
 
 impl ResidentExecutionPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) const fn plan_generation()
+    -> OwnerGeneration {
+        UNMATERIALIZED_RESIDENT_PLAN_GENERATION
+    }
+
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
         let security = ResidentSecurityUnderlayPlan::from_proxy(proxy);
         let wrapper = ResidentStreamWrapperPlan::from_proxy(proxy);
@@ -40,7 +49,19 @@ impl ResidentExecutionPlan {
             security,
             wrapper,
             udp,
+            runtime_generation: Self::plan_generation(),
         }
+    }
+
+    pub(super) fn with_runtime_generation(mut self, generation: OwnerGeneration) -> Self {
+        self.runtime_generation = generation;
+        self
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) const fn runtime_generation(
+        self,
+    ) -> OwnerGeneration {
+        self.runtime_generation
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn executor_contract(
@@ -76,8 +97,8 @@ mod tests {
 
     #[test]
     fn materialized_execution_plan_stays_compact() {
-        assert!(std::mem::size_of::<ResidentExecutionPlan>() <= 8);
-        assert!(std::mem::size_of::<Option<ResidentExecutionPlan>>() <= 8);
+        assert!(std::mem::size_of::<ResidentExecutionPlan>() <= 16);
+        assert!(std::mem::size_of::<Option<ResidentExecutionPlan>>() <= 16);
     }
 
     #[test]
@@ -87,6 +108,7 @@ mod tests {
             security: ResidentSecurityUnderlayPlan::StandardTls,
             wrapper: ResidentStreamWrapperPlan::ConnectUdpH2,
             udp: ResidentUdpExecutorFactory::ConnectUdpH2,
+            runtime_generation: UNMATERIALIZED_RESIDENT_PLAN_GENERATION,
         };
         assert_eq!(h2.manual_probe_dispatch(), ResidentManualProbeDispatch::Udp);
 
@@ -95,6 +117,7 @@ mod tests {
             security: ResidentSecurityUnderlayPlan::QuicTls,
             wrapper: ResidentStreamWrapperPlan::ConnectUdpH3,
             udp: ResidentUdpExecutorFactory::ConnectUdpH3,
+            runtime_generation: UNMATERIALIZED_RESIDENT_PLAN_GENERATION,
         };
         assert_eq!(h3.manual_probe_dispatch(), ResidentManualProbeDispatch::Udp);
     }

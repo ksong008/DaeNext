@@ -75,9 +75,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let last_error = Arc::new(Mutex::new(None));
     let task_error = Arc::clone(&last_error);
-    let task = tokio::spawn(async move {
+    let task = tokio::spawn(inherit_quic_endpoint_observation(async move {
         resident_proxy_udp_bridge_loop(proxy, original_dst, socket, shutdown_rx, task_error).await;
-    });
+    }));
     Ok(ResidentProxyUdpBridge {
         local_addr,
         shutdown: Some(shutdown_tx),

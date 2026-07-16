@@ -7,7 +7,13 @@ pub(super) async fn forward_dns_quic_to_proxy_async(
     proxy: Arc<ResidentProxyPlan>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
-    forward_dns_quic_to_proxy_with_context(upstream, remote, payload, proxy, context).await
+    let generation = proxy.execution_plan().runtime_generation();
+    scope_quic_endpoint_observation(
+        QuicEndpointCallerClass::ManagedDns,
+        Some(generation),
+        forward_dns_quic_to_proxy_with_context(upstream, remote, payload, proxy, context),
+    )
+    .await
 }
 
 async fn forward_dns_quic_to_proxy_with_context(
@@ -24,8 +30,13 @@ async fn forward_dns_quic_to_proxy_with_context(
             open_resident_proxy_udp_bridge_async(Arc::clone(&proxy), remote),
         )
         .await?;
-    let mut endpoint = match open_proxy_dns_quic_endpoint(bridge.local_addr(), proxy.mark, context)
-    {
+    let mut endpoint = match open_proxy_dns_quic_endpoint(
+        upstream,
+        remote,
+        bridge.local_addr(),
+        &proxy,
+        context,
+    ) {
         Ok(endpoint) => endpoint,
         Err(error) => {
             let error = append_bridge_error(error, &bridge);
@@ -60,10 +71,12 @@ async fn forward_dns_quic_to_proxy_with_context(
 }
 
 fn open_proxy_dns_quic_endpoint(
-    remote: SocketAddr,
-    mark: u32,
+    upstream: &ResidentDnsUpstream,
+    upstream_remote: SocketAddr,
+    bridge_remote: SocketAddr,
+    proxy: &ResidentProxyPlan,
     context: ProxyDnsRequestContext,
-) -> Result<quinn::Endpoint, ProxyDnsRequestError> {
+) -> Result<ObservedQuicEndpoint, ProxyDnsRequestError> {
     context.ensure(ProxyDnsRequestStage::OwnerAcquire)?;
     let config = resident_dns_quic_client_config(DNS_DOQ_ALPN).map_err(|error| {
         ProxyDnsRequestError::new(
@@ -72,39 +85,58 @@ fn open_proxy_dns_quic_endpoint(
             error,
         )
     })?;
-    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote).map_err(|error| {
-        ProxyDnsRequestError::new(
-            ProxyDnsRequestStage::OwnerAcquire,
-            ProxyDnsRequestFailure::Network,
-            format!("open proxied DoQ endpoint: {error}"),
-        )
-    })?;
+    let open_context = managed_dns_quic_endpoint_context(
+        QuicEndpointProtocol::DnsOverQuic,
+        upstream,
+        upstream_remote,
+        proxy,
+    );
+    let mut endpoint =
+        open_marked_quic_endpoint_for_remote(proxy.mark, bridge_remote, open_context).map_err(
+            |error| {
+                ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::OwnerAcquire,
+                    ProxyDnsRequestFailure::Network,
+                    format!("open proxied DoQ endpoint: {error}"),
+                )
+            },
+        )?;
     endpoint.set_default_client_config(config);
     Ok(endpoint)
 }
 
 async fn connect_proxy_dns_quic_connection(
     upstream: &ResidentDnsUpstream,
-    endpoint: &mut quinn::Endpoint,
+    endpoint: &mut ObservedQuicEndpoint,
     remote: SocketAddr,
     context: ProxyDnsRequestContext,
 ) -> Result<quinn::Connection, ProxyDnsRequestError> {
-    let connecting = endpoint
-        .connect(remote, &upstream.target.host)
-        .map_err(|error| {
-            ProxyDnsRequestError::new(
+    let connecting = match endpoint.connect(remote, &upstream.target.host) {
+        Ok(connecting) => connecting,
+        Err(error) => {
+            endpoint.mark_failed();
+            return Err(ProxyDnsRequestError::new(
                 ProxyDnsRequestStage::Connect,
                 ProxyDnsRequestFailure::Network,
                 format!("connect proxied DoQ endpoint: {error}"),
-            )
-        })?;
-    let connection = context
+            ));
+        }
+    };
+    let connection = match context
         .run(
             ProxyDnsRequestStage::Authenticate,
             ProxyDnsRequestFailure::Network,
             connecting,
         )
-        .await?;
+        .await
+    {
+        Ok(connection) => connection,
+        Err(error) => {
+            endpoint.mark_failed();
+            return Err(error);
+        }
+    };
+    endpoint.mark_ready();
     Ok(connection)
 }
 
@@ -177,7 +209,7 @@ async fn shutdown_proxy_dns_bridge(
 }
 
 async fn shutdown_proxy_dns_quic(
-    endpoint: quinn::Endpoint,
+    endpoint: ObservedQuicEndpoint,
     bridge: ResidentProxyUdpBridge,
     context: ProxyDnsRequestContext,
 ) -> Result<(), ProxyDnsRequestError> {
