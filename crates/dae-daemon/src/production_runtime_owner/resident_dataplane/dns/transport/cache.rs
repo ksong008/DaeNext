@@ -88,6 +88,7 @@ impl ResidentDnsForwarderCache {
             || {
                 Ok(Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
                     upstream: upstream.clone(),
+                    generation: self.udp_runtime.generation,
                     mark,
                     fixed_remote: None,
                     endpoint: None,
@@ -124,6 +125,7 @@ impl ResidentDnsForwarderCache {
             || {
                 Ok(Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
                     upstream: upstream.clone(),
+                    generation: self.udp_runtime.generation,
                     mark,
                     fixed_remote: Some(target),
                     endpoint: None,
@@ -353,6 +355,7 @@ impl ResidentDnsForwarderCache {
             || {
                 Ok(Arc::new(AsyncMutex::new(ResidentDnsH3Forwarder {
                     upstream: upstream.clone(),
+                    generation: self.udp_runtime.generation,
                     target,
                     mark,
                     endpoint: None,

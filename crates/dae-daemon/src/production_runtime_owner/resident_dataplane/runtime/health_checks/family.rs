@@ -6,6 +6,19 @@ pub(super) async fn run_resident_candidate_family_health_checks(
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
 ) -> HealthCheckRoundStatus {
+    scope_quic_endpoint_observation(
+        QuicEndpointCallerClass::BackgroundHealth,
+        Some(candidate.proxy.execution_plan().runtime_generation()),
+        run_resident_candidate_family_health_checks_scoped(group, candidate, stop),
+    )
+    .await
+}
+
+async fn run_resident_candidate_family_health_checks_scoped(
+    group: &plan::ResidentProxyGroupPlan,
+    candidate: &plan::ResidentProxyProbePlan,
+    stop: SharedResidentStopSignal,
+) -> HealthCheckRoundStatus {
     match candidate.proxy.execution_plan().manual_probe_dispatch() {
         plan::ResidentManualProbeDispatch::Tcp => {
             let tcp_results = match super::tcp_family_probe::probe_resident_candidate_tcp_families(

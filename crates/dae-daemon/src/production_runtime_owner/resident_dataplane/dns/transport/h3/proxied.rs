@@ -1,4 +1,4 @@
-use super::super::quic::append_dns_proxy_udp_bridge_error;
+use super::super::quic::{append_dns_proxy_udp_bridge_error, managed_dns_quic_endpoint_context};
 use super::super::wire::resident_dns_quic_client_config;
 use super::*;
 
@@ -40,7 +40,7 @@ struct ProxiedDoh3Exchange {
     proxy: Arc<ResidentProxyPlan>,
     context: ProxyDnsRequestContext,
     bridge: Option<ResidentProxyUdpBridge>,
-    endpoint: Option<quinn::Endpoint>,
+    endpoint: Option<ObservedQuicEndpoint>,
     connection: Option<quinn::Connection>,
     client: Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
     driver_task: Option<tokio::task::JoinHandle<()>>,
@@ -101,37 +101,47 @@ impl ProxiedDoh3Exchange {
                 error,
             )
         })?;
+        let open_context = managed_dns_quic_endpoint_context(
+            QuicEndpointProtocol::DnsOverHttp3,
+            &self.upstream,
+            self.remote,
+            &self.proxy,
+        );
         self.endpoint = Some(
-            open_marked_quic_endpoint_for_remote(self.proxy.mark, bridge_addr).map_err(
-                |error| {
+            open_marked_quic_endpoint_for_remote(self.proxy.mark, bridge_addr, open_context)
+                .map_err(|error| {
                     ProxyDnsRequestError::new(
                         ProxyDnsRequestStage::OwnerAcquire,
                         ProxyDnsRequestFailure::Network,
                         error,
                     )
-                },
-            )?,
+                })?,
         );
         let connecting = {
-            let endpoint = self.endpoint.as_mut().ok_or_else(|| {
-                ProxyDnsRequestError::new(
-                    ProxyDnsRequestStage::Connect,
-                    ProxyDnsRequestFailure::Protocol,
-                    "proxied DoH3 endpoint is unavailable",
-                )
-            })?;
+            let endpoint = match self.endpoint.as_mut() {
+                Some(endpoint) => endpoint,
+                None => {
+                    return Err(ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Connect,
+                        ProxyDnsRequestFailure::Protocol,
+                        "proxied DoH3 endpoint is unavailable",
+                    ));
+                }
+            };
             endpoint.set_default_client_config(config);
-            endpoint
-                .connect(bridge_addr, &self.upstream.target.host)
-                .map_err(|error| {
-                    ProxyDnsRequestError::new(
+            match endpoint.connect(bridge_addr, &self.upstream.target.host) {
+                Ok(connecting) => connecting,
+                Err(error) => {
+                    endpoint.mark_failed();
+                    return Err(ProxyDnsRequestError::new(
                         ProxyDnsRequestStage::Connect,
                         ProxyDnsRequestFailure::Network,
                         format!("connect DoH3 endpoint: {error}"),
-                    )
-                })?
+                    ));
+                }
+            }
         };
-        let connection = self
+        let connection = match self
             .context
             .run(
                 ProxyDnsRequestStage::Authenticate,
@@ -139,48 +149,65 @@ impl ProxiedDoh3Exchange {
                 connecting,
             )
             .await
-            .map_err(|error| {
-                ProxyDnsRequestError::new(
+        {
+            Ok(connection) => connection,
+            Err(error) => {
+                if let Some(endpoint) = self.endpoint.as_ref() {
+                    endpoint.mark_failed();
+                }
+                return Err(ProxyDnsRequestError::new(
                     error.stage(),
                     error.failure(),
                     format!(
                         "connect DNS H3 upstream {} {}: {error}",
                         self.upstream.tag, self.upstream.target.authority
                     ),
-                )
-            })?;
+                ));
+            }
+        };
         self.connection = Some(connection);
         Ok(())
     }
 
     async fn open_h3_client(&mut self) -> Result<(), ProxyDnsRequestError> {
-        let connection = self
-            .connection
-            .as_ref()
-            .ok_or_else(|| {
-                ProxyDnsRequestError::new(
+        let connection = match self.connection.as_ref() {
+            Some(connection) => connection.clone(),
+            None => {
+                if let Some(endpoint) = self.endpoint.as_ref() {
+                    endpoint.mark_failed();
+                }
+                return Err(ProxyDnsRequestError::new(
                     ProxyDnsRequestStage::Authenticate,
                     ProxyDnsRequestFailure::Protocol,
                     "proxied DoH3 connection is unavailable",
-                )
-            })?
-            .clone();
+                ));
+            }
+        };
         let h3_connection = h3_quinn::Connection::new(connection);
-        let (mut driver, client) = self
+        let h3_client = self
             .context
             .run(
                 ProxyDnsRequestStage::Authenticate,
                 ProxyDnsRequestFailure::Network,
                 h3::client::new(h3_connection),
             )
-            .await
-            .map_err(|error| {
-                ProxyDnsRequestError::new(
+            .await;
+        let (mut driver, client) = match h3_client {
+            Ok(client) => client,
+            Err(error) => {
+                if let Some(endpoint) = self.endpoint.as_ref() {
+                    endpoint.mark_failed();
+                }
+                return Err(ProxyDnsRequestError::new(
                     error.stage(),
                     error.failure(),
                     format!("create DNS H3 client: {error}"),
-                )
-            })?;
+                ));
+            }
+        };
+        if let Some(endpoint) = self.endpoint.as_ref() {
+            endpoint.mark_ready();
+        }
         self.driver_task = Some(tokio::spawn(async move {
             let _ = poll_fn(|cx| driver.poll_close(cx)).await;
         }));
@@ -221,12 +248,17 @@ impl ProxiedDoh3Exchange {
 
 impl ProxiedDoh3ExchangeTarget for ProxiedDoh3Exchange {
     async fn exchange(&mut self) -> Result<Vec<u8>, ProxyDnsRequestError> {
-        let result = async {
-            self.open_bridge().await?;
-            self.connect().await?;
-            self.open_h3_client().await?;
-            self.perform_request().await
-        }
+        let generation = self.proxy.execution_plan().runtime_generation();
+        let result = scope_quic_endpoint_observation(
+            QuicEndpointCallerClass::ManagedDns,
+            Some(generation),
+            async {
+                self.open_bridge().await?;
+                self.connect().await?;
+                self.open_h3_client().await?;
+                self.perform_request().await
+            },
+        )
         .await;
         result.map_err(|error| {
             let error = self.append_bridge_error(error);

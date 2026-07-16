@@ -44,9 +44,13 @@ use super::plan::build_resident_dataplane_plan;
 use super::plan::share_resident_proxy_groups;
 use super::plan::{ResidentProxyPlan, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
 use super::tcp::{
+    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
+    QuicEndpointOpenContext, QuicEndpointProtocol, open_marked_quic_endpoint_for_remote,
+    scope_quic_endpoint_observation, set_socket_mark,
+};
+use super::tcp::{
     exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_dns_tcp_stream_async,
 };
-use super::tcp::{open_marked_quic_endpoint_for_remote, set_socket_mark};
 use super::udp::{
     ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
 };

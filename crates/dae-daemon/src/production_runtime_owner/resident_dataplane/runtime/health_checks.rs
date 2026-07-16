@@ -1,3 +1,4 @@
+use super::tcp::{QuicEndpointCallerClass, scope_quic_endpoint_observation};
 use super::*;
 use crate::allocator::{AllocatorReclaimReason, allocator_reclaim};
 
@@ -162,7 +163,7 @@ pub(crate) fn run_resident_group_health_checks(
     runtime.block_on(run_resident_group_health_checks_async(group, candidates));
 }
 
-pub(crate) async fn probe_resident_candidate_tcp_latency_snapshot(
+async fn probe_resident_candidate_tcp_latency_snapshot_scoped(
     candidate: plan::ResidentProxyProbePlan,
     reload_generation: u64,
 ) -> Value {
@@ -211,27 +212,43 @@ pub(crate) async fn probe_resident_candidate_manual_latency_snapshot(
     candidate: plan::ResidentProxyProbePlan,
     reload_generation: u64,
 ) -> Value {
-    match candidate.proxy.execution_plan().manual_probe_dispatch() {
-        plan::ResidentManualProbeDispatch::Tcp => {
-            probe_resident_candidate_tcp_latency_snapshot(candidate, reload_generation).await
-        }
-        plan::ResidentManualProbeDispatch::Udp => {
-            probe_resident_candidate_udp_latency_snapshot(candidate, reload_generation).await
-        }
-        plan::ResidentManualProbeDispatch::PolicyClosed => manual_probe_unavailable_snapshot(
-            &candidate.link,
-            "native outbound probe not admitted for this node",
-            candidate
-                .proxy
-                .execution_plan()
-                .udp
-                .agreement()
-                .unsupported_reason()
-                .unwrap_or("manual probe is policy-closed for this exact protocol shape"),
-            unix_now_secs(),
-            reload_generation,
-        ),
-    }
+    scope_quic_endpoint_observation(
+        QuicEndpointCallerClass::ManualProbe,
+        Some(dae_runtime_control::OwnerGeneration::new(reload_generation)),
+        async move {
+            match candidate.proxy.execution_plan().manual_probe_dispatch() {
+                plan::ResidentManualProbeDispatch::Tcp => {
+                    probe_resident_candidate_tcp_latency_snapshot_scoped(
+                        candidate,
+                        reload_generation,
+                    )
+                    .await
+                }
+                plan::ResidentManualProbeDispatch::Udp => {
+                    probe_resident_candidate_udp_latency_snapshot(candidate, reload_generation)
+                        .await
+                }
+                plan::ResidentManualProbeDispatch::PolicyClosed => {
+                    manual_probe_unavailable_snapshot(
+                        &candidate.link,
+                        "native outbound probe not admitted for this node",
+                        candidate
+                            .proxy
+                            .execution_plan()
+                            .udp
+                            .agreement()
+                            .unsupported_reason()
+                            .unwrap_or(
+                                "manual probe is policy-closed for this exact protocol shape",
+                            ),
+                        unix_now_secs(),
+                        reload_generation,
+                    )
+                }
+            }
+        },
+    )
+    .await
 }
 
 async fn probe_resident_candidate_udp_latency_snapshot(

@@ -57,6 +57,7 @@ mod tests {
             security: ResidentSecurityUnderlayPlan::None,
             wrapper,
             udp,
+            runtime_generation: ResidentExecutionPlan::plan_generation(),
         }
     }
 

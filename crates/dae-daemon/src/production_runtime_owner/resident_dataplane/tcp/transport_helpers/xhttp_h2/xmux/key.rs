@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use sha2::{Digest, Sha256};
 
 use crate::production_runtime_owner::resident_dataplane::plan::{
@@ -6,6 +8,8 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
 
 use super::super::resolved_endpoint::XhttpResolvedEndpointIdentity;
 use super::*;
+
+const XHTTP_QUIC_PROVENANCE_DOMAIN: &[u8] = b"dae/xhttp/quic-provenance/v1";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum XhttpCarrierRole {
@@ -144,6 +148,12 @@ impl XhttpXmuxKey {
         self.runtime_generation
     }
 
+    pub(in super::super) fn quic_provenance_identity(&self) -> [u8; 32] {
+        let mut hasher = XhttpQuicProvenanceHasher::new();
+        self.hash(&mut hasher);
+        hasher.finalize()
+    }
+
     #[cfg(test)]
     pub(super) fn isolated_test(
         nonce: u64,
@@ -183,6 +193,35 @@ impl XhttpXmuxKey {
                 mptcp: false,
             },
         }
+    }
+}
+
+struct XhttpQuicProvenanceHasher(Sha256);
+
+impl XhttpQuicProvenanceHasher {
+    fn new() -> Self {
+        let mut digest = Sha256::new();
+        update_identity_part(&mut digest, XHTTP_QUIC_PROVENANCE_DOMAIN);
+        Self(digest)
+    }
+
+    fn finalize(self) -> [u8; 32] {
+        self.0.finalize().into()
+    }
+}
+
+impl Hasher for XhttpQuicProvenanceHasher {
+    fn finish(&self) -> u64 {
+        let digest = self.0.clone().finalize();
+        u64::from_be_bytes(
+            digest[..8]
+                .try_into()
+                .expect("SHA-256 prefix is eight bytes"),
+        )
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        update_identity_part(&mut self.0, bytes);
     }
 }
 

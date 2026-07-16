@@ -1,7 +1,7 @@
 use super::super::*;
 use super::ResidentDnsTransportError;
 use super::plain::dns_transport_route_name;
-use super::quic::connect_dns_quic_endpoint_async;
+use super::quic::{configured_dns_quic_endpoint_context, connect_dns_quic_endpoint_async};
 use super::route::{
     ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
     select_dns_upstream_targets,
@@ -142,14 +142,25 @@ async fn cached_dns_h3_client(
             return Ok(client.clone());
         }
     }
-    let (upstream, target, mark) = {
+    let (upstream, generation, target, mark) = {
         let forwarder = forwarder.lock().await;
-        (forwarder.upstream.clone(), forwarder.target, forwarder.mark)
+        (
+            forwarder.upstream.clone(),
+            forwarder.generation,
+            forwarder.target,
+            forwarder.mark,
+        )
     };
+    let open_context = configured_dns_quic_endpoint_context(
+        QuicEndpointProtocol::DnsOverHttp3,
+        &upstream,
+        generation,
+    );
     let (endpoint, connection) = connect_dns_quic_endpoint_async(
         &upstream,
         target,
         mark,
+        open_context,
         DNS_DOH3_ALPN,
         "connect DoH3 endpoint",
         "DNS H3 handshake timeout",
@@ -157,13 +168,23 @@ async fn cached_dns_h3_client(
     )
     .await?;
     let h3_connection = h3_quinn::Connection::new(connection.clone());
-    let (mut driver, client) = time::timeout(
+    let h3_client = match time::timeout(
         RESIDENT_UDP_RESPONSE_TIMEOUT,
         h3::client::new(h3_connection),
     )
     .await
-    .map_err(|_| "create DNS H3 client timeout".to_owned())?
-    .map_err(|err| format!("create DNS H3 client: {err:?}"))?;
+    {
+        Ok(result) => result.map_err(|err| format!("create DNS H3 client: {err:?}")),
+        Err(_) => Err("create DNS H3 client timeout".to_owned()),
+    };
+    let (mut driver, client) = match h3_client {
+        Ok(client) => client,
+        Err(error) => {
+            endpoint.mark_failed();
+            return Err(error);
+        }
+    };
+    endpoint.mark_ready();
     let driver_task = tokio::spawn(async move {
         let _ = poll_fn(|cx| driver.poll_close(cx)).await;
     });

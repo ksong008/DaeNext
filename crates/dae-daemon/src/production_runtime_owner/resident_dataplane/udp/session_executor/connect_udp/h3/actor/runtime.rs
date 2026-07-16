@@ -13,7 +13,7 @@ struct ConnectUdpH3SessionEntry {
 }
 
 pub(super) struct ConnectUdpH3ActorContext {
-    pub(super) endpoint: quinn::Endpoint,
+    pub(super) endpoint: ObservedQuicEndpoint,
     pub(super) connection: quinn::Connection,
     pub(super) client: ::h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     pub(super) driver_task: tokio::task::JoinHandle<()>,

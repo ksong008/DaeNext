@@ -58,10 +58,11 @@ async fn cached_dns_quic_connection(
             return Ok((connection.clone(), forwarder.upstream.clone()));
         }
     }
-    let (upstream, mark, fixed_remote) = {
+    let (upstream, generation, mark, fixed_remote) = {
         let forwarder = forwarder.lock().await;
         (
             forwarder.upstream.clone(),
+            forwarder.generation,
             forwarder.mark,
             forwarder.fixed_remote,
         )
@@ -72,10 +73,16 @@ async fn cached_dns_quic_connection(
         None => resolved_upstream_targets(&upstream).await?,
     };
     for remote in remotes {
+        let open_context = configured_dns_quic_endpoint_context(
+            QuicEndpointProtocol::DnsOverQuic,
+            &upstream,
+            generation,
+        );
         match connect_dns_quic_endpoint_async(
             &upstream,
             remote,
             mark,
+            open_context,
             DNS_DOQ_ALPN,
             "connect DoQ endpoint",
             "DNS QUIC handshake timeout",
@@ -84,6 +91,7 @@ async fn cached_dns_quic_connection(
         .await
         {
             Ok((endpoint, connection)) => {
+                endpoint.mark_ready();
                 let mut forwarder = forwarder.lock().await;
                 forwarder.endpoint = Some(endpoint);
                 forwarder.connection = Some(connection.clone());
@@ -231,28 +239,84 @@ pub(super) async fn connect_dns_quic_endpoint_async(
     upstream: &ResidentDnsUpstream,
     remote: SocketAddr,
     mark: u32,
+    open_context: QuicEndpointOpenContext,
     alpn: &str,
-    endpoint_context: &'static str,
+    connect_context: &'static str,
     handshake_timeout: &'static str,
     upstream_context: &'static str,
-) -> Result<(quinn::Endpoint, quinn::Connection), String> {
-    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
-    endpoint.set_default_client_config(resident_dns_quic_client_config(alpn)?);
-    let connection = time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        endpoint
-            .connect(remote, &upstream.target.host)
-            .map_err(|err| format!("{endpoint_context}: {err}"))?,
+) -> Result<(ObservedQuicEndpoint, quinn::Connection), String> {
+    let client_config = resident_dns_quic_client_config(alpn)?;
+    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote, open_context)?;
+    endpoint.set_default_client_config(client_config);
+    let connection = match endpoint
+        .connect(remote, &upstream.target.host)
+        .map_err(|err| format!("{connect_context}: {err}"))
+    {
+        Ok(connecting) => match time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connecting).await {
+            Ok(result) => result.map_err(|err| {
+                format!(
+                    "{upstream_context} {} {}: {err}",
+                    upstream.tag, upstream.target.authority
+                )
+            }),
+            Err(_) => Err(handshake_timeout.to_owned()),
+        },
+        Err(error) => Err(error),
+    };
+    match connection {
+        Ok(connection) => Ok((endpoint, connection)),
+        Err(error) => {
+            endpoint.mark_failed();
+            Err(error)
+        }
+    }
+}
+
+pub(super) fn configured_dns_quic_endpoint_context(
+    protocol: QuicEndpointProtocol,
+    upstream: &ResidentDnsUpstream,
+    generation: u64,
+) -> QuicEndpointOpenContext {
+    let port = upstream.target.port.to_be_bytes();
+    QuicEndpointOpenContext::from_identity_parts(
+        protocol,
+        QuicEndpointCallerClass::ConfiguredDns,
+        dae_runtime_control::OwnerGeneration::new(generation),
+        QuicEndpointIdentityRole::ConfiguredDns,
+        &[
+            upstream.tag.as_bytes(),
+            upstream.scheme.as_str().as_bytes(),
+            upstream.target.authority.as_bytes(),
+            upstream.target.host.as_bytes(),
+            &port,
+            upstream.path.as_bytes(),
+        ],
     )
-    .await
-    .map_err(|_| handshake_timeout.to_owned())?
-    .map_err(|err| {
-        format!(
-            "{upstream_context} {} {}: {err}",
-            upstream.tag, upstream.target.authority
-        )
-    })?;
-    Ok((endpoint, connection))
+}
+
+pub(super) fn managed_dns_quic_endpoint_context(
+    protocol: QuicEndpointProtocol,
+    upstream: &ResidentDnsUpstream,
+    remote: SocketAddr,
+    proxy: &ResidentProxyPlan,
+) -> QuicEndpointOpenContext {
+    let port = upstream.target.port.to_be_bytes();
+    let remote = remote.to_string();
+    QuicEndpointOpenContext::for_proxy(
+        protocol,
+        QuicEndpointCallerClass::ManagedDns,
+        proxy,
+        QuicEndpointIdentityRole::ManagedDnsOuter,
+        &[
+            upstream.tag.as_bytes(),
+            upstream.scheme.as_str().as_bytes(),
+            upstream.target.authority.as_bytes(),
+            upstream.target.host.as_bytes(),
+            &port,
+            upstream.path.as_bytes(),
+            remote.as_bytes(),
+        ],
+    )
 }
 
 pub(super) fn append_dns_proxy_udp_bridge_error(

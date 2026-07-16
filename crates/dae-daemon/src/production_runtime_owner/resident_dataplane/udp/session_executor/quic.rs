@@ -14,7 +14,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria
     max_rx: u64,
     obfs: ResidentHysteria2ObfsPlan,
     port_hop_ports: Vec<u16>,
-    endpoint: Option<quinn::Endpoint>,
+    endpoint: Option<ObservedQuicEndpoint>,
     connection: Option<quinn::Connection>,
     auth_session: Option<Hysteria2AuthenticatedSession>,
     session_id: u32,
@@ -147,16 +147,27 @@ impl Hysteria2QuicDatagramSession {
             &self.port_hop_ports,
             &self.tls_identity,
             RESIDENT_UDP_RESPONSE_TIMEOUT,
+            QuicEndpointCallerClass::UdpData,
         )
         .await?;
-        let auth_session = time::timeout(
+        let auth_session = match time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
             authenticate_hysteria2_connection(connection.clone(), &self.auth, self.max_rx),
         )
         .await
-        .map_err(|_| "Hysteria2 QUIC auth timeout".to_owned())?
-        .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
+        {
+            Err(_) => {
+                endpoint.mark_failed();
+                return Err("Hysteria2 QUIC auth timeout".to_owned());
+            }
+            Ok(Err(err)) => {
+                endpoint.mark_failed();
+                return Err(format!("authenticate Hysteria2 QUIC connection: {err}"));
+            }
+            Ok(Ok(session)) => session,
+        };
         if !auth_session.report().auth_ok || !auth_session.report().udp_enabled {
+            endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"resident hysteria2 udp auth failed");
             endpoint.wait_idle().await;
             return Err(format!(
@@ -165,6 +176,7 @@ impl Hysteria2QuicDatagramSession {
                 auth_session.report().udp_enabled
             ));
         }
+        endpoint.mark_ready();
         self.connection = Some(connection);
         self.endpoint = Some(endpoint);
         self.auth_session = Some(auth_session);
@@ -189,7 +201,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuic
     password: String,
     alpn: Vec<String>,
     allow_insecure: bool,
-    endpoint: Option<quinn::Endpoint>,
+    endpoint: Option<ObservedQuicEndpoint>,
     connection: Option<quinn::Connection>,
     assoc_id: u16,
     fragments: QuicUdpFragmentBuffer,
@@ -313,15 +325,26 @@ impl TuicQuicDatagramSession {
             &self.alpn,
             self.allow_insecure,
             RESIDENT_UDP_RESPONSE_TIMEOUT,
+            QuicEndpointCallerClass::UdpData,
         )
         .await?;
-        time::timeout(
+        match time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
             authenticate_tuic_connection(&connection, &self.uuid, &self.password),
         )
         .await
-        .map_err(|_| "TUIC QUIC auth timeout".to_owned())?
-        .map_err(|err| format!("authenticate TUIC QUIC connection: {err}"))?;
+        {
+            Err(_) => {
+                endpoint.mark_failed();
+                return Err("TUIC QUIC auth timeout".to_owned());
+            }
+            Ok(Err(err)) => {
+                endpoint.mark_failed();
+                return Err(format!("authenticate TUIC QUIC connection: {err}"));
+            }
+            Ok(Ok(_)) => {}
+        }
+        endpoint.mark_ready();
         self.connection = Some(connection);
         self.endpoint = Some(endpoint);
         Ok(())
@@ -345,7 +368,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct JuicityQ
     password: String,
     allow_insecure: bool,
     pinned_certchain_sha256: String,
-    endpoint: Option<quinn::Endpoint>,
+    endpoint: Option<ObservedQuicEndpoint>,
     connection: Option<quinn::Connection>,
     auth_stream: Option<dae_outbound::juicity::JuicityAuthStream>,
 }
@@ -424,15 +447,26 @@ impl JuicityQuicStreamPacketSession {
             self.allow_insecure,
             &self.pinned_certchain_sha256,
             RESIDENT_UDP_RESPONSE_TIMEOUT,
+            QuicEndpointCallerClass::UdpData,
         )
         .await?;
-        let (_auth_report, auth_stream) = time::timeout(
+        let (_auth_report, auth_stream) = match time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
             authenticate_juicity_connection(&connection, &self.uuid, &self.password),
         )
         .await
-        .map_err(|_| "Juicity QUIC auth timeout".to_owned())?
-        .map_err(|err| format!("authenticate Juicity QUIC connection: {err}"))?;
+        {
+            Err(_) => {
+                endpoint.mark_failed();
+                return Err("Juicity QUIC auth timeout".to_owned());
+            }
+            Ok(Err(err)) => {
+                endpoint.mark_failed();
+                return Err(format!("authenticate Juicity QUIC connection: {err}"));
+            }
+            Ok(Ok(auth)) => auth,
+        };
+        endpoint.mark_ready();
         self.auth_stream = Some(auth_stream);
         self.connection = Some(connection);
         self.endpoint = Some(endpoint);

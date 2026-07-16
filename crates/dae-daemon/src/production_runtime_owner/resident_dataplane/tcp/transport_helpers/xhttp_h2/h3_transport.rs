@@ -8,9 +8,10 @@ use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
+use sha2::{Digest, Sha256};
 
 pub(crate) struct XhttpH3Connection {
-    endpoint: quinn::Endpoint,
+    endpoint: ObservedQuicEndpoint,
     connection: quinn::Connection,
     pub(super) client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     driver_task: tokio::task::JoinHandle<()>,
@@ -28,7 +29,15 @@ pub(super) async fn open_xhttp_h3_proxy_client(
 ) -> Result<XhttpH3EndpointClient, String> {
     let Some(xmux) = &proxy.xhttp_xmux else {
         let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-        let connection = open_xhttp_h3_connection(endpoint, resolved.candidates(), mark).await?;
+        let connection = open_xhttp_h3_connection(
+            proxy,
+            endpoint,
+            resolved.candidates(),
+            mark,
+            QuicEndpointIdentityRole::XhttpPrimary,
+            None,
+        )
+        .await?;
         return Ok(XhttpH3EndpointClient {
             client: connection.client.clone(),
             connection: Some(connection),
@@ -37,8 +46,17 @@ pub(super) async fn open_xhttp_h3_proxy_client(
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
     let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, false);
+    let provenance_identity = key.quic_provenance_identity();
     let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
-        let connection = open_xhttp_h3_connection(endpoint, resolved.candidates(), mark).await?;
+        let connection = open_xhttp_h3_connection(
+            proxy,
+            endpoint,
+            resolved.candidates(),
+            mark,
+            QuicEndpointIdentityRole::XhttpPrimary,
+            Some(provenance_identity),
+        )
+        .await?;
         Ok(XhttpH3EndpointClient {
             client: connection.client.clone(),
             connection: Some(connection),
@@ -60,7 +78,15 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
 ) -> Result<XhttpH3EndpointClient, String> {
     let Some(xmux) = &endpoint.xmux else {
         let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-        let connection = open_xhttp_h3_connection(endpoint, resolved.candidates(), mark).await?;
+        let connection = open_xhttp_h3_connection(
+            proxy,
+            endpoint,
+            resolved.candidates(),
+            mark,
+            QuicEndpointIdentityRole::XhttpDownload,
+            None,
+        )
+        .await?;
         return Ok(XhttpH3EndpointClient {
             client: connection.client.clone(),
             connection: Some(connection),
@@ -69,8 +95,17 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
     let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, false);
+    let provenance_identity = key.quic_provenance_identity();
     let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
-        let connection = open_xhttp_h3_connection(endpoint, resolved.candidates(), mark).await?;
+        let connection = open_xhttp_h3_connection(
+            proxy,
+            endpoint,
+            resolved.candidates(),
+            mark,
+            QuicEndpointIdentityRole::XhttpDownload,
+            Some(provenance_identity),
+        )
+        .await?;
         Ok(XhttpH3EndpointClient {
             client: connection.client.clone(),
             connection: Some(connection),
@@ -86,18 +121,31 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
 }
 
 async fn open_xhttp_h3_connection(
+    proxy: &ResidentProxyPlan,
     endpoint: &ResidentXhttpEndpointPlan,
     candidates: &[SocketAddr],
     mark: u32,
+    role: QuicEndpointIdentityRole,
+    shared_transport_identity: Option<[u8; 32]>,
 ) -> Result<XhttpH3Connection, String> {
     let client_config = build_xhttp_h3_client_config(endpoint)?;
+    let transport_identity = shared_transport_identity
+        .unwrap_or_else(|| xhttp_h3_transport_identity(proxy, endpoint, role));
+    let endpoint_context = QuicEndpointOpenContext::for_proxy(
+        QuicEndpointProtocol::XhttpHttp3,
+        QuicEndpointCallerClass::TcpData,
+        proxy,
+        role,
+        &[&transport_identity],
+    );
     let (_, quic_endpoint, connection) = connect_quic_endpoint_candidates_async(
         candidates,
         &endpoint.server_name,
         RESIDENT_CONNECT_TIMEOUT,
         "connect xHTTP H3 QUIC endpoint",
         |remote| {
-            let mut quic_endpoint = open_marked_quic_endpoint_for_remote(mark, remote)?;
+            let mut quic_endpoint =
+                open_marked_quic_endpoint_for_remote(mark, remote, endpoint_context.clone())?;
             quic_endpoint.set_default_client_config(client_config.clone());
             Ok(quic_endpoint)
         },
@@ -105,19 +153,78 @@ async fn open_xhttp_h3_connection(
     .await?;
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let (mut driver, client) =
-        time::timeout(RESIDENT_CONNECT_TIMEOUT, h3::client::new(h3_connection))
-            .await
-            .map_err(|_| "create xHTTP H3 client timeout".to_owned())?
-            .map_err(|err| format!("create xHTTP H3 client: {err:?}"))?;
+        match time::timeout(RESIDENT_CONNECT_TIMEOUT, h3::client::new(h3_connection)).await {
+            Err(_) => {
+                quic_endpoint.mark_failed();
+                return Err("create xHTTP H3 client timeout".to_owned());
+            }
+            Ok(Err(err)) => {
+                quic_endpoint.mark_failed();
+                return Err(format!("create xHTTP H3 client: {err:?}"));
+            }
+            Ok(Ok(client)) => client,
+        };
     let driver_task = tokio::spawn(async move {
         let _ = poll_fn(|cx| driver.poll_close(cx)).await;
     });
+    quic_endpoint.mark_ready();
     Ok(XhttpH3Connection {
         endpoint: quic_endpoint,
         connection,
         client,
         driver_task,
     })
+}
+
+fn xhttp_h3_transport_identity(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    role: QuicEndpointIdentityRole,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    update_xhttp_h3_identity_part(&mut digest, b"dae/xhttp/h3-transport/v1");
+    update_xhttp_h3_identity_part(&mut digest, endpoint.server_host.as_bytes());
+    update_xhttp_h3_identity_part(&mut digest, &endpoint.server_port.to_be_bytes());
+    update_xhttp_h3_identity_part(&mut digest, endpoint.server_name.as_bytes());
+    for alpn in &endpoint.alpn {
+        update_xhttp_h3_identity_part(&mut digest, alpn.as_bytes());
+    }
+    update_xhttp_h3_identity_part(&mut digest, &[u8::from(endpoint.allow_insecure)]);
+    update_xhttp_h3_identity_part(&mut digest, endpoint.stream_host.as_bytes());
+    update_xhttp_h3_identity_part(&mut digest, endpoint.stream_path.as_bytes());
+    update_xhttp_h3_identity_part(&mut digest, endpoint.mode.as_str().as_bytes());
+    if let Some(fragment) = &endpoint.tls_fragment {
+        update_xhttp_h3_identity_part(&mut digest, &fragment.min_length.to_be_bytes());
+        update_xhttp_h3_identity_part(&mut digest, &fragment.max_length.to_be_bytes());
+        update_xhttp_h3_identity_part(&mut digest, &fragment.min_interval_ms.to_be_bytes());
+        update_xhttp_h3_identity_part(&mut digest, &fragment.max_interval_ms.to_be_bytes());
+    }
+    if let Some(reality) = &endpoint.reality {
+        update_xhttp_h3_identity_part(&mut digest, &reality.public_key);
+        update_xhttp_h3_identity_part(&mut digest, &reality.short_id);
+        update_xhttp_h3_identity_part(&mut digest, reality.spider_x.as_bytes());
+    }
+    if role == QuicEndpointIdentityRole::XhttpPrimary
+        && let Some(fingerprint) = &proxy.utls_fingerprint
+    {
+        update_xhttp_h3_identity_part(&mut digest, fingerprint.source.as_bytes());
+        update_xhttp_h3_identity_part(&mut digest, fingerprint.requested.as_bytes());
+        update_xhttp_h3_identity_part(&mut digest, fingerprint.name.as_bytes());
+        update_xhttp_h3_identity_part(&mut digest, fingerprint.canonical.as_bytes());
+        update_xhttp_h3_identity_part(&mut digest, fingerprint.family.as_bytes());
+        update_xhttp_h3_identity_part(&mut digest, fingerprint.client.as_bytes());
+        update_xhttp_h3_identity_part(&mut digest, &[u8::from(fingerprint.randomized)]);
+        update_xhttp_h3_identity_part(&mut digest, fingerprint.alpn_policy.as_bytes());
+        for alpn in &fingerprint.default_alpn {
+            update_xhttp_h3_identity_part(&mut digest, alpn.as_bytes());
+        }
+    }
+    digest.finalize().into()
+}
+
+fn update_xhttp_h3_identity_part(digest: &mut Sha256, part: &[u8]) {
+    digest.update((part.len() as u64).to_be_bytes());
+    digest.update(part);
 }
 
 impl XhttpH3Connection {

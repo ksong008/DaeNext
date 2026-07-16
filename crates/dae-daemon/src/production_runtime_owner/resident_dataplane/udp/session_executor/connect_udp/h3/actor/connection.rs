@@ -6,7 +6,9 @@ use super::runtime::{ConnectUdpH3ActorContext, run_connect_udp_h3_actor};
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::resolve_socket_addr_candidates;
 use crate::production_runtime_owner::resident_dataplane::tcp::{
-    connect_quic_endpoint_candidates_async, open_marked_quic_endpoint_for_remote,
+    QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointOpenContext,
+    QuicEndpointProtocol, connect_quic_endpoint_candidates_async,
+    open_marked_quic_endpoint_for_remote,
 };
 use crate::production_runtime_owner::resident_dataplane::udp::session_executor::connect_udp::h3::tls::build_connect_udp_h3_client_config;
 
@@ -23,40 +25,65 @@ pub(super) async fn start_connect_udp_h3_actor(
     )
     .await?;
     let client_config = build_connect_udp_h3_client_config(proxy, runtime)?;
+    let endpoint_context = QuicEndpointOpenContext::for_proxy(
+        QuicEndpointProtocol::ConnectUdpHttp3,
+        QuicEndpointCallerClass::UdpData,
+        proxy,
+        QuicEndpointIdentityRole::ProtocolCarrier,
+        &[],
+    );
     let (_, endpoint, connection) = connect_quic_endpoint_candidates_async(
         &candidates,
         &proxy.server_name,
         RESIDENT_CONNECT_TIMEOUT,
         "connect CONNECT-UDP H3 QUIC endpoint",
         |remote| {
-            let mut endpoint = open_marked_quic_endpoint_for_remote(proxy.mark, remote)?;
+            let mut endpoint =
+                open_marked_quic_endpoint_for_remote(proxy.mark, remote, endpoint_context.clone())?;
             endpoint.set_default_client_config(client_config.clone());
             Ok(endpoint)
         },
     )
     .await?;
-    let max_datagram_size = connection.max_datagram_size().ok_or_else(|| {
-        "CONNECT-UDP H3 peer did not negotiate QUIC DATAGRAM transport support".to_owned()
-    })?;
+    let max_datagram_size = match connection.max_datagram_size() {
+        Some(size) => size,
+        None => {
+            endpoint.mark_failed();
+            return Err(
+                "CONNECT-UDP H3 peer did not negotiate QUIC DATAGRAM transport support".to_owned(),
+            );
+        }
+    };
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let mut builder = ::h3::client::builder();
     builder.enable_extended_connect(true).enable_datagram(true);
-    let (mut driver, client) = time::timeout(
+    let (mut driver, client) = match time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
         builder.build::<_, _, Bytes>(h3_connection),
     )
     .await
-    .map_err(|_| "create CONNECT-UDP H3 client timeout".to_owned())?
-    .map_err(|err| format!("create CONNECT-UDP H3 client: {err:?}"))?;
+    {
+        Err(_) => {
+            endpoint.mark_failed();
+            return Err("create CONNECT-UDP H3 client timeout".to_owned());
+        }
+        Ok(Err(err)) => {
+            endpoint.mark_failed();
+            return Err(format!("create CONNECT-UDP H3 client: {err:?}"));
+        }
+        Ok(Ok(client)) => client,
+    };
     let driver_task = tokio::spawn(async move {
         let _ = poll_fn(|cx| driver.poll_close(cx)).await;
     });
     if let Err(err) = wait_for_connect_udp_h3_settings(&client, &driver_task).await {
+        endpoint.mark_failed();
         connection.close(0_u32.into(), b"CONNECT-UDP H3 settings rejected");
         driver_task.abort();
         endpoint.wait_idle().await;
         return Err(err);
     }
+    endpoint.mark_ready();
 
     let (sender, receiver) = tokio::sync::mpsc::channel(runtime.h3_command_queue_depth.max(1));
     let proxy = Arc::new(proxy.clone());

@@ -99,11 +99,15 @@ pub(crate) async fn relay_tcp_over_quic_stream_async(
 pub(crate) fn open_marked_quic_endpoint_for_remote(
     mark: u32,
     remote: SocketAddr,
-) -> Result<quinn::Endpoint, String> {
+    context: QuicEndpointOpenContext,
+) -> Result<ObservedQuicEndpoint, String> {
     open_marked_quic_endpoint_with_runtime(
         mark,
         quinn::default_runtime(),
+        remote,
         quic_bind_addr_for_remote(remote),
+        QuicEndpointUnderlay::Ordinary,
+        context,
     )
 }
 
@@ -111,15 +115,24 @@ pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
     mark: u32,
     obfs: &ResidentHysteria2ObfsPlan,
     remote: SocketAddr,
-) -> Result<quinn::Endpoint, String> {
-    open_marked_hysteria2_quic_endpoint_with_bind(mark, obfs, quic_bind_addr_for_remote(remote))
+    context: QuicEndpointOpenContext,
+) -> Result<ObservedQuicEndpoint, String> {
+    open_marked_hysteria2_quic_endpoint_with_bind(
+        mark,
+        obfs,
+        remote,
+        quic_bind_addr_for_remote(remote),
+        context,
+    )
 }
 
 fn open_marked_hysteria2_quic_endpoint_with_bind(
     mark: u32,
     obfs: &ResidentHysteria2ObfsPlan,
+    remote: SocketAddr,
     bind: SocketAddr,
-) -> Result<quinn::Endpoint, String> {
+    context: QuicEndpointOpenContext,
+) -> Result<ObservedQuicEndpoint, String> {
     let runtime = quinn::default_runtime();
     let runtime = if obfs.is_salamander() {
         let runtime = runtime.ok_or_else(|| "no quinn runtime available".to_owned())?;
@@ -130,7 +143,12 @@ fn open_marked_hysteria2_quic_endpoint_with_bind(
     } else {
         runtime
     };
-    open_marked_quic_endpoint_with_runtime(mark, runtime, bind)
+    let underlay = if obfs.is_salamander() {
+        QuicEndpointUnderlay::Salamander
+    } else {
+        QuicEndpointUnderlay::Ordinary
+    };
+    open_marked_quic_endpoint_with_runtime(mark, runtime, remote, bind, underlay, context)
 }
 
 fn quic_bind_addr_for_remote(remote: SocketAddr) -> SocketAddr {
@@ -143,16 +161,12 @@ fn quic_bind_addr_for_remote(remote: SocketAddr) -> SocketAddr {
 fn open_marked_quic_endpoint_with_runtime(
     mark: u32,
     runtime: Option<Arc<dyn quinn::Runtime>>,
+    remote: SocketAddr,
     bind: SocketAddr,
-) -> Result<quinn::Endpoint, String> {
-    let socket = UdpSocket::bind(bind).map_err(|err| format!("bind QUIC UDP socket: {err}"))?;
-    if mark != 0 {
-        set_socket_mark(socket.as_raw_fd(), mark)
-            .map_err(|err| format!("set QUIC UDP SO_MARK {mark}: {err}"))?;
-    }
-    let runtime = runtime.ok_or_else(|| "no quinn runtime available".to_owned())?;
-    quinn::Endpoint::new(quinn::EndpointConfig::default(), None, socket, runtime)
-        .map_err(|err| format!("create QUIC endpoint: {err}"))
+    underlay: QuicEndpointUnderlay,
+    context: QuicEndpointOpenContext,
+) -> Result<ObservedQuicEndpoint, String> {
+    open_observed_quic_endpoint(mark, runtime, remote, bind, underlay, context)
 }
 
 struct Hysteria2SalamanderRuntime {
@@ -362,9 +376,9 @@ pub(crate) async fn connect_quic_endpoint_candidates_async<F>(
     timeout: Duration,
     context: &str,
     mut endpoint_for_remote: F,
-) -> Result<(SocketAddr, quinn::Endpoint, quinn::Connection), String>
+) -> Result<(SocketAddr, ObservedQuicEndpoint, quinn::Connection), String>
 where
-    F: FnMut(SocketAddr) -> Result<quinn::Endpoint, String>,
+    F: FnMut(SocketAddr) -> Result<ObservedQuicEndpoint, String>,
 {
     let (remote, (endpoint, connection)) =
         try_socket_addr_candidates(candidates, context, |remote| {
@@ -375,6 +389,7 @@ where
                 let connecting = match endpoint.connect(remote, &server_name) {
                     Ok(connecting) => connecting,
                     Err(err) => {
+                        endpoint.mark_failed();
                         endpoint.close(0_u32.into(), b"resolved candidate connect failed");
                         endpoint.wait_idle().await;
                         return Err(format!("start QUIC connect: {err}"));
@@ -383,11 +398,13 @@ where
                 match time::timeout(timeout, connecting).await {
                     Ok(Ok(connection)) => Ok((endpoint, connection)),
                     Ok(Err(err)) => {
+                        endpoint.mark_failed();
                         endpoint.close(0_u32.into(), b"resolved candidate connect failed");
                         endpoint.wait_idle().await;
                         Err(format!("await QUIC connect: {err}"))
                     }
                     Err(_) => {
+                        endpoint.mark_failed();
                         endpoint.close(0_u32.into(), b"resolved candidate connect timeout");
                         endpoint.wait_idle().await;
                         Err("QUIC connect timeout".to_owned())
@@ -450,5 +467,38 @@ mod tests {
         ));
         assert_eq!(meta[0].len, payload.len());
         assert_eq!(&bufs[0][..payload.len()], payload);
+    }
+
+    #[tokio::test]
+    async fn salamander_endpoint_charge_uses_wrapped_receive_segment_count() {
+        let generation = dae_runtime_control::OwnerGeneration::new(8_204);
+        let context = QuicEndpointOpenContext::from_identity_parts(
+            QuicEndpointProtocol::Hysteria2,
+            QuicEndpointCallerClass::BackgroundHealth,
+            generation,
+            QuicEndpointIdentityRole::ProtocolCarrier,
+            &[b"salamander-charge-test"],
+        );
+        let endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
+            0,
+            &ResidentHysteria2ObfsPlan::salamander("test-obfs-key".to_owned()),
+            "127.0.0.1:443".parse().unwrap(),
+            context,
+        )
+        .unwrap();
+        endpoint.mark_ready();
+        let snapshot = quic_endpoint_metrics_snapshot(generation.get());
+        let charge = &snapshot["endpoints"][0]["chargedBytes"];
+        assert_eq!(charge["receiveSegments"], 1);
+        assert_eq!(
+            charge["receiveSlab"],
+            quinn::EndpointConfig::default()
+                .get_max_udp_payload_size()
+                .min(64 * 1024)
+                * quinn::udp::BATCH_SIZE as u64
+        );
+        endpoint.close(0_u32.into(), b"salamander charge test complete");
+        endpoint.wait_idle().await;
+        drop(endpoint);
     }
 }
