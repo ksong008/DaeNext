@@ -77,20 +77,21 @@ pub use shadowsocks::{
 };
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
 pub use source_shape_registry::{
-    CALLER_SCOPED_QUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, CapabilityLedger,
+    CALLER_SCOPED_HYSTERIA2_OWNERSHIP, CALLER_SCOPED_JUICITY_OWNERSHIP,
+    CALLER_SCOPED_TUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, CapabilityLedger,
     ComponentExecutorProof, ExecutorKind, ExpandedLiveMatrixLedger,
     FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
     FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_CONNECT_UDP_OWNERSHIP, LogicalLeaseKind,
-    MATERIALIZED_PROTOCOL_OWNERSHIP, PacketSemantics, PhysicalCarrierKind,
-    PhysicalOwnerKeyContract, ProductionReadinessReconciliation, ProtocolFraming,
-    RuntimeBudgetContract, RuntimeCallerClass, RuntimeLifecycleOwner, RuntimeOwnerRoute,
-    RuntimeOwnershipDisposition, RuntimeOwnershipModel, RuntimeOwnershipProfile,
-    RuntimeRouteAdmission, RuntimeSelectionLedger, SOURCE_REJECTED_OWNERSHIP,
-    ScopedExpandedSourceMatrixEvidence, SecurityUnderlay, SecurityUnderlayPolicyContract,
-    ShapeStateLedger, SourceShapeRegistryContract, SourceShapeRegistryRow, SourceShapeState,
-    StreamWrapper, TypedCapabilityContract, capability_reason_taxonomy,
-    official_common_fixture_requirements, official_common_source_shape_ids,
-    source_shape_registry_contract, source_shape_registry_rows,
+    MATERIALIZED_CHAIN_OWNERSHIP, MATERIALIZED_STREAM_SECURITY_OWNERSHIP, PacketSemantics,
+    PhysicalCarrierKind, PhysicalOwnerKeyContract, ProductionReadinessReconciliation,
+    ProtocolFraming, QUIC_FAMILY_MATERIALIZED_OWNERSHIP, RuntimeBudgetContract, RuntimeCallerClass,
+    RuntimeLifecycleOwner, RuntimeOwnerRoute, RuntimeOwnershipDisposition, RuntimeOwnershipModel,
+    RuntimeOwnershipProfile, RuntimeRouteAdmission, RuntimeSelectionLedger,
+    SOURCE_REJECTED_OWNERSHIP, ScopedExpandedSourceMatrixEvidence, SecurityUnderlay,
+    SecurityUnderlayPolicyContract, ShapeStateLedger, SourceShapeRegistryContract,
+    SourceShapeRegistryRow, SourceShapeState, StreamWrapper, TypedCapabilityContract,
+    capability_reason_taxonomy, official_common_fixture_requirements,
+    official_common_source_shape_ids, source_shape_registry_contract, source_shape_registry_rows,
 };
 pub use stream_wrapper_capability::{
     StreamWrapperCapabilityContract, StreamWrapperCapabilityRow,

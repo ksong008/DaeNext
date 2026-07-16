@@ -5,7 +5,9 @@ pub enum RuntimeOwnershipModel {
     FlowStreamAndPacketSession,
     FlowStreamWithPacketPolicyClosed,
     FlowStreamAndAssociation,
-    CallerScopedQuicTransport,
+    CallerScopedHysteria2Transport,
+    CallerScopedTuicTransport,
+    CallerScopedJuicityTransport,
     GenerationConnectUdpTransport,
     ConfiguredHttpTransport,
     MaterializedProtocolTransport,
@@ -18,7 +20,9 @@ impl RuntimeOwnershipModel {
             Self::FlowStreamAndPacketSession => "flow-stream-and-packet-session",
             Self::FlowStreamWithPacketPolicyClosed => "flow-stream-with-packet-policy-closed",
             Self::FlowStreamAndAssociation => "flow-stream-and-association",
-            Self::CallerScopedQuicTransport => "caller-scoped-quic-transport",
+            Self::CallerScopedHysteria2Transport => "caller-scoped-hysteria2-transport",
+            Self::CallerScopedTuicTransport => "caller-scoped-tuic-transport",
+            Self::CallerScopedJuicityTransport => "caller-scoped-juicity-transport",
             Self::GenerationConnectUdpTransport => "generation-connect-udp-transport",
             Self::ConfiguredHttpTransport => "configured-http-transport",
             Self::MaterializedProtocolTransport => "materialized-protocol-transport",
@@ -48,23 +52,25 @@ impl RuntimeOwnershipDisposition {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeCallerClass {
-    TcpFlow,
-    UdpFlow,
-    HealthCheck,
+    DataTcp,
+    DataUdp,
+    HealthTcp,
+    HealthDns,
     ManualProbe,
-    ProxyDns,
-    None,
+    ConfiguredDns,
+    ForcedManagedDns,
 }
 
 impl RuntimeCallerClass {
     pub(super) fn as_report_str(self) -> &'static str {
         match self {
-            Self::TcpFlow => "tcp-flow",
-            Self::UdpFlow => "udp-flow",
-            Self::HealthCheck => "health-check",
+            Self::DataTcp => "data-tcp",
+            Self::DataUdp => "data-udp",
+            Self::HealthTcp => "health-tcp",
+            Self::HealthDns => "health-dns",
             Self::ManualProbe => "manual-probe",
-            Self::ProxyDns => "proxy-dns",
-            Self::None => "none",
+            Self::ConfiguredDns => "configured-dns",
+            Self::ForcedManagedDns => "forced-managed-dns",
         }
     }
 }
@@ -123,7 +129,10 @@ pub enum LogicalLeaseKind {
     PacketSession,
     PacketAssociation,
     QuicStream,
-    QuicPacketSession,
+    Hysteria2Session,
+    TuicAssociation,
+    JuicityPacketStream,
+    MaterializedQuicLease,
     ConnectUdpContext,
     HttpStreamOrExchange,
     MaterializedLease,
@@ -137,7 +146,10 @@ impl LogicalLeaseKind {
             Self::PacketSession => "packet-session",
             Self::PacketAssociation => "packet-association",
             Self::QuicStream => "quic-stream",
-            Self::QuicPacketSession => "quic-packet-session",
+            Self::Hysteria2Session => "hysteria2-session",
+            Self::TuicAssociation => "tuic-association",
+            Self::JuicityPacketStream => "juicity-packet-stream",
+            Self::MaterializedQuicLease => "materialized-quic-lease",
             Self::ConnectUdpContext => "connect-udp-context",
             Self::HttpStreamOrExchange => "http-stream-or-exchange",
             Self::MaterializedLease => "materialized-lease",
@@ -154,6 +166,7 @@ pub enum RuntimeLifecycleOwner {
     HealthAttempt,
     ManualProbeJob,
     DnsRequest,
+    ConfiguredDnsForwarder,
     GenerationOrCaller,
     ResolvedAtMaterialization,
     SourceAdmission,
@@ -168,6 +181,7 @@ impl RuntimeLifecycleOwner {
             Self::HealthAttempt => "health-attempt",
             Self::ManualProbeJob => "manual-probe-job",
             Self::DnsRequest => "dns-request",
+            Self::ConfiguredDnsForwarder => "configured-dns-forwarder",
             Self::GenerationOrCaller => "generation-or-caller",
             Self::ResolvedAtMaterialization => "resolved-at-materialization",
             Self::SourceAdmission => "source-admission",
@@ -204,6 +218,7 @@ impl PhysicalOwnerKeyContract {
 pub enum RuntimeBudgetContract {
     FlowConcurrency,
     UdpSessionCountAndPayloadBytes,
+    ConfiguredDnsActorCountAndPayloadBytes,
     PhysicalOwnerCountAndChargedBytesMissing,
     PoolCountAndChargedBytes,
     ConfiguredConnectionCountWithChargedBytesMissing,
@@ -216,6 +231,9 @@ impl RuntimeBudgetContract {
         match self {
             Self::FlowConcurrency => "flow-concurrency",
             Self::UdpSessionCountAndPayloadBytes => "udp-session-count-and-payload-bytes",
+            Self::ConfiguredDnsActorCountAndPayloadBytes => {
+                "configured-dns-actor-count-and-payload-bytes"
+            }
             Self::PhysicalOwnerCountAndChargedBytesMissing => {
                 "physical-owner-count-and-charged-bytes-missing"
             }
@@ -257,18 +275,19 @@ impl RuntimeOwnerRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeOwnershipProfile {
     pub model: RuntimeOwnershipModel,
+    pub allowed_materialized_models: &'static [RuntimeOwnershipModel],
     pub disposition: RuntimeOwnershipDisposition,
-    pub tcp: RuntimeOwnerRoute,
-    pub udp: RuntimeOwnerRoute,
-    pub health: RuntimeOwnerRoute,
+    pub data_tcp: RuntimeOwnerRoute,
+    pub data_udp: RuntimeOwnerRoute,
+    pub health_tcp: RuntimeOwnerRoute,
+    pub health_dns: RuntimeOwnerRoute,
     pub manual: RuntimeOwnerRoute,
-    pub dns: RuntimeOwnerRoute,
+    pub configured_dns: RuntimeOwnerRoute,
+    pub forced_managed_dns: RuntimeOwnerRoute,
 }
 
 impl RuntimeOwnershipProfile {
     pub fn accepts_materialized(self, materialized: RuntimeOwnershipModel) -> bool {
-        self.model == materialized
-            || (self.model == RuntimeOwnershipModel::MaterializedProtocolTransport
-                && materialized != RuntimeOwnershipModel::SourceAdmissionRejected)
+        self.allowed_materialized_models.contains(&materialized)
     }
 }

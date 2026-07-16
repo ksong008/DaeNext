@@ -4,7 +4,8 @@ fn materialized_runtime_ownership(
     execution: plan::ResidentExecutionPlan,
 ) -> dae_outbound::RuntimeOwnershipProfile {
     use dae_outbound::{
-        CALLER_SCOPED_QUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP,
+        CALLER_SCOPED_HYSTERIA2_OWNERSHIP, CALLER_SCOPED_JUICITY_OWNERSHIP,
+        CALLER_SCOPED_TUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP,
         FLOW_STREAM_PACKET_OWNERSHIP, FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         GENERATION_CONNECT_UDP_OWNERSHIP,
     };
@@ -12,7 +13,9 @@ fn materialized_runtime_ownership(
 
     match execution.protocol {
         Protocol::ConnectUdpH2 | Protocol::ConnectUdpH3 => GENERATION_CONNECT_UDP_OWNERSHIP,
-        Protocol::Hysteria2 | Protocol::Tuic | Protocol::Juicity => CALLER_SCOPED_QUIC_OWNERSHIP,
+        Protocol::Hysteria2 => CALLER_SCOPED_HYSTERIA2_OWNERSHIP,
+        Protocol::Tuic => CALLER_SCOPED_TUIC_OWNERSHIP,
+        Protocol::Juicity => CALLER_SCOPED_JUICITY_OWNERSHIP,
         Protocol::Socks5 => FLOW_STREAM_ASSOCIATION_OWNERSHIP,
         _ if matches!(execution.wrapper, Wrapper::Xhttp(_)) => CONFIGURED_HTTP_OWNERSHIP,
         _ if execution.udp.policy_closed() => FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
@@ -38,8 +41,9 @@ pub(super) fn source_and_materialized_ownership_agree(
 mod tests {
     use super::*;
     use dae_outbound::{
-        CALLER_SCOPED_QUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, GENERATION_CONNECT_UDP_OWNERSHIP,
-        RuntimeOwnershipModel,
+        CALLER_SCOPED_HYSTERIA2_OWNERSHIP, CALLER_SCOPED_JUICITY_OWNERSHIP,
+        CALLER_SCOPED_TUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, GENERATION_CONNECT_UDP_OWNERSHIP,
+        LogicalLeaseKind, RuntimeOwnershipModel,
     };
     use plan::{
         ResidentExecutionPlan, ResidentProtocolShape as Protocol, ResidentSecurityUnderlayPlan,
@@ -64,10 +68,10 @@ mod tests {
             Udp::Hysteria2Datagram,
         ));
 
-        assert_eq!(ownership, CALLER_SCOPED_QUIC_OWNERSHIP);
+        assert_eq!(ownership, CALLER_SCOPED_HYSTERIA2_OWNERSHIP);
         assert_eq!(
             ownership.model,
-            RuntimeOwnershipModel::CallerScopedQuicTransport
+            RuntimeOwnershipModel::CallerScopedHysteria2Transport
         );
     }
 
@@ -80,6 +84,31 @@ mod tests {
         ));
 
         assert_eq!(ownership, GENERATION_CONNECT_UDP_OWNERSHIP);
+    }
+
+    #[test]
+    fn quic_packet_leases_remain_protocol_specific() {
+        let tuic = materialized_runtime_ownership(execution(
+            Protocol::Tuic,
+            Wrapper::QuicStream,
+            Udp::TuicPacket,
+        ));
+        let juicity = materialized_runtime_ownership(execution(
+            Protocol::Juicity,
+            Wrapper::QuicStream,
+            Udp::JuicityStreamPacket,
+        ));
+
+        assert_eq!(tuic, CALLER_SCOPED_TUIC_OWNERSHIP);
+        assert_eq!(
+            tuic.data_udp.logical_lease,
+            LogicalLeaseKind::TuicAssociation
+        );
+        assert_eq!(juicity, CALLER_SCOPED_JUICITY_OWNERSHIP);
+        assert_eq!(
+            juicity.data_udp.logical_lease,
+            LogicalLeaseKind::JuicityPacketStream
+        );
     }
 
     #[test]
