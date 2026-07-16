@@ -1,7 +1,7 @@
 use super::super::{append_runtime_execution_descriptor, udp_execution_descriptor};
 use super::{
-    UdpFixedTargetPayload, UdpFixedTargetValidation, UdpResponseDropReason,
-    UdpResponseIdentityEvidence, UdpResponseIdentityToken,
+    UdpFixedTargetExpectation, UdpFixedTargetPayload, UdpFixedTargetValidation,
+    UdpResponseDropReason, UdpResponseIdentityEvidence, UdpResponseIdentityToken,
 };
 
 const UDP_SESSION_OWNERSHIP_MANAGER_OWNED: &str = "manager-owned";
@@ -97,12 +97,10 @@ impl UdpResponseEnvelope {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn with_decoded_response_identity(
         mut self,
         wire_source: Option<std::net::SocketAddr>,
-        expected_identity: Option<UdpResponseIdentityToken>,
         observed_identity: Option<UdpResponseIdentityToken>,
     ) -> Self {
         self.identity = UdpResponseIdentityEvidence::Decoded {
             wire_source,
-            expected_identity,
             observed_identity,
         };
         self
@@ -119,22 +117,16 @@ impl UdpResponseEnvelope {
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn validate_fixed_target(
         &self,
-        expected_source: std::net::SocketAddr,
+        expectation: UdpFixedTargetExpectation,
     ) -> UdpFixedTargetValidation {
-        self.identity.validate_fixed_target(expected_source)
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn payload_len(
-        &self,
-    ) -> usize {
-        self.payload.len()
+        self.identity.validate_fixed_target(expectation)
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn take_fixed_target_payload(
         &mut self,
-        expected_source: std::net::SocketAddr,
+        expectation: UdpFixedTargetExpectation,
     ) -> UdpFixedTargetPayload {
-        let validation = self.validate_fixed_target(expected_source);
+        let validation = self.validate_fixed_target(expectation);
         let payload = std::mem::take(&mut self.payload);
         match validation {
             UdpFixedTargetValidation::Validated

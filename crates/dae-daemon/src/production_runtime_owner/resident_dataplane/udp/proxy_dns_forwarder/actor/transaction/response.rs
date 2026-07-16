@@ -2,7 +2,8 @@ use dae_dns::{DnsPacketView, restore_packed_response_request_id};
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::udp::{
-    UdpFixedTargetPayload, UdpFixedTargetValidation, UdpResponseDropReason,
+    UdpFixedTargetExpectation, UdpFixedTargetPayload, UdpFixedTargetValidation,
+    UdpResponseDropReason,
 };
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwarder::actor) fn handle_proxy_dns_udp_response(
@@ -13,7 +14,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwa
     mut response: UdpExchangeResult,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<(), ProxyDnsRequestError> {
-    let payload = match response.take_fixed_target_payload(expected_source) {
+    let expectation = UdpFixedTargetExpectation::compatibility(expected_source);
+    let payload = match response.take_fixed_target_payload(expectation) {
         UdpFixedTargetPayload::Accepted {
             payload,
             validation,
