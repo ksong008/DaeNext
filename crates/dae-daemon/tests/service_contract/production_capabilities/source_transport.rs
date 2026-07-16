@@ -81,7 +81,20 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
                 .is_some_and(|version| version == 1)
                 && row["securityUnderlayPolicy"]["schemaVersion"]
                     .as_u64()
-                    .is_some_and(|version| version == 1))
+                    .is_some_and(|version| version == 1)
+                && row["runtimeOwnershipLedger"]["schemaVersion"]
+                    .as_u64()
+                    .is_some_and(|version| version == 1)
+                && ["tcp", "udp", "health", "manual", "dns"]
+                    .iter()
+                    .all(|caller| {
+                        row["runtimeOwnershipLedger"]["callers"][caller]["physicalCarrier"]
+                            .is_string()
+                            && row["runtimeOwnershipLedger"]["callers"][caller]["logicalLease"]
+                                .is_string()
+                            && row["runtimeOwnershipLedger"]["callers"][caller]["lifecycleOwner"]
+                                .is_string()
+                    }))
     );
     assert_eq!(
         report["expanded_source_matrix_status_counts"]["blocked"]

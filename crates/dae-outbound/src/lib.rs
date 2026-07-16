@@ -77,8 +77,15 @@ pub use shadowsocks::{
 };
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
 pub use source_shape_registry::{
-    CapabilityLedger, ComponentExecutorProof, ExecutorKind, ExpandedLiveMatrixLedger,
-    PacketSemantics, ProductionReadinessReconciliation, ProtocolFraming, RuntimeSelectionLedger,
+    CALLER_SCOPED_QUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, CapabilityLedger,
+    ComponentExecutorProof, ExecutorKind, ExpandedLiveMatrixLedger,
+    FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
+    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_CONNECT_UDP_OWNERSHIP, LogicalLeaseKind,
+    MATERIALIZED_PROTOCOL_OWNERSHIP, PacketSemantics, PhysicalCarrierKind,
+    PhysicalOwnerKeyContract, ProductionReadinessReconciliation, ProtocolFraming,
+    RuntimeBudgetContract, RuntimeCallerClass, RuntimeLifecycleOwner, RuntimeOwnerRoute,
+    RuntimeOwnershipDisposition, RuntimeOwnershipModel, RuntimeOwnershipProfile,
+    RuntimeRouteAdmission, RuntimeSelectionLedger, SOURCE_REJECTED_OWNERSHIP,
     ScopedExpandedSourceMatrixEvidence, SecurityUnderlay, SecurityUnderlayPolicyContract,
     ShapeStateLedger, SourceShapeRegistryContract, SourceShapeRegistryRow, SourceShapeState,
     StreamWrapper, TypedCapabilityContract, capability_reason_taxonomy,

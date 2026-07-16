@@ -1,4 +1,7 @@
 use super::*;
+#[path = "matrix/ownership.rs"]
+mod ownership;
+use self::ownership::*;
 pub(super) fn resident_full_matrix_config_rows(
     config: &Config,
     nodes: &[plan::ResidentNodeLinkShape],
@@ -176,6 +179,7 @@ pub(super) fn resident_expanded_source_matrix_row(
         "capabilityLedger": row.capability.to_value(),
         "expandedLiveMatrixLedger": row.expanded_live_matrix.to_value(),
         "productionReadinessReconciliation": row.production_readiness.to_value(),
+        "runtimeOwnershipLedger": row.runtime_ownership_ledger(),
         "candidates": candidate_reports,
         "sourceRegistryRow": (*row).to_value(),
     })
@@ -195,6 +199,9 @@ pub(super) fn resident_source_shape_candidate_report(
         Ok(proxy) => {
             let mut summary = resident_proxy_plan_summary_json(&proxy);
             summary["scheme"] = json!(&node.scheme);
+            summary["runtimeOwnershipLedger"] = materialized_runtime_ownership_value(&proxy);
+            summary["runtimeOwnershipAgreement"] =
+                json!(source_and_materialized_ownership_agree(row, &proxy));
             if resident_proxy_matches_source_shape(row, &proxy, &summary["executableGraph"]) {
                 summary["planner_status"] = json!("admitted");
                 summary["admission"] = json!({
@@ -238,6 +245,7 @@ pub(super) fn resident_proxy_matches_source_shape(
         && source_shape_field_matches(row.security_underlay, graph["securityUnderlay"].as_str())
         && source_shape_field_matches(row.stream_wrapper, graph["streamWrapper"].as_str())
         && source_shape_field_matches(row.packet_semantics, graph["packetSemantics"].as_str())
+        && source_and_materialized_ownership_agree(row, proxy)
 }
 
 pub(super) fn source_shape_protocol_matches(

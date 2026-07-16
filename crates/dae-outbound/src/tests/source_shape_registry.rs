@@ -363,6 +363,167 @@ fn source_shape_registry_rows_have_explicit_security_underlay_policy() {
 }
 
 #[test]
+fn source_shape_registry_rows_have_explicit_runtime_ownership_ledgers() {
+    for row in source_shape_registry_rows() {
+        let ledger = row.runtime_ownership_ledger();
+        assert_eq!(
+            ledger["schema"], "runtime-shape-ownership-ledger",
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(ledger["schemaVersion"], 1, "{}", row.shape_id);
+        assert_eq!(
+            ledger["redactedIdentity"], row.redacted_identity,
+            "{}",
+            row.shape_id
+        );
+        assert!(
+            !ledger["model"].as_str().unwrap().is_empty(),
+            "{}",
+            row.shape_id
+        );
+        assert!(
+            matches!(
+                ledger["disposition"].as_str().unwrap(),
+                "implemented" | "intentionally-per-flow" | "fail-closed" | "blocked"
+            ),
+            "{}",
+            row.shape_id
+        );
+        for caller in ["tcp", "udp", "health", "manual", "dns"] {
+            let route = &ledger["callers"][caller];
+            assert!(route["admission"].is_string(), "{} {caller}", row.shape_id);
+            assert!(
+                route["physicalCarrier"].is_string(),
+                "{} {caller}",
+                row.shape_id
+            );
+            assert!(
+                route["logicalLease"].is_string(),
+                "{} {caller}",
+                row.shape_id
+            );
+            assert!(
+                route["lifecycleOwner"].is_string(),
+                "{} {caller}",
+                row.shape_id
+            );
+            assert!(
+                route["keyContract"].is_string(),
+                "{} {caller}",
+                row.shape_id
+            );
+            assert!(
+                route["budgetContract"].is_string(),
+                "{} {caller}",
+                row.shape_id
+            );
+        }
+        for evidence in [
+            "parser",
+            "configurationMaterialization",
+            "localExecutablePath",
+            "resourceValidation",
+            "immutableArtifact",
+            "authorizedLiveInteroperability",
+        ] {
+            assert!(
+                ledger["evidence"][evidence].is_string(),
+                "{} {evidence}",
+                row.shape_id
+            );
+        }
+    }
+}
+
+#[test]
+fn runtime_ownership_ledger_keeps_raw_streams_intentionally_per_flow() {
+    for shape_id in [
+        "baseline-aead-cipher-endpoint",
+        "baseline-tls-auth-endpoint",
+        "baseline-aead-framed-endpoint",
+        "baseline-tls-vision-endpoint",
+    ] {
+        let row = source_shape_registry_rows()
+            .iter()
+            .find(|row| row.shape_id == shape_id)
+            .unwrap();
+        let ledger = row.runtime_ownership_ledger();
+        assert_eq!(
+            ledger["disposition"], "intentionally-per-flow",
+            "{shape_id}"
+        );
+        assert_eq!(
+            ledger["callers"]["tcp"]["physicalCarrier"], "per-flow-stream",
+            "{shape_id}"
+        );
+        assert_eq!(
+            ledger["callers"]["tcp"]["lifecycleOwner"], "flow",
+            "{shape_id}"
+        );
+    }
+}
+
+#[test]
+fn runtime_ownership_ledger_exposes_caller_scoped_quic_cost_boundary() {
+    for shape_id in [
+        "baseline-quic-auth-endpoint",
+        "baseline-quic-uuid-endpoint",
+        "baseline-quic-password-endpoint",
+        "quic-port-hopping-surface",
+        "verified-quic-security-underlay",
+    ] {
+        let row = source_shape_registry_rows()
+            .iter()
+            .find(|row| row.shape_id == shape_id)
+            .unwrap();
+        let ledger = row.runtime_ownership_ledger();
+        assert_eq!(
+            ledger["model"], "caller-scoped-quic-transport",
+            "{shape_id}"
+        );
+        for caller in ["tcp", "udp", "health", "manual", "dns"] {
+            assert_eq!(
+                ledger["callers"][caller]["physicalCarrier"], "quic-endpoint-and-connection",
+                "{shape_id} {caller}"
+            );
+            assert_eq!(
+                ledger["callers"][caller]["budgetContract"],
+                "physical-owner-count-and-charged-bytes-missing",
+                "{shape_id} {caller}"
+            );
+        }
+    }
+}
+
+#[test]
+fn runtime_ownership_ledger_keeps_policy_rejection_pre_network() {
+    for row in source_shape_registry_rows()
+        .iter()
+        .filter(|row| row.source_support == "not-source-supported")
+    {
+        let ledger = row.runtime_ownership_ledger();
+        assert_eq!(
+            ledger["model"], "source-admission-rejected",
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(ledger["disposition"], "fail-closed", "{}", row.shape_id);
+        assert_eq!(ledger["evidence"]["parser"], "rejected", "{}", row.shape_id);
+        assert_eq!(
+            ledger["callers"]["tcp"]["admission"], "fail-closed",
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(
+            ledger["callers"]["udp"]["admission"], "fail-closed",
+            "{}",
+            row.shape_id
+        );
+    }
+}
+
+#[test]
 fn source_shape_registry_records_scoped_production_readiness_evidence() {
     let evidence = source_shape_registry_contract().scoped_expanded_source_matrix_evidence;
 

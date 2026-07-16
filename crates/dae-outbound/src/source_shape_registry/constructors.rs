@@ -6,6 +6,7 @@ pub(super) const fn admitted_row(
     security_underlay: &'static str,
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
+    runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
@@ -25,6 +26,7 @@ pub(super) const fn admitted_row(
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
         redacted_identity,
+        runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -44,6 +46,7 @@ pub(super) const fn blocked_row(
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
     blocker_id: &'static str,
+    runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
@@ -63,6 +66,7 @@ pub(super) const fn blocked_row(
         blocker_id: Some(blocker_id),
         evidence_requirements: &["executor", "large-page-live", "benchmark", "cleanup"],
         redacted_identity,
+        runtime_ownership,
         state_ledger: BLOCKED_STATE,
         executor_proof: BLOCKED_EXECUTOR_PROOF,
         runtime_selection: BLOCKED_RUNTIME_SELECTION,
@@ -79,6 +83,7 @@ pub(super) const fn scoped_evidence_admitted_row(
     security_underlay: &'static str,
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
+    runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
@@ -98,6 +103,7 @@ pub(super) const fn scoped_evidence_admitted_row(
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
         redacted_identity,
+        runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -116,6 +122,7 @@ pub(super) const fn scoped_evidence_capability_admitted_row(
     security_underlay: &'static str,
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
+    runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
     capability: CapabilityLedger,
 ) -> SourceShapeRegistryRow {
@@ -136,6 +143,7 @@ pub(super) const fn scoped_evidence_capability_admitted_row(
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
         redacted_identity,
+        runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -152,6 +160,7 @@ pub(super) const fn scoped_evidence_plugin_wrapper_admitted_row(
     security_underlay: &'static str,
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
+    runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
@@ -171,6 +180,7 @@ pub(super) const fn scoped_evidence_plugin_wrapper_admitted_row(
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
         redacted_identity,
+        runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -187,6 +197,7 @@ pub(super) const fn scoped_evidence_chain_admitted_row(
     security_underlay: &'static str,
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
+    runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
@@ -206,6 +217,7 @@ pub(super) const fn scoped_evidence_chain_admitted_row(
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
         redacted_identity,
+        runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: CHAIN_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -222,6 +234,7 @@ pub(super) const fn scoped_evidence_legacy_import_admitted_row(
     security_underlay: &'static str,
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
+    runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
@@ -241,6 +254,7 @@ pub(super) const fn scoped_evidence_legacy_import_admitted_row(
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
         redacted_identity,
+        runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -260,6 +274,7 @@ pub(super) const fn not_supported_row(
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
     blocker_id: &'static str,
+    runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
@@ -279,6 +294,7 @@ pub(super) const fn not_supported_row(
         blocker_id: Some(blocker_id),
         evidence_requirements: &[],
         redacted_identity,
+        runtime_ownership,
         state_ledger: NOT_SOURCE_SUPPORTED_STATE,
         executor_proof: BLOCKED_EXECUTOR_PROOF,
         runtime_selection: BLOCKED_RUNTIME_SELECTION,
