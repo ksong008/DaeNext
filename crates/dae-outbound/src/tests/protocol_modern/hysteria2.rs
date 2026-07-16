@@ -152,3 +152,20 @@ pub(super) fn hysteria2_mport_query_rejects_invalid_values() {
         );
     }
 }
+
+#[test]
+pub(super) fn hysteria2_tls_fields_without_runtime_support_fail_before_construction() {
+    for field in ["ca", "clientCertificate", "clientKey", "ech"] {
+        let secret_value = "must-not-appear-in-error";
+        let link = format!(
+            "hysteria2://auth@example.com:443/?{field}={secret_value}#unsupported-tls-field"
+        );
+        let err = crate::hysteria2::Hysteria2Link::parse(&link).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains(field),
+            "unexpected error for {field}: {err}"
+        );
+        assert!(!message.contains(secret_value));
+    }
+}

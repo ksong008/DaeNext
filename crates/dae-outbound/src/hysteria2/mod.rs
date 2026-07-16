@@ -6,6 +6,8 @@ pub mod port_hopping;
 mod quic_loopback;
 mod runtime;
 mod tls;
+mod tls_policy;
+mod tls_verifier;
 mod underlay;
 mod wire;
 
@@ -30,7 +32,12 @@ pub use quic_loopback::{
 pub use runtime::{
     Hysteria2TcpResponseHead, read_hysteria2_tcp_response, write_hysteria2_tcp_request,
 };
-pub use tls::{build_hysteria2_pinned_client_config, build_hysteria2_runtime_client_config};
+pub use tls::build_hysteria2_runtime_client_config;
+pub use tls_policy::{
+    Hysteria2ApplicationProtocol, Hysteria2CertificateVerification,
+    Hysteria2ClientCertificateIdentity, Hysteria2EncryptedClientHelloIdentity,
+    Hysteria2TlsIdentity, Hysteria2TlsPolicy, Hysteria2TrustAnchorIdentity,
+};
 pub use underlay::{
     Hysteria2PinSha256Check, Hysteria2UnderlayContract, pin_sha256_matches_raw_cert,
     raw_cert_sha256_hex, underlay_contract,

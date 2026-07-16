@@ -41,7 +41,21 @@ fn case_hysteria2_pin_sha256_matches_raw_cert_hash_only() {
 
 #[test]
 fn case_hysteria2_runtime_tls_uses_system_roots_without_pin() {
-    assert!(hysteria2::build_hysteria2_runtime_client_config(false, String::new()).is_ok());
-    assert!(hysteria2::build_hysteria2_runtime_client_config(false, "00".to_owned()).is_ok());
-    assert!(hysteria2::build_hysteria2_runtime_client_config(true, String::new()).is_ok());
+    let secure =
+        hysteria2::Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", false, false, "")
+            .unwrap();
+    let insecure =
+        hysteria2::Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", true, false, "")
+            .unwrap();
+    assert!(hysteria2::build_hysteria2_runtime_client_config(&secure).is_ok());
+    assert!(hysteria2::build_hysteria2_runtime_client_config(&insecure).is_ok());
+    assert!(
+        hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+            "fixture.invalid",
+            false,
+            false,
+            "00",
+        )
+        .is_err()
+    );
 }

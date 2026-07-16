@@ -10,8 +10,7 @@ use self::packet_id::QuicUdpPacketIdAllocator;
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria2QuicDatagramSession
 {
     auth: String,
-    allow_insecure: bool,
-    pin_sha256: String,
+    tls_identity: dae_outbound::hysteria2::Hysteria2TlsIdentity,
     max_rx: u64,
     obfs: ResidentHysteria2ObfsPlan,
     port_hop_ports: Vec<u16>,
@@ -26,16 +25,14 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria
 impl Hysteria2QuicDatagramSession {
     pub(super) fn new(
         auth: String,
-        allow_insecure: bool,
-        pin_sha256: String,
+        tls_identity: dae_outbound::hysteria2::Hysteria2TlsIdentity,
         max_rx: u64,
         obfs: ResidentHysteria2ObfsPlan,
         port_hop_ports: Vec<u16>,
     ) -> Self {
         Self {
             auth,
-            allow_insecure,
-            pin_sha256,
+            tls_identity,
             max_rx,
             obfs,
             port_hop_ports,
@@ -148,8 +145,7 @@ impl Hysteria2QuicDatagramSession {
             proxy.mark,
             &self.obfs,
             &self.port_hop_ports,
-            self.allow_insecure,
-            &self.pin_sha256,
+            &self.tls_identity,
             RESIDENT_UDP_RESPONSE_TIMEOUT,
         )
         .await?;
@@ -465,8 +461,13 @@ mod tests {
     fn quic_datagram_pending_results_do_not_forward_empty_reply() {
         let hysteria2 = Hysteria2QuicDatagramSession::new(
             "auth".to_owned(),
-            false,
-            String::new(),
+            dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+                "fixture.invalid",
+                false,
+                false,
+                "",
+            )
+            .unwrap(),
             0,
             ResidentHysteria2ObfsPlan::none(),
             Vec::new(),

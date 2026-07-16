@@ -12,15 +12,13 @@ pub(crate) async fn handle_quic_tcp_connection_async(
     match &selection.proxy.handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
-            allow_insecure,
-            pin_sha256,
+            tls_identity,
             max_rx,
             obfs,
             port_hop_ports,
         } => {
             let auth = auth.clone();
-            let allow_insecure = *allow_insecure;
-            let pin_sha256 = pin_sha256.clone();
+            let tls_identity = tls_identity.clone();
             let max_rx = *max_rx;
             let obfs = obfs.clone();
             let port_hop_ports = port_hop_ports.clone();
@@ -33,8 +31,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 sniff,
                 metrics,
                 &auth,
-                allow_insecure,
-                &pin_sha256,
+                &tls_identity,
                 max_rx,
                 &obfs,
                 &port_hop_ports,
@@ -105,8 +102,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     auth: &str,
-    allow_insecure: bool,
-    pin_sha256: &str,
+    tls_identity: &dae_outbound::hysteria2::Hysteria2TlsIdentity,
     max_rx: u64,
     obfs: &ResidentHysteria2ObfsPlan,
     port_hop_ports: &[u16],
@@ -120,8 +116,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
         selection.mark,
         obfs,
         port_hop_ports,
-        allow_insecure,
-        pin_sha256,
+        tls_identity,
         RESIDENT_CONNECT_TIMEOUT,
     )
     .await?;

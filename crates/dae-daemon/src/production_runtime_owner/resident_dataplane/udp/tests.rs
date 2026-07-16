@@ -390,8 +390,14 @@ mod tests {
             (
                 ResidentProxyProtocolPlan::Hysteria2QuicTcp {
                     auth: String::new(),
-                    allow_insecure: false,
-                    pin_sha256: String::new(),
+                    tls_identity:
+                        dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+                            "fixture.invalid",
+                            false,
+                            false,
+                            "",
+                        )
+                        .unwrap(),
                     max_rx: 0,
                     obfs: ResidentHysteria2ObfsPlan::none(),
                     port_hop_ports: Vec::new(),

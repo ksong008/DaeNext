@@ -457,14 +457,14 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     assert!(matches!(
         hy2_no_pin.handler,
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
-            allow_insecure: false,
-            ref pin_sha256,
+            ref tls_identity,
             ..
-        } if pin_sha256.is_empty()
+        } if !tls_identity.policy().allow_insecure()
+            && !tls_identity.policy().has_leaf_certificate_pin()
     ));
     assert_eq!(
         hy2_no_pin.executable_graph_value()["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
-        "system-roots"
+        "webpki"
     );
 
     let hy2_hopping = build_resident_proxy_plan_for_node(
@@ -485,10 +485,12 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     assert!(matches!(
         hy2_hopping.handler,
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
-            allow_insecure: false,
+            ref tls_identity,
             ref port_hop_ports,
             ..
-        } if port_hop_ports == &vec![
+        } if !tls_identity.policy().allow_insecure()
+            && tls_identity.policy().has_leaf_certificate_pin()
+            && port_hop_ports == &vec![
             fixture_port(4),
             fixture_port(5),
             fixture_port(6),
@@ -497,7 +499,7 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     ));
     assert_eq!(
         hy2_hopping.executable_graph_value()["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
-        "pinned-raw-cert-sha256"
+        "webpki-and-pinned-raw-cert-sha256"
     );
 
     let tuic_verified = build_resident_proxy_plan_for_node(
