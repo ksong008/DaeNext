@@ -24,10 +24,12 @@ fn faulting_one_owner_domain_does_not_stop_another() {
 
     let first_cell = SingleFlightPhysicalOwner::<String>::new();
     let second_cell = SingleFlightPhysicalOwner::<String>::new();
-    first_cell.fail(PhysicalOwnerFailure::new(
-        OwnerFailureClass::Transport,
-        "transport-driver",
-    ));
+    first_cell
+        .fail(
+            first_cell.snapshot().revision,
+            PhysicalOwnerFailure::new(OwnerFailureClass::Transport, "transport-driver"),
+        )
+        .unwrap();
     assert_eq!(first_cell.snapshot().state, PhysicalOwnerState::Failed);
     assert!(matches!(
         second_cell

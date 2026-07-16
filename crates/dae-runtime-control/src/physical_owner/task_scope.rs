@@ -1,5 +1,9 @@
-use std::sync::{Arc, Condvar, Mutex};
+use std::future::Future;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use tokio::sync::watch;
+use tokio::task::{JoinError, JoinHandle};
 
 use super::{
     AbsoluteDeadline, OwnerCancellation, OwnerCancellationSignal, OwnerCloseReason,
@@ -73,7 +77,7 @@ struct GenerationOwnerInner {
     generation: OwnerGeneration,
     redacted_identity: RedactedOwnerIdentity,
     state: Mutex<GenerationOwnerRuntimeState>,
-    joined: Condvar,
+    state_changed: watch::Sender<u64>,
     cancellation: OwnerCancellationSignal,
 }
 
@@ -84,6 +88,7 @@ pub struct GenerationOwnerBoundary {
 
 impl GenerationOwnerBoundary {
     pub fn new(generation: OwnerGeneration, redacted_identity: RedactedOwnerIdentity) -> Self {
+        let (state_changed, _) = watch::channel(0);
         Self {
             inner: Arc::new(GenerationOwnerInner {
                 generation,
@@ -92,7 +97,7 @@ impl GenerationOwnerBoundary {
                     state: GenerationOwnerState::Running,
                     tasks: OwnerTaskCounts::default(),
                 }),
-                joined: Condvar::new(),
+                state_changed,
                 cancellation: OwnerCancellationSignal::new(),
             }),
         }
@@ -107,7 +112,25 @@ impl GenerationOwnerBoundary {
         self.inner.cancellation.clone()
     }
 
-    pub fn register_task(
+    pub fn spawn_task_on<F>(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        role: OwnerTaskRole,
+        future: F,
+    ) -> Result<GenerationTaskHandle<F::Output>, OwnerTaskRegistrationError>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let guard = self.reserve_task(role)?;
+        let task = runtime.spawn(async move {
+            let _guard = guard;
+            future.await
+        });
+        Ok(GenerationTaskHandle::new(task))
+    }
+
+    fn reserve_task(
         &self,
         role: OwnerTaskRole,
     ) -> Result<GenerationTaskGuard, OwnerTaskRegistrationError> {
@@ -129,6 +152,7 @@ impl GenerationOwnerBoundary {
 
     pub fn apply_command(&self, command: GenerationOwnerCommand) -> GenerationOwnerSnapshot {
         let mut state = self.inner.state.lock().unwrap();
+        let previous_state = state.state;
         match command {
             GenerationOwnerCommand::BeginDrain(reason) => {
                 if matches!(state.state, GenerationOwnerState::Running) {
@@ -146,31 +170,40 @@ impl GenerationOwnerBoundary {
             }
             GenerationOwnerCommand::Close(_) => {}
         }
-        snapshot_from_state(&self.inner, &state)
+        let snapshot = snapshot_from_state(&self.inner, &state);
+        drop(state);
+        if snapshot.state != previous_state {
+            notify_state_changed(&self.inner.state_changed);
+        }
+        snapshot
     }
 
-    pub fn wait_joined(
+    pub async fn wait_joined(
         &self,
         deadline: AbsoluteDeadline,
     ) -> Result<GenerationOwnerSnapshot, OwnerTaskJoinError> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state_changed = self.inner.state_changed.subscribe();
         loop {
-            if state.tasks.total() == 0 {
-                return Ok(snapshot_from_state(&self.inner, &state));
+            let snapshot = self.snapshot();
+            if matches!(snapshot.state, GenerationOwnerState::Running) {
+                return Err(OwnerTaskJoinError::NotDraining(snapshot));
             }
-            let Some(remaining) = deadline.remaining_at(Instant::now()) else {
-                return Err(OwnerTaskJoinError::DeadlineElapsed(snapshot_from_state(
-                    &self.inner,
-                    &state,
-                )));
-            };
-            let (next, timeout) = self.inner.joined.wait_timeout(state, remaining).unwrap();
-            state = next;
-            if timeout.timed_out() && state.tasks.total() != 0 {
-                return Err(OwnerTaskJoinError::DeadlineElapsed(snapshot_from_state(
-                    &self.inner,
-                    &state,
-                )));
+            if snapshot.tasks.total() == 0 {
+                return Ok(snapshot);
+            }
+            if deadline.check_at(Instant::now()).is_err() {
+                return Err(OwnerTaskJoinError::DeadlineElapsed(snapshot));
+            }
+
+            tokio::select! {
+                _ = state_changed.changed() => {}
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline.instant())) => {
+                    let snapshot = self.snapshot();
+                    if snapshot.tasks.total() == 0 {
+                        return Ok(snapshot);
+                    }
+                    return Err(OwnerTaskJoinError::DeadlineElapsed(snapshot));
+                }
             }
         }
     }
@@ -182,8 +215,15 @@ impl Drop for GenerationOwnerBoundary {
             .cancellation
             .cancel(OwnerCancellation::GenerationDraining);
         let mut state = self.inner.state.lock().unwrap();
-        if matches!(state.state, GenerationOwnerState::Running) {
+        let transitioned = if matches!(state.state, GenerationOwnerState::Running) {
             state.state = GenerationOwnerState::Draining(OwnerDrainReason::Shutdown);
+            true
+        } else {
+            false
+        };
+        drop(state);
+        if transitioned {
+            notify_state_changed(&self.inner.state_changed);
         }
     }
 }
@@ -202,12 +242,99 @@ pub enum OwnerTaskRegistrationError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OwnerTaskJoinError {
+    NotDraining(GenerationOwnerSnapshot),
     DeadlineElapsed(GenerationOwnerSnapshot),
 }
 
-#[must_use = "the task guard must live inside the generation-owned task"]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenerationTaskJoinError {
+    Cancelled,
+    Panicked,
+    DeadlineElapsed,
+}
+
+#[must_use = "generation-owned tasks must be joined or explicitly aborted"]
 #[derive(Debug)]
-pub struct GenerationTaskGuard {
+pub struct GenerationTaskHandle<T> {
+    task: Option<JoinHandle<T>>,
+}
+
+impl<T> GenerationTaskHandle<T> {
+    fn new(task: JoinHandle<T>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    pub fn abort(&self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.task.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    pub async fn join(mut self) -> Result<T, GenerationTaskJoinError> {
+        classify_task_join(self.take_task().await)
+    }
+
+    pub async fn join_until(
+        mut self,
+        deadline: AbsoluteDeadline,
+    ) -> Result<T, GenerationTaskJoinError> {
+        let mut task = self
+            .task
+            .take()
+            .expect("generation task handle must own its join handle");
+        if task.is_finished() {
+            return classify_task_join(task.await);
+        }
+        if deadline.check_at(Instant::now()).is_err() {
+            return abort_and_join_at_deadline(task).await;
+        }
+        tokio::select! {
+            result = &mut task => classify_task_join(result),
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline.instant())) =>
+                abort_and_join_at_deadline(task).await,
+        }
+    }
+
+    async fn take_task(&mut self) -> Result<T, JoinError> {
+        self.task
+            .take()
+            .expect("generation task handle must own its join handle")
+            .await
+    }
+}
+
+impl<T> Drop for GenerationTaskHandle<T> {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+fn classify_task_join<T>(result: Result<T, JoinError>) -> Result<T, GenerationTaskJoinError> {
+    result.map_err(|error| {
+        if error.is_panic() {
+            GenerationTaskJoinError::Panicked
+        } else {
+            GenerationTaskJoinError::Cancelled
+        }
+    })
+}
+
+async fn abort_and_join_at_deadline<T>(task: JoinHandle<T>) -> Result<T, GenerationTaskJoinError> {
+    task.abort();
+    match task.await {
+        Err(error) if error.is_panic() => Err(GenerationTaskJoinError::Panicked),
+        Ok(_) | Err(_) => Err(GenerationTaskJoinError::DeadlineElapsed),
+    }
+}
+
+#[derive(Debug)]
+struct GenerationTaskGuard {
     inner: Option<Arc<GenerationOwnerInner>>,
     role: OwnerTaskRole,
 }
@@ -219,12 +346,13 @@ impl Drop for GenerationTaskGuard {
         };
         let mut state = inner.state.lock().unwrap();
         state.tasks.decrement(self.role);
-        let joined = state.tasks.total() == 0;
         drop(state);
-        if joined {
-            inner.joined.notify_all();
-        }
+        notify_state_changed(&inner.state_changed);
     }
+}
+
+fn notify_state_changed(state_changed: &watch::Sender<u64>) {
+    state_changed.send_modify(|revision| *revision = revision.wrapping_add(1));
 }
 
 fn snapshot_from_state(

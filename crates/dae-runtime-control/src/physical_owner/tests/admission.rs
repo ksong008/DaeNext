@@ -122,8 +122,8 @@ fn expired_and_cancelled_work_is_rejected_before_admission() {
     assert_eq!(admission.metrics().cumulative_admitted, 0);
 }
 
-#[test]
-fn deterministic_drain_rejects_new_owners_and_closes_after_balance() {
+#[tokio::test(flavor = "current_thread")]
+async fn deterministic_drain_rejects_new_owners_and_closes_after_balance() {
     let admission = PhysicalOwnerAdmission::new(budget(1, 100));
     let reservation = admission
         .try_reserve(charge(20), deadline(), &OwnerCancellationSignal::new())
@@ -137,7 +137,7 @@ fn deterministic_drain_rejects_new_owners_and_closes_after_balance() {
     );
 
     drop(reservation);
-    let drained = admission.wait_drained(deadline()).unwrap();
+    let drained = admission.wait_drained(deadline()).await.unwrap();
     assert_eq!(drained.active_owners, 0);
     let closed = admission.mark_closed(OwnerCloseReason::Reload).unwrap();
     assert_eq!(

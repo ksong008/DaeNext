@@ -143,6 +143,9 @@ impl<T> SingleFlightPhysicalOwner<T> {
 
     pub fn begin_drain(&self, reason: OwnerDrainReason) -> SingleFlightOwnerSnapshot {
         let mut state = self.inner.state.lock().unwrap();
+        if !state.accepting {
+            return state.snapshot;
+        }
         state.accepting = false;
         state.snapshot.state = PhysicalOwnerState::Draining;
         state.snapshot.drain_reason = Some(reason);
@@ -173,6 +176,9 @@ impl<T> SingleFlightPhysicalOwner<T> {
 
     pub fn close(&self) -> SingleFlightOwnerSnapshot {
         let mut state = self.inner.state.lock().unwrap();
+        if !state.accepting && state.snapshot.state == PhysicalOwnerState::Closed {
+            return state.snapshot;
+        }
         state.accepting = false;
         state.snapshot.state = PhysicalOwnerState::Closed;
         state.snapshot.revision = state.snapshot.revision.wrapping_add(1);
@@ -183,7 +189,46 @@ impl<T> SingleFlightPhysicalOwner<T> {
         snapshot
     }
 
-    pub fn fail(&self, failure: PhysicalOwnerFailure) -> SingleFlightOwnerSnapshot {
-        publish_failure(&self.inner, failure, None)
+    pub fn fail(
+        &self,
+        expected_revision: u64,
+        failure: PhysicalOwnerFailure,
+    ) -> Result<SingleFlightOwnerSnapshot, SingleFlightError> {
+        let mut state = self.inner.state.lock().unwrap();
+        if !state.accepting {
+            return match state.snapshot.state {
+                PhysicalOwnerState::Draining => Err(SingleFlightError::Draining(
+                    state
+                        .snapshot
+                        .drain_reason
+                        .unwrap_or(OwnerDrainReason::OperatorRequest),
+                )),
+                _ => Err(SingleFlightError::Closed),
+            };
+        }
+        if state.snapshot.revision != expected_revision {
+            return Err(SingleFlightError::Superseded);
+        }
+        if state.snapshot.state == PhysicalOwnerState::Failed {
+            return Err(SingleFlightError::Failed(state.snapshot.failure.unwrap()));
+        }
+        if state.snapshot.state == PhysicalOwnerState::Draining {
+            return Err(SingleFlightError::Draining(
+                state
+                    .snapshot
+                    .drain_reason
+                    .unwrap_or(OwnerDrainReason::OperatorRequest),
+            ));
+        }
+
+        state.snapshot.state = PhysicalOwnerState::Failed;
+        state.snapshot.failure = Some(failure);
+        state.snapshot.drain_reason = None;
+        state.snapshot.revision = state.snapshot.revision.wrapping_add(1);
+        state.value = None;
+        let snapshot = state.snapshot;
+        drop(state);
+        self.inner.revision.send_replace(snapshot.revision);
+        Ok(snapshot)
     }
 }

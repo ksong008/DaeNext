@@ -55,7 +55,7 @@ impl<T> SingleFlightBuilder<T> {
 
     pub fn publish_failed(mut self, failure: PhysicalOwnerFailure) -> SingleFlightOwnerSnapshot {
         self.finished = true;
-        publish_failure(&self.inner, failure, Some(self.revision))
+        publish_builder_failure(&self.inner, failure, self.revision)
     }
 }
 
@@ -64,10 +64,10 @@ impl<T> Drop for SingleFlightBuilder<T> {
         if self.finished {
             return;
         }
-        publish_failure(
+        publish_builder_failure(
             &self.inner,
             PhysicalOwnerFailure::new(OwnerFailureClass::BuilderDropped, "owner-construction"),
-            Some(self.revision),
+            self.revision,
         );
     }
 }
@@ -130,16 +130,15 @@ impl<T> SingleFlightObserver<T> {
     }
 }
 
-pub(super) fn publish_failure<T>(
+pub(super) fn publish_builder_failure<T>(
     inner: &Arc<SingleFlightInner<T>>,
     failure: PhysicalOwnerFailure,
-    expected_revision: Option<u64>,
+    expected_revision: u64,
 ) -> SingleFlightOwnerSnapshot {
     let mut state = inner.state.lock().unwrap();
-    if expected_revision.is_none_or(|revision| {
-        state.snapshot.state == PhysicalOwnerState::Connecting
-            && state.snapshot.revision == revision
-    }) {
+    if state.snapshot.state == PhysicalOwnerState::Connecting
+        && state.snapshot.revision == expected_revision
+    {
         state.snapshot.state = PhysicalOwnerState::Failed;
         state.snapshot.failure = Some(failure);
         state.snapshot.revision = state.snapshot.revision.wrapping_add(1);
