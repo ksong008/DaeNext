@@ -41,8 +41,8 @@ impl ResidentExecutionPlan {
     }
 
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
-        let security = ResidentSecurityUnderlayPlan::from_proxy(proxy);
         let wrapper = ResidentStreamWrapperPlan::from_proxy(proxy);
+        let security = ResidentSecurityUnderlayPlan::from_proxy(proxy, wrapper);
         let protocol = ResidentProtocolShape::from_proxy(proxy);
         let udp = ResidentUdpExecutorFactory::from_proxy(proxy, wrapper, security);
         Self {

@@ -218,9 +218,11 @@ fn vless_standard_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnership
             Some(FLOW_STREAM_PACKET_OWNERSHIP)
         }
         (security, Wrapper::XhttpH1, Vless(Stream::XhttpH1))
-        | (security, Wrapper::XhttpH3, Vless(Stream::XhttpH3))
             if is_standard_tls_security(security) =>
         {
+            Some(CONFIGURED_HTTP_OWNERSHIP)
+        }
+        (SecurityDimension::QuicTls, Wrapper::XhttpH3, Vless(Stream::XhttpH3)) => {
             Some(CONFIGURED_HTTP_OWNERSHIP)
         }
         (security, Wrapper::XhttpH2, Vless(Stream::XhttpH2))
