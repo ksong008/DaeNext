@@ -52,6 +52,10 @@ pub(crate) struct ResidentDataplaneMetrics {
     proxy_dns_udp_executors_opened: AtomicU64,
     proxy_dns_udp_executors_reused: AtomicU64,
     proxy_dns_udp_executors_reset: AtomicU64,
+    udp_response_validated: AtomicU64,
+    udp_response_compatibility_unverified: AtomicU64,
+    udp_response_dropped: AtomicU64,
+    udp_response_dropped_bytes: AtomicU64,
     udp_reply_queued: AtomicU64,
     udp_reply_queue_full: AtomicU64,
     udp_reply_sent: AtomicU64,
@@ -294,6 +298,21 @@ impl ResidentDataplaneMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(super) fn udp_response_validated(&self) {
+        self.udp_response_validated.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_response_compatibility_unverified(&self) {
+        self.udp_response_compatibility_unverified
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_response_dropped(&self, bytes: usize) {
+        self.udp_response_dropped.fetch_add(1, Ordering::Relaxed);
+        self.udp_response_dropped_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
     pub(super) fn dns_fast_path_queued(&self) {
         self.dns_fast_path_queued.fetch_add(1, Ordering::Relaxed);
     }
@@ -419,6 +438,10 @@ impl ResidentDataplaneMetrics {
             "proxyDnsUdpExecutorsOpened": self.proxy_dns_udp_executors_opened.load(Ordering::Relaxed),
             "proxyDnsUdpExecutorsReused": self.proxy_dns_udp_executors_reused.load(Ordering::Relaxed),
             "proxyDnsUdpExecutorsReset": self.proxy_dns_udp_executors_reset.load(Ordering::Relaxed),
+            "udpResponseValidated": self.udp_response_validated.load(Ordering::Relaxed),
+            "udpResponseCompatibilityUnverified": self.udp_response_compatibility_unverified.load(Ordering::Relaxed),
+            "udpResponseDropped": self.udp_response_dropped.load(Ordering::Relaxed),
+            "udpResponseDroppedBytes": self.udp_response_dropped_bytes.load(Ordering::Relaxed),
             "udpReplyQueued": self.udp_reply_queued.load(Ordering::Relaxed),
             "udpReplyQueueFull": self.udp_reply_queue_full.load(Ordering::Relaxed),
             "udpReplySent": self.udp_reply_sent.load(Ordering::Relaxed),
@@ -459,5 +482,18 @@ mod tests {
             assert_eq!(metrics.active_tcp_connections.load(Ordering::Relaxed), 1);
         }
         assert_eq!(metrics.active_tcp_connections.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn udp_response_validation_metrics_keep_drops_and_compatibility_visible() {
+        let metrics = ResidentDataplaneMetrics::default();
+        metrics.udp_response_validated();
+        metrics.udp_response_compatibility_unverified();
+        metrics.udp_response_dropped(512);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot["udpResponseValidated"], 1);
+        assert_eq!(snapshot["udpResponseCompatibilityUnverified"], 1);
+        assert_eq!(snapshot["udpResponseDropped"], 1);
+        assert_eq!(snapshot["udpResponseDroppedBytes"], 512);
     }
 }

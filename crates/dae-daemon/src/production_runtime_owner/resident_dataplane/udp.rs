@@ -105,6 +105,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::session_ex
 use self::session_executor::*;
 mod vmess_session;
 use self::vmess_session::*;
+mod response;
+use self::response::*;
 mod packet_handler;
 use self::packet_handler::*;
 mod proxy_dns_forwarder;
