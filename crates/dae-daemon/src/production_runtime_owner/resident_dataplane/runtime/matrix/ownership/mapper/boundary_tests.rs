@@ -197,11 +197,20 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
         (
             shape(
                 Protocol::VlessStandard,
-                Security::StandardTls,
+                Security::QuicTls,
                 Wrapper::XhttpH3,
                 Udp::Vless(Stream::XhttpH3),
             ),
             Some(CONFIGURED_HTTP_OWNERSHIP),
+        ),
+        (
+            shape(
+                Protocol::VlessStandard,
+                Security::StandardTls,
+                Wrapper::XhttpH3,
+                Udp::Vless(Stream::XhttpH3),
+            ),
+            None,
         ),
         (
             shape(

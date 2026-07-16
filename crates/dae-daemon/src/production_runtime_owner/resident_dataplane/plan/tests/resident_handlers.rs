@@ -6,6 +6,7 @@ use self::trojan::*;
 mod vmess_vless;
 use self::vmess_vless::*;
 mod quic;
+mod xhttp_h3_admission;
 use self::quic::*;
 mod graph_contract;
 use self::graph_contract::*;

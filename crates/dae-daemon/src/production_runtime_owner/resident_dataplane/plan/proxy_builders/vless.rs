@@ -3,7 +3,8 @@ use super::*;
 mod xhttp;
 use self::xhttp::{
     ResidentXhttpExtraPlan, resident_xhttp_extra_plan, resident_xhttp_mode_from_normalized,
-    validate_resident_xhttp_primary_alpn, validate_resident_xhttp_settings_for_mode,
+    validate_resident_xhttp_primary_alpn, validate_resident_xhttp_primary_quic_tls_features,
+    validate_resident_xhttp_settings_for_mode,
 };
 pub(crate) fn build_vless_proxy_plan(
     config: &Config,
@@ -73,6 +74,14 @@ pub(crate) fn build_vless_proxy_plan(
         ));
     }
     let requested_allow_insecure = vless.allow_insecure || config.global.allow_insecure;
+    let xhttp_primary_http_version = (net == "xhttp").then(|| {
+        let alpn = if vless.alpn.trim().is_empty() {
+            Vec::new()
+        } else {
+            split_alpn(&vless.alpn)
+        };
+        ResidentXhttpHttpVersion::from_tls_alpn(&alpn)
+    });
     let meek_options = if net == "meek" {
         Some(
             MeekRoundTripOptions::from_https_url(&vless.path, Vec::new()).map_err(|err| {
@@ -87,11 +96,12 @@ pub(crate) fn build_vless_proxy_plan(
     let reality = resident_reality_underlay_plan(&vless)
         .map_err(|err| format!("validate VLESS Reality for {node_tag}: {err}"))?;
     let allow_insecure = requested_allow_insecure;
-    let tls_fragment = if vless.tls == "tls" {
-        resident_tls_fragment_plan(config)?
-    } else {
-        None
-    };
+    let tls_fragment =
+        if vless.tls == "tls" && xhttp_primary_http_version != Some(ResidentXhttpHttpVersion::H3) {
+            resident_tls_fragment_plan(config)?
+        } else {
+            None
+        };
     let utls_fingerprint = match vless.tls.as_str() {
         "tls" => resident_utls_fingerprint_plan_for_boundary(
             config,
@@ -101,6 +111,13 @@ pub(crate) fn build_vless_proxy_plan(
         "reality" => resident_reality_utls_fingerprint_plan(&vless.fingerprint)?,
         _ => None,
     };
+    if let Some(http_version) = xhttp_primary_http_version {
+        validate_resident_xhttp_primary_quic_tls_features(
+            http_version,
+            utls_fingerprint.is_some(),
+            &node_tag,
+        )?;
+    }
     let server_port = vless.port.parse::<u16>().map_err(|err| {
         format!(
             "invalid VLESS port {} for node {node_tag}: {err}",

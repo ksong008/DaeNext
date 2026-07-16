@@ -29,6 +29,15 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
         ),
         (
             shape(
+                Protocol::VlessStandard,
+                Security::QuicTls,
+                Wrapper::XhttpH3,
+                Udp::Vless(Stream::XhttpH3),
+            ),
+            CONFIGURED_HTTP_OWNERSHIP,
+        ),
+        (
+            shape(
                 Protocol::VlessMux,
                 Security::StandardTls,
                 Wrapper::Mux,

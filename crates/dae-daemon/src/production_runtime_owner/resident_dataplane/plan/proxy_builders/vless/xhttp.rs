@@ -1,11 +1,13 @@
 use super::*;
 
 mod parsing;
+mod quic_tls;
 mod settings;
 use self::parsing::{
     optional_alpn, optional_bool, optional_object, optional_string, reject_unknown_object_fields,
     required_string, required_u16, resident_xhttp_extra_overlay_object,
 };
+use self::quic_tls::validate_resident_xhttp_reality_http_version;
 use self::settings::resident_xhttp_settings_and_xmux_plan;
 
 #[derive(Default)]
@@ -322,12 +324,12 @@ fn resident_xhttp_download_reality_settings(
     )?
     .unwrap_or_else(|| vec!["h2".to_owned()]);
     validate_resident_xhttp_endpoint_alpn(&alpn, node_tag)?;
-    if ResidentXhttpHttpVersion::from_tls_alpn(&alpn) == ResidentXhttpHttpVersion::H1 {
-        return Err(format!(
-            "resident dataplane vless xHTTP downloadSettings.security=reality follows official HTTP/2 selection and does not admit single http/1.1 ALPN for node {node_tag}; got {}",
-            alpn.join(",")
-        ));
-    }
+    validate_resident_xhttp_reality_http_version(
+        ResidentXhttpHttpVersion::from_tls_alpn(&alpn),
+        "downloadSettings.security=reality",
+        &alpn,
+        node_tag,
+    )?;
     let allow_insecure = global_allow_insecure
         || optional_bool(
             reality_settings.get("allowInsecure"),
@@ -478,6 +480,18 @@ pub(super) fn validate_resident_xhttp_settings_for_mode(
     settings::validate_resident_xhttp_settings_for_mode(settings, mode, field, node_tag)
 }
 
+pub(super) fn validate_resident_xhttp_primary_quic_tls_features(
+    http_version: ResidentXhttpHttpVersion,
+    has_fingerprint: bool,
+    node_tag: &str,
+) -> Result<(), String> {
+    quic_tls::validate_resident_xhttp_primary_quic_tls_features(
+        http_version,
+        has_fingerprint,
+        node_tag,
+    )
+}
+
 fn validate_resident_xhttp_endpoint_alpn(alpn: &[String], node_tag: &str) -> Result<(), String> {
     if resident_xhttp_tls_alpn_supported(alpn) {
         return Ok(());
@@ -499,11 +513,8 @@ pub(super) fn validate_resident_xhttp_primary_alpn(
         split_alpn(raw_alpn)
     };
     let http_version = ResidentXhttpHttpVersion::from_tls_alpn(&alpn);
-    if security.eq_ignore_ascii_case("reality") && http_version == ResidentXhttpHttpVersion::H1 {
-        return Err(format!(
-            "resident dataplane vless xHTTP Reality follows official HTTP/2 selection and does not admit single http/1.1 ALPN for node {node_tag}; got {}",
-            alpn.join(",")
-        ));
+    if security.eq_ignore_ascii_case("reality") {
+        validate_resident_xhttp_reality_http_version(http_version, "Reality", &alpn, node_tag)?;
     }
     if resident_xhttp_tls_alpn_supported(&alpn) {
         return Ok(());

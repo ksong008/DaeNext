@@ -17,7 +17,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentSecurit
 }
 
 impl ResidentSecurityUnderlayPlan {
-    pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
+    pub(super) fn from_proxy(
+        proxy: &ResidentProxyPlan,
+        wrapper: ResidentStreamWrapperPlan,
+    ) -> Self {
+        if matches!(
+            wrapper,
+            ResidentStreamWrapperPlan::Xhttp(ResidentXhttpHttpVersion::H3)
+        ) {
+            return Self::QuicTls;
+        }
         if proxy.tls == "reality" {
             return if proxy.utls_fingerprint.is_some() {
                 Self::RealityFingerprint
