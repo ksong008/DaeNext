@@ -78,18 +78,14 @@ async fn cached_dns_quic_connection(
             &upstream,
             generation,
         );
-        match connect_dns_quic_endpoint_async(
-            &upstream,
-            remote,
-            mark,
+        let connect_contract = DnsQuicEndpointConnectContract::new(
             open_context,
             DNS_DOQ_ALPN,
             "connect DoQ endpoint",
             "DNS QUIC handshake timeout",
             "connect DNS QUIC upstream",
-        )
-        .await
-        {
+        );
+        match connect_dns_quic_endpoint_async(&upstream, remote, mark, connect_contract).await {
             Ok((endpoint, connection)) => {
                 endpoint.mark_ready();
                 let mut forwarder = forwarder.lock().await;
@@ -235,31 +231,53 @@ async fn forward_dns_over_quic_connection(
     })
 }
 
+pub(super) struct DnsQuicEndpointConnectContract {
+    open_context: QuicEndpointOpenContext,
+    alpn: &'static str,
+    connect_context: &'static str,
+    handshake_timeout: &'static str,
+    upstream_context: &'static str,
+}
+
+impl DnsQuicEndpointConnectContract {
+    pub(super) const fn new(
+        open_context: QuicEndpointOpenContext,
+        alpn: &'static str,
+        connect_context: &'static str,
+        handshake_timeout: &'static str,
+        upstream_context: &'static str,
+    ) -> Self {
+        Self {
+            open_context,
+            alpn,
+            connect_context,
+            handshake_timeout,
+            upstream_context,
+        }
+    }
+}
+
 pub(super) async fn connect_dns_quic_endpoint_async(
     upstream: &ResidentDnsUpstream,
     remote: SocketAddr,
     mark: u32,
-    open_context: QuicEndpointOpenContext,
-    alpn: &str,
-    connect_context: &'static str,
-    handshake_timeout: &'static str,
-    upstream_context: &'static str,
+    contract: DnsQuicEndpointConnectContract,
 ) -> Result<(ObservedQuicEndpoint, quinn::Connection), String> {
-    let client_config = resident_dns_quic_client_config(alpn)?;
-    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote, open_context)?;
+    let client_config = resident_dns_quic_client_config(contract.alpn)?;
+    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote, contract.open_context)?;
     endpoint.set_default_client_config(client_config);
     let connection = match endpoint
         .connect(remote, &upstream.target.host)
-        .map_err(|err| format!("{connect_context}: {err}"))
+        .map_err(|err| format!("{}: {err}", contract.connect_context))
     {
         Ok(connecting) => match time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connecting).await {
             Ok(result) => result.map_err(|err| {
                 format!(
-                    "{upstream_context} {} {}: {err}",
-                    upstream.tag, upstream.target.authority
+                    "{} {} {}: {err}",
+                    contract.upstream_context, upstream.tag, upstream.target.authority
                 )
             }),
-            Err(_) => Err(handshake_timeout.to_owned()),
+            Err(_) => Err(contract.handshake_timeout.to_owned()),
         },
         Err(error) => Err(error),
     };

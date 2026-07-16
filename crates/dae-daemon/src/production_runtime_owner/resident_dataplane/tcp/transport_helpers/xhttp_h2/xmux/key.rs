@@ -83,8 +83,7 @@ impl XhttpXmuxKey {
             resolved_endpoint,
             proxy.utls_fingerprint.as_ref(),
             xmux,
-            mark,
-            mptcp,
+            XhttpSocketIdentity { mark, mptcp },
         )
     }
 
@@ -106,8 +105,7 @@ impl XhttpXmuxKey {
             resolved_endpoint,
             None,
             xmux,
-            mark,
-            mptcp,
+            XhttpSocketIdentity { mark, mptcp },
         )
     }
 
@@ -118,8 +116,7 @@ impl XhttpXmuxKey {
         resolved_endpoint: &XhttpResolvedEndpointIdentity,
         fingerprint: Option<&ResidentUtlsFingerprintPlan>,
         xmux: &ResidentXhttpXmuxPlan,
-        mark: u32,
-        mptcp: bool,
+        socket: XhttpSocketIdentity,
     ) -> Self {
         let xmux = xmux.clone().official_normalized();
         Self {
@@ -140,7 +137,7 @@ impl XhttpXmuxKey {
             security: security_identity(endpoint, fingerprint),
             request_route_identity: request_route_identity(endpoint),
             xmux,
-            socket: XhttpSocketIdentity { mark, mptcp },
+            socket,
         }
     }
 

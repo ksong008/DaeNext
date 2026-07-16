@@ -1,7 +1,10 @@
 use super::super::*;
 use super::ResidentDnsTransportError;
 use super::plain::dns_transport_route_name;
-use super::quic::{configured_dns_quic_endpoint_context, connect_dns_quic_endpoint_async};
+use super::quic::{
+    DnsQuicEndpointConnectContract, configured_dns_quic_endpoint_context,
+    connect_dns_quic_endpoint_async,
+};
 use super::route::{
     ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
     select_dns_upstream_targets,
@@ -161,17 +164,15 @@ async fn cached_dns_h3_client(
         &upstream,
         generation,
     );
-    let (endpoint, connection) = connect_dns_quic_endpoint_async(
-        &upstream,
-        target,
-        mark,
+    let connect_contract = DnsQuicEndpointConnectContract::new(
         open_context,
         DNS_DOH3_ALPN,
         "connect DoH3 endpoint",
         "DNS H3 handshake timeout",
         "connect DNS H3 upstream",
-    )
-    .await?;
+    );
+    let (endpoint, connection) =
+        connect_dns_quic_endpoint_async(&upstream, target, mark, connect_contract).await?;
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let h3_client = match time::timeout(
         RESIDENT_UDP_RESPONSE_TIMEOUT,
