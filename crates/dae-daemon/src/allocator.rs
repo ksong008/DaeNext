@@ -7,6 +7,11 @@ use serde_json::{Value, json};
 
 mod reclaim;
 use self::reclaim::allocator_reclaim_impl;
+mod requests;
+pub(crate) use self::requests::{
+    AllocatorReclaimRequestBatch, allocator_pending_reclaim_requests, allocator_request_reclaim,
+    allocator_take_reclaim_requests,
+};
 
 #[cfg(not(feature = "allocator-jemalloc"))]
 const ALLOCATOR_SYSTEM_TRIM_ENV: &str = "ALLOCATOR_SYSTEM_TRIM";
@@ -20,7 +25,7 @@ compile_error!("allocator-system cannot be combined with allocator-jemalloc");
 #[global_allocator]
 static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocatorReclaimReason {
     StartupControlBuilt,
     ReloadCompleted,
@@ -33,7 +38,7 @@ pub enum AllocatorReclaimReason {
 }
 
 impl AllocatorReclaimReason {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::StartupControlBuilt => "startup_control_built",
             Self::ReloadCompleted => "reload_completed",
@@ -252,6 +257,7 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
         "requestedTotal": TOTAL_RECLAIMS.load(Ordering::Relaxed),
         "executedTotal": EXECUTED_RECLAIMS.load(Ordering::Relaxed),
         "coalescedTotal": COALESCED_RECLAIMS.load(Ordering::Relaxed),
+        "deferred": requests::allocator_reclaim_request_snapshot_json(),
         "reasons": {
             "startup_control_built": STARTUP_CONTROL_BUILT_RECLAIMS.load(Ordering::Relaxed),
             "reload_completed": RELOAD_COMPLETED_RECLAIMS.load(Ordering::Relaxed),

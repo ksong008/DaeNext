@@ -60,6 +60,13 @@ pub(super) fn automatic_profile_decision() -> AutomaticProfileDecision {
         .clone()
 }
 
+pub(super) fn automatic_memory_capacity() -> Option<(u64, &'static str)> {
+    let decision = automatic_profile_decision();
+    decision
+        .effective_memory_bytes
+        .zip(decision.capacity_source)
+}
+
 pub(super) fn automatic_profile_decision_for_capacities(
     host_memory_bytes: Option<u64>,
     cgroup_limit: Option<(u64, &'static str)>,

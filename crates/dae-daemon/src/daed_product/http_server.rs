@@ -277,13 +277,10 @@ pub(super) fn handle_stream(
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
         Err(err) => {
-            let response = HttpResponse::json(
-                400,
-                json!({
-                    "error": format!("bad request: {err}")
-                }),
-            );
-            write_http_response(&mut stream, &response, false)?;
+            metrics.request_read.record(err.kind());
+            if let Some(response) = http_request_read_error_response(&err) {
+                write_http_response(&mut stream, &response, false)?;
+            }
             return Ok(ProductHttpConnectionResult::Closed);
         }
     };

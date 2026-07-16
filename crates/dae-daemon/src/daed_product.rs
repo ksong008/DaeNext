@@ -36,7 +36,7 @@ use sha3::{
 use crate::allocator::{
     AllocatorReclaimReason, allocator_derived_stats_json_from, allocator_live_heap_bytes,
     allocator_profile, allocator_reclaim, allocator_reclaim_snapshot_json,
-    allocator_stats_json_from, allocator_stats_snapshot,
+    allocator_request_reclaim, allocator_stats_json_from, allocator_stats_snapshot,
 };
 use crate::config_validate::{load_config_file, validate_config_file};
 use crate::production_runtime_owner::{
@@ -181,6 +181,9 @@ const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV: &str = "ALLOCATOR_IDLE_RECLAIM_
 const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT: u64 = 32 * 1024 * 1024;
 const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN: u64 = 4 * 1024 * 1024;
 const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MAX: u64 = 1024 * 1024 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_AUTO_PRESSURE_CAPACITY_DIVISOR: u64 = 256;
+const ALLOCATOR_IDLE_RECLAIM_AUTO_PRESSURE_MAX_BYTES: u64 =
+    ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT;
 const ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV: &str =
     "ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND";
 const ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT: u64 = 32 * 1024;
@@ -276,6 +279,7 @@ struct ProductHttpMetrics {
     sse_rejected_unavailable_total: AtomicU64,
     sse_runtime_joined_total: AtomicU64,
     sse_runtime_detached_total: AtomicU64,
+    request_read: ProductHttpRequestReadMetrics,
 }
 
 impl ProductHttpMetrics {
@@ -409,6 +413,7 @@ impl ProductHttpMetrics {
             "enqueuedTotal": self.enqueued_total.load(Ordering::Relaxed),
             "rejectedTotal": self.rejected_total.load(Ordering::Relaxed),
             "queueDepth": self.queue_depth.load(Ordering::Relaxed),
+            "requestRead": self.request_read.snapshot(),
             "sseRuntime": {
                 "connectionLimit": self.sse_connection_limit.load(Ordering::Relaxed),
                 "perUserLimit": self.sse_per_user_limit.load(Ordering::Relaxed),
@@ -668,6 +673,11 @@ fn product_runtime_defaults() -> Value {
                     "pressureBytesConfigKey": "allocator_idle_reclaim_pressure_threshold_bytes",
                     "pressureBytesEnv": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
                     "pressureBytesDefault": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT.to_string(),
+                    "pressureBytesDefaultPolicy": "explicit config or env; otherwise effective memory capacity divided by the automatic divisor and clamped to the automatic bounds",
+                    "pressureBytesPrecedence": ["env", "config", "auto-capacity", "default"],
+                    "pressureBytesAutoCapacityDivisor": ALLOCATOR_IDLE_RECLAIM_AUTO_PRESSURE_CAPACITY_DIVISOR,
+                    "pressureBytesAutoMin": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN.to_string(),
+                    "pressureBytesAutoMax": ALLOCATOR_IDLE_RECLAIM_AUTO_PRESSURE_MAX_BYTES.to_string(),
                     "pressureMetric": "allocator-resident-minus-active",
                     "retainedMetric": "diagnostic-virtual-address-space",
                     "maxTrafficRateBytesPerSecondConfigKey": "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",

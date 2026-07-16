@@ -30,7 +30,7 @@ impl HttpRequestReadPolicy {
         let absolute = started_at
             .checked_add(self.header_timeout)
             .unwrap_or(started_at);
-        if self.header_min_bytes_per_second == 0 {
+        if received == 0 || self.header_min_bytes_per_second == 0 {
             return absolute;
         }
         let rate_millis = received
