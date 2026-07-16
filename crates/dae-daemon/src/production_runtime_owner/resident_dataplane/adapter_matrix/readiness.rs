@@ -16,9 +16,9 @@ pub(crate) fn resident_live_adapter_entry_missing(
     if evidence.source.is_some() {
         return vec![
             evidence
-                .error
-                .clone()
-                .unwrap_or_else(|| REMOTE_LIVE_MATRIX_INVALID.to_owned()),
+                .redacted_error()
+                .unwrap_or(REMOTE_LIVE_MATRIX_INVALID)
+                .to_owned(),
         ];
     }
     entry

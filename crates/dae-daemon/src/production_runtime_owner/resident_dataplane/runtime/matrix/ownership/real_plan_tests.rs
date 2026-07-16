@@ -1,7 +1,7 @@
 use base64::Engine;
 use dae_outbound::{
-    CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP, FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
-    ShadowsocksLink, Sip003, TrojanLink, VLESSLink, VMessLink,
+    CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
+    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, ShadowsocksLink, Sip003, TrojanLink, VLESSLink, VMessLink,
 };
 
 use super::*;
@@ -86,6 +86,50 @@ fn source_admission_rejects_factory_only_or_invalid_security_tuples() {
     }
 }
 
+#[test]
+fn chain_admission_projects_effective_udp_ownership_without_rewriting_child_factories() {
+    let standalone_socks = build_proxy("socks5://127.0.0.1:1080".to_owned()).unwrap();
+    assert_eq!(
+        effective_materialized_runtime_ownership(&standalone_socks),
+        FLOW_STREAM_ASSOCIATION_OWNERSHIP
+    );
+    let chained_socks = build_proxy(chained("socks5://127.0.0.1:1081".to_owned())).unwrap();
+    assert_eq!(
+        effective_materialized_runtime_ownership(&chained_socks),
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP
+    );
+
+    let standalone_shadowsocks = build_proxy(shadowsocks_link()).unwrap();
+    assert_eq!(
+        effective_materialized_runtime_ownership(&standalone_shadowsocks),
+        FLOW_STREAM_PACKET_OWNERSHIP
+    );
+    let chained_shadowsocks = build_proxy(chained(shadowsocks_link())).unwrap();
+    assert_eq!(
+        effective_materialized_runtime_ownership(&chained_shadowsocks),
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP
+    );
+
+    for net in ["tcp", "ws", "httpupgrade"] {
+        let vmess = build_proxy(chained(vmess_link(net, "none").export_url())).unwrap();
+        assert_eq!(
+            effective_materialized_runtime_ownership(&vmess),
+            FLOW_STREAM_PACKET_OWNERSHIP,
+            "{net}"
+        );
+    }
+
+    let http_transport = build_proxy(chained(
+        "http://user:password@127.0.0.1:8080/resource?transport=1&host=transport.example.test"
+            .to_owned(),
+    ))
+    .unwrap();
+    assert_eq!(
+        effective_materialized_runtime_ownership(&http_transport),
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP
+    );
+}
+
 fn build_proxy(link: String) -> Result<plan::ResidentProxyPlan, String> {
     plan::build_resident_proxy_plan_for_node(
         &test_config(),
@@ -93,6 +137,10 @@ fn build_proxy(link: String) -> Result<plan::ResidentProxyPlan, String> {
         "ownership-fixture".to_owned(),
         link,
     )
+}
+
+fn chained(child: String) -> String {
+    format!("socks5://127.0.0.1:1080 -> {child}")
 }
 
 fn test_config() -> Config {
@@ -206,6 +254,20 @@ fn shadowsocks_plugin_link() -> String {
             "simple-obfs;obfs=http;obfs-host=transport.example.test;obfs-uri=/resource",
         ),
         udp: false,
+        protocol: "shadowsocks".to_owned(),
+    }
+    .export_url()
+}
+
+fn shadowsocks_link() -> String {
+    ShadowsocksLink {
+        name: String::new(),
+        server: "127.0.0.1".to_owned(),
+        port: 8388,
+        password: "shadowsocks-secret".to_owned(),
+        cipher: "aes-128-gcm".to_owned(),
+        plugin: Sip003::default(),
+        udp: true,
         protocol: "shadowsocks".to_owned(),
     }
     .export_url()

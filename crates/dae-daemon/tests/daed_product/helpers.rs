@@ -443,7 +443,11 @@ pub(super) fn assert_current_config_matrix_scope_contract(report: &Value) {
             .unwrap()
     );
     let status_counts = &report["expanded_source_matrix_status_counts"];
-    assert!(status_counts["blocked"].as_u64().unwrap() >= 1);
+    assert!(
+        status_counts["blocked"].as_u64().unwrap_or(0)
+            + status_counts["blocked-deferred"].as_u64().unwrap_or(0)
+            >= 1
+    );
     assert!(status_counts["not-source-supported"].as_u64().unwrap() >= 1);
     assert!(
         status_counts["admitted"].as_u64().unwrap_or(0) >= 1

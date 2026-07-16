@@ -1,4 +1,7 @@
 use super::*;
+#[path = "live_release/redaction.rs"]
+mod redaction;
+
 pub(crate) fn assert_live_release_and_runtime_state_contract(report: &Value) {
     assert!(
         report["resident_live_adapter_matrix_contract_ready"]

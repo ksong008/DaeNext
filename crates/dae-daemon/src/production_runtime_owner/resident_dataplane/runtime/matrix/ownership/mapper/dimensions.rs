@@ -1,5 +1,10 @@
 use super::*;
 
+#[path = "dimensions/materialized.rs"]
+mod materialized;
+
+pub(super) use self::materialized::project_materialized_execution_shape;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct TypedOwnershipShape {
     pub(super) protocol: Protocol,

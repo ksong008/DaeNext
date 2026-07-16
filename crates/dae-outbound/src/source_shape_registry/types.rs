@@ -150,6 +150,7 @@ impl SourceShapeRegistryRow {
             "productionReadinessReconciliation": self.production_readiness.to_value(),
             "typedCapabilityContract": self.typed_capability_contract().map(|contract| contract.to_value()),
             "securityUnderlayPolicy": self.security_underlay_policy_contract().map(|contract| contract.to_value()),
+            "sourceShapeReconciliation": source_shape_reconciliation(self.shape_id).map(|reconciliation| reconciliation.to_value()),
         })
     }
 }

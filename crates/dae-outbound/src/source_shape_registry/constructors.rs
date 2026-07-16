@@ -1,23 +1,82 @@
 use super::*;
-pub(super) const fn admitted_row(
+
+pub(super) struct RegistrySourceIdentity {
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
+}
+
+pub(super) struct RegistryTransportContract {
+    source: RegistrySourceIdentity,
+    security_underlay: &'static str,
+    stream_wrapper: &'static str,
+    packet_semantics: &'static str,
+}
+
+pub(super) struct RegistryRowContract {
+    source: RegistrySourceIdentity,
     security_underlay: &'static str,
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
     runtime_ownership: RuntimeOwnershipProfile,
     redacted_identity: &'static str,
-) -> SourceShapeRegistryRow {
-    SourceShapeRegistryRow {
+}
+
+pub(super) const fn registry_source(
+    shape_id: &'static str,
+    protocol_family: &'static str,
+    link_schemes: &'static [&'static str],
+) -> RegistrySourceIdentity {
+    RegistrySourceIdentity {
         shape_id,
-        source_support: "source-supported",
         protocol_family,
         link_schemes,
+    }
+}
+
+impl RegistrySourceIdentity {
+    pub(super) const fn with_transport(
+        self,
+        security_underlay: &'static str,
+        stream_wrapper: &'static str,
+        packet_semantics: &'static str,
+    ) -> RegistryTransportContract {
+        RegistryTransportContract {
+            source: self,
+            security_underlay,
+            stream_wrapper,
+            packet_semantics,
+        }
+    }
+}
+
+impl RegistryTransportContract {
+    pub(super) const fn with_runtime(
+        self,
+        runtime_ownership: RuntimeOwnershipProfile,
+        redacted_identity: &'static str,
+    ) -> RegistryRowContract {
+        RegistryRowContract {
+            source: self.source,
+            security_underlay: self.security_underlay,
+            stream_wrapper: self.stream_wrapper,
+            packet_semantics: self.packet_semantics,
+            runtime_ownership,
+            redacted_identity,
+        }
+    }
+}
+
+pub(super) const fn admitted_row(contract: RegistryRowContract) -> SourceShapeRegistryRow {
+    SourceShapeRegistryRow {
+        shape_id: contract.source.shape_id,
+        source_support: "source-supported",
+        protocol_family: contract.source.protocol_family,
+        link_schemes: contract.source.link_schemes,
         endpoint: "host-port",
-        security_underlay,
-        stream_wrapper,
-        packet_semantics,
+        security_underlay: contract.security_underlay,
+        stream_wrapper: contract.stream_wrapper,
+        packet_semantics: contract.packet_semantics,
         chain_shape: "single-graph",
         policy_surface: "selected-runtime-plus-expanded-ledger",
         reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
@@ -25,8 +84,8 @@ pub(super) const fn admitted_row(
         resident_status: "admitted-baseline",
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
-        redacted_identity,
-        runtime_ownership,
+        redacted_identity: contract.redacted_identity,
+        runtime_ownership: contract.runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -36,28 +95,19 @@ pub(super) const fn admitted_row(
     }
 }
 
-// Registry row constructors keep each matrix dimension explicit.
-#[allow(dead_code, clippy::too_many_arguments)]
 pub(super) const fn blocked_row(
-    shape_id: &'static str,
-    protocol_family: &'static str,
-    link_schemes: &'static [&'static str],
-    security_underlay: &'static str,
-    stream_wrapper: &'static str,
-    packet_semantics: &'static str,
+    contract: RegistryRowContract,
     blocker_id: &'static str,
-    runtime_ownership: RuntimeOwnershipProfile,
-    redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
-        shape_id,
+        shape_id: contract.source.shape_id,
         source_support: "source-supported",
-        protocol_family,
-        link_schemes,
+        protocol_family: contract.source.protocol_family,
+        link_schemes: contract.source.link_schemes,
         endpoint: "host-port",
-        security_underlay,
-        stream_wrapper,
-        packet_semantics,
+        security_underlay: contract.security_underlay,
+        stream_wrapper: contract.stream_wrapper,
+        packet_semantics: contract.packet_semantics,
         chain_shape: "single-graph",
         policy_surface: "selected-runtime-plus-expanded-ledger",
         reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
@@ -65,8 +115,8 @@ pub(super) const fn blocked_row(
         resident_status: "blocked",
         blocker_id: Some(blocker_id),
         evidence_requirements: &["executor", "large-page-live", "benchmark", "cleanup"],
-        redacted_identity,
-        runtime_ownership,
+        redacted_identity: contract.redacted_identity,
+        runtime_ownership: contract.runtime_ownership,
         state_ledger: BLOCKED_STATE,
         executor_proof: BLOCKED_EXECUTOR_PROOF,
         runtime_selection: BLOCKED_RUNTIME_SELECTION,
@@ -77,24 +127,17 @@ pub(super) const fn blocked_row(
 }
 
 pub(super) const fn scoped_evidence_admitted_row(
-    shape_id: &'static str,
-    protocol_family: &'static str,
-    link_schemes: &'static [&'static str],
-    security_underlay: &'static str,
-    stream_wrapper: &'static str,
-    packet_semantics: &'static str,
-    runtime_ownership: RuntimeOwnershipProfile,
-    redacted_identity: &'static str,
+    contract: RegistryRowContract,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
-        shape_id,
+        shape_id: contract.source.shape_id,
         source_support: "source-supported",
-        protocol_family,
-        link_schemes,
+        protocol_family: contract.source.protocol_family,
+        link_schemes: contract.source.link_schemes,
         endpoint: "host-port",
-        security_underlay,
-        stream_wrapper,
-        packet_semantics,
+        security_underlay: contract.security_underlay,
+        stream_wrapper: contract.stream_wrapper,
+        packet_semantics: contract.packet_semantics,
         chain_shape: "single-graph",
         policy_surface: "selected-runtime-plus-expanded-ledger",
         reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
@@ -102,8 +145,8 @@ pub(super) const fn scoped_evidence_admitted_row(
         resident_status: "admitted-baseline",
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
-        redacted_identity,
-        runtime_ownership,
+        redacted_identity: contract.redacted_identity,
+        runtime_ownership: contract.runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -113,28 +156,19 @@ pub(super) const fn scoped_evidence_admitted_row(
     }
 }
 
-// Registry row constructors keep each matrix dimension explicit.
-#[allow(clippy::too_many_arguments)]
 pub(super) const fn scoped_evidence_capability_admitted_row(
-    shape_id: &'static str,
-    protocol_family: &'static str,
-    link_schemes: &'static [&'static str],
-    security_underlay: &'static str,
-    stream_wrapper: &'static str,
-    packet_semantics: &'static str,
-    runtime_ownership: RuntimeOwnershipProfile,
-    redacted_identity: &'static str,
+    contract: RegistryRowContract,
     capability: CapabilityLedger,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
-        shape_id,
+        shape_id: contract.source.shape_id,
         source_support: "source-supported",
-        protocol_family,
-        link_schemes,
+        protocol_family: contract.source.protocol_family,
+        link_schemes: contract.source.link_schemes,
         endpoint: "host-port",
-        security_underlay,
-        stream_wrapper,
-        packet_semantics,
+        security_underlay: contract.security_underlay,
+        stream_wrapper: contract.stream_wrapper,
+        packet_semantics: contract.packet_semantics,
         chain_shape: "single-graph",
         policy_surface: "selected-runtime-plus-expanded-ledger",
         reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
@@ -142,8 +176,8 @@ pub(super) const fn scoped_evidence_capability_admitted_row(
         resident_status: "admitted-baseline",
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
-        redacted_identity,
-        runtime_ownership,
+        redacted_identity: contract.redacted_identity,
+        runtime_ownership: contract.runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -154,24 +188,17 @@ pub(super) const fn scoped_evidence_capability_admitted_row(
 }
 
 pub(super) const fn scoped_evidence_plugin_wrapper_admitted_row(
-    shape_id: &'static str,
-    protocol_family: &'static str,
-    link_schemes: &'static [&'static str],
-    security_underlay: &'static str,
-    stream_wrapper: &'static str,
-    packet_semantics: &'static str,
-    runtime_ownership: RuntimeOwnershipProfile,
-    redacted_identity: &'static str,
+    contract: RegistryRowContract,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
-        shape_id,
+        shape_id: contract.source.shape_id,
         source_support: "source-supported",
-        protocol_family,
-        link_schemes,
+        protocol_family: contract.source.protocol_family,
+        link_schemes: contract.source.link_schemes,
         endpoint: "host-port",
-        security_underlay,
-        stream_wrapper,
-        packet_semantics,
+        security_underlay: contract.security_underlay,
+        stream_wrapper: contract.stream_wrapper,
+        packet_semantics: contract.packet_semantics,
         chain_shape: "single-graph",
         policy_surface: "selected-runtime-plus-expanded-ledger",
         reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
@@ -179,8 +206,8 @@ pub(super) const fn scoped_evidence_plugin_wrapper_admitted_row(
         resident_status: "admitted-baseline",
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
-        redacted_identity,
-        runtime_ownership,
+        redacted_identity: contract.redacted_identity,
+        runtime_ownership: contract.runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -191,24 +218,17 @@ pub(super) const fn scoped_evidence_plugin_wrapper_admitted_row(
 }
 
 pub(super) const fn scoped_evidence_chain_admitted_row(
-    shape_id: &'static str,
-    protocol_family: &'static str,
-    link_schemes: &'static [&'static str],
-    security_underlay: &'static str,
-    stream_wrapper: &'static str,
-    packet_semantics: &'static str,
-    runtime_ownership: RuntimeOwnershipProfile,
-    redacted_identity: &'static str,
+    contract: RegistryRowContract,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
-        shape_id,
+        shape_id: contract.source.shape_id,
         source_support: "source-supported",
-        protocol_family,
-        link_schemes,
+        protocol_family: contract.source.protocol_family,
+        link_schemes: contract.source.link_schemes,
         endpoint: "host-port",
-        security_underlay,
-        stream_wrapper,
-        packet_semantics,
+        security_underlay: contract.security_underlay,
+        stream_wrapper: contract.stream_wrapper,
+        packet_semantics: contract.packet_semantics,
         chain_shape: "parent-connect-chain",
         policy_surface: "selected-runtime-plus-expanded-ledger",
         reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
@@ -216,8 +236,8 @@ pub(super) const fn scoped_evidence_chain_admitted_row(
         resident_status: "admitted-baseline",
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
-        redacted_identity,
-        runtime_ownership,
+        redacted_identity: contract.redacted_identity,
+        runtime_ownership: contract.runtime_ownership,
         state_ledger: ADMITTED_STATE,
         executor_proof: CHAIN_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
@@ -227,65 +247,19 @@ pub(super) const fn scoped_evidence_chain_admitted_row(
     }
 }
 
-pub(super) const fn scoped_evidence_legacy_import_admitted_row(
-    shape_id: &'static str,
-    protocol_family: &'static str,
-    link_schemes: &'static [&'static str],
-    security_underlay: &'static str,
-    stream_wrapper: &'static str,
-    packet_semantics: &'static str,
-    runtime_ownership: RuntimeOwnershipProfile,
-    redacted_identity: &'static str,
-) -> SourceShapeRegistryRow {
-    SourceShapeRegistryRow {
-        shape_id,
-        source_support: "source-supported",
-        protocol_family,
-        link_schemes,
-        endpoint: "host-port",
-        security_underlay,
-        stream_wrapper,
-        packet_semantics,
-        chain_shape: "single-graph",
-        policy_surface: "selected-runtime-plus-expanded-ledger",
-        reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
-        parser_coverage: "covered",
-        resident_status: "admitted-baseline",
-        blocker_id: None,
-        evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
-        redacted_identity,
-        runtime_ownership,
-        state_ledger: ADMITTED_STATE,
-        executor_proof: ADMITTED_EXECUTOR_PROOF,
-        runtime_selection: ADMITTED_RUNTIME_SELECTION,
-        capability: LEGACY_IMPORT_CAPABILITY,
-        expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
-        production_readiness: SCOPED_READY_PRODUCTION_READINESS,
-    }
-}
-
-// Registry row constructors keep each matrix dimension explicit.
-#[allow(clippy::too_many_arguments)]
 pub(super) const fn not_supported_row(
-    shape_id: &'static str,
-    protocol_family: &'static str,
-    link_schemes: &'static [&'static str],
-    security_underlay: &'static str,
-    stream_wrapper: &'static str,
-    packet_semantics: &'static str,
+    contract: RegistryRowContract,
     blocker_id: &'static str,
-    runtime_ownership: RuntimeOwnershipProfile,
-    redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
-        shape_id,
+        shape_id: contract.source.shape_id,
         source_support: "not-source-supported",
-        protocol_family,
-        link_schemes,
+        protocol_family: contract.source.protocol_family,
+        link_schemes: contract.source.link_schemes,
         endpoint: "external",
-        security_underlay,
-        stream_wrapper,
-        packet_semantics,
+        security_underlay: contract.security_underlay,
+        stream_wrapper: contract.stream_wrapper,
+        packet_semantics: contract.packet_semantics,
         chain_shape: "external",
         policy_surface: "rejected",
         reload_lifecycle: "rejected",
@@ -293,8 +267,8 @@ pub(super) const fn not_supported_row(
         resident_status: "not-source-supported",
         blocker_id: Some(blocker_id),
         evidence_requirements: &[],
-        redacted_identity,
-        runtime_ownership,
+        redacted_identity: contract.redacted_identity,
+        runtime_ownership: contract.runtime_ownership,
         state_ledger: NOT_SOURCE_SUPPORTED_STATE,
         executor_proof: BLOCKED_EXECUTOR_PROOF,
         runtime_selection: BLOCKED_RUNTIME_SELECTION,

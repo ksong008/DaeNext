@@ -24,20 +24,30 @@ pub struct VMessLink {
     pub protocol: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VMessSourceFormat {
+    Json,
+    Legacy,
+}
+
 impl VMessLink {
     pub fn parse(raw: &str) -> Result<Self, OutboundError> {
+        Self::parse_with_source_format(raw).map(|(link, _)| link)
+    }
+
+    pub fn parse_with_source_format(raw: &str) -> Result<(Self, VMessSourceFormat), OutboundError> {
         let Some(payload) = raw.strip_prefix("vmess://") else {
             return Err(OutboundError::BadVmess("unsupported scheme".to_owned()));
         };
         let b64 = payload.split('?').next().unwrap_or_default();
         let decoded = decode_base64(b64)?;
-        let mut parsed = if decoded.trim_start().starts_with('{') {
-            parse_json(&decoded)?
+        let (mut parsed, source_format) = if decoded.trim_start().starts_with('{') {
+            (parse_json(&decoded)?, VMessSourceFormat::Json)
         } else {
-            parse_legacy(raw, &decoded)?
+            (parse_legacy(raw, &decoded)?, VMessSourceFormat::Legacy)
         };
         parsed.normalize();
-        Ok(parsed)
+        Ok((parsed, source_format))
     }
 
     pub fn validate_aead(&self) -> Result<(), OutboundError> {

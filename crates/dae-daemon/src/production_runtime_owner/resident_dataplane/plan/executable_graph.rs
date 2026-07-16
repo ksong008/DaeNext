@@ -10,6 +10,12 @@ use super::{
 
 mod runtime_limits;
 use self::runtime_limits::*;
+mod udp_effective;
+use self::udp_effective::EffectiveUdpExecutionAgreement;
+
+const EXECUTABLE_GRAPH_SCHEMA_VERSION: u64 = 2;
+const RUNTIME_COMPONENT_EVIDENCE_SCHEMA_VERSION: u64 = 2;
+const STREAM_WRAPPER_FACTORY_SCHEMA_VERSION: u64 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecutableGraphDescriptor
@@ -25,7 +31,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     security_underlay: String,
     stream_wrapper: String,
     stream_host_hash: Option<String>,
-    stream_path: String,
+    stream_path_present: bool,
+    stream_path_hash: Option<String>,
     udp_agreement: ResidentUdpExecutionAgreement,
     xhttp_mode: ResidentXhttpMode,
     xhttp_settings: ResidentXhttpSettingsPlan,
@@ -50,7 +57,7 @@ impl ResidentExecutableGraphDescriptor {
         Self {
             graph_id: proxy.graph_id.clone(),
             link_hash: proxy.graph_link_hash.clone(),
-            redacted_link_source: proxy.redacted_link_source.clone(),
+            redacted_link_source: scheme_only_redacted_source(&proxy.redacted_link_source),
             protocol_framing: proxy.protocol,
             tcp_executor: executor_contract.tcp_executor,
             endpoint_host_hash: link_hash(&proxy.server_host),
@@ -63,7 +70,12 @@ impl ResidentExecutableGraphDescriptor {
             } else {
                 Some(link_hash(&proxy.stream_host))
             },
-            stream_path: proxy.stream_path.clone(),
+            stream_path_present: !proxy.stream_path.is_empty(),
+            stream_path_hash: if proxy.stream_path.is_empty() {
+                None
+            } else {
+                Some(link_hash(&proxy.stream_path))
+            },
             udp_agreement: execution.udp.agreement(),
             xhttp_mode: proxy.xhttp_mode,
             xhttp_settings: proxy.xhttp_settings.clone(),
@@ -110,8 +122,10 @@ impl ResidentExecutableGraphDescriptor {
         } else {
             "fail-closed"
         };
+        let effective_udp =
+            EffectiveUdpExecutionAgreement::new(self.udp_agreement, self.udp_chain_admission);
         json!({
-            "schemaVersion": 1,
+            "schemaVersion": EXECUTABLE_GRAPH_SCHEMA_VERSION,
             "graphId": self.graph_id,
             "linkIdentity": {
                 "schemaVersion": 1,
@@ -127,11 +141,12 @@ impl ResidentExecutableGraphDescriptor {
             "streamWrapper": self.stream_wrapper,
             "streamWrapperEndpoint": {
                 "hostHash": self.stream_host_hash,
-                "path": self.stream_path,
+                "pathEvidence": self.stream_path_evidence_value(),
             },
             "protocolFraming": self.protocol_framing,
             "tcpExecutor": self.tcp_executor,
-            "packetSemantics": self.udp_agreement.packet_semantics().as_str(),
+            "packetSemantics": effective_udp.packet_semantics().as_str(),
+            "rawChildPacketSemantics": self.udp_agreement.packet_semantics().as_str(),
             "chain": {
                 "mode": if self.chain_parent_count > 0 { "parent-proxy" } else { "none" },
                 "parentCount": self.chain_parent_count,
@@ -175,7 +190,7 @@ impl ResidentExecutableGraphDescriptor {
         reload_generation: Option<u64>,
     ) -> Value {
         json!({
-            "schemaVersion": 1,
+            "schemaVersion": RUNTIME_COMPONENT_EVIDENCE_SCHEMA_VERSION,
             "graphId": self.graph_id,
             "underlayFactory": self.underlay_factory_value(),
             "streamWrapperFactory": self.stream_wrapper_factory_value(),
@@ -290,13 +305,13 @@ impl ResidentExecutableGraphDescriptor {
             ),
         };
         json!({
-            "schemaVersion": 1,
+            "schemaVersion": STREAM_WRAPPER_FACTORY_SCHEMA_VERSION,
             "status": status,
             "wrapper": self.stream_wrapper,
             "provider": provider,
             "endpoint": {
                 "hostHash": self.stream_host_hash,
-                "path": self.stream_path,
+                "pathEvidence": self.stream_path_evidence_value(),
             },
             "protocolFraming": self.protocol_framing,
             "runtimeLimits": stream_wrapper_runtime_limits_value(&self.stream_wrapper),
@@ -322,6 +337,13 @@ impl ResidentExecutableGraphDescriptor {
                 Value::Null
             },
             "unsupportedReason": unsupported_reason,
+        })
+    }
+
+    fn stream_path_evidence_value(&self) -> Value {
+        json!({
+            "present": self.stream_path_present,
+            "hash": self.stream_path_hash,
         })
     }
 
@@ -367,7 +389,8 @@ impl ResidentExecutableGraphDescriptor {
     }
 
     fn udp_execution_agreement_value(&self) -> Value {
-        let agreement = self.udp_agreement;
+        let agreement =
+            EffectiveUdpExecutionAgreement::new(self.udp_agreement, self.udp_chain_admission);
         json!({
             "schemaVersion": 1,
             "disposition": agreement.disposition().as_str(),
@@ -385,23 +408,15 @@ impl ResidentExecutableGraphDescriptor {
     }
 
     fn packet_session_manager_value(&self) -> Value {
-        let agreement = self.udp_agreement;
+        let agreement =
+            EffectiveUdpExecutionAgreement::new(self.udp_agreement, self.udp_chain_admission);
         let chain_unsupported_reason = self.udp_chain_admission.unsupported_reason();
-        let unsupported_reason = if let Some(reason) = agreement.unsupported_reason() {
-            Value::from(reason)
-        } else if let Some(reason) = chain_unsupported_reason {
-            Value::from(reason)
-        } else {
-            Value::Null
-        };
-        let status = if agreement.policy_closed() {
-            agreement.component_status()
-        } else {
-            self.udp_chain_admission.status()
-        };
+        let unsupported_reason = agreement
+            .unsupported_reason()
+            .map_or(Value::Null, Value::from);
         json!({
             "schemaVersion": 1,
-            "status": status,
+            "status": agreement.component_status(),
             "manager": "resident-udp-session-manager",
             "executor": agreement.executor_label(),
             "graphId": self.graph_id,
@@ -423,12 +438,13 @@ impl ResidentExecutableGraphDescriptor {
                 "packetSemantics"
             ],
             "limitSource": "resident-udp-session-limit",
-            "transientExchangeCompatible": !agreement.policy_closed(),
+            "transientExchangeCompatible": agreement.transient_exchange_compatible(),
         })
     }
 
     fn probe_executor_value(&self, reload_generation: Option<u64>) -> Value {
-        let agreement = self.udp_agreement;
+        let agreement =
+            EffectiveUdpExecutionAgreement::new(self.udp_agreement, self.udp_chain_admission);
         json!({
             "schemaVersion": 1,
             "status": "admitted",
@@ -457,6 +473,14 @@ impl ResidentExecutableGraphDescriptor {
     }
 }
 
+fn scheme_only_redacted_source(redacted_source: &str) -> String {
+    let scheme = redacted_source
+        .split_once(':')
+        .map(|(scheme, _)| scheme)
+        .unwrap_or("link");
+    format!("{scheme}:<redacted>")
+}
+
 fn xhttp_settings_evidence_value(settings: &ResidentXhttpSettingsPlan) -> Value {
     json!({
         "headers": {
@@ -467,25 +491,25 @@ fn xhttp_settings_evidence_value(settings: &ResidentXhttpSettingsPlan) -> Value 
             "bytes": settings.x_padding_bytes,
             "effectiveBytes": settings.normalized_x_padding_bytes(),
             "obfsMode": settings.x_padding_obfs_mode,
-            "key": &settings.x_padding_key,
-            "header": &settings.x_padding_header,
+            "keyFieldName": &settings.x_padding_key,
+            "headerFieldName": &settings.x_padding_header,
             "placement": settings.x_padding_placement.as_str(),
             "method": settings.x_padding_method.as_str(),
         },
         "uplink": {
             "httpMethod": &settings.uplink_http_method,
             "dataPlacement": settings.uplink_data_placement.as_str(),
-            "dataKey": settings.normalized_uplink_data_key(),
+            "dataFieldName": settings.normalized_uplink_data_key(),
             "chunkSize": settings.uplink_chunk_size,
             "effectiveChunkSize": settings.normalized_uplink_chunk_size(),
         },
         "metadata": {
             "sessionIDPlacement": settings.session_id_placement.as_str(),
-            "sessionIDKey": settings.normalized_session_key(),
+            "sessionIDFieldName": settings.normalized_session_key(),
             "sessionIDTableLength": settings.session_id_table.len(),
             "sessionIDLength": settings.session_id_length,
             "seqPlacement": settings.seq_placement.as_str(),
-            "seqKey": settings.normalized_seq_key(),
+            "seqFieldName": settings.normalized_seq_key(),
         },
         "headersPolicy": {
             "noGRPCHeader": settings.no_grpc_header,

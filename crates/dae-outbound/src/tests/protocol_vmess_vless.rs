@@ -20,7 +20,20 @@ fn vmess_rust_native_matches_nativelden_fixture() {
     );
 
     for case in fixture["link_parser"].as_array().unwrap() {
-        let parsed = crate::vmess::VMessLink::parse(case["input"].as_str().unwrap()).unwrap();
+        let (parsed, source_format) =
+            crate::vmess::VMessLink::parse_with_source_format(case["input"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(
+            source_format,
+            if case["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("legacy-"))
+            {
+                crate::vmess::VMessSourceFormat::Legacy
+            } else {
+                crate::vmess::VMessSourceFormat::Json
+            }
+        );
         parsed.validate_aead().unwrap();
         parsed.validate_transport().unwrap();
         assert_eq!(parsed.ps, case["ps"].as_str().unwrap());

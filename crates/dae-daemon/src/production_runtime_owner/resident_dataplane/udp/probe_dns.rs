@@ -267,6 +267,9 @@ fn record_resident_proxy_udp_bridge_error(last_error: &Arc<Mutex<Option<String>>
 #[path = "probe_dns/shutdown_tests.rs"]
 mod shutdown_tests;
 
+pub(crate) const RESIDENT_UDP_PROBE_PUBLIC_ERROR: &str =
+    "resident UDP probe failed; protected detail redacted";
+
 pub(crate) async fn probe_resident_proxy_udp_async(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddr,
@@ -347,7 +350,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             }
             report
         }
-        Err(err) => json!({
+        Err(_) => json!({
             "status": "fail",
             "ok": false,
             "protocol_closed": false,
@@ -361,7 +364,8 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             "elapsed_ms": started.elapsed().as_millis(),
             "graphId": proxy.graph_id,
             "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
-            "error": err,
+            "reasonId": "udp-probe-exchange-failed",
+            "error": RESIDENT_UDP_PROBE_PUBLIC_ERROR,
         }),
     }
 }

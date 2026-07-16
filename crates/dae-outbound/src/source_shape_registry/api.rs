@@ -3,7 +3,7 @@ pub fn source_shape_registry_contract() -> SourceShapeRegistryContract {
     let rows = source_shape_registry_rows();
     SourceShapeRegistryContract {
         schema: "outbound-source-shape-registry",
-        schema_version: 1,
+        schema_version: 2,
         rows,
         source_shape_registry_open: true,
         expanded_source_matrix_open: true,
@@ -36,6 +36,27 @@ fn expanded_source_matrix_is_complete(
     rows: &[SourceShapeRegistryRow],
     evidence: ScopedExpandedSourceMatrixEvidence,
 ) -> bool {
+    let reconciliations_are_total = rows.iter().all(|row| {
+        source_shape_reconciliation(row.shape_id).is_some_and(|reconciliation| match reconciliation
+            .kind
+        {
+            SourceShapeReconciliationKind::ProductionWitness => {
+                reconciliation.contributes_production_witness()
+                    && direct_selector_ownership_is_total(row, reconciliation)
+            }
+            SourceShapeReconciliationKind::AggregateCapability => {
+                aggregate_reconciliation_is_total(rows, row, reconciliation)
+            }
+            SourceShapeReconciliationKind::DeferredCapability => {
+                row.resident_status == "blocked"
+                    && row.blocker_id.is_some()
+                    && direct_selector_ownership_is_total(row, reconciliation)
+            }
+            SourceShapeReconciliationKind::SourceRejected => {
+                row.source_support == "not-source-supported"
+            }
+        })
+    });
     let source_supported = rows
         .iter()
         .filter(|row| row.source_support == "source-supported")
@@ -57,7 +78,8 @@ fn expanded_source_matrix_is_complete(
                 && row.executor_proof.proof_state == "descriptor-only-fail-closed"
         });
     let no_unscoped_stream_wrapper_exclusions = evidence.excluded_stream_wrappers.is_empty();
-    all_source_supported_rows_admitted
+    reconciliations_are_total
+        && all_source_supported_rows_admitted
         && policy_rejected_rows_fail_closed
         && no_unscoped_stream_wrapper_exclusions
         && evidence.production_ready
@@ -69,4 +91,100 @@ fn expanded_source_matrix_is_complete(
         && !evidence.raw_links_retained
         && !evidence.raw_bodies_retained
         && !evidence.raw_state_retained
+}
+
+fn aggregate_reconciliation_is_total(
+    rows: &[SourceShapeRegistryRow],
+    aggregate_row: &SourceShapeRegistryRow,
+    reconciliation: &SourceShapeReconciliation,
+) -> bool {
+    if reconciliation.aggregate_components.is_empty() {
+        return aggregate_row.resident_status == "blocked"
+            && aggregate_row.blocker_id.is_some()
+            && !reconciliation.classification_selectors.is_empty()
+            && direct_selector_ownership_is_total(aggregate_row, reconciliation);
+    }
+    if !reconciliation.classification_selectors.is_empty() {
+        return false;
+    }
+
+    let components_are_total = reconciliation.aggregate_components.iter().enumerate().all(
+        |(index, aggregate_component)| {
+            let unique = reconciliation.aggregate_components[..index]
+                .iter()
+                .all(|earlier| earlier != aggregate_component);
+            let Some(component) = source_shape_reconciliation(aggregate_component.shape_id) else {
+                return false;
+            };
+            let Some(component_row) = rows
+                .iter()
+                .find(|row| row.shape_id == aggregate_component.shape_id)
+            else {
+                return false;
+            };
+            let projected_shapes = component
+                .selectors
+                .iter()
+                .flat_map(|selector| selector.materialized_shapes())
+                .filter(|shape| aggregate_component.projection.matches(*shape))
+                .collect::<Vec<_>>();
+            unique
+                && component.kind == SourceShapeReconciliationKind::ProductionWitness
+                && component.contributes_production_witness()
+                && !projected_shapes.is_empty()
+                && projected_shapes.iter().all(|shape| {
+                    reconciliation.classifies(*shape)
+                        && aggregate_row
+                            .runtime_ownership
+                            .accepts_materialized(shape.runtime_ownership_model())
+                })
+                && component_row
+                    .runtime_ownership
+                    .allowed_materialized_models
+                    .iter()
+                    .all(|model| aggregate_row.runtime_ownership.accepts_materialized(*model))
+        },
+    );
+    components_are_total && projected_security_surface_is_total(reconciliation)
+}
+
+fn direct_selector_ownership_is_total(
+    row: &SourceShapeRegistryRow,
+    reconciliation: &SourceShapeReconciliation,
+) -> bool {
+    reconciliation
+        .selectors
+        .iter()
+        .chain(reconciliation.classification_selectors)
+        .flat_map(|selector| selector.materialized_shapes())
+        .all(|shape| {
+            row.runtime_ownership
+                .accepts_materialized(shape.runtime_ownership_model())
+        })
+}
+
+fn projected_security_surface_is_total(reconciliation: &SourceShapeReconciliation) -> bool {
+    let covers_fragment = reconciliation
+        .aggregate_components
+        .iter()
+        .any(|component| component.projection == SourceShapeProjection::TlsFragment);
+    let covers_reality = reconciliation
+        .aggregate_components
+        .iter()
+        .any(|component| component.projection == SourceShapeProjection::Reality);
+    source_shape_reconciliations()
+        .iter()
+        .filter(|candidate| candidate.kind == SourceShapeReconciliationKind::ProductionWitness)
+        .flat_map(|candidate| candidate.selectors)
+        .flat_map(|selector| selector.materialized_shapes())
+        .all(|shape| {
+            (!covers_fragment || !shape.tls_features.fragment || reconciliation.classifies(shape))
+                && (!covers_reality
+                    || !matches!(
+                        shape.security,
+                        MaterializedSecurity::RealityRustls
+                            | MaterializedSecurity::RealityFingerprint
+                    )
+                    || reconciliation.classifies(shape))
+        })
 }

@@ -1,4 +1,7 @@
-use crate::source_shape_registry::{SourceShapeRegistryRow, source_shape_registry_rows};
+use crate::source_shape_registry::{
+    SourceShapeReconciliationKind, SourceShapeRegistryRow, source_shape_reconciliation,
+    source_shape_registry_rows,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OutboundProductionMatrixEntry {
@@ -88,6 +91,9 @@ pub fn production_matrix_entries_are_source_registry_backed(
                         && row.executor_proof.proof_state == "runtime-executable"
                         && row.typed_capability_contract().is_some()
                         && row.security_underlay_policy_contract().is_some()
+                        && source_shape_reconciliation(row.shape_id).is_some_and(|reconciliation| {
+                            reconciliation.kind == SourceShapeReconciliationKind::ProductionWitness
+                        })
                 })
             })
     })
@@ -103,7 +109,6 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tls-websocket-plugin-wrapper",
             "obfs-tls-plugin-wrapper",
             "aead-2022-plugin-wrapper",
-            "passthrough-udp-transport",
         ],
         &[
             "shadowsocks::link",
@@ -119,7 +124,6 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "stream-wrapper-grpc",
             "stream-wrapper-httpupgrade",
             "inner-encryption-stream-wrapper",
-            "passthrough-udp-transport",
         ],
         &[
             "trojan::link",
@@ -136,9 +140,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "secure-websocket-framed-endpoint",
             "secure-httpupgrade-framed-endpoint",
             "stream-wrapper-grpc",
-            "legacy-layer-shape",
-            "mux-transport-wrapper",
-            "passthrough-udp-transport",
+            "vmess-h2-stream-wrapper",
         ],
         &[
             "vmess::link",
@@ -150,17 +152,19 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
     matrix_entry(
         "vless",
         &[
+            "vless-native-tcp-endpoint",
             "baseline-tls-vision-endpoint",
             "stream-wrapper-websocket",
             "stream-wrapper-grpc",
             "stream-wrapper-httpupgrade",
-            "stream-wrapper-meek",
+            "vless-meek-tls-stream-wrapper",
+            "vless-meek-reality-stream-wrapper",
+            "vless-h2-stream-wrapper",
+            "xhttp-h1-wrapper",
+            "stream-wrapper-xhttp",
+            "xhttp-h3-wrapper",
             "reality-security-underlay",
-            "shared-reality-security-underlay",
-            "full-utls-security-underlay",
-            "tls-fragment-security-underlay",
             "mux-transport-wrapper",
-            "passthrough-udp-transport",
         ],
         &[
             "vless::link",
@@ -171,11 +175,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
     ),
     matrix_entry(
         "hysteria2",
-        &[
-            "baseline-quic-auth-endpoint",
-            "quic-option-surface",
-            "quic-port-hopping-surface",
-        ],
+        &["baseline-quic-auth-endpoint", "quic-port-hopping-surface"],
         &[
             "hysteria2::link",
             "hysteria2::dataplane",
@@ -187,7 +187,6 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
         "tuic",
         &[
             "baseline-quic-uuid-endpoint",
-            "quic-option-surface",
             "verified-quic-security-underlay",
         ],
         &[
@@ -199,7 +198,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
     ),
     matrix_entry(
         "juicity",
-        &["baseline-quic-password-endpoint", "quic-option-surface"],
+        &["baseline-quic-password-endpoint"],
         &[
             "juicity::link",
             "juicity::outbound_dataplane",
@@ -212,7 +211,6 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
         &[
             "baseline-frame-stream-endpoint",
             "insecure-frame-stream-underlay",
-            "full-utls-security-underlay",
         ],
         &[
             "anytls::link",
@@ -228,7 +226,6 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "proxy-transport-mode",
             "insecure-secure-endpoint-underlay",
             "fingerprint-secure-endpoint-underlay",
-            "tls-fragment-security-underlay",
         ],
         &[
             "http_proxy::link",

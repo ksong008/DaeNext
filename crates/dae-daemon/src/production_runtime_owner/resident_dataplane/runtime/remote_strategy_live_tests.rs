@@ -8,3 +8,7 @@ pub(crate) use self::config_assessment::*;
 #[path = "remote_strategy_live_tests/udp_probe.rs"]
 mod udp_probe;
 pub(crate) use self::udp_probe::*;
+
+fn redacted_path_identity(path: &Path) -> String {
+    link_hash(&path_string(path))
+}

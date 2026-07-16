@@ -7,10 +7,9 @@ const MATERIALIZED_STREAM_SECURITY_MODELS: &[RuntimeOwnershipModel] = &[
     RuntimeOwnershipModel::ConfiguredHttpTransport,
 ];
 
-const MATERIALIZED_CHAIN_MODELS: &[RuntimeOwnershipModel] = &[
+const MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_MODELS: &[RuntimeOwnershipModel] = &[
     RuntimeOwnershipModel::FlowStreamAndPacketSession,
     RuntimeOwnershipModel::FlowStreamWithPacketPolicyClosed,
-    RuntimeOwnershipModel::FlowStreamAndAssociation,
 ];
 
 const SOURCE_REJECTED_MODELS: &[RuntimeOwnershipModel] =
@@ -21,8 +20,11 @@ const MATERIALIZED_SHAPE_REJECTED_MODELS: &[RuntimeOwnershipModel] =
 pub const MATERIALIZED_STREAM_SECURITY_OWNERSHIP: RuntimeOwnershipProfile =
     materialized_profile(MATERIALIZED_STREAM_SECURITY_MODELS);
 
+pub const MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_OWNERSHIP: RuntimeOwnershipProfile =
+    materialized_profile(MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_MODELS);
+
 pub const MATERIALIZED_CHAIN_OWNERSHIP: RuntimeOwnershipProfile =
-    materialized_profile(MATERIALIZED_CHAIN_MODELS);
+    MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_OWNERSHIP;
 
 pub const MATERIALIZED_SHAPE_REJECTED_OWNERSHIP: RuntimeOwnershipProfile =
     RuntimeOwnershipProfile {

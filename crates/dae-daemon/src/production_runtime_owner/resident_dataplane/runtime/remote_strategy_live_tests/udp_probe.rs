@@ -1,4 +1,6 @@
+use super::super::udp::RESIDENT_UDP_PROBE_PUBLIC_ERROR;
 use super::*;
+
 pub(crate) fn resident_live_adapter_udp_probe(
     config: &Config,
     target: std::net::SocketAddr,
@@ -30,10 +32,13 @@ pub(crate) fn resident_live_adapter_udp_probe(
                 ) {
                     Ok(proxy) => {
                         let mut probe = match &probe_runtime {
-                            Ok(runtime) => {
-                                runtime.block_on(probe_resident_proxy_udp_async(&proxy, target, payload, include_response_hex))
-                            }
-                            Err(err) => json!({
+                            Ok(runtime) => runtime.block_on(probe_resident_proxy_udp_async(
+                                &proxy,
+                                target,
+                                payload,
+                                include_response_hex,
+                            )),
+                            Err(_) => json!({
                                 "status": "fail",
                                 "ok": false,
                                 "protocol_closed": false,
@@ -43,19 +48,23 @@ pub(crate) fn resident_live_adapter_udp_probe(
                                 "payload_match": false,
                                 "elapsed_ms": started.elapsed().as_millis(),
                                 "graphId": proxy.graph_id,
-                                "error": format!("start Tokio UDP live adapter probe runtime: {err}"),
+                                "reasonId": "udp-probe-runtime-unavailable",
+                                "error": RESIDENT_UDP_PROBE_PUBLIC_ERROR,
                             }),
                         };
                         probe["formal_matrix_handler"] = json!(entry.formal_matrix_handler);
-                        probe["node_tag"] = json!(node.tag);
+                        probe["node_tag"] = json!(safe_matrix_node_tag(&node.tag));
+                        probe["node_tag_source"] = json!(matrix_node_tag_source(&node.tag));
                         probe["udp_live_adapter"] = json!(entry.udp_live_adapter);
                         probe["udp_semantics"] = json!(entry.udp_semantics);
                         probe["udp_path_ready"] = json!(entry.udp_path_ready());
                         return probe;
                     }
                     Err(err) => blocked.push(json!({
-                        "node_tag": node.tag,
+                        "node_tag": safe_matrix_node_tag(&node.tag),
+                        "node_tag_source": matrix_node_tag_source(&node.tag),
                         "scheme": node.scheme,
+                        "reasonId": "source-materialization-failed",
                         "error": sanitize_matrix_error(&err),
                     })),
                 }
@@ -88,7 +97,9 @@ pub(crate) fn resident_live_adapter_udp_probe(
     let matrix = resident_live_adapter_matrix_contract();
     json!({
         "schema": "resident-live-adapter-udp-live",
-        "config": config_path.map(path_string),
+        "schemaVersion": 2,
+        "config": config_path.map(redacted_path_identity),
+        "configPathRedacted": config_path.is_some(),
         "target": target.to_string(),
         "payload_len": payload.len(),
         "network_io_executed": true,
