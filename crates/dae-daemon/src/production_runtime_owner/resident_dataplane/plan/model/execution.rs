@@ -14,6 +14,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) use semantics::UdpPa
 pub(in crate::production_runtime_owner::resident_dataplane) use udp::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentStreamPacketTransport,
     ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory,
+    ResidentUdpPolicyClosedReason,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

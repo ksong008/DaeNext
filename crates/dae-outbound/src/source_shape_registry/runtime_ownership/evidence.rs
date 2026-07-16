@@ -92,6 +92,18 @@ impl RuntimeOwnershipEvidence {
         }
     }
 
+    fn materialization_rejected() -> Self {
+        Self {
+            scope: OwnershipEvidenceScope::MaterializedRuntime,
+            parser: OwnershipEvidenceState::Verified,
+            configuration_materialization: OwnershipEvidenceState::Rejected,
+            local_executable_path: OwnershipEvidenceState::Rejected,
+            resource_validation: OwnershipEvidenceState::Rejected,
+            immutable_artifact: OwnershipEvidenceState::Rejected,
+            authorized_live_interoperability: OwnershipEvidenceState::Rejected,
+        }
+    }
+
     fn to_value(self) -> Value {
         json!({
             "scope": self.scope.as_report_str(),
@@ -110,6 +122,14 @@ impl RuntimeOwnershipProfile {
         self.to_value(
             redacted_identity,
             RuntimeOwnershipEvidence::materialized_runtime(),
+        )
+    }
+
+    pub fn to_materialization_rejected_value(self, redacted_identity: &str) -> Value {
+        debug_assert_eq!(self.model, RuntimeOwnershipModel::MaterializedShapeRejected);
+        self.to_value(
+            redacted_identity,
+            RuntimeOwnershipEvidence::materialization_rejected(),
         )
     }
 

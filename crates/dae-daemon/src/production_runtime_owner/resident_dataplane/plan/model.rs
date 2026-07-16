@@ -10,7 +10,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) use execution::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentExecutionPlan,
     ResidentManualProbeDispatch, ResidentProtocolShape, ResidentStreamPacketTransport,
     ResidentTcpProbeDispatch, ResidentTcpRuntimeDispatch, ResidentUdpExecutionAgreement,
-    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, UdpPacketSemantics,
+    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, ResidentUdpPolicyClosedReason,
+    UdpPacketSemantics,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use protocol::ResidentProtocolExecutorContract;
 pub(crate) use protocol::{

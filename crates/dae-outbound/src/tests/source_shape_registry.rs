@@ -677,6 +677,47 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
 }
 
 #[test]
+fn materialized_shape_rejection_records_no_carrier_and_is_not_source_rejection() {
+    let rejection = MATERIALIZED_SHAPE_REJECTED_OWNERSHIP;
+
+    assert_eq!(
+        rejection.model,
+        RuntimeOwnershipModel::MaterializedShapeRejected
+    );
+    assert_eq!(
+        rejection.disposition,
+        RuntimeOwnershipDisposition::FailClosed
+    );
+    assert_eq!(
+        rejection.data_tcp.admission,
+        RuntimeRouteAdmission::FailClosed
+    );
+    assert_eq!(
+        rejection.data_tcp.physical_carrier,
+        PhysicalCarrierKind::None
+    );
+    assert_eq!(rejection.data_tcp.logical_lease, LogicalLeaseKind::None);
+    assert_eq!(
+        rejection.data_tcp.lifecycle_owner,
+        RuntimeLifecycleOwner::ResolvedAtMaterialization
+    );
+    assert!(rejection.accepts_materialized(RuntimeOwnershipModel::MaterializedShapeRejected));
+    assert!(!rejection.accepts_materialized(RuntimeOwnershipModel::SourceAdmissionRejected));
+    assert!(source_shape_registry_rows().iter().all(|row| {
+        !row.runtime_ownership
+            .accepts_materialized(RuntimeOwnershipModel::MaterializedShapeRejected)
+    }));
+
+    let ledger = rejection.to_materialization_rejected_value("runtime:redacted");
+    assert_eq!(ledger["evidence"]["scope"], "materialized-runtime");
+    assert_eq!(
+        ledger["evidence"]["configurationMaterialization"],
+        "rejected"
+    );
+    assert_eq!(ledger["evidence"]["localExecutablePath"], "rejected");
+}
+
+#[test]
 fn runtime_ownership_ledger_keeps_policy_rejection_pre_network() {
     for row in source_shape_registry_rows()
         .iter()
