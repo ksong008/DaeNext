@@ -3,7 +3,10 @@ use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOUR
 use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpSettingsPlan;
 use dae_dns::DnsPacketView;
 use dae_outbound::shadowsocks::{decode_udp_packet, encode_udp_packet};
-use std::net::{IpAddr, Ipv4Addr};
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    time::Duration,
+};
 
 const TEST_CIPHER: &str = "aes-128-gcm";
 const TEST_PASSWORD: &str = "fixture-password";
@@ -178,12 +181,213 @@ async fn request_scoped_proxy_dns_udp_uses_the_profile_actor_limit() {
     drop(first_guard);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn expired_proxy_dns_request_is_rejected_before_actor_creation() {
+    let runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    let payload_admission = runtime.payload_admission.clone();
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let actor_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+        runtime.clone(),
+        Arc::clone(&metrics),
+    ));
+    let forwarder = ResidentProxyDnsUdpForwarder::new(
+        Arc::new(proxy_plan(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9,
+        ))),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+        runtime,
+        Arc::clone(&metrics),
+        Arc::clone(&actor_executor),
+    )
+    .unwrap();
+
+    let error = forwarder
+        .exchange_with_context(
+            &[0_u8; 12],
+            ProxyDnsRequestContext::from_deadline(time::Instant::now()),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.failure(), ProxyDnsRequestFailure::Deadline);
+    assert_eq!(error.stage(), ProxyDnsRequestStage::Retry);
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot["dnsUdpActorsOpened"], 0);
+    assert_eq!(snapshot["proxyDnsUdpQueuedCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingCurrent"], 0);
+    assert_eq!(payload_admission.current(), 0);
+
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    assert_eq!(forwarder.shutdown(deadline).await["status"], "pass");
+    assert_eq!(actor_executor.shutdown(deadline).await["status"], "pass");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abandoned_queued_proxy_dns_request_does_not_reach_the_executor() {
+    let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let (release_server, wait_for_release) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let _ = wait_for_release.await;
+        drop(upstream);
+    });
+
+    let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    runtime.proxy_actor_limit = 1;
+    runtime.actor_worker_threads = 1;
+    runtime.pending_limit = 1;
+    runtime.queue_depth = 2;
+    runtime.attempts = 1;
+    let payload_admission = runtime.payload_admission.clone();
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let actor_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+        runtime.clone(),
+        Arc::clone(&metrics),
+    ));
+    let forwarder = Arc::new(
+        ResidentProxyDnsUdpForwarder::new(
+            Arc::new(proxy_plan(upstream_addr)),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+            runtime,
+            Arc::clone(&metrics),
+            Arc::clone(&actor_executor),
+        )
+        .unwrap(),
+    );
+
+    let first_forwarder = Arc::clone(&forwarder);
+    let first = tokio::spawn(async move {
+        let query = dns_query(0x5101, "pending.example");
+        first_forwarder
+            .exchange_with_context(
+                &query,
+                ProxyDnsRequestContext::from_timeout(Duration::from_secs(5)),
+            )
+            .await
+    });
+    time::timeout(Duration::from_secs(1), async {
+        while metrics.snapshot()["proxyDnsUdpPendingCurrent"] != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let second_forwarder = Arc::clone(&forwarder);
+    let second = tokio::spawn(async move {
+        second_forwarder
+            .exchange_with_context(
+                &[0_u8],
+                ProxyDnsRequestContext::from_timeout(Duration::from_secs(5)),
+            )
+            .await
+    });
+    time::timeout(Duration::from_secs(1), async {
+        while metrics.snapshot()["proxyDnsUdpQueuedCurrent"] != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    second.abort();
+    let _ = second.await;
+    first.abort();
+    let _ = first.await;
+    time::timeout(Duration::from_secs(1), async {
+        loop {
+            let snapshot = metrics.snapshot();
+            if snapshot["proxyDnsUdpQueuedCurrent"] == 0
+                && snapshot["proxyDnsUdpPendingCurrent"] == 0
+                && snapshot["proxyDnsUdpAbandoned"].as_u64().unwrap_or(0) >= 2
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot["proxyDnsUdpExecutorsOpened"], 1);
+    assert_eq!(snapshot["proxyDnsUdpExecutorsReused"], 0);
+    assert_eq!(snapshot["proxyDnsUdpQueuedBytesCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingBytesCurrent"], 0);
+    assert_eq!(payload_admission.current(), 0);
+    let _ = release_server.send(());
+    server.await.unwrap();
+
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    assert_eq!(forwarder.shutdown(deadline).await["status"], "pass");
+    assert_eq!(actor_executor.shutdown(deadline).await["status"], "pass");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn second_routed_proxy_dns_attempt_cannot_restart_the_caller_deadline() {
+    let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    runtime.proxy_actor_limit = 1;
+    runtime.actor_worker_threads = 1;
+    runtime.attempts = 1;
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let actor_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+        runtime.clone(),
+        Arc::clone(&metrics),
+    ));
+    let forwarder = ResidentProxyDnsUdpForwarder::new(
+        Arc::new(proxy_plan(upstream_addr)),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+        runtime,
+        Arc::clone(&metrics),
+        Arc::clone(&actor_executor),
+    )
+    .unwrap();
+    let context = ProxyDnsRequestContext::from_timeout(Duration::from_millis(20));
+
+    let first_error = forwarder
+        .exchange_with_context(&dns_query(0x5201, "first-upstream.example"), context)
+        .await
+        .unwrap_err();
+    assert_eq!(first_error.failure(), ProxyDnsRequestFailure::Deadline);
+    let executors_opened = metrics.snapshot()["proxyDnsUdpExecutorsOpened"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(executors_opened, 1);
+
+    let second_error = forwarder
+        .exchange_with_context(&dns_query(0x5202, "second-upstream.example"), context)
+        .await
+        .unwrap_err();
+    assert_eq!(second_error.failure(), ProxyDnsRequestFailure::Deadline);
+    assert_eq!(second_error.stage(), ProxyDnsRequestStage::Retry);
+    assert_eq!(
+        metrics.snapshot()["proxyDnsUdpExecutorsOpened"]
+            .as_u64()
+            .unwrap(),
+        executors_opened
+    );
+
+    drop(upstream);
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    assert_eq!(forwarder.shutdown(deadline).await["status"], "pass");
+    assert_eq!(actor_executor.shutdown(deadline).await["status"], "pass");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn one_proxy_dns_udp_actor_multiplexes_out_of_order_responses_without_head_of_line_waiting() {
     let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
+    let (second_sent, second_response_sent) = tokio::sync::oneshot::channel();
+    let (release_first, first_release) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let mut first_wire = vec![0_u8; 4096];
         let mut second_wire = vec![0_u8; 4096];
@@ -213,12 +417,15 @@ async fn one_proxy_dns_udp_actor_multiplexes_out_of_order_responses_without_head
         )
         .unwrap();
         upstream.send_to(&second_wire, peer).await.unwrap();
+        let _ = second_sent.send(());
+        let _ = first_release.await;
         upstream.send_to(&first_wire, peer).await.unwrap();
     });
     let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
     runtime.proxy_actor_limit = 1;
     runtime.actor_worker_threads = 1;
     runtime.attempts = 1;
+    let payload_admission = runtime.payload_admission.clone();
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let actor_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
         runtime.clone(),
@@ -236,21 +443,142 @@ async fn one_proxy_dns_udp_actor_multiplexes_out_of_order_responses_without_head
     );
     let first = dns_query(0x1111, "first.example");
     let second = dns_query(0x2222, "second.example");
+    let first_len = first.len();
     let first_forwarder = Arc::clone(&forwarder);
-    let second_forwarder = Arc::clone(&forwarder);
-    let (first_response, second_response) = tokio::join!(
-        async move { first_forwarder.exchange(&first).await },
-        async move { second_forwarder.exchange(&second).await },
-    );
+    let first_response = tokio::spawn(async move { first_forwarder.exchange(&first).await });
+    time::timeout(Duration::from_secs(1), async {
+        while metrics.snapshot()["proxyDnsUdpPendingCurrent"] != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 
-    assert_eq!(&first_response.unwrap()[0..2], &0x1111_u16.to_be_bytes());
-    assert_eq!(&second_response.unwrap()[0..2], &0x2222_u16.to_be_bytes());
+    let second_forwarder = Arc::clone(&forwarder);
+    let second_response = tokio::spawn(async move { second_forwarder.exchange(&second).await });
+    second_response_sent.await.unwrap();
+    let second_response = time::timeout(Duration::from_secs(1), second_response)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(&second_response[0..2], &0x2222_u16.to_be_bytes());
+    time::timeout(Duration::from_secs(1), async {
+        while metrics.snapshot()["proxyDnsUdpPendingCurrent"] != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let while_first_is_pending = metrics.snapshot();
+    assert_eq!(while_first_is_pending["proxyDnsUdpQueuedCurrent"], 0);
+    assert_eq!(while_first_is_pending["proxyDnsUdpQueuedBytesCurrent"], 0);
+    assert_eq!(while_first_is_pending["proxyDnsUdpPendingCurrent"], 1);
+    assert_eq!(
+        while_first_is_pending["proxyDnsUdpPendingBytesCurrent"],
+        first_len
+    );
+    assert_eq!(payload_admission.current(), first_len);
+
+    release_first.send(()).unwrap();
+    let first_response = time::timeout(Duration::from_secs(1), first_response)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(&first_response[0..2], &0x1111_u16.to_be_bytes());
     server.await.unwrap();
+    time::timeout(Duration::from_secs(1), async {
+        loop {
+            let snapshot = metrics.snapshot();
+            if snapshot["proxyDnsUdpPendingCurrent"] == 0
+                && snapshot["proxyDnsUdpPendingBytesCurrent"] == 0
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot["dnsUdpActorsOpened"], 1);
     assert_eq!(snapshot["proxyDnsUdpExecutorsOpened"], 1);
     assert!(snapshot["proxyDnsUdpExecutorsReused"].as_u64().unwrap_or(0) >= 1);
     assert_eq!(snapshot["dnsUdpPendingMaximum"], 2);
+    assert_eq!(snapshot["proxyDnsUdpQueuedCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpQueuedBytesCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingBytesCurrent"], 0);
+    assert_eq!(payload_admission.current(), 0);
+
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    assert_eq!(forwarder.shutdown(deadline).await["status"], "pass");
+    assert_eq!(actor_executor.shutdown(deadline).await["status"], "pass");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn proxy_dns_udp_preserves_large_responses_and_releases_payload_bytes() {
+    let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let response_sizes = [1500_usize, 4096_usize];
+    let server = tokio::spawn(async move {
+        let mut wire = vec![0_u8; u16::MAX as usize];
+        for (index, response_size) in response_sizes.into_iter().enumerate() {
+            let (wire_len, peer) = upstream.recv_from(&mut wire).await.unwrap();
+            let request = decode_udp_packet(TEST_CIPHER, TEST_PASSWORD, &wire[..wire_len]).unwrap();
+            let mut response = dns_a_response_for_query(&request.payload, [192, 0, 2, 10]);
+            assert!(response.len() <= response_size);
+            response.resize(response_size, 0);
+            let encoded = encode_udp_packet(
+                TEST_CIPHER,
+                TEST_PASSWORD,
+                &[0x41_u8.saturating_add(index as u8); 16],
+                &request.target,
+                &response,
+            )
+            .unwrap();
+            upstream.send_to(&encoded, peer).await.unwrap();
+        }
+    });
+
+    let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    runtime.proxy_actor_limit = 1;
+    runtime.actor_worker_threads = 1;
+    runtime.attempts = 1;
+    let payload_admission = runtime.payload_admission.clone();
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let actor_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+        runtime.clone(),
+        Arc::clone(&metrics),
+    ));
+    let forwarder = ResidentProxyDnsUdpForwarder::new(
+        Arc::new(proxy_plan(upstream_addr)),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+        runtime,
+        Arc::clone(&metrics),
+        Arc::clone(&actor_executor),
+    )
+    .unwrap();
+
+    for (index, response_size) in response_sizes.into_iter().enumerate() {
+        let request_id = 0x4100_u16.saturating_add(index as u16);
+        let query = dns_query(request_id, &format!("large-{response_size}.example"));
+        let response = forwarder.exchange(&query).await.unwrap();
+        assert_eq!(response.len(), response_size);
+        assert_eq!(&response[0..2], &request_id.to_be_bytes());
+    }
+    server.await.unwrap();
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot["proxyDnsUdpQueuedCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpQueuedBytesCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingBytesCurrent"], 0);
+    assert_eq!(payload_admission.current(), 0);
 
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     assert_eq!(forwarder.shutdown(deadline).await["status"], "pass");

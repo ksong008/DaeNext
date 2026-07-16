@@ -15,12 +15,15 @@ pub(super) async fn wait_proxy_dns_udp_response(
 
 pub(super) async fn reset_proxy_dns_udp_executor(
     executor: &mut Option<Box<UdpSessionExecutor>>,
-    timeout: Duration,
+    deadline: time::Instant,
     metrics: &ResidentDataplaneMetrics,
 ) {
     let Some(mut failed) = executor.take() else {
         return;
     };
-    let _ = time::timeout(timeout, failed.shutdown()).await;
+    let mut cleanup = tokio::spawn(async move {
+        failed.shutdown().await;
+    });
+    let _ = time::timeout_at(deadline, &mut cleanup).await;
     metrics.proxy_dns_udp_executor_reset();
 }

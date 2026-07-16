@@ -24,6 +24,7 @@ const EXPECTED_CLEANUP: [CleanupEvent; 5] = [
 enum FakeExchangeOutcome {
     Success,
     Failure(&'static str),
+    ProtocolFailure(&'static str),
     Pending,
 }
 
@@ -101,13 +102,22 @@ impl FakeExchange {
 }
 
 impl ProxiedDoh3ExchangeTarget for FakeExchange {
-    async fn exchange(&mut self) -> Result<Vec<u8>, String> {
+    async fn exchange(&mut self) -> Result<Vec<u8>, ProxyDnsRequestError> {
         if let Some(started) = self.exchange_started.take() {
             let _ = started.send(());
         }
         match self.outcome {
             FakeExchangeOutcome::Success => Ok(vec![0x12, 0x34]),
-            FakeExchangeOutcome::Failure(error) => Err(error.to_owned()),
+            FakeExchangeOutcome::Failure(error) => Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Read,
+                ProxyDnsRequestFailure::Network,
+                error,
+            )),
+            FakeExchangeOutcome::ProtocolFailure(error) => Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Read,
+                ProxyDnsRequestFailure::Protocol,
+                error,
+            )),
             FakeExchangeOutcome::Pending => pending().await,
         }
     }
@@ -175,12 +185,32 @@ async fn every_exchange_exit_uses_the_same_cleanup_epilogue() {
                 assert_eq!(result.unwrap(), vec![0x12, 0x34]);
             }
             FakeExchangeOutcome::Failure(error) => {
-                assert!(result.unwrap_err().contains(error));
+                assert!(result.unwrap_err().to_string().contains(error));
+            }
+            FakeExchangeOutcome::ProtocolFailure(error) => {
+                assert!(result.unwrap_err().to_string().contains(error));
             }
             FakeExchangeOutcome::Pending => unreachable!(),
         }
         assert_eq!(recorded_events(&events), EXPECTED_CLEANUP);
     }
+}
+
+#[tokio::test]
+async fn protocol_failure_remains_typed_after_the_cleanup_epilogue() {
+    let (target, events) = FakeExchange::new(
+        FakeExchangeOutcome::ProtocolFailure("invalid response"),
+        None,
+    );
+    let (_keep_open, cancelled) = tokio::sync::oneshot::channel();
+    let error = run_owned_proxied_doh3_exchange(target, cancelled)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.stage(), ProxyDnsRequestStage::Read);
+    assert_eq!(error.failure(), ProxyDnsRequestFailure::Protocol);
+    assert!(error.to_string().contains("invalid response"));
+    assert_eq!(recorded_events(&events), EXPECTED_CLEANUP);
 }
 
 #[tokio::test]
@@ -195,7 +225,8 @@ async fn cancellation_is_signalled_to_the_owner_before_cleanup() {
         .expect("owner task should finish after cancellation")
         .expect("owner task should not panic")
         .unwrap_err();
-    assert_eq!(error, PROXIED_DOH3_CANCELLED);
+    assert_eq!(error.failure(), ProxyDnsRequestFailure::Cancelled);
+    assert!(error.to_string().contains(PROXIED_DOH3_CANCELLED));
     assert_eq!(recorded_events(&events), EXPECTED_CLEANUP);
 }
 
@@ -222,6 +253,34 @@ async fn dropping_the_public_wrapper_still_cleans_the_detached_owner() {
     })
     .await
     .expect("detached owner should complete cleanup after caller drop");
+}
+
+#[tokio::test]
+async fn caller_deadline_returns_typed_error_and_detached_owner_still_cleans_up() {
+    let (target, events) = FakeExchange::new(FakeExchangeOutcome::Pending, None);
+    let (started, exchange_started) = tokio::sync::oneshot::channel();
+    let context = ProxyDnsRequestContext::from_timeout(std::time::Duration::from_millis(100));
+    let caller_task = tokio::spawn(lifecycle::run_proxied_doh3_exchange_with_context(
+        target.with_exchange_started(started),
+        context,
+    ));
+    exchange_started
+        .await
+        .expect("fake exchange should start before its caller deadline");
+
+    let error = caller_task.await.unwrap().unwrap_err();
+    assert_eq!(error.stage(), ProxyDnsRequestStage::Read);
+    assert_eq!(error.failure(), ProxyDnsRequestFailure::Deadline);
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        loop {
+            if recorded_events(&events) == EXPECTED_CLEANUP {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("detached owner should complete cleanup after caller deadline");
 }
 
 #[tokio::test]
@@ -291,8 +350,14 @@ async fn cleanup_failure_does_not_skip_later_cleanup_actions() {
             .await
             .unwrap_err();
 
-        assert!(error.contains("request failed"));
-        assert!(error.contains(&format!("{failed_event:?} failed")));
+        assert!(error.to_string().contains("request failed"));
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{failed_event:?} failed"))
+        );
+        assert_eq!(error.stage(), ProxyDnsRequestStage::Cleanup);
+        assert_eq!(error.failure(), ProxyDnsRequestFailure::Network);
         assert_eq!(recorded_events(&events), EXPECTED_CLEANUP);
     }
 }

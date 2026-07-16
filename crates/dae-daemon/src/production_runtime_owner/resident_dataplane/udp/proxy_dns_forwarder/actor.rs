@@ -2,11 +2,11 @@ use std::collections::{HashMap, VecDeque};
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::dns::{
-    ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
+    ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext, ProxyDnsRequestError,
+    ProxyDnsRequestFailure, ProxyDnsRequestStage, ResidentDnsUdpActorLifecycle,
+    ResidentDnsUdpActorRegistration,
 };
-use crate::production_runtime_owner::udp_payload_admission::{
-    ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit,
-};
+use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadAdmission;
 
 mod executor_state;
 mod pending;
@@ -15,7 +15,8 @@ mod transaction;
 use self::executor_state::{reset_proxy_dns_udp_executor, wait_proxy_dns_udp_response};
 use self::pending::{
     expire_proxy_dns_udp_requests, fail_proxy_dns_udp_requests, fail_queued_proxy_dns_udp_requests,
-    next_proxy_dns_udp_deadline, wait_proxy_dns_udp_deadline,
+    insert_proxy_dns_udp_deadline, next_proxy_dns_udp_deadline, remove_proxy_dns_udp_deadline,
+    wait_proxy_dns_udp_cancellation, wait_proxy_dns_udp_deadline,
 };
 use self::transaction::{
     PendingProxyDnsDeadline, PendingProxyDnsUdpRequest, handle_proxy_dns_udp_request,
@@ -27,14 +28,14 @@ pub(super) struct ResidentProxyDnsUdpActorHandle {
     sender: tokio::sync::mpsc::Sender<ResidentProxyDnsUdpRequest>,
     lifecycle: Arc<ResidentDnsUdpActorLifecycle>,
     metrics: Arc<ResidentDataplaneMetrics>,
-    attempt_timeout: Duration,
     payload_admission: ResidentUdpPayloadAdmission,
 }
 
 pub(super) struct ResidentProxyDnsUdpRequest {
     pub(super) payload: Vec<u8>,
-    pub(super) _payload_admission: ResidentUdpPayloadPermit,
-    pub(super) response: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+    pub(super) context: ProxyDnsRequestContext,
+    pub(super) bytes: ProxyDnsQueuedRequestBytes,
+    pub(super) response: tokio::sync::oneshot::Sender<Result<Vec<u8>, ProxyDnsRequestError>>,
 }
 
 struct ResidentProxyDnsUdpActorMetricGuard {
@@ -52,6 +53,7 @@ enum ResidentProxyDnsUdpActorEvent {
     Stop,
     Request(Option<ResidentProxyDnsUdpRequest>),
     Response(Result<Option<(&'static str, UdpExchangeResult)>, String>),
+    Cancelled,
     Deadline,
 }
 
@@ -87,7 +89,6 @@ pub(super) fn start_proxy_dns_udp_actor(
             sender,
             lifecycle: Arc::clone(&lifecycle),
             metrics,
-            attempt_timeout: runtime_config.attempt_timeout,
             payload_admission: runtime_config.payload_admission.clone(),
         },
         lifecycle: Arc::downgrade(&lifecycle),
@@ -113,38 +114,65 @@ impl ResidentProxyDnsUdpActorHandle {
             .is_ok()
     }
 
-    pub(super) async fn exchange_once(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
+    pub(super) async fn exchange_once(
+        &self,
+        payload: &[u8],
+        context: ProxyDnsRequestContext,
+    ) -> Result<Vec<u8>, ProxyDnsRequestError> {
+        context.ensure(ProxyDnsRequestStage::Enqueue)?;
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let payload_admission = self
             .payload_admission
             .try_acquire(payload.len())
             .map_err(|error| {
-                format!(
+                ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::Enqueue,
+                    ProxyDnsRequestFailure::Capacity,
+                    format!(
                     "proxied DNS UDP queued payload byte limit reached: requested={}, current={}, limit={}",
                     error.requested, error.current, error.limit
+                    ),
                 )
             })?;
-        match time::timeout(
-            self.attempt_timeout,
-            self.sender.send(ResidentProxyDnsUdpRequest {
-                payload: payload.to_vec(),
-                _payload_admission: payload_admission,
-                response: response_tx,
-            }),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => return Err("proxied DNS UDP actor is closed".to_owned()),
+        let mut bytes = ProxyDnsQueuedRequestBytes::new(
+            payload_admission,
+            Arc::clone(&self.metrics),
+            payload.len(),
+            context,
+        );
+        let queue_permit = match time::timeout_at(context.deadline(), self.sender.reserve()).await {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(error)) => {
+                bytes.mark_rejected();
+                return Err(ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::Enqueue,
+                    ProxyDnsRequestFailure::Network,
+                    format!("proxied DNS UDP actor is closed: {error}"),
+                ));
+            }
             Err(_) => {
                 self.metrics.dns_udp_queue_wait_timeout();
-                return Err("proxied DNS UDP actor queue wait timeout".to_owned());
+                bytes.mark_expired();
+                return Err(ProxyDnsRequestError::deadline(
+                    ProxyDnsRequestStage::Enqueue,
+                ));
             }
+        };
+        queue_permit.send(ResidentProxyDnsUdpRequest {
+            payload: payload.to_vec(),
+            context,
+            bytes,
+            response: response_tx,
+        });
+        match time::timeout_at(context.deadline(), response_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Read,
+                ProxyDnsRequestFailure::Network,
+                "proxied DNS UDP actor dropped response",
+            )),
+            Err(_) => Err(ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Read)),
         }
-        time::timeout(self.attempt_timeout, response_rx)
-            .await
-            .map_err(|_| "proxied DNS UDP actor exchange timeout".to_owned())?
-            .map_err(|_| "proxied DNS UDP actor dropped response".to_owned())?
     }
 }
 
@@ -166,7 +194,7 @@ async fn run_proxy_dns_udp_actor(
     let mut executor = None::<Box<UdpSessionExecutor>>;
     let mut next_generation = 1_u64;
     loop {
-        expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator, &metrics);
+        expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);
         if receiver.is_closed() && pending.is_empty() {
             break;
         }
@@ -176,6 +204,9 @@ async fn run_proxy_dns_udp_actor(
             _ = &mut stop => ResidentProxyDnsUdpActorEvent::Stop,
             response = wait_proxy_dns_udp_response(&mut executor, !pending.is_empty()) => {
                 ResidentProxyDnsUdpActorEvent::Response(response)
+            }
+            _ = wait_proxy_dns_udp_cancellation(&mut pending), if !pending.is_empty() => {
+                ResidentProxyDnsUdpActorEvent::Cancelled
             }
             request = receiver.recv(), if pending.len() < pending_limit => {
                 ResidentProxyDnsUdpActorEvent::Request(request)
@@ -187,9 +218,13 @@ async fn run_proxy_dns_udp_actor(
                 receiver.close();
                 let failed = fail_proxy_dns_udp_requests(
                     &mut pending,
+                    &mut deadlines,
                     &mut id_allocator,
-                    "proxied DNS UDP actor is shutting down".to_owned(),
-                    &metrics,
+                    ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Cleanup,
+                        ProxyDnsRequestFailure::Network,
+                        "proxied DNS UDP actor is shutting down",
+                    ),
                 )
                 .saturating_add(fail_queued_proxy_dns_udp_requests(
                     &mut receiver,
@@ -199,6 +234,7 @@ async fn run_proxy_dns_udp_actor(
                 break;
             }
             ResidentProxyDnsUdpActorEvent::Request(Some(request)) => {
+                let request_deadline = request.context.deadline();
                 if let Err(err) = handle_proxy_dns_udp_request(
                     &proxy,
                     original_dst,
@@ -213,13 +249,18 @@ async fn run_proxy_dns_udp_actor(
                 )
                 .await
                 {
-                    fail_proxy_dns_udp_requests(&mut pending, &mut id_allocator, err, &metrics);
-                    reset_proxy_dns_udp_executor(
-                        &mut executor,
-                        runtime_config.attempt_timeout,
-                        &metrics,
-                    )
-                    .await;
+                    let shared_error = ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Cleanup,
+                        ProxyDnsRequestFailure::Network,
+                        format!("proxied DNS UDP executor reset after request failure: {err}"),
+                    );
+                    fail_proxy_dns_udp_requests(
+                        &mut pending,
+                        &mut deadlines,
+                        &mut id_allocator,
+                        shared_error,
+                    );
+                    reset_proxy_dns_udp_executor(&mut executor, request_deadline, &metrics).await;
                 }
             }
             ResidentProxyDnsUdpActorEvent::Request(None) => {
@@ -228,37 +269,54 @@ async fn run_proxy_dns_udp_actor(
                 }
             }
             ResidentProxyDnsUdpActorEvent::Response(Ok(Some((_, response)))) => {
-                handle_proxy_dns_udp_response(
+                if let Err(error) = handle_proxy_dns_udp_response(
                     &mut pending,
+                    &mut deadlines,
                     &mut id_allocator,
-                    &response.payload,
+                    original_dst,
+                    response,
                     &metrics,
-                );
+                ) {
+                    let reset_deadline = pending
+                        .values()
+                        .map(|request| request.context.deadline())
+                        .min()
+                        .unwrap_or_else(time::Instant::now);
+                    fail_proxy_dns_udp_requests(
+                        &mut pending,
+                        &mut deadlines,
+                        &mut id_allocator,
+                        error,
+                    );
+                    reset_proxy_dns_udp_executor(&mut executor, reset_deadline, &metrics).await;
+                }
             }
             ResidentProxyDnsUdpActorEvent::Response(Ok(None)) => {
                 tokio::task::yield_now().await;
             }
             ResidentProxyDnsUdpActorEvent::Response(Err(err)) => {
+                let reset_deadline = pending
+                    .values()
+                    .map(|request| request.context.deadline())
+                    .min()
+                    .unwrap_or_else(time::Instant::now);
                 fail_proxy_dns_udp_requests(
-                    &mut pending,
-                    &mut id_allocator,
-                    format!("receive proxied DNS UDP response: {err}"),
-                    &metrics,
-                );
-                reset_proxy_dns_udp_executor(
-                    &mut executor,
-                    runtime_config.attempt_timeout,
-                    &metrics,
-                )
-                .await;
-            }
-            ResidentProxyDnsUdpActorEvent::Deadline => {
-                expire_proxy_dns_udp_requests(
                     &mut pending,
                     &mut deadlines,
                     &mut id_allocator,
-                    &metrics,
+                    ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Read,
+                        ProxyDnsRequestFailure::Network,
+                        format!("receive proxied DNS UDP response: {err}"),
+                    ),
                 );
+                reset_proxy_dns_udp_executor(&mut executor, reset_deadline, &metrics).await;
+            }
+            ResidentProxyDnsUdpActorEvent::Cancelled => {
+                expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);
+            }
+            ResidentProxyDnsUdpActorEvent::Deadline => {
+                expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);
             }
         }
     }

@@ -1,7 +1,10 @@
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::{
     ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
-    dns::{ResidentDnsUdpActorExecutor, UdpRequestIdAllocator},
+    dns::{
+        ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
+        ResidentDnsUdpActorExecutor, UdpRequestIdAllocator,
+    },
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde_json::{Value, json};
@@ -81,34 +84,79 @@ impl ResidentProxyDnsUdpForwarder {
         })
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) async fn exchange(
         &self,
         payload: &[u8],
     ) -> Result<Vec<u8>, String> {
+        self.exchange_with_context(
+            payload,
+            ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn exchange_with_context(
+        &self,
+        payload: &[u8],
+        context: ProxyDnsRequestContext,
+    ) -> Result<Vec<u8>, ProxyDnsRequestError> {
         if self.closing.load(Ordering::Acquire) {
-            return Err("proxied DNS UDP forwarder is closing".to_owned());
+            return Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::OwnerAcquire,
+                ProxyDnsRequestFailure::Network,
+                "proxied DNS UDP forwarder is closing",
+            ));
         }
         let (actor_index, _load_guard) = self.acquire_actor_slot();
         let attempts = self.runtime_config.attempts;
         let mut failures = Vec::with_capacity(attempts);
         for attempt in 0..attempts {
+            context.ensure(ProxyDnsRequestStage::Retry)?;
             if attempt > 0 {
                 self.metrics.dns_udp_retry();
             }
-            let handle = self.actor_handle(actor_index).await?;
-            match handle.exchange_once(payload).await {
+            let handle = context
+                .run(
+                    ProxyDnsRequestStage::OwnerAcquire,
+                    ProxyDnsRequestFailure::Network,
+                    self.actor_handle(actor_index),
+                )
+                .await?;
+            match handle.exchange_once(payload, context).await {
                 Ok(response) => return Ok(response),
                 Err(err) => {
+                    let retryable = err.failure() == ProxyDnsRequestFailure::Network;
                     failures.push(err);
                     if handle.is_closed() {
                         self.clear_closed_actor(actor_index, &handle).await;
                     }
+                    if !retryable {
+                        break;
+                    }
                 }
             }
         }
-        Err(format!(
-            "proxied DNS UDP response failed after {attempts} attempts: {}",
-            failures.join("; ")
+        let Some(last) = failures.last() else {
+            return Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Retry,
+                ProxyDnsRequestFailure::Capacity,
+                "proxied DNS UDP forwarder has no configured attempts",
+            ));
+        };
+        Err(ProxyDnsRequestError::new(
+            last.stage(),
+            last.failure(),
+            format!(
+                "proxied DNS UDP response failed after {} attempt(s): {}",
+                failures.len(),
+                failures
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
         ))
     }
 

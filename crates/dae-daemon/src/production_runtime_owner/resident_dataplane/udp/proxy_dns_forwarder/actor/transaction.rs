@@ -1,14 +1,23 @@
-use dae_dns::{DnsPacketView, restore_packed_response_request_id};
+use dae_dns::DnsPacketView;
 
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::dns::{
+    ProxyDnsPendingRequestBytes, ProxyDnsRequestContext, ProxyDnsRequestError,
+    ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
+};
+
+mod response;
+
+pub(super) use self::response::handle_proxy_dns_udp_response;
 
 pub(super) struct PendingProxyDnsUdpRequest {
     pub(super) upstream_id: u16,
     pub(super) original_id: u16,
     pub(super) generation: u64,
-    pub(super) deadline: time::Instant,
+    pub(super) context: ProxyDnsRequestContext,
     questions: Vec<PendingProxyDnsQuestion>,
-    pub(super) response: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+    pub(super) bytes: ProxyDnsPendingRequestBytes,
+    pub(super) response: tokio::sync::oneshot::Sender<Result<Vec<u8>, ProxyDnsRequestError>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,21 +46,43 @@ pub(super) async fn handle_proxy_dns_udp_request(
     executor: &mut Option<Box<UdpSessionExecutor>>,
     runtime_config: &ResidentDnsUdpRuntimeConfig,
     metrics: &ResidentDataplaneMetrics,
-) -> Result<(), String> {
-    if pending.len() >= runtime_config.pending_limit {
+) -> Result<ProxyDnsRequestOutcome, ProxyDnsRequestError> {
+    if let Err(error) = request.context.ensure(ProxyDnsRequestStage::Queued) {
+        request.bytes.mark_expired();
+        let _ = request.response.send(Err(error));
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+    if request.response.is_closed() {
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+
+    let pending_limit = runtime_config.pending_limit.max(1);
+    if pending.len() >= pending_limit {
         metrics.dns_udp_pending_rejected();
-        let _ = request
-            .response
-            .send(Err("proxied DNS UDP pending queue is full".to_owned()));
-        return Ok(());
+        request.bytes.mark_rejected();
+        let _ = request.response.send(Err(ProxyDnsRequestError::new(
+            ProxyDnsRequestStage::Pending,
+            ProxyDnsRequestFailure::Capacity,
+            "proxied DNS UDP pending queue is full",
+        )));
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+
+    if let Err(error) = request.context.ensure(ProxyDnsRequestStage::Parse) {
+        request.bytes.mark_expired();
+        let _ = request.response.send(Err(error));
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
     }
     let request_view = match DnsPacketView::parse(&request.payload) {
         Ok(request_view) => request_view,
-        Err(err) => {
-            let _ = request
-                .response
-                .send(Err(format!("parse proxied DNS UDP request: {err}")));
-            return Ok(());
+        Err(error) => {
+            request.bytes.mark_rejected();
+            let _ = request.response.send(Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Parse,
+                ProxyDnsRequestFailure::Protocol,
+                format!("parse proxied DNS UDP request: {error}"),
+            )));
+            return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
         }
     };
     let original_id = request_view.id();
@@ -63,102 +94,148 @@ pub(super) async fn handle_proxy_dns_udp_request(
             qclass: question.qclass(),
         })
         .collect::<Vec<_>>();
-    let upstream_id = match id_allocator.allocate(runtime_config.pending_limit) {
+
+    if let Err(error) = request.context.ensure(ProxyDnsRequestStage::Identifier) {
+        request.bytes.mark_expired();
+        let _ = request.response.send(Err(error));
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+    if request.response.is_closed() {
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+    let upstream_id = match id_allocator.allocate(pending_limit) {
         Ok(upstream_id) => upstream_id,
-        Err(err) => {
+        Err(error) => {
             metrics.dns_udp_id_exhausted();
-            let _ = request.response.send(Err(err));
-            return Ok(());
+            request.bytes.mark_rejected();
+            let _ = request.response.send(Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Identifier,
+                ProxyDnsRequestFailure::Capacity,
+                error,
+            )));
+            return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
         }
     };
     request.payload[0..2].copy_from_slice(&upstream_id.to_be_bytes());
-    let deadline = time::Instant::now() + runtime_config.attempt_timeout;
+
     let generation = *next_generation;
     *next_generation = (*next_generation).wrapping_add(1).max(1);
-    pending.insert(
+    let deadline = request.context.deadline();
+    let mut transaction = PendingProxyDnsUdpRequest {
         upstream_id,
-        PendingProxyDnsUdpRequest {
-            upstream_id,
-            original_id,
-            generation,
-            deadline,
-            questions,
-            response: request.response,
-        },
-    );
-    metrics.dns_udp_pending_added();
-    deadlines.push_back(PendingProxyDnsDeadline {
-        id: upstream_id,
+        original_id,
         generation,
-        deadline,
-    });
-    if executor.is_none() {
+        context: request.context,
+        questions,
+        bytes: request.bytes.into_pending(),
+        response: request.response,
+    };
+
+    if let Err(error) = transaction
+        .context
+        .ensure(ProxyDnsRequestStage::OwnerAcquire)
+    {
+        transaction.bytes.mark_expired();
+        id_allocator.release(upstream_id);
+        let _ = transaction.response.send(Err(error));
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+    if transaction.response.is_closed() {
+        transaction.bytes.mark_abandoned();
+        id_allocator.release(upstream_id);
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+
+    let opening_executor = executor.is_none();
+    if opening_executor {
         *executor = Some(Box::new(UdpSessionExecutor::new_proxy_packet(proxy)));
         metrics.proxy_dns_udp_executor_opened();
     } else {
         metrics.proxy_dns_udp_executor_reused();
     }
     let Some(executor) = executor.as_mut() else {
-        return Err("proxied DNS UDP executor was not initialized".to_owned());
+        id_allocator.release(upstream_id);
+        let error = ProxyDnsRequestError::new(
+            ProxyDnsRequestStage::OwnerAcquire,
+            ProxyDnsRequestFailure::Network,
+            "proxied DNS UDP executor was not initialized",
+        );
+        let _ = transaction.response.send(Err(error.clone()));
+        return Err(error);
     };
-    let (_, response) = executor
-        .execute_proxy_packet(proxy, original_dst, &request.payload)
-        .await?;
+
+    let execution_stage = if opening_executor {
+        ProxyDnsRequestStage::Connect
+    } else {
+        ProxyDnsRequestStage::Send
+    };
+    let execution = executor.execute_proxy_packet(proxy, original_dst, &request.payload);
+    tokio::pin!(execution);
+    let exchange = tokio::select! {
+        biased;
+        _ = transaction.response.closed() => {
+            id_allocator.release(upstream_id);
+            if transaction.context.ensure(execution_stage).is_err() {
+                transaction.bytes.mark_expired();
+                return Err(ProxyDnsRequestError::deadline(execution_stage));
+            }
+            transaction.bytes.mark_abandoned();
+            return Err(ProxyDnsRequestError::cancelled(execution_stage));
+        }
+        _ = time::sleep_until(deadline) => {
+            id_allocator.release(upstream_id);
+            transaction.bytes.mark_expired();
+            let error = ProxyDnsRequestError::deadline(execution_stage);
+            let _ = transaction.response.send(Err(error.clone()));
+            return Err(error);
+        }
+        result = &mut execution => result,
+    };
+    let (_, response) = match exchange {
+        Ok(response) => response,
+        Err(error) => {
+            id_allocator.release(upstream_id);
+            let error =
+                ProxyDnsRequestError::new(execution_stage, ProxyDnsRequestFailure::Network, error);
+            let _ = transaction.response.send(Err(error.clone()));
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = transaction.context.ensure(ProxyDnsRequestStage::Pending) {
+        transaction.bytes.mark_expired();
+        id_allocator.release(upstream_id);
+        let _ = transaction.response.send(Err(error));
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+    if transaction.response.is_closed() {
+        transaction.bytes.mark_abandoned();
+        id_allocator.release(upstream_id);
+        return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+    }
+
+    pending.insert(upstream_id, transaction);
+    insert_proxy_dns_udp_deadline(
+        deadlines,
+        PendingProxyDnsDeadline {
+            id: upstream_id,
+            generation,
+            deadline,
+        },
+    );
     if response.reply_forwarded {
-        handle_proxy_dns_udp_response(pending, id_allocator, &response.payload, metrics);
+        handle_proxy_dns_udp_response(
+            pending,
+            deadlines,
+            id_allocator,
+            original_dst,
+            response,
+            metrics,
+        )?;
     }
-    Ok(())
-}
-
-pub(super) fn handle_proxy_dns_udp_response(
-    pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
-    id_allocator: &mut UdpRequestIdAllocator,
-    response: &[u8],
-    metrics: &ResidentDataplaneMetrics,
-) {
-    let Some(id_bytes) = response.get(0..2) else {
-        return;
-    };
-    let response_id = u16::from_be_bytes([id_bytes[0], id_bytes[1]]);
-    let Some(request) = pending.get(&response_id) else {
-        return;
-    };
-    let Ok(response_view) = DnsPacketView::parse(response) else {
-        return;
-    };
-    if !proxy_dns_udp_response_matches(request, &response_view) {
-        return;
+    if pending.contains_key(&upstream_id) {
+        Ok(ProxyDnsRequestOutcome::Pending)
+    } else {
+        Ok(ProxyDnsRequestOutcome::ResponseForwarded)
     }
-    let Some(request) = pending.remove(&response_id) else {
-        return;
-    };
-    id_allocator.release(response_id);
-    metrics.dns_udp_pending_removed(1);
-    let restored = restore_packed_response_request_id(response, request.original_id)
-        .ok_or_else(|| "proxied DNS UDP response is too short to restore request id".to_owned());
-    let _ = request.response.send(restored);
-}
-
-fn proxy_dns_udp_response_matches(
-    request: &PendingProxyDnsUdpRequest,
-    response: &DnsPacketView<'_>,
-) -> bool {
-    if !response.response() || response.id() != request.upstream_id {
-        return false;
-    }
-    if request.questions.is_empty() {
-        return true;
-    }
-    if response.question_count() != request.questions.len() {
-        return false;
-    }
-    request
-        .questions
-        .iter()
-        .zip(response.questions())
-        .all(|(want, got)| {
-            want.qtype == got.qtype()
-                && want.qclass == got.qclass()
-                && want.qname_wire.eq_ignore_ascii_case(got.qname_wire())
-        })
 }

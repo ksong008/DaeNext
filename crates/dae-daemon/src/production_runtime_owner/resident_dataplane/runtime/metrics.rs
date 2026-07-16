@@ -52,6 +52,14 @@ pub(crate) struct ResidentDataplaneMetrics {
     proxy_dns_udp_executors_opened: AtomicU64,
     proxy_dns_udp_executors_reused: AtomicU64,
     proxy_dns_udp_executors_reset: AtomicU64,
+    proxy_dns_udp_queued_current: AtomicU64,
+    proxy_dns_udp_queued_bytes_current: AtomicU64,
+    proxy_dns_udp_pending_current: AtomicU64,
+    proxy_dns_udp_pending_bytes_current: AtomicU64,
+    proxy_dns_udp_abandoned: AtomicU64,
+    proxy_dns_udp_abandoned_bytes: AtomicU64,
+    proxy_dns_udp_expired: AtomicU64,
+    proxy_dns_udp_expired_bytes: AtomicU64,
     udp_response_validated: AtomicU64,
     udp_response_compatibility_unverified: AtomicU64,
     udp_response_dropped: AtomicU64,
@@ -63,6 +71,13 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_reply_socket_recreated: AtomicU64,
     udp_reply_socket_idle_evicted: AtomicU64,
     udp_reply_failed: AtomicU64,
+}
+
+fn subtract_metric(metric: &AtomicU64, value: u64) {
+    let updated = metric.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        current.checked_sub(value)
+    });
+    debug_assert!(updated.is_ok(), "resident dataplane metric underflow");
 }
 
 impl ResidentDataplaneMetrics {
@@ -298,6 +313,44 @@ impl ResidentDataplaneMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(super) fn proxy_dns_udp_queued_added(&self, bytes: usize) {
+        self.proxy_dns_udp_queued_current
+            .fetch_add(1, Ordering::Relaxed);
+        self.proxy_dns_udp_queued_bytes_current
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_udp_queued_removed(&self, bytes: usize) {
+        subtract_metric(&self.proxy_dns_udp_queued_current, 1);
+        subtract_metric(&self.proxy_dns_udp_queued_bytes_current, bytes as u64);
+    }
+
+    pub(super) fn proxy_dns_udp_pending_added(&self, bytes: usize) {
+        self.proxy_dns_udp_pending_current
+            .fetch_add(1, Ordering::Relaxed);
+        self.proxy_dns_udp_pending_bytes_current
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+        self.dns_udp_pending_added();
+    }
+
+    pub(super) fn proxy_dns_udp_pending_removed(&self, bytes: usize) {
+        subtract_metric(&self.proxy_dns_udp_pending_current, 1);
+        subtract_metric(&self.proxy_dns_udp_pending_bytes_current, bytes as u64);
+        self.dns_udp_pending_removed(1);
+    }
+
+    pub(super) fn proxy_dns_udp_abandoned(&self, bytes: usize) {
+        self.proxy_dns_udp_abandoned.fetch_add(1, Ordering::Relaxed);
+        self.proxy_dns_udp_abandoned_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_udp_expired(&self, bytes: usize) {
+        self.proxy_dns_udp_expired.fetch_add(1, Ordering::Relaxed);
+        self.proxy_dns_udp_expired_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
     pub(super) fn udp_response_validated(&self) {
         self.udp_response_validated.fetch_add(1, Ordering::Relaxed);
     }
@@ -438,6 +491,14 @@ impl ResidentDataplaneMetrics {
             "proxyDnsUdpExecutorsOpened": self.proxy_dns_udp_executors_opened.load(Ordering::Relaxed),
             "proxyDnsUdpExecutorsReused": self.proxy_dns_udp_executors_reused.load(Ordering::Relaxed),
             "proxyDnsUdpExecutorsReset": self.proxy_dns_udp_executors_reset.load(Ordering::Relaxed),
+            "proxyDnsUdpQueuedCurrent": self.proxy_dns_udp_queued_current.load(Ordering::Relaxed),
+            "proxyDnsUdpQueuedBytesCurrent": self.proxy_dns_udp_queued_bytes_current.load(Ordering::Relaxed),
+            "proxyDnsUdpPendingCurrent": self.proxy_dns_udp_pending_current.load(Ordering::Relaxed),
+            "proxyDnsUdpPendingBytesCurrent": self.proxy_dns_udp_pending_bytes_current.load(Ordering::Relaxed),
+            "proxyDnsUdpAbandoned": self.proxy_dns_udp_abandoned.load(Ordering::Relaxed),
+            "proxyDnsUdpAbandonedBytes": self.proxy_dns_udp_abandoned_bytes.load(Ordering::Relaxed),
+            "proxyDnsUdpExpired": self.proxy_dns_udp_expired.load(Ordering::Relaxed),
+            "proxyDnsUdpExpiredBytes": self.proxy_dns_udp_expired_bytes.load(Ordering::Relaxed),
             "udpResponseValidated": self.udp_response_validated.load(Ordering::Relaxed),
             "udpResponseCompatibilityUnverified": self.udp_response_compatibility_unverified.load(Ordering::Relaxed),
             "udpResponseDropped": self.udp_response_dropped.load(Ordering::Relaxed),

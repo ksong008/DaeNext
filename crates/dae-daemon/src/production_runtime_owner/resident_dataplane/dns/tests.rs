@@ -532,6 +532,7 @@ async fn tcp_udp_exhausts_udp_targets_before_starting_tcp_phase() {
         QUERY,
         &ResidentDnsPlan::asis(0),
         &Arc::new(ResidentDnsForwarderCache::default()),
+        ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
     )
     .await
     .unwrap();
@@ -581,6 +582,7 @@ async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
         QUERY,
         &ResidentDnsPlan::asis(0),
         &Arc::new(ResidentDnsForwarderCache::default()),
+        ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
     )
     .await
     .unwrap();
