@@ -33,7 +33,6 @@ pub(super) struct XhttpXmuxUsage {
     state_signal: XhttpXmuxStateSignal,
 }
 
-#[derive(Clone)]
 pub(crate) struct XhttpXmuxClientLease {
     pub(super) usage: Arc<XhttpXmuxUsage>,
 }
@@ -86,7 +85,8 @@ impl XhttpXmuxRequestHandle {
 
 impl Drop for XhttpXmuxClientLease {
     fn drop(&mut self) {
-        self.usage.open_usage.fetch_sub(1, Ordering::AcqRel);
+        let previous = self.usage.open_usage.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "xHTTP xmux lease accounting underflow");
         self.usage.state_signal.notify();
     }
 }
@@ -168,5 +168,27 @@ mod tests {
 
         assert_eq!(usage.open_usage.load(Ordering::Acquire), 0);
         assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    fn xhttp_xmux_independent_leases_balance_open_usage() {
+        let usage = xmux_usage(4, None);
+        let first = XhttpXmuxClientLease::open(Arc::clone(&usage));
+        let second = XhttpXmuxClientLease::open(Arc::clone(&usage));
+
+        assert_eq!(usage.open_usage.load(Ordering::Acquire), 2);
+        assert!(!can_release_retiring_owner(
+            usage.open_usage.load(Ordering::Acquire)
+        ));
+        drop(first);
+        assert_eq!(usage.open_usage.load(Ordering::Acquire), 1);
+        assert!(!can_release_retiring_owner(
+            usage.open_usage.load(Ordering::Acquire)
+        ));
+        drop(second);
+        assert_eq!(usage.open_usage.load(Ordering::Acquire), 0);
+        assert!(can_release_retiring_owner(
+            usage.open_usage.load(Ordering::Acquire)
+        ));
     }
 }
