@@ -43,10 +43,7 @@ fn https_proxy_rejects_negotiated_h2_before_connect_bytes() {
         let conn = rustls::ServerConnection::new(server_config).unwrap();
         let mut tls = rustls::StreamOwned::new(conn, stream);
         let mut application_byte = [0_u8; 1];
-        let application_bytes = match tls.read(&mut application_byte) {
-            Ok(count) => count,
-            Err(_) => 0,
-        };
+        let application_bytes = tls.read(&mut application_byte).unwrap_or_default();
         let selected = tls
             .conn
             .alpn_protocol()
