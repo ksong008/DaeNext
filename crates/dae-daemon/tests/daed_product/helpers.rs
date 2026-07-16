@@ -45,12 +45,18 @@ pub(super) fn fixture_secret() -> String {
     format!("credential-{}", FixtureEndpoint::Primary.slot())
 }
 
+const CERTIFICATE_SHA256_BYTES: u8 = 32;
+const FIXTURE_CERTIFICATE_DIGEST_PREFIX: u8 = 0xa0;
+
 pub(super) fn fixture_pin_sha256() -> String {
-    [1_u16, 2, 3]
-        .into_iter()
-        .map(|offset| format!("{:02X}", 160 + offset))
-        .collect::<Vec<_>>()
-        .join("-")
+    (0..CERTIFICATE_SHA256_BYTES)
+        .map(|offset| {
+            format!(
+                "{:02x}",
+                FIXTURE_CERTIFICATE_DIGEST_PREFIX.wrapping_add(offset)
+            )
+        })
+        .collect()
 }
 
 pub(super) fn socks5_fixture_url(host: &str, port: u16) -> String {
