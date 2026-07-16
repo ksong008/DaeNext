@@ -7,6 +7,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead",
         "none",
         "datagram-aead",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:baseline-aead-cipher-endpoint",
     ),
     admitted_row(
@@ -16,6 +17,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead-2022",
         "none",
         "datagram-aead-2022",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:baseline-aead-2022-cipher-endpoint",
     ),
     admitted_row(
@@ -25,6 +27,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-tls",
         "none",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:baseline-tls-auth-endpoint",
     ),
     admitted_row(
@@ -34,6 +37,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead",
         "none",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:baseline-aead-framed-endpoint",
     ),
     admitted_row(
@@ -43,6 +47,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-or-fingerprint-aware-tls",
         "none",
         "xudp",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:baseline-tls-vision-endpoint",
     ),
     admitted_row(
@@ -52,6 +57,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "quic-tls",
         "quic-stream",
         "quic-datagram-or-stream",
+        CALLER_SCOPED_QUIC_OWNERSHIP,
         "registry:baseline-quic-auth-endpoint",
     ),
     admitted_row(
@@ -61,6 +67,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "quic-tls",
         "quic-stream",
         "quic-datagram-or-stream",
+        CALLER_SCOPED_QUIC_OWNERSHIP,
         "registry:baseline-quic-uuid-endpoint",
     ),
     admitted_row(
@@ -70,6 +77,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "quic-tls",
         "quic-stream",
         "quic-datagram-or-stream",
+        CALLER_SCOPED_QUIC_OWNERSHIP,
         "registry:baseline-quic-password-endpoint",
     ),
     admitted_row(
@@ -79,6 +87,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-tls",
         "frame-stream",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:baseline-frame-stream-endpoint",
     ),
     // Protocol-closed: plain HTTP proxy import maps to CONNECT/TCP only;
@@ -90,6 +99,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "none",
         "none",
         "protocol-closed",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:baseline-connect-endpoint",
     ),
     admitted_row(
@@ -99,6 +109,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "none",
         "none",
         "udp-associate",
+        FLOW_STREAM_ASSOCIATION_OWNERSHIP,
         "registry:baseline-socks-endpoint",
     ),
     admitted_row(
@@ -108,6 +119,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-tls",
         "connect-udp-h2",
         "connect-udp-capsule",
+        GENERATION_CONNECT_UDP_OWNERSHIP,
         "registry:connect-udp-h2-endpoint",
     ),
     admitted_row(
@@ -117,6 +129,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "quic-tls",
         "connect-udp-h3",
         "connect-udp-http-datagram",
+        GENERATION_CONNECT_UDP_OWNERSHIP,
         "registry:connect-udp-h3-endpoint",
     ),
     admitted_row(
@@ -126,6 +139,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-or-fingerprint-aware-tls",
         "websocket",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:stream-wrapper-websocket",
     ),
     admitted_row(
@@ -135,6 +149,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead",
         "websocket",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:plain-websocket-framed-endpoint",
     ),
     admitted_row(
@@ -144,6 +159,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-or-fingerprint-aware-tls",
         "grpc",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:stream-wrapper-grpc",
     ),
     admitted_row(
@@ -153,6 +169,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-or-fingerprint-aware-tls",
         "httpupgrade",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:stream-wrapper-httpupgrade",
     ),
     admitted_row(
@@ -162,6 +179,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead",
         "httpupgrade",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:plain-httpupgrade-framed-endpoint",
     ),
     scoped_evidence_admitted_row(
@@ -171,6 +189,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-or-fingerprint-aware-tls",
         "meek",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:stream-wrapper-meek",
     ),
     scoped_evidence_admitted_row(
@@ -180,6 +199,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-or-fingerprint-aware-tls",
         "xhttp",
         "tcp-stream-h2-packet-up",
+        CONFIGURED_HTTP_OWNERSHIP,
         "registry:stream-wrapper-xhttp",
     ),
     scoped_evidence_chain_admitted_row(
@@ -189,6 +209,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "plain-parent-connect",
         "baseline-or-plugin-wrapper",
         "tcp-resident-chain",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:nested-chain-shape",
     ),
     scoped_evidence_plugin_wrapper_admitted_row(
@@ -198,6 +219,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead",
         "simple-obfs-http",
         "tcp-stream-wrapper",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:plugin-wrapper-layer",
     ),
     scoped_evidence_legacy_import_admitted_row(
@@ -207,6 +229,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead",
         "none",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:legacy-layer-shape",
     ),
     admitted_row(
@@ -216,6 +239,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "quic-tls",
         "quic-stream",
         "quic-datagram-or-stream",
+        CALLER_SCOPED_QUIC_OWNERSHIP,
         "registry:quic-option-surface",
     ),
     // Protocol-closed: HTTPS proxy endpoints still expose CONNECT/TCP
@@ -227,6 +251,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-tls",
         "none",
         "protocol-closed",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:secure-endpoint-capability",
     ),
     scoped_evidence_capability_admitted_row(
@@ -236,6 +261,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-tls",
         "websocket",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:secure-websocket-framed-endpoint",
         SECURE_FRAME_STREAM_CAPABILITY,
     ),
@@ -246,6 +272,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-tls",
         "httpupgrade",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:secure-httpupgrade-framed-endpoint",
         SECURE_FRAME_STREAM_CAPABILITY,
     ),
@@ -256,6 +283,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "reality",
         "none-or-stream-wrapper",
         "xudp",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:reality-security-underlay",
         REALITY_SECURITY_UNDERLAY_CAPABILITY,
     ),
@@ -266,6 +294,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "quic-tls",
         "quic-port-hopping",
         "quic-datagram-or-stream",
+        CALLER_SCOPED_QUIC_OWNERSHIP,
         "registry:quic-port-hopping-surface",
         QUIC_PORT_HOPPING_CAPABILITY,
     ),
@@ -276,6 +305,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "verified-quic-tls",
         "quic-stream",
         "quic-datagram-or-stream",
+        CALLER_SCOPED_QUIC_OWNERSHIP,
         "registry:verified-quic-security-underlay",
         VERIFIED_QUIC_CAPABILITY,
     ),
@@ -286,6 +316,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-tls",
         "websocket-or-httpupgrade-or-grpc",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:inner-encryption-stream-wrapper",
         INNER_ENCRYPTION_STREAM_CAPABILITY,
     ),
@@ -296,6 +327,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead",
         "tls-websocket-plugin",
         "tcp-stream-wrapper",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:tls-websocket-plugin-wrapper",
         PLUGIN_WRAPPER_STREAM_CAPABILITY,
     ),
@@ -306,6 +338,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead",
         "obfs-tls",
         "tcp-stream-wrapper",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:obfs-tls-plugin-wrapper",
         PLUGIN_WRAPPER_STREAM_CAPABILITY,
     ),
@@ -316,6 +349,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "aead-2022",
         "plugin-wrapper",
         "tcp-stream-wrapper",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:aead-2022-plugin-wrapper",
         PLUGIN_WRAPPER_STREAM_CAPABILITY,
     ),
@@ -328,6 +362,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "plain-or-standard-tls",
         "http-transport",
         "protocol-closed",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:proxy-transport-mode",
         PROXY_TRANSPORT_CAPABILITY,
     ),
@@ -340,6 +375,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "insecure-tls",
         "none",
         "protocol-closed",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:insecure-secure-endpoint-underlay",
         INSECURE_SECURITY_UNDERLAY_CAPABILITY,
     ),
@@ -352,6 +388,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "fingerprint-aware-tls",
         "none",
         "protocol-closed",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:fingerprint-secure-endpoint-underlay",
         FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY,
     ),
@@ -362,6 +399,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "insecure-tls",
         "frame-stream",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:insecure-frame-stream-underlay",
         INSECURE_SECURITY_UNDERLAY_CAPABILITY,
     ),
@@ -372,6 +410,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "full-utls",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
+        MATERIALIZED_PROTOCOL_OWNERSHIP,
         "registry:full-utls-security-underlay",
         FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY,
     ),
@@ -382,6 +421,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "tls-fragment",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
+        MATERIALIZED_PROTOCOL_OWNERSHIP,
         "registry:tls-fragment-security-underlay",
         TLS_FRAGMENT_SECURITY_UNDERLAY_CAPABILITY,
     ),
@@ -392,6 +432,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "reality",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_PACKET_OWNERSHIP,
         "registry:shared-reality-security-underlay",
         REALITY_SECURITY_UNDERLAY_CAPABILITY,
     ),
@@ -402,6 +443,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "plain-or-standard-tls",
         "mux",
         "multiplexed-stream",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:mux-transport-wrapper",
         MUX_TRANSPORT_CAPABILITY,
     ),
@@ -412,6 +454,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "plain-or-native-underlay",
         "none-or-stream-wrapper",
         "passthrough-udp",
+        MATERIALIZED_PROTOCOL_OWNERSHIP,
         "registry:passthrough-udp-transport",
         PASSTHROUGH_UDP_CAPABILITY,
     ),
@@ -422,6 +465,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "legacy-cipher",
         "legacy-obfs",
         "udp-over-stream-or-datagram",
+        FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
         "registry:legacy-cipher-protocol-shape",
         LEGACY_STREAM_CAPABILITY,
     ),
@@ -432,6 +476,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-or-fingerprint-aware-tls",
         "xhttp",
         "tcp-stream-h3-packet-up",
+        CONFIGURED_HTTP_OWNERSHIP,
         "registry:xhttp-h3-wrapper",
     ),
     scoped_evidence_admitted_row(
@@ -441,6 +486,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "standard-or-fingerprint-aware-tls-or-reality",
         "xhttp",
         "extended-xhttp",
+        CONFIGURED_HTTP_OWNERSHIP,
         "registry:xhttp-extended-settings-wrapper",
     ),
     // Policy-closed: these rows require non-Rust-native ABI/runtime/executor
@@ -453,6 +499,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "non-native",
         "non-native",
         "unsupported-source-policy",
+        SOURCE_REJECTED_OWNERSHIP,
         "registry:non-native-abi-outbound-shape",
     ),
     not_supported_row(
@@ -463,6 +510,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "external",
         "external",
         "unsupported-source-policy",
+        SOURCE_REJECTED_OWNERSHIP,
         "registry:external-runtime-dependent-shape",
     ),
     not_supported_row(
@@ -473,6 +521,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "non-native-executor",
         "non-native-executor",
         "unsupported-source-policy",
+        SOURCE_REJECTED_OWNERSHIP,
         "registry:non-native-executor-dependent-shape",
     ),
 ];
