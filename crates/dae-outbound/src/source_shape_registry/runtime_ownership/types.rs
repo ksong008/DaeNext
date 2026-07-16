@@ -11,6 +11,8 @@ pub enum RuntimeOwnershipModel {
     GenerationConnectUdpTransport,
     ConfiguredHttpTransport,
     MaterializedProtocolTransport,
+    // This is a materialized-ledger rejection, not a source parser rejection.
+    MaterializedShapeRejected,
     SourceAdmissionRejected,
 }
 
@@ -26,6 +28,7 @@ impl RuntimeOwnershipModel {
             Self::GenerationConnectUdpTransport => "generation-connect-udp-transport",
             Self::ConfiguredHttpTransport => "configured-http-transport",
             Self::MaterializedProtocolTransport => "materialized-protocol-transport",
+            Self::MaterializedShapeRejected => "materialized-shape-rejected",
             Self::SourceAdmissionRejected => "source-admission-rejected",
         }
     }
