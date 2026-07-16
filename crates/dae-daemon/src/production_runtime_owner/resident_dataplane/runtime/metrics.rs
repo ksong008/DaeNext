@@ -1,4 +1,11 @@
 use super::*;
+
+#[path = "metrics/proxied_doh3.rs"]
+mod proxied_doh3;
+
+pub(in crate::production_runtime_owner::resident_dataplane) use self::proxied_doh3::ProxiedDoh3CleanupMetricObservation;
+use self::proxied_doh3::ProxiedDoh3CleanupMetrics;
+
 #[derive(Debug, Default)]
 pub(crate) struct ResidentDataplaneMetrics {
     pub(super) upload_total: AtomicU64,
@@ -60,6 +67,7 @@ pub(crate) struct ResidentDataplaneMetrics {
     proxy_dns_udp_abandoned_bytes: AtomicU64,
     proxy_dns_udp_expired: AtomicU64,
     proxy_dns_udp_expired_bytes: AtomicU64,
+    proxied_doh3_cleanup: ProxiedDoh3CleanupMetrics,
     udp_response_validated: AtomicU64,
     udp_response_compatibility_unverified: AtomicU64,
     udp_response_dropped: AtomicU64,
@@ -499,6 +507,7 @@ impl ResidentDataplaneMetrics {
             "proxyDnsUdpAbandonedBytes": self.proxy_dns_udp_abandoned_bytes.load(Ordering::Relaxed),
             "proxyDnsUdpExpired": self.proxy_dns_udp_expired.load(Ordering::Relaxed),
             "proxyDnsUdpExpiredBytes": self.proxy_dns_udp_expired_bytes.load(Ordering::Relaxed),
+            "proxiedDoh3Cleanup": self.proxied_doh3_cleanup.snapshot(),
             "udpResponseValidated": self.udp_response_validated.load(Ordering::Relaxed),
             "udpResponseCompatibilityUnverified": self.udp_response_compatibility_unverified.load(Ordering::Relaxed),
             "udpResponseDropped": self.udp_response_dropped.load(Ordering::Relaxed),

@@ -3,11 +3,24 @@ use std::net::{IpAddr, Ipv4Addr};
 
 const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
 
+mod shutdown;
+#[cfg(test)]
+mod test_observation;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::test_observation::ResidentProxyUdpBridgeTestObservation;
+
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxyUdpBridge {
     local_addr: SocketAddr,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
     last_error: Arc<Mutex<Option<String>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentProxyUdpBridgeShutdownCompletion
+{
+    Joined,
+    Aborted,
 }
 
 impl ResidentProxyUdpBridge {
@@ -49,6 +62,19 @@ impl ResidentProxyUdpBridge {
         }
         Ok(())
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown_and_join_until(
+        mut self,
+        deadline: time::Instant,
+    ) -> Result<ResidentProxyUdpBridgeShutdownCompletion, String> {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        let Some(task) = self.task.take() else {
+            return Ok(ResidentProxyUdpBridgeShutdownCompletion::Joined);
+        };
+        shutdown::join_bridge_task_until(task, deadline).await
+    }
 }
 
 impl Drop for ResidentProxyUdpBridge {
@@ -66,6 +92,30 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
 ) -> Result<ResidentProxyUdpBridge, String> {
+    #[cfg(test)]
+    {
+        open_resident_proxy_udp_bridge_inner(proxy, original_dst, None).await
+    }
+    #[cfg(not(test))]
+    {
+        open_resident_proxy_udp_bridge_inner(proxy, original_dst).await
+    }
+}
+
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) async fn open_resident_proxy_udp_bridge_with_test_observation_async(
+    proxy: Arc<ResidentProxyPlan>,
+    original_dst: SocketAddr,
+    observation: Arc<ResidentProxyUdpBridgeTestObservation>,
+) -> Result<ResidentProxyUdpBridge, String> {
+    open_resident_proxy_udp_bridge_inner(proxy, original_dst, Some(observation)).await
+}
+
+async fn open_resident_proxy_udp_bridge_inner(
+    proxy: Arc<ResidentProxyPlan>,
+    original_dst: SocketAddr,
+    #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
+) -> Result<ResidentProxyUdpBridge, String> {
     let socket = tokio::net::UdpSocket::bind(resident_proxy_udp_bridge_bind_addr())
         .await
         .map_err(|err| format!("bind resident proxy UDP bridge socket: {err}"))?;
@@ -75,7 +125,30 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let last_error = Arc::new(Mutex::new(None));
     let task_error = Arc::clone(&last_error);
+    #[cfg(test)]
+    let socket_guard = test_observation
+        .as_ref()
+        .map(ResidentProxyUdpBridgeTestObservation::socket_guard);
+    #[cfg(test)]
+    let task_guard = test_observation
+        .as_ref()
+        .map(ResidentProxyUdpBridgeTestObservation::task_guard);
     let task = tokio::spawn(inherit_quic_endpoint_observation(async move {
+        #[cfg(test)]
+        let _socket_guard = socket_guard;
+        #[cfg(test)]
+        let _task_guard = task_guard;
+        #[cfg(test)]
+        resident_proxy_udp_bridge_loop(
+            proxy,
+            original_dst,
+            socket,
+            shutdown_rx,
+            task_error,
+            test_observation,
+        )
+        .await;
+        #[cfg(not(test))]
         resident_proxy_udp_bridge_loop(proxy, original_dst, socket, shutdown_rx, task_error).await;
     }));
     Ok(ResidentProxyUdpBridge {
@@ -96,6 +169,7 @@ async fn resident_proxy_udp_bridge_loop(
     socket: tokio::net::UdpSocket,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
     last_error: Arc<Mutex<Option<String>>>,
+    #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) {
     let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
     let mut buf = vec![0_u8; RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY];
@@ -116,7 +190,14 @@ async fn resident_proxy_udp_bridge_loop(
                 };
                 last_peer = Some(peer);
                 let payload = buf[..read].to_vec();
-                match executor.execute_proxy_packet(&proxy, original_dst, &payload).await {
+                #[cfg(test)]
+                let execution = test_observation::observe_execution(
+                    test_observation.as_ref(),
+                    executor.execute_proxy_packet(&proxy, original_dst, &payload),
+                ).await;
+                #[cfg(not(test))]
+                let execution = executor.execute_proxy_packet(&proxy, original_dst, &payload).await;
+                match execution {
                     Ok((_, response)) if response.reply_forwarded => {
                         if let Err(err) =
                             send_resident_proxy_udp_bridge_response(

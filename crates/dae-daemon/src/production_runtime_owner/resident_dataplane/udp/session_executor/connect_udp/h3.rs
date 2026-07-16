@@ -12,6 +12,10 @@ mod tls;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::tests::{
+    ConnectUdpH3TestServer, ConnectUdpH3TestServerConfig,
+};
 
 pub(in crate::production_runtime_owner::resident_dataplane) use self::pool::clear_connect_udp_h3_pools;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::pool::connect_udp_h3_pool_metrics_snapshot;

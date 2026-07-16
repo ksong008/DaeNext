@@ -71,6 +71,10 @@ mod dispatch;
 mod selection;
 mod wait;
 use self::connect_udp::{ConnectUdpH2Session, ConnectUdpH3Session};
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::connect_udp::{
+    ConnectUdpH3TestServer, ConnectUdpH3TestServerConfig,
+};
 pub(in crate::production_runtime_owner::resident_dataplane) use self::connect_udp::{
     clear_connect_udp_h2_pools, clear_connect_udp_h3_pools, connect_udp_pool_metrics_snapshot,
 };
