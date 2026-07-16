@@ -12,6 +12,78 @@ pub(crate) struct NodeLatencyWrite {
     pub(in crate::daed_product) message: Option<String>,
 }
 
+#[derive(Debug)]
+pub(crate) struct RuntimeNodeLatencyIndex<'a> {
+    nodes: &'a [LatencyProbeNode],
+    nodes_by_link_hash: HashMap<String, Vec<usize>>,
+}
+
+impl<'a> RuntimeNodeLatencyIndex<'a> {
+    pub(crate) fn new(nodes: &'a [LatencyProbeNode]) -> Self {
+        let mut nodes_by_link_hash = HashMap::<String, Vec<usize>>::with_capacity(nodes.len());
+        for (index, node) in nodes.iter().enumerate() {
+            nodes_by_link_hash
+                .entry(runtime_link_hash(&node.link))
+                .or_default()
+                .push(index);
+        }
+        Self {
+            nodes,
+            nodes_by_link_hash,
+        }
+    }
+
+    pub(crate) fn results_for_snapshots(
+        &self,
+        snapshots: &[Value],
+    ) -> (Vec<NodeLatencyWrite>, HashSet<i64>) {
+        let mut results = Vec::with_capacity(snapshots.len().min(self.nodes.len()));
+        let mut tested_ids = HashSet::with_capacity(self.nodes.len().min(snapshots.len()));
+        for snapshot in snapshots {
+            if !runtime_latency_snapshot_has_result(snapshot) {
+                continue;
+            }
+            let Some(link_hash) = runtime_latency_snapshot_link_hash(snapshot) else {
+                continue;
+            };
+            let Some(matched_nodes) = self.nodes_by_link_hash.get(link_hash) else {
+                continue;
+            };
+            let checked_at = snapshot
+                .get("checkedAtUnix")
+                .and_then(Value::as_i64)
+                .filter(|checked_at| *checked_at > 0)
+                .map(|checked_at| iso8601_utc(checked_at as u64))
+                .unwrap_or_else(now_text);
+            let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64);
+            let alive = snapshot
+                .get("alive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let message = snapshot
+                .get("message")
+                .and_then(Value::as_str)
+                .filter(|message| !message.is_empty())
+                .map(str::to_owned);
+            let probe_generation = snapshot.get("reloadGeneration").and_then(Value::as_u64);
+            for &node_index in matched_nodes {
+                let node = &self.nodes[node_index];
+                tested_ids.insert(node.id);
+                results.push(NodeLatencyWrite {
+                    node_id: node.id,
+                    node_link: node.link.clone(),
+                    probe_generation,
+                    latency_ms,
+                    alive,
+                    tested_at: checked_at.clone(),
+                    message: if alive { None } else { message.clone() },
+                });
+            }
+        }
+        (results, tested_ids)
+    }
+}
+
 pub(crate) fn stored_successful_node_latency_seed_snapshots(
     state: &Path,
 ) -> io::Result<Vec<Value>> {
@@ -60,6 +132,7 @@ pub(crate) fn stored_successful_node_latency_seed_snapshots_from_conn(
                 "checkedAtUnix": parse_runtime_latency_seed_time(&tested_at).unwrap_or(0),
                 "message": format!("{latency_ms}ms"),
                 "scope": "proxy-tcp-check",
+                "seedSource": "database",
             }))
         })
         .map_err(sqlite_io_error)?;
@@ -70,60 +143,12 @@ pub(crate) fn stored_successful_node_latency_seed_snapshots_from_conn(
     Ok(snapshots)
 }
 
+#[cfg(test)]
 pub(crate) fn runtime_node_latency_results_for_nodes(
-    nodes: &[(i64, String, String)],
+    nodes: &[LatencyProbeNode],
     snapshots: &[Value],
 ) -> (Vec<NodeLatencyWrite>, HashSet<i64>) {
-    let mut results = Vec::with_capacity(snapshots.len().min(nodes.len()));
-    let mut tested_ids = HashSet::with_capacity(nodes.len().min(snapshots.len()));
-    let mut nodes_by_link_hash = HashMap::<String, Vec<(i64, &str)>>::with_capacity(nodes.len());
-    for (id, node_link, _) in nodes {
-        nodes_by_link_hash
-            .entry(runtime_link_hash(node_link))
-            .or_default()
-            .push((*id, node_link.as_str()));
-    }
-    for snapshot in snapshots {
-        if !runtime_latency_snapshot_has_result(snapshot) {
-            continue;
-        }
-        let Some(link_hash) = runtime_latency_snapshot_link_hash(snapshot) else {
-            continue;
-        };
-        let Some(matched_nodes) = nodes_by_link_hash.get(link_hash) else {
-            continue;
-        };
-        let checked_at = snapshot
-            .get("checkedAtUnix")
-            .and_then(Value::as_i64)
-            .filter(|checked_at| *checked_at > 0)
-            .map(|checked_at| iso8601_utc(checked_at as u64))
-            .unwrap_or_else(now_text);
-        let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64);
-        let alive = snapshot
-            .get("alive")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let message = snapshot
-            .get("message")
-            .and_then(Value::as_str)
-            .filter(|message| !message.is_empty())
-            .map(str::to_owned);
-        let probe_generation = snapshot.get("reloadGeneration").and_then(Value::as_u64);
-        for &(node_id, node_link) in matched_nodes {
-            tested_ids.insert(node_id);
-            results.push(NodeLatencyWrite {
-                node_id,
-                node_link: node_link.to_owned(),
-                probe_generation,
-                latency_ms,
-                alive,
-                tested_at: checked_at.clone(),
-                message: if alive { None } else { message.clone() },
-            });
-        }
-    }
-    (results, tested_ids)
+    RuntimeNodeLatencyIndex::new(nodes).results_for_snapshots(snapshots)
 }
 
 pub(crate) fn runtime_latency_snapshot_link_hash(snapshot: &Value) -> Option<&str> {
@@ -170,15 +195,15 @@ pub(crate) fn store_node_latency_result(
 }
 
 pub(crate) fn native_probe_unavailable_results(
-    nodes: &[(i64, String, String)],
+    nodes: &[LatencyProbeNode],
     tested_at: &str,
     probe_generation: Option<u64>,
 ) -> Vec<NodeLatencyWrite> {
     nodes
         .iter()
-        .map(|(id, link, _)| NodeLatencyWrite {
-            node_id: *id,
-            node_link: link.clone(),
+        .map(|node| NodeLatencyWrite {
+            node_id: node.id,
+            node_link: node.link.clone(),
             probe_generation,
             latency_ms: None,
             alive: false,

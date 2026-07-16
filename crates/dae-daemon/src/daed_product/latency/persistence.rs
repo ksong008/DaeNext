@@ -5,7 +5,7 @@ pub(super) const NODE_LATENCY_DB_WRITE_BATCH_SIZE: usize = 128;
 
 #[derive(Debug, Default)]
 pub(super) struct LatencyPersistenceQueue {
-    pending: Mutex<BTreeMap<(i64, String), NodeLatencyWrite>>,
+    pending: Mutex<BTreeMap<i64, NodeLatencyWrite>>,
 }
 
 #[derive(Debug, Default)]
@@ -21,7 +21,7 @@ impl LatencyPersistenceQueue {
             .lock()
             .map_err(|_| io::Error::other("latency persistence queue lock poisoned"))?;
         for result in results {
-            pending.insert((result.node_id, result.node_link.clone()), result.clone());
+            pending.insert(result.node_id, result.clone());
         }
         Ok(pending.len())
     }
@@ -39,7 +39,7 @@ impl LatencyPersistenceQueue {
         if queued.is_empty() {
             return LatencyPersistenceFlush::default();
         }
-        let results = queued.values().cloned().collect::<Vec<_>>();
+        let results = queued.into_values().collect::<Vec<_>>();
         let result = open_state_connection(state)
             .and_then(|mut conn| write_node_latency_results(&mut conn, &results));
         match result {
@@ -48,7 +48,7 @@ impl LatencyPersistenceQueue {
                 error: None,
             },
             Err(err) => {
-                self.restore_pending(queued);
+                self.restore_pending(results);
                 LatencyPersistenceFlush {
                     pending: self.pending_count(),
                     error: Some(err.to_string()),
@@ -64,7 +64,7 @@ impl LatencyPersistenceQueue {
             .unwrap_or(0)
     }
 
-    fn take_pending(&self) -> io::Result<BTreeMap<(i64, String), NodeLatencyWrite>> {
+    fn take_pending(&self) -> io::Result<BTreeMap<i64, NodeLatencyWrite>> {
         let mut pending = self
             .pending
             .lock()
@@ -72,12 +72,12 @@ impl LatencyPersistenceQueue {
         Ok(std::mem::take(&mut *pending))
     }
 
-    fn restore_pending(&self, queued: BTreeMap<(i64, String), NodeLatencyWrite>) {
+    fn restore_pending(&self, queued: Vec<NodeLatencyWrite>) {
         let Ok(mut pending) = self.pending.lock() else {
             return;
         };
-        for (key, result) in queued {
-            pending.entry(key).or_insert(result);
+        for result in queued {
+            pending.entry(result.node_id).or_insert(result);
         }
     }
 }
@@ -166,6 +166,38 @@ fn node_latency_result_target_exists(
 mod tests {
     use super::super::super::tests::support::FreshProductState;
     use super::*;
+
+    #[test]
+    fn persistence_queue_keeps_only_the_latest_result_for_each_node() {
+        let queue = LatencyPersistenceQueue::default();
+        queue
+            .queue(&[
+                NodeLatencyWrite {
+                    node_id: 7,
+                    node_link: "socks://127.0.0.1:1080#old".to_owned(),
+                    probe_generation: Some(1),
+                    latency_ms: Some(100),
+                    alive: true,
+                    tested_at: "old".to_owned(),
+                    message: None,
+                },
+                NodeLatencyWrite {
+                    node_id: 7,
+                    node_link: "socks://127.0.0.1:1081#new".to_owned(),
+                    probe_generation: Some(2),
+                    latency_ms: Some(20),
+                    alive: true,
+                    tested_at: "new".to_owned(),
+                    message: None,
+                },
+            ])
+            .unwrap();
+
+        let pending = queue.take_pending().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[&7].node_link, "socks://127.0.0.1:1081#new");
+        assert_eq!(pending[&7].latency_ms, Some(20));
+    }
 
     #[test]
     fn persistence_failure_keeps_results_pending_until_a_later_flush() {

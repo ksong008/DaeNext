@@ -21,6 +21,44 @@ pub(super) struct LatencyProbeHelperRequest {
     pub(super) concurrency: usize,
 }
 
+#[derive(Serialize)]
+struct LatencyProbeHelperConfigRef<'a> {
+    source: &'static str,
+    content: &'a str,
+}
+
+#[derive(Serialize)]
+struct LatencyProbeHelperRequestRef<'a> {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u64,
+    scope: &'static str,
+    #[serde(rename = "reloadGeneration")]
+    reload_generation: u64,
+    #[serde(rename = "requestedLinks")]
+    requested_links: &'a [String],
+    config: LatencyProbeHelperConfigRef<'a>,
+    concurrency: usize,
+}
+
+pub(super) fn encode_latency_probe_helper_request(
+    config_content: &str,
+    reload_generation: u64,
+    concurrency: usize,
+    links: &[String],
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&LatencyProbeHelperRequestRef {
+        schema_version: 1,
+        scope: "manual-latency-probe",
+        reload_generation,
+        requested_links: links,
+        config: LatencyProbeHelperConfigRef {
+            source: "current-runtime-config",
+            content: config_content,
+        },
+        concurrency: concurrency.max(1),
+    })
+}
+
 pub(crate) fn latency_probe_helper_response_from_request(input: &[u8]) -> Result<Value, String> {
     let request = latency_probe_helper_request_from_input(input)?;
     let config = build_runtime_config_from_content(&request.config.content)?;

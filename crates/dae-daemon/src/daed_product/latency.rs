@@ -1,8 +1,10 @@
 mod helper;
 mod job_state;
 mod jobs;
+mod nodes;
 mod persistence;
 mod runtime_snapshots;
+mod seen;
 mod storage;
 
 #[cfg(test)]
@@ -13,17 +15,20 @@ pub(crate) use helper::{
     latency_probe_helper_response_from_request, latency_probe_helper_response_lines_from_request,
     run_latency_probe_helper_streaming,
 };
+#[cfg(test)]
+pub(crate) use job_state::LatencyJobAdmissionKind;
 pub(crate) use job_state::{
     LatencyJobCancelError, LatencyJobCancellation, LatencyJobManager, cancel_node_latency_job_value,
 };
+#[cfg(test)]
+pub(crate) use jobs::node_latency_results_for_runtime_snapshots_only;
 pub(crate) use jobs::{
     add_node_latency_job_value, current_node_latency_job_value, enqueue_node_latency_job,
     list_stored_node_latencies_value,
 };
-#[cfg(test)]
-pub(crate) use jobs::{
-    latency_probe_link_chunks, latency_probe_nodes_for_ids, latency_probe_nodes_for_links,
-    latency_probe_unique_link_count, node_latency_results_for_runtime_snapshots_only,
+pub(crate) use nodes::{
+    LatencyProbeNode, current_latency_probe_nodes, latency_probe_link_chunks,
+    latency_probe_nodes_for_ids, latency_probe_nodes_for_links, latency_probe_unique_link_count,
 };
 #[cfg(test)]
 pub(crate) use runtime_snapshots::fake_runtime_tcp_latency_snapshot;
@@ -31,8 +36,11 @@ pub(crate) use runtime_snapshots::{
     fake_runtime_probe_node_latencies, node_name_from_link, runtime_execution_identity,
     runtime_link_hash, runtime_link_identity_value, runtime_redacted_link_source,
 };
+pub(crate) use seen::LatencyProbeSeenLinks;
+#[cfg(test)]
+pub(crate) use storage::runtime_node_latency_results_for_nodes;
 pub(crate) use storage::{
-    NodeLatencyWrite, all_node_ids, native_probe_unavailable_results,
-    runtime_latency_snapshot_link_hash, runtime_node_latency_results_for_nodes,
-    store_node_latency_result, stored_successful_node_latency_seed_snapshots,
+    NodeLatencyWrite, RuntimeNodeLatencyIndex, native_probe_unavailable_results,
+    runtime_latency_snapshot_link_hash, store_node_latency_result,
+    stored_successful_node_latency_seed_snapshots,
 };

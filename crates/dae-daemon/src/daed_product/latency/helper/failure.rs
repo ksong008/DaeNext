@@ -40,15 +40,11 @@ pub(crate) fn latency_probe_failure_snapshots_for_unseen_links(
     reload_generation: u64,
     reason: &str,
     detail: &str,
-    seen_snapshots: &[Value],
+    seen_links: &LatencyProbeSeenLinks,
 ) -> Vec<Value> {
-    let seen_link_hashes = seen_snapshots
-        .iter()
-        .filter_map(runtime_latency_snapshot_link_hash)
-        .collect::<HashSet<_>>();
     let unseen_links = links
         .iter()
-        .filter(|link| !seen_link_hashes.contains(runtime_link_hash(link).as_str()))
+        .filter(|link| !seen_links.contains_link(link))
         .cloned()
         .collect::<Vec<_>>();
     latency_probe_failure_snapshots(&unseen_links, reload_generation, reason, detail)

@@ -55,9 +55,13 @@ pub(crate) fn enqueue_node_latency_job(
     let conn = open_state_connection(state)?;
     let nodes = latency_probe_nodes_for_ids(&conn, ids)?;
     drop(conn);
-    let (job, should_spawn) = jobs.start_or_current(nodes.len())?;
-    let value = json!({"items": [], "job": job.to_value()});
-    if should_spawn {
+    let (job, admission) = jobs.start_or_current(nodes.len())?;
+    let value = json!({
+        "items": [],
+        "admission": admission.as_str(),
+        "job": job.to_value(),
+    });
+    if admission.should_spawn() {
         let job_id = job.id();
         let cancellation = job.cancellation();
         let state = state.to_path_buf();
@@ -107,7 +111,7 @@ fn run_node_latency_job(
     config_dir: PathBuf,
     runtime: Arc<ProductRuntimeManager>,
     jobs: Arc<LatencyJobManager>,
-    nodes: Vec<(i64, String, String)>,
+    nodes: Vec<LatencyProbeNode>,
 ) {
     debug_assert_eq!(cancellation.job_id(), job_id);
     jobs.mark_running(job_id);
@@ -153,7 +157,7 @@ fn run_node_latency_job(
     drop(jobs);
     drop(config_dir);
     drop(state);
-    let _ = allocator_reclaim(AllocatorReclaimReason::ManualLatencyProbe);
+    allocator_request_reclaim(AllocatorReclaimReason::ManualLatencyProbe);
 }
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
@@ -173,7 +177,7 @@ fn run_node_latency_job_inner(
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
     jobs: &LatencyJobManager,
-    nodes: &[(i64, String, String)],
+    nodes: &[LatencyProbeNode],
 ) -> io::Result<LatencyJobRunOutcome> {
     let conn = open_state_connection(state)?;
     let mut completed = 0usize;
@@ -203,7 +207,8 @@ fn run_node_latency_job_inner(
                 continue;
             }
             let link_chunk = latency_probe_unique_links(&chunk_nodes);
-            let mut emitted_snapshots = Vec::<Value>::new();
+            let node_index = RuntimeNodeLatencyIndex::new(&chunk_nodes);
+            let mut seen_links = LatencyProbeSeenLinks::default();
             let probe_cancelled = handle.probe_node_latencies_streaming_without_group_update(
                 &link_chunk,
                 || cancellation.is_requested(),
@@ -216,11 +221,8 @@ fn run_node_latency_job_inner(
                     {
                         return;
                     }
-                    emitted_snapshots.extend_from_slice(runtime_snapshots);
-                    let results = node_latency_results_for_runtime_snapshots_only(
-                        &chunk_nodes,
-                        runtime_snapshots,
-                    );
+                    seen_links.record_snapshots(runtime_snapshots);
+                    let results = node_index.results_for_snapshots(runtime_snapshots).0;
                     if results.is_empty() {
                         return;
                     }
@@ -257,12 +259,16 @@ fn run_node_latency_job_inner(
                     generation,
                     "manual latency probe result discarded",
                     "resident runtime generation changed while latency probe was running",
-                    &emitted_snapshots,
+                    &seen_links,
                 );
                 if failures.is_empty() {
                     continue;
                 }
-                let results = node_latency_results_for_runtime_snapshots(&chunk_nodes, &failures);
+                let results = node_latency_results_for_runtime_snapshots(
+                    &chunk_nodes,
+                    &node_index,
+                    &failures,
+                );
                 if !results.is_empty() && !cancellation.is_requested() {
                     let alive = results.iter().filter(|result| result.alive).count();
                     completed = completed.saturating_add(results.len());
@@ -330,53 +336,27 @@ fn apply_and_persist_runtime_latency_results(
     (results.len(), alive)
 }
 
-pub(crate) fn latency_probe_link_chunks(
-    nodes: &[(i64, String, String)],
-    chunk_size: usize,
-) -> Vec<Vec<String>> {
-    latency_probe_unique_links(nodes)
-        .chunks(chunk_size.max(1))
-        .map(|chunk| chunk.to_vec())
-        .collect()
-}
-
-pub(crate) fn latency_probe_unique_link_count(nodes: &[(i64, String, String)]) -> usize {
-    latency_probe_unique_links(nodes).len()
-}
-
-fn latency_probe_unique_links(nodes: &[(i64, String, String)]) -> Vec<String> {
+fn latency_probe_unique_links(nodes: &[LatencyProbeNode]) -> Vec<String> {
     let mut seen = HashSet::with_capacity(nodes.len());
     let mut links = Vec::with_capacity(nodes.len());
-    for (_, link, _) in nodes {
-        if seen.insert(link.as_str()) {
-            links.push(link.clone());
+    for node in nodes {
+        if seen.insert(node.link.as_str()) {
+            links.push(node.link.clone());
         }
     }
     links
 }
 
-pub(crate) fn latency_probe_nodes_for_links(
-    nodes: &[(i64, String, String)],
-    links: &[String],
-) -> Vec<(i64, String, String)> {
-    let link_set = links.iter().map(String::as_str).collect::<HashSet<_>>();
-    nodes
-        .iter()
-        .filter(|(_, link, _)| link_set.contains(link.as_str()))
-        .cloned()
-        .collect()
-}
-
 fn node_latency_results_for_runtime_snapshots(
-    nodes: &[(i64, String, String)],
+    nodes: &[LatencyProbeNode],
+    node_index: &RuntimeNodeLatencyIndex<'_>,
     runtime_snapshots: &[Value],
 ) -> Vec<NodeLatencyWrite> {
-    let (runtime_results, runtime_tested_ids) =
-        runtime_node_latency_results_for_nodes(nodes, runtime_snapshots);
+    let (runtime_results, runtime_tested_ids) = node_index.results_for_snapshots(runtime_snapshots);
     let tested_at = now_text();
     let fallback_nodes = nodes
         .iter()
-        .filter(|(id, _, _)| !runtime_tested_ids.contains(id))
+        .filter(|node| !runtime_tested_ids.contains(&node.id))
         .cloned()
         .collect::<Vec<_>>();
     let mut results = runtime_results;
@@ -391,8 +371,9 @@ fn node_latency_results_for_runtime_snapshots(
     results
 }
 
+#[cfg(test)]
 pub(crate) fn node_latency_results_for_runtime_snapshots_only(
-    nodes: &[(i64, String, String)],
+    nodes: &[LatencyProbeNode],
     runtime_snapshots: &[Value],
 ) -> Vec<NodeLatencyWrite> {
     runtime_node_latency_results_for_nodes(nodes, runtime_snapshots).0
@@ -404,62 +385,6 @@ pub(crate) fn current_node_latency_job_value(jobs: &LatencyJobManager) -> Value 
 
 pub(crate) fn add_node_latency_job_value(value: &mut Value, jobs: &LatencyJobManager) {
     value["job"] = jobs.current_value();
-}
-
-pub(crate) fn latency_probe_nodes_for_ids(
-    conn: &Connection,
-    ids: &[i64],
-) -> io::Result<Vec<(i64, String, String)>> {
-    let target_ids = if ids.is_empty() {
-        all_node_ids(conn)?
-    } else {
-        ids.to_vec()
-    };
-    let mut nodes = Vec::new();
-    for id in target_ids {
-        let node: Option<(i64, String, String)> = conn
-            .query_row(
-                "SELECT id, link, address FROM nodes WHERE id = ?1",
-                params![id],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(sqlite_io_error)?;
-        if let Some(node) = node {
-            nodes.push(node);
-        }
-    }
-    Ok(nodes)
-}
-
-fn current_latency_probe_nodes(
-    conn: &Connection,
-    nodes: &[(i64, String, String)],
-) -> io::Result<Vec<(i64, String, String)>> {
-    let mut current = Vec::with_capacity(nodes.len());
-    for (id, link, address) in nodes {
-        if latency_probe_node_identity_exists(conn, *id, link)? {
-            current.push((*id, link.clone(), address.clone()));
-        }
-    }
-    Ok(current)
-}
-
-fn latency_probe_node_identity_exists(conn: &Connection, id: i64, link: &str) -> io::Result<bool> {
-    conn.query_row(
-        "SELECT 1 FROM nodes WHERE id = ?1 AND link = ?2",
-        params![id, link],
-        |_| Ok(()),
-    )
-    .optional()
-    .map(|value| value.is_some())
-    .map_err(sqlite_io_error)
 }
 
 #[cfg(test)]
@@ -599,16 +524,8 @@ mod tests {
             .unwrap();
 
         let nodes = vec![
-            (
-                1_i64,
-                "socks://127.0.0.1:1080#one".to_owned(),
-                "127.0.0.1".to_owned(),
-            ),
-            (
-                2_i64,
-                "socks://127.0.0.1:1081#two".to_owned(),
-                "127.0.0.1".to_owned(),
-            ),
+            LatencyProbeNode::new(1, "socks://127.0.0.1:1080#one".to_owned()),
+            LatencyProbeNode::new(2, "socks://127.0.0.1:1081#two".to_owned()),
         ];
 
         let current = current_latency_probe_nodes(&conn, &nodes).unwrap();

@@ -54,7 +54,7 @@ pub(super) struct ProductRuntimeManager {
 pub(super) struct ProductRuntimeState {
     pub(super) runtime: Option<ProductRuntimeInstance>,
     pub(super) config: Option<Config>,
-    pub(super) config_content: Option<String>,
+    pub(super) config_content: Option<Arc<str>>,
     pub(super) last_error: Option<String>,
     pub(super) last_transition_at: Option<String>,
     pub(super) runtime_started_at: Option<String>,
@@ -138,7 +138,7 @@ pub(super) struct FakeProductRuntime {
 pub(super) enum ProductRuntimeProbeHandle {
     Resident {
         handle: Box<ResidentManualProbeHandle>,
-        config_content: Option<String>,
+        config_content: Option<Arc<str>>,
     },
     Fake,
 }
@@ -177,7 +177,7 @@ impl ProductRuntimeProbeHandle {
                                 handle.reload_generation(),
                                 "manual latency probe helper failed",
                                 &err.message,
-                                &err.snapshots,
+                                &err.seen_links,
                             );
                             if !failures.is_empty() {
                                 on_snapshots(&failures);
@@ -374,7 +374,7 @@ impl ProductRuntimeManager {
             &self.lifecycle,
             &self.inner,
             config,
-            config_content,
+            config_content.map(Arc::<str>::from),
             source,
             latency_seed,
         )
@@ -422,7 +422,7 @@ fn reload_product_runtime_with_config_content(
     lifecycle: &Arc<Mutex<()>>,
     inner: &Arc<Mutex<ProductRuntimeState>>,
     config: Config,
-    config_content: Option<String>,
+    config_content: Option<Arc<str>>,
     source: &str,
     latency_seed: &[Value],
 ) -> Result<RuntimeStartOutcome, String> {
