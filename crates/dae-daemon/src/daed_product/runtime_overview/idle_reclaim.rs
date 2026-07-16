@@ -1,6 +1,23 @@
 use super::*;
+use crate::allocator::{
+    AllocatorReclaimRequestBatch, allocator_pending_reclaim_requests,
+    allocator_take_reclaim_requests,
+};
+
+#[path = "idle_reclaim/adaptive.rs"]
+mod adaptive;
+use self::adaptive::*;
+#[path = "idle_reclaim/capacity.rs"]
+mod capacity;
+use self::capacity::*;
+#[path = "idle_reclaim/pressure.rs"]
+mod pressure;
+use self::pressure::*;
 
 const ALLOCATOR_IDLE_RECLAIM_MONITOR_STACK_BYTES: usize = 256 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL: Duration = Duration::from_secs(1);
+const ALLOCATOR_IDLE_RECLAIM_DEFERRED_SETTLE_INTERVAL: Duration = Duration::from_secs(5);
+const ALLOCATOR_IDLE_RECLAIM_DEFERRED_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug)]
 struct AllocatorIdleReclaimPolicy {
@@ -10,6 +27,8 @@ struct AllocatorIdleReclaimPolicy {
     low_traffic_duration: Duration,
     pressure_threshold_bytes: u64,
     max_traffic_rate_bytes_per_second: u64,
+    pressure_capacity_bytes: Option<u64>,
+    pressure_capacity_source: Option<&'static str>,
     sources: AllocatorIdleReclaimPolicySources,
 }
 
@@ -64,12 +83,17 @@ impl AllocatorIdleReclaimPolicy {
             ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MIN,
             ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MAX,
         );
-        let (pressure_threshold_bytes, pressure_source) = effective_u64(
+        let (configured_pressure_threshold_bytes, configured_pressure_source) = effective_u64(
             ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
             global.and_then(|global| global.allocator_idle_reclaim_pressure_threshold_bytes),
             ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT,
             ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN,
             ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MAX,
+        );
+        let pressure = allocator_idle_reclaim_pressure_threshold(
+            configured_pressure_threshold_bytes,
+            configured_pressure_source,
+            crate::production_runtime_owner::effective_process_memory_capacity(),
         );
         let (max_traffic_rate_bytes_per_second, max_rate_source) = effective_u64(
             ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
@@ -84,14 +108,16 @@ impl AllocatorIdleReclaimPolicy {
             sample_interval: Duration::from_secs(sample_interval_seconds),
             min_interval: Duration::from_secs(min_interval_seconds),
             low_traffic_duration: Duration::from_secs(low_traffic_seconds),
-            pressure_threshold_bytes,
+            pressure_threshold_bytes: pressure.bytes,
             max_traffic_rate_bytes_per_second,
+            pressure_capacity_bytes: pressure.capacity_bytes,
+            pressure_capacity_source: pressure.capacity_source,
             sources: AllocatorIdleReclaimPolicySources {
                 enabled: enabled_source,
                 sample_interval: sample_interval_source,
                 min_interval: min_interval_source,
                 low_traffic_duration: low_traffic_source,
-                pressure_threshold_bytes: pressure_source,
+                pressure_threshold_bytes: pressure.source,
                 max_traffic_rate_bytes_per_second: max_rate_source,
             },
         }
@@ -105,10 +131,13 @@ impl AllocatorIdleReclaimPolicy {
             "minIntervalSeconds": self.min_interval.as_secs(),
             "lowTrafficSeconds": self.low_traffic_duration.as_secs(),
             "pressureThresholdBytes": self.pressure_threshold_bytes.to_string(),
+            "pressureCapacityBytes": self.pressure_capacity_bytes.map(|value| value.to_string()),
+            "pressureCapacitySource": self.pressure_capacity_source,
             "pressureMetric": "allocator-resident-minus-active",
             "retainedMetric": "diagnostic-virtual-address-space",
             "maxTrafficRateBytesPerSecond": self.max_traffic_rate_bytes_per_second.to_string(),
             "sessionCountGate": false,
+            "deferredSettleSeconds": ALLOCATOR_IDLE_RECLAIM_DEFERRED_SETTLE_INTERVAL.as_secs(),
             "sources": {
                 "enabled": self.sources.enabled,
                 "sampleIntervalSeconds": self.sources.sample_interval,
@@ -127,6 +156,10 @@ struct AllocatorIdleReclaimState {
     last_attempt: Option<Instant>,
     last_sample: Option<AllocatorIdleTrafficSample>,
     low_traffic_since: Option<Instant>,
+    low_yield_streak: u8,
+    last_released_bytes: Option<u64>,
+    last_cgroup_high_events: Option<u64>,
+    cgroup_high_event_latched: bool,
     last_report: Value,
 }
 
@@ -216,18 +249,39 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
         .stack_size(ALLOCATOR_IDLE_RECLAIM_MONITOR_STACK_BYTES)
         .spawn(move || {
             let _started = AllocatorIdleReclaimStartedGuard;
+            let mut next_periodic_evaluation = Instant::now();
+            let mut next_deferred_evaluation = None;
             while !app.shutdown.is_requested() {
                 let config = app.runtime.current_config();
                 let policy = AllocatorIdleReclaimPolicy::from_config(config.as_ref());
-                if app.shutdown.wait_timeout(policy.sample_interval) {
-                    break;
+                let now = Instant::now();
+                let periodic_due = now >= next_periodic_evaluation;
+                let deferred_due = deferred_reclaim_evaluation_due(
+                    &mut next_deferred_evaluation,
+                    now,
+                    allocator_pending_reclaim_requests(),
+                );
+                if periodic_due || deferred_due {
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        allocator_idle_reclaim_tick(&app, policy, deferred_due);
+                    }))
+                    .is_err()
+                    {
+                        record_idle_reclaim_tick_panic();
+                    }
+                    if periodic_due {
+                        next_periodic_evaluation = now + policy.sample_interval;
+                    }
+                    if deferred_due {
+                        next_deferred_evaluation = allocator_pending_reclaim_requests()
+                            .then_some(now + ALLOCATOR_IDLE_RECLAIM_DEFERRED_RETRY_INTERVAL);
+                    }
                 }
-                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    allocator_idle_reclaim_tick(&app, policy);
-                }))
-                .is_err()
+                if app
+                    .shutdown
+                    .wait_timeout(ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL)
                 {
-                    record_idle_reclaim_tick_panic();
+                    break;
                 }
             }
         });
@@ -263,8 +317,12 @@ pub(crate) fn allocator_idle_reclaim_snapshot_json(app: &AppState) -> Value {
     })
 }
 
-fn allocator_idle_reclaim_tick(app: &AppState, policy: AllocatorIdleReclaimPolicy) {
-    let report = evaluate_allocator_idle_reclaim(app, policy);
+fn allocator_idle_reclaim_tick(
+    app: &AppState,
+    policy: AllocatorIdleReclaimPolicy,
+    admit_deferred_requests: bool,
+) {
+    let report = evaluate_allocator_idle_reclaim(app, policy, admit_deferred_requests);
     if let Ok(mut state) = ALLOCATOR_IDLE_RECLAIM_STATE
         .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
         .lock()
@@ -273,13 +331,26 @@ fn allocator_idle_reclaim_tick(app: &AppState, policy: AllocatorIdleReclaimPolic
     }
 }
 
-fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimPolicy) -> Value {
+fn evaluate_allocator_idle_reclaim(
+    app: &AppState,
+    policy: AllocatorIdleReclaimPolicy,
+    admit_deferred_requests: bool,
+) -> Value {
     if !policy.enabled {
         reset_idle_reclaim_observation();
-        return json!({"status": "skipped", "reason": "disabled"});
+        clear_cgroup_reclaim_pressure_latch();
+        let deferred = if admit_deferred_requests {
+            allocator_take_reclaim_requests()
+        } else {
+            AllocatorReclaimRequestBatch::default()
+        };
+        return json!({"status": "skipped", "reason": "disabled", "deferred": deferred.json()});
     }
 
     let now = Instant::now();
+    let deferred_waiting = allocator_pending_reclaim_requests();
+    let deferred_pending = admit_deferred_requests && deferred_waiting;
+    let cgroup_pressure = observe_cgroup_reclaim_pressure();
     let Some(observation) = idle_reclaim_observation(app) else {
         reset_idle_reclaim_observation();
         return json!({"status": "skipped", "reason": "runtime_metrics_unavailable"});
@@ -287,7 +358,9 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
     let Some(traffic_rate) = idle_reclaim_traffic_rate(now, observation) else {
         return json!({"status": "skipped", "reason": "traffic_sample_warming_up"});
     };
-    if traffic_rate.bytes_per_second > policy.max_traffic_rate_bytes_per_second {
+    if traffic_rate.bytes_per_second > policy.max_traffic_rate_bytes_per_second
+        && !cgroup_pressure.urgent
+    {
         reset_idle_reclaim_low_traffic_window();
         return json!({
             "status": "skipped",
@@ -298,11 +371,14 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
             "maxTrafficRateBytesPerSecond": policy.max_traffic_rate_bytes_per_second.to_string(),
             "activeTcpConnections": observation.active_tcp,
             "activeUdpSessions": observation.active_udp,
+            "deferredReclaimPending": deferred_pending,
+            "deferredReclaimWaiting": deferred_waiting,
+            "cgroupPressure": cgroup_pressure.json(),
         });
     }
     let low_traffic =
         idle_reclaim_low_traffic_window(now, traffic_rate, policy.low_traffic_duration);
-    if !low_traffic.ready {
+    if !deferred_pending && !cgroup_pressure.urgent && !low_traffic.ready {
         return json!({
             "status": "skipped",
             "reason": "low_traffic_window_warming_up",
@@ -313,9 +389,16 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
             "lowTrafficRequiredMillis": policy.low_traffic_duration.as_millis().to_string(),
             "activeTcpConnections": observation.active_tcp,
             "activeUdpSessions": observation.active_udp,
+            "cgroupPressure": cgroup_pressure.json(),
         });
     }
-    if let Some(wait_remaining) = idle_reclaim_wait_remaining(now, policy.min_interval) {
+    let adaptive_min_interval = idle_reclaim_effective_min_interval(policy.min_interval);
+    let effective_min_interval = if cgroup_pressure.urgent {
+        adaptive_min_interval.min(policy.sample_interval)
+    } else {
+        adaptive_min_interval
+    };
+    if let Some(wait_remaining) = idle_reclaim_wait_remaining(now, effective_min_interval) {
         return json!({
             "status": "skipped",
             "reason": "cooldown",
@@ -325,6 +408,10 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
             "lowTrafficElapsedMillis": low_traffic.elapsed.as_millis().to_string(),
             "activeTcpConnections": observation.active_tcp,
             "activeUdpSessions": observation.active_udp,
+            "deferredReclaimPending": deferred_pending,
+            "deferredReclaimWaiting": deferred_waiting,
+            "effectiveMinIntervalMillis": effective_min_interval.as_millis().to_string(),
+            "cgroupPressure": cgroup_pressure.json(),
         });
     }
 
@@ -332,13 +419,24 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
         return json!({"status": "skipped", "reason": "allocator_stats_unavailable"});
     };
     let pressure = stats.idle_reclaim_pressure_bytes();
-    if pressure < policy.pressure_threshold_bytes {
+    let effective_pressure_threshold = if cgroup_pressure.urgent {
+        (policy.pressure_threshold_bytes / 4).max(ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN)
+    } else {
+        policy.pressure_threshold_bytes
+    };
+    if pressure < effective_pressure_threshold {
+        let deferred = if deferred_pending {
+            allocator_take_reclaim_requests()
+        } else {
+            AllocatorReclaimRequestBatch::default()
+        };
+        clear_cgroup_reclaim_pressure_latch();
         return json!({
             "status": "skipped",
             "reason": "pressure_below_threshold",
             "pressureBytes": pressure.to_string(),
             "pressureMetric": "allocator-resident-minus-active",
-            "pressureThresholdBytes": policy.pressure_threshold_bytes.to_string(),
+            "pressureThresholdBytes": effective_pressure_threshold.to_string(),
             "allocatorResidentMinusActiveBytes": stats.resident_minus_active().to_string(),
             "allocatorRetainedBytes": stats.retained.to_string(),
             "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
@@ -346,14 +444,27 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
             "lowTrafficElapsedMillis": low_traffic.elapsed.as_millis().to_string(),
             "activeTcpConnections": observation.active_tcp,
             "activeUdpSessions": observation.active_udp,
+            "deferred": deferred.json(),
+            "effectiveMinIntervalMillis": effective_min_interval.as_millis().to_string(),
+            "cgroupPressure": cgroup_pressure.json(),
         });
     }
 
+    let deferred = if deferred_pending {
+        allocator_take_reclaim_requests()
+    } else {
+        AllocatorReclaimRequestBatch::default()
+    };
+    let reclaim_reason = deferred
+        .primary_reason()
+        .unwrap_or(AllocatorReclaimReason::IdleMemoryPressure);
     record_idle_reclaim_attempt(now);
-    let reclaim = allocator_reclaim(AllocatorReclaimReason::IdleMemoryPressure);
+    let reclaim = allocator_reclaim(reclaim_reason);
+    let adaptive = record_idle_reclaim_outcome(&reclaim, policy.pressure_threshold_bytes);
+    clear_cgroup_reclaim_pressure_latch();
     json!({
         "status": "reclaimed",
-        "reason": "idle_memory_pressure",
+        "reason": reclaim_reason.as_str(),
         "pressureBytes": pressure.to_string(),
         "pressureMetric": "allocator-resident-minus-active",
         "allocatorResidentMinusActiveBytes": stats.resident_minus_active().to_string(),
@@ -363,8 +474,25 @@ fn evaluate_allocator_idle_reclaim(app: &AppState, policy: AllocatorIdleReclaimP
         "lowTrafficElapsedMillis": low_traffic.elapsed.as_millis().to_string(),
         "activeTcpConnections": observation.active_tcp,
         "activeUdpSessions": observation.active_udp,
+        "deferred": deferred.json(),
+        "effectiveMinIntervalMillis": effective_min_interval.as_millis().to_string(),
+        "cgroupPressure": cgroup_pressure.json(),
+        "adaptive": adaptive,
         "reclaim": reclaim,
     })
+}
+
+fn deferred_reclaim_evaluation_due(
+    deadline: &mut Option<Instant>,
+    now: Instant,
+    pending: bool,
+) -> bool {
+    if !pending {
+        *deadline = None;
+        return false;
+    }
+    let deadline = deadline.get_or_insert(now + ALLOCATOR_IDLE_RECLAIM_DEFERRED_SETTLE_INTERVAL);
+    now >= *deadline
 }
 
 fn idle_reclaim_observation(app: &AppState) -> Option<AllocatorIdleObservation> {
@@ -551,6 +679,10 @@ fn default_idle_reclaim_state() -> AllocatorIdleReclaimState {
         last_attempt: None,
         last_sample: None,
         low_traffic_since: None,
+        low_yield_streak: 0,
+        last_released_bytes: None,
+        last_cgroup_high_events: None,
+        cgroup_high_event_latched: false,
         last_report: json!({"status": "not_started"}),
     }
 }
@@ -725,6 +857,40 @@ mod tests {
             idle_reclaim_wait_remaining_since(now, now + Duration::from_secs(30), min_interval,),
             Some(min_interval)
         );
+    }
+
+    #[test]
+    fn deferred_reclaim_waits_for_one_bounded_settle_window() {
+        let started_at = Instant::now();
+        let mut deadline = None;
+
+        assert!(!deferred_reclaim_evaluation_due(
+            &mut deadline,
+            started_at,
+            true,
+        ));
+        let first_deadline = deadline.unwrap();
+        assert_eq!(
+            first_deadline,
+            started_at + ALLOCATOR_IDLE_RECLAIM_DEFERRED_SETTLE_INTERVAL
+        );
+        assert!(!deferred_reclaim_evaluation_due(
+            &mut deadline,
+            started_at + Duration::from_secs(2),
+            true,
+        ));
+        assert_eq!(deadline, Some(first_deadline));
+        assert!(deferred_reclaim_evaluation_due(
+            &mut deadline,
+            first_deadline,
+            true,
+        ));
+        assert!(!deferred_reclaim_evaluation_due(
+            &mut deadline,
+            first_deadline,
+            false,
+        ));
+        assert_eq!(deadline, None);
     }
 
     #[test]

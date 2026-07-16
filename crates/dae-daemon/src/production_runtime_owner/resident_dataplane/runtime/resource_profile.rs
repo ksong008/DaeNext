@@ -103,6 +103,26 @@ pub(crate) struct ResidentRuntimeProfileSelection {
     invalid_value: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EffectiveProcessMemoryCapacity {
+    bytes: u64,
+    source: &'static str,
+}
+
+impl EffectiveProcessMemoryCapacity {
+    pub(crate) const fn new(bytes: u64, source: &'static str) -> Self {
+        Self { bytes, source }
+    }
+
+    pub(crate) const fn bytes(self) -> u64 {
+        self.bytes
+    }
+
+    pub(crate) const fn source(self) -> &'static str {
+        self.source
+    }
+}
+
 impl ResidentRuntimeProfile {
     fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -350,6 +370,11 @@ impl ResidentRuntimeProfileSelection {
 
 pub(crate) fn selected_resident_runtime_profile_name() -> &'static str {
     ResidentRuntimeProfileSelection::selected().profile.name()
+}
+
+pub(crate) fn effective_process_memory_capacity() -> Option<EffectiveProcessMemoryCapacity> {
+    automatic_memory_capacity()
+        .map(|(bytes, source)| EffectiveProcessMemoryCapacity::new(bytes, source))
 }
 
 pub(crate) fn resident_runtime_profile_contract() -> Value {

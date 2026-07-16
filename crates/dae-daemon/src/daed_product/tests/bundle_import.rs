@@ -27,7 +27,7 @@ fn read_request_bytes(raw: Vec<u8>) -> io::Result<HttpRequest> {
     writer
         .join()
         .map_err(|_| io::Error::other("bundle request writer panicked"))??;
-    request
+    request.map_err(io::Error::other)
 }
 
 fn json_put_request(path: &str, body: &[u8]) -> Vec<u8> {

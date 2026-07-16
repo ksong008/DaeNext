@@ -110,7 +110,7 @@ pub(super) fn geodata_update_http_response(
             }),
         ),
     };
-    let _ = allocator_reclaim(AllocatorReclaimReason::GeodataUpdate);
+    allocator_request_reclaim(AllocatorReclaimReason::GeodataUpdate);
     response
 }
 

@@ -4,25 +4,26 @@ const HTTP_REQUEST_READ_BUFFER_BYTES: usize = 4 * 1024;
 
 pub(in crate::daed_product) fn read_http_request(
     stream: &mut TcpStream,
-) -> io::Result<HttpRequest> {
+) -> Result<HttpRequest, HttpRequestReadError> {
     read_http_request_with_policy(stream, HttpRequestReadPolicy::production())
 }
 
 pub(in crate::daed_product) fn read_http_request_with_policy(
     stream: &mut TcpStream,
     policy: HttpRequestReadPolicy,
-) -> io::Result<HttpRequest> {
+) -> Result<HttpRequest, HttpRequestReadError> {
     let mut buffer = Vec::new();
     let mut temp = [0_u8; HTTP_REQUEST_READ_BUFFER_BYTES];
     let header_end = read_request_headers(stream, policy, &mut buffer, &mut temp)?;
-    let (method, raw_path, headers) = parse_request_head(&buffer[..header_end - 4])?;
-    let content_length = parse_content_length(&headers)?;
+    let (method, raw_path, headers) =
+        parse_request_head(&buffer[..header_end - 4]).map_err(HttpRequestReadError::invalid)?;
+    let content_length = parse_content_length(&headers).map_err(HttpRequestReadError::invalid)?;
     let body_limit = request_body_limit(&method, &raw_path);
     if content_length > body_limit {
-        return Err(io::Error::new(
+        return Err(HttpRequestReadError::invalid(io::Error::new(
             io::ErrorKind::InvalidData,
             "body is too large",
-        ));
+        )));
     }
     read_request_body(
         stream,
@@ -33,7 +34,9 @@ pub(in crate::daed_product) fn read_http_request_with_policy(
         header_end,
         content_length,
     )?;
-    stream.set_read_timeout(None)?;
+    stream
+        .set_read_timeout(None)
+        .map_err(HttpRequestReadError::io)?;
 
     let body = buffer[header_end..header_end + content_length].to_vec();
     let (path, query) = split_path_query(&raw_path);
@@ -51,49 +54,64 @@ fn read_request_headers(
     policy: HttpRequestReadPolicy,
     buffer: &mut Vec<u8>,
     temp: &mut [u8; HTTP_REQUEST_READ_BUFFER_BYTES],
-) -> io::Result<usize> {
+) -> Result<usize, HttpRequestReadError> {
     let started_at = Instant::now();
     loop {
         let deadline = policy.header_deadline(started_at, buffer.len());
-        stream.set_read_timeout(Some(socket_timeout_until(
-            deadline,
-            "request header read deadline exceeded",
-        )?))?;
+        let timeout = socket_timeout_until(deadline, "request header read deadline exceeded")
+            .map_err(|error| header_timeout_error(buffer.len(), error))?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .map_err(HttpRequestReadError::io)?;
         let read = match stream.read(temp) {
             Ok(read) => read,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) if is_socket_timeout(&error) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "request header read deadline exceeded",
-                ));
+                return Err(header_timeout_error(buffer.len(), error));
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(HttpRequestReadError::io(error)),
         };
         if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "connection closed while reading request headers",
+            let kind = if buffer.is_empty() {
+                HttpRequestReadErrorKind::ConnectionClosed
+            } else {
+                HttpRequestReadErrorKind::InvalidRequest
+            };
+            return Err(HttpRequestReadError::new(
+                kind,
+                io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "connection closed while reading request headers",
+                ),
             ));
         }
         buffer.extend_from_slice(&temp[..read]);
         if let Some(index) = find_subsequence(buffer, b"\r\n\r\n") {
             let header_end = index + 4;
             if header_end > MAX_HTTP_HEADER_BYTES {
-                return Err(io::Error::new(
+                return Err(HttpRequestReadError::invalid(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "request headers are too large",
-                ));
+                )));
             }
             return Ok(header_end);
         }
         if buffer.len() > MAX_HTTP_HEADER_BYTES {
-            return Err(io::Error::new(
+            return Err(HttpRequestReadError::invalid(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request headers are too large",
-            ));
+            )));
         }
     }
+}
+
+fn header_timeout_error(received: usize, _source: io::Error) -> HttpRequestReadError {
+    let kind = if received == 0 {
+        HttpRequestReadErrorKind::IdleHeaderTimeout
+    } else {
+        HttpRequestReadErrorKind::PartialHeaderTimeout
+    };
+    HttpRequestReadError::timeout(kind, "request header read deadline exceeded")
 }
 
 fn parse_request_head(raw: &[u8]) -> io::Result<(String, String, HashMap<String, String>)> {
@@ -216,7 +234,7 @@ fn read_request_body(
     temp: &mut [u8; HTTP_REQUEST_READ_BUFFER_BYTES],
     header_end: usize,
     content_length: usize,
-) -> io::Result<()> {
+) -> Result<(), HttpRequestReadError> {
     if buffer.len() >= header_end + content_length {
         return Ok(());
     }
@@ -226,30 +244,32 @@ fn read_request_body(
     while buffer.len() < header_end + content_length {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
+            return Err(HttpRequestReadError::timeout(
+                HttpRequestReadErrorKind::BodyTimeout,
                 "request body read deadline exceeded",
             ));
         }
-        stream.set_read_timeout(Some(
-            idle_timeout.min(remaining).max(Duration::from_millis(1)),
-        ))?;
+        stream
+            .set_read_timeout(Some(
+                idle_timeout.min(remaining).max(Duration::from_millis(1)),
+            ))
+            .map_err(HttpRequestReadError::io)?;
         let read = match stream.read(temp) {
             Ok(read) => read,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) if is_socket_timeout(&error) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
+                return Err(HttpRequestReadError::timeout(
+                    HttpRequestReadErrorKind::BodyTimeout,
                     "request body read deadline exceeded",
                 ));
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(HttpRequestReadError::io(error)),
         };
         if read == 0 {
-            return Err(io::Error::new(
+            return Err(HttpRequestReadError::invalid(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "request body is truncated",
-            ));
+            )));
         }
         buffer.extend_from_slice(&temp[..read]);
     }

@@ -442,6 +442,7 @@ pub(super) fn status_reason(status: u16) -> &'static str {
         401 => "Unauthorized",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        408 => "Request Timeout",
         409 => "Conflict",
         429 => "Too Many Requests",
         500 => "Internal Server Error",
