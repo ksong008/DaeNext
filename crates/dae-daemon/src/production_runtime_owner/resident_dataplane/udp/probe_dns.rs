@@ -21,6 +21,7 @@ impl ResidentProxyUdpBridge {
         self.last_error.lock().ok().and_then(|error| error.clone())
     }
 
+    #[allow(dead_code)]
     pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
@@ -34,6 +35,19 @@ impl ResidentProxyUdpBridge {
                 }
             }
         }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown_and_join(
+        mut self,
+    ) -> Result<(), String> {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(task) = self.task.take() {
+            task.await
+                .map_err(|error| format!("join resident proxy UDP bridge task: {error}"))?;
+        }
+        Ok(())
     }
 }
 
@@ -166,6 +180,10 @@ fn record_resident_proxy_udp_bridge_error(last_error: &Arc<Mutex<Option<String>>
         *last_error = Some(err);
     }
 }
+
+#[cfg(test)]
+#[path = "probe_dns/shutdown_tests.rs"]
+mod shutdown_tests;
 
 pub(crate) async fn probe_resident_proxy_udp_async(
     proxy: &ResidentProxyPlan,
