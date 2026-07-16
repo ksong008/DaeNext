@@ -1,10 +1,16 @@
 use super::*;
+
+#[path = "entry_chain/udp_passthrough.rs"]
+mod udp_passthrough;
+use self::udp_passthrough::reject_requested_udp_passthrough;
+
 pub(crate) fn build_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,
     link: String,
 ) -> Result<ResidentProxyPlan, String> {
+    reject_requested_udp_passthrough(&link, &node_tag)?;
     if link.contains(" -> ") || link.contains("->") {
         return build_chained_proxy_plan(config, group_name, node_tag, link);
     }
@@ -129,3 +135,7 @@ pub(crate) fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool 
 #[cfg(test)]
 #[path = "entry_chain/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "entry_chain/udp_passthrough_tests.rs"]
+mod udp_passthrough_tests;
