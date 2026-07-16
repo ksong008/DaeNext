@@ -167,7 +167,8 @@ async fn send_resident_proxy_udp_bridge_response(
     expected_source: SocketAddr,
     mut response: UdpExchangeResult,
 ) -> Result<(), String> {
-    let payload = take_udp_response_for_fixed_target(&mut response, expected_source)?;
+    let expectation = UdpFixedTargetExpectation::compatibility(expected_source);
+    let payload = take_udp_response_for_fixed_target(&mut response, expectation)?;
     socket
         .send_to(&payload, peer)
         .await
@@ -231,7 +232,8 @@ pub(crate) async fn probe_resident_proxy_udp_async(
     }
     executor.shutdown().await;
     let exchange = exchange.and_then(|mut response| {
-        let payload = take_udp_response_for_fixed_target(&mut response, original_dst)?;
+        let expectation = UdpFixedTargetExpectation::compatibility(original_dst);
+        let payload = take_udp_response_for_fixed_target(&mut response, expectation)?;
         Ok((response, payload))
     });
     match exchange {
@@ -325,16 +327,17 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
     }
     executor.shutdown().await;
     let mut response = response?;
-    let payload = take_udp_response_for_fixed_target(&mut response, original_dst)?;
+    let expectation = UdpFixedTargetExpectation::compatibility(original_dst);
+    let payload = take_udp_response_for_fixed_target(&mut response, expectation)?;
     dns_a_response_has_answer(id, &payload)
 }
 
 fn take_udp_response_for_fixed_target(
     response: &mut UdpExchangeResult,
-    expected_source: SocketAddr,
+    expectation: UdpFixedTargetExpectation,
 ) -> Result<Vec<u8>, String> {
     response
-        .take_fixed_target_payload(expected_source)
+        .take_fixed_target_payload(expectation)
         .into_payload()
         .map_err(|reason| {
             format!(

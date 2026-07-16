@@ -37,6 +37,56 @@ impl fmt::Debug for UdpResponseIdentityToken {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane::udp) struct UdpFixedTargetExpectation {
+    source: SocketAddr,
+    mode: UdpFixedTargetExpectationMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UdpFixedTargetExpectationMode {
+    Compatibility,
+    Decoded {
+        protocol_identity: Option<UdpResponseIdentityToken>,
+    },
+}
+
+impl UdpFixedTargetExpectation {
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) const fn compatibility(
+        source: SocketAddr,
+    ) -> Self {
+        Self {
+            source,
+            mode: UdpFixedTargetExpectationMode::Compatibility,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) const fn decoded_source(
+        source: SocketAddr,
+    ) -> Self {
+        Self {
+            source,
+            mode: UdpFixedTargetExpectationMode::Decoded {
+                protocol_identity: None,
+            },
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) const fn with_protocol_identity(
+        source: SocketAddr,
+        protocol_identity: UdpResponseIdentityToken,
+    ) -> Self {
+        Self {
+            source,
+            mode: UdpFixedTargetExpectationMode::Decoded {
+                protocol_identity: Some(protocol_identity),
+            },
+        }
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane::udp) enum UdpResponseDropReason {
@@ -47,6 +97,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) enum UdpRespons
     LateResponse,
     MalformedIdentity,
     CrossSessionIdentity,
+    UnexpectedIdentityEvidence,
 }
 
 impl UdpResponseDropReason {
@@ -61,6 +112,7 @@ impl UdpResponseDropReason {
             Self::LateResponse => "late-response",
             Self::MalformedIdentity => "malformed-identity",
             Self::CrossSessionIdentity => "cross-session-identity",
+            Self::UnexpectedIdentityEvidence => "unexpected-identity-evidence",
         }
     }
 }
@@ -71,7 +123,6 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) enum UdpRespons
     CompatibilityUnverified,
     Decoded {
         wire_source: Option<SocketAddr>,
-        expected_identity: Option<UdpResponseIdentityToken>,
         observed_identity: Option<UdpResponseIdentityToken>,
     },
     Rejected(UdpResponseDropReason),
@@ -80,27 +131,44 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) enum UdpRespons
 impl UdpResponseIdentityEvidence {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn validate_fixed_target(
         self,
-        expected_source: SocketAddr,
+        expectation: UdpFixedTargetExpectation,
     ) -> UdpFixedTargetValidation {
         match self {
-            Self::CompatibilityUnverified => UdpFixedTargetValidation::CompatibilityUnverified,
+            Self::CompatibilityUnverified => match expectation.mode {
+                UdpFixedTargetExpectationMode::Compatibility => {
+                    UdpFixedTargetValidation::CompatibilityUnverified
+                }
+                UdpFixedTargetExpectationMode::Decoded {
+                    protocol_identity: Some(_),
+                } => UdpFixedTargetValidation::Dropped(
+                    UdpResponseDropReason::MissingProtocolIdentity,
+                ),
+                UdpFixedTargetExpectationMode::Decoded {
+                    protocol_identity: None,
+                } => UdpFixedTargetValidation::Dropped(UdpResponseDropReason::MissingWireSource),
+            },
             Self::Rejected(reason) => UdpFixedTargetValidation::Dropped(reason),
             Self::Decoded {
                 wire_source,
-                expected_identity,
                 observed_identity,
             } => {
+                let UdpFixedTargetExpectationMode::Decoded { protocol_identity } = expectation.mode
+                else {
+                    return UdpFixedTargetValidation::Dropped(
+                        UdpResponseDropReason::UnexpectedIdentityEvidence,
+                    );
+                };
                 let Some(wire_source) = wire_source else {
                     return UdpFixedTargetValidation::Dropped(
                         UdpResponseDropReason::MissingWireSource,
                     );
                 };
-                if !same_fixed_target(wire_source, expected_source) {
+                if !same_fixed_target(wire_source, expectation.source) {
                     return UdpFixedTargetValidation::Dropped(
                         UdpResponseDropReason::UnexpectedWireSource,
                     );
                 }
-                match (expected_identity, observed_identity) {
+                match (protocol_identity, observed_identity) {
                     (Some(_), None) => UdpFixedTargetValidation::Dropped(
                         UdpResponseDropReason::MissingProtocolIdentity,
                     ),
@@ -152,7 +220,6 @@ impl UdpFixedTargetPayload {
         }
     }
 
-    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn payload_len(
         &self,
     ) -> usize {

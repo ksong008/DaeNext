@@ -101,13 +101,15 @@ async fn record_udp_session_exchange_result(
     }
     match exchange {
         Ok((event, mut response)) => {
-            let response_len = response.payload_len();
-            let (response_validation, forwarded_payload) = if response.reply_forwarded {
-                let payload = response.take_fixed_target_payload(original_dst);
+            let (response_len, response_validation, forwarded_payload) = if response.reply_forwarded
+            {
+                let expectation = UdpFixedTargetExpectation::compatibility(original_dst);
+                let payload = response.take_fixed_target_payload(expectation);
+                let response_len = payload.payload_len();
                 let validation = payload.validation();
-                (Some(validation), payload.into_payload().ok())
+                (response_len, Some(validation), payload.into_payload().ok())
             } else {
-                (None, None)
+                (0, None, None)
             };
             if let Some(validation) = response_validation {
                 match validation {
