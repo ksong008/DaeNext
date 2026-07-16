@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn drain_latency_probe_helper_lines<F>(
     line_rx: &Receiver<Result<String, String>>,
     reload_generation: u64,
-    snapshots: &mut Vec<Value>,
+    seen_links: &mut LatencyProbeSeenLinks,
     streamed_bytes: &mut usize,
     on_snapshot: &mut F,
 ) -> Result<(), String>
@@ -15,7 +15,7 @@ where
             Ok(line) => consume_latency_probe_helper_line(
                 line,
                 reload_generation,
-                snapshots,
+                seen_links,
                 streamed_bytes,
                 on_snapshot,
             )?,
@@ -28,7 +28,7 @@ where
 pub(super) fn drain_latency_probe_helper_until_closed<F>(
     line_rx: &Receiver<Result<String, String>>,
     reload_generation: u64,
-    snapshots: &mut Vec<Value>,
+    seen_links: &mut LatencyProbeSeenLinks,
     streamed_bytes: &mut usize,
     on_snapshot: &mut F,
 ) -> Result<(), String>
@@ -41,7 +41,7 @@ where
             Ok(line) => consume_latency_probe_helper_line(
                 line,
                 reload_generation,
-                snapshots,
+                seen_links,
                 streamed_bytes,
                 on_snapshot,
             )?,
@@ -59,7 +59,7 @@ where
 fn consume_latency_probe_helper_line<F>(
     line: Result<String, String>,
     reload_generation: u64,
-    snapshots: &mut Vec<Value>,
+    seen_links: &mut LatencyProbeSeenLinks,
     streamed_bytes: &mut usize,
     on_snapshot: &mut F,
 ) -> Result<(), String>
@@ -85,9 +85,7 @@ where
     if snapshot.get("reloadGeneration").and_then(Value::as_u64) != Some(reload_generation) {
         return Err("latency probe helper stream reloadGeneration mismatch".to_owned());
     }
-    snapshots.push(snapshot);
-    if let Some(snapshot) = snapshots.last() {
-        on_snapshot(snapshot);
-    }
+    seen_links.record_snapshot(&snapshot);
+    on_snapshot(&snapshot);
     Ok(())
 }

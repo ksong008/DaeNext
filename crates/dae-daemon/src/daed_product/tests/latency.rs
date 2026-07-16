@@ -80,6 +80,10 @@ pub(crate) fn insert_config_node(
     .unwrap();
 }
 
+fn latency_probe_node(id: i64, link: impl Into<String>) -> LatencyProbeNode {
+    LatencyProbeNode::new(id, link.into())
+}
+
 #[test]
 pub(crate) fn stored_successful_latency_seed_snapshots_skip_failures_and_redact_links() {
     let dir = std::env::temp_dir().join(format!("daed-product-latency-seed-{}", fastrand::u64(..)));
@@ -145,7 +149,7 @@ pub(crate) fn empty_latency_probe_ids_select_all_nodes() {
 
     let nodes = latency_probe_nodes_for_ids(&conn, &[]).unwrap();
     assert_eq!(
-        nodes.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+        nodes.iter().map(|node| node.id).collect::<Vec<_>>(),
         vec![11, 12]
     );
 
@@ -165,7 +169,7 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
 
     let runtime = Arc::new(ProductRuntimeManager::new());
     let jobs = Arc::new(LatencyJobManager::default());
-    let reclaim_before = allocator_reclaim_snapshot_json()["reasons"]["manual_latency_probe"]
+    let reclaim_before = allocator_reclaim_snapshot_json()["deferred"]["requestedTotal"]
         .as_u64()
         .unwrap_or(0);
     let value =
@@ -173,6 +177,7 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
             .unwrap();
 
     assert_eq!(value["items"].as_array().map(Vec::len), Some(0));
+    assert_eq!(value["admission"].as_str(), Some("started"));
     assert_eq!(value["job"]["total"].as_u64(), Some(2));
     assert_eq!(value["job"]["completed"].as_u64(), Some(0));
     assert_eq!(value["job"]["status"].as_str(), Some("queued"));
@@ -203,7 +208,7 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
             .map(Vec::len),
         Some(2),
     );
-    let reclaim_after = allocator_reclaim_snapshot_json()["reasons"]["manual_latency_probe"]
+    let reclaim_after = allocator_reclaim_snapshot_json()["deferred"]["requestedTotal"]
         .as_u64()
         .unwrap_or(0);
     assert!(reclaim_after > reclaim_before);
@@ -214,8 +219,8 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
 #[test]
 pub(crate) fn latency_job_cancellation_is_scoped_to_the_expected_job() {
     let jobs = LatencyJobManager::default();
-    let (job, should_spawn) = jobs.start_or_current(3).unwrap();
-    assert!(should_spawn);
+    let (job, admission) = jobs.start_or_current(3).unwrap();
+    assert_eq!(admission, LatencyJobAdmissionKind::Started);
     let job_id = job.to_value()["id"].as_u64().unwrap();
 
     let mismatch = cancel_node_latency_job_value(&jobs, job_id.saturating_add(1)).unwrap_err();
@@ -226,9 +231,79 @@ pub(crate) fn latency_job_cancellation_is_scoped_to_the_expected_job() {
     assert_eq!(cancelled["job"]["id"].as_u64(), Some(job_id));
     assert_eq!(cancelled["job"]["status"].as_str(), Some("cancelling"));
 
-    let (same_job, should_spawn) = jobs.start_or_current(9).unwrap();
-    assert!(!should_spawn);
+    let (same_job, admission) = jobs.start_or_current(9).unwrap();
+    assert_eq!(admission, LatencyJobAdmissionKind::Existing);
     assert_eq!(same_job.to_value()["id"].as_u64(), Some(job_id));
+}
+
+#[test]
+pub(crate) fn concurrent_latency_admission_starts_exactly_one_job() {
+    const CALLERS: usize = 16;
+    let jobs = Arc::new(LatencyJobManager::default());
+    let barrier = Arc::new(std::sync::Barrier::new(CALLERS));
+    let callers = (0..CALLERS)
+        .map(|_| {
+            let jobs = Arc::clone(&jobs);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                let (job, admission) = jobs.start_or_current(34).unwrap();
+                (job.to_value()["id"].as_u64().unwrap(), admission)
+            })
+        })
+        .collect::<Vec<_>>();
+    let admissions = callers
+        .into_iter()
+        .map(|caller| caller.join().unwrap())
+        .collect::<Vec<_>>();
+
+    let canonical_id = admissions[0].0;
+    assert!(admissions.iter().all(|(id, _)| *id == canonical_id));
+    assert_eq!(
+        admissions
+            .iter()
+            .filter(|(_, admission)| *admission == LatencyJobAdmissionKind::Started)
+            .count(),
+        1
+    );
+    assert_eq!(
+        admissions
+            .iter()
+            .filter(|(_, admission)| *admission == LatencyJobAdmissionKind::Existing)
+            .count(),
+        CALLERS - 1
+    );
+}
+
+#[test]
+pub(crate) fn enqueue_latency_probe_reports_the_canonical_existing_job() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-latency-existing-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("state.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 11, "one", "socks://127.0.0.1:1080#one", None);
+    drop(conn);
+    let jobs = Arc::new(LatencyJobManager::default());
+    let (existing, admission) = jobs.start_or_current(1).unwrap();
+    assert_eq!(admission, LatencyJobAdmissionKind::Started);
+
+    let response = enqueue_node_latency_job(
+        &state,
+        &dir,
+        Arc::new(ProductRuntimeManager::new()),
+        Arc::clone(&jobs),
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(response["admission"], "existing");
+    assert_eq!(response["job"]["id"], existing.to_value()["id"]);
+    assert_eq!(response["job"]["status"], "queued");
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -276,26 +351,10 @@ pub(crate) fn latency_probe_helper_stream_accepts_runtime_config_request() {
 #[test]
 pub(crate) fn latency_probe_link_chunks_preserve_unique_order_and_node_mapping() {
     let nodes = vec![
-        (
-            11,
-            "socks://127.0.0.1:1080#one".to_owned(),
-            "127.0.0.1".to_owned(),
-        ),
-        (
-            12,
-            "socks://127.0.0.1:1081#two".to_owned(),
-            "127.0.0.1".to_owned(),
-        ),
-        (
-            13,
-            "socks://127.0.0.1:1080#one".to_owned(),
-            "127.0.0.1".to_owned(),
-        ),
-        (
-            14,
-            "socks://127.0.0.1:1082#three".to_owned(),
-            "127.0.0.1".to_owned(),
-        ),
+        latency_probe_node(11, "socks://127.0.0.1:1080#one"),
+        latency_probe_node(12, "socks://127.0.0.1:1081#two"),
+        latency_probe_node(13, "socks://127.0.0.1:1080#one"),
+        latency_probe_node(14, "socks://127.0.0.1:1082#three"),
     ];
 
     let chunks = latency_probe_link_chunks(&nodes, 2);
@@ -314,7 +373,7 @@ pub(crate) fn latency_probe_link_chunks_preserve_unique_order_and_node_mapping()
     assert_eq!(
         first_chunk_nodes
             .iter()
-            .map(|(id, _, _)| *id)
+            .map(|node| node.id)
             .collect::<Vec<_>>(),
         vec![11, 12, 13]
     );
@@ -331,10 +390,9 @@ pub(crate) fn latency_probe_helper_parent_chunk_size_bounds_process_work() {
     let make_nodes = |count, port_base: i64, prefix: &str| {
         (0..count)
             .map(|index| {
-                (
+                latency_probe_node(
                     index,
                     format!("socks://127.0.0.1:{}#{prefix}-{index}", port_base + index),
-                    "127.0.0.1".to_owned(),
                 )
             })
             .collect::<Vec<_>>()
@@ -372,18 +430,13 @@ pub(crate) fn latency_probe_helper_parent_chunk_size_bounds_process_work() {
 pub(crate) fn latency_probe_helper_parent_chunk_size_uses_unique_link_count() {
     let mut nodes = (0..27)
         .map(|index| {
-            (
+            latency_probe_node(
                 index,
                 format!("socks://127.0.0.1:{}#node-{index}", 10_000 + index),
-                "127.0.0.1".to_owned(),
             )
         })
         .collect::<Vec<_>>();
-    nodes.push((
-        1000,
-        "socks://127.0.0.1:10000#node-0".to_owned(),
-        "127.0.0.1".to_owned(),
-    ));
+    nodes.push(latency_probe_node(1000, "socks://127.0.0.1:10000#node-0"));
     assert_eq!(latency_probe_unique_link_count(&nodes), 27);
     let chunks = latency_probe_link_chunks(
         &nodes,
@@ -407,7 +460,9 @@ pub(crate) fn latency_probe_failure_snapshots_only_cover_unseen_links() {
         "socks://127.0.0.1:1080#one".to_owned(),
         "socks://127.0.0.1:1081#two".to_owned(),
     ];
-    let seen = vec![fake_runtime_tcp_latency_snapshot(&links[0])];
+    let mut seen = LatencyProbeSeenLinks::default();
+    seen.record_snapshot(&fake_runtime_tcp_latency_snapshot(&links[0]));
+    assert_eq!(seen.len(), 1);
     let failures = latency_probe_failure_snapshots_for_unseen_links(
         &links,
         7,
@@ -427,16 +482,8 @@ pub(crate) fn latency_probe_failure_snapshots_only_cover_unseen_links() {
 #[test]
 pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
     let nodes = vec![
-        (
-            11,
-            "socks://127.0.0.1:1080#one".to_owned(),
-            "127.0.0.1:1080".to_owned(),
-        ),
-        (
-            12,
-            "socks://127.0.0.1:1081#two".to_owned(),
-            "127.0.0.1:1081".to_owned(),
-        ),
+        latency_probe_node(11, "socks://127.0.0.1:1080#one"),
+        latency_probe_node(12, "socks://127.0.0.1:1081#two"),
     ];
     let snapshots = vec![
         json!({
@@ -489,18 +536,10 @@ pub(crate) fn runtime_latency_snapshots_map_to_node_ids_by_link() {
 #[test]
 pub(crate) fn streaming_latency_snapshot_writes_only_matching_nodes() {
     let nodes = vec![
-        (
-            11,
-            "socks://127.0.0.1:1080#one".to_owned(),
-            "127.0.0.1:1080".to_owned(),
-        ),
-        (
-            12,
-            "socks://127.0.0.1:1081#two".to_owned(),
-            "127.0.0.1:1081".to_owned(),
-        ),
+        latency_probe_node(11, "socks://127.0.0.1:1080#one"),
+        latency_probe_node(12, "socks://127.0.0.1:1081#two"),
     ];
-    let snapshot = fake_runtime_tcp_latency_snapshot(&nodes[0].1);
+    let snapshot = fake_runtime_tcp_latency_snapshot(&nodes[0].link);
     let streaming_results = node_latency_results_for_runtime_snapshots_only(&nodes, &[snapshot]);
 
     assert_eq!(streaming_results.len(), 1);
@@ -508,12 +547,29 @@ pub(crate) fn streaming_latency_snapshot_writes_only_matching_nodes() {
 }
 
 #[test]
+pub(crate) fn one_runtime_node_index_maps_multiple_stream_callbacks() {
+    let nodes = vec![
+        latency_probe_node(11, "socks://127.0.0.1:1080#one"),
+        latency_probe_node(12, "socks://127.0.0.1:1081#two"),
+    ];
+    let index = RuntimeNodeLatencyIndex::new(&nodes);
+
+    let first = index
+        .results_for_snapshots(&[fake_runtime_tcp_latency_snapshot(&nodes[0].link)])
+        .0;
+    let second = index
+        .results_for_snapshots(&[fake_runtime_tcp_latency_snapshot(&nodes[1].link)])
+        .0;
+
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].node_id, 11);
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].node_id, 12);
+}
+
+#[test]
 pub(crate) fn runtime_latency_failure_snapshot_is_tested_with_message() {
-    let nodes = vec![(
-        21,
-        "socks://127.0.0.1:1080#one".to_owned(),
-        "127.0.0.1:1080".to_owned(),
-    )];
+    let nodes = vec![latency_probe_node(21, "socks://127.0.0.1:1080#one")];
     let snapshots = vec![json!({
         "name": "one",
         "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
@@ -541,11 +597,7 @@ pub(crate) fn runtime_latency_failure_snapshot_is_tested_with_message() {
 
 #[test]
 pub(crate) fn runtime_latency_failed_snapshot_with_placeholder_latency_keeps_message() {
-    let nodes = vec![(
-        22,
-        "socks://127.0.0.1:1080#one".to_owned(),
-        "127.0.0.1:1080".to_owned(),
-    )];
+    let nodes = vec![latency_probe_node(22, "socks://127.0.0.1:1080#one")];
     let snapshots = vec![json!({
         "name": "one",
         "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),

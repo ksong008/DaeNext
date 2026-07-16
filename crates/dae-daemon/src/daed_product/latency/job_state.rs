@@ -41,6 +41,25 @@ pub(crate) enum LatencyJobCancelError {
     ManagerUnavailable,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LatencyJobAdmissionKind {
+    Started,
+    Existing,
+}
+
+impl LatencyJobAdmissionKind {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Existing => "existing",
+        }
+    }
+
+    pub(super) const fn should_spawn(self) -> bool {
+        matches!(self, Self::Started)
+    }
+}
+
 impl fmt::Display for LatencyJobCancelError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -78,7 +97,10 @@ impl LatencyJobCancellation {
 }
 
 impl LatencyJobManager {
-    pub(crate) fn start_or_current(&self, total: usize) -> io::Result<(LatencyJobRecord, bool)> {
+    pub(crate) fn start_or_current(
+        &self,
+        total: usize,
+    ) -> io::Result<(LatencyJobRecord, LatencyJobAdmissionKind)> {
         let mut current = self
             .current
             .lock()
@@ -86,7 +108,7 @@ impl LatencyJobManager {
         if let Some(job) = current.as_ref()
             && job.blocks_new_job()
         {
-            return Ok((job.clone(), false));
+            return Ok((job.clone(), LatencyJobAdmissionKind::Existing));
         }
         let id = self
             .next_id
@@ -107,7 +129,7 @@ impl LatencyJobManager {
             cancellation: LatencyJobCancellation::new(id),
         };
         *current = Some(job.clone());
-        Ok((job, true))
+        Ok((job, LatencyJobAdmissionKind::Started))
     }
 
     pub(crate) fn current_value(&self) -> Value {

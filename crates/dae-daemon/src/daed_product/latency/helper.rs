@@ -10,7 +10,7 @@ pub(crate) use failure::latency_probe_failure_snapshots_for_unseen_links;
 use process::{
     LatencyProbeHelperProcess, spawn_bounded_stderr_reader, spawn_bounded_stdout_reader,
 };
-use protocol::{LatencyProbeHelperConfig, LatencyProbeHelperRequest};
+use protocol::encode_latency_probe_helper_request;
 pub(crate) use protocol::{
     latency_probe_helper_response_from_request, latency_probe_helper_response_lines_from_request,
 };
@@ -27,7 +27,7 @@ const LATENCY_PROBE_HELPER_READER_JOIN_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub(crate) struct LatencyProbeHelperStreamError {
-    pub(crate) snapshots: Vec<Value>,
+    pub(crate) seen_links: LatencyProbeSeenLinks,
     pub(crate) message: String,
 }
 
@@ -54,28 +54,18 @@ where
         return Ok(LatencyProbeHelperStreamOutcome::Cancelled);
     }
     let current_exe = std::env::current_exe().map_err(|err| LatencyProbeHelperStreamError {
-        snapshots: Vec::new(),
+        seen_links: LatencyProbeSeenLinks::default(),
         message: format!("resolve latency probe helper executable: {err}"),
     })?;
-    let request = LatencyProbeHelperRequest {
-        schema_version: 1,
-        scope: "manual-latency-probe".to_owned(),
-        reload_generation,
-        requested_links: links.to_vec(),
-        config: LatencyProbeHelperConfig {
-            source: "current-runtime-config".to_owned(),
-            content: config_content.to_owned(),
-        },
-        concurrency: concurrency.max(1),
-    };
     let request_json =
-        serde_json::to_vec(&request).map_err(|err| LatencyProbeHelperStreamError {
-            snapshots: Vec::new(),
-            message: format!("encode latency probe helper request: {err}"),
-        })?;
+        encode_latency_probe_helper_request(config_content, reload_generation, concurrency, links)
+            .map_err(|err| LatencyProbeHelperStreamError {
+                seen_links: LatencyProbeSeenLinks::default(),
+                message: format!("encode latency probe helper request: {err}"),
+            })?;
     if request_json.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
         return Err(LatencyProbeHelperStreamError {
-            snapshots: Vec::new(),
+            seen_links: LatencyProbeSeenLinks::default(),
             message: format!(
                 "latency probe helper request exceeds {} bytes",
                 LATENCY_PROBE_HELPER_MAX_IO_BYTES
@@ -90,34 +80,35 @@ where
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|err| LatencyProbeHelperStreamError {
-            snapshots: Vec::new(),
+            seen_links: LatencyProbeSeenLinks::default(),
             message: format!("spawn latency probe helper: {err}"),
         })?;
     let mut process = LatencyProbeHelperProcess::new(child);
     {
         let Some(mut stdin) = process.child_mut().stdin.take() else {
             return Err(LatencyProbeHelperStreamError {
-                snapshots: Vec::new(),
+                seen_links: LatencyProbeSeenLinks::default(),
                 message: "open latency probe helper stdin: unavailable".to_owned(),
             });
         };
         if let Err(err) = stdin.write_all(&request_json) {
             return Err(LatencyProbeHelperStreamError {
-                snapshots: Vec::new(),
+                seen_links: LatencyProbeSeenLinks::default(),
                 message: format!("write latency probe helper request: {err}"),
             });
         }
     }
+    drop(request_json);
 
     let Some(stdout) = process.child_mut().stdout.take() else {
         return Err(LatencyProbeHelperStreamError {
-            snapshots: Vec::new(),
+            seen_links: LatencyProbeSeenLinks::default(),
             message: "open latency probe helper stdout: unavailable".to_owned(),
         });
     };
     let Some(stderr) = process.child_mut().stderr.take() else {
         return Err(LatencyProbeHelperStreamError {
-            snapshots: Vec::new(),
+            seen_links: LatencyProbeSeenLinks::default(),
             message: "open latency probe helper stderr: unavailable".to_owned(),
         });
     };
@@ -132,7 +123,7 @@ where
         spawn_bounded_stderr_reader(stderr, LATENCY_PROBE_HELPER_MAX_STDERR_BYTES),
     );
 
-    let mut snapshots = Vec::new();
+    let mut seen_links = LatencyProbeSeenLinks::default();
     let mut streamed_bytes = 0usize;
     let timeout = latency_probe_helper_timeout(concurrency, links.len(), tcp_probe_timeout);
     let started = Instant::now();
@@ -141,12 +132,12 @@ where
         drain_latency_probe_helper_lines(
             &line_rx,
             reload_generation,
-            &mut snapshots,
+            &mut seen_links,
             &mut streamed_bytes,
             &mut on_snapshot,
         )
         .map_err(|message| LatencyProbeHelperStreamError {
-            snapshots: snapshots.clone(),
+            seen_links: seen_links.clone(),
             message,
         })?;
         if should_cancel() {
@@ -157,7 +148,7 @@ where
             .child_mut()
             .try_wait()
             .map_err(|err| LatencyProbeHelperStreamError {
-                snapshots: snapshots.clone(),
+                seen_links: seen_links.clone(),
                 message: format!("wait latency probe helper: {err}"),
             })? {
             Some(exit_status) => {
@@ -174,12 +165,12 @@ where
     drain_latency_probe_helper_until_closed(
         &line_rx,
         reload_generation,
-        &mut snapshots,
+        &mut seen_links,
         &mut streamed_bytes,
         &mut on_snapshot,
     )
     .map_err(|message| LatencyProbeHelperStreamError {
-        snapshots: snapshots.clone(),
+        seen_links: seen_links.clone(),
         message,
     })?;
     let stderr = process.join_readers();
@@ -190,13 +181,13 @@ where
 
     let Some(status) = status else {
         return Err(LatencyProbeHelperStreamError {
-            snapshots,
+            seen_links,
             message: "latency probe helper exited without status".to_owned(),
         });
     };
     if started.elapsed() >= timeout && !status.success() {
         return Err(LatencyProbeHelperStreamError {
-            snapshots,
+            seen_links,
             message: format!(
                 "latency probe helper timed out after {:?}: {}",
                 timeout,
@@ -206,7 +197,7 @@ where
     }
     if !status.success() {
         return Err(LatencyProbeHelperStreamError {
-            snapshots,
+            seen_links,
             message: format!(
                 "latency probe helper exited with status {}: {}",
                 status,
