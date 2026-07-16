@@ -14,6 +14,7 @@ mod dataplane_anytls_frames;
 mod dataplane_anytls_stream_lifecycle;
 mod dataplane_anytls_udp_packet_stream;
 mod dataplane_base;
+mod dataplane_http_proxy_application_protocol;
 mod dataplane_http_proxy_tls;
 mod dataplane_hysteria2_quic;
 mod dataplane_hysteria2_underlay;

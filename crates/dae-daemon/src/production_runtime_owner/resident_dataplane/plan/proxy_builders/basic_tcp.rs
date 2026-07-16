@@ -96,11 +96,17 @@ pub(crate) fn build_http_proxy_plan(
     };
     let (tls, server_name, alpn) = match parsed.protocol {
         HttpScheme::Http => ("none".to_owned(), String::new(), Vec::new()),
-        HttpScheme::Https => (
-            "tls".to_owned(),
-            parsed.effective_sni(),
-            resident_csv_values(&parsed.alpn),
-        ),
+        HttpScheme::Https => {
+            let application_protocol = dae_outbound::http_proxy::EffectiveHttpProxyApplicationProtocol::from_configured_alpn(
+                Some(&parsed.alpn),
+            )
+            .map_err(|err| format!("normalize HTTPS proxy ALPN for node {node_tag}: {err}"))?;
+            (
+                "tls".to_owned(),
+                parsed.effective_sni(),
+                vec![application_protocol.alpn().to_owned()],
+            )
+        }
     };
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {

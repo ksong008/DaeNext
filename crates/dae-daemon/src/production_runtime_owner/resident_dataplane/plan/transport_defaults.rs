@@ -41,14 +41,6 @@ pub(super) fn resident_stream_path(path: &str) -> String {
     }
 }
 
-pub(super) fn resident_csv_values(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
 pub(super) fn resident_xhttp_stream_path(path: &str) -> String {
     let normalized = ir::normalize_xhttp_path_and_query(path);
     if normalized.query.is_empty() {
