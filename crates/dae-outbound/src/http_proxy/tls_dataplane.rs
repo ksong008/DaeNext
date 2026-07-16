@@ -7,6 +7,7 @@ use rustls::pki_types::ServerName;
 use crate::error::OutboundError;
 use crate::shared_transport::{TlsLoopbackMaterial, TlsUnderlayOptions};
 
+use super::EffectiveHttpProxyApplicationProtocol;
 use super::dataplane::connect_exchange_over_stream;
 use super::request::HttpConnectOptions;
 
@@ -43,6 +44,13 @@ where
     let conn = ClientConnection::new(Arc::clone(&material.client_config), server_name)
         .map_err(|err| OutboundError::BadHttpProxy(format!("https proxy tls connect: {err}")))?;
     let mut tls = rustls::StreamOwned::new(conn, stream);
+    while tls.conn.is_handshaking() {
+        tls.conn.complete_io(&mut tls.sock).map_err(|err| {
+            OutboundError::BadHttpProxy(format!("https proxy tls handshake: {err}"))
+        })?;
+    }
+    EffectiveHttpProxyApplicationProtocol::Http1
+        .validate_negotiated_alpn(tls.conn.alpn_protocol())?;
     let connect = connect_exchange_over_stream(&mut tls, proxy, options, payload)?;
     let selected_alpn = tls
         .conn

@@ -111,6 +111,9 @@ pub(crate) async fn handle_https_proxy_tcp_connection_async(
     let mut proxy =
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
             .await?;
+    dae_outbound::http_proxy::EffectiveHttpProxyApplicationProtocol::Http1
+        .validate_negotiated_alpn(proxy.negotiated_alpn())
+        .map_err(|err| format!("validate HTTPS proxy negotiated ALPN: {err}"))?;
     let tls_underlay = async_resident_tls_underlay_name(&proxy);
     let response_leftover = http_proxy_connect_async(
         &mut proxy,

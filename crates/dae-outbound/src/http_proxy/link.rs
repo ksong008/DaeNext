@@ -2,6 +2,7 @@ use url::Url;
 
 use crate::error::OutboundError;
 
+use super::EffectiveHttpProxyApplicationProtocol;
 use super::contract::{ALLOW_INSECURE_ALIASES, HTTPS_DEFAULT_ALPN_QUERY_VALUE};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +63,15 @@ impl HttpProxyLink {
             .to_owned();
         let port = url.port().unwrap_or_else(|| protocol.default_port());
         let query = url.query_pairs().collect::<Vec<_>>();
+        let configured_alpn = query_value(&query, "alpn");
+        let alpn = match protocol {
+            HttpScheme::Http => HTTPS_DEFAULT_ALPN_QUERY_VALUE.to_owned(),
+            HttpScheme::Https => EffectiveHttpProxyApplicationProtocol::from_configured_alpn(
+                configured_alpn.as_deref(),
+            )?
+            .alpn()
+            .to_owned(),
+        };
         Ok(Self {
             name: url.fragment().unwrap_or_default().to_owned(),
             server,
@@ -79,9 +89,7 @@ impl HttpProxyLink {
             tls_implementation: query_value(&query, "tlsImplementation")
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "tls".to_owned()),
-            alpn: query_value(&query, "alpn")
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| HTTPS_DEFAULT_ALPN_QUERY_VALUE.to_owned()),
+            alpn,
             utls_imitate: query_value(&query, "utlsImitate").unwrap_or_default(),
         })
     }

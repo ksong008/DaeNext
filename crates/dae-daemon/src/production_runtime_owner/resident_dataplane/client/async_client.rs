@@ -1,5 +1,18 @@
 use super::*;
 impl AsyncVlessTlsClient {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn negotiated_alpn(
+        &self,
+    ) -> Option<&[u8]> {
+        match &self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                tls.get_ref().1.alpn_protocol()
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                tls.ssl().selected_alpn_protocol()
+            }
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) async fn write_plain_all(
         &mut self,
         payload: &[u8],
