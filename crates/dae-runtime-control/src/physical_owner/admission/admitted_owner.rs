@@ -31,11 +31,8 @@ impl Drop for OwnerReservation {
         counters.active_charged_bytes = counters
             .active_charged_bytes
             .saturating_sub(self.charged_bytes.get());
-        let drained = counters.active_owners == 0;
         drop(counters);
-        if drained {
-            inner.drained.notify_all();
-        }
+        notify_state_changed(&inner.state_changed);
     }
 }
 

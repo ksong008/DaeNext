@@ -1,6 +1,8 @@
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use tokio::sync::watch;
 
 use super::{
     AbsoluteDeadline, OwnerCancellation, OwnerCancellationSignal, OwnerCloseReason,
@@ -92,7 +94,7 @@ struct OwnerAdmissionCounters {
 struct OwnerAdmissionInner {
     budget: OwnerResourceBudget,
     counters: Mutex<OwnerAdmissionCounters>,
-    drained: Condvar,
+    state_changed: watch::Sender<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +104,7 @@ pub struct PhysicalOwnerAdmission {
 
 impl PhysicalOwnerAdmission {
     pub fn new(budget: OwnerResourceBudget) -> Self {
+        let (state_changed, _) = watch::channel(0);
         Self {
             inner: Arc::new(OwnerAdmissionInner {
                 budget,
@@ -116,7 +119,7 @@ impl PhysicalOwnerAdmission {
                     rejected_by_charged_bytes: 0,
                     rejected_while_draining: 0,
                 }),
-                drained: Condvar::new(),
+                state_changed,
             }),
         }
     }
@@ -189,38 +192,46 @@ impl PhysicalOwnerAdmission {
 
     pub fn begin_drain(&self, reason: OwnerDrainReason) -> OwnerAdmissionMetrics {
         let mut counters = self.inner.counters.lock().unwrap();
-        if matches!(counters.state, OwnerAdmissionState::Open) {
+        let transitioned = if matches!(counters.state, OwnerAdmissionState::Open) {
             counters.state = OwnerAdmissionState::Draining(reason);
+            true
+        } else {
+            false
+        };
+        let metrics = metrics_from_counters(self.inner.budget, &counters);
+        drop(counters);
+        if transitioned {
+            notify_state_changed(&self.inner.state_changed);
         }
-        metrics_from_counters(self.inner.budget, &counters)
+        metrics
     }
 
-    pub fn wait_drained(
+    pub async fn wait_drained(
         &self,
         deadline: AbsoluteDeadline,
     ) -> Result<OwnerAdmissionMetrics, OwnerDrainWaitError> {
-        let mut counters = self.inner.counters.lock().unwrap();
+        let mut state_changed = self.inner.state_changed.subscribe();
         loop {
-            if counters.active_owners == 0 {
-                return Ok(metrics_from_counters(self.inner.budget, &counters));
+            let metrics = self.metrics();
+            if matches!(metrics.state, OwnerAdmissionState::Open) {
+                return Err(OwnerDrainWaitError::NotDraining(metrics));
             }
-            let Some(remaining) = deadline.remaining_at(Instant::now()) else {
-                return Err(OwnerDrainWaitError::DeadlineElapsed(metrics_from_counters(
-                    self.inner.budget,
-                    &counters,
-                )));
-            };
-            let (next, timeout) = self
-                .inner
-                .drained
-                .wait_timeout(counters, remaining)
-                .unwrap();
-            counters = next;
-            if timeout.timed_out() && counters.active_owners != 0 {
-                return Err(OwnerDrainWaitError::DeadlineElapsed(metrics_from_counters(
-                    self.inner.budget,
-                    &counters,
-                )));
+            if metrics.active_owners == 0 {
+                return Ok(metrics);
+            }
+            if deadline.check_at(Instant::now()).is_err() {
+                return Err(OwnerDrainWaitError::DeadlineElapsed(metrics));
+            }
+
+            tokio::select! {
+                _ = state_changed.changed() => {}
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline.instant())) => {
+                    let metrics = self.metrics();
+                    if metrics.active_owners == 0 {
+                        return Ok(metrics);
+                    }
+                    return Err(OwnerDrainWaitError::DeadlineElapsed(metrics));
+                }
             }
         }
     }
@@ -241,12 +252,16 @@ impl PhysicalOwnerAdmission {
             ));
         }
         counters.state = OwnerAdmissionState::Closed(reason);
-        Ok(metrics_from_counters(self.inner.budget, &counters))
+        let metrics = metrics_from_counters(self.inner.budget, &counters);
+        drop(counters);
+        notify_state_changed(&self.inner.state_changed);
+        Ok(metrics)
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OwnerDrainWaitError {
+    NotDraining(OwnerAdmissionMetrics),
     DeadlineElapsed(OwnerAdmissionMetrics),
 }
 
@@ -254,6 +269,10 @@ pub enum OwnerDrainWaitError {
 pub enum OwnerAdmissionCloseError {
     OwnersStillActive(OwnerAdmissionMetrics),
     NotDraining(OwnerAdmissionMetrics),
+}
+
+fn notify_state_changed(state_changed: &watch::Sender<u64>) {
+    state_changed.send_modify(|revision| *revision = revision.wrapping_add(1));
 }
 
 fn metrics_from_counters(
