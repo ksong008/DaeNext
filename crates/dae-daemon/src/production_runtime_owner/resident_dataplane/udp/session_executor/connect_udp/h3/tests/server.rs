@@ -9,7 +9,7 @@ use bytes::Bytes;
 use http::{Request, Response, StatusCode};
 use quinn::crypto::rustls::QuicServerConfig;
 use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::task::{JoinHandle, JoinSet};
 
 use dae_outbound::shared_transport::encode_quic_varint;
@@ -33,7 +33,7 @@ enum TestResponseBehavior {
 }
 
 #[derive(Clone)]
-pub(super) struct ConnectUdpH3TestServerConfig {
+pub(in crate::production_runtime_owner::resident_dataplane) struct ConnectUdpH3TestServerConfig {
     enable_extended_connect: bool,
     enable_h3_datagram: bool,
     enable_quic_datagram: bool,
@@ -44,7 +44,7 @@ pub(super) struct ConnectUdpH3TestServerConfig {
 }
 
 impl ConnectUdpH3TestServerConfig {
-    pub(super) fn echo() -> Self {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn echo() -> Self {
         Self {
             enable_extended_connect: true,
             enable_h3_datagram: true,
@@ -150,19 +150,21 @@ struct ConnectUdpH3TestServerState {
     observations: Mutex<Vec<ConnectUdpH3TestObservation>>,
 }
 
-pub(super) struct ConnectUdpH3TestServer {
+pub(in crate::production_runtime_owner::resident_dataplane) struct ConnectUdpH3TestServer {
     address: std::net::SocketAddr,
+    certificate: CertificateDer<'static>,
     state: Arc<ConnectUdpH3TestServerState>,
     task: JoinHandle<()>,
 }
 
 impl ConnectUdpH3TestServer {
-    pub(super) async fn start(config: ConnectUdpH3TestServerConfig) -> Self {
-        let endpoint = quinn::Endpoint::server(
-            build_server_config(config.enable_quic_datagram),
-            (std::net::Ipv4Addr::LOCALHOST, 0).into(),
-        )
-        .unwrap();
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn start(
+        config: ConnectUdpH3TestServerConfig,
+    ) -> Self {
+        let (server_config, certificate) = build_server_config(config.enable_quic_datagram);
+        let endpoint =
+            quinn::Endpoint::server(server_config, (std::net::Ipv4Addr::LOCALHOST, 0).into())
+                .unwrap();
         let address = endpoint.local_addr().unwrap();
         let state = Arc::new(ConnectUdpH3TestServerState {
             connections: AtomicUsize::new(0),
@@ -188,20 +190,33 @@ impl ConnectUdpH3TestServer {
         });
         Self {
             address,
+            certificate,
             state,
             task,
         }
     }
 
-    pub(super) fn address(&self) -> std::net::SocketAddr {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn address(
+        &self,
+    ) -> std::net::SocketAddr {
         self.address
     }
 
-    pub(super) fn server_name(&self) -> &'static str {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn server_name(
+        &self,
+    ) -> &'static str {
         TEST_SERVER_NAME
     }
 
-    pub(super) fn connection_count(&self) -> usize {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn certificate(
+        &self,
+    ) -> CertificateDer<'static> {
+        self.certificate.clone()
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn connection_count(
+        &self,
+    ) -> usize {
         self.state.connections.load(Ordering::Relaxed)
     }
 
@@ -224,7 +239,9 @@ impl Drop for ConnectUdpH3TestServer {
     }
 }
 
-fn build_server_config(enable_quic_datagram: bool) -> quinn::ServerConfig {
+fn build_server_config(
+    enable_quic_datagram: bool,
+) -> (quinn::ServerConfig, CertificateDer<'static>) {
     let certified = generate_simple_self_signed(vec![TEST_SERVER_NAME.to_owned()]).unwrap();
     let cert_der = certified.cert.der().clone();
     let key_der =
@@ -232,7 +249,7 @@ fn build_server_config(enable_quic_datagram: bool) -> quinn::ServerConfig {
     let mut crypto =
         rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_no_client_auth()
-            .with_single_cert(vec![cert_der], key_der)
+            .with_single_cert(vec![cert_der.clone()], key_der)
             .unwrap();
     crypto.alpn_protocols = vec![b"h3".to_vec()];
     let mut server =
@@ -246,7 +263,7 @@ fn build_server_config(enable_quic_datagram: bool) -> quinn::ServerConfig {
         transport.datagram_send_buffer_size(0);
     }
     server.transport_config(Arc::new(transport));
-    server
+    (server, cert_der)
 }
 
 async fn run_connection(

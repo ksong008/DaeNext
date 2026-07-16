@@ -18,7 +18,9 @@ use crate::production_runtime_owner::resident_dataplane::probe_resident_candidat
 
 mod server;
 
-use self::server::{ConnectUdpH3TestServer, ConnectUdpH3TestServerConfig};
+pub(in crate::production_runtime_owner::resident_dataplane) use self::server::{
+    ConnectUdpH3TestServer, ConnectUdpH3TestServerConfig,
+};
 
 static NEXT_TEST_GENERATION: AtomicU64 = AtomicU64::new(20_000);
 const TEST_TEMPLATE: &str =

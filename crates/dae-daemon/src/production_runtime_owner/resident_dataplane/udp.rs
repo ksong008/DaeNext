@@ -104,6 +104,10 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::session_ex
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::clear_connect_udp_h3_pools;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::connect_udp_pool_metrics_snapshot;
 use self::session_executor::*;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::{
+    ConnectUdpH3TestServer, ConnectUdpH3TestServerConfig,
+};
 mod vmess_session;
 use self::vmess_session::*;
 mod response;

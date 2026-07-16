@@ -66,11 +66,16 @@ async fn forward_dns_h3_to_routed_target_async(
                 .map_err(|err| format!("{target}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_h3_to_proxy_async(upstream, target, payload, Arc::clone(proxy), context)
-                .await
-                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target)))
-        }
+        ResidentDnsUpstreamSelection::Proxy { proxy } => forward_dns_h3_to_proxy_async(
+            upstream,
+            target,
+            payload,
+            Arc::clone(proxy),
+            Arc::clone(&forwarders.metrics),
+            context,
+        )
+        .await
+        .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target))),
     };
     record_dns_transport_trace(ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),

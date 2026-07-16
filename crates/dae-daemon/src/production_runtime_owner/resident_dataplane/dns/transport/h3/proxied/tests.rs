@@ -3,6 +3,10 @@ use super::*;
 use std::future::pending;
 use std::sync::{Arc, Mutex};
 
+mod bounded_cleanup;
+mod production_resources;
+mod resource_balance;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CleanupEvent {
     ClientDiscarded,
@@ -25,6 +29,7 @@ enum FakeExchangeOutcome {
     Success,
     Failure(&'static str),
     ProtocolFailure(&'static str),
+    DeadlineFailure(&'static str),
     Pending,
 }
 
@@ -118,45 +123,70 @@ impl ProxiedDoh3ExchangeTarget for FakeExchange {
                 ProxyDnsRequestFailure::Protocol,
                 error,
             )),
+            FakeExchangeOutcome::DeadlineFailure(error) => Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Read,
+                ProxyDnsRequestFailure::Deadline,
+                error,
+            )),
             FakeExchangeOutcome::Pending => pending().await,
         }
     }
 
-    fn discard_client(&mut self) {
+    fn discard_client(&mut self) -> bool {
         if std::mem::take(&mut self.owned.client) {
             self.record(CleanupEvent::ClientDiscarded).unwrap();
+            true
+        } else {
+            false
         }
     }
 
-    fn close_connection(&mut self) {
+    fn close_connection(&mut self) -> bool {
         if std::mem::take(&mut self.owned.connection) {
             self.record(CleanupEvent::ConnectionClosed).unwrap();
+            true
+        } else {
+            false
         }
     }
 
-    async fn close_endpoint_and_wait_idle(&mut self) -> Result<(), String> {
+    async fn close_endpoint_and_wait_idle(
+        &mut self,
+        _deadline: ProxiedDoh3CleanupDeadline,
+    ) -> Result<Option<ProxiedDoh3EndpointCompletion>, String> {
         if std::mem::take(&mut self.owned.endpoint) {
-            self.record(CleanupEvent::EndpointClosedAndIdle)
+            self.record(CleanupEvent::EndpointClosedAndIdle)?;
+            Ok(Some(ProxiedDoh3EndpointCompletion::Idle))
         } else {
-            Ok(())
+            Ok(None)
         }
     }
 
-    async fn finish_driver(&mut self) -> Result<(), String> {
+    async fn finish_driver(
+        &mut self,
+        _deadline: ProxiedDoh3CleanupDeadline,
+    ) -> Result<Option<ProxiedDoh3DriverCompletion>, String> {
         if std::mem::take(&mut self.owned.driver) {
-            self.record(CleanupEvent::DriverFinished)
+            self.record(CleanupEvent::DriverFinished)?;
+            Ok(Some(ProxiedDoh3DriverCompletion::Finished))
         } else {
-            Ok(())
+            Ok(None)
         }
     }
 
-    async fn shutdown_bridge(&mut self) -> Result<(), String> {
+    async fn shutdown_bridge(
+        &mut self,
+        _deadline: ProxiedDoh3CleanupDeadline,
+    ) -> Result<Option<ResidentProxyUdpBridgeShutdownCompletion>, String> {
         if std::mem::take(&mut self.owned.bridge) {
-            self.record(CleanupEvent::BridgeShutdown)
+            self.record(CleanupEvent::BridgeShutdown)?;
+            Ok(Some(ResidentProxyUdpBridgeShutdownCompletion::Joined))
         } else {
-            Ok(())
+            Ok(None)
         }
     }
+
+    fn observe_cleanup(&self, _outcome: &ProxiedDoh3CleanupOutcome) {}
 }
 
 fn recorded_events(events: &Arc<Mutex<Vec<CleanupEvent>>>) -> Vec<CleanupEvent> {
@@ -188,6 +218,9 @@ async fn every_exchange_exit_uses_the_same_cleanup_epilogue() {
                 assert!(result.unwrap_err().to_string().contains(error));
             }
             FakeExchangeOutcome::ProtocolFailure(error) => {
+                assert!(result.unwrap_err().to_string().contains(error));
+            }
+            FakeExchangeOutcome::DeadlineFailure(error) => {
                 assert!(result.unwrap_err().to_string().contains(error));
             }
             FakeExchangeOutcome::Pending => unreachable!(),
@@ -256,7 +289,7 @@ async fn dropping_the_public_wrapper_still_cleans_the_detached_owner() {
 }
 
 #[tokio::test]
-async fn caller_deadline_returns_typed_error_and_detached_owner_still_cleans_up() {
+async fn caller_deadline_returns_typed_error_after_owned_cleanup() {
     let (target, events) = FakeExchange::new(FakeExchangeOutcome::Pending, None);
     let (started, exchange_started) = tokio::sync::oneshot::channel();
     let context = ProxyDnsRequestContext::from_timeout(std::time::Duration::from_millis(100));
@@ -271,16 +304,7 @@ async fn caller_deadline_returns_typed_error_and_detached_owner_still_cleans_up(
     let error = caller_task.await.unwrap().unwrap_err();
     assert_eq!(error.stage(), ProxyDnsRequestStage::Read);
     assert_eq!(error.failure(), ProxyDnsRequestFailure::Deadline);
-    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
-        loop {
-            if recorded_events(&events) == EXPECTED_CLEANUP {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("detached owner should complete cleanup after caller deadline");
+    assert_eq!(recorded_events(&events), EXPECTED_CLEANUP);
 }
 
 #[tokio::test]
@@ -363,20 +387,35 @@ async fn cleanup_failure_does_not_skip_later_cleanup_actions() {
 }
 
 #[tokio::test]
-async fn driver_task_is_joined_when_it_finishes() {
-    let completion = finish_or_abort_driver_task(tokio::spawn(async {}))
+async fn cancellation_and_deadline_types_survive_cleanup_failures() {
+    let (cancelled_target, cancelled_events) = FakeExchange::new(
+        FakeExchangeOutcome::Pending,
+        Some(CleanupEvent::DriverFinished),
+    );
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    drop(cancel);
+    let cancelled_error = run_owned_proxied_doh3_exchange(cancelled_target, cancelled)
         .await
-        .unwrap();
-    assert_eq!(completion, ProxiedDoh3DriverCompletion::Finished);
-}
+        .unwrap_err();
+    assert_eq!(cancelled_error.stage(), ProxyDnsRequestStage::Read);
+    assert_eq!(cancelled_error.failure(), ProxyDnsRequestFailure::Cancelled);
+    assert!(
+        cancelled_error
+            .to_string()
+            .contains("DriverFinished failed")
+    );
+    assert_eq!(recorded_events(&cancelled_events), EXPECTED_CLEANUP);
 
-#[tokio::test]
-async fn stalled_driver_task_is_aborted_and_joined() {
-    let completion = lifecycle::finish_or_abort_driver_task_with_grace(
-        tokio::spawn(pending()),
-        RESIDENT_IDLE_SLEEP,
-    )
-    .await
-    .unwrap();
-    assert_eq!(completion, ProxiedDoh3DriverCompletion::Aborted);
+    let (deadline_target, deadline_events) = FakeExchange::new(
+        FakeExchangeOutcome::DeadlineFailure("request deadline expired"),
+        Some(CleanupEvent::BridgeShutdown),
+    );
+    let (_keep_open, cancelled) = tokio::sync::oneshot::channel();
+    let deadline_error = run_owned_proxied_doh3_exchange(deadline_target, cancelled)
+        .await
+        .unwrap_err();
+    assert_eq!(deadline_error.stage(), ProxyDnsRequestStage::Read);
+    assert_eq!(deadline_error.failure(), ProxyDnsRequestFailure::Deadline);
+    assert!(deadline_error.to_string().contains("BridgeShutdown failed"));
+    assert_eq!(recorded_events(&deadline_events), EXPECTED_CLEANUP);
 }

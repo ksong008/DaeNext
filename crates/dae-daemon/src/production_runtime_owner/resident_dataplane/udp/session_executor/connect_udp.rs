@@ -13,6 +13,10 @@ use self::h2::connect_udp_h2_pool_metrics_snapshot;
 pub(in crate::production_runtime_owner::resident_dataplane::udp) use self::h3::ConnectUdpH3Session;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::h3::clear_connect_udp_h3_pools;
 use self::h3::connect_udp_h3_pool_metrics_snapshot;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::h3::{
+    ConnectUdpH3TestServer, ConnectUdpH3TestServerConfig,
+};
 use self::identity::connect_udp_authentication_identity;
 use self::metrics::{ConnectUdpConnectionRetirementReason, ConnectUdpPoolEvents};
 use self::request::{
