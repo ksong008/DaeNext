@@ -1,5 +1,6 @@
 pub mod connectivity_owned;
 pub mod domain_routing;
+pub mod physical_owner;
 pub mod reload;
 pub mod routing_native;
 pub mod routing_owned;
@@ -60,6 +61,7 @@ pub use domain_routing::{
     DomainRoutingStateEntry, DomainRoutingSyncPlan, DomainRoutingTracker, DomainRoutingView,
     IpRoutingView, format_ip_key, ip_to_key, parse_ip_key,
 };
+pub use physical_owner::*;
 pub use reload::{CoreFlip, ReloadCoreState, ReloadDnsCachePlan};
 pub use routing_native::{
     BPF_F_NO_PREALLOC, DEFAULT_LPM_MAX_ENTRIES, LpmMapTemplate, MAX_LPM_ARRAY_ENTRIES,
