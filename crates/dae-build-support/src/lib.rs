@@ -1,3 +1,5 @@
+mod native_object;
+
 pub mod native_ebpf_build {
     use std::env;
     use std::path::{Path, PathBuf};
@@ -9,7 +11,6 @@ pub mod native_ebpf_build {
     const RUST_NATIVE_BPF_OUTPUT: &str = "libdae_ebpf_program.so";
     const DEFAULT_NATIVE_BPF_OBJECT: &str = "dae-native-bpf_bpfel.o";
     const PNAME_CORE_NATIVE_BPF_OBJECT: &str = "dae-native-bpf-pname-core_bpfel.o";
-    const REQUIRED_BTF_SECTIONS: [&[u8]; 2] = [b".BTF\0", b".BTF.ext\0"];
 
     pub fn build_for_crate(crate_name: &str) {
         println!("cargo:rerun-if-changed=../dae-ebpf-program/Cargo.toml");
@@ -18,6 +19,7 @@ pub mod native_ebpf_build {
         println!("cargo:rerun-if-changed=../../.cargo/config.toml");
         println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_CARGO");
         println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_TOOLCHAIN");
+        println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_STRIP");
         println!("cargo:rerun-if-env-changed={RUST_NATIVE_BPF_OBJECT_ENV}");
         println!("cargo:rerun-if-env-changed={RUST_NATIVE_BPF_PNAME_CORE_OBJECT_ENV}");
 
@@ -34,7 +36,7 @@ pub mod native_ebpf_build {
         } else {
             build_rust_native_aya_object(repo_root, &out_dir, &output, &[]);
         }
-        validate_native_aya_object(&output);
+        crate::native_object::strip_debug_and_validate(&output);
 
         let pname_core_output = out_dir.join(PNAME_CORE_NATIVE_BPF_OBJECT);
         if let Some(source) = rust_native_bpf_pname_core_object_override() {
@@ -42,7 +44,7 @@ pub mod native_ebpf_build {
         } else {
             build_rust_native_aya_object(repo_root, &out_dir, &pname_core_output, &["pname-core"]);
         }
-        validate_native_aya_object(&pname_core_output);
+        crate::native_object::strip_debug_and_validate(&pname_core_output);
     }
 
     fn repo_root_from_manifest<'a>(manifest_dir: &'a Path, crate_name: &str) -> &'a Path {
@@ -147,53 +149,5 @@ pub mod native_ebpf_build {
                 output.display()
             )
         });
-    }
-
-    fn validate_native_aya_object(object: &Path) {
-        let bytes = std::fs::read(object).unwrap_or_else(|err| {
-            panic!(
-                "failed to read native eBPF object for BTF validation {}: {err}",
-                object.display()
-            )
-        });
-        let missing = REQUIRED_BTF_SECTIONS
-            .iter()
-            .filter(|section| !contains_bytes(&bytes, section))
-            .map(|section| String::from_utf8_lossy(trim_section_name(section)).into_owned())
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            panic!(
-                "native eBPF object is missing required BTF section(s) {}: {}; rebuild the bpfel object with bpf-linker --btf",
-                missing.join(", "),
-                object.display()
-            );
-        }
-    }
-
-    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-        !needle.is_empty()
-            && haystack
-                .windows(needle.len())
-                .any(|window| window == needle)
-    }
-
-    fn trim_section_name(section: &[u8]) -> &[u8] {
-        let mut end = section.len();
-        while end > 0 && section[end - 1] == 0 {
-            end -= 1;
-        }
-        &section[..end]
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::contains_bytes;
-
-        #[test]
-        fn contains_bytes_matches_exact_subslice() {
-            assert!(contains_bytes(b"elf\0.BTF\0.BTF.ext\0", b".BTF\0"));
-            assert!(contains_bytes(b"elf\0.BTF\0.BTF.ext\0", b".BTF.ext\0"));
-            assert!(!contains_bytes(b"elf\0.text\0", b".BTF\0"));
-        }
     }
 }
