@@ -33,6 +33,7 @@ pub(super) async fn stream_runtime_events_async(
                 }
                 continue;
             }
+            peer = wait_sse_peer_closed(stream) => return peer,
             tick = overview.recv() => tick,
         };
         let tick = match tick {
@@ -104,6 +105,7 @@ pub(super) async fn stream_log_events_async(
         if let Some(updates) = log_updates.as_mut() {
             enum LogStreamWake {
                 Stop,
+                Peer(io::Result<()>),
                 Update(Result<(), tokio::sync::watch::error::RecvError>),
                 Poll,
             }
@@ -115,11 +117,13 @@ pub(super) async fn stream_log_events_async(
                         LogStreamWake::Poll
                     }
                 }
+                peer = wait_sse_peer_closed(stream) => LogStreamWake::Peer(peer),
                 changed = updates.changed() => LogStreamWake::Update(changed),
                 _ = interval.tick() => LogStreamWake::Poll,
             };
             match wake {
                 LogStreamWake::Stop => return Ok(()),
+                LogStreamWake::Peer(result) => return result,
                 LogStreamWake::Update(Err(_)) => log_updates = None,
                 LogStreamWake::Update(Ok(())) | LogStreamWake::Poll => {}
             }
@@ -130,6 +134,7 @@ pub(super) async fn stream_log_events_async(
                         return Ok(());
                     }
                 }
+                peer = wait_sse_peer_closed(stream) => return peer,
                 _ = interval.tick() => {}
             }
         }
