@@ -140,8 +140,17 @@ fn run_product_runtime_sampler(
                 None
             }
         };
+        let allocator = allocator_stats_snapshot();
+        let cgroup_memory = cgroup_memory_snapshot_json();
         if let Ok(mut state) = state.lock() {
-            state.record(traffic, totals_reset, process, config);
+            state.record(
+                traffic,
+                totals_reset,
+                process,
+                allocator,
+                cgroup_memory,
+                config,
+            );
         }
         metrics.sampled();
         if first {

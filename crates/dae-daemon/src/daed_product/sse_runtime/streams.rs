@@ -8,6 +8,7 @@ pub(super) async fn stream_runtime_events_async(
     app: &AppState,
     request: &HttpRequest,
     mut stop: tokio::sync::watch::Receiver<bool>,
+    mut overview: tokio::sync::broadcast::Receiver<Arc<ProductRuntimeOverviewTick>>,
 ) -> io::Result<()> {
     write_sse_headers(stream, request).await?;
     write_sse_retry(stream).await?;
@@ -22,32 +23,46 @@ pub(super) async fn stream_runtime_events_async(
     if let Some(event) = group_selection_events.observe_app(app) {
         write_sse_event(stream, RUNTIME_GROUP_SELECTION_EVENT, &event).await?;
     }
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    interval.tick().await;
+    let mut last_sequence = 0_u64;
+    let mut sequence_synced = false;
     loop {
-        tokio::select! {
+        let tick = tokio::select! {
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
                     return Ok(());
                 }
+                continue;
             }
-            _ = interval.tick() => {}
-        }
-        let delta = runtime_overview_delta_report(app, request);
+            tick = overview.recv() => tick,
+        };
+        let tick = match tick {
+            Ok(tick) => tick,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                let full = runtime_overview_report(app, request);
+                write_sse_event(stream, "runtime.overview", &full).await?;
+                sequence_synced = false;
+                continue;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
+        };
         let runtime_identity = app.runtime.runtime_event_identity();
-        let reload_count = delta["reloadCount"].as_u64().unwrap_or(last_reload_count);
-        if reload_count != last_reload_count || runtime_identity != last_runtime_identity {
+        let sequence_gap = sequence_synced && tick.sequence != last_sequence.saturating_add(1);
+        if sequence_gap
+            || tick.reload_count != last_reload_count
+            || runtime_identity != last_runtime_identity
+        {
             let full = runtime_overview_report(app, request);
             last_reload_count = full
                 .pointer("/runtime/reloadCount")
                 .and_then(Value::as_u64)
-                .unwrap_or(reload_count);
+                .unwrap_or(tick.reload_count);
             last_runtime_identity = runtime_identity;
             write_sse_event(stream, "runtime.overview", &full).await?;
         } else {
-            write_sse_event(stream, "runtime.overview.delta", &delta).await?;
+            write_sse_serialized_runtime_delta(stream, &tick.payload).await?;
         }
+        last_sequence = tick.sequence;
+        sequence_synced = true;
         if let Some(event) = group_selection_events.observe_app(app) {
             write_sse_event(stream, RUNTIME_GROUP_SELECTION_EVENT, &event).await?;
         }

@@ -9,6 +9,8 @@ use self::group_selection_events::RuntimeGroupSelectionEventTracker;
 pub(in crate::daed_product) use self::group_selection_events::{
     RUNTIME_GROUP_SELECTION_EVENT, initial_group_selection_event,
 };
+mod overview_feed;
+use self::overview_feed::*;
 mod stream_io;
 use self::stream_io::*;
 mod streams;
@@ -30,6 +32,7 @@ pub(super) struct ProductSseJob {
     kind: ProductSseStreamKind,
     admission: ProductSseAdmissionLease,
     ui_session: Option<ProductUiStreamLease>,
+    overview: Option<tokio::sync::broadcast::Receiver<Arc<ProductRuntimeOverviewTick>>>,
     http_metrics: Arc<ProductHttpMetrics>,
 }
 
@@ -40,10 +43,12 @@ impl ProductSseJob {
             request,
             admission,
             ui_session,
+            overview,
             ..
         } = self;
         drop(admission);
         drop(ui_session);
+        drop(overview);
         Box::new(ProductSseSubmissionError {
             stream,
             request,
@@ -70,6 +75,7 @@ pub(super) struct ProductSseRuntime {
     worker: Mutex<Option<ProductSseWorkerHandle>>,
     admission: Arc<ProductSseAdmission>,
     metrics: Arc<ProductHttpMetrics>,
+    overview: tokio::sync::broadcast::Sender<Arc<ProductRuntimeOverviewTick>>,
 }
 
 impl ProductSseRuntime {
@@ -99,9 +105,16 @@ impl ProductSseRuntime {
         );
         let admission = Arc::new(ProductSseAdmission::new(config));
         let (sender, receiver) = tokio::sync::mpsc::channel(config.queue_capacity);
+        let (overview, _) = runtime_overview_feed();
         let (stop, stop_receiver) = tokio::sync::watch::channel(false);
-        let worker =
-            start_product_sse_worker(config, app, receiver, stop_receiver, Arc::clone(&metrics))?;
+        let worker = start_product_sse_worker(
+            config,
+            app,
+            receiver,
+            stop_receiver,
+            Arc::clone(&metrics),
+            overview.clone(),
+        )?;
         Ok(Arc::new(Self {
             config,
             sender: Mutex::new(Some(sender)),
@@ -109,6 +122,7 @@ impl ProductSseRuntime {
             worker: Mutex::new(Some(worker)),
             admission,
             metrics,
+            overview,
         }))
     }
 
@@ -182,6 +196,8 @@ impl ProductSseRuntime {
             kind,
             admission,
             ui_session,
+            overview: matches!(kind, ProductSseStreamKind::Runtime)
+                .then(|| self.overview.subscribe()),
             http_metrics,
         };
         self.metrics.sse_enqueued();

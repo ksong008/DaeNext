@@ -123,6 +123,11 @@ fn fallback_runtime_sample_view(
     let traffic = metrics
         .map(resident_runtime_traffic_stats_from_metrics)
         .unwrap_or_default();
+    let history = VecDeque::from([RuntimeTrafficRateSample {
+        timestamp: sampled_at,
+        upload_rate: traffic.upload_rate,
+        download_rate: traffic.download_rate,
+    }]);
     ProductRuntimeSampleView {
         sampled_at,
         sample_count: 0,
@@ -137,7 +142,7 @@ fn fallback_runtime_sample_view(
                     active_connections: traffic.active_connections,
                     udp_sessions: traffic.udp_sessions,
                 },
-                &VecDeque::new(),
+                &history,
                 window_sec,
                 max_points,
             )
@@ -145,5 +150,7 @@ fn fallback_runtime_sample_view(
             ..traffic
         },
         process: process_metrics_lifetime_snapshot(),
+        allocator: allocator_stats_snapshot(),
+        cgroup_memory: cgroup_memory_snapshot_json(),
     }
 }

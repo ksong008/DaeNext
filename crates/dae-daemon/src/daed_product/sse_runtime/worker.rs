@@ -21,6 +21,7 @@ pub(super) fn start_product_sse_worker(
     receiver: tokio::sync::mpsc::Receiver<ProductSseJob>,
     stop: tokio::sync::watch::Receiver<bool>,
     metrics: Arc<ProductHttpMetrics>,
+    overview: tokio::sync::broadcast::Sender<Arc<ProductRuntimeOverviewTick>>,
 ) -> io::Result<ProductSseWorkerHandle> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -40,6 +41,7 @@ pub(super) fn start_product_sse_worker(
                 stop,
                 metrics,
                 &mut reclaim_worker,
+                overview,
             ));
         })?;
     Ok(ProductSseWorkerHandle {
@@ -62,10 +64,14 @@ async fn run_product_sse_runtime(
     mut stop: tokio::sync::watch::Receiver<bool>,
     metrics: Arc<ProductHttpMetrics>,
     reclaim_worker: &mut Option<ProductUiReclaimWorker>,
+    overview: tokio::sync::broadcast::Sender<Arc<ProductRuntimeOverviewTick>>,
 ) {
     let mut tasks = tokio::task::JoinSet::new();
     let mut maintenance = tokio::time::interval(PRODUCT_HTTP_WORKER_RECV_TIMEOUT);
     maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut overview_interval = tokio::time::interval(Duration::from_secs(1));
+    overview_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut overview_sequence = 0_u64;
     loop {
         tokio::select! {
             biased;
@@ -97,6 +103,16 @@ async fn run_product_sse_runtime(
                     app.ui_runtime.maintain(&metrics, worker);
                 }
             }
+            _ = overview_interval.tick() => {
+                if overview.receiver_count() > 0
+                    && let Some(app) = app.upgrade()
+                {
+                    overview_sequence = overview_sequence.saturating_add(1);
+                    if let Ok(tick) = runtime_overview_tick(&app, overview_sequence) {
+                        let _ = overview.send(tick);
+                    }
+                }
+            }
         }
     }
     receiver.close();
@@ -119,6 +135,7 @@ async fn run_product_sse_job(
         kind,
         admission,
         ui_session,
+        overview,
         http_metrics,
     } = job;
     metrics.sse_dequeued();
@@ -139,7 +156,10 @@ async fn run_product_sse_job(
             stream_log_events_async(&mut stream, &app, &request, stop).await
         }
         ProductSseStreamKind::Runtime => {
-            stream_runtime_events_async(&mut stream, &app, &request, stop).await
+            let Some(overview) = overview else {
+                return;
+            };
+            stream_runtime_events_async(&mut stream, &app, &request, stop, overview).await
         }
     };
 }

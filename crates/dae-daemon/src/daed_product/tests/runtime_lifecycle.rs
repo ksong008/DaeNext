@@ -455,7 +455,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert!(overview["fileRssBytes"].as_str().is_some());
     assert_eq!(overview["rssFileBytes"], overview["fileRssBytes"]);
     assert!(overview["vmDataBytes"].as_str().is_some());
-    if allocator_live_heap_bytes().is_some() {
+    if allocator_stats_snapshot().is_some() {
         assert!(
             overview["heapLiveBytes"]
                 .as_str()
@@ -512,10 +512,10 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert!(overview["goroutines"].as_u64().unwrap() > 0);
     assert!(overview["cpuUsagePercent"].as_f64().unwrap() >= 0.0);
 
-    let delta = runtime_overview_delta_report(&app, &request);
+    let delta = runtime_overview_delta_report(&app);
     assert!(delta["uploadRate"].as_str().is_some());
     assert!(delta["rssBytes"].as_str().is_some());
-    if allocator_live_heap_bytes().is_some() {
+    if allocator_stats_snapshot().is_some() {
         assert!(delta["heapLiveBytes"].as_str().is_some());
     } else {
         assert_eq!(delta["heapLiveBytes"], Value::Null);
@@ -527,6 +527,8 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert!(delta.get("allocatorReclaim").is_none());
     assert!(delta.get("allocatorIdleReclaim").is_none());
     assert!(delta["cgroupMemory"]["available"].as_bool().is_some());
+    assert_eq!(delta["samples"].as_array().map(Vec::len), Some(1));
+    assert!(delta["sequence"].as_u64().is_some());
     assert!(delta.get("resourcePools").is_none());
     assert!(delta.get("runtime").is_none());
 

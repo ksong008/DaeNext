@@ -4,6 +4,8 @@ use super::*;
 pub(super) struct ProductRuntimeSamplerState {
     latest_traffic: RuntimeTrafficObservation,
     latest_process: ProcessMetrics,
+    latest_allocator: Option<AllocatorStatsSnapshot>,
+    latest_cgroup_memory: Value,
     history: VecDeque<RuntimeTrafficRateSample>,
     sample_count: u64,
 }
@@ -13,6 +15,8 @@ pub(crate) struct ProductRuntimeSampleView {
     pub(crate) sample_count: u64,
     pub(crate) traffic: RuntimeTrafficStats,
     pub(crate) process: ProcessMetrics,
+    pub(crate) allocator: Option<AllocatorStatsSnapshot>,
+    pub(crate) cgroup_memory: Value,
 }
 
 impl ProductRuntimeSamplerState {
@@ -21,6 +25,8 @@ impl ProductRuntimeSamplerState {
         traffic: RuntimeTrafficObservation,
         totals_reset: bool,
         process: Option<ProcessMetrics>,
+        allocator: Option<AllocatorStatsSnapshot>,
+        cgroup_memory: Value,
         config: ProductRuntimeSamplerConfig,
     ) {
         if totals_reset {
@@ -57,6 +63,8 @@ impl ProductRuntimeSamplerState {
         if let Some(process) = process {
             self.latest_process = process;
         }
+        self.latest_allocator = allocator;
+        self.latest_cgroup_memory = cgroup_memory;
         self.sample_count = self.sample_count.saturating_add(1);
     }
 
@@ -71,6 +79,8 @@ impl ProductRuntimeSamplerState {
                 max_points,
             ),
             process: self.latest_process,
+            allocator: self.latest_allocator,
+            cgroup_memory: self.latest_cgroup_memory.clone(),
         }
     }
 
