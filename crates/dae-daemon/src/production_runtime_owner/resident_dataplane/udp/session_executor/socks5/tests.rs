@@ -96,3 +96,30 @@ async fn udp_associate_reuses_existing_control_and_relay() {
         "unexpected second control connection"
     );
 }
+
+#[test]
+fn udp_associate_response_source_is_checked_before_payload_access() {
+    let session = Socks5UdpAssociateSession::default();
+    let expected: SocketAddr = "192.0.2.1:53".parse().unwrap();
+    let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
+    let packet = udp_packet::wrap_target(&other.to_string(), b"response").unwrap();
+    let mut response = session.decode_response(&packet).unwrap();
+    let expectation = response.fixed_target_expectation(expected);
+    assert_eq!(
+        response.take_fixed_target_payload(expectation).validation(),
+        UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+    );
+}
+
+#[test]
+fn udp_associate_domain_response_is_rejected_for_a_fixed_socket_target() {
+    let session = Socks5UdpAssociateSession::default();
+    let expected: SocketAddr = "192.0.2.1:53".parse().unwrap();
+    let packet = udp_packet::wrap_target("example.invalid:53", b"response").unwrap();
+    let mut response = session.decode_response(&packet).unwrap();
+    let expectation = response.fixed_target_expectation(expected);
+    assert_eq!(
+        response.take_fixed_target_payload(expectation).validation(),
+        UdpFixedTargetValidation::Dropped(UdpResponseDropReason::MalformedIdentity)
+    );
+}

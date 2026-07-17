@@ -42,11 +42,16 @@ impl Socks5UdpAssociateSession {
     fn decode_response(&self, response: &[u8]) -> Result<UdpExchangeResult, String> {
         let decoded = udp_packet::unwrap(response)
             .map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;
-        Ok(
-            UdpExchangeResult::new(decoded.payload, "socks5-udp-associate")
-                .with_session_executor("tokio-socks5-udp-associate")
-                .with_underlay_reuse("tcp-control-and-udp-relay-reused"),
-        )
+        let wire_source = decoded.target.authority().parse::<SocketAddr>();
+        let result = UdpExchangeResult::new(decoded.payload, "socks5-udp-associate")
+            .with_session_executor("tokio-socks5-udp-associate")
+            .with_underlay_reuse("tcp-control-and-udp-relay-reused");
+        Ok(match wire_source {
+            Ok(source) => result.with_decoded_response_identity(Some(source), None),
+            Err(_) => {
+                result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity)
+            }
+        })
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {
