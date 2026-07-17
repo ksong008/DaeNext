@@ -579,7 +579,16 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
     #[cfg(feature = "allocator-jemalloc")]
     {
         assert_eq!(reclaim["status"], json!("pass"), "{reclaim}");
-        assert_eq!(reclaim["detail"]["failures"], json!([]), "{reclaim}");
+        assert_eq!(
+            reclaim["detail"]["threadCacheFlush"]["status"],
+            json!("pass"),
+            "{reclaim}"
+        );
+        assert_eq!(
+            reclaim["detail"]["purge"]["status"],
+            json!("pass"),
+            "{reclaim}"
+        );
     }
     assert!(after["total"].as_u64().unwrap_or(0) > before_total);
     assert!(after["reasons"]["reload_completed"].as_u64().unwrap_or(0) > before_reload_completed);
