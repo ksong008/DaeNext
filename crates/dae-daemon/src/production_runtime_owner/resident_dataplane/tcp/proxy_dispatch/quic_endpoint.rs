@@ -1,3 +1,4 @@
+mod admission;
 mod charge;
 mod metrics;
 mod model;
@@ -8,6 +9,9 @@ use std::net::{SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
+#[cfg(test)]
+use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
+
 pub(crate) use self::metrics::quic_endpoint_metrics_snapshot;
 pub(crate) use self::model::{
     QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointOpenContext,
@@ -15,6 +19,7 @@ pub(crate) use self::model::{
     scope_quic_endpoint_observation,
 };
 
+pub(super) use self::admission::QuicEndpointAdmissionContext;
 use self::charge::QuicEndpointCharge;
 use self::metrics::QuicEndpointObservation;
 use self::runtime::EndpointDriverTrackingRuntime;
@@ -69,7 +74,9 @@ impl std::ops::DerefMut for ObservedQuicEndpoint {
 impl Drop for ObservedQuicEndpoint {
     fn drop(&mut self) {
         if Arc::strong_count(&self.handle_lifecycle) == 1 {
-            self.handle_lifecycle.observation.begin_draining();
+            self.handle_lifecycle
+                .observation
+                .endpoint_handles_released();
         }
     }
 }
@@ -84,13 +91,13 @@ impl ObservedQuicEndpoint {
     }
 
     pub(crate) fn close(&self, error_code: quinn::VarInt, reason: &[u8]) {
-        self.handle_lifecycle.observation.begin_draining();
+        self.handle_lifecycle.observation.explicit_close_requested();
         self.endpoint.close(error_code, reason);
     }
 
     pub(crate) async fn wait_idle(&self) {
         self.endpoint.wait_idle().await;
-        self.handle_lifecycle.observation.mark_closed_if_draining();
+        self.handle_lifecycle.observation.wait_idle_completed();
     }
 }
 
@@ -101,7 +108,15 @@ pub(super) fn open_observed_quic_endpoint(
     bind: SocketAddr,
     underlay: QuicEndpointUnderlay,
     context: QuicEndpointOpenContext,
+    admission_context: QuicEndpointAdmissionContext<'_>,
 ) -> Result<ObservedQuicEndpoint, String> {
+    let endpoint_config = quinn::EndpointConfig::default();
+    let admission_charge = QuicEndpointCharge::before_socket(
+        &endpoint_config,
+        underlay,
+        context.protocol().uses_http3(),
+    )?;
+    let reservation = admission::reserve_quic_endpoint(admission_charge, admission_context)?;
     let socket = UdpSocket::bind(bind).map_err(|error| format!("bind QUIC UDP socket: {error}"))?;
     if mark != 0 {
         set_socket_mark(socket.as_raw_fd(), mark)
@@ -111,14 +126,19 @@ pub(super) fn open_observed_quic_endpoint(
     let socket = runtime
         .wrap_udp_socket(socket)
         .map_err(|error| format!("wrap QUIC UDP socket: {error}"))?;
-    let endpoint_config = quinn::EndpointConfig::default();
     let charge = QuicEndpointCharge::for_socket(
         &endpoint_config,
         socket.max_receive_segments(),
         context.protocol().uses_http3(),
     )?;
-    let provenance = context.finalize(remote, bind, mark, underlay, charge);
-    let observation = QuicEndpointObservation::register(provenance);
+    if charge.total_bytes > admission_charge.total_bytes {
+        return Err(format!(
+            "wrapped QUIC socket charge {} exceeds pre-socket reservation {}",
+            charge.total_bytes, admission_charge.total_bytes
+        ));
+    }
+    let provenance = context.finalize(remote, bind, mark, underlay, charge, admission_charge);
+    let observation = QuicEndpointObservation::register(provenance, reservation);
     let socket = Arc::new(ObservedQuicUdpSocket::new(socket, Arc::clone(&observation)));
     let tracking_runtime = Arc::new(EndpointDriverTrackingRuntime::new(
         runtime,

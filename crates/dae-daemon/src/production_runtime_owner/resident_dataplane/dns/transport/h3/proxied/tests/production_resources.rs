@@ -166,8 +166,18 @@ async fn production_resource_graph_closes_endpoint_h3_driver_and_stalled_bridge(
         QuicEndpointIdentityRole::ManagedDnsOuter,
         &[b"proxied-doh3-production-resource-test"],
     );
-    let mut endpoint =
-        open_marked_quic_endpoint_for_remote(0, server.address(), endpoint_context).unwrap();
+    let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
+    let mut endpoint = open_marked_quic_endpoint_for_remote(
+        0,
+        server.address(),
+        endpoint_context,
+        dae_runtime_control::AbsoluteDeadline::from_now(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(1),
+        ),
+        &cancellation,
+    )
+    .unwrap();
     endpoint.set_default_client_config(trusted_h3_client_config(&server));
     let connection = time::timeout(
         RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,

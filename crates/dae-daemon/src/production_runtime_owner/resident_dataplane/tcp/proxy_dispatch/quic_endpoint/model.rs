@@ -257,6 +257,7 @@ impl QuicEndpointOpenContext {
         mark: u32,
         underlay: QuicEndpointUnderlay,
         charge: QuicEndpointCharge,
+        admission_charge: QuicEndpointCharge,
     ) -> QuicEndpointProvenance {
         let family = if remote.is_ipv4() {
             QuicEndpointAddressFamily::Ipv4
@@ -281,6 +282,7 @@ impl QuicEndpointOpenContext {
             family,
             underlay,
             charge,
+            admission_charge,
         }
     }
 }
@@ -294,6 +296,7 @@ pub(super) struct QuicEndpointProvenance {
     pub family: QuicEndpointAddressFamily,
     pub underlay: QuicEndpointUnderlay,
     pub charge: QuicEndpointCharge,
+    pub admission_charge: QuicEndpointCharge,
 }
 
 struct IdentityDigest(Sha256);

@@ -116,15 +116,24 @@ impl ProxiedDoh3Exchange {
             self.remote,
             &self.proxy,
         );
+        let deadline =
+            dae_runtime_control::AbsoluteDeadline::at(self.context.deadline().into_std());
+        let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
         self.resources.endpoint = Some(
-            open_marked_quic_endpoint_for_remote(self.proxy.mark, bridge_addr, open_context)
-                .map_err(|error| {
-                    ProxyDnsRequestError::new(
-                        ProxyDnsRequestStage::OwnerAcquire,
-                        ProxyDnsRequestFailure::Network,
-                        error,
-                    )
-                })?,
+            open_marked_quic_endpoint_for_remote(
+                self.proxy.mark,
+                bridge_addr,
+                open_context,
+                deadline,
+                &cancellation,
+            )
+            .map_err(|error| {
+                ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::OwnerAcquire,
+                    ProxyDnsRequestFailure::Network,
+                    error,
+                )
+            })?,
         );
         let connecting = {
             let endpoint = match self.resources.endpoint.as_mut() {

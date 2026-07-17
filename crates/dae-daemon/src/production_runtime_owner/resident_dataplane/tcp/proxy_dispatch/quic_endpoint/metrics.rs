@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
-use dae_runtime_control::{OwnerGeneration, PhysicalOwnerState};
+use dae_runtime_control::{OwnerGeneration, OwnerReservation, PhysicalOwnerState};
 use serde_json::{Value, json};
 
+use super::admission::admission_snapshot;
 use super::charge::charge_model_json;
 use super::model::{
     QuicEndpointAddressFamily, QuicEndpointCallerClass, QuicEndpointProtocol,
@@ -10,9 +11,9 @@ use super::model::{
 };
 
 const QUIC_ENDPOINT_METRICS_SCHEMA: &str = "quinn-endpoint-resources";
-const QUIC_ENDPOINT_METRICS_SCHEMA_VERSION: u64 = 1;
+const QUIC_ENDPOINT_METRICS_SCHEMA_VERSION: u64 = 2;
 const QUIC_ENDPOINT_OBSERVABILITY_MODEL: &str = "bounded-generation-quinn-inventory";
-const QUIC_ENDPOINT_OBSERVABILITY_MODEL_VERSION: u64 = 1;
+const QUIC_ENDPOINT_OBSERVABILITY_MODEL_VERSION: u64 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct QuicEndpointObservabilityProfile {
@@ -51,6 +52,10 @@ struct QuicEndpointLiveRecord {
     udp_fd_live: bool,
     endpoint_driver_task_live: bool,
     endpoint_charge_live: bool,
+    explicit_close_requested: bool,
+    endpoint_handles_released: bool,
+    wait_idle_completed: bool,
+    endpoint_driver_finished: bool,
 }
 
 #[derive(Default)]
@@ -59,6 +64,10 @@ struct QuicEndpointGenerationMetrics {
     failed_transitions: u64,
     draining_transitions: u64,
     closed_transitions: u64,
+    explicit_close_requests: u64,
+    implicit_handle_releases: u64,
+    wait_idle_completions: u64,
+    endpoint_driver_completions: u64,
 }
 
 struct QuicEndpointGenerationEntry {
@@ -155,6 +164,10 @@ impl QuicEndpointMetricsRegistry {
                     udp_fd_live: false,
                     endpoint_driver_task_live: false,
                     endpoint_charge_live: false,
+                    explicit_close_requested: false,
+                    endpoint_handles_released: false,
+                    wait_idle_completed: false,
+                    endpoint_driver_finished: false,
                 },
             },
         );
@@ -219,6 +232,18 @@ impl QuicEndpointMetricsRegistry {
     }
 
     fn endpoint_driver_finished(&mut self, id: u64) {
+        let generation = self
+            .live_record(id)
+            .map(|record| record.provenance.generation);
+        if let Some(record) = self.live_record_mut(id)
+            && !record.endpoint_driver_finished
+        {
+            record.endpoint_driver_finished = true;
+            if let Some(generation) = generation {
+                self.generation_metrics_mut(generation)
+                    .endpoint_driver_completions += 1;
+            }
+        }
         self.set_endpoint_driver_live(id, false);
         if self.live_record(id).is_some_and(|record| {
             matches!(
@@ -228,6 +253,58 @@ impl QuicEndpointMetricsRegistry {
         }) {
             self.transition(id, PhysicalOwnerState::Failed);
         }
+    }
+
+    fn explicit_close_requested(&mut self, id: u64) {
+        let generation = self
+            .live_record(id)
+            .map(|record| record.provenance.generation);
+        if let Some(record) = self.live_record_mut(id)
+            && !record.explicit_close_requested
+        {
+            record.explicit_close_requested = true;
+            if let Some(generation) = generation {
+                self.generation_metrics_mut(generation)
+                    .explicit_close_requests += 1;
+            }
+        }
+        self.transition(id, PhysicalOwnerState::Draining);
+    }
+
+    fn endpoint_handles_released(&mut self, id: u64) {
+        let generation = self
+            .live_record(id)
+            .map(|record| record.provenance.generation);
+        let mut implicit = false;
+        if let Some(record) = self.live_record_mut(id)
+            && !record.endpoint_handles_released
+        {
+            record.endpoint_handles_released = true;
+            implicit = !record.explicit_close_requested;
+            if implicit && let Some(generation) = generation {
+                self.generation_metrics_mut(generation)
+                    .implicit_handle_releases += 1;
+            }
+        }
+        if implicit {
+            self.transition(id, PhysicalOwnerState::Draining);
+        }
+    }
+
+    fn wait_idle_completed(&mut self, id: u64) {
+        let generation = self
+            .live_record(id)
+            .map(|record| record.provenance.generation);
+        if let Some(record) = self.live_record_mut(id)
+            && !record.wait_idle_completed
+        {
+            record.wait_idle_completed = true;
+            if let Some(generation) = generation {
+                self.generation_metrics_mut(generation)
+                    .wait_idle_completions += 1;
+            }
+        }
+        self.mark_closed_if_draining(id);
     }
 
     fn release(&mut self, id: u64) {
@@ -348,6 +425,12 @@ impl QuicEndpointMetricsRegistry {
                     "state": state_name(record.state),
                     "udpFdLive": record.udp_fd_live,
                     "endpointDriverTaskLive": record.endpoint_driver_task_live,
+                    "closeEvidence": {
+                        "explicitCloseRequested": record.explicit_close_requested,
+                        "endpointHandlesReleased": record.endpoint_handles_released,
+                        "waitIdleCompleted": record.wait_idle_completed,
+                        "endpointDriverFinished": record.endpoint_driver_finished,
+                    },
                     "chargedBytes": {
                         "live": record.endpoint_charge_live,
                         "receiveSlab": charge.receive_slab_bytes,
@@ -360,15 +443,28 @@ impl QuicEndpointMetricsRegistry {
                         "receiveSegments": charge.receive_segments,
                         "batchSize": charge.batch_size,
                     },
+                    "admissionChargedBytes": record.provenance.admission_charge.total_bytes,
                 })
             })
             .collect::<Vec<_>>();
-        let (failed_transitions, draining_transitions, closed_transitions) = generation_metrics
+        let (
+            failed_transitions,
+            draining_transitions,
+            closed_transitions,
+            explicit_close_requests,
+            implicit_handle_releases,
+            wait_idle_completions,
+            endpoint_driver_completions,
+        ) = generation_metrics
             .map(|metrics| {
                 (
                     metrics.failed_transitions,
                     metrics.draining_transitions,
                     metrics.closed_transitions,
+                    metrics.explicit_close_requests,
+                    metrics.implicit_handle_releases,
+                    metrics.wait_idle_completions,
+                    metrics.endpoint_driver_completions,
                 )
             })
             .unwrap_or_default();
@@ -391,6 +487,12 @@ impl QuicEndpointMetricsRegistry {
                 "draining": draining_transitions,
                 "closed": closed_transitions,
             },
+            "closeEvidence": {
+                "explicitCloseRequests": explicit_close_requests,
+                "implicitHandleReleases": implicit_handle_releases,
+                "waitIdleCompletions": wait_idle_completions,
+                "endpointDriverCompletions": endpoint_driver_completions,
+            },
             "udpFds": { "ipv4": udp4_fds, "ipv6": udp6_fds },
             "endpointDriverTasks": {
                 "live": endpoint_driver_tasks,
@@ -405,9 +507,10 @@ impl QuicEndpointMetricsRegistry {
                 "total": total_bytes,
             },
             "chargeModel": charge_model_json(),
+            "admission": admission_snapshot(),
             "endpoints": endpoints,
-            "closeJoinEvidenceComplete": false,
-            "admissionEnforced": false,
+            "closeJoinEvidenceComplete": true,
+            "admissionEnforced": true,
         })
     }
 
@@ -526,12 +629,20 @@ fn registry() -> &'static Mutex<QuicEndpointMetricsRegistry> {
 pub(super) struct QuicEndpointObservation {
     id: u64,
     provenance: QuicEndpointProvenance,
+    _reservation: OwnerReservation,
 }
 
 impl QuicEndpointObservation {
-    pub(super) fn register(provenance: QuicEndpointProvenance) -> Arc<Self> {
+    pub(super) fn register(
+        provenance: QuicEndpointProvenance,
+        reservation: OwnerReservation,
+    ) -> Arc<Self> {
         let id = registry().lock().unwrap().register(provenance.clone());
-        Arc::new(Self { id, provenance })
+        Arc::new(Self {
+            id,
+            provenance,
+            _reservation: reservation,
+        })
     }
 
     pub(super) const fn provenance(&self) -> &QuicEndpointProvenance {
@@ -556,17 +667,6 @@ impl QuicEndpointObservation {
             .transition(self.id, PhysicalOwnerState::Failed);
     }
 
-    pub(super) fn begin_draining(&self) {
-        registry()
-            .lock()
-            .unwrap()
-            .transition(self.id, PhysicalOwnerState::Draining);
-    }
-
-    pub(super) fn mark_closed_if_draining(&self) {
-        registry().lock().unwrap().mark_closed_if_draining(self.id);
-    }
-
     pub(super) fn udp_fd_opened(&self) {
         registry().lock().unwrap().set_udp_fd_live(self.id, true);
     }
@@ -584,6 +684,21 @@ impl QuicEndpointObservation {
 
     pub(super) fn endpoint_driver_finished(&self) {
         registry().lock().unwrap().endpoint_driver_finished(self.id);
+    }
+
+    pub(super) fn explicit_close_requested(&self) {
+        registry().lock().unwrap().explicit_close_requested(self.id);
+    }
+
+    pub(super) fn endpoint_handles_released(&self) {
+        registry()
+            .lock()
+            .unwrap()
+            .endpoint_handles_released(self.id);
+    }
+
+    pub(super) fn wait_idle_completed(&self) {
+        registry().lock().unwrap().wait_idle_completed(self.id);
     }
 }
 
@@ -630,7 +745,14 @@ mod registry_tests {
             generation,
             b"metrics-registry-test",
         )
-        .finalize(remote, bind, 0, QuicEndpointUnderlay::Ordinary, charge)
+        .finalize(
+            remote,
+            bind,
+            0,
+            QuicEndpointUnderlay::Ordinary,
+            charge,
+            charge,
+        )
     }
 
     #[test]

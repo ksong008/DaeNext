@@ -11,6 +11,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
+
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
@@ -100,6 +102,8 @@ pub(crate) fn open_marked_quic_endpoint_for_remote(
     mark: u32,
     remote: SocketAddr,
     context: QuicEndpointOpenContext,
+    deadline: AbsoluteDeadline,
+    cancellation: &OwnerCancellationSignal,
 ) -> Result<ObservedQuicEndpoint, String> {
     open_marked_quic_endpoint_with_runtime(
         mark,
@@ -108,6 +112,7 @@ pub(crate) fn open_marked_quic_endpoint_for_remote(
         quic_bind_addr_for_remote(remote),
         QuicEndpointUnderlay::Ordinary,
         context,
+        QuicEndpointAdmissionContext::new(deadline, cancellation),
     )
 }
 
@@ -116,6 +121,8 @@ pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
     obfs: &ResidentHysteria2ObfsPlan,
     remote: SocketAddr,
     context: QuicEndpointOpenContext,
+    deadline: AbsoluteDeadline,
+    cancellation: &OwnerCancellationSignal,
 ) -> Result<ObservedQuicEndpoint, String> {
     open_marked_hysteria2_quic_endpoint_with_bind(
         mark,
@@ -123,6 +130,8 @@ pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
         remote,
         quic_bind_addr_for_remote(remote),
         context,
+        deadline,
+        cancellation,
     )
 }
 
@@ -132,6 +141,8 @@ fn open_marked_hysteria2_quic_endpoint_with_bind(
     remote: SocketAddr,
     bind: SocketAddr,
     context: QuicEndpointOpenContext,
+    deadline: AbsoluteDeadline,
+    cancellation: &OwnerCancellationSignal,
 ) -> Result<ObservedQuicEndpoint, String> {
     let runtime = quinn::default_runtime();
     let runtime = if obfs.is_salamander() {
@@ -148,7 +159,15 @@ fn open_marked_hysteria2_quic_endpoint_with_bind(
     } else {
         QuicEndpointUnderlay::Ordinary
     };
-    open_marked_quic_endpoint_with_runtime(mark, runtime, remote, bind, underlay, context)
+    open_marked_quic_endpoint_with_runtime(
+        mark,
+        runtime,
+        remote,
+        bind,
+        underlay,
+        context,
+        QuicEndpointAdmissionContext::new(deadline, cancellation),
+    )
 }
 
 fn quic_bind_addr_for_remote(remote: SocketAddr) -> SocketAddr {
@@ -165,8 +184,17 @@ fn open_marked_quic_endpoint_with_runtime(
     bind: SocketAddr,
     underlay: QuicEndpointUnderlay,
     context: QuicEndpointOpenContext,
+    admission_context: QuicEndpointAdmissionContext<'_>,
 ) -> Result<ObservedQuicEndpoint, String> {
-    open_observed_quic_endpoint(mark, runtime, remote, bind, underlay, context)
+    open_observed_quic_endpoint(
+        mark,
+        runtime,
+        remote,
+        bind,
+        underlay,
+        context,
+        admission_context,
+    )
 }
 
 struct Hysteria2SalamanderRuntime {
@@ -347,14 +375,19 @@ fn salamander_hash(key: &[u8], salt: &[u8; HYSTERIA2_SALAMANDER_SALT_LEN]) -> [u
 
 pub(crate) async fn resolve_proxy_udp_addr_candidates_async(
     proxy: &ResidentProxyPlan,
+    deadline: AbsoluteDeadline,
 ) -> Result<Vec<SocketAddr>, String> {
     let target = format!("{}:{}", proxy.server_host, proxy.server_port);
-    resolve_socket_addr_candidates(&target, RESIDENT_CONNECT_TIMEOUT, "resolve QUIC endpoint").await
+    let timeout = deadline
+        .remaining_at(Instant::now())
+        .ok_or_else(|| "resolve QUIC endpoint: connect deadline elapsed".to_owned())?;
+    resolve_socket_addr_candidates(&target, timeout, "resolve QUIC endpoint").await
 }
 
 pub(crate) async fn resolve_hysteria2_quic_remote_candidates_async(
     proxy: &ResidentProxyPlan,
     port_hop_ports: &[u16],
+    deadline: AbsoluteDeadline,
 ) -> Result<Vec<SocketAddr>, String> {
     let selected_port = if port_hop_ports.is_empty() {
         proxy.server_port
@@ -362,27 +395,30 @@ pub(crate) async fn resolve_hysteria2_quic_remote_candidates_async(
         port_hop_ports[fastrand::usize(..port_hop_ports.len())]
     };
     let target = format!("{}:{selected_port}", proxy.server_host);
-    resolve_socket_addr_candidates(
-        &target,
-        RESIDENT_CONNECT_TIMEOUT,
-        "resolve Hysteria2 QUIC endpoint",
-    )
-    .await
+    let timeout = deadline
+        .remaining_at(Instant::now())
+        .ok_or_else(|| "resolve Hysteria2 QUIC endpoint: connect deadline elapsed".to_owned())?;
+    resolve_socket_addr_candidates(&target, timeout, "resolve Hysteria2 QUIC endpoint").await
 }
 
 pub(crate) async fn connect_quic_endpoint_candidates_async<F>(
     candidates: &[SocketAddr],
     server_name: &str,
-    timeout: Duration,
+    deadline: AbsoluteDeadline,
     context: &str,
     mut endpoint_for_remote: F,
 ) -> Result<(SocketAddr, ObservedQuicEndpoint, quinn::Connection), String>
 where
-    F: FnMut(SocketAddr) -> Result<ObservedQuicEndpoint, String>,
+    F: FnMut(
+        SocketAddr,
+        AbsoluteDeadline,
+        &OwnerCancellationSignal,
+    ) -> Result<ObservedQuicEndpoint, String>,
 {
+    let cancellation = OwnerCancellationSignal::new();
     let (remote, (endpoint, connection)) =
         try_socket_addr_candidates(candidates, context, |remote| {
-            let endpoint = endpoint_for_remote(remote);
+            let endpoint = endpoint_for_remote(remote, deadline, &cancellation);
             let server_name = server_name.to_owned();
             async move {
                 let endpoint = endpoint?;
@@ -395,7 +431,11 @@ where
                         return Err(format!("start QUIC connect: {err}"));
                     }
                 };
-                match time::timeout(timeout, connecting).await {
+                let remaining = deadline.remaining_at(Instant::now()).ok_or_else(|| {
+                    endpoint.mark_failed();
+                    "QUIC connect deadline elapsed".to_owned()
+                })?;
+                match time::timeout(remaining, connecting).await {
                     Ok(Ok(connection)) => Ok((endpoint, connection)),
                     Ok(Err(err)) => {
                         endpoint.mark_failed();
@@ -479,11 +519,14 @@ mod tests {
             QuicEndpointIdentityRole::ProtocolCarrier,
             &[b"salamander-charge-test"],
         );
+        let cancellation = OwnerCancellationSignal::new();
         let endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
             0,
             &ResidentHysteria2ObfsPlan::salamander("test-obfs-key".to_owned()),
             "127.0.0.1:443".parse().unwrap(),
             context,
+            AbsoluteDeadline::from_now(Instant::now(), Duration::from_secs(1)),
+            &cancellation,
         )
         .unwrap();
         endpoint.mark_ready();

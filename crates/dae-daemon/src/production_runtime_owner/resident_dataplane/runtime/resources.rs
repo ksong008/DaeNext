@@ -253,6 +253,12 @@ impl ResidentRuntimeResourceConfig {
                 "dispatchQueueDepth": self.udp_dispatch_queue_depth.json(),
                 "socketBufferBytes": self.udp_socket_buffer_bytes.json(),
             },
+            "quicEndpoints": {
+                "profileSource": "runtimeProfile",
+                "limit": self.runtime_profile.profile.quic_endpoint_limit_default(),
+                "chargedBytes": self.runtime_profile.profile.quic_endpoint_charged_bytes_default(),
+                "scope": "process-wide connecting, ready, failed and draining Quinn Endpoint owners",
+            },
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),
                 "queueDepth": self.dns_fast_path_queue_depth.json(),
