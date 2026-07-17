@@ -1,5 +1,7 @@
 use super::*;
 
+const SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN: &[u8] = b"shadowsocks-2022-client-session";
+
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct ShadowsocksAeadDatagramSession
 {
     cipher: String,
@@ -56,9 +58,10 @@ impl ShadowsocksAeadDatagramSession {
     fn decode_response(&self, response: &[u8]) -> Result<UdpExchangeResult, String> {
         let decoded = decode_shadowsocks_udp_packet(&self.cipher, &self.password, response)
             .map_err(|err| format!("decode Shadowsocks UDP packet: {err}"))?;
-        Ok(UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
+        let result = UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
             .with_session_executor("tokio-datagram-relay")
-            .with_underlay_reuse("udp-socket-reused"))
+            .with_underlay_reuse("udp-socket-reused");
+        Ok(response_with_source_identity(result, &decoded.target))
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {
@@ -151,16 +154,106 @@ impl Shadowsocks2022DatagramSession {
         let decoded = codec
             .decode_server_packet(response, ss2022_udp_unix_timestamp_now())
             .map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
-        Ok(
-            UdpExchangeResult::new(decoded.payload, "udp-datagram-aead-2022")
-                .with_session_executor("tokio-datagram-relay")
-                .with_underlay_reuse("udp-socket-and-codec-session-reused"),
+        let expected_identity = UdpResponseIdentityToken::from_protocol_identity(
+            SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN,
+            &codec.session_id(),
         )
+        .expect("static Shadowsocks 2022 identity domain and session id are nonempty");
+        let observed_identity = decoded.client_session_id.and_then(|session_id| {
+            UdpResponseIdentityToken::from_protocol_identity(
+                SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN,
+                &session_id,
+            )
+        });
+        let result = UdpExchangeResult::new(decoded.payload, "udp-datagram-aead-2022")
+            .with_session_executor("tokio-datagram-relay")
+            .with_underlay_reuse("udp-socket-and-codec-session-reused")
+            .with_expected_protocol_identity(expected_identity);
+        Ok(response_with_source_and_protocol_identity(
+            result,
+            &decoded.target,
+            observed_identity,
+        ))
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {
         UdpExchangeResult::pending_response("udp-datagram-aead-2022")
             .with_session_executor("tokio-datagram-relay")
             .with_underlay_reuse("udp-socket-and-codec-session-reused")
+    }
+}
+
+fn response_with_source_identity(result: UdpExchangeResult, target: &str) -> UdpExchangeResult {
+    response_with_source_and_protocol_identity(result, target, None)
+}
+
+fn response_with_source_and_protocol_identity(
+    result: UdpExchangeResult,
+    target: &str,
+    observed_identity: Option<UdpResponseIdentityToken>,
+) -> UdpExchangeResult {
+    match target.parse::<SocketAddr>() {
+        Ok(source) => result.with_decoded_response_identity(Some(source), observed_identity),
+        Err(_) => result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SS2022_CIPHER: &str = "2022-blake3-aes-128-gcm";
+    const SS2022_PASSWORD: &str = "AQIDBAUGBwgJCgsMDQ4PEA==:ERITFBUWFxgZGhscHR4fIA==";
+
+    #[test]
+    fn aead_response_source_is_verified_at_the_consumer_boundary() {
+        let cipher = "aes-128-gcm";
+        let password = "fixed-target-password";
+        let salt = [0x31_u8; 16];
+        let expected: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
+        let packet =
+            encode_udp_packet(cipher, password, &salt, &other.to_string(), b"response").unwrap();
+        let session =
+            ShadowsocksAeadDatagramSession::new(cipher.to_owned(), password.to_owned(), salt.len());
+        let mut response = session.decode_response(&packet).unwrap();
+        let expectation = response.fixed_target_expectation(expected);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+        );
+    }
+
+    #[test]
+    fn ss2022_response_source_and_client_session_are_verified() {
+        let client_session = *b"client90";
+        let server_session = *b"server90";
+        let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let now = ss2022_udp_unix_timestamp_now();
+        let codec = Ss2022UdpCodec::new(SS2022_CIPHER, SS2022_PASSWORD, client_session).unwrap();
+        let packet = dae_outbound::shadowsocks::encode_ss2022_udp_server_packet(
+            SS2022_CIPHER,
+            SS2022_PASSWORD,
+            server_session,
+            0,
+            client_session,
+            &target.to_string(),
+            b"response",
+            now,
+            None,
+        )
+        .unwrap();
+        let mut session = Shadowsocks2022DatagramSession::new(
+            SS2022_CIPHER.to_owned(),
+            SS2022_PASSWORD.to_owned(),
+            0,
+        );
+        session.codec = Some(codec);
+        let mut response = session.decode_response(&packet.wire).unwrap();
+        let expectation = response.fixed_target_expectation(target);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Validated
+        );
     }
 }
