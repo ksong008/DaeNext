@@ -58,13 +58,9 @@ impl Hysteria2QuicDatagramSession {
             .connection
             .as_ref()
             .ok_or_else(|| "Hysteria2 QUIC connection is not initialized".to_owned())?;
-        let packet_id = self.packet_ids.allocate()?;
-        let request = build_hysteria2_udp_message(
-            self.session_id,
-            packet_id,
-            &original_dst.to_string(),
-            payload,
-        )?;
+        let request = Hysteria2UdpMessage::new(self.session_id, original_dst.to_string(), payload)
+            .and_then(|message| encode_hysteria2_udp_message(&message))
+            .map_err(|err| format!("build Hysteria2 UDP datagram: {err}"))?;
         connection
             .send_datagram(Bytes::from(request))
             .map_err(|err| format!("send Hysteria2 UDP datagram: {err}"))?;
@@ -108,12 +104,13 @@ impl Hysteria2QuicDatagramSession {
     }
 
     fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
-        let parsed = parse_hysteria2_udp_message(response)?;
+        let parsed = decode_hysteria2_udp_message(response)
+            .map_err(|err| format!("decode Hysteria2 UDP datagram: {err}"))?;
         let Some(payload) = self.fragments.push(
-            parsed.packet_id,
-            parsed.frag_id,
-            parsed.frag_count,
-            parsed.payload,
+            parsed.packet_id(),
+            parsed.fragment_id(),
+            parsed.fragment_count(),
+            parsed.into_payload(),
             "Hysteria2",
         )?
         else {
