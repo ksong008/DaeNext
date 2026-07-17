@@ -91,16 +91,22 @@ fn open_proxy_dns_quic_endpoint(
         upstream_remote,
         proxy,
     );
-    let mut endpoint =
-        open_marked_quic_endpoint_for_remote(proxy.mark, bridge_remote, open_context).map_err(
-            |error| {
-                ProxyDnsRequestError::new(
-                    ProxyDnsRequestStage::OwnerAcquire,
-                    ProxyDnsRequestFailure::Network,
-                    format!("open proxied DoQ endpoint: {error}"),
-                )
-            },
-        )?;
+    let deadline = dae_runtime_control::AbsoluteDeadline::at(context.deadline().into_std());
+    let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
+    let mut endpoint = open_marked_quic_endpoint_for_remote(
+        proxy.mark,
+        bridge_remote,
+        open_context,
+        deadline,
+        &cancellation,
+    )
+    .map_err(|error| {
+        ProxyDnsRequestError::new(
+            ProxyDnsRequestStage::OwnerAcquire,
+            ProxyDnsRequestFailure::Network,
+            format!("open proxied DoQ endpoint: {error}"),
+        )
+    })?;
     endpoint.set_default_client_config(config);
     Ok(endpoint)
 }

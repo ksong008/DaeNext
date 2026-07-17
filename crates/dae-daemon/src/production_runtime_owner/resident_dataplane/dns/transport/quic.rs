@@ -263,21 +263,35 @@ pub(super) async fn connect_dns_quic_endpoint_async(
     mark: u32,
     contract: DnsQuicEndpointConnectContract,
 ) -> Result<(ObservedQuicEndpoint, quinn::Connection), String> {
+    let deadline = dae_runtime_control::AbsoluteDeadline::from_now(
+        Instant::now(),
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+    );
+    let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
     let client_config = resident_dns_quic_client_config(contract.alpn)?;
-    let mut endpoint = open_marked_quic_endpoint_for_remote(mark, remote, contract.open_context)?;
+    let mut endpoint = open_marked_quic_endpoint_for_remote(
+        mark,
+        remote,
+        contract.open_context,
+        deadline,
+        &cancellation,
+    )?;
     endpoint.set_default_client_config(client_config);
     let connection = match endpoint
         .connect(remote, &upstream.target.host)
         .map_err(|err| format!("{}: {err}", contract.connect_context))
     {
-        Ok(connecting) => match time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connecting).await {
-            Ok(result) => result.map_err(|err| {
-                format!(
-                    "{} {} {}: {err}",
-                    contract.upstream_context, upstream.tag, upstream.target.authority
-                )
-            }),
-            Err(_) => Err(contract.handshake_timeout.to_owned()),
+        Ok(connecting) => match deadline.remaining_at(Instant::now()) {
+            None => Err(contract.handshake_timeout.to_owned()),
+            Some(remaining) => match time::timeout(remaining, connecting).await {
+                Ok(result) => result.map_err(|err| {
+                    format!(
+                        "{} {} {}: {err}",
+                        contract.upstream_context, upstream.tag, upstream.target.authority
+                    )
+                }),
+                Err(_) => Err(contract.handshake_timeout.to_owned()),
+            },
         },
         Err(error) => Err(error),
     };

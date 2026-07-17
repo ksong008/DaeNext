@@ -6,6 +6,32 @@ use super::*;
 
 mod source_gate;
 
+fn open_test_quic_endpoint(
+    mark: u32,
+    runtime: Option<Arc<dyn quinn::Runtime>>,
+    remote: SocketAddr,
+    bind: SocketAddr,
+    underlay: QuicEndpointUnderlay,
+    context: QuicEndpointOpenContext,
+) -> Result<ObservedQuicEndpoint, String> {
+    let cancellation = OwnerCancellationSignal::new();
+    open_observed_quic_endpoint(
+        mark,
+        runtime,
+        remote,
+        bind,
+        underlay,
+        context,
+        QuicEndpointAdmissionContext::new(
+            AbsoluteDeadline::from_now(
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(1),
+            ),
+            &cancellation,
+        ),
+    )
+}
+
 #[test]
 fn receive_slab_charge_uses_quinn_runtime_dimensions() {
     let config = quinn::EndpointConfig::default();
@@ -87,8 +113,22 @@ async fn task_scoped_caller_and_generation_do_not_cross_requests() {
         QuicEndpointCharge::for_socket(&quinn::EndpointConfig::default(), 1, false).unwrap();
     let remote = "127.0.0.1:443".parse().unwrap();
     let bind = "0.0.0.0:0".parse().unwrap();
-    let manual = manual.finalize(remote, bind, 0, QuicEndpointUnderlay::Ordinary, charge);
-    let health = health.finalize(remote, bind, 0, QuicEndpointUnderlay::Ordinary, charge);
+    let manual = manual.finalize(
+        remote,
+        bind,
+        0,
+        QuicEndpointUnderlay::Ordinary,
+        charge,
+        charge,
+    );
+    let health = health.finalize(
+        remote,
+        bind,
+        0,
+        QuicEndpointUnderlay::Ordinary,
+        charge,
+        charge,
+    );
     assert_eq!(manual.caller, QuicEndpointCallerClass::ManualProbe);
     assert_eq!(manual.generation, Some(manual_generation));
     assert_eq!(health.caller, QuicEndpointCallerClass::BackgroundHealth);
@@ -101,7 +141,14 @@ async fn task_scoped_caller_and_generation_do_not_cross_requests() {
         QuicEndpointIdentityRole::ConfiguredDns,
         &[b"default-observation"],
     )
-    .finalize(remote, bind, 0, QuicEndpointUnderlay::Ordinary, charge);
+    .finalize(
+        remote,
+        bind,
+        0,
+        QuicEndpointUnderlay::Ordinary,
+        charge,
+        charge,
+    );
     assert_eq!(default.caller, QuicEndpointCallerClass::ConfiguredDns);
     assert_eq!(default.generation, Some(OwnerGeneration::new(8_103)));
 }
@@ -135,6 +182,7 @@ async fn inherited_task_observation_survives_spawn() {
         0,
         QuicEndpointUnderlay::Ordinary,
         charge,
+        charge,
     );
     assert_eq!(provenance.caller, QuicEndpointCallerClass::ManagedDns);
     assert_eq!(provenance.generation, Some(generation));
@@ -159,6 +207,7 @@ fn redacted_key_partitions_socket_mark_and_bind_policy() {
         100,
         QuicEndpointUnderlay::Ordinary,
         charge,
+        charge,
     );
     let different_mark = context.clone().finalize(
         remote,
@@ -166,12 +215,14 @@ fn redacted_key_partitions_socket_mark_and_bind_policy() {
         101,
         QuicEndpointUnderlay::Ordinary,
         charge,
+        charge,
     );
     let different_bind = context.finalize(
         remote,
         explicit_bind,
         100,
         QuicEndpointUnderlay::Ordinary,
+        charge,
         charge,
     );
     assert_ne!(base.redacted_identity, different_mark.redacted_identity);
@@ -188,7 +239,7 @@ async fn endpoint_driver_fd_charge_and_states_balance_after_drop() {
         QuicEndpointIdentityRole::ConfiguredDns,
         &[b"driver-lifetime-test"],
     );
-    let endpoint = open_observed_quic_endpoint(
+    let endpoint = open_test_quic_endpoint(
         0,
         quinn::default_runtime(),
         "127.0.0.1:443".parse().unwrap(),
@@ -210,9 +261,11 @@ async fn endpoint_driver_fd_charge_and_states_balance_after_drop() {
     endpoint_clone.close(0_u32.into(), b"lifetime test complete");
     let draining = quic_endpoint_metrics_snapshot(generation.get());
     assert_eq!(draining["liveStates"]["draining"], 1);
+    assert_eq!(draining["closeEvidence"]["explicitCloseRequests"], 1);
     endpoint_clone.wait_idle().await;
     let closed = quic_endpoint_metrics_snapshot(generation.get());
     assert_eq!(closed["liveStates"]["closed"], 1);
+    assert_eq!(closed["closeEvidence"]["waitIdleCompletions"], 1);
     assert!(closed["chargedBytes"]["total"].as_u64().unwrap() > 0);
     assert_eq!(closed["udpFds"]["ipv4"], 1);
     drop(endpoint_clone);
@@ -232,10 +285,42 @@ async fn endpoint_driver_fd_charge_and_states_balance_after_drop() {
 }
 
 #[tokio::test]
+async fn implicit_endpoint_drop_records_handle_and_driver_completion() {
+    let generation = OwnerGeneration::new(8_206);
+    let endpoint = open_test_quic_endpoint(
+        0,
+        quinn::default_runtime(),
+        "127.0.0.1:443".parse().unwrap(),
+        "0.0.0.0:0".parse().unwrap(),
+        QuicEndpointUnderlay::Ordinary,
+        QuicEndpointOpenContext::isolated_test(
+            QuicEndpointProtocol::DnsOverQuic,
+            QuicEndpointCallerClass::ConfiguredDns,
+            Some(generation),
+            b"implicit-drop-test",
+        ),
+    )
+    .unwrap();
+    drop(endpoint);
+
+    for _ in 0..32 {
+        let snapshot = quic_endpoint_metrics_snapshot(generation.get());
+        if snapshot["liveStates"]["total"] == 0 && snapshot["endpointDriverTasks"]["live"] == 0 {
+            assert_eq!(snapshot["closeEvidence"]["implicitHandleReleases"], 1);
+            assert_eq!(snapshot["closeEvidence"]["endpointDriverCompletions"], 1);
+            assert_eq!(snapshot["admission"]["enforced"], true);
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("implicit QUIC Endpoint drop did not complete its driver");
+}
+
+#[tokio::test]
 async fn runtime_snapshot_keeps_unassigned_and_other_live_generations_visible() {
     let current_generation = OwnerGeneration::new(8_201);
     let retiring_generation = OwnerGeneration::new(8_202);
-    let current = open_observed_quic_endpoint(
+    let current = open_test_quic_endpoint(
         0,
         quinn::default_runtime(),
         "127.0.0.1:443".parse().unwrap(),
@@ -250,7 +335,7 @@ async fn runtime_snapshot_keeps_unassigned_and_other_live_generations_visible() 
     )
     .unwrap();
     current.mark_ready();
-    let retiring = open_observed_quic_endpoint(
+    let retiring = open_test_quic_endpoint(
         0,
         quinn::default_runtime(),
         "127.0.0.1:443".parse().unwrap(),
@@ -266,7 +351,7 @@ async fn runtime_snapshot_keeps_unassigned_and_other_live_generations_visible() 
     .unwrap();
     retiring.mark_ready();
     retiring.close(0_u32.into(), b"retiring generation");
-    let unassigned = open_observed_quic_endpoint(
+    let unassigned = open_test_quic_endpoint(
         0,
         quinn::default_runtime(),
         "127.0.0.1:443".parse().unwrap(),
@@ -311,7 +396,7 @@ async fn bind_failure_creates_no_endpoint_driver_fd_or_charge_record() {
     let occupied = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let bind = occupied.local_addr().unwrap();
     let generation = OwnerGeneration::new(8_203);
-    let result = open_observed_quic_endpoint(
+    let result = open_test_quic_endpoint(
         0,
         quinn::default_runtime(),
         "127.0.0.1:443".parse().unwrap(),
@@ -336,7 +421,7 @@ async fn bind_failure_creates_no_endpoint_driver_fd_or_charge_record() {
 #[tokio::test]
 async fn abstract_socket_constructor_failure_records_failure_without_leaking_resources() {
     let generation = OwnerGeneration::new(8_205);
-    let result = open_observed_quic_endpoint(
+    let result = open_test_quic_endpoint(
         0,
         Some(std::sync::Arc::new(LocalAddressFailureRuntime)),
         "127.0.0.1:443".parse().unwrap(),

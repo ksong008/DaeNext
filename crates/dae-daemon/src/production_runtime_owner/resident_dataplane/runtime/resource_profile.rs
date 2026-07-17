@@ -36,6 +36,12 @@ const HIGH_PERFORMANCE_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS: u64 = 60;
 const LOW_MEMORY_UDP_QUEUED_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 const BALANCED_UDP_QUEUED_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 const HIGH_PERFORMANCE_UDP_QUEUED_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
+const LOW_MEMORY_QUIC_ENDPOINT_LIMIT: usize = 8;
+const BALANCED_QUIC_ENDPOINT_LIMIT: usize = 32;
+const HIGH_PERFORMANCE_QUIC_ENDPOINT_LIMIT: usize = 128;
+const LOW_MEMORY_QUIC_ENDPOINT_CHARGED_BYTES: usize = 16 * 1024 * 1024;
+const BALANCED_QUIC_ENDPOINT_CHARGED_BYTES: usize = 64 * 1024 * 1024;
+const HIGH_PERFORMANCE_QUIC_ENDPOINT_CHARGED_BYTES: usize = 256 * 1024 * 1024;
 const LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY: usize = 64;
 const BALANCED_DNS_FAST_PATH_CONCURRENCY: usize = 512;
 const HIGH_PERFORMANCE_DNS_FAST_PATH_CONCURRENCY: usize = 1_024;
@@ -190,6 +196,22 @@ impl ResidentRuntimeProfile {
         }
     }
 
+    pub(crate) fn quic_endpoint_limit_default(self) -> usize {
+        match self {
+            Self::LowMemory => LOW_MEMORY_QUIC_ENDPOINT_LIMIT,
+            Self::Balanced => BALANCED_QUIC_ENDPOINT_LIMIT,
+            Self::HighPerformance => HIGH_PERFORMANCE_QUIC_ENDPOINT_LIMIT,
+        }
+    }
+
+    pub(crate) fn quic_endpoint_charged_bytes_default(self) -> usize {
+        match self {
+            Self::LowMemory => LOW_MEMORY_QUIC_ENDPOINT_CHARGED_BYTES,
+            Self::Balanced => BALANCED_QUIC_ENDPOINT_CHARGED_BYTES,
+            Self::HighPerformance => HIGH_PERFORMANCE_QUIC_ENDPOINT_CHARGED_BYTES,
+        }
+    }
+
     pub(crate) fn dns_fast_path_concurrency_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY,
@@ -305,6 +327,8 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "udpSessionQueueDepthDefault": LOW_MEMORY_UDP_SESSION_QUEUE_DEPTH,
                 "udpRuntimeShardsMax": LOW_MEMORY_UDP_RUNTIME_SHARDS_MAX,
                 "udpDispatchQueueDepthDefault": LOW_MEMORY_UDP_DISPATCH_QUEUE_DEPTH,
+                "quicEndpointDefault": LOW_MEMORY_QUIC_ENDPOINT_LIMIT,
+                "quicEndpointChargedBytesDefault": LOW_MEMORY_QUIC_ENDPOINT_CHARGED_BYTES,
                 "dnsFastPathConcurrencyDefault": LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": LOW_MEMORY_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": LOW_MEMORY_DNS_UDP_FORWARDER_QUEUE_DEPTH,
@@ -321,6 +345,8 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "udpSessionQueueDepthDefault": BALANCED_UDP_SESSION_QUEUE_DEPTH,
                 "udpRuntimeShardsMax": BALANCED_UDP_RUNTIME_SHARDS_MAX,
                 "udpDispatchQueueDepthDefault": BALANCED_UDP_DISPATCH_QUEUE_DEPTH,
+                "quicEndpointDefault": BALANCED_QUIC_ENDPOINT_LIMIT,
+                "quicEndpointChargedBytesDefault": BALANCED_QUIC_ENDPOINT_CHARGED_BYTES,
                 "dnsFastPathConcurrencyDefault": BALANCED_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": BALANCED_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": BALANCED_DNS_UDP_FORWARDER_QUEUE_DEPTH,
@@ -337,6 +363,8 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "udpSessionQueueDepthDefault": HIGH_PERFORMANCE_UDP_SESSION_QUEUE_DEPTH,
                 "udpRuntimeShardsMax": HIGH_PERFORMANCE_UDP_RUNTIME_SHARDS_MAX,
                 "udpDispatchQueueDepthDefault": HIGH_PERFORMANCE_UDP_DISPATCH_QUEUE_DEPTH,
+                "quicEndpointDefault": HIGH_PERFORMANCE_QUIC_ENDPOINT_LIMIT,
+                "quicEndpointChargedBytesDefault": HIGH_PERFORMANCE_QUIC_ENDPOINT_CHARGED_BYTES,
                 "dnsFastPathConcurrencyDefault": HIGH_PERFORMANCE_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": HIGH_PERFORMANCE_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_QUEUE_DEPTH,
@@ -432,6 +460,22 @@ mod tests {
         assert!(
             ResidentRuntimeProfile::Balanced.tcp_connection_limit_default()
                 < ResidentRuntimeProfile::HighPerformance.tcp_connection_limit_default()
+        );
+        assert!(
+            ResidentRuntimeProfile::LowMemory.quic_endpoint_limit_default()
+                < ResidentRuntimeProfile::Balanced.quic_endpoint_limit_default()
+        );
+        assert!(
+            ResidentRuntimeProfile::Balanced.quic_endpoint_limit_default()
+                < ResidentRuntimeProfile::HighPerformance.quic_endpoint_limit_default()
+        );
+        assert!(
+            ResidentRuntimeProfile::LowMemory.quic_endpoint_charged_bytes_default()
+                < ResidentRuntimeProfile::Balanced.quic_endpoint_charged_bytes_default()
+        );
+        assert!(
+            ResidentRuntimeProfile::Balanced.quic_endpoint_charged_bytes_default()
+                < ResidentRuntimeProfile::HighPerformance.quic_endpoint_charged_bytes_default()
         );
         assert_eq!(
             ResidentRuntimeProfile::LowMemory.udp_runtime_shards_default(64),

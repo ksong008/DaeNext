@@ -107,6 +107,7 @@ async fn repeated_failures_restore_observed_endpoint_resources_by_cleanup_deadli
 
         let attempt_identity = [attempt];
         let identity_parts: [&[u8]; 2] = [b"proxied-doh3-cleanup-failure", &attempt_identity];
+        let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
         let endpoint = open_marked_quic_endpoint_for_remote(
             0,
             remote,
@@ -117,6 +118,11 @@ async fn repeated_failures_restore_observed_endpoint_resources_by_cleanup_deadli
                 QuicEndpointIdentityRole::ManagedDnsOuter,
                 &identity_parts,
             ),
+            dae_runtime_control::AbsoluteDeadline::from_now(
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(1),
+            ),
+            &cancellation,
         )
         .unwrap();
         endpoint.mark_failed();

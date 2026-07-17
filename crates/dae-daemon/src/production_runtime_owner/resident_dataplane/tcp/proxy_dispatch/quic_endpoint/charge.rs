@@ -1,11 +1,15 @@
 use std::num::NonZeroU64;
 
+use super::model::QuicEndpointUnderlay;
+
 pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA: &str = "quinn-endpoint-charge";
 pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA_VERSION: u64 = 1;
 pub(super) const QUIC_ENDPOINT_CHARGE_MODEL: &str = "quinn-0.11-receive-slab-safety-reserve";
-pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 1;
+pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 2;
 
 const QUINN_RECEIVE_DATAGRAM_LIMIT_BYTES: u64 = 64 * 1024;
+const QUINN_GRO_RECEIVE_SEGMENTS: usize = 64;
+const QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS: usize = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct QuicEndpointSafetyChargeProfile {
@@ -40,6 +44,18 @@ pub(super) struct QuicEndpointCharge {
 }
 
 impl QuicEndpointCharge {
+    pub(super) fn before_socket(
+        endpoint_config: &quinn::EndpointConfig,
+        underlay: QuicEndpointUnderlay,
+        uses_http3: bool,
+    ) -> Result<Self, String> {
+        let receive_segments = match underlay {
+            QuicEndpointUnderlay::Salamander => QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS,
+            QuicEndpointUnderlay::Ordinary => conservative_platform_receive_segments(),
+        };
+        Self::for_socket(endpoint_config, receive_segments, uses_http3)
+    }
+
     pub(super) fn for_socket(
         endpoint_config: &quinn::EndpointConfig,
         max_receive_segments: usize,
@@ -85,6 +101,20 @@ impl QuicEndpointCharge {
     }
 }
 
+const fn conservative_platform_receive_segments() -> usize {
+    if cfg!(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "windows"
+    )) {
+        // Quinn 0.11 / quinn-udp 0.5 reserve for Linux UDP_GRO_CNT_MAX and use the same
+        // conservative segment count on Windows. This is deliberately evaluated before bind.
+        QUINN_GRO_RECEIVE_SEGMENTS
+    } else {
+        QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS
+    }
+}
+
 pub(super) fn charge_model_json() -> serde_json::Value {
     let profile = QuicEndpointSafetyChargeProfile::OBSERVABILITY_BASELINE;
     serde_json::json!({
@@ -94,13 +124,39 @@ pub(super) fn charge_model_json() -> serde_json::Value {
         "modelVersion": QUIC_ENDPOINT_CHARGE_MODEL_VERSION,
         "quinnReceivePayloadCapBytes": QUINN_RECEIVE_DATAGRAM_LIMIT_BYTES,
         "quinnUdpBatchSize": quinn::udp::BATCH_SIZE,
+        "preSocketOrdinaryReceiveSegments": conservative_platform_receive_segments(),
+        "preSocketSalamanderReceiveSegments": QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS,
         "safetyReserve": {
             "quicTransportBytes": profile.quic_transport_bytes.get(),
             "http3Bytes": profile.http3_bytes.get(),
             "tlsBytes": profile.tls_bytes.get(),
             "queueBytes": profile.queue_bytes.get(),
         },
-        "admissionEnforced": false,
+        "admissionEnforced": true,
         "rssClaim": false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pre_socket_charge_covers_wrapped_socket_segment_counts() {
+        let config = quinn::EndpointConfig::default();
+        let ordinary =
+            QuicEndpointCharge::before_socket(&config, QuicEndpointUnderlay::Ordinary, true)
+                .unwrap();
+        let single = QuicEndpointCharge::for_socket(&config, 1, true).unwrap();
+        let maximum =
+            QuicEndpointCharge::for_socket(&config, conservative_platform_receive_segments(), true)
+                .unwrap();
+        assert!(ordinary.total_bytes >= single.total_bytes);
+        assert_eq!(ordinary, maximum);
+
+        let salamander =
+            QuicEndpointCharge::before_socket(&config, QuicEndpointUnderlay::Salamander, true)
+                .unwrap();
+        assert_eq!(salamander.receive_segments, 1);
+    }
 }

@@ -15,7 +15,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
     timeout: Duration,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
-    let candidates = resolve_hysteria2_quic_remote_candidates_async(proxy, port_hop_ports).await?;
+    let deadline = dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout);
+    let candidates =
+        resolve_hysteria2_quic_remote_candidates_async(proxy, port_hop_ports, deadline).await?;
     let client_config = build_hysteria2_runtime_client_config(tls_identity)
         .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
@@ -28,14 +30,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
     let (remote, endpoint, connection) = connect_quic_endpoint_candidates_async(
         &candidates,
         tls_identity.server_name(),
-        timeout,
+        deadline,
         "connect Hysteria2 QUIC endpoint",
-        |remote| {
+        |remote, deadline, cancellation| {
             let mut endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
                 mark,
                 obfs,
                 remote,
                 endpoint_context.clone(),
+                deadline,
+                cancellation,
             )?;
             endpoint.set_default_client_config(client_config.clone());
             Ok(endpoint)
@@ -57,7 +61,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
     timeout: Duration,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
-    let candidates = resolve_proxy_udp_addr_candidates_async(proxy).await?;
+    let deadline = dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout);
+    let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
     let client_config = build_tuic_runtime_client_config(alpn, allow_insecure)
         .map_err(|err| format!("build TUIC QUIC client config: {err}"))?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
@@ -70,11 +75,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
     let (remote, endpoint, connection) = connect_quic_endpoint_candidates_async(
         &candidates,
         &proxy.server_name,
-        timeout,
+        deadline,
         "connect TUIC QUIC endpoint",
-        |remote| {
-            let mut endpoint =
-                open_marked_quic_endpoint_for_remote(mark, remote, endpoint_context.clone())?;
+        |remote, deadline, cancellation| {
+            let mut endpoint = open_marked_quic_endpoint_for_remote(
+                mark,
+                remote,
+                endpoint_context.clone(),
+                deadline,
+                cancellation,
+            )?;
             endpoint.set_default_client_config(client_config.clone());
             Ok(endpoint)
         },
@@ -95,7 +105,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
     timeout: Duration,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
-    let candidates = resolve_proxy_udp_addr_candidates_async(proxy).await?;
+    let deadline = dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout);
+    let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
     let client_config =
         build_juicity_runtime_client_config(allow_insecure, pinned_certchain_sha256)
             .map_err(|err| format!("build Juicity QUIC client config: {err}"))?;
@@ -109,11 +120,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
     let (remote, endpoint, connection) = connect_quic_endpoint_candidates_async(
         &candidates,
         &proxy.server_name,
-        timeout,
+        deadline,
         "connect Juicity QUIC endpoint",
-        |remote| {
-            let mut endpoint =
-                open_marked_quic_endpoint_for_remote(mark, remote, endpoint_context.clone())?;
+        |remote, deadline, cancellation| {
+            let mut endpoint = open_marked_quic_endpoint_for_remote(
+                mark,
+                remote,
+                endpoint_context.clone(),
+                deadline,
+                cancellation,
+            )?;
             endpoint.set_default_client_config(client_config.clone());
             Ok(endpoint)
         },

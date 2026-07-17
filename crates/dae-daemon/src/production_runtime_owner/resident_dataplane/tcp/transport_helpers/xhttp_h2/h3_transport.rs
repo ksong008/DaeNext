@@ -128,6 +128,8 @@ async fn open_xhttp_h3_connection(
     role: QuicEndpointIdentityRole,
     shared_transport_identity: Option<[u8; 32]>,
 ) -> Result<XhttpH3Connection, String> {
+    let deadline =
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
     let client_config = build_xhttp_h3_client_config(endpoint)?;
     let transport_identity = shared_transport_identity
         .unwrap_or_else(|| xhttp_h3_transport_identity(proxy, endpoint, role));
@@ -141,29 +143,37 @@ async fn open_xhttp_h3_connection(
     let (_, quic_endpoint, connection) = connect_quic_endpoint_candidates_async(
         candidates,
         &endpoint.server_name,
-        RESIDENT_CONNECT_TIMEOUT,
+        deadline,
         "connect xHTTP H3 QUIC endpoint",
-        |remote| {
-            let mut quic_endpoint =
-                open_marked_quic_endpoint_for_remote(mark, remote, endpoint_context.clone())?;
+        |remote, deadline, cancellation| {
+            let mut quic_endpoint = open_marked_quic_endpoint_for_remote(
+                mark,
+                remote,
+                endpoint_context.clone(),
+                deadline,
+                cancellation,
+            )?;
             quic_endpoint.set_default_client_config(client_config.clone());
             Ok(quic_endpoint)
         },
     )
     .await?;
     let h3_connection = h3_quinn::Connection::new(connection.clone());
-    let (mut driver, client) =
-        match time::timeout(RESIDENT_CONNECT_TIMEOUT, h3::client::new(h3_connection)).await {
-            Err(_) => {
-                quic_endpoint.mark_failed();
-                return Err("create xHTTP H3 client timeout".to_owned());
-            }
-            Ok(Err(err)) => {
-                quic_endpoint.mark_failed();
-                return Err(format!("create xHTTP H3 client: {err:?}"));
-            }
-            Ok(Ok(client)) => client,
-        };
+    let remaining = deadline
+        .remaining_at(Instant::now())
+        .ok_or_else(|| "create xHTTP H3 client deadline elapsed".to_owned())?;
+    let (mut driver, client) = match time::timeout(remaining, h3::client::new(h3_connection)).await
+    {
+        Err(_) => {
+            quic_endpoint.mark_failed();
+            return Err("create xHTTP H3 client timeout".to_owned());
+        }
+        Ok(Err(err)) => {
+            quic_endpoint.mark_failed();
+            return Err(format!("create xHTTP H3 client: {err:?}"));
+        }
+        Ok(Ok(client)) => client,
+    };
     let driver_task = tokio::spawn(async move {
         let _ = poll_fn(|cx| driver.poll_close(cx)).await;
     });
