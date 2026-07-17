@@ -155,6 +155,18 @@ fn response_owned_expectation_preserves_compatibility_and_verified_modes() {
 }
 
 #[test]
+fn session_bound_source_uses_the_same_fixed_target_gate() {
+    let expected_target = target(1, 443);
+    let other_target = target(2, 443);
+    let response = UdpExchangeResult::new(vec![1], "fixture")
+        .with_session_bound_response_identity(other_target, None);
+    assert_eq!(
+        response.validate_fixed_target(response.fixed_target_expectation(expected_target)),
+        UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+    );
+}
+
+#[test]
 fn rejected_fixed_target_payload_is_consumed_before_forwarding() {
     let expected_target = target(1, 443);
     let mut response = UdpExchangeResult::new(vec![0x33; 4096], "fixture")
