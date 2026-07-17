@@ -9,6 +9,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXud
     response_unpadder: Option<VisionUnpadder>,
     response_plaintext: Vec<u8>,
     response_xudp_payload: Vec<u8>,
+    fixed_target: UdpSessionFixedTarget,
 }
 
 impl VlessXudpStreamSession {
@@ -24,6 +25,8 @@ impl VlessXudpStreamSession {
                     .to_owned(),
             );
         }
+        self.fixed_target
+            .bind(original_dst, "VLESS Vision XUDP stream")?;
         let key = match self.key {
             Some(key) => key,
             None => {
@@ -161,6 +164,7 @@ impl VlessXudpStreamSession {
             .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
             .with_session_executor("tokio-stream-session")
             .with_underlay_reuse("tls-stream-reused")
+            .with_session_fixed_target(self.fixed_target)
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
@@ -175,6 +179,7 @@ impl VlessXudpStreamSession {
             client.shutdown().await;
         }
         self.client.take();
+        self.fixed_target.clear();
     }
 }
 
@@ -190,6 +195,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXht
     upload_underlay: Option<&'static str>,
     upload_http_version: Option<ResidentXhttpHttpVersion>,
     xhttp_mode: Option<ResidentXhttpMode>,
+    fixed_target: UdpSessionFixedTarget,
 }
 
 impl VlessXhttpH2UdpSession {
@@ -205,6 +211,8 @@ impl VlessXhttpH2UdpSession {
                     .to_owned(),
             );
         }
+        self.fixed_target
+            .bind(original_dst, "VLESS xHTTP UDP session")?;
         let key = proxy.vless_key()?;
         let request = if self.seq == 0 {
             packet::first_write_bytes(
@@ -354,6 +362,7 @@ impl VlessXhttpH2UdpSession {
             close_xhttp_stream_upload_client(upload).await;
         }
         self.session_id = None;
+        self.fixed_target.clear();
     }
 
     fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
@@ -387,7 +396,7 @@ impl VlessXhttpH2UdpSession {
     }
 
     fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
-        if self.upload_http_version() == ResidentXhttpHttpVersion::H3 {
+        let result = if self.upload_http_version() == ResidentXhttpHttpVersion::H3 {
             UdpExchangeResult::new(payload, "quic-udp-stream-packet")
                 .with_session_executor(self.session_executor_label())
                 .with_underlay_reuse(self.underlay_reuse_label())
@@ -397,7 +406,8 @@ impl VlessXhttpH2UdpSession {
                 .with_session_executor(self.session_executor_label())
                 .with_underlay_reuse(self.underlay_reuse_label())
                 .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
-        }
+        };
+        result.with_session_fixed_target(self.fixed_target)
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
@@ -519,4 +529,34 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) fn vless_udp_le
     out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
     out.extend_from_slice(payload);
     Ok(out)
+}
+
+#[cfg(test)]
+mod fixed_target_tests {
+    use super::*;
+
+    fn assert_response_is_bound(mut response: UdpExchangeResult, target: SocketAddr) {
+        let expectation = response.fixed_target_expectation(target);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Validated
+        );
+    }
+
+    #[test]
+    fn xudp_and_xhttp_responses_use_their_bound_targets() {
+        let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let mut xudp = VlessXudpStreamSession::default();
+        xudp.fixed_target
+            .bind(target, "VLESS Vision XUDP stream")
+            .unwrap();
+        assert_response_is_bound(xudp.response_result(b"xudp".to_vec()), target);
+
+        let mut xhttp = VlessXhttpH2UdpSession::default();
+        xhttp
+            .fixed_target
+            .bind(target, "VLESS xHTTP UDP session")
+            .unwrap();
+        assert_response_is_bound(xhttp.response_result(b"xhttp".to_vec()), target);
+    }
 }
