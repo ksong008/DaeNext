@@ -10,11 +10,27 @@ pub(super) async fn write_sse_headers(
     );
     if let Some(origin) = allowed_cors_origin(request) {
         headers.push_str(&format!(
-            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\nAccess-Control-Max-Age: 300\r\n"
+            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, X-Daed-Page-Id\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\nAccess-Control-Max-Age: 300\r\n"
         ));
     }
     headers.push_str("\r\n");
     write_sse_bytes(stream, headers.as_bytes()).await
+}
+
+pub(super) async fn write_sse_serialized_runtime_delta(
+    stream: &mut tokio::net::TcpStream,
+    payload: &[u8],
+) -> io::Result<()> {
+    tokio::time::timeout(PRODUCT_HTTP_SSE_WRITE_TIMEOUT, async {
+        stream
+            .write_all(b"event: runtime.overview.delta\ndata: ")
+            .await?;
+        stream.write_all(payload).await?;
+        stream.write_all(b"\n\n").await?;
+        stream.flush().await
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSE write timed out"))?
 }
 
 pub(super) async fn write_sse_retry(stream: &mut tokio::net::TcpStream) -> io::Result<()> {

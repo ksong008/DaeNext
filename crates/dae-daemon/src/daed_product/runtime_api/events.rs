@@ -7,7 +7,7 @@ pub(in crate::daed_product) fn api_runtime_events(
     let full = runtime_overview_report(app, request);
     let group_selection = initial_group_selection_event(app);
     thread::sleep(Duration::from_millis(200));
-    let delta = runtime_overview_delta_report(app, request);
+    let delta = runtime_overview_delta_report(app);
     sse_response_events(
         &[
             ("runtime.overview", full),

@@ -140,10 +140,6 @@ pub fn allocator_profile() -> &'static str {
     }
 }
 
-pub fn allocator_live_heap_bytes() -> Option<u64> {
-    allocator_stats_snapshot().map(|stats| stats.allocated)
-}
-
 pub fn allocator_stats_json_from(snapshot: Option<&AllocatorStatsSnapshot>) -> Value {
     match snapshot {
         Some(stats) => json!({

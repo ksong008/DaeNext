@@ -12,9 +12,9 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
     let sampled = runtime_sample_view_for_app(app, window_sec, max_points);
     let traffic = sampled.traffic;
     let process = sampled.process;
-    let allocator_stats = allocator_stats_snapshot();
+    let allocator_stats = sampled.allocator;
     let allocator_live_heap = allocator_stats.map(|stats| stats.allocated);
-    let cgroup_memory = cgroup_memory_snapshot_json();
+    let cgroup_memory = sampled.cgroup_memory;
     json!({
         "updatedAt": iso8601_utc(sampled.sampled_at),
         "uploadRate": traffic.upload_rate.to_string(),
@@ -62,19 +62,13 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
     })
 }
 
-pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpRequest) -> Value {
+pub(crate) fn runtime_overview_delta_report(app: &AppState) -> Value {
     let runtime_delta = app.runtime.runtime_overview_delta_state();
-    let window_sec = query_u64(request, "windowSec")
-        .unwrap_or(60)
-        .clamp(1, 3_600);
-    let max_points = query_usize(request, "maxPoints")
-        .unwrap_or(120)
-        .clamp(1, 1_000);
-    let sampled = runtime_sample_view_for_app(app, window_sec, max_points);
+    let sampled = runtime_sample_view_for_app(app, 1, 1);
     let traffic = sampled.traffic;
     let process = sampled.process;
-    let allocator_live_heap = allocator_live_heap_bytes();
-    let cgroup_memory = cgroup_memory_snapshot_json();
+    let allocator_live_heap = sampled.allocator.map(|stats| stats.allocated);
+    let cgroup_memory = sampled.cgroup_memory;
     json!({
         "updatedAt": iso8601_utc(sampled.sampled_at),
         "uploadRate": traffic.upload_rate.to_string(),
@@ -101,6 +95,7 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpReques
         "productGeodataUpdate": app.geodata_update_runtime.as_ref().map(|runtime| runtime.snapshot()).unwrap_or(Value::Null),
         "runtimeSampler": app.runtime_sampler.as_ref().map(|sampler| sampler.snapshot()).unwrap_or(Value::Null),
         "runtimeSampleCount": sampled.sample_count,
+        "sequence": sampled.sample_count,
         "reloadCount": runtime_delta.reload_count,
         "samples": traffic.samples,
     })

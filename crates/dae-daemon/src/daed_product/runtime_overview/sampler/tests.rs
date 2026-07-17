@@ -17,6 +17,8 @@ fn reader_windows_do_not_mutate_shared_history() {
             },
             false,
             None,
+            None,
+            Value::Null,
             config,
         );
     }
@@ -69,6 +71,8 @@ fn counter_reset_clears_only_sampler_owned_history() {
         },
         false,
         None,
+        None,
+        Value::Null,
         config,
     );
     state.record(
@@ -80,6 +84,8 @@ fn counter_reset_clears_only_sampler_owned_history() {
         },
         true,
         None,
+        None,
+        Value::Null,
         config,
     );
 
@@ -102,6 +108,8 @@ fn sampler_history_obeys_internal_capacity_independent_of_readers() {
             },
             false,
             None,
+            None,
+            Value::Null,
             config,
         );
     }
