@@ -5,6 +5,7 @@ pub(super) use self::envelope::UdpExchangeResult;
 pub(super) use self::fixed_target::{
     UdpFixedTargetExpectation, UdpFixedTargetPayload, UdpFixedTargetValidation,
     UdpResponseDropReason, UdpResponseIdentityEvidence, UdpResponseIdentityToken,
+    UdpSessionFixedTarget,
 };
 
 #[cfg(test)]
