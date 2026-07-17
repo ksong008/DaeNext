@@ -311,13 +311,15 @@ mod tests {
         let target = format!("udp-target:{CONFIGURED_UDP_TARGET_PORT}");
         let payload = b"resident-udp-live-matrix";
 
-        let hy2 = build_hysteria2_udp_message(0x1122_3344, 0x5566, &target, payload).unwrap();
-        let parsed_hy2 = parse_hysteria2_udp_message(&hy2).unwrap();
-        assert_eq!(parsed_hy2.session_id, 0x1122_3344);
-        assert_eq!(parsed_hy2.packet_id, 0x5566);
-        assert_eq!(parsed_hy2.frag_id, 0);
-        assert_eq!(parsed_hy2.frag_count, 1);
-        assert_eq!(parsed_hy2.payload, payload);
+        let hy2 = Hysteria2UdpMessage::new(0x1122_3344, &target, payload).unwrap();
+        let encoded_hy2 = encode_hysteria2_udp_message(&hy2).unwrap();
+        let parsed_hy2 = decode_hysteria2_udp_message(&encoded_hy2).unwrap();
+        assert_eq!(parsed_hy2.session_id(), 0x1122_3344);
+        assert_eq!(parsed_hy2.packet_id(), 0);
+        assert_eq!(parsed_hy2.fragment_id(), 0);
+        assert_eq!(parsed_hy2.fragment_count(), 1);
+        assert_eq!(parsed_hy2.target(), target);
+        assert_eq!(parsed_hy2.payload(), payload);
 
         let tuic = build_tuic_packet_frame(7, 9, &target, payload).unwrap();
         let parsed_tuic = parse_tuic_packet_frame(&tuic).unwrap();
