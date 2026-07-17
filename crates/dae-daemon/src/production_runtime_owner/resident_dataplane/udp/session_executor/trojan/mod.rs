@@ -81,8 +81,8 @@ impl TrojanUdpStreamSession {
         &mut self,
         mode: UdpStreamReadMode,
     ) -> Result<Option<UdpExchangeResult>, String> {
-        if let Some(payload) = self.try_pop_response_payload()? {
-            return Ok(Some(self.response_result(payload)));
+        if let Some(packet) = self.try_pop_response_packet()? {
+            return Ok(Some(self.response_result(packet)));
         }
         if self.carrier.is_none() && mode.waits_for_readiness() {
             return std::future::pending().await;
@@ -102,11 +102,13 @@ impl TrojanUdpStreamSession {
             ));
         }
         self.response_plaintext.extend_from_slice(&chunk);
-        self.try_pop_response_payload()
-            .map(|payload| payload.map(|payload| self.response_result(payload)))
+        self.try_pop_response_packet()
+            .map(|packet| packet.map(|packet| self.response_result(packet)))
     }
 
-    fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
+    fn try_pop_response_packet(
+        &mut self,
+    ) -> Result<Option<dae_outbound::trojan::TrojanUdpPacket>, String> {
         let Some((packet, consumed)) =
             dae_outbound::trojan::decode_udp_packet_prefix(&self.response_plaintext)
                 .map_err(|err| format!("decode Trojan UDP session response: {err}"))?
@@ -114,15 +116,21 @@ impl TrojanUdpStreamSession {
             return Ok(None);
         };
         self.response_plaintext.drain(..consumed);
-        Ok(Some(packet.payload))
+        Ok(Some(packet))
     }
 
-    fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
+    fn response_result(&self, packet: dae_outbound::trojan::TrojanUdpPacket) -> UdpExchangeResult {
         let (session_executor, underlay_reuse, tls_underlay) = self.evidence_fields();
-        UdpExchangeResult::new(payload, "tls-udp-over-tcp")
+        let result = UdpExchangeResult::new(packet.payload, "tls-udp-over-tcp")
             .with_tls_underlay(tls_underlay)
             .with_session_executor(session_executor)
-            .with_underlay_reuse(underlay_reuse)
+            .with_underlay_reuse(underlay_reuse);
+        match packet.target.parse::<SocketAddr>() {
+            Ok(source) => result.with_decoded_response_identity(Some(source), None),
+            Err(_) => {
+                result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity)
+            }
+        }
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
@@ -161,14 +169,36 @@ mod tests {
         session.response_plaintext.extend_from_slice(&second);
 
         assert_eq!(
-            session.try_pop_response_payload().unwrap(),
-            Some(b"one".to_vec())
+            session
+                .try_pop_response_packet()
+                .unwrap()
+                .map(|packet| packet.payload),
+            Some(b"one".to_vec()),
         );
         assert_eq!(
-            session.try_pop_response_payload().unwrap(),
-            Some(b"two".to_vec())
+            session
+                .try_pop_response_packet()
+                .unwrap()
+                .map(|packet| packet.payload),
+            Some(b"two".to_vec()),
         );
-        assert_eq!(session.try_pop_response_payload().unwrap(), None);
+        assert_eq!(session.try_pop_response_packet().unwrap(), None);
+    }
+
+    #[test]
+    fn trojan_udp_response_source_is_verified_before_forwarding() {
+        let expected: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
+        let packet = trojan_packet::udp_packet(&other.to_string(), b"response").unwrap();
+        let mut session = TrojanUdpStreamSession::tls("password".to_owned());
+        session.response_plaintext.extend_from_slice(&packet);
+        let packet = session.try_pop_response_packet().unwrap().unwrap();
+        let mut response = session.response_result(packet);
+        let expectation = response.fixed_target_expectation(expected);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+        );
     }
 
     #[test]
