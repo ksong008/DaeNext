@@ -49,6 +49,7 @@ fn multiple_sse_connections_share_one_runtime_thread() {
                 server,
                 runtime_request(),
                 Arc::clone(&metrics),
+                &app.ui_runtime,
             )
             .unwrap();
         read_until(&mut client, "event: runtime.overview");
@@ -102,6 +103,7 @@ fn runtime_shutdown_closes_active_streams_and_releases_metrics() {
                 server,
                 runtime_request(),
                 Arc::clone(&metrics),
+                &app.ui_runtime,
             )
             .unwrap();
         clients.push(client);
@@ -140,6 +142,7 @@ fn test_app(dir: &Path) -> AppState {
         runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        ui_runtime: Arc::new(ProductUiRuntime::default()),
         auth_runtime: product_test_auth_runtime(),
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),

@@ -85,6 +85,8 @@ pub(super) fn handle_api_request(
                 }
                 ("POST", "/geodata/geoip/update") => api_update_geodata(app, GeodataKind::Geoip),
                 ("GET", "/runtime/overview") => api_runtime_overview(app, request),
+                ("POST", "/ui/session") => api_ui_session_touch(app, request, user.id),
+                ("POST", "/ui/session/close") => api_ui_session_close(app, request, user.id),
                 ("POST", "/runtime/reload") => api_runtime_reload(app, request),
                 ("POST", "/runtime/stop") => api_runtime_stop(app),
                 ("GET", "/runtime/log-level") => api_get_runtime_log_level(app),

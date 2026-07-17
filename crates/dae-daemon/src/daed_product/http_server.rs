@@ -230,6 +230,7 @@ pub(super) fn product_http_worker_loop(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
+        app.ui_runtime.sweep();
     }
 }
 
@@ -284,6 +285,7 @@ pub(super) fn handle_stream(
             return Ok(ProductHttpConnectionResult::Closed);
         }
     };
+    let _ui_request = app.ui_runtime.request_lease(&request);
     let head_only = request.method == "HEAD";
     if request.method == "GET"
         && (request.path == "/api/events/logs" || request.path == "/api/events/runtime")
@@ -306,7 +308,14 @@ pub(super) fn handle_stream(
             write_http_response_for_request(&mut stream, &request, &response, false)?;
             return Ok(ProductHttpConnectionResult::Closed);
         };
-        return detach_sse_stream(stream, metrics, request, user.id, sse_runtime);
+        return detach_sse_stream(
+            stream,
+            metrics,
+            request,
+            user.id,
+            sse_runtime,
+            &app.ui_runtime,
+        );
     }
     if let Some(kind) = geodata_update_kind_for_request(&request)
         && let Some(runtime) = app.geodata_update_runtime.as_ref()
@@ -358,6 +367,7 @@ fn detach_sse_stream(
     request: HttpRequest,
     user_id: i64,
     runtime: &ProductSseRuntime,
+    ui_runtime: &Arc<ProductUiRuntime>,
 ) -> io::Result<ProductHttpConnectionResult> {
     let stream_kind = if request.path == "/api/events/logs" {
         if let Err(error) = log_level_filter_from_request(&request)
@@ -371,7 +381,7 @@ fn detach_sse_stream(
     } else {
         ProductSseStreamKind::Runtime
     };
-    match runtime.submit(user_id, stream_kind, stream, request, metrics) {
+    match runtime.submit(user_id, stream_kind, stream, request, metrics, ui_runtime) {
         Ok(()) => Ok(ProductHttpConnectionResult::Detached),
         Err(mut rejection) => {
             write_http_response_for_request(

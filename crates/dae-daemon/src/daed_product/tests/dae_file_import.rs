@@ -230,6 +230,7 @@ fn dae_config_file_api_reports_the_resources_it_imported() {
         runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
+        ui_runtime: Arc::new(ProductUiRuntime::default()),
         auth_runtime: product_test_auth_runtime(),
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),

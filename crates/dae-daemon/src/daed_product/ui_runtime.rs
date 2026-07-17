@@ -1,0 +1,244 @@
+use super::*;
+
+mod registry;
+use self::registry::*;
+
+pub(super) const PRODUCT_UI_PAGE_HEADER: &str = "x-daed-page-id";
+const PRODUCT_UI_SESSION_LIMIT: usize = 64;
+const PRODUCT_UI_SESSION_PER_USER_LIMIT: usize = 8;
+const PRODUCT_UI_SESSION_LEASE: Duration = Duration::from_secs(10);
+const PRODUCT_UI_PAGE_ID_MAX_BYTES: usize = 64;
+
+#[derive(Debug)]
+pub(super) struct ProductUiRuntime {
+    state: Mutex<ProductUiRegistryState>,
+    session_limit: AtomicU64,
+    per_user_limit: AtomicU64,
+    lease: Duration,
+    sessions_active: AtomicU64,
+    sessions_peak: AtomicU64,
+    requests_active: AtomicU64,
+    bytes_in_flight: AtomicU64,
+    drain_epoch: AtomicU64,
+}
+
+impl Default for ProductUiRuntime {
+    fn default() -> Self {
+        Self::new(
+            PRODUCT_UI_SESSION_LIMIT,
+            PRODUCT_UI_SESSION_PER_USER_LIMIT,
+            PRODUCT_UI_SESSION_LEASE,
+        )
+    }
+}
+
+impl ProductUiRuntime {
+    fn new(session_limit: usize, per_user_limit: usize, lease: Duration) -> Self {
+        Self {
+            state: Mutex::new(ProductUiRegistryState::default()),
+            session_limit: AtomicU64::new(session_limit as u64),
+            per_user_limit: AtomicU64::new(per_user_limit as u64),
+            lease,
+            sessions_active: AtomicU64::new(0),
+            sessions_peak: AtomicU64::new(0),
+            requests_active: AtomicU64::new(0),
+            bytes_in_flight: AtomicU64::new(0),
+            drain_epoch: AtomicU64::new(0),
+        }
+    }
+
+    pub(super) fn configure(&self, session_limit: usize, per_user_limit: usize) {
+        self.session_limit
+            .store(session_limit as u64, Ordering::Relaxed);
+        self.per_user_limit
+            .store(per_user_limit as u64, Ordering::Relaxed);
+    }
+
+    pub(super) fn touch(&self, user_id: i64, request: &HttpRequest) -> io::Result<()> {
+        let page_id = page_id_from_request(request)?;
+        self.touch_page(user_id, page_id, Instant::now())
+    }
+
+    pub(super) fn close_hint(&self, user_id: i64, request: &HttpRequest) -> io::Result<bool> {
+        let page_id = page_id_from_request(request)?;
+        self.close_page(user_id, page_id, Instant::now())
+    }
+
+    pub(super) fn open_stream(
+        self: &Arc<Self>,
+        user_id: i64,
+        request: &HttpRequest,
+    ) -> io::Result<Option<ProductUiStreamLease>> {
+        let Some(page_id) = optional_page_id_from_request(request)? else {
+            return Ok(None);
+        };
+        self.touch_page(user_id, page_id, Instant::now())?;
+        let key = ProductUiSessionKey::new(user_id, page_id);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("UI session state is unavailable"))?;
+        let session = state
+            .sessions
+            .get_mut(&key)
+            .ok_or_else(|| io::Error::other("UI session disappeared during stream admission"))?;
+        session.active_streams = session.active_streams.saturating_add(1);
+        Ok(Some(ProductUiStreamLease {
+            runtime: Arc::clone(self),
+            key: Some(key),
+        }))
+    }
+
+    pub(super) fn request_lease(
+        self: &Arc<Self>,
+        request: &HttpRequest,
+    ) -> Option<ProductUiRequestLease> {
+        let page_id = optional_page_id_from_request(request).ok().flatten()?;
+        let charged_bytes = request
+            .body
+            .len()
+            .saturating_add(page_id.len())
+            .try_into()
+            .unwrap_or(u64::MAX);
+        self.requests_active.fetch_add(1, Ordering::Relaxed);
+        self.bytes_in_flight
+            .fetch_add(charged_bytes, Ordering::Relaxed);
+        Some(ProductUiRequestLease {
+            runtime: Arc::clone(self),
+            charged_bytes,
+        })
+    }
+
+    pub(super) fn sweep(&self) {
+        self.sweep_at(Instant::now());
+    }
+
+    pub(super) fn snapshot(&self) -> Value {
+        json!({
+            "sessionLimit": self.session_limit.load(Ordering::Relaxed),
+            "perUserLimit": self.per_user_limit.load(Ordering::Relaxed),
+            "leaseSeconds": self.lease.as_secs(),
+            "sessionsActive": self.sessions_active.load(Ordering::Relaxed),
+            "sessionsPeak": self.sessions_peak.load(Ordering::Relaxed),
+            "requestsActive": self.requests_active.load(Ordering::Relaxed),
+            "bytesInFlight": self.bytes_in_flight.load(Ordering::Relaxed).to_string(),
+            "drainEpoch": self.drain_epoch.load(Ordering::Relaxed),
+        })
+    }
+}
+
+fn optional_page_id_from_request(request: &HttpRequest) -> io::Result<Option<&str>> {
+    let Some(page_id) = request.headers.get(PRODUCT_UI_PAGE_HEADER) else {
+        return Ok(None);
+    };
+    let page_id = page_id.trim();
+    if page_id.len() < 16
+        || page_id.len() > PRODUCT_UI_PAGE_ID_MAX_BYTES
+        || !page_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid WebUI page identity",
+        ));
+    }
+    Ok(Some(page_id))
+}
+
+fn page_id_from_request(request: &HttpRequest) -> io::Result<&str> {
+    optional_page_id_from_request(request)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "WebUI page identity header is required",
+        )
+    })
+}
+
+pub(super) struct ProductUiRequestLease {
+    runtime: Arc<ProductUiRuntime>,
+    charged_bytes: u64,
+}
+
+impl Drop for ProductUiRequestLease {
+    fn drop(&mut self) {
+        self.runtime.requests_active.fetch_sub(1, Ordering::Release);
+        let _ = self.runtime.bytes_in_flight.fetch_update(
+            Ordering::Release,
+            Ordering::Relaxed,
+            |bytes| Some(bytes.saturating_sub(self.charged_bytes)),
+        );
+        self.runtime.sweep();
+    }
+}
+
+pub(super) struct ProductUiStreamLease {
+    runtime: Arc<ProductUiRuntime>,
+    key: Option<ProductUiSessionKey>,
+}
+
+impl Drop for ProductUiStreamLease {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            self.runtime.close_stream(&key, Instant::now());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(page_id: &str) -> HttpRequest {
+        HttpRequest {
+            method: "POST".to_owned(),
+            path: "/api/ui/session".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::from([(PRODUCT_UI_PAGE_HEADER.to_owned(), page_id.to_owned())]),
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn sessions_are_bounded_globally_and_per_user() {
+        let runtime = ProductUiRuntime::new(2, 1, Duration::from_secs(10));
+        runtime.touch(1, &request("aaaaaaaaaaaaaaaa")).unwrap();
+        assert_eq!(
+            runtime
+                .touch(1, &request("bbbbbbbbbbbbbbbb"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        runtime.touch(2, &request("cccccccccccccccc")).unwrap();
+        assert_eq!(
+            runtime
+                .touch(3, &request("dddddddddddddddd"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn close_hint_waits_for_the_stream_owner() {
+        let runtime = Arc::new(ProductUiRuntime::new(4, 2, Duration::from_secs(10)));
+        let request = request("aaaaaaaaaaaaaaaa");
+        runtime.touch(1, &request).unwrap();
+        let stream = runtime.open_stream(1, &request).unwrap().unwrap();
+        assert!(runtime.close_hint(1, &request).unwrap());
+        assert_eq!(runtime.snapshot()["sessionsActive"], json!(1));
+        drop(stream);
+        assert_eq!(runtime.snapshot()["sessionsActive"], json!(0));
+        assert_eq!(runtime.snapshot()["drainEpoch"], json!(1));
+    }
+
+    #[test]
+    fn expired_session_is_removed_without_a_close_hint() {
+        let runtime = ProductUiRuntime::new(4, 2, Duration::from_secs(1));
+        let now = Instant::now();
+        runtime.touch_page(1, "aaaaaaaaaaaaaaaa", now).unwrap();
+        runtime.sweep_at(now + Duration::from_secs(2));
+        assert_eq!(runtime.snapshot()["sessionsActive"], json!(0));
+    }
+}

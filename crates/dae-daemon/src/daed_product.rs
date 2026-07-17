@@ -244,6 +244,7 @@ struct AppState {
     runtime_sampler: Option<Arc<ProductRuntimeSampler>>,
     latency_jobs: Arc<LatencyJobManager>,
     http_metrics: Arc<ProductHttpMetrics>,
+    ui_runtime: Arc<ProductUiRuntime>,
     auth_runtime: Arc<ProductAuthRuntime>,
     geodata_updates: Arc<geodata::ProductGeodataUpdateCoordinator>,
     geodata_status_cache: Arc<Mutex<GeodataStatusCache>>,
@@ -842,6 +843,8 @@ mod state_schema;
 use self::state_schema::*;
 mod http_connections;
 use self::http_connections::*;
+mod ui_runtime;
+use self::ui_runtime::*;
 mod http_server;
 use self::http_server::*;
 mod sse_runtime;
