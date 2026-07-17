@@ -85,6 +85,14 @@ fn source_rejected_rows_are_backed_by_builder_admission_failures() {
             "non-native-executor-dependent-shape",
             "non-native-executor://127.0.0.1:1",
         ),
+        (
+            "connect-udp-h2-endpoint",
+            "masque://127.0.0.1:443?transport=h2&auth=none&template=%2F.well-known%2Fmasque%2Fudp%2F%7Btarget_host%7D%2F%7Btarget_port%7D%2F",
+        ),
+        (
+            "connect-udp-h3-endpoint",
+            "masque://127.0.0.1:443?transport=h3&auth=none&template=%2F.well-known%2Fmasque%2Fudp%2F%7Btarget_host%7D%2F%7Btarget_port%7D%2F",
+        ),
     ];
     let rejected = dae_outbound::source_shape_reconciliations()
         .iter()

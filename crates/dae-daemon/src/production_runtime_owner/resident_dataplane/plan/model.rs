@@ -8,15 +8,12 @@ mod xhttp;
 
 pub(in crate::production_runtime_owner::resident_dataplane) use execution::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentExecutionPlan,
-    ResidentManualProbeDispatch, ResidentProtocolShape, ResidentStreamPacketTransport,
-    ResidentTcpProbeDispatch, ResidentTcpRuntimeDispatch, ResidentUdpExecutionAgreement,
-    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, ResidentUdpPolicyClosedReason,
-    UdpPacketSemantics,
+    ResidentProtocolShape, ResidentStreamPacketTransport, ResidentTcpProbeDispatch,
+    ResidentTcpRuntimeDispatch, ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition,
+    ResidentUdpExecutorFactory, ResidentUdpPolicyClosedReason, UdpPacketSemantics,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use protocol::ResidentProtocolExecutorContract;
-pub(crate) use protocol::{
-    ResidentConnectUdpAuthPlan, ResidentHysteria2ObfsPlan, ResidentProxyProtocolPlan,
-};
+pub(crate) use protocol::{ResidentHysteria2ObfsPlan, ResidentProxyProtocolPlan};
 pub(in crate::production_runtime_owner::resident_dataplane) use security::ResidentSecurityUnderlayPlan;
 pub(in crate::production_runtime_owner::resident_dataplane) use wrapper::ResidentStreamWrapperPlan;
 pub(crate) use xhttp::{
@@ -177,7 +174,6 @@ impl ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
         &mut self,
         runtime_generation: u64,
-        connect_udp_runtime: ResidentConnectUdpRuntimePlan,
     ) {
         self.execution = Some(self.execution_plan().with_runtime_generation(
             dae_runtime_control::OwnerGeneration::new(runtime_generation),
@@ -190,10 +186,8 @@ impl ResidentProxyPlan {
         {
             xmux.apply_runtime_generation(runtime_generation);
         }
-        self.handler
-            .apply_connect_udp_runtime_plan(connect_udp_runtime);
         if let Some(parent) = self.chain_parent.as_mut() {
-            Arc::make_mut(parent).apply_runtime_generation(runtime_generation, connect_udp_runtime);
+            Arc::make_mut(parent).apply_runtime_generation(runtime_generation);
         }
     }
 

@@ -8,20 +8,6 @@ fn raw_tls_security_variants_follow_builder_reachability() {
     use UdpDimension as Udp;
     use WrapperDimension as Wrapper;
 
-    for security in [Security::StandardTls, Security::InsecureTls] {
-        let shape = shape(
-            Protocol::ConnectUdpH2,
-            security,
-            Wrapper::ConnectUdpH2,
-            Udp::ConnectUdpH2,
-        );
-        assert_eq!(
-            profile_for_shape(shape),
-            Some(GENERATION_CONNECT_UDP_OWNERSHIP),
-            "{shape:?}"
-        );
-    }
-
     for security in [Security::StandardTls, Security::FragmentedTls] {
         let shape = shape(
             Protocol::ShadowsocksV2rayPluginTlsWebSocket,
@@ -95,18 +81,6 @@ fn builder_unreachable_tls_security_variants_are_rejected() {
     use WrapperDimension as Wrapper;
 
     let impossible = [
-        shape(
-            Protocol::ConnectUdpH2,
-            Security::FragmentedTls,
-            Wrapper::ConnectUdpH2,
-            Udp::ConnectUdpH2,
-        ),
-        shape(
-            Protocol::ConnectUdpH2,
-            Security::FingerprintAwareTls,
-            Wrapper::ConnectUdpH2,
-            Udp::ConnectUdpH2,
-        ),
         shape(
             Protocol::ShadowsocksV2rayPluginTlsWebSocket,
             Security::InsecureTls,

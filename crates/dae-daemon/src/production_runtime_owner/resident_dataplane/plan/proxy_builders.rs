@@ -5,8 +5,6 @@ mod vless;
 pub(super) use self::vless::*;
 mod basic_tcp;
 pub(super) use self::basic_tcp::*;
-mod masque;
-pub(super) use self::masque::*;
 mod shadowsocks;
 pub(super) use self::shadowsocks::*;
 mod shadowsocksr;

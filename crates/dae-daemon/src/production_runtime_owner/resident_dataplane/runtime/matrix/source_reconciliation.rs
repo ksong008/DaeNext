@@ -285,13 +285,6 @@ fn quic_verification(
             (true, true) => MaterializedQuicVerification::Insecure,
             (true, false) => MaterializedQuicVerification::PinOnly,
         },
-        plan::ResidentProxyProtocolPlan::ConnectUdpH3Tls { .. } => {
-            if proxy.allow_insecure {
-                MaterializedQuicVerification::Insecure
-            } else {
-                MaterializedQuicVerification::WebPki
-            }
-        }
         _ => MaterializedQuicVerification::NotApplicable,
     }
 }

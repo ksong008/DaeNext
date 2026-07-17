@@ -92,7 +92,7 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
 }
 
 #[test]
-fn source_shape_registry_admits_h2_and_h3_connect_udp_independently() {
+fn source_shape_registry_rejects_removed_h2_and_h3_connect_udp_independently() {
     let rows = source_shape_registry_rows();
     let connect_udp = rows
         .iter()
@@ -107,9 +107,11 @@ fn source_shape_registry_admits_h2_and_h3_connect_udp_independently() {
         ["connect-udp-h2-endpoint", "connect-udp-h3-endpoint"]
     );
     assert!(connect_udp.iter().all(|row| {
-        row.resident_status == "admitted-baseline"
+        row.source_support == "not-source-supported"
+            && row.resident_status == "not-source-supported"
             && row.link_schemes == ["masque"]
-            && row.executor_proof.proof_state == "runtime-executable"
+            && row.blocker_id == Some("unsupported-source-policy")
+            && row.parser_coverage == "rejected"
     }));
 }
 
@@ -820,6 +822,8 @@ fn source_shape_registry_records_scoped_production_readiness_evidence() {
 fn source_shape_registry_rejects_non_native_policy_shapes() {
     let rows = source_shape_registry_rows();
     for expected in [
+        "connect-udp-h2-endpoint",
+        "connect-udp-h3-endpoint",
         "non-native-abi-outbound-shape",
         "external-runtime-dependent-shape",
         "non-native-executor-dependent-shape",

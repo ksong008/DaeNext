@@ -53,10 +53,8 @@ impl ResidentProxyProbePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
         &mut self,
         runtime_generation: u64,
-        connect_udp_runtime: ResidentConnectUdpRuntimePlan,
     ) {
-        Arc::make_mut(&mut self.proxy)
-            .apply_runtime_generation(runtime_generation, connect_udp_runtime);
+        Arc::make_mut(&mut self.proxy).apply_runtime_generation(runtime_generation);
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn apply_latency_probe_control_mark(
@@ -414,11 +412,9 @@ impl ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
         &mut self,
         runtime_generation: u64,
-        connect_udp_runtime: ResidentConnectUdpRuntimePlan,
     ) {
         for candidate in &mut self.candidates {
-            Arc::make_mut(&mut candidate.proxy)
-                .apply_runtime_generation(runtime_generation, connect_udp_runtime);
+            Arc::make_mut(&mut candidate.proxy).apply_runtime_generation(runtime_generation);
         }
     }
 

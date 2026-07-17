@@ -23,8 +23,6 @@ fn materialized_protocol(protocol: Protocol) -> MaterializedProtocol {
         Protocol::VlessMux => MaterializedProtocol::VlessMux,
         Protocol::Socks5 => MaterializedProtocol::Socks5,
         Protocol::HttpProxy => MaterializedProtocol::HttpProxy,
-        Protocol::ConnectUdpH2 => MaterializedProtocol::ConnectUdpH2,
-        Protocol::ConnectUdpH3 => MaterializedProtocol::ConnectUdpH3,
         Protocol::ShadowsocksAead => MaterializedProtocol::ShadowsocksAead,
         Protocol::Shadowsocks2022 => MaterializedProtocol::Shadowsocks2022,
         Protocol::ShadowsocksSimpleObfsHttp => MaterializedProtocol::ShadowsocksSimpleObfsHttp,
@@ -67,8 +65,6 @@ fn materialized_wrapper(wrapper: WrapperDimension) -> MaterializedWrapper {
     match wrapper {
         WrapperDimension::None => MaterializedWrapper::None,
         WrapperDimension::HttpTransport => MaterializedWrapper::HttpTransport,
-        WrapperDimension::ConnectUdpH2 => MaterializedWrapper::ConnectUdpH2,
-        WrapperDimension::ConnectUdpH3 => MaterializedWrapper::ConnectUdpH3,
         WrapperDimension::WebSocket => MaterializedWrapper::WebSocket,
         WrapperDimension::HttpUpgrade => MaterializedWrapper::HttpUpgrade,
         WrapperDimension::Grpc => MaterializedWrapper::Grpc,
@@ -101,8 +97,6 @@ fn materialized_udp(udp: UdpDimension) -> MaterializedUdp {
         UdpDimension::Hysteria2 => MaterializedUdp::Hysteria2,
         UdpDimension::Tuic => MaterializedUdp::Tuic,
         UdpDimension::Juicity => MaterializedUdp::Juicity,
-        UdpDimension::ConnectUdpH2 => MaterializedUdp::ConnectUdpH2,
-        UdpDimension::ConnectUdpH3 => MaterializedUdp::ConnectUdpH3,
         UdpDimension::PolicyClosed(reason) => {
             MaterializedUdp::PolicyClosed(materialized_policy_closed(reason))
         }

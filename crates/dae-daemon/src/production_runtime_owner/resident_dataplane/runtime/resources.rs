@@ -263,10 +263,6 @@ impl ResidentRuntimeResourceConfig {
                 "attempts": self.dns_udp_forwarder_attempts.json(),
                 "proxyActors": self.dns_proxy_udp_actors.json(),
             },
-            "connectUdp": ResidentConnectUdpRuntimePlan::from_profile(
-                0,
-                self.runtime_profile.profile,
-            ).to_value(),
             "dnsUpstreamResolver": {
                 "refreshSeconds": self.dns_upstream_refresh_seconds.json(),
             },

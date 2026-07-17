@@ -35,10 +35,10 @@ fn registry_rows_and_reconciliations_are_total_and_unique() {
             .filter(|reconciliation| reconciliation.kind == kind)
             .count()
     };
-    assert_eq!(count(SourceShapeReconciliationKind::ProductionWitness), 44);
+    assert_eq!(count(SourceShapeReconciliationKind::ProductionWitness), 42);
     assert_eq!(count(SourceShapeReconciliationKind::AggregateCapability), 5);
     assert_eq!(count(SourceShapeReconciliationKind::DeferredCapability), 3);
-    assert_eq!(count(SourceShapeReconciliationKind::SourceRejected), 3);
+    assert_eq!(count(SourceShapeReconciliationKind::SourceRejected), 5);
 }
 
 #[test]

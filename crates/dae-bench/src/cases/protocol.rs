@@ -1,12 +1,10 @@
 use std::hint::black_box;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose};
 use dae_outbound::{
-    AnyTLSLink, HttpConnectOptions, HttpProxyLink, Hysteria2Link, JuicityLink, MasqueLink,
-    ShadowsocksLink, ShadowsocksMetadata, Socks5Address, TrojanLink, TuicLink, VLESSLink,
-    VMessLink, VMessMetadata,
+    AnyTLSLink, HttpConnectOptions, HttpProxyLink, Hysteria2Link, JuicityLink, ShadowsocksLink,
+    ShadowsocksMetadata, Socks5Address, TrojanLink, TuicLink, VLESSLink, VMessLink, VMessMetadata,
 };
 
 use crate::{BenchCase, Measurement, measure};
@@ -28,7 +26,5 @@ mod anytls;
 use self::anytls::*;
 mod shared_transport;
 use self::shared_transport::*;
-mod masque;
-use self::masque::*;
 mod helpers;
 use self::helpers::*;

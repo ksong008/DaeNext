@@ -114,14 +114,6 @@ impl UdpSessionExecutor {
                 *allow_insecure,
                 pinned_certchain_sha256.clone(),
             )),
-            (
-                ResidentProxyProtocolPlan::ConnectUdpH2Tls { runtime, .. },
-                ResidentUdpExecutorFactory::ConnectUdpH2,
-            ) => Self::ConnectUdpH2(ConnectUdpH2Session::new(*runtime)),
-            (
-                ResidentProxyProtocolPlan::ConnectUdpH3Tls { runtime, .. },
-                ResidentUdpExecutorFactory::ConnectUdpH3,
-            ) => Self::ConnectUdpH3(ConnectUdpH3Session::new(*runtime)),
             (_, ResidentUdpExecutorFactory::PolicyClosed(reason)) => {
                 Self::fail_closed(reason.reason())
             }

@@ -45,7 +45,8 @@ fn juicity_verification_cross_product_has_one_exact_row() {
 }
 
 #[test]
-fn connect_udp_h2_and_h3_cover_verified_and_insecure_tls() {
+fn connect_udp_h2_and_h3_sources_remain_policy_closed() {
+    let config = fixture_config();
     for transport in ["h2", "h3"] {
         for allow_insecure in [false, true] {
             let source = connect_udp_source(transport, allow_insecure);
@@ -54,38 +55,18 @@ fn connect_udp_h2_and_h3_cover_verified_and_insecure_tls() {
             } else {
                 "connect-udp-h3-endpoint"
             };
-            let shape = assert_exact_source(&source, &fixture_config(), &[expected_id]);
-            if transport == "h2" {
-                assert_eq!(
-                    shape.tls_variant(),
-                    MaterializedTlsVariant::new(
-                        if allow_insecure {
-                            MaterializedSecurity::InsecureTls
-                        } else {
-                            MaterializedSecurity::StandardTls
-                        },
-                        if allow_insecure {
-                            MaterializedTlsFeatures::ALLOW_INSECURE
-                        } else {
-                            MaterializedTlsFeatures::NONE
-                        },
-                    )
-                );
-                assert_eq!(
-                    shape.quic_verification,
-                    MaterializedQuicVerification::NotApplicable
-                );
-            } else {
-                assert_quic_tls(shape);
-                assert_eq!(
-                    shape.quic_verification,
-                    if allow_insecure {
-                        MaterializedQuicVerification::Insecure
-                    } else {
-                        MaterializedQuicVerification::WebPki
-                    }
-                );
-            }
+            let error = build_resident_proxy_plan_for_node(
+                &config,
+                "proxy".to_owned(),
+                "connect-udp-policy".to_owned(),
+                source,
+            )
+            .expect_err("removed CONNECT-UDP source must remain fail-closed");
+            assert!(error.contains("unsupported masque node"), "{error}");
+            assert_eq!(
+                source_shape_reconciliation(expected_id).unwrap().kind,
+                SourceShapeReconciliationKind::SourceRejected,
+            );
         }
     }
 }

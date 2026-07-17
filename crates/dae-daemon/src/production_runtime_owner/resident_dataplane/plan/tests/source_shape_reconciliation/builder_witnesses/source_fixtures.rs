@@ -15,17 +15,6 @@ pub(super) fn shadowsocks_2022_source(host: &str, port: u16) -> String {
     .export_url()
 }
 
-pub(super) fn connect_udp_source(
-    transport: &str,
-    host: &str,
-    port: u16,
-    authority: &str,
-) -> String {
-    format!(
-        "masque://identity:credential@{host}:{port}?transport={transport}&auth=basic&template=%2F.well-known%2Fmasque%2Fudp%2F%7Btarget_host%7D%2F%7Btarget_port%7D%2F&sni={authority}"
-    )
-}
-
 pub(super) fn https_transport_source(primary: &str, authority: &str) -> String {
     let mut source = url::Url::parse(&https_proxy_fixture_url(primary, fixture_port(3))).unwrap();
     source

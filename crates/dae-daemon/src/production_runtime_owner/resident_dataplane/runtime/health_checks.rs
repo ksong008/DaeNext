@@ -13,10 +13,6 @@ use tcp_family_probe::{
 };
 #[path = "health_checks/udp_family_probe.rs"]
 mod udp_family_probe;
-use udp_family_probe::{
-    ResidentUdpFamilyProbeResult, preferred_udp_family_probe_result,
-    probe_resident_candidate_udp_families,
-};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HealthCheckRoundStatus {
@@ -264,93 +260,9 @@ pub(crate) async fn probe_resident_candidate_manual_latency_snapshot(
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::ManualProbe,
         Some(dae_runtime_control::OwnerGeneration::new(reload_generation)),
-        async move {
-            match candidate.proxy.execution_plan().manual_probe_dispatch() {
-                plan::ResidentManualProbeDispatch::Tcp => {
-                    probe_resident_candidate_tcp_latency_snapshot_scoped(
-                        candidate,
-                        reload_generation,
-                    )
-                    .await
-                }
-                plan::ResidentManualProbeDispatch::Udp => {
-                    probe_resident_candidate_udp_latency_snapshot(candidate, reload_generation)
-                        .await
-                }
-                plan::ResidentManualProbeDispatch::PolicyClosed => {
-                    manual_probe_unavailable_snapshot(
-                        &candidate.link,
-                        "native outbound probe not admitted for this node",
-                        candidate
-                            .proxy
-                            .execution_plan()
-                            .udp
-                            .agreement()
-                            .unsupported_reason()
-                            .unwrap_or(
-                                "manual probe is policy-closed for this exact protocol shape",
-                            ),
-                        unix_now_secs(),
-                        reload_generation,
-                    )
-                }
-            }
-        },
+        probe_resident_candidate_tcp_latency_snapshot_scoped(candidate, reload_generation),
     )
     .await
-}
-
-async fn probe_resident_candidate_udp_latency_snapshot(
-    candidate: plan::ResidentProxyProbePlan,
-    reload_generation: u64,
-) -> Value {
-    let checked_at = unix_now_secs();
-    let family_results = probe_resident_candidate_udp_families(&candidate, None)
-        .await
-        .unwrap_or_default();
-    let preferred = preferred_udp_family_probe_result(&family_results);
-    let latency_ms = preferred.and_then(|result| result.latency_ms);
-    let preferred_health_state = preferred.map(|result| result.health_state.as_str());
-    let message = preferred
-        .and_then(|result| result.message.clone())
-        .or_else(|| {
-            family_results
-                .is_empty()
-                .then(|| "all UDP health family probes were cancelled".to_owned())
-        });
-    let family_results_json = family_results
-        .iter()
-        .map(ResidentUdpFamilyProbeResult::to_json)
-        .collect::<Vec<_>>();
-    let display_name = candidate.node_tag.as_str();
-    let graph_id = candidate.proxy.graph_id.as_str();
-    let link_hash = candidate.link_hash.as_str();
-    let execution_identity = candidate.execution_identity.as_str();
-    let redacted_source = candidate.redacted_link_source.as_str();
-    let network_type = preferred.map(|result| result.network_type.string_without_dns());
-    let network_dimension = preferred.map(|result| result.network_type.dimension_name());
-    json!({
-        "name": display_name,
-        "displayName": display_name,
-        "graphId": graph_id,
-        "reloadGeneration": reload_generation,
-        "linkHash": link_hash,
-        "executionIdentity": execution_identity,
-        "linkIdentity": latency_link_identity_value(display_name, link_hash, redacted_source),
-        "probeExecutor": resident_probe_executor_value(graph_id, reload_generation),
-        "runtimeComponents": candidate
-            .proxy
-            .runtime_component_evidence_value_for_reload_generation(reload_generation),
-        "latencyMs": latency_ms,
-        "alive": latency_ms.is_some(),
-        "healthState": preferred_health_state,
-        "checkedAtUnix": checked_at,
-        "message": message,
-        "networkType": network_type,
-        "networkDimension": network_dimension,
-        "familyResults": family_results_json,
-        "scope": "proxy-udp-check",
-    })
 }
 
 pub(crate) fn manual_probe_unavailable_snapshot(

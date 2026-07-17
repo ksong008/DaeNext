@@ -64,12 +64,11 @@ pub(crate) fn assert_live_release_and_runtime_state_contract(report: &Value) {
             && !entry["live_ready"].as_bool().unwrap()
             && !entry["missing"].as_array().unwrap().is_empty()
     }));
-    assert!(matrix_entries.iter().any(|entry| {
-        entry["handler"].as_str().unwrap() == "connect-udp"
-            && entry["wired_ready"].as_bool().unwrap()
-            && !entry["live_ready"].as_bool().unwrap()
-            && !entry["missing"].as_array().unwrap().is_empty()
-    }));
+    assert!(
+        matrix_entries
+            .iter()
+            .all(|entry| entry["handler"].as_str().unwrap() != "connect-udp")
+    );
     assert_eq!(
         report["resident_live_adapter_matrix_typed_report"]["status"]
             .as_str()

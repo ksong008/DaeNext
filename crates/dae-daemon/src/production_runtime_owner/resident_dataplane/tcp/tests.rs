@@ -1,5 +1,4 @@
 use super::*;
-use crate::production_runtime_owner::resident_dataplane::ResidentConnectUdpRuntimePlan;
 use crate::production_runtime_owner::resident_dataplane::plan::resident_tcp_check_network_type;
 use dae_outbound::NetworkType;
 use serde_json::json;
@@ -355,7 +354,7 @@ fn runtime_generation_reaches_primary_and_download_xmux_keys() {
     proxy.xhttp_xmux = Some(ResidentXhttpXmuxPlan::official_default());
     proxy.xhttp_download = Some(ResidentXhttpEndpointPlan::from_proxy(&proxy));
 
-    proxy.apply_runtime_generation(73, ResidentConnectUdpRuntimePlan::standalone());
+    proxy.apply_runtime_generation(73);
 
     assert_eq!(proxy.xhttp_xmux.as_ref().unwrap().runtime_generation, 73);
     assert_eq!(

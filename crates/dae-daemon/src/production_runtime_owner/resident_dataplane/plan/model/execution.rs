@@ -27,13 +27,6 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     pub(in crate::production_runtime_owner::resident_dataplane) runtime_generation: OwnerGeneration,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentManualProbeDispatch {
-    Tcp,
-    Udp,
-    PolicyClosed,
-}
-
 impl ResidentExecutionPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) const fn plan_generation()
     -> OwnerGeneration {
@@ -75,21 +68,6 @@ impl ResidentExecutionPlan {
             udp_policy_closed: self.udp.policy_closed(),
         }
     }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn manual_probe_dispatch(
-        self,
-    ) -> ResidentManualProbeDispatch {
-        match self.protocol {
-            ResidentProtocolShape::ConnectUdpH2 | ResidentProtocolShape::ConnectUdpH3 => {
-                if self.udp.policy_closed() {
-                    ResidentManualProbeDispatch::PolicyClosed
-                } else {
-                    ResidentManualProbeDispatch::Udp
-                }
-            }
-            _ => ResidentManualProbeDispatch::Tcp,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -100,26 +78,5 @@ mod tests {
     fn materialized_execution_plan_stays_compact() {
         assert!(std::mem::size_of::<ResidentExecutionPlan>() <= 16);
         assert!(std::mem::size_of::<Option<ResidentExecutionPlan>>() <= 16);
-    }
-
-    #[test]
-    fn connect_udp_manual_probe_follows_udp_admission_independently() {
-        let h2 = ResidentExecutionPlan {
-            protocol: ResidentProtocolShape::ConnectUdpH2,
-            security: ResidentSecurityUnderlayPlan::StandardTls,
-            wrapper: ResidentStreamWrapperPlan::ConnectUdpH2,
-            udp: ResidentUdpExecutorFactory::ConnectUdpH2,
-            runtime_generation: UNMATERIALIZED_RESIDENT_PLAN_GENERATION,
-        };
-        assert_eq!(h2.manual_probe_dispatch(), ResidentManualProbeDispatch::Udp);
-
-        let h3 = ResidentExecutionPlan {
-            protocol: ResidentProtocolShape::ConnectUdpH3,
-            security: ResidentSecurityUnderlayPlan::QuicTls,
-            wrapper: ResidentStreamWrapperPlan::ConnectUdpH3,
-            udp: ResidentUdpExecutorFactory::ConnectUdpH3,
-            runtime_generation: UNMATERIALIZED_RESIDENT_PLAN_GENERATION,
-        };
-        assert_eq!(h3.manual_probe_dispatch(), ResidentManualProbeDispatch::Udp);
     }
 }

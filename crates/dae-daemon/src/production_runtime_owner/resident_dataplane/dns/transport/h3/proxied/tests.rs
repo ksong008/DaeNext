@@ -4,6 +4,7 @@ use std::future::pending;
 use std::sync::{Arc, Mutex};
 
 mod bounded_cleanup;
+mod h3_server;
 mod production_resources;
 mod resource_balance;
 

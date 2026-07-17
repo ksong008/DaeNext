@@ -62,9 +62,9 @@ mod tests {
     use super::*;
     use dae_outbound::{
         CALLER_SCOPED_HYSTERIA2_OWNERSHIP, CALLER_SCOPED_JUICITY_OWNERSHIP,
-        CALLER_SCOPED_TUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, GENERATION_CONNECT_UDP_OWNERSHIP,
-        LogicalLeaseKind, MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, PhysicalCarrierKind,
-        RuntimeOwnershipModel, RuntimeRouteAdmission,
+        CALLER_SCOPED_TUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, LogicalLeaseKind,
+        MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, PhysicalCarrierKind, RuntimeOwnershipModel,
+        RuntimeRouteAdmission,
     };
     use plan::{
         ResidentExecutionPlan, ResidentProtocolShape as Protocol,
@@ -102,18 +102,6 @@ mod tests {
             ownership.model,
             RuntimeOwnershipModel::CallerScopedHysteria2Transport
         );
-    }
-
-    #[test]
-    fn connect_udp_execution_uses_the_generation_transport_contract() {
-        let ownership = materialized_runtime_ownership(execution(
-            Protocol::ConnectUdpH3,
-            Security::QuicTls,
-            Wrapper::ConnectUdpH3,
-            Udp::ConnectUdpH3,
-        ));
-
-        assert_eq!(ownership, GENERATION_CONNECT_UDP_OWNERSHIP);
     }
 
     #[test]
