@@ -125,6 +125,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) enum UdpRespons
         wire_source: Option<SocketAddr>,
         observed_identity: Option<UdpResponseIdentityToken>,
     },
+    SessionBound {
+        wire_source: Option<SocketAddr>,
+        observed_identity: Option<UdpResponseIdentityToken>,
+    },
     Rejected(UdpResponseDropReason),
 }
 
@@ -149,6 +153,10 @@ impl UdpResponseIdentityEvidence {
             },
             Self::Rejected(reason) => UdpFixedTargetValidation::Dropped(reason),
             Self::Decoded {
+                wire_source,
+                observed_identity,
+            }
+            | Self::SessionBound {
                 wire_source,
                 observed_identity,
             } => {

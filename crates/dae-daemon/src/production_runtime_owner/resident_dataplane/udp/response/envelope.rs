@@ -110,6 +110,19 @@ impl UdpResponseEnvelope {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn with_session_bound_response_identity(
+        mut self,
+        source: std::net::SocketAddr,
+        observed_identity: Option<UdpResponseIdentityToken>,
+    ) -> Self {
+        self.identity = UdpResponseIdentityEvidence::SessionBound {
+            wire_source: Some(source),
+            observed_identity,
+        };
+        self
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn with_expected_protocol_identity(
         mut self,
         expected_identity: UdpResponseIdentityToken,
@@ -145,11 +158,16 @@ impl UdpResponseEnvelope {
             UdpResponseIdentityEvidence::Decoded {
                 observed_identity: Some(_),
                 ..
+            }
+            | UdpResponseIdentityEvidence::SessionBound {
+                observed_identity: Some(_),
+                ..
             } => self.expected_protocol_identity.map_or_else(
                 || UdpFixedTargetExpectation::decoded_source(source),
                 |identity| UdpFixedTargetExpectation::with_protocol_identity(source, identity),
             ),
             UdpResponseIdentityEvidence::Decoded { .. }
+            | UdpResponseIdentityEvidence::SessionBound { .. }
             | UdpResponseIdentityEvidence::Rejected(_) => {
                 UdpFixedTargetExpectation::decoded_source(source)
             }
