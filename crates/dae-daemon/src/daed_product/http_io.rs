@@ -1,4 +1,67 @@
 use super::*;
+const STATIC_FILE_CHUNK_BYTES: usize = 16 * 1024;
+
+pub(super) fn write_static_file_response(
+    stream: &mut TcpStream,
+    web_root: &Path,
+    request: &HttpRequest,
+    head_only: bool,
+) -> io::Result<()> {
+    if request.method != "GET" && request.method != "HEAD" {
+        let response = HttpResponse::json(405, json!({"error": "method should be GET or HEAD"}));
+        return write_http_response_for_request(stream, request, &response, head_only);
+    }
+    let mut path = match safe_static_path(web_root, &request.path) {
+        Some(path) => path,
+        None => {
+            let response = HttpResponse::json(400, json!({"error": "invalid static path"}));
+            return write_http_response_for_request(stream, request, &response, head_only);
+        }
+    };
+    if path.is_dir() {
+        path = path.join("index.html");
+    }
+    if !path.is_file() {
+        path = web_root.join("index.html");
+    }
+    let mut file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) => {
+            let response = HttpResponse::json(404, json!({"error": error.to_string()}));
+            return write_http_response_for_request(stream, request, &response, head_only);
+        }
+    };
+    let content_length = file.metadata()?.len();
+    let deadline = Instant::now()
+        .checked_add(PRODUCT_HTTP_RESPONSE_WRITE_TIMEOUT)
+        .unwrap_or_else(Instant::now);
+    let mut head = Vec::with_capacity(256);
+    write!(
+        head,
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n",
+        mime_for_path(&path),
+        content_length,
+    )?;
+    write_all_with_deadline(stream, &head, deadline)?;
+    if !head_only {
+        let mut chunk = [0_u8; STATIC_FILE_CHUNK_BYTES];
+        loop {
+            let read = match file.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            };
+            write_all_with_deadline(stream, &chunk[..read], deadline)?;
+        }
+    }
+    stream.set_write_timeout(Some(socket_timeout_until(
+        deadline,
+        "HTTP response write deadline exceeded",
+    )?))?;
+    stream.flush()
+}
+
 pub(super) fn serve_static_file(web_root: &Path, request: &HttpRequest) -> HttpResponse {
     if request.method != "GET" && request.method != "HEAD" {
         return HttpResponse::json(405, json!({"error": "method should be GET or HEAD"}));
@@ -468,4 +531,40 @@ pub(super) fn help_text() -> String {
   daed resetpass -c /etc/daed [--json]
 "#
     .to_owned()
+}
+
+#[cfg(test)]
+mod static_response_tests {
+    use super::*;
+
+    #[test]
+    fn static_response_streams_the_complete_file_with_bounded_chunks() {
+        let root = std::env::temp_dir().join(format!("daed-static-response-{}", fastrand::u64(..)));
+        fs::create_dir_all(&root).unwrap();
+        let body = vec![0x5a; STATIC_FILE_CHUNK_BYTES * 3 + 17];
+        fs::write(root.join("asset.bin"), &body).unwrap();
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let request = HttpRequest {
+            method: "GET".to_owned(),
+            path: "/asset.bin".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+        let writer = thread::spawn(move || {
+            write_static_file_response(&mut server, &root, &request, false).unwrap();
+            fs::remove_dir_all(root).unwrap();
+        });
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        writer.join().unwrap();
+        let body_start = find_subsequence(&response, b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(&response[body_start..], body.as_slice());
+        assert!(
+            String::from_utf8_lossy(&response[..body_start])
+                .contains(&format!("Content-Length: {}", body.len()))
+        );
+    }
 }
