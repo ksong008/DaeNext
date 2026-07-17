@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dae_runtime_control::{OwnerGeneration, PhysicalOwnerState};
@@ -56,10 +55,20 @@ struct QuicEndpointLiveRecord {
 
 #[derive(Default)]
 struct QuicEndpointGenerationMetrics {
-    creations: BTreeMap<QuicEndpointMetricDimensions, u64>,
+    creations: Vec<(QuicEndpointMetricDimensions, u64)>,
     failed_transitions: u64,
     draining_transitions: u64,
     closed_transitions: u64,
+}
+
+struct QuicEndpointGenerationEntry {
+    generation: Option<OwnerGeneration>,
+    metrics: QuicEndpointGenerationMetrics,
+}
+
+struct QuicEndpointLiveEntry {
+    id: u64,
+    record: QuicEndpointLiveRecord,
 }
 
 #[derive(Default)]
@@ -67,23 +76,86 @@ struct QuicEndpointMetricsRegistry {
     // Evidence only: records contain no Endpoint, Connection, socket, task, or protocol state.
     // Physical ownership remains with each protocol caller until a protocol registry is migrated.
     next_id: u64,
-    live: BTreeMap<u64, QuicEndpointLiveRecord>,
-    generations: BTreeMap<Option<OwnerGeneration>, QuicEndpointGenerationMetrics>,
+    live: Vec<QuicEndpointLiveEntry>,
+    generations: Vec<QuicEndpointGenerationEntry>,
 }
 
 impl QuicEndpointMetricsRegistry {
+    fn generation_metrics(
+        &self,
+        generation: Option<OwnerGeneration>,
+    ) -> Option<&QuicEndpointGenerationMetrics> {
+        self.generations
+            .binary_search_by_key(&generation, |entry| entry.generation)
+            .ok()
+            .map(|index| &self.generations[index].metrics)
+    }
+
+    fn generation_metrics_mut(
+        &mut self,
+        generation: Option<OwnerGeneration>,
+    ) -> &mut QuicEndpointGenerationMetrics {
+        let index = match self
+            .generations
+            .binary_search_by_key(&generation, |entry| entry.generation)
+        {
+            Ok(index) => index,
+            Err(index) => {
+                self.generations.insert(
+                    index,
+                    QuicEndpointGenerationEntry {
+                        generation,
+                        metrics: QuicEndpointGenerationMetrics::default(),
+                    },
+                );
+                index
+            }
+        };
+        &mut self.generations[index].metrics
+    }
+
+    fn live_record(&self, id: u64) -> Option<&QuicEndpointLiveRecord> {
+        self.live
+            .binary_search_by_key(&id, |entry| entry.id)
+            .ok()
+            .map(|index| &self.live[index].record)
+    }
+
+    fn live_record_mut(&mut self, id: u64) -> Option<&mut QuicEndpointLiveRecord> {
+        self.live
+            .binary_search_by_key(&id, |entry| entry.id)
+            .ok()
+            .map(|index| &mut self.live[index].record)
+    }
+
+    fn generation_has_live_endpoint(&self, generation: Option<OwnerGeneration>) -> bool {
+        self.live
+            .iter()
+            .any(|entry| entry.record.provenance.generation == generation)
+    }
+
     fn register(&mut self, provenance: QuicEndpointProvenance) -> u64 {
-        self.next_id = self.next_id.wrapping_add(1).max(1);
-        let id = self.next_id;
-        self.generations.entry(provenance.generation).or_default();
+        let mut id = self.next_id.wrapping_add(1).max(1);
+        while self.live_record(id).is_some() {
+            id = id.wrapping_add(1).max(1);
+        }
+        self.next_id = id;
+        self.generation_metrics_mut(provenance.generation);
+        let index = self
+            .live
+            .binary_search_by_key(&id, |entry| entry.id)
+            .expect_err("unused QUIC endpoint observation id");
         self.live.insert(
-            id,
-            QuicEndpointLiveRecord {
-                provenance,
-                state: PhysicalOwnerState::Connecting,
-                udp_fd_live: false,
-                endpoint_driver_task_live: false,
-                endpoint_charge_live: false,
+            index,
+            QuicEndpointLiveEntry {
+                id,
+                record: QuicEndpointLiveRecord {
+                    provenance,
+                    state: PhysicalOwnerState::Connecting,
+                    udp_fd_live: false,
+                    endpoint_driver_task_live: false,
+                    endpoint_charge_live: false,
+                },
             },
         );
         self.prune_inactive_generations();
@@ -91,22 +163,20 @@ impl QuicEndpointMetricsRegistry {
     }
 
     fn endpoint_created(&mut self, id: u64) {
-        let Some(record) = self.live.get(&id) else {
+        let Some(record) = self.live_record(id) else {
             return;
         };
         let generation = record.provenance.generation;
         let dimensions = QuicEndpointMetricDimensions::from(&record.provenance);
-        *self
-            .generations
-            .entry(generation)
-            .or_default()
-            .creations
-            .entry(dimensions)
-            .or_default() += 1;
+        let creations = &mut self.generation_metrics_mut(generation).creations;
+        match creations.binary_search_by_key(&dimensions, |(dimensions, _)| *dimensions) {
+            Ok(index) => creations[index].1 += 1,
+            Err(index) => creations.insert(index, (dimensions, 1)),
+        }
     }
 
     fn transition(&mut self, id: u64, next: PhysicalOwnerState) {
-        let Some(record) = self.live.get_mut(&id) else {
+        let Some(record) = self.live_record_mut(id) else {
             return;
         };
         if record.state == next || !state_transition_allowed(record.state, next) {
@@ -114,7 +184,7 @@ impl QuicEndpointMetricsRegistry {
         }
         record.state = next;
         let generation = record.provenance.generation;
-        let generation = self.generations.entry(generation).or_default();
+        let generation = self.generation_metrics_mut(generation);
         match next {
             PhysicalOwnerState::Failed => generation.failed_transitions += 1,
             PhysicalOwnerState::Draining => generation.draining_transitions += 1,
@@ -125,8 +195,7 @@ impl QuicEndpointMetricsRegistry {
 
     fn mark_closed_if_draining(&mut self, id: u64) {
         if self
-            .live
-            .get(&id)
+            .live_record(id)
             .is_some_and(|record| record.state == PhysicalOwnerState::Draining)
         {
             self.transition(id, PhysicalOwnerState::Closed);
@@ -134,7 +203,7 @@ impl QuicEndpointMetricsRegistry {
     }
 
     fn set_udp_fd_live(&mut self, id: u64, live: bool) {
-        if let Some(record) = self.live.get_mut(&id) {
+        if let Some(record) = self.live_record_mut(id) {
             record.udp_fd_live = live;
             // Quinn's receive slab and Endpoint state share the EndpointInner that owns this
             // abstract socket. The socket lifetime therefore remains charged even if the
@@ -144,14 +213,14 @@ impl QuicEndpointMetricsRegistry {
     }
 
     fn set_endpoint_driver_live(&mut self, id: u64, live: bool) {
-        if let Some(record) = self.live.get_mut(&id) {
+        if let Some(record) = self.live_record_mut(id) {
             record.endpoint_driver_task_live = live;
         }
     }
 
     fn endpoint_driver_finished(&mut self, id: u64) {
         self.set_endpoint_driver_live(id, false);
-        if self.live.get(&id).is_some_and(|record| {
+        if self.live_record(id).is_some_and(|record| {
             matches!(
                 record.state,
                 PhysicalOwnerState::Connecting | PhysicalOwnerState::Ready
@@ -162,39 +231,40 @@ impl QuicEndpointMetricsRegistry {
     }
 
     fn release(&mut self, id: u64) {
-        if !self.live.contains_key(&id) {
+        let Ok(index) = self.live.binary_search_by_key(&id, |entry| entry.id) else {
             return;
-        }
+        };
         self.transition(id, PhysicalOwnerState::Closed);
-        self.live.remove(&id);
+        self.live.remove(index);
         self.prune_inactive_generations();
     }
 
     fn prune_inactive_generations(&mut self) {
-        let live_generations = self
-            .live
-            .values()
-            .map(|record| record.provenance.generation)
-            .collect::<std::collections::BTreeSet<_>>();
         let inactive = self
             .generations
-            .keys()
-            .copied()
-            .filter(|generation| !live_generations.contains(generation))
+            .iter()
+            .map(|entry| entry.generation)
+            .filter(|generation| !self.generation_has_live_endpoint(*generation))
             .collect::<Vec<_>>();
         let remove = inactive.len().saturating_sub(
             QuicEndpointObservabilityProfile::CURRENT.retained_inactive_generations,
         );
         for generation in inactive.into_iter().take(remove) {
-            self.generations.remove(&generation);
+            if let Ok(index) = self
+                .generations
+                .binary_search_by_key(&generation, |entry| entry.generation)
+            {
+                self.generations.remove(index);
+            }
         }
     }
 
     fn snapshot(&self, generation: Option<OwnerGeneration>) -> Value {
-        let generation_metrics = self.generations.get(&generation);
+        let generation_metrics = self.generation_metrics(generation);
         let records = self
             .live
-            .values()
+            .iter()
+            .map(|entry| &entry.record)
             .filter(|record| record.provenance.generation == generation)
             .collect::<Vec<_>>();
         let mut connecting = 0_u64;
@@ -239,7 +309,13 @@ impl QuicEndpointMetricsRegistry {
             }
         }
         let creations_total = generation_metrics
-            .map(|metrics| metrics.creations.values().copied().sum::<u64>())
+            .map(|metrics| {
+                metrics
+                    .creations
+                    .iter()
+                    .map(|(_, count)| *count)
+                    .sum::<u64>()
+            })
             .unwrap_or_default();
         let creations = generation_metrics
             .map(|metrics| {
@@ -337,27 +413,20 @@ impl QuicEndpointMetricsRegistry {
 
     fn runtime_snapshot(&self, current_generation: OwnerGeneration) -> Value {
         let mut current = self.snapshot(Some(current_generation));
-        let live_generations = self
-            .live
-            .values()
-            .map(|record| record.provenance.generation)
-            .collect::<std::collections::BTreeSet<_>>();
         let other_live_generations = self
             .generations
-            .keys()
-            .filter_map(|generation| *generation)
+            .iter()
+            .filter_map(|entry| entry.generation)
             .filter(|generation| *generation != current_generation)
-            .filter(|generation| live_generations.contains(&Some(*generation)))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
+            .filter(|generation| self.generation_has_live_endpoint(Some(*generation)))
             .map(|generation| self.snapshot(Some(generation)))
             .collect::<Vec<_>>();
         let inactive_generation_history = self
             .generations
-            .keys()
-            .filter_map(|generation| *generation)
+            .iter()
+            .filter_map(|entry| entry.generation)
             .filter(|generation| *generation != current_generation)
-            .filter(|generation| !live_generations.contains(&Some(*generation)))
+            .filter(|generation| !self.generation_has_live_endpoint(Some(*generation)))
             .map(|generation| self.snapshot(Some(generation)))
             .collect::<Vec<_>>();
         current["inventoryScope"] = json!("current-plus-unassigned-and-other-live");
@@ -383,7 +452,8 @@ impl QuicEndpointMetricsRegistry {
         let mut udp6_fds = 0_u64;
         let mut endpoint_driver_tasks = 0_u64;
         let mut charged_bytes = 0_u64;
-        for record in self.live.values() {
+        for entry in &self.live {
+            let record = &entry.record;
             let state_index = match record.state {
                 PhysicalOwnerState::Connecting => 0,
                 PhysicalOwnerState::Ready => 1,
@@ -528,4 +598,207 @@ pub(crate) fn quic_endpoint_metrics_snapshot(generation: u64) -> Value {
         .lock()
         .unwrap()
         .runtime_snapshot(OwnerGeneration::new(generation))
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use crate::production_runtime_owner::resident_dataplane::tcp::proxy_dispatch::quic_endpoint::{
+        charge::QuicEndpointCharge, model::QuicEndpointOpenContext,
+    };
+
+    fn provenance(
+        protocol: QuicEndpointProtocol,
+        caller: QuicEndpointCallerClass,
+        generation: Option<OwnerGeneration>,
+        ipv6: bool,
+    ) -> QuicEndpointProvenance {
+        let endpoint_config = quinn::EndpointConfig::default();
+        let charge =
+            QuicEndpointCharge::for_socket(&endpoint_config, 1, protocol.uses_http3()).unwrap();
+        let (remote, bind) = if ipv6 {
+            ("[::1]:443".parse().unwrap(), "[::]:0".parse().unwrap())
+        } else {
+            (
+                "127.0.0.1:443".parse().unwrap(),
+                "0.0.0.0:0".parse().unwrap(),
+            )
+        };
+        QuicEndpointOpenContext::isolated_test(
+            protocol,
+            caller,
+            generation,
+            b"metrics-registry-test",
+        )
+        .finalize(remote, bind, 0, QuicEndpointUnderlay::Ordinary, charge)
+    }
+
+    #[test]
+    fn creations_and_live_records_remain_sorted_by_typed_keys() {
+        let generation = Some(OwnerGeneration::new(71));
+        let mut registry = QuicEndpointMetricsRegistry {
+            next_id: 9,
+            ..Default::default()
+        };
+        let high_id = registry.register(provenance(
+            QuicEndpointProtocol::DnsOverHttp3,
+            QuicEndpointCallerClass::ManualProbe,
+            generation,
+            true,
+        ));
+        registry.next_id = 1;
+        let low_id = registry.register(provenance(
+            QuicEndpointProtocol::Hysteria2,
+            QuicEndpointCallerClass::TcpData,
+            generation,
+            false,
+        ));
+        registry.endpoint_created(high_id);
+        registry.endpoint_created(low_id);
+        registry.endpoint_created(low_id);
+
+        assert_eq!(
+            registry
+                .live
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec![low_id, high_id]
+        );
+        let creations = &registry.generation_metrics(generation).unwrap().creations;
+        assert!(creations.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        assert_eq!(creations.iter().map(|(_, count)| *count).sum::<u64>(), 3);
+
+        let snapshot = registry.snapshot(generation);
+        assert_eq!(snapshot["schema"], QUIC_ENDPOINT_METRICS_SCHEMA);
+        assert_eq!(
+            snapshot["schemaVersion"],
+            QUIC_ENDPOINT_METRICS_SCHEMA_VERSION
+        );
+        assert_eq!(snapshot["cumulativeCreations"], 3);
+        assert_eq!(
+            snapshot["creationsByDimensions"][0]["protocol"],
+            "hysteria2"
+        );
+        assert_eq!(snapshot["creationsByDimensions"][0]["count"], 2);
+        assert_eq!(snapshot["creationsByDimensions"][1]["protocol"], "doh3");
+        assert_eq!(snapshot["creationsByDimensions"][1]["count"], 1);
+    }
+
+    #[test]
+    fn live_generations_are_retained_and_inactive_history_keeps_highest_ids() {
+        let current_generation = OwnerGeneration::new(130);
+        let mut registry = QuicEndpointMetricsRegistry::default();
+        let unassigned = registry.register(provenance(
+            QuicEndpointProtocol::Juicity,
+            QuicEndpointCallerClass::ManagedDns,
+            None,
+            false,
+        ));
+        let current = registry.register(provenance(
+            QuicEndpointProtocol::Tuic,
+            QuicEndpointCallerClass::TcpData,
+            Some(current_generation),
+            false,
+        ));
+        let other_live_high = registry.register(provenance(
+            QuicEndpointProtocol::DnsOverQuic,
+            QuicEndpointCallerClass::ConfiguredDns,
+            Some(OwnerGeneration::new(120)),
+            false,
+        ));
+        let other_live_low = registry.register(provenance(
+            QuicEndpointProtocol::Hysteria2,
+            QuicEndpointCallerClass::BackgroundHealth,
+            Some(OwnerGeneration::new(110)),
+            false,
+        ));
+
+        for generation in [140, 150, 160] {
+            let id = registry.register(provenance(
+                QuicEndpointProtocol::XhttpHttp3,
+                QuicEndpointCallerClass::ManualProbe,
+                Some(OwnerGeneration::new(generation)),
+                true,
+            ));
+            registry.release(id);
+        }
+
+        let snapshot = registry.runtime_snapshot(current_generation);
+        assert_eq!(snapshot["unassigned"]["liveStates"]["total"], 1);
+        assert_eq!(
+            snapshot["otherLiveGenerations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value["generation"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![110, 120]
+        );
+        assert_eq!(
+            snapshot["inactiveGenerationHistory"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value["generation"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![150, 160]
+        );
+
+        for id in [unassigned, current, other_live_high, other_live_low] {
+            registry.release(id);
+        }
+    }
+
+    #[test]
+    fn release_records_closed_before_removing_the_live_record() {
+        let generation = Some(OwnerGeneration::new(170));
+        let mut registry = QuicEndpointMetricsRegistry::default();
+        let id = registry.register(provenance(
+            QuicEndpointProtocol::Tuic,
+            QuicEndpointCallerClass::UdpData,
+            generation,
+            false,
+        ));
+        registry.endpoint_created(id);
+        registry.transition(id, PhysicalOwnerState::Ready);
+        registry.transition(id, PhysicalOwnerState::Failed);
+        registry.transition(id, PhysicalOwnerState::Ready);
+        registry.transition(id, PhysicalOwnerState::Draining);
+        registry.release(id);
+
+        assert!(registry.live_record(id).is_none());
+        let snapshot = registry.snapshot(generation);
+        assert_eq!(snapshot["cumulativeCreations"], 1);
+        assert_eq!(snapshot["stateTransitions"]["failed"], 1);
+        assert_eq!(snapshot["stateTransitions"]["draining"], 1);
+        assert_eq!(snapshot["stateTransitions"]["closed"], 1);
+        assert_eq!(snapshot["liveStates"]["total"], 0);
+    }
+
+    #[test]
+    fn wrapped_ids_skip_existing_live_records() {
+        let mut registry = QuicEndpointMetricsRegistry {
+            next_id: u64::MAX,
+            ..Default::default()
+        };
+        let first = registry.register(provenance(
+            QuicEndpointProtocol::Tuic,
+            QuicEndpointCallerClass::TcpData,
+            Some(OwnerGeneration::new(180)),
+            false,
+        ));
+        registry.next_id = u64::MAX;
+        let second = registry.register(provenance(
+            QuicEndpointProtocol::Tuic,
+            QuicEndpointCallerClass::UdpData,
+            Some(OwnerGeneration::new(180)),
+            false,
+        ));
+
+        assert_eq!((first, second), (1, 2));
+        assert_eq!(registry.live.len(), 2);
+        assert_eq!(registry.live[0].id, 1);
+        assert_eq!(registry.live[1].id, 2);
+    }
 }
