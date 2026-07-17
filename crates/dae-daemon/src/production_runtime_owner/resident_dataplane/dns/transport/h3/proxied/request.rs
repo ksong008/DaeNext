@@ -55,25 +55,17 @@ pub(super) async fn forward_proxied_dns_h3_request(
             },
         )
         .await?;
-    if !doh.body.is_empty() {
-        context
-            .run(
-                ProxyDnsRequestStage::Send,
-                ProxyDnsRequestFailure::Network,
-                async {
-                    stream
-                        .send_data(Bytes::copy_from_slice(&doh.body))
-                        .await
-                        .map_err(|error| format!("send proxied DoH3 body: {error:?}"))
-                },
-            )
-            .await?;
-    }
     context
         .run(
             ProxyDnsRequestStage::Send,
             ProxyDnsRequestFailure::Network,
             async {
+                if !doh.body.is_empty() {
+                    stream
+                        .send_data(Bytes::copy_from_slice(&doh.body))
+                        .await
+                        .map_err(|error| format!("send proxied DoH3 body: {error:?}"))?;
+                }
                 stream
                     .finish()
                     .await
@@ -81,17 +73,41 @@ pub(super) async fn forward_proxied_dns_h3_request(
             },
         )
         .await?;
-    let response = context
-        .run(
-            ProxyDnsRequestStage::Read,
-            ProxyDnsRequestFailure::Network,
-            async {
-                stream
-                    .recv_response()
-                    .await
-                    .map_err(|error| format!("receive proxied DoH3 response: {error:?}"))
-            },
-        )
+    let (response, body) = context
+        .run_typed(ProxyDnsRequestStage::Read, async {
+            let response = stream.recv_response().await.map_err(|error| {
+                ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::Read,
+                    ProxyDnsRequestFailure::Network,
+                    format!("receive proxied DoH3 response: {error:?}"),
+                )
+            })?;
+            let mut body = Vec::new();
+            loop {
+                let chunk = stream.recv_data().await.map_err(|error| {
+                    ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Read,
+                        ProxyDnsRequestFailure::Network,
+                        format!("receive proxied DoH3 body: {error:?}"),
+                    )
+                })?;
+                let Some(mut chunk) = chunk else {
+                    break;
+                };
+                let remaining = chunk.remaining();
+                if body.len().saturating_add(remaining) > DNS_DOH_RESPONSE_READ_LIMIT {
+                    return Err(ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Read,
+                        ProxyDnsRequestFailure::Capacity,
+                        format!(
+                            "proxied DoH3 response exceeds read limit {DNS_DOH_RESPONSE_READ_LIMIT}"
+                        ),
+                    ));
+                }
+                body.extend_from_slice(&chunk.copy_to_bytes(remaining));
+            }
+            Ok((response, body))
+        })
         .await?;
     let content_type = response
         .headers()
@@ -99,33 +115,6 @@ pub(super) async fn forward_proxied_dns_h3_request(
         .map(|value| value.as_bytes().to_vec())
         .unwrap_or_default();
     let status = response.status();
-    let mut body = Vec::new();
-    loop {
-        let chunk = context
-            .run(
-                ProxyDnsRequestStage::Read,
-                ProxyDnsRequestFailure::Network,
-                async {
-                    stream
-                        .recv_data()
-                        .await
-                        .map_err(|error| format!("receive proxied DoH3 body: {error:?}"))
-                },
-            )
-            .await?;
-        let Some(mut chunk) = chunk else {
-            break;
-        };
-        let remaining = chunk.remaining();
-        if body.len().saturating_add(remaining) > DNS_DOH_RESPONSE_READ_LIMIT {
-            return Err(ProxyDnsRequestError::new(
-                ProxyDnsRequestStage::Read,
-                ProxyDnsRequestFailure::Capacity,
-                format!("proxied DoH3 response exceeds read limit {DNS_DOH_RESPONSE_READ_LIMIT}"),
-            ));
-        }
-        body.extend_from_slice(&chunk.copy_to_bytes(remaining));
-    }
     validate_doh_response(status.as_u16(), status.as_str(), &content_type).map_err(|error| {
         ProxyDnsRequestError::new(
             ProxyDnsRequestStage::Read,

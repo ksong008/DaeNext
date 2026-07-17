@@ -74,6 +74,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ProxyDnsReque
 }
 
 impl ProxyDnsRequestError {
+    #[cold]
+    #[inline(never)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         stage: ProxyDnsRequestStage,
         failure: ProxyDnsRequestFailure,
@@ -86,6 +88,8 @@ impl ProxyDnsRequestError {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn cancelled(
         stage: ProxyDnsRequestStage,
     ) -> Self {
@@ -96,6 +100,8 @@ impl ProxyDnsRequestError {
         )
     }
 
+    #[cold]
+    #[inline(never)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn deadline(
         stage: ProxyDnsRequestStage,
     ) -> Self {
@@ -118,6 +124,8 @@ impl ProxyDnsRequestError {
         self.failure
     }
 
+    #[cold]
+    #[inline(never)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn with_context(
         self,
         context: impl fmt::Display,
@@ -189,7 +197,11 @@ impl ProxyDnsRequestContext {
         self.ensure(stage)?;
         match time::timeout_at(self.deadline, future).await {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => Err(ProxyDnsRequestError::new(stage, failure, error.to_string())),
+            Ok(Err(error)) => Err(proxy_dns_request_stage_error(
+                stage,
+                failure,
+                error.to_string(),
+            )),
             Err(_) => Err(ProxyDnsRequestError::deadline(stage)),
         }
     }
@@ -208,6 +220,16 @@ impl ProxyDnsRequestContext {
             Err(_) => Err(ProxyDnsRequestError::deadline(stage)),
         }
     }
+}
+
+#[cold]
+#[inline(never)]
+fn proxy_dns_request_stage_error(
+    stage: ProxyDnsRequestStage,
+    failure: ProxyDnsRequestFailure,
+    detail: String,
+) -> ProxyDnsRequestError {
+    ProxyDnsRequestError::new(stage, failure, detail)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
