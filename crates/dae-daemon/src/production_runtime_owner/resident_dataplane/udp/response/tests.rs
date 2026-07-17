@@ -181,6 +181,18 @@ fn session_fixed_target_is_idempotent_and_rejects_retargeting() {
 }
 
 #[test]
+fn session_fixed_target_decorates_the_response_envelope() {
+    let expected = target(1, 443);
+    let mut binding = UdpSessionFixedTarget::default();
+    binding.bind(expected, "fixture session").unwrap();
+    let response = UdpExchangeResult::new(vec![1], "fixture").with_session_fixed_target(binding);
+    assert_eq!(
+        response.validate_fixed_target(response.fixed_target_expectation(expected)),
+        UdpFixedTargetValidation::Validated
+    );
+}
+
+#[test]
 fn rejected_fixed_target_payload_is_consumed_before_forwarding() {
     let expected_target = target(1, 443);
     let mut response = UdpExchangeResult::new(vec![0x33; 4096], "fixture")
