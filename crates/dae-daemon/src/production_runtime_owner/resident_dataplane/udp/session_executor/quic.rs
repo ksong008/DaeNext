@@ -7,6 +7,8 @@ mod packet_id;
 use self::fragment_buffer::QuicUdpFragmentBuffer;
 use self::packet_id::QuicUdpPacketIdAllocator;
 
+const TUIC_ASSOCIATION_IDENTITY_DOMAIN: &[u8] = b"tuic-v5-association";
+
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria2QuicDatagramSession
 {
     auth: String,
@@ -206,6 +208,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuic
     assoc_id: u16,
     fragments: QuicUdpFragmentBuffer,
     packet_ids: QuicUdpPacketIdAllocator,
+    fixed_target: UdpSessionFixedTarget,
 }
 
 impl TuicQuicDatagramSession {
@@ -225,6 +228,7 @@ impl TuicQuicDatagramSession {
             assoc_id: fastrand::u16(1..=u16::MAX),
             fragments: QuicUdpFragmentBuffer::default(),
             packet_ids: QuicUdpPacketIdAllocator::default(),
+            fixed_target: UdpSessionFixedTarget::default(),
         }
     }
 
@@ -234,6 +238,8 @@ impl TuicQuicDatagramSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
+        self.fixed_target
+            .bind(original_dst, "TUIC UDP association")?;
         self.ensure_open(proxy).await?;
         let connection = self
             .connection
@@ -286,6 +292,45 @@ impl TuicQuicDatagramSession {
 
     fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
         let parsed = parse_tuic_packet_frame(response)?;
+        let expected_identity = UdpResponseIdentityToken::from_protocol_identity(
+            TUIC_ASSOCIATION_IDENTITY_DOMAIN,
+            &self.assoc_id.to_be_bytes(),
+        )
+        .expect("static TUIC identity domain and association id are nonempty");
+        let observed_identity = UdpResponseIdentityToken::from_protocol_identity(
+            TUIC_ASSOCIATION_IDENTITY_DOMAIN,
+            &parsed.assoc_id.to_be_bytes(),
+        )
+        .expect("static TUIC identity domain and association id are nonempty");
+        let base_response = || {
+            UdpExchangeResult::new(parsed.payload.clone(), "quic-udp-datagram")
+                .with_quic_underlay("quinn")
+                .with_session_executor("tokio-quic-datagram-session")
+                .with_underlay_reuse("quic-endpoint-and-connection-reused")
+                .with_expected_protocol_identity(expected_identity)
+        };
+        if parsed.assoc_id != self.assoc_id {
+            return Ok(Some(base_response().with_rejected_response_identity(
+                UdpResponseDropReason::CrossSessionIdentity,
+            )));
+        }
+        let source: SocketAddr = match parsed
+            .target
+            .as_deref()
+            .and_then(|target| target.parse().ok())
+        {
+            Some(source) => source,
+            None => {
+                return Ok(Some(base_response().with_rejected_response_identity(
+                    UdpResponseDropReason::MalformedIdentity,
+                )));
+            }
+        };
+        if self.fixed_target.source() != Some(source) {
+            return Ok(Some(base_response().with_rejected_response_identity(
+                UdpResponseDropReason::UnexpectedWireSource,
+            )));
+        }
         let Some(payload) = self.fragments.push(
             parsed.packet_id,
             parsed.frag_id,
@@ -300,7 +345,9 @@ impl TuicQuicDatagramSession {
             UdpExchangeResult::new(payload, "quic-udp-datagram")
                 .with_quic_underlay("quinn")
                 .with_session_executor("tokio-quic-datagram-session")
-                .with_underlay_reuse("quic-endpoint-and-connection-reused"),
+                .with_underlay_reuse("quic-endpoint-and-connection-reused")
+                .with_decoded_response_identity(Some(source), Some(observed_identity))
+                .with_expected_protocol_identity(expected_identity),
         ))
     }
 
@@ -359,6 +406,7 @@ impl TuicQuicDatagramSession {
         }
         self.fragments.clear();
         self.packet_ids.clear();
+        self.fixed_target.clear();
     }
 }
 
@@ -530,6 +578,49 @@ mod tests {
         assert_eq!(
             tuic.underlay_reuse,
             Some("quic-endpoint-and-connection-reused")
+        );
+    }
+
+    #[test]
+    fn tuic_rejects_cross_association_and_wrong_target_before_reassembly() {
+        let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
+        let mut session = TuicQuicDatagramSession::new(
+            "uuid".to_owned(),
+            "password".to_owned(),
+            Vec::new(),
+            true,
+        );
+        session.assoc_id = 7;
+        session
+            .fixed_target
+            .bind(target, "TUIC UDP association")
+            .unwrap();
+
+        for (frame, reason) in [
+            (
+                build_tuic_packet_frame(8, 1, &target.to_string(), b"cross-session").unwrap(),
+                UdpResponseDropReason::CrossSessionIdentity,
+            ),
+            (
+                build_tuic_packet_frame(7, 2, &other.to_string(), b"wrong-target").unwrap(),
+                UdpResponseDropReason::UnexpectedWireSource,
+            ),
+        ] {
+            let mut response = session.decode_response(&frame).unwrap().unwrap();
+            let expectation = response.fixed_target_expectation(target);
+            assert_eq!(
+                response.take_fixed_target_payload(expectation).validation(),
+                UdpFixedTargetValidation::Dropped(reason)
+            );
+        }
+
+        let frame = build_tuic_packet_frame(7, 3, &target.to_string(), b"response").unwrap();
+        let mut response = session.decode_response(&frame).unwrap().unwrap();
+        let expectation = response.fixed_target_expectation(target);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Validated
         );
     }
 }

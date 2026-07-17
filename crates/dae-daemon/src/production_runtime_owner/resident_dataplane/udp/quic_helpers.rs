@@ -66,6 +66,7 @@ pub(super) struct TuicPacketFrame {
     pub(super) packet_id: u16,
     pub(super) frag_total: u8,
     pub(super) frag_id: u8,
+    pub(super) target: Option<String>,
     pub(super) payload: Vec<u8>,
 }
 
@@ -112,7 +113,7 @@ pub(super) fn parse_tuic_packet_frame(input: &[u8]) -> Result<TuicPacketFrame, S
             "invalid TUIC UDP fragment fields: frag_total={frag_total} frag_id={frag_id}"
         ));
     }
-    let offset = read_tuic_address(input, 10)?;
+    let (target, offset) = read_tuic_address(input, 10)?;
     let payload_end = offset + size;
     if input.len() != payload_end {
         return Err("TUIC packet payload length mismatch".to_owned());
@@ -122,6 +123,7 @@ pub(super) fn parse_tuic_packet_frame(input: &[u8]) -> Result<TuicPacketFrame, S
         packet_id,
         frag_total,
         frag_id,
+        target,
         payload: input[offset..payload_end].to_vec(),
     })
 }
@@ -151,27 +153,68 @@ pub(super) fn write_tuic_address(address: &Socks5Address, out: &mut Vec<u8>) -> 
     Ok(())
 }
 
-pub(super) fn read_tuic_address(input: &[u8], offset: usize) -> Result<usize, String> {
+pub(super) fn read_tuic_address(
+    input: &[u8],
+    offset: usize,
+) -> Result<(Option<String>, usize), String> {
     let Some(&atyp) = input.get(offset) else {
         return Err("missing TUIC address type".to_owned());
     };
     let mut cursor = offset + 1;
-    match atyp {
+    let address = match atyp {
         0 => {
             let Some(&len) = input.get(cursor) else {
                 return Err("missing TUIC domain length".to_owned());
             };
-            cursor += 1 + len as usize;
+            cursor += 1;
+            let end = cursor + len as usize;
+            let hostname = std::str::from_utf8(
+                input
+                    .get(cursor..end)
+                    .ok_or_else(|| "short TUIC domain address".to_owned())?,
+            )
+            .map_err(|_| "TUIC domain address is not UTF-8".to_owned())?
+            .to_owned();
+            cursor = end;
+            Some(Socks5Address::Domain { hostname, port: 0 })
         }
-        1 => cursor += 4,
-        2 => cursor += 16,
-        255 => return Ok(cursor),
+        1 => {
+            let octets: [u8; 4] = input
+                .get(cursor..cursor + 4)
+                .ok_or_else(|| "short TUIC IPv4 address".to_owned())?
+                .try_into()
+                .expect("checked TUIC IPv4 address length");
+            cursor += 4;
+            Some(Socks5Address::Ipv4 {
+                addr: std::net::Ipv4Addr::from(octets),
+                port: 0,
+            })
+        }
+        2 => {
+            let octets: [u8; 16] = input
+                .get(cursor..cursor + 16)
+                .ok_or_else(|| "short TUIC IPv6 address".to_owned())?
+                .try_into()
+                .expect("checked TUIC IPv6 address length");
+            cursor += 16;
+            Some(Socks5Address::Ipv6 {
+                addr: std::net::Ipv6Addr::from(octets),
+                port: 0,
+            })
+        }
+        255 => return Ok((None, cursor)),
         value => return Err(format!("unsupported TUIC address type: {value}")),
-    }
+    };
     if input.len() < cursor + 2 {
         return Err("short TUIC address port".to_owned());
     }
-    Ok(cursor + 2)
+    let port = u16::from_be_bytes([input[cursor], input[cursor + 1]]);
+    let address = address.map(|address| match address {
+        Socks5Address::Domain { hostname, .. } => Socks5Address::Domain { hostname, port },
+        Socks5Address::Ipv4 { addr, .. } => Socks5Address::Ipv4 { addr, port },
+        Socks5Address::Ipv6 { addr, .. } => Socks5Address::Ipv6 { addr, port },
+    });
+    Ok((address.map(|address| address.authority()), cursor + 2))
 }
 
 pub(super) fn build_juicity_stream_packet_request(
