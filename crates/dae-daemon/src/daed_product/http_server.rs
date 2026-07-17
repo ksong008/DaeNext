@@ -1,4 +1,8 @@
 use super::*;
+
+mod job_queue;
+use job_queue::{ProductHttpJobQueue, ProductHttpQueueReceiveError, ProductHttpQueueSendError};
+
 pub(super) fn serve_forever(
     listen: &str,
     app: Arc<AppState>,
@@ -32,12 +36,11 @@ pub(super) fn serve_forever(
                 return Err(err);
             }
         };
-    let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
-    let receiver = Arc::new(Mutex::new(receiver));
+    let queue = Arc::new(ProductHttpJobQueue::new(config.queue_capacity));
     let connections = Arc::new(ProductHttpConnectionRegistry::default());
     let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(config.worker_count);
     for index in 0..config.worker_count {
-        let receiver = Arc::clone(&receiver);
+        let worker_queue = Arc::clone(&queue);
         let worker_app = Arc::clone(&app);
         let metrics = Arc::clone(&app.http_metrics);
         let worker_sse_runtime = Arc::clone(&sse_runtime);
@@ -48,7 +51,7 @@ pub(super) fn serve_forever(
             .spawn(move || {
                 product_http_worker_loop(
                     index,
-                    receiver,
+                    worker_queue,
                     worker_app,
                     metrics,
                     worker_sse_runtime,
@@ -58,7 +61,7 @@ pub(super) fn serve_forever(
             Ok(handle) => handle,
             Err(err) => {
                 app.shutdown.request(0);
-                drop(sender);
+                queue.close();
                 for handle in handles {
                     let _ = handle.join();
                 }
@@ -108,7 +111,7 @@ pub(super) fn serve_forever(
         fields,
     );
     if !app.shutdown.mark_ready() {
-        drop(sender);
+        queue.close();
         for handle in handles {
             let _ = handle.join();
         }
@@ -129,13 +132,13 @@ pub(super) fn serve_forever(
                     break;
                 }
                 app.http_metrics.accepted();
-                match sender.try_send(ProductHttpJob { stream }) {
-                    Ok(()) => app.http_metrics.enqueued(),
-                    Err(TrySendError::Full(job)) => {
+                match queue.try_submit(ProductHttpJob { stream }, || app.http_metrics.enqueued()) {
+                    Ok(()) => {}
+                    Err(ProductHttpQueueSendError::Full(job)) => {
                         app.http_metrics.rejected();
                         let _ = write_http_rejected(job.stream);
                     }
-                    Err(TrySendError::Disconnected(job)) => {
+                    Err(ProductHttpQueueSendError::Closed(job)) => {
                         app.http_metrics.rejected();
                         let _ = write_http_rejected(job.stream);
                         app.shutdown.request(0);
@@ -155,7 +158,7 @@ pub(super) fn serve_forever(
         }
     }
     let connection_shutdown = connections.shutdown_all();
-    drop(sender);
+    queue.close();
     let mut worker_panicked = false;
     for handle in handles {
         worker_panicked |= handle.join().is_err();
@@ -178,13 +181,13 @@ pub(super) fn serve_forever(
     Ok(())
 }
 
-pub(super) struct ProductHttpJob {
-    pub(super) stream: TcpStream,
+struct ProductHttpJob {
+    stream: TcpStream,
 }
 
-pub(super) fn product_http_worker_loop(
+fn product_http_worker_loop(
     _index: usize,
-    receiver: Arc<Mutex<Receiver<ProductHttpJob>>>,
+    queue: Arc<ProductHttpJobQueue<ProductHttpJob>>,
     app: Arc<AppState>,
     metrics: Arc<ProductHttpMetrics>,
     sse_runtime: Arc<ProductSseRuntime>,
@@ -192,13 +195,7 @@ pub(super) fn product_http_worker_loop(
 ) {
     let mut reclaim_worker = app.ui_runtime.register_reclaim_worker();
     loop {
-        let recv_result = {
-            let Ok(receiver) = receiver.lock() else {
-                break;
-            };
-            receiver.recv_timeout(PRODUCT_HTTP_WORKER_RECV_TIMEOUT)
-        };
-        match recv_result {
+        match queue.receive_timeout(PRODUCT_HTTP_WORKER_RECV_TIMEOUT) {
             Ok(job) => {
                 metrics.dequeued();
                 metrics.opened();
@@ -228,8 +225,8 @@ pub(super) fn product_http_worker_loop(
                 }
                 metrics.closed();
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
+            Err(ProductHttpQueueReceiveError::Timeout) => {}
+            Err(ProductHttpQueueReceiveError::Closed) => break,
         }
         app.ui_runtime.maintain(&metrics, &mut reclaim_worker);
     }

@@ -1,6 +1,24 @@
 use super::*;
 use tokio::io::AsyncWriteExt;
 
+pub(super) async fn wait_sse_peer_closed(stream: &tokio::net::TcpStream) -> io::Result<()> {
+    loop {
+        stream.readable().await?;
+        let mut byte = [0_u8; 1];
+        match stream.try_read(&mut byte) {
+            Ok(0) => return Ok(()),
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "SSE connection received unexpected client data",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub(super) async fn write_sse_headers(
     stream: &mut tokio::net::TcpStream,
     request: &HttpRequest,
@@ -69,4 +87,43 @@ async fn write_sse_bytes(stream: &mut tokio::net::TcpStream, bytes: &[u8]) -> io
     tokio::time::timeout(PRODUCT_HTTP_SSE_WRITE_TIMEOUT, stream.flush())
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSE flush timed out"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn tcp_pair() -> (tokio::net::TcpStream, tokio::net::TcpStream) {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let connect = tokio::spawn(tokio::net::TcpStream::connect(address));
+        let (server, _) = listener.accept().await.unwrap();
+        let client = connect.await.unwrap().unwrap();
+        (server, client)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn peer_close_observer_detects_read_half_eof() {
+        let (server, client) = tcp_pair().await;
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(1), wait_sse_peer_closed(&server))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn peer_close_observer_rejects_client_payload() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let (server, mut client) = tcp_pair().await;
+        client.write_all(b"x").await.unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), wait_sse_peer_closed(&server))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
 }
