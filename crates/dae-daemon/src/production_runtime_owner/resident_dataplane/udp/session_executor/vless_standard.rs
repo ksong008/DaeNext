@@ -12,6 +12,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessSta
     seq: u64,
     response_header_seen: bool,
     response_plaintext: Vec<u8>,
+    fixed_target: UdpSessionFixedTarget,
 }
 
 impl VlessStandardUdpOverStreamSession {
@@ -54,6 +55,7 @@ impl VlessStandardUdpOverStreamSession {
             seq: 0,
             response_header_seen: false,
             response_plaintext: Vec::new(),
+            fixed_target: UdpSessionFixedTarget::default(),
         }
     }
 
@@ -69,6 +71,8 @@ impl VlessStandardUdpOverStreamSession {
                     .to_owned(),
             );
         }
+        self.fixed_target
+            .bind(original_dst, "VLESS standard UDP-over-stream")?;
         let key = proxy.vless_key()?;
         let request = if self.seq == 0 {
             packet::first_write_bytes(
@@ -190,7 +194,7 @@ impl VlessStandardUdpOverStreamSession {
         if let Some(tls_underlay) = tls_underlay {
             result = result.with_tls_underlay(tls_underlay);
         }
-        result
+        result.with_session_fixed_target(self.fixed_target)
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
@@ -216,5 +220,26 @@ impl VlessStandardUdpOverStreamSession {
             underlay.shutdown().await;
         }
         self.response_plaintext.clear();
+        self.fixed_target.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_udp_stream_response_uses_its_bound_target() {
+        let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let mut session = VlessStandardUdpOverStreamSession::plain();
+        session
+            .fixed_target
+            .bind(target, "VLESS standard UDP-over-stream")
+            .unwrap();
+        let response = session.response_result(b"response".to_vec());
+        assert_eq!(
+            response.validate_fixed_target(response.fixed_target_expectation(target)),
+            UdpFixedTargetValidation::Validated
+        );
     }
 }
