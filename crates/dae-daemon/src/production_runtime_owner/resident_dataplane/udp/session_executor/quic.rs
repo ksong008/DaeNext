@@ -473,12 +473,7 @@ impl JuicityQuicStreamPacketSession {
         .map_err(|_| "read Juicity UDP stream response timeout".to_owned())??;
         let parsed = decode_stream_packet_frame(&response)
             .map_err(|err| format!("decode Juicity UDP stream packet: {err}"))?;
-        Ok(
-            UdpExchangeResult::new(parsed.payload, "quic-udp-stream-packet")
-                .with_quic_underlay("quinn-h3")
-                .with_session_executor("tokio-quic-stream-packet-session")
-                .with_underlay_reuse("quic-endpoint-connection-and-auth-stream-reused"),
-        )
+        Ok(juicity_udp_response_result(parsed.target, parsed.payload))
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
@@ -532,6 +527,17 @@ impl JuicityQuicStreamPacketSession {
         if let Some(endpoint) = self.endpoint.take() {
             endpoint.wait_idle().await;
         }
+    }
+}
+
+fn juicity_udp_response_result(target: String, payload: Vec<u8>) -> UdpExchangeResult {
+    let result = UdpExchangeResult::new(payload, "quic-udp-stream-packet")
+        .with_quic_underlay("quinn-h3")
+        .with_session_executor("tokio-quic-stream-packet-session")
+        .with_underlay_reuse("quic-endpoint-connection-and-auth-stream-reused");
+    match target.parse::<SocketAddr>() {
+        Ok(source) => result.with_decoded_response_identity(Some(source), None),
+        Err(_) => result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity),
     }
 }
 
@@ -621,6 +627,20 @@ mod tests {
         assert_eq!(
             response.take_fixed_target_payload(expectation).validation(),
             UdpFixedTargetValidation::Validated
+        );
+    }
+
+    #[test]
+    fn juicity_stream_packet_response_source_is_verified() {
+        let expected: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
+        let frame = seal_stream_packet_frame(&other.to_string(), b"response").unwrap();
+        let parsed = decode_stream_packet_frame(&frame.encoded).unwrap();
+        let mut response = juicity_udp_response_result(parsed.target, parsed.payload);
+        let expectation = response.fixed_target_expectation(expected);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
         );
     }
 }
