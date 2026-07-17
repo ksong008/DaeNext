@@ -2,6 +2,9 @@ use super::*;
 
 mod registry;
 use self::registry::*;
+mod reclaim;
+use self::reclaim::ProductUiReclaim;
+pub(in crate::daed_product) use self::reclaim::ProductUiReclaimWorker;
 
 pub(super) const PRODUCT_UI_PAGE_HEADER: &str = "x-daed-page-id";
 const PRODUCT_UI_SESSION_LIMIT: usize = 64;
@@ -20,6 +23,8 @@ pub(super) struct ProductUiRuntime {
     requests_active: AtomicU64,
     bytes_in_flight: AtomicU64,
     drain_epoch: AtomicU64,
+    reclaim_drain_epoch: AtomicU64,
+    reclaim: Arc<ProductUiReclaim>,
 }
 
 impl Default for ProductUiRuntime {
@@ -44,6 +49,8 @@ impl ProductUiRuntime {
             requests_active: AtomicU64::new(0),
             bytes_in_flight: AtomicU64::new(0),
             drain_epoch: AtomicU64::new(0),
+            reclaim_drain_epoch: AtomicU64::new(0),
+            reclaim: Arc::new(ProductUiReclaim::default()),
         }
     }
 
@@ -113,6 +120,67 @@ impl ProductUiRuntime {
         self.sweep_at(Instant::now());
     }
 
+    pub(super) fn register_reclaim_worker(&self) -> ProductUiReclaimWorker {
+        self.reclaim.register()
+    }
+
+    pub(super) fn maintain(
+        &self,
+        metrics: &ProductHttpMetrics,
+        worker: &mut ProductUiReclaimWorker,
+    ) {
+        self.sweep();
+        self.request_reclaim_if_drained(metrics);
+        worker.poll(self, metrics);
+        if self.reclaim.take_owner_retry() {
+            let drain_epoch = self.drain_epoch.load(Ordering::Acquire);
+            self.reclaim_drain_epoch
+                .store(drain_epoch.saturating_sub(1), Ordering::Release);
+        }
+    }
+
+    fn request_reclaim_if_drained(&self, metrics: &ProductHttpMetrics) {
+        let drain_epoch = self.drain_epoch.load(Ordering::Acquire);
+        if drain_epoch == 0
+            || self.reclaim_drain_epoch.load(Ordering::Acquire) >= drain_epoch
+            || !self.owner_drained(metrics)
+        {
+            return;
+        }
+        let recorded_epoch = self.reclaim_drain_epoch.load(Ordering::Acquire);
+        if recorded_epoch < drain_epoch
+            && self
+                .reclaim_drain_epoch
+                .compare_exchange(
+                    recorded_epoch,
+                    drain_epoch,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+        {
+            if self.owner_drained(metrics) {
+                let _ = self.reclaim.request();
+            } else {
+                let _ = self.reclaim_drain_epoch.compare_exchange(
+                    drain_epoch,
+                    recorded_epoch,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            }
+        }
+    }
+
+    fn owner_drained(&self, metrics: &ProductHttpMetrics) -> bool {
+        self.sessions_active.load(Ordering::Acquire) == 0
+            && self.requests_active.load(Ordering::Acquire) == 0
+            && metrics.active_connections.load(Ordering::Acquire) == 0
+            && metrics.active_sse_connections.load(Ordering::Acquire) == 0
+            && metrics.queue_depth.load(Ordering::Acquire) == 0
+            && metrics.sse_queue_depth.load(Ordering::Acquire) == 0
+    }
+
     pub(super) fn snapshot(&self) -> Value {
         json!({
             "sessionLimit": self.session_limit.load(Ordering::Relaxed),
@@ -123,6 +191,7 @@ impl ProductUiRuntime {
             "requestsActive": self.requests_active.load(Ordering::Relaxed),
             "bytesInFlight": self.bytes_in_flight.load(Ordering::Relaxed).to_string(),
             "drainEpoch": self.drain_epoch.load(Ordering::Relaxed),
+            "reclaim": self.reclaim.snapshot(),
         })
     }
 }
@@ -240,5 +309,29 @@ mod tests {
         runtime.touch_page(1, "aaaaaaaaaaaaaaaa", now).unwrap();
         runtime.sweep_at(now + Duration::from_secs(2));
         assert_eq!(runtime.snapshot()["sessionsActive"], json!(0));
+    }
+
+    #[test]
+    fn drained_workers_acknowledge_before_scoped_reclaim_completes() {
+        let runtime = Arc::new(ProductUiRuntime::new(4, 2, Duration::from_secs(10)));
+        let metrics = ProductHttpMetrics::default();
+        let mut first = runtime.register_reclaim_worker();
+        let mut second = runtime.register_reclaim_worker();
+        let request = request("aaaaaaaaaaaaaaaa");
+        runtime.touch(1, &request).unwrap();
+        runtime.close_hint(1, &request).unwrap();
+
+        runtime.maintain(&metrics, &mut first);
+        assert_eq!(runtime.snapshot()["reclaim"]["completedTotal"], json!(0));
+        runtime.maintain(&metrics, &mut second);
+
+        let reclaim = &runtime.snapshot()["reclaim"];
+        assert_eq!(reclaim["completedTotal"], json!(1));
+        assert_eq!(reclaim["expectedWorkers"], json!(2));
+        assert_eq!(reclaim["acknowledgedWorkers"], json!(2));
+        assert_eq!(
+            reclaim.pointer("/last/detail/arenaPurgeScope"),
+            Some(&json!("control-plane-only"))
+        );
     }
 }

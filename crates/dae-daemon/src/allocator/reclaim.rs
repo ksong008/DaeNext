@@ -23,11 +23,11 @@ pub(super) fn allocator_reclaim_impl() -> (&'static str, Value) {
 
 #[cfg(feature = "allocator-jemalloc")]
 fn allocator_reclaim_backend() -> (&'static str, Value) {
-    use tikv_jemalloc_ctl::{arenas, epoch, raw};
+    use tikv_jemalloc_ctl::epoch;
 
     let epoch_before = epoch::advance().ok();
     let (thread_cache_flush_ok, thread_cache_flush) =
-        match jemalloc_void_mallctl(b"thread.tcache.flush\0") {
+        match mallctl::command(b"thread.tcache.flush\0") {
             Ok(()) => (true, json!({"status": "pass"})),
             Err(err) => (
                 false,
@@ -37,7 +37,7 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
                 }),
             ),
         };
-    let narenas = match arenas::narenas::read() {
+    let arena = match mallctl::read_u32(b"thread.arena\0") {
         Ok(value) => value,
         Err(err) => {
             return (
@@ -46,45 +46,16 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
                     "operation": "jemalloc_arena_purge",
                     "threadCacheFlush": thread_cache_flush,
                     "threadCacheScope": "calling-thread",
-                    "arenaPurgeScope": "all-initialized-arenas",
-                    "error": err.to_string(),
+                    "arenaPurgeScope": "calling-thread-arena",
+                    "error": err,
                 }),
             );
         }
     };
-    let mut failures = Vec::new();
-    let mut skipped = 0_u64;
-    let mut attempted = 0_u64;
-    for arena in 0..narenas {
-        let initialized_key = format!("arena.{arena}.initialized\0");
-        match unsafe { raw::read::<bool>(initialized_key.as_bytes()) } {
-            Ok(true) => {}
-            Ok(false) => {
-                skipped += 1;
-                continue;
-            }
-            Err(err) => {
-                failures.push(json!({
-                    "arena": arena,
-                    "step": "read_initialized",
-                    "error": err.to_string(),
-                }));
-                continue;
-            }
-        }
-
-        attempted += 1;
-        let key = format!("arena.{arena}.purge\0");
-        if let Err(err) = jemalloc_void_mallctl(key.as_bytes()) {
-            failures.push(json!({
-                "arena": arena,
-                "step": "purge",
-                "error": err,
-            }));
-        }
-    }
+    let key = format!("arena.{arena}.purge\0");
+    let purge = mallctl::command(key.as_bytes());
     let epoch_after = epoch::advance().ok();
-    let status = if failures.is_empty() && thread_cache_flush_ok {
+    let status = if purge.is_ok() && thread_cache_flush_ok {
         "pass"
     } else {
         "partial"
@@ -95,46 +66,13 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
             "operation": "jemalloc_thread_tcache_flush_and_arena_purge",
             "threadCacheFlush": thread_cache_flush,
             "threadCacheScope": "calling-thread",
-            "arenaPurgeScope": "all-initialized-arenas",
-            "arenasObserved": narenas,
-            "arenasAttempted": attempted,
-            "arenasSkipped": skipped,
-            "failures": failures,
+            "arenaPurgeScope": "calling-thread-arena",
+            "arena": arena,
+            "purge": purge.map(|_| json!({"status": "pass"})).unwrap_or_else(|error| json!({"status": "fail", "error": error})),
             "epochBefore": epoch_before,
             "epochAfter": epoch_after,
         }),
     )
-}
-
-#[cfg(feature = "allocator-jemalloc")]
-fn jemalloc_void_mallctl(name: &[u8]) -> Result<(), String> {
-    use std::os::raw::c_char;
-    use std::ptr;
-
-    if !name.ends_with(&[0]) {
-        return Err("mallctl name must be null-terminated".to_owned());
-    }
-
-    let rc = unsafe {
-        tikv_jemalloc_sys::mallctl(
-            name.as_ptr().cast::<c_char>(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-            0,
-        )
-    };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(jemalloc_mallctl_error(rc))
-    }
-}
-
-#[cfg(feature = "allocator-jemalloc")]
-fn jemalloc_mallctl_error(rc: i32) -> String {
-    let err = std::io::Error::from_raw_os_error(rc);
-    format!("mallctl returned {rc}: {err}")
 }
 
 #[cfg(not(feature = "allocator-jemalloc"))]

@@ -7,6 +7,12 @@ use serde_json::{Value, json};
 
 mod reclaim;
 use self::reclaim::allocator_reclaim_impl;
+mod control_plane;
+mod mallctl;
+pub(crate) use self::control_plane::{
+    allocator_bind_control_plane_thread, allocator_flush_current_thread_cache,
+    allocator_purge_control_plane_arena,
+};
 mod requests;
 pub(crate) use self::requests::{
     AllocatorReclaimRequestBatch, allocator_pending_reclaim_requests, allocator_request_reclaim,
