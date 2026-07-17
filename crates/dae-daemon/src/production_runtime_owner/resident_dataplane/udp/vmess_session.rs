@@ -26,6 +26,7 @@ pub(super) struct VmessAeadUdpOverTcpSession {
     request: Option<vmess::VMessAeadTcpRequest>,
     response: Option<vmess::VMessAeadTcpResponseReader>,
     response_plaintext: Vec<u8>,
+    fixed_target: UdpSessionFixedTarget,
 }
 
 impl VmessAeadUdpOverTcpSession {
@@ -66,6 +67,7 @@ impl VmessAeadUdpOverTcpSession {
             request: None,
             response: None,
             response_plaintext: Vec::new(),
+            fixed_target: UdpSessionFixedTarget::default(),
         }
     }
 
@@ -75,6 +77,8 @@ impl VmessAeadUdpOverTcpSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
+        self.fixed_target
+            .bind(original_dst, "VMess AEAD UDP-over-TCP session")?;
         let result = if self.underlay.is_some() {
             self.exchange_next(payload).await
         } else {
@@ -122,6 +126,7 @@ impl VmessAeadUdpOverTcpSession {
             session_executor,
             underlay_reuse,
             tls_underlay,
+            self.fixed_target,
         ))
     }
 
@@ -162,6 +167,7 @@ impl VmessAeadUdpOverTcpSession {
             session_executor,
             underlay_reuse,
             tls_underlay,
+            self.fixed_target,
         ))
     }
 
@@ -228,7 +234,13 @@ impl VmessAeadUdpOverTcpSession {
             .as_ref()
             .map(VmessAeadUdpUnderlay::evidence_fields)
             .unwrap_or(("tokio-stream-session", "stream-reused", None));
-        vmess_udp_session_result(payload, session_executor, underlay_reuse, tls_underlay)
+        vmess_udp_session_result(
+            payload,
+            session_executor,
+            underlay_reuse,
+            tls_underlay,
+            self.fixed_target,
+        )
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
@@ -381,6 +393,7 @@ impl VmessAeadUdpOverTcpSession {
         if let Some(mut underlay) = self.underlay.take() {
             underlay.shutdown().await;
         }
+        self.fixed_target.clear();
     }
 }
 
@@ -778,6 +791,7 @@ fn vmess_udp_session_result(
     session_executor: &'static str,
     underlay_reuse: &'static str,
     tls_underlay: Option<&'static str>,
+    fixed_target: UdpSessionFixedTarget,
 ) -> UdpExchangeResult {
     let mut result = UdpExchangeResult::new(payload, "aead-udp-over-tcp")
         .with_session_executor(session_executor)
@@ -785,7 +799,33 @@ fn vmess_udp_session_result(
     if let Some(tls_underlay) = tls_underlay {
         result = result.with_tls_underlay(tls_underlay);
     }
-    result
+    result.with_session_fixed_target(fixed_target)
+}
+
+#[cfg(test)]
+mod fixed_target_tests {
+    use super::*;
+
+    #[test]
+    fn vmess_udp_response_uses_its_bound_target() {
+        let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let mut session = VmessAeadUdpOverTcpSession::plain("fixture-id".to_owned());
+        session
+            .fixed_target
+            .bind(target, "VMess AEAD UDP-over-TCP session")
+            .unwrap();
+        let response = vmess_udp_session_result(
+            b"response".to_vec(),
+            "tokio-stream-session",
+            "stream-reused",
+            None,
+            session.fixed_target,
+        );
+        assert_eq!(
+            response.validate_fixed_target(response.fixed_target_expectation(target)),
+            UdpFixedTargetValidation::Validated
+        );
+    }
 }
 
 fn vmess_udp_pending_session_result(
