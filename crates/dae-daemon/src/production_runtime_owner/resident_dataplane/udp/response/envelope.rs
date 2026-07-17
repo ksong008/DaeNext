@@ -123,6 +123,17 @@ impl UdpResponseEnvelope {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn with_session_fixed_target(
+        self,
+        binding: super::UdpSessionFixedTarget,
+    ) -> Self {
+        match binding.source() {
+            Some(source) => self.with_session_bound_response_identity(source, None),
+            None => self.with_rejected_response_identity(UdpResponseDropReason::MissingWireSource),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn with_expected_protocol_identity(
         mut self,
         expected_identity: UdpResponseIdentityToken,
