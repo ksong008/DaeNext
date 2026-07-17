@@ -594,6 +594,9 @@ dependencies = [
 [[package]]
 name = "dae-build-support"
 version = "3.1.0"
+dependencies = [
+ "object",
+]
 
 [[package]]
 name = "dae-cli"
