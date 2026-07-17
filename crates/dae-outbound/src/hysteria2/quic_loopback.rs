@@ -13,8 +13,9 @@ use super::tls::{build_hysteria2_server_config, selected_alpn};
 use super::underlay::raw_cert_sha256_hex;
 pub use super::wire::HYSTERIA2_FRAME_TYPE_TCP_REQUEST;
 use super::wire::{
-    build_tcp_request_stream, build_tcp_response_stream, build_udp_message,
-    parse_tcp_request_stream, parse_tcp_response_stream, parse_udp_message,
+    Hysteria2UdpMessage, build_tcp_request_stream, build_tcp_response_stream,
+    decode_hysteria2_udp_message, encode_hysteria2_udp_message, parse_tcp_request_stream,
+    parse_tcp_response_stream,
 };
 use super::{Hysteria2TlsIdentity, build_hysteria2_runtime_client_config};
 
@@ -147,13 +148,16 @@ async fn run_hysteria2_quic_loopback_smoke_async(
 ) -> Result<Hysteria2QuicLoopbackReport, OutboundError> {
     let tcp_request = build_tcp_request_stream(&options.tcp_target, &options.tcp_payload)?;
     let tcp_response = build_tcp_response_stream(true, "", &options.tcp_response_payload)?;
-    let udp_request = build_udp_message(0x1300_0001, 1, &options.udp_target, &options.udp_payload)?;
-    let udp_response = build_udp_message(
+    let udp_request = encode_hysteria2_udp_message(&Hysteria2UdpMessage::new(
         0x1300_0001,
-        1,
+        &options.udp_target,
+        &options.udp_payload,
+    )?)?;
+    let udp_response = encode_hysteria2_udp_message(&Hysteria2UdpMessage::new(
+        0x1300_0001,
         &options.udp_target,
         &options.udp_response_payload,
-    )?;
+    )?)?;
 
     let (server_config, cert_der) = build_hysteria2_server_config(&options.server_name)?;
     let raw_cert_hash = raw_cert_sha256_hex(cert_der.as_ref());
@@ -245,13 +249,12 @@ async fn run_hysteria2_quic_loopback_smoke_async(
     let mut client_datagram_send_count = 0_usize;
     let mut client_datagram_receive_count = 0_usize;
     let mut client_datagram_match_count = 0_usize;
-    for packet_id in 1..=options.datagram_iterations {
-        let request = build_udp_message(
+    for _ in 0..options.datagram_iterations {
+        let request = encode_hysteria2_udp_message(&Hysteria2UdpMessage::new(
             0x1300_0001,
-            packet_id as u16,
             &options.udp_target,
             &options.udp_payload,
-        )?;
+        )?)?;
         client_connection
             .send_datagram(Bytes::from(request))
             .map_err(|err| bad_quic_loopback(format!("send Hysteria2 UDP datagram: {err}")))?;
@@ -261,13 +264,13 @@ async fn run_hysteria2_quic_loopback_smoke_async(
             .await
             .map_err(|err| bad_quic_loopback(format!("read Hysteria2 UDP datagram: {err}")))?;
         client_datagram_receive_count += 1;
-        let parsed = parse_udp_message(&response)?;
-        if parsed.target == options.udp_target
-            && parsed.payload == options.udp_response_payload
-            && parsed.session_id == 0x1300_0001
-            && parsed.packet_id == packet_id as u16
-            && parsed.frag_id == 0
-            && parsed.frag_count == 1
+        let parsed = decode_hysteria2_udp_message(&response)?;
+        if parsed.target() == options.udp_target
+            && parsed.payload() == options.udp_response_payload
+            && parsed.session_id() == 0x1300_0001
+            && parsed.packet_id() == 0
+            && parsed.fragment_id() == 0
+            && parsed.fragment_count() == 1
         {
             client_datagram_match_count += 1;
         }
@@ -341,19 +344,17 @@ async fn run_hysteria2_quic_loopback_smoke_async(
         udp_target: options.udp_target.clone(),
         udp_payload_len: options.udp_payload.len(),
         udp_response_payload_len: options.udp_response_payload.len(),
-        udp_message_frame_len: build_udp_message(
+        udp_message_frame_len: encode_hysteria2_udp_message(&Hysteria2UdpMessage::new(
             0x1300_0001,
-            1,
             &options.udp_target,
             &options.udp_payload,
-        )?
+        )?)?
         .len(),
-        udp_response_frame_len: build_udp_message(
+        udp_response_frame_len: encode_hysteria2_udp_message(&Hysteria2UdpMessage::new(
             0x1300_0001,
-            1,
             &options.udp_target,
             &options.udp_response_payload,
-        )?
+        )?)?
         .len(),
         client_datagram_send_count,
         server_datagram_receive_count: server.datagram_receive_count,
@@ -431,39 +432,37 @@ async fn run_hysteria2_quic_server(
     let mut datagram_receive_count = 0_usize;
     let mut datagram_match_count = 0_usize;
     let mut datagram_send_count = 0_usize;
-    for packet_id in 1..=options.datagram_iterations {
+    for packet_index in 0..options.datagram_iterations {
         let request = connection
             .read_datagram()
             .await
             .map_err(|err| bad_quic_loopback(format!("server read Hysteria2 datagram: {err}")))?;
         datagram_receive_count += 1;
-        let parsed = parse_udp_message(&request)?;
-        let expected = if packet_id == 1 {
+        let parsed = decode_hysteria2_udp_message(&request)?;
+        let expected = if packet_index == 0 {
             expected_udp_request.clone()
         } else {
-            build_udp_message(
+            encode_hysteria2_udp_message(&Hysteria2UdpMessage::new(
                 0x1300_0001,
-                packet_id as u16,
                 &options.udp_target,
                 &options.udp_payload,
-            )?
+            )?)?
         };
         if request == expected
-            && parsed.target == options.udp_target
-            && parsed.payload == options.udp_payload
-            && parsed.packet_id == packet_id as u16
+            && parsed.target() == options.udp_target
+            && parsed.payload() == options.udp_payload
+            && parsed.packet_id() == 0
         {
             datagram_match_count += 1;
         }
-        let response = if packet_id == 1 {
+        let response = if packet_index == 0 {
             udp_response.clone()
         } else {
-            build_udp_message(
+            encode_hysteria2_udp_message(&Hysteria2UdpMessage::new(
                 0x1300_0001,
-                packet_id as u16,
                 &options.udp_target,
                 &options.udp_response_payload,
-            )?
+            )?)?
         };
         connection
             .send_datagram(Bytes::from(response))
