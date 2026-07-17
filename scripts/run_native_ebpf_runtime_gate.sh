@@ -24,7 +24,16 @@ cgroup_log="${CGROUP_LOG:-/tmp/dae-native-ebpf-cgroup-gate-${run_id}.log}"
 resource_log="${RUNTIME_RESOURCE_LOG:-/tmp/dae-native-ebpf-runtime-resources-${run_id}.env}"
 backend="${NATIVE_EBPF_BACKEND:-${DAE_NATIVE_EBPF_BACKEND:-auto}}"
 netns_link="${NETNS_LINK:-${DAE_NETNS_LINK:-auto}}"
+native_object_mode="${NATIVE_EBPF_OBJECT_MODE:-auto}"
 runtime_timeout="${RUNTIME_TIMEOUT:-180s}"
+
+case "$native_object_mode" in
+  auto|pname-core|current-comm) ;;
+  *)
+    echo "unsupported NATIVE_EBPF_OBJECT_MODE: $native_object_mode" >&2
+    exit 2
+    ;;
+esac
 
 case "$run_root" in
   /tmp/dae-daemon-native-ebpf-runtime-gate*) ;;
@@ -146,7 +155,7 @@ run_with_resource_sample() {
   return "$status"
 }
 
-echo "running native eBPF runtime gate: root=$run_root backend=$backend netns_link=$netns_link timeout=$runtime_timeout"
+echo "running native eBPF runtime gate: root=$run_root backend=$backend netns_link=$netns_link object=$native_object_mode timeout=$runtime_timeout"
 : >"$cargo_log"
 if ! cargo build --manifest-path Cargo.toml \
   -p dae-daemon \
@@ -187,11 +196,11 @@ if [[ ! -f "$manifest" ]]; then
   exit 1
 fi
 
-python3 - "$manifest" "$backend" "$netns_link" <<'PY'
+python3 - "$manifest" "$backend" "$netns_link" "$native_object_mode" <<'PY'
 import json
 import sys
 
-manifest, expected_backend_raw, expected_netns_link_raw = sys.argv[1:4]
+manifest, expected_backend_raw, expected_netns_link_raw, expected_object = sys.argv[1:5]
 expected_backend = expected_backend_raw.replace("-", "_")
 expected_netns_link = expected_netns_link_raw.strip().lower()
 accepted_backends = (
@@ -202,6 +211,7 @@ accepted_backends = (
 with open(manifest, "r", encoding="utf-8") as fh:
     root = json.load(fh)
 owner = root.get("production_runtime_owner", {})
+native_object = owner.get("native_object") or {}
 
 required = [
     "daemon_owned_production_runtime_owner_smoke_passed",
@@ -295,6 +305,34 @@ cleanup_failures = [
 if cleanup_failures:
     missing.append("cleanup_steps_without_failures")
 
+selected_object = native_object.get("selectedObject")
+core_enabled = native_object.get("coreEnabled")
+core_status = native_object.get("coreStatus")
+if selected_object not in {
+    "memory:native-ebpf-object",
+    "memory:native-ebpf-object-pname-core",
+}:
+    missing.append("native_object.selectedObject")
+if expected_object == "pname-core":
+    if selected_object != "memory:native-ebpf-object-pname-core":
+        missing.append("native_object.pname_core_selected")
+    if core_enabled is not True or core_status != "enhanced_load_succeeded":
+        missing.append("native_object.pname_core_admitted")
+    if native_object.get("currentTaskArgvEnabled") is not True:
+        missing.append("native_object.current_task_argv_enabled")
+    if (native_object.get("targetBtf") or {}).get("parseOk") is not True:
+        missing.append("native_object.target_btf_parse")
+elif expected_object == "current-comm":
+    if selected_object != "memory:native-ebpf-object":
+        missing.append("native_object.current_comm_selected")
+    if core_enabled is not False or core_status != "fallback_to_current_comm":
+        missing.append("native_object.current_comm_fallback")
+elif selected_object == "memory:native-ebpf-object-pname-core":
+    if core_enabled is not True or core_status != "enhanced_load_succeeded":
+        missing.append("native_object.auto_pname_core_consistency")
+elif core_enabled is not False or core_status != "fallback_to_current_comm":
+    missing.append("native_object.auto_current_comm_consistency")
+
 evidence = {
     "manifest": manifest,
     "scope": owner.get("production_runtime_owner_scope"),
@@ -321,6 +359,7 @@ evidence = {
             }
         ],
     },
+    "native_object": native_object,
     "native_steps": [
         {
             "name": step.get("name"),

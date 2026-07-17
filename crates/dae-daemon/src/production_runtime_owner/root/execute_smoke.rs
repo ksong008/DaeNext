@@ -8,6 +8,7 @@ pub(super) struct ExecutionEvidence {
     pub(super) peer_attach_show: Value,
     pub(super) host_attach_show: Value,
     pub(super) native_param_image: Value,
+    pub(super) native_object: Value,
     pub(super) loaded_map_handoff: Value,
     pub(super) before_map_ids: Vec<u32>,
     pub(super) after_map_ids: Vec<u32>,
@@ -415,6 +416,7 @@ pub(super) fn execute_owner_smoke(
     let native_peer_attached = native_runtime.peer_attached();
     let native_lan_attached = native_runtime.lan_attached();
     let native_host_attached = native_runtime.host_attached();
+    evidence.native_object = native_runtime.pname_evidence(false, &evidence.native_param_image);
     drop(live_handoff);
     native_runtime.reset();
     if options.execute_active_udp {

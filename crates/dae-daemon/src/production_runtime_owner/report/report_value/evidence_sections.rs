@@ -16,6 +16,10 @@ pub(crate) fn insert_evidence_sections(
         context.evidence.native_param_image.clone(),
     );
     report.insert(
+        "native_object".to_owned(),
+        context.evidence.native_object.clone(),
+    );
+    report.insert(
         "peer_attach_show".to_owned(),
         context.evidence.peer_attach_show.clone(),
     );
