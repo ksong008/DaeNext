@@ -92,14 +92,10 @@ async fn forward_proxy_dns_https(
         .run(
             ProxyDnsRequestStage::Send,
             ProxyDnsRequestFailure::Network,
-            tls.write_all(&request),
-        )
-        .await?;
-    context
-        .run(
-            ProxyDnsRequestStage::Send,
-            ProxyDnsRequestFailure::Network,
-            tls.flush(),
+            async {
+                tls.write_all(&request).await?;
+                tls.flush().await
+            },
         )
         .await?;
     let raw = context
