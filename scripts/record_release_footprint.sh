@@ -18,6 +18,37 @@ release_binary="$output_root/daed.stripped"
 target_cpu="${RUST_TARGET_CPU:-native}"
 features="${DAED_FEATURES:-default}"
 version_shape="${DAE_DAEMON_VERSION:-auto-git-product-identity}"
+strip_policy="${DAED_STRIP_POLICY:-all}"
+
+case "$strip_policy" in
+  all)
+    strip_argument="--strip-all"
+    ;;
+  debug)
+    strip_argument="--strip-debug"
+    ;;
+  none)
+    strip_argument=""
+    ;;
+  *)
+    printf 'unsupported daemon strip policy: %s (expected all, debug or none)\n' "$strip_policy" >&2
+    exit 1
+    ;;
+esac
+
+strip_tool=""
+if [[ -n "$strip_argument" ]]; then
+  for candidate in llvm-strip rust-llvm-strip strip; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      strip_tool="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$strip_tool" ]]; then
+    printf 'no supported strip tool found\n' >&2
+    exit 1
+  fi
+fi
 
 mkdir -p "$output_root" "$(dirname "$report")" "$target_dir"
 
@@ -33,18 +64,9 @@ RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=$target_cpu" \
 cp "$target_dir/release/daed" "$analysis_binary"
 cp "$analysis_binary" "$release_binary"
 
-strip_tool=""
-for candidate in llvm-strip rust-llvm-strip strip; do
-  if command -v "$candidate" >/dev/null 2>&1; then
-    strip_tool="$candidate"
-    break
-  fi
-done
-if [[ -z "$strip_tool" ]]; then
-  printf 'no supported strip tool found\n' >&2
-  exit 1
+if [[ -n "$strip_argument" ]]; then
+  "$strip_tool" "$strip_argument" "$release_binary"
 fi
-"$strip_tool" --strip-debug "$release_binary"
 
 readelf -SW "$analysis_binary" >"$output_root/sections.txt"
 nm -S --size-sort --radix=d "$analysis_binary" >"$output_root/symbols.txt" 2>"$output_root/symbols.err" || true
@@ -89,7 +111,11 @@ tool_version() {
   printf -- '- Feature set: `%s`\n' "$features"
   printf -- '- Allocator: `%s`\n' "$(if [[ "$features" == *allocator-system* ]]; then printf system; else printf jemalloc; fi)"
   printf -- '- Product version shape: `%s`\n' "$version_shape"
-  printf -- '- Strip policy: `%s --strip-debug`\n' "$strip_tool"
+  if [[ -n "$strip_argument" ]]; then
+    printf -- '- Strip policy: `%s %s`\n' "$strip_tool" "$strip_argument"
+  else
+    printf -- '- Strip policy: `none`\n'
+  fi
   printf -- '- Unstripped bytes: `%s`\n' "$(stat -c %s "$analysis_binary")"
   printf -- '- Stripped bytes: `%s`\n' "$(stat -c %s "$release_binary")"
   printf -- '- `.text` bytes: `%s`\n' "$(section_bytes .text)"
