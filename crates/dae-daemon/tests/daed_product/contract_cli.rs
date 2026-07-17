@@ -242,6 +242,12 @@ pub(super) fn daed_state_migrate_does_not_modify_wing_db() {
     let wing = temp.join("wing.db");
     let daed = temp.join("daed.db");
 
+    let source = rusqlite::Connection::open(&wing).unwrap();
+    source
+        .execute_batch("CREATE TABLE wing_fixture(id INTEGER PRIMARY KEY);")
+        .unwrap();
+    drop(source);
+
     let check_wing = Command::new(binary())
         .args(["state", "check", "--state"])
         .arg(&wing)
