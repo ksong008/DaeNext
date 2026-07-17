@@ -3,6 +3,42 @@ use std::net::SocketAddr;
 
 use sha2::{Digest, Sha256};
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane::udp) struct UdpSessionFixedTarget {
+    source: Option<SocketAddr>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl UdpSessionFixedTarget {
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn bind(
+        &mut self,
+        source: SocketAddr,
+        owner: &str,
+    ) -> Result<(), String> {
+        match self.source {
+            None => {
+                self.source = Some(source);
+                Ok(())
+            }
+            Some(current) if current == source => Ok(()),
+            Some(current) => Err(format!(
+                "{owner} is bound to UDP target {current}, cannot send to {source}"
+            )),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) const fn source(
+        self,
+    ) -> Option<SocketAddr> {
+        self.source
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn clear(&mut self) {
+        self.source = None;
+    }
+}
+
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct UdpResponseIdentityToken(
     [u8; 32],

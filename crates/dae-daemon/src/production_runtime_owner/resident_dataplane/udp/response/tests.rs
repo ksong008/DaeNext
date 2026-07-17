@@ -1,5 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use super::fixed_target::UdpSessionFixedTarget;
 use super::*;
 
 fn target(last_octet: u8, port: u16) -> SocketAddr {
@@ -164,6 +165,19 @@ fn session_bound_source_uses_the_same_fixed_target_gate() {
         response.validate_fixed_target(response.fixed_target_expectation(expected_target)),
         UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
     );
+}
+
+#[test]
+fn session_fixed_target_is_idempotent_and_rejects_retargeting() {
+    let first = target(1, 443);
+    let second = target(2, 443);
+    let mut binding = UdpSessionFixedTarget::default();
+    binding.bind(first, "fixture session").unwrap();
+    binding.bind(first, "fixture session").unwrap();
+    assert!(binding.bind(second, "fixture session").is_err());
+    assert_eq!(binding.source(), Some(first));
+    binding.clear();
+    assert_eq!(binding.source(), None);
 }
 
 #[test]
