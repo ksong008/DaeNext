@@ -101,11 +101,13 @@ async fn run_product_sse_job(
         request,
         kind,
         admission,
+        ui_session,
         http_metrics,
     } = job;
     metrics.sse_dequeued();
     let _completion = ProductSseJobCompletion {
         admission,
+        ui_session,
         http_metrics,
         metrics,
     };
@@ -127,6 +129,7 @@ async fn run_product_sse_job(
 
 struct ProductSseJobCompletion {
     admission: ProductSseAdmissionLease,
+    ui_session: Option<ProductUiStreamLease>,
     http_metrics: Arc<ProductHttpMetrics>,
     metrics: Arc<ProductHttpMetrics>,
 }
@@ -134,6 +137,7 @@ struct ProductSseJobCompletion {
 impl Drop for ProductSseJobCompletion {
     fn drop(&mut self) {
         let _ = &self.admission;
+        let _ = &self.ui_session;
         self.metrics.sse_completed();
         self.http_metrics.closed();
     }
@@ -156,6 +160,7 @@ mod tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _completion = ProductSseJobCompletion {
                 admission: lease,
+                ui_session: None,
                 http_metrics: Arc::clone(&metrics),
                 metrics: Arc::clone(&metrics),
             };

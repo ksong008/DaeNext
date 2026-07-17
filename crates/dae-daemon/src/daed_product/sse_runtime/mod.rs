@@ -29,6 +29,7 @@ pub(super) struct ProductSseJob {
     request: HttpRequest,
     kind: ProductSseStreamKind,
     admission: ProductSseAdmissionLease,
+    ui_session: Option<ProductUiStreamLease>,
     http_metrics: Arc<ProductHttpMetrics>,
 }
 
@@ -38,9 +39,11 @@ impl ProductSseJob {
             stream,
             request,
             admission,
+            ui_session,
             ..
         } = self;
         drop(admission);
+        drop(ui_session);
         Box::new(ProductSseSubmissionError {
             stream,
             request,
@@ -75,11 +78,12 @@ impl ProductSseRuntime {
         app: std::sync::Weak<AppState>,
         metrics: Arc<ProductHttpMetrics>,
     ) -> io::Result<Arc<Self>> {
-        Self::start_with_config(
-            ProductSseRuntimeConfig::from_http_config(http_config),
-            app,
-            metrics,
-        )
+        let config = ProductSseRuntimeConfig::from_http_config(http_config);
+        if let Some(app) = app.upgrade() {
+            app.ui_runtime
+                .configure(config.connection_limit, config.per_user_limit);
+        }
+        Self::start_with_config(config, app, metrics)
     }
 
     fn start_with_config(
@@ -115,6 +119,7 @@ impl ProductSseRuntime {
         stream: TcpStream,
         request: HttpRequest,
         http_metrics: Arc<ProductHttpMetrics>,
+        ui_runtime: &Arc<ProductUiRuntime>,
     ) -> Result<(), Box<ProductSseSubmissionError>> {
         let admission = match self.admission.acquire(user_id) {
             Ok(lease) => lease,
@@ -155,11 +160,28 @@ impl ProductSseRuntime {
                 }));
             }
         };
+        let ui_session = match ui_runtime.open_stream(user_id, &request) {
+            Ok(session) => session,
+            Err(error) => {
+                drop(admission);
+                let status = match error.kind() {
+                    io::ErrorKind::InvalidInput => 400,
+                    io::ErrorKind::WouldBlock => 429,
+                    _ => 503,
+                };
+                return Err(Box::new(ProductSseSubmissionError {
+                    stream,
+                    request,
+                    response: HttpResponse::json(status, json!({"error": error.to_string()})),
+                }));
+            }
+        };
         let job = ProductSseJob {
             stream,
             request,
             kind,
             admission,
+            ui_session,
             http_metrics,
         };
         self.metrics.sse_enqueued();
