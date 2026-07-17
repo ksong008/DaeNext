@@ -2,8 +2,7 @@ use dae_outbound::{
     CALLER_SCOPED_HYSTERIA2_OWNERSHIP, CALLER_SCOPED_JUICITY_OWNERSHIP,
     CALLER_SCOPED_TUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP,
     FLOW_STREAM_PACKET_OWNERSHIP, FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
-    GENERATION_CONNECT_UDP_OWNERSHIP, MATERIALIZED_SHAPE_REJECTED_OWNERSHIP,
-    RuntimeOwnershipProfile,
+    MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, RuntimeOwnershipProfile,
 };
 
 use super::*;
@@ -95,23 +94,6 @@ fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
             FLOW_STREAM_ASSOCIATION_OWNERSHIP,
         ),
         Protocol::HttpProxy => http_proxy_profile(shape),
-        Protocol::ConnectUdpH2 => exact_profile(
-            shape,
-            &[
-                SecurityDimension::StandardTls,
-                SecurityDimension::InsecureTls,
-            ],
-            WrapperDimension::ConnectUdpH2,
-            UdpDimension::ConnectUdpH2,
-            GENERATION_CONNECT_UDP_OWNERSHIP,
-        ),
-        Protocol::ConnectUdpH3 => exact_profile(
-            shape,
-            &[SecurityDimension::QuicTls],
-            WrapperDimension::ConnectUdpH3,
-            UdpDimension::ConnectUdpH3,
-            GENERATION_CONNECT_UDP_OWNERSHIP,
-        ),
         Protocol::ShadowsocksAead => exact_profile(
             shape,
             &[SecurityDimension::Aead],

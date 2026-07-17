@@ -151,13 +151,6 @@ impl UdpResponseEnvelope {
     }
 
     #[cfg(test)]
-    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn into_payload_for_test(
-        self,
-    ) -> Vec<u8> {
-        self.payload
-    }
-
-    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn with_session_ownership(
         mut self,
         session_ownership: &'static str,

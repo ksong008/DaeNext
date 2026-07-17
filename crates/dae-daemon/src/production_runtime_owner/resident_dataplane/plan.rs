@@ -17,7 +17,6 @@ use dae_outbound::{
         server_contract as hysteria2_server_contract,
     },
     juicity::JuicityLink,
-    masque::{MasqueAuthentication, MasqueLink, MasqueTransport},
     parse_link_chain,
     shadowsocks::ss2022::{cipher_conf, validate_psk_list},
     shadowsocks::{CipherFamily, classify_cipher},
@@ -25,8 +24,8 @@ use dae_outbound::{
         ShadowsocksLink, ShadowsocksRLink, cipher_spec, shadowsocksr_stream_cipher_supported,
     },
     shared_transport::{
-        DEFAULT_UTLS_FINGERPRINT, MasqueUriTemplate, MeekRoundTripOptions, TlsFragmentOptions,
-        UTLS_ALPN_H2, UTLS_ALPN_HTTP_1_1, UtlsFingerprint, ir, resolve_utls_client_hello_id,
+        DEFAULT_UTLS_FINGERPRINT, MeekRoundTripOptions, TlsFragmentOptions, UTLS_ALPN_H2,
+        UTLS_ALPN_HTTP_1_1, UtlsFingerprint, ir, resolve_utls_client_hello_id,
         utls_fingerprint_default_alpn_protocols,
     },
     trojan::{TrojanLink, TrojanTransportType},
@@ -40,7 +39,6 @@ use url::Url;
 use super::super::resident_routing::ResidentGeodataStore;
 #[cfg(test)]
 use super::RESIDENT_TCP_LATENCY_PROBE_TIMEOUT;
-pub(super) use super::connect_udp_resources::ResidentConnectUdpRuntimePlan;
 use super::{
     dns::{ResidentDnsPlan, build_resident_dns_plan},
     execution_link_hash, link_hash, redacted_link_source,

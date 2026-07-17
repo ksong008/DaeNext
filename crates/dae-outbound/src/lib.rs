@@ -14,7 +14,6 @@ pub mod juicity;
 pub mod latency;
 pub mod link_identity;
 pub mod link_parser;
-pub mod masque;
 pub mod matrix_extension_capability;
 pub mod policy;
 pub mod production_matrix;
@@ -52,7 +51,6 @@ pub use juicity::JuicityLink;
 pub use latency::LatenciesN;
 pub use link_identity::canonical_link_without_display_name;
 pub use link_parser::{LinkNode, LinkParseResult, parse_link_chain};
-pub use masque::{MasqueAuthentication, MasqueLink, MasqueTransport, MasqueUriTemplate};
 pub use matrix_extension_capability::{
     ExpandedLiveMatrixValidationBoundaryContract, ExtensionLayerCapabilityContract,
     ExtensionLayerCapabilityRow, PacketSemanticsCapabilityContract, PacketSemanticsCapabilityRow,

@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 const CENTRAL_CONSTRUCTOR: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/proxy_dispatch/quic_endpoint.rs";
-const CONNECT_UDP_TEST_SERVER: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/udp/session_executor/connect_udp/h3/tests/server.rs";
+const PROXIED_DOH3_TEST_SERVER: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/dns/transport/h3/proxied/tests/h3_server.rs";
 const SOURCE_GATE_TEST: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/proxy_dispatch/quic_endpoint/tests/source_gate.rs";
 const EXPLICIT_NON_PRODUCTION_CONSTRUCTORS: &[&str] = &[
-    CONNECT_UDP_TEST_SERVER,
+    PROXIED_DOH3_TEST_SERVER,
     SOURCE_GATE_TEST,
     "crates/dae-outbound/src/hysteria2/auth/tests.rs",
     "crates/dae-outbound/src/hysteria2/quic_loopback.rs",

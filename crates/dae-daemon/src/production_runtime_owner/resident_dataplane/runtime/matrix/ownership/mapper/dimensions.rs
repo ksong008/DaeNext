@@ -44,8 +44,6 @@ pub(super) enum SecurityDimension {
 pub(super) enum WrapperDimension {
     None,
     HttpTransport,
-    ConnectUdpH2,
-    ConnectUdpH3,
     WebSocket,
     HttpUpgrade,
     Grpc,
@@ -92,8 +90,6 @@ pub(super) enum UdpDimension {
     Hysteria2,
     Tuic,
     Juicity,
-    ConnectUdpH2,
-    ConnectUdpH3,
     PolicyClosed(PolicyClosedDimension),
 }
 
@@ -137,8 +133,6 @@ fn wrapper_dimension(wrapper: plan::ResidentStreamWrapperPlan) -> WrapperDimensi
     match wrapper {
         Wrapper::None => WrapperDimension::None,
         Wrapper::HttpTransport => WrapperDimension::HttpTransport,
-        Wrapper::ConnectUdpH2 => WrapperDimension::ConnectUdpH2,
-        Wrapper::ConnectUdpH3 => WrapperDimension::ConnectUdpH3,
         Wrapper::WebSocket => WrapperDimension::WebSocket,
         Wrapper::HttpUpgrade => WrapperDimension::HttpUpgrade,
         Wrapper::Grpc => WrapperDimension::Grpc,
@@ -175,8 +169,6 @@ fn udp_dimension(udp: plan::ResidentUdpExecutorFactory) -> UdpDimension {
         Udp::Hysteria2Datagram => UdpDimension::Hysteria2,
         Udp::TuicPacket => UdpDimension::Tuic,
         Udp::JuicityStreamPacket => UdpDimension::Juicity,
-        Udp::ConnectUdpH2 => UdpDimension::ConnectUdpH2,
-        Udp::ConnectUdpH3 => UdpDimension::ConnectUdpH3,
         Udp::PolicyClosed(reason) => UdpDimension::PolicyClosed(policy_closed_dimension(reason)),
     }
 }

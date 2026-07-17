@@ -108,8 +108,6 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentUdpExec
     Hysteria2Datagram,
     TuicPacket,
     JuicityStreamPacket,
-    ConnectUdpH2,
-    ConnectUdpH3,
     PolicyClosed(ResidentUdpPolicyClosedReason),
 }
 
@@ -135,8 +133,6 @@ impl ResidentUdpExecutorFactory {
             | Self::AnyTlsPacketStream
             | Self::Hysteria2Datagram
             | Self::TuicPacket
-            | Self::ConnectUdpH2
-            | Self::ConnectUdpH3
             | Self::PolicyClosed(_) => false,
         }
     }
@@ -154,8 +150,6 @@ impl ResidentUdpExecutorFactory {
             ResidentProxyProtocolPlan::HttpProxyTcp { .. } => {
                 Self::PolicyClosed(Closed::HttpConnect)
             }
-            ResidentProxyProtocolPlan::ConnectUdpH2Tls { .. } => Self::ConnectUdpH2,
-            ResidentProxyProtocolPlan::ConnectUdpH3Tls { .. } => Self::ConnectUdpH3,
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => Self::ShadowsocksAead,
             ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => Self::Shadowsocks2022,
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
@@ -285,8 +279,6 @@ impl ResidentUdpExecutorFactory {
             Self::Hysteria2Datagram => "resident-hysteria2-quic-datagram",
             Self::TuicPacket => "resident-tuic-quic-packet",
             Self::JuicityStreamPacket => "resident-juicity-quic-stream-packet",
-            Self::ConnectUdpH2 => "resident-connect-udp-h2-capsule",
-            Self::ConnectUdpH3 => "resident-connect-udp-h3-http-datagram",
             Self::PolicyClosed(reason) => reason.executor_label(),
         }
     }
@@ -306,8 +298,6 @@ impl ResidentUdpExecutorFactory {
             Self::Hysteria2Datagram => UdpPacketSemantics::QuicDatagram,
             Self::TuicPacket => UdpPacketSemantics::QuicPacket,
             Self::JuicityStreamPacket => UdpPacketSemantics::QuicStreamPacket,
-            Self::ConnectUdpH2 => UdpPacketSemantics::ConnectUdpCapsule,
-            Self::ConnectUdpH3 => UdpPacketSemantics::ConnectUdpHttpDatagram,
             Self::PolicyClosed(reason) => reason.packet_semantics(),
         }
     }

@@ -4,7 +4,6 @@ pub mod grpc;
 pub mod grpc_cache;
 pub mod grpc_http2;
 pub mod ir;
-pub mod masque;
 pub mod meek;
 pub mod mux;
 pub mod quic_h3;
@@ -45,13 +44,6 @@ pub use grpc_http2::{
     HTTP2_FRAME_SETTINGS, grpc_hunk_http2_data, http2_frame, read_grpc_http2_request,
     read_grpc_http2_response, read_http2_frame, write_grpc_http2_request,
     write_grpc_http2_response,
-};
-pub use masque::{
-    CONNECT_UDP_CAPSULE_TYPE, CONNECT_UDP_CONTEXT_ID, MasqueCapsule, MasqueCapsuleDecoder,
-    MasqueCapsuleLimits, MasqueCodecError, MasqueHttpDatagram, MasqueQuarterStreamId,
-    MasqueUriTemplate, decode_http_datagram, decode_quic_varint_exact, decode_quic_varint_prefix,
-    encode_connect_udp_capsule, encode_http_datagram, encode_quic_varint, encode_unknown_capsule,
-    quic_varint_encoded_len,
 };
 pub use meek::{
     MeekRoundTripOptions, MeekRoundTripReport, meek_http_request, meek_polling_exchange,

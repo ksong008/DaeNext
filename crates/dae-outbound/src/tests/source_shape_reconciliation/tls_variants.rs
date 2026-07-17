@@ -98,19 +98,9 @@ fn protocol_selectors_preserve_exact_tls_responsibilities() {
         STREAM_TLS_WITHOUT_FINGERPRINT_VARIANTS,
     );
     assert_exact_variants(
-        "connect-udp-h2-endpoint",
-        MaterializedProtocol::ConnectUdpH2,
-        &FULL_STREAM_TLS_VARIANTS[..2],
-    );
-    assert_exact_variants(
         "vless-meek-reality-stream-wrapper",
         MaterializedProtocol::VlessStandard,
         REALITY_TLS_VARIANTS,
-    );
-    assert_exact_variants(
-        "connect-udp-h3-endpoint",
-        MaterializedProtocol::ConnectUdpH3,
-        &[QUIC_TLS_VARIANT],
     );
     assert_exact_variants(
         "xhttp-h3-wrapper",
@@ -133,26 +123,15 @@ fn protocol_selectors_preserve_exact_tls_responsibilities() {
 }
 
 #[test]
-fn connect_udp_h2_rejects_fragmented_insecure_tls_variant() {
-    let standard = standalone(
-        MaterializedProtocol::ConnectUdpH2,
-        TEST_STANDARD_TLS_VARIANT,
-        MaterializedWrapper::ConnectUdpH2,
-        MaterializedUdp::ConnectUdpH2,
-    );
-    let insecure = MaterializedSourceShape {
-        security: MaterializedSecurity::InsecureTls,
-        tls_features: MaterializedTlsFeatures::ALLOW_INSECURE,
-        ..standard
-    };
-    let insecure_fragmented = MaterializedSourceShape {
-        tls_features: MaterializedTlsFeatures::ALLOW_INSECURE_FRAGMENT,
-        ..insecure
-    };
-
-    assert!(matches("connect-udp-h2-endpoint", standard));
-    assert!(matches("connect-udp-h2-endpoint", insecure));
-    assert!(!matches("connect-udp-h2-endpoint", insecure_fragmented));
+fn removed_connect_udp_rows_have_no_tls_execution_selectors() {
+    for shape_id in ["connect-udp-h2-endpoint", "connect-udp-h3-endpoint"] {
+        let reconciliation = source_shape_reconciliation(shape_id).unwrap();
+        assert_eq!(
+            reconciliation.kind,
+            SourceShapeReconciliationKind::SourceRejected
+        );
+        assert!(reconciliation.selectors.is_empty());
+    }
 }
 
 #[test]

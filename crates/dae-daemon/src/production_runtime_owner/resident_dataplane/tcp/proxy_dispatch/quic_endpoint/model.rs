@@ -17,7 +17,6 @@ pub(crate) enum QuicEndpointProtocol {
     Tuic,
     Juicity,
     XhttpHttp3,
-    ConnectUdpHttp3,
     DnsOverQuic,
     DnsOverHttp3,
 }
@@ -29,7 +28,6 @@ impl QuicEndpointProtocol {
             Self::Tuic => "tuic",
             Self::Juicity => "juicity",
             Self::XhttpHttp3 => "xhttp-h3",
-            Self::ConnectUdpHttp3 => "connect-udp-h3",
             Self::DnsOverQuic => "doq",
             Self::DnsOverHttp3 => "doh3",
         }
@@ -38,11 +36,7 @@ impl QuicEndpointProtocol {
     pub(super) const fn uses_http3(self) -> bool {
         matches!(
             self,
-            Self::Hysteria2
-                | Self::Juicity
-                | Self::XhttpHttp3
-                | Self::ConnectUdpHttp3
-                | Self::DnsOverHttp3
+            Self::Hysteria2 | Self::Juicity | Self::XhttpHttp3 | Self::DnsOverHttp3
         )
     }
 }

@@ -134,7 +134,7 @@ pub(super) const BASELINE_SOCKS_ENDPOINT: SourceShapeRegistryRow = admitted_row(
         ),
 );
 
-pub(super) const CONNECT_UDP_H2_ENDPOINT: SourceShapeRegistryRow = admitted_row(
+pub(super) const CONNECT_UDP_H2_ENDPOINT: SourceShapeRegistryRow = not_supported_row(
     registry_source("connect-udp-h2-endpoint", "connect-udp", &["masque"])
         .with_transport(
             "standard-or-insecure-tls",
@@ -142,16 +142,18 @@ pub(super) const CONNECT_UDP_H2_ENDPOINT: SourceShapeRegistryRow = admitted_row(
             "connect-udp-capsule",
         )
         .with_runtime(
-            GENERATION_CONNECT_UDP_OWNERSHIP,
+            SOURCE_REJECTED_OWNERSHIP,
             "registry:connect-udp-h2-endpoint",
         ),
+    "unsupported-source-policy",
 );
 
-pub(super) const CONNECT_UDP_H3_ENDPOINT: SourceShapeRegistryRow = admitted_row(
+pub(super) const CONNECT_UDP_H3_ENDPOINT: SourceShapeRegistryRow = not_supported_row(
     registry_source("connect-udp-h3-endpoint", "connect-udp", &["masque"])
         .with_transport("quic-tls", "connect-udp-h3", "connect-udp-http-datagram")
         .with_runtime(
-            GENERATION_CONNECT_UDP_OWNERSHIP,
+            SOURCE_REJECTED_OWNERSHIP,
             "registry:connect-udp-h3-endpoint",
         ),
+    "unsupported-source-policy",
 );

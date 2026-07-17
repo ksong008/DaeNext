@@ -141,28 +141,8 @@ pub(super) const BASELINE_SOCKS_ENDPOINT: SourceShapeReconciliation = production
     )],
 );
 
-pub(super) const CONNECT_UDP_H2_ENDPOINT: SourceShapeReconciliation = production(
-    "connect-udp-h2-endpoint",
-    &[standalone(
-        MaterializedProtocol::ConnectUdpH2,
-        TLS_WITHOUT_CLIENT_HELLO_MUTATION_VARIANTS,
-        MaterializedWrapper::ConnectUdpH2,
-        MaterializedUdp::ConnectUdpH2,
-    )],
-);
+pub(super) const CONNECT_UDP_H2_ENDPOINT: SourceShapeReconciliation =
+    rejected("connect-udp-h2-endpoint");
 
-pub(super) const CONNECT_UDP_H3_ENDPOINT: SourceShapeReconciliation = production(
-    "connect-udp-h3-endpoint",
-    &[SourceShapeSelector {
-        quic_verification: &[
-            MaterializedQuicVerification::WebPki,
-            MaterializedQuicVerification::Insecure,
-        ],
-        ..standalone(
-            MaterializedProtocol::ConnectUdpH3,
-            QUIC_TLS_VARIANTS,
-            MaterializedWrapper::ConnectUdpH3,
-            MaterializedUdp::ConnectUdpH3,
-        )
-    }],
-);
+pub(super) const CONNECT_UDP_H3_ENDPOINT: SourceShapeReconciliation =
+    rejected("connect-udp-h3-endpoint");

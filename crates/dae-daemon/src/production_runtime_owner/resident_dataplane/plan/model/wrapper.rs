@@ -4,8 +4,6 @@ use super::*;
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentStreamWrapperPlan {
     None,
     HttpTransport,
-    ConnectUdpH2,
-    ConnectUdpH3,
     WebSocket,
     HttpUpgrade,
     Grpc,
@@ -26,8 +24,6 @@ impl ResidentStreamWrapperPlan {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
         match proxy.handler {
             ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => return Self::FrameStream,
-            ResidentProxyProtocolPlan::ConnectUdpH2Tls { .. } => return Self::ConnectUdpH2,
-            ResidentProxyProtocolPlan::ConnectUdpH3Tls { .. } => return Self::ConnectUdpH3,
             ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => return Self::Mux,
             ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
             | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
@@ -71,8 +67,6 @@ impl ResidentStreamWrapperPlan {
         match self {
             Self::None => "none",
             Self::HttpTransport => "http-transport",
-            Self::ConnectUdpH2 => "connect-udp-h2",
-            Self::ConnectUdpH3 => "connect-udp-h3",
             Self::WebSocket => "websocket",
             Self::HttpUpgrade => "httpupgrade",
             Self::Grpc => "grpc",

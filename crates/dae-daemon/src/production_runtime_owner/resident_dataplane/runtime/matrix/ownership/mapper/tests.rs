@@ -65,24 +65,6 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
         ),
         (
             shape(
-                Protocol::ConnectUdpH2,
-                Security::StandardTls,
-                Wrapper::ConnectUdpH2,
-                Udp::ConnectUdpH2,
-            ),
-            GENERATION_CONNECT_UDP_OWNERSHIP,
-        ),
-        (
-            shape(
-                Protocol::ConnectUdpH3,
-                Security::QuicTls,
-                Wrapper::ConnectUdpH3,
-                Udp::ConnectUdpH3,
-            ),
-            GENERATION_CONNECT_UDP_OWNERSHIP,
-        ),
-        (
-            shape(
                 Protocol::ShadowsocksAead,
                 Security::Aead,
                 Wrapper::None,

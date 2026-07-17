@@ -9,23 +9,6 @@ pub(super) struct ResidentUdpFamilyProbeResult {
     pub(super) message: Option<String>,
 }
 
-impl ResidentUdpFamilyProbeResult {
-    fn alive(&self) -> bool {
-        self.health_state == HealthState::Alive && self.latency_ms.is_some()
-    }
-
-    pub(super) fn to_json(&self) -> Value {
-        json!({
-            "networkType": self.network_type.string_without_dns(),
-            "networkDimension": self.network_type.dimension_name(),
-            "healthState": self.health_state.as_str(),
-            "latencyMs": self.latency_ms,
-            "alive": self.alive(),
-            "message": self.message,
-        })
-    }
-}
-
 pub(super) async fn probe_resident_candidate_udp_families(
     candidate: &plan::ResidentProxyProbePlan,
     stop: Option<&SharedResidentStopSignal>,
@@ -134,41 +117,5 @@ async fn probe_udp_family(
             latency_ms: None,
             message: Some(err),
         }),
-    }
-}
-
-pub(super) fn preferred_udp_family_probe_result(
-    results: &[ResidentUdpFamilyProbeResult],
-) -> Option<&ResidentUdpFamilyProbeResult> {
-    results.iter().reduce(|current, next| {
-        if prefer_udp_family_result(next, current) {
-            next
-        } else {
-            current
-        }
-    })
-}
-
-fn prefer_udp_family_result(
-    next: &ResidentUdpFamilyProbeResult,
-    current: &ResidentUdpFamilyProbeResult,
-) -> bool {
-    match (next.latency_ms, current.latency_ms) {
-        (Some(next_latency), Some(current_latency)) => next_latency < current_latency,
-        (Some(_), None) => true,
-        (None, Some(_)) => false,
-        (None, None) => {
-            health_state_failure_rank(next.health_state)
-                < health_state_failure_rank(current.health_state)
-        }
-    }
-}
-
-fn health_state_failure_rank(state: HealthState) -> u8 {
-    match state {
-        HealthState::Dead => 0,
-        HealthState::Unknown => 1,
-        HealthState::Unavailable => 2,
-        HealthState::Alive => 3,
     }
 }

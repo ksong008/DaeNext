@@ -109,9 +109,6 @@ pub(crate) use self::resource_profile::{
 pub(super) use self::resource_profile::{
     resident_datapath_postflight_interval_seconds_default, selected_resident_runtime_profile_name,
 };
-#[path = "runtime/connect_udp_resources.rs"]
-mod connect_udp_resources;
-use self::connect_udp_resources::*;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 pub(super) use self::health_checks::*;

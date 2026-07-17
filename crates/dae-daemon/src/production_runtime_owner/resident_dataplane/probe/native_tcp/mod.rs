@@ -76,7 +76,6 @@ async fn open_native_tcp_tunnel(
             open_shadowsocks_native_tcp_tunnel(proxy, target).await
         }
         ResidentTcpProbeDispatch::Quic => open_quic_stream_native_tcp_tunnel(proxy, target).await,
-        ResidentTcpProbeDispatch::PolicyClosed => Err(NativeTcpProbeError::NotAdmitted),
     }
 }
 

@@ -71,10 +71,9 @@ fn plain_stream_and_datagram_sources_have_exact_production_rows() {
 }
 
 #[test]
-fn quic_and_connect_udp_qualifiers_produce_exact_match_sets() {
+fn quic_qualifiers_produce_exact_match_sets() {
     let config = fixture_config();
     let primary = fixture_host(FixtureEndpoint::Primary);
-    let authority = fixture_host(FixtureEndpoint::Authority);
 
     assert_exact_source(
         &hysteria2_fixture_url("", &primary, fixture_port(5)),
@@ -110,16 +109,6 @@ fn quic_and_connect_udp_qualifiers_produce_exact_match_sets() {
         &juicity_fixture_url("", &primary, fixture_port(7), true),
         &config,
         &["baseline-quic-password-endpoint"],
-    );
-    assert_exact_source(
-        &connect_udp_source("h2", &primary, fixture_port(8), &authority),
-        &config,
-        &["connect-udp-h2-endpoint"],
-    );
-    assert_exact_source(
-        &connect_udp_source("h3", &primary, fixture_port(8), &authority),
-        &config,
-        &["connect-udp-h3-endpoint"],
     );
 }
 
@@ -165,10 +154,4 @@ fn shadowsocks_2022_source(host: &str, port: u16) -> String {
         protocol: "shadowsocks".to_owned(),
     }
     .export_url()
-}
-
-fn connect_udp_source(transport: &str, host: &str, port: u16, authority: &str) -> String {
-    format!(
-        "masque://identity:credential@{host}:{port}?transport={transport}&auth=basic&template=%2F.well-known%2Fmasque%2Fudp%2F%7Btarget_host%7D%2F%7Btarget_port%7D%2F&sni={authority}"
-    )
 }

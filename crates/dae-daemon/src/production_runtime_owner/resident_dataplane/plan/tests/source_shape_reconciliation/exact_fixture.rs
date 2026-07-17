@@ -87,6 +87,23 @@ fn shared_exact_shapes_match_typed_registry_selectors() {
     for shape in shapes {
         let id = fixture_field(shape, "id");
         let source = fixture_source(id);
+        if matches!(id, "connect-udp-h2" | "connect-udp-h3") {
+            let error = build_resident_proxy_plan_for_node(
+                &config,
+                "proxy".to_owned(),
+                id.to_owned(),
+                source,
+            )
+            .expect_err("removed CONNECT-UDP source must remain fail-closed");
+            assert!(error.contains("unsupported masque node"), "{id}: {error}");
+            assert_eq!(
+                source_shape_reconciliation(registry_shape_id(id))
+                    .unwrap()
+                    .kind,
+                SourceShapeReconciliationKind::SourceRejected,
+            );
+            continue;
+        }
         let proxy = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),

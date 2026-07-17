@@ -58,10 +58,6 @@ pub(crate) fn start_resident_dataplane_workers(
         );
     }
     let resource_config = ResidentRuntimeResourceConfig::from_config(config);
-    let connect_udp_runtime = ResidentConnectUdpRuntimePlan::from_profile(
-        reload_generation,
-        resource_config.runtime_profile.profile,
-    );
     let so_mark_from_dae = effective_so_mark_from_dae(config.global.so_mark_from_dae);
     let default_outbound = plan.default_outbound;
     let tcp_dial_mode = plan.tcp_dial_mode;
@@ -69,7 +65,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let dns_plan = plan.dns;
     let mut proxy_groups = plan.proxies;
     for group in proxy_groups.values_mut() {
-        group.apply_runtime_generation(reload_generation, connect_udp_runtime);
+        group.apply_runtime_generation(reload_generation);
     }
     let Some(default_outbound) = default_outbound else {
         return (
@@ -218,7 +214,7 @@ pub(crate) fn start_resident_dataplane_workers(
         .values_mut()
         .filter_map(|probe| probe.as_mut().ok())
     {
-        probe.apply_runtime_generation(reload_generation, connect_udp_runtime);
+        probe.apply_runtime_generation(reload_generation);
     }
     let manual_probe_plan_count = manual_probe_plans
         .values()

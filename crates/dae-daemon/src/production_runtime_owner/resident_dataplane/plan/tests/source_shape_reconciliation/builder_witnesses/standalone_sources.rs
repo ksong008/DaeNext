@@ -153,8 +153,6 @@ pub(super) fn standalone_builder_sources() -> Vec<String> {
         tuic_fixture_url("", &primary, fixture_port(6), true),
         tuic_fixture_url("", &primary, fixture_port(6), false),
         juicity_fixture_url("", &primary, fixture_port(7), true),
-        connect_udp_source("h2", &primary, fixture_port(8), &authority),
-        connect_udp_source("h3", &primary, fixture_port(8), &authority),
     ];
 
     sources.push(https_transport_source(&primary, &authority));

@@ -10,11 +10,12 @@ use dae_runtime_control::OwnerGeneration;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore};
 
+use super::h3_server::H3TestServer;
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::production_runtime_owner::resident_dataplane::plan::build_resident_proxy_plan_for_node;
 use crate::production_runtime_owner::resident_dataplane::tcp::quic_endpoint_metrics_snapshot;
 use crate::production_runtime_owner::resident_dataplane::udp::{
-    ConnectUdpH3TestServer, ConnectUdpH3TestServerConfig, ResidentProxyUdpBridgeTestObservation,
+    ResidentProxyUdpBridgeTestObservation,
     open_resident_proxy_udp_bridge_with_test_observation_async,
 };
 
@@ -100,7 +101,7 @@ impl ProxiedDoh3ExchangeTarget for ProductionResourceTarget {
     }
 }
 
-fn trusted_h3_client_config(server: &ConnectUdpH3TestServer) -> quinn::ClientConfig {
+fn trusted_h3_client_config(server: &H3TestServer) -> quinn::ClientConfig {
     let mut roots = RootCertStore::empty();
     roots.add(server.certificate()).unwrap();
     let mut crypto = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -156,7 +157,7 @@ fn assert_generation_resources_closed(snapshot: &serde_json::Value) {
 
 #[tokio::test]
 async fn production_resource_graph_closes_endpoint_h3_driver_and_stalled_bridge() {
-    let server = ConnectUdpH3TestServer::start(ConnectUdpH3TestServerConfig::echo()).await;
+    let server = H3TestServer::start().await;
     let generation = OwnerGeneration::new(PROXIED_DOH3_PRODUCTION_RESOURCE_TEST_GENERATION);
     let endpoint_context = QuicEndpointOpenContext::from_identity_parts(
         QuicEndpointProtocol::DnsOverHttp3,

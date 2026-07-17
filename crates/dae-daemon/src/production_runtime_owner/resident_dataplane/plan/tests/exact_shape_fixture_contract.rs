@@ -85,13 +85,21 @@ fn rust_execution_plan_matches_shared_web_exact_shape_contract() {
 
     for shape in shapes {
         let id = fixture_field(shape, "id");
-        let proxy = build_resident_proxy_plan_for_node(
-            &config,
-            "proxy".to_owned(),
-            id.to_owned(),
-            exact_shape_source(id),
-        )
-        .unwrap_or_else(|err| panic!("build shared exact-shape fixture {id}: {err}"));
+        let source = exact_shape_source(id);
+        if matches!(id, "connect-udp-h2" | "connect-udp-h3") {
+            let error = build_resident_proxy_plan_for_node(
+                &config,
+                "proxy".to_owned(),
+                id.to_owned(),
+                source,
+            )
+            .expect_err("removed CONNECT-UDP source must remain fail-closed");
+            assert!(error.contains("unsupported masque node"), "{id}: {error}");
+            continue;
+        }
+        let proxy =
+            build_resident_proxy_plan_for_node(&config, "proxy".to_owned(), id.to_owned(), source)
+                .unwrap_or_else(|err| panic!("build shared exact-shape fixture {id}: {err}"));
         let execution = proxy.execution_plan();
         let contract = execution.executor_contract();
         let graph = proxy.executable_graph_value();
