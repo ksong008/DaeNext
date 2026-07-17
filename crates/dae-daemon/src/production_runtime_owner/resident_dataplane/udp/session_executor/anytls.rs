@@ -5,7 +5,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct AnyTlsPa
     opened: bool,
     tls_underlay: Option<&'static str>,
     response_plaintext: Vec<u8>,
-    fixed_target: Option<SocketAddr>,
+    fixed_target: UdpSessionFixedTarget,
 }
 
 impl AnyTlsPacketStreamSession {
@@ -16,7 +16,7 @@ impl AnyTlsPacketStreamSession {
             opened: false,
             tls_underlay: None,
             response_plaintext: Vec::new(),
-            fixed_target: None,
+            fixed_target: UdpSessionFixedTarget::default(),
         }
     }
 
@@ -26,7 +26,8 @@ impl AnyTlsPacketStreamSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        self.bind_fixed_target(original_dst)?;
+        self.fixed_target
+            .bind(original_dst, "AnyTLS UDP packet stream")?;
         if self.client.is_none() {
             let mut client = open_async_resident_tls_client(proxy).await?;
             self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
@@ -173,7 +174,7 @@ impl AnyTlsPacketStreamSession {
             .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
             .with_session_executor("tokio-stream-session")
             .with_underlay_reuse("tls-frame-stream-reused");
-        match self.fixed_target {
+        match self.fixed_target.source() {
             Some(target) => result.with_session_bound_response_identity(target, None),
             None => {
                 result.with_rejected_response_identity(UdpResponseDropReason::MissingWireSource)
@@ -200,20 +201,7 @@ impl AnyTlsPacketStreamSession {
         }
         self.client.take();
         self.response_plaintext.clear();
-        self.fixed_target = None;
-    }
-
-    fn bind_fixed_target(&mut self, target: SocketAddr) -> Result<(), String> {
-        match self.fixed_target {
-            None => {
-                self.fixed_target = Some(target);
-                Ok(())
-            }
-            Some(current) if current == target => Ok(()),
-            Some(current) => Err(format!(
-                "AnyTLS UDP packet stream is bound to {current}, cannot send to {target}"
-            )),
-        }
+        self.fixed_target.clear();
     }
 }
 
@@ -264,8 +252,16 @@ mod tests {
         let expected: SocketAddr = "192.0.2.1:53".parse().unwrap();
         let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
         let mut session = AnyTlsPacketStreamSession::new("auth".to_owned());
-        session.bind_fixed_target(expected).unwrap();
-        assert!(session.bind_fixed_target(other).is_err());
+        session
+            .fixed_target
+            .bind(expected, "AnyTLS UDP packet stream")
+            .unwrap();
+        assert!(
+            session
+                .fixed_target
+                .bind(other, "AnyTLS UDP packet stream")
+                .is_err()
+        );
 
         let mut response = session.response_result(b"response".to_vec());
         let expectation = response.fixed_target_expectation(expected);

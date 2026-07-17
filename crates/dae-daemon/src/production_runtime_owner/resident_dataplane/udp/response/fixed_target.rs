@@ -3,13 +3,11 @@ use std::net::SocketAddr;
 
 use sha2::{Digest, Sha256};
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct UdpSessionFixedTarget {
     source: Option<SocketAddr>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl UdpSessionFixedTarget {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn bind(
         &mut self,
