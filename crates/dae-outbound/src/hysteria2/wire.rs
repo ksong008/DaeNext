@@ -1,6 +1,8 @@
 use crate::error::OutboundError;
 
 pub const HYSTERIA2_FRAME_TYPE_TCP_REQUEST: u64 = 0x401;
+pub const HYSTERIA2_MAX_UDP_ADDRESS_LENGTH: usize = 2048;
+pub const HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH: usize = 4096;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct TcpRequestFrame {
@@ -18,13 +20,81 @@ pub(super) struct TcpResponseFrame {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct UdpMessageFrame {
-    pub(super) session_id: u32,
-    pub(super) packet_id: u16,
-    pub(super) frag_id: u8,
-    pub(super) frag_count: u8,
-    pub(super) target: String,
-    pub(super) payload: Vec<u8>,
+pub struct Hysteria2UdpMessage {
+    session_id: u32,
+    packet_id: u16,
+    fragment_id: u8,
+    fragment_count: u8,
+    target: String,
+    payload: Vec<u8>,
+}
+
+impl Hysteria2UdpMessage {
+    pub fn new(
+        session_id: u32,
+        target: impl AsRef<str>,
+        payload: impl AsRef<[u8]>,
+    ) -> Result<Self, OutboundError> {
+        Self::from_parts(
+            session_id,
+            0,
+            0,
+            1,
+            target.as_ref().to_owned(),
+            payload.as_ref().to_vec(),
+        )
+    }
+
+    fn from_parts(
+        session_id: u32,
+        packet_id: u16,
+        fragment_id: u8,
+        fragment_count: u8,
+        target: String,
+        payload: Vec<u8>,
+    ) -> Result<Self, OutboundError> {
+        validate_udp_message_fields(packet_id, fragment_id, fragment_count, &target, &payload)?;
+        Ok(Self {
+            session_id,
+            packet_id,
+            fragment_id,
+            fragment_count,
+            target,
+            payload,
+        })
+    }
+
+    pub fn session_id(&self) -> u32 {
+        self.session_id
+    }
+
+    pub fn packet_id(&self) -> u16 {
+        self.packet_id
+    }
+
+    pub fn fragment_id(&self) -> u8 {
+        self.fragment_id
+    }
+
+    pub fn fragment_count(&self) -> u8 {
+        self.fragment_count
+    }
+
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    pub fn into_payload(self) -> Vec<u8> {
+        self.payload
+    }
+
+    pub fn encoded_len(&self) -> usize {
+        8 + quic_varint_len(self.target.len() as u64) + self.target.len() + self.payload.len()
+    }
 }
 
 pub(super) fn build_tcp_request_stream(
@@ -119,54 +189,144 @@ pub(super) fn parse_tcp_response_stream(input: &[u8]) -> Result<TcpResponseFrame
     })
 }
 
-pub(super) fn build_udp_message(
-    session_id: u32,
-    packet_id: u16,
-    target: &str,
-    payload: &[u8],
+pub fn encode_hysteria2_udp_message(
+    message: &Hysteria2UdpMessage,
 ) -> Result<Vec<u8>, OutboundError> {
-    if target.is_empty() {
-        return Err(bad_wire("Hysteria2 UDP target cannot be empty"));
-    }
-    if payload.is_empty() || payload.len() > 4096 {
-        return Err(bad_wire("invalid Hysteria2 UDP payload length"));
-    }
-    let mut out = Vec::with_capacity(16 + target.len() + payload.len());
-    out.extend_from_slice(&session_id.to_be_bytes());
-    out.extend_from_slice(&packet_id.to_be_bytes());
-    out.push(0);
-    out.push(1);
-    append_quic_varint(&mut out, target.len() as u64)?;
-    out.extend_from_slice(target.as_bytes());
-    out.extend_from_slice(payload);
+    validate_udp_message_fields(
+        message.packet_id,
+        message.fragment_id,
+        message.fragment_count,
+        &message.target,
+        &message.payload,
+    )?;
+    let mut out = Vec::with_capacity(message.encoded_len());
+    out.extend_from_slice(&message.session_id.to_be_bytes());
+    out.extend_from_slice(&message.packet_id.to_be_bytes());
+    out.push(message.fragment_id);
+    out.push(message.fragment_count);
+    append_quic_varint(&mut out, message.target.len() as u64)?;
+    out.extend_from_slice(message.target.as_bytes());
+    out.extend_from_slice(&message.payload);
     Ok(out)
 }
 
-pub(super) fn parse_udp_message(input: &[u8]) -> Result<UdpMessageFrame, OutboundError> {
+pub fn decode_hysteria2_udp_message(input: &[u8]) -> Result<Hysteria2UdpMessage, OutboundError> {
     if input.len() < 9 {
         return Err(bad_wire("short Hysteria2 UDP message"));
     }
     let session_id = u32::from_be_bytes([input[0], input[1], input[2], input[3]]);
     let packet_id = u16::from_be_bytes([input[4], input[5]]);
-    let frag_id = input[6];
-    let frag_count = input[7];
+    let fragment_id = input[6];
+    let fragment_count = input[7];
     let (addr_len, mut offset) = read_quic_varint(input, 8)?;
     let addr_len =
         usize::try_from(addr_len).map_err(|_| bad_wire("Hysteria2 UDP address too large"))?;
-    if addr_len == 0 || input.len() <= offset + addr_len {
+    let payload_offset = offset
+        .checked_add(addr_len)
+        .ok_or_else(|| bad_wire("Hysteria2 UDP address length overflow"))?;
+    if addr_len == 0 || addr_len > HYSTERIA2_MAX_UDP_ADDRESS_LENGTH || input.len() <= payload_offset
+    {
         return Err(bad_wire("invalid Hysteria2 UDP address length"));
     }
-    let target = String::from_utf8(input[offset..offset + addr_len].to_vec())
+    let target = String::from_utf8(input[offset..payload_offset].to_vec())
         .map_err(|err| bad_wire(format!("Hysteria2 UDP target utf8: {err}")))?;
-    offset += addr_len;
-    Ok(UdpMessageFrame {
+    offset = payload_offset;
+    Hysteria2UdpMessage::from_parts(
         session_id,
         packet_id,
-        frag_id,
-        frag_count,
+        fragment_id,
+        fragment_count,
         target,
-        payload: input[offset..].to_vec(),
-    })
+        input[offset..].to_vec(),
+    )
+}
+
+pub fn fragment_hysteria2_udp_message(
+    message: &Hysteria2UdpMessage,
+    packet_id: u16,
+    max_wire_size: usize,
+) -> Result<Vec<Hysteria2UdpMessage>, OutboundError> {
+    if message.fragment_count != 1 || message.fragment_id != 0 || message.packet_id != 0 {
+        return Err(bad_wire(
+            "only a complete Hysteria2 UDP message can be fragmented",
+        ));
+    }
+    if packet_id == 0 {
+        return Err(bad_wire(
+            "fragmented Hysteria2 UDP message requires a nonzero packet ID",
+        ));
+    }
+    if message.encoded_len() <= max_wire_size {
+        return Err(bad_wire(format!(
+            "Hysteria2 UDP message fits max wire size {max_wire_size} without fragmentation"
+        )));
+    }
+    let header_len = message
+        .encoded_len()
+        .checked_sub(message.payload.len())
+        .ok_or_else(|| bad_wire("Hysteria2 UDP header length underflow"))?;
+    let max_fragment_payload = max_wire_size.checked_sub(header_len).ok_or_else(|| {
+        bad_wire(format!(
+            "Hysteria2 UDP header is larger than max wire size {max_wire_size}"
+        ))
+    })?;
+    if max_fragment_payload == 0 {
+        return Err(bad_wire(format!(
+            "Hysteria2 UDP header leaves no payload at max wire size {max_wire_size}"
+        )));
+    }
+    let fragment_count = message.payload.len().div_ceil(max_fragment_payload);
+    let fragment_count = u8::try_from(fragment_count)
+        .map_err(|_| bad_wire("Hysteria2 UDP fragment count exceeds 255"))?;
+    if fragment_count <= 1 {
+        return Err(bad_wire(
+            "Hysteria2 UDP fragmentation did not produce multiple fragments",
+        ));
+    }
+
+    let mut fragments = Vec::with_capacity(fragment_count as usize);
+    for (fragment_id, payload) in message.payload.chunks(max_fragment_payload).enumerate() {
+        fragments.push(Hysteria2UdpMessage::from_parts(
+            message.session_id,
+            packet_id,
+            fragment_id as u8,
+            fragment_count,
+            message.target.clone(),
+            payload.to_vec(),
+        )?);
+    }
+    Ok(fragments)
+}
+
+fn validate_udp_message_fields(
+    packet_id: u16,
+    fragment_id: u8,
+    fragment_count: u8,
+    target: &str,
+    payload: &[u8],
+) -> Result<(), OutboundError> {
+    if target.is_empty() || target.len() > HYSTERIA2_MAX_UDP_ADDRESS_LENGTH {
+        return Err(bad_wire("invalid Hysteria2 UDP target length"));
+    }
+    if payload.is_empty() || payload.len() > HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH {
+        return Err(bad_wire("invalid Hysteria2 UDP payload length"));
+    }
+    if fragment_count == 0 || fragment_id >= fragment_count {
+        return Err(bad_wire(format!(
+            "invalid Hysteria2 UDP fragment fields: fragment_id={fragment_id} fragment_count={fragment_count}"
+        )));
+    }
+    if fragment_count == 1 && (fragment_id != 0 || packet_id != 0) {
+        return Err(bad_wire(
+            "complete Hysteria2 UDP message requires zero packet and fragment IDs",
+        ));
+    }
+    if fragment_count > 1 && packet_id == 0 {
+        return Err(bad_wire(
+            "fragmented Hysteria2 UDP message requires a nonzero packet ID",
+        ));
+    }
+    Ok(())
 }
 
 fn append_quic_varint(out: &mut Vec<u8>, value: u64) -> Result<(), OutboundError> {
@@ -215,6 +375,105 @@ fn read_quic_varint(input: &[u8], offset: usize) -> Result<(u64, usize), Outboun
     Ok((value, offset + len))
 }
 
+fn quic_varint_len(value: u64) -> usize {
+    match value {
+        0..=63 => 1,
+        64..=16_383 => 2,
+        16_384..=1_073_741_823 => 4,
+        _ => 8,
+    }
+}
+
 fn bad_wire(message: impl Into<String>) -> OutboundError {
     OutboundError::BadHysteria2(message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn udp_message_roundtrips_supported_payload_and_address_shapes() {
+        for target in ["192.0.2.1:53", "[2001:db8::1]:5353", "dns.example:853"] {
+            for payload_len in [1, 1_250, 1_400, 1_500, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH] {
+                let payload = vec![payload_len as u8; payload_len];
+                let message =
+                    Hysteria2UdpMessage::new(0x1122_3344, target, payload.clone()).unwrap();
+                let encoded = encode_hysteria2_udp_message(&message).unwrap();
+                let decoded = decode_hysteria2_udp_message(&encoded).unwrap();
+                assert_eq!(decoded, message);
+                assert_eq!(decoded.packet_id(), 0);
+                assert_eq!(decoded.fragment_id(), 0);
+                assert_eq!(decoded.fragment_count(), 1);
+                assert_eq!(decoded.payload(), payload);
+            }
+        }
+    }
+
+    #[test]
+    fn udp_message_rejects_empty_and_oversized_payloads() {
+        assert!(Hysteria2UdpMessage::new(1, "192.0.2.1:53", Vec::new()).is_err());
+        assert!(
+            Hysteria2UdpMessage::new(
+                1,
+                "192.0.2.1:53",
+                vec![0; HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH + 1],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn udp_message_fragments_repeat_identity_and_reassemble_in_order() {
+        let message =
+            Hysteria2UdpMessage::new(0x0102_0304, "[2001:db8::1]:5353", vec![7; 4_096]).unwrap();
+        let fragments = fragment_hysteria2_udp_message(&message, 0x7788, 1_250).unwrap();
+        assert!(fragments.len() > 1);
+        let mut reassembled = Vec::new();
+        for (index, fragment) in fragments.iter().enumerate() {
+            assert_eq!(fragment.session_id(), message.session_id());
+            assert_eq!(fragment.packet_id(), 0x7788);
+            assert_eq!(fragment.fragment_id(), index as u8);
+            assert_eq!(fragment.fragment_count(), fragments.len() as u8);
+            assert_eq!(fragment.target(), message.target());
+            assert!(fragment.encoded_len() <= 1_250);
+            let decoded =
+                decode_hysteria2_udp_message(&encode_hysteria2_udp_message(fragment).unwrap())
+                    .unwrap();
+            reassembled.extend_from_slice(decoded.payload());
+        }
+        assert_eq!(reassembled, message.payload());
+    }
+
+    #[test]
+    fn udp_fragmentation_rejects_invalid_wire_budget_and_packet_identity() {
+        let message = Hysteria2UdpMessage::new(7, "dns.example:53", vec![1; 1_500]).unwrap();
+        assert!(fragment_hysteria2_udp_message(&message, 0, 1_250).is_err());
+        assert!(fragment_hysteria2_udp_message(&message, 1, message.encoded_len()).is_err());
+        let header_len = message.encoded_len() - message.payload().len();
+        assert!(fragment_hysteria2_udp_message(&message, 1, header_len).is_err());
+        assert!(fragment_hysteria2_udp_message(&message, 1, header_len + 1).is_err());
+    }
+
+    #[test]
+    fn udp_decoder_rejects_malformed_fragment_and_address_fields() {
+        let message = Hysteria2UdpMessage::new(7, "dns.example:53", vec![1]).unwrap();
+        let encoded = encode_hysteria2_udp_message(&message).unwrap();
+
+        let mut zero_fragments = encoded.clone();
+        zero_fragments[7] = 0;
+        assert!(decode_hysteria2_udp_message(&zero_fragments).is_err());
+
+        let mut wrong_fragment_id = encoded.clone();
+        wrong_fragment_id[6] = 1;
+        assert!(decode_hysteria2_udp_message(&wrong_fragment_id).is_err());
+
+        let mut nonzero_complete_packet = encoded.clone();
+        nonzero_complete_packet[5] = 1;
+        assert!(decode_hysteria2_udp_message(&nonzero_complete_packet).is_err());
+
+        let mut invalid_utf8 = encoded;
+        invalid_utf8[9] = 0xff;
+        assert!(decode_hysteria2_udp_message(&invalid_utf8).is_err());
+    }
 }

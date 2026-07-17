@@ -42,3 +42,7 @@ pub use underlay::{
     Hysteria2PinSha256Check, Hysteria2UnderlayContract, pin_sha256_matches_raw_cert,
     raw_cert_sha256_hex, underlay_contract,
 };
+pub use wire::{
+    HYSTERIA2_MAX_UDP_ADDRESS_LENGTH, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage,
+    decode_hysteria2_udp_message, encode_hysteria2_udp_message, fragment_hysteria2_udp_message,
+};
