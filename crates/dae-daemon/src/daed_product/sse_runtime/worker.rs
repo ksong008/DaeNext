@@ -31,7 +31,16 @@ pub(super) fn start_product_sse_worker(
         .stack_size(config.worker_stack_bytes)
         .spawn(move || {
             let _completion = ProductSseWorkerCompletion(completed_sender);
-            runtime.block_on(run_product_sse_runtime(app, receiver, stop, metrics));
+            let mut reclaim_worker = app
+                .upgrade()
+                .map(|app| app.ui_runtime.register_reclaim_worker());
+            runtime.block_on(run_product_sse_runtime(
+                app,
+                receiver,
+                stop,
+                metrics,
+                &mut reclaim_worker,
+            ));
         })?;
     Ok(ProductSseWorkerHandle {
         join: Some(join),
@@ -52,8 +61,11 @@ async fn run_product_sse_runtime(
     mut receiver: tokio::sync::mpsc::Receiver<ProductSseJob>,
     mut stop: tokio::sync::watch::Receiver<bool>,
     metrics: Arc<ProductHttpMetrics>,
+    reclaim_worker: &mut Option<ProductUiReclaimWorker>,
 ) {
     let mut tasks = tokio::task::JoinSet::new();
+    let mut maintenance = tokio::time::interval(PRODUCT_HTTP_WORKER_RECV_TIMEOUT);
+    maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
@@ -79,6 +91,11 @@ async fn run_product_sse_runtime(
             }
             completed = tasks.join_next(), if !tasks.is_empty() => {
                 drop(completed);
+            }
+            _ = maintenance.tick() => {
+                if let (Some(app), Some(worker)) = (app.upgrade(), reclaim_worker.as_mut()) {
+                    app.ui_runtime.maintain(&metrics, worker);
+                }
             }
         }
     }

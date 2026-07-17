@@ -190,6 +190,7 @@ pub(super) fn product_http_worker_loop(
     sse_runtime: Arc<ProductSseRuntime>,
     connections: Arc<ProductHttpConnectionRegistry>,
 ) {
+    let mut reclaim_worker = app.ui_runtime.register_reclaim_worker();
     loop {
         let recv_result = {
             let Ok(receiver) = receiver.lock() else {
@@ -230,7 +231,7 @@ pub(super) fn product_http_worker_loop(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        app.ui_runtime.sweep();
+        app.ui_runtime.maintain(&metrics, &mut reclaim_worker);
     }
 }
 
