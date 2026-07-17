@@ -325,6 +325,7 @@ mod tests {
         assert_eq!(parsed_tuic.packet_id, 9);
         assert_eq!(parsed_tuic.frag_total, 1);
         assert_eq!(parsed_tuic.frag_id, 0);
+        assert_eq!(parsed_tuic.target.as_deref(), Some(target.as_str()));
         assert_eq!(parsed_tuic.payload, payload);
 
         let juicity_frame = seal_stream_packet_frame(&target, payload).unwrap();
