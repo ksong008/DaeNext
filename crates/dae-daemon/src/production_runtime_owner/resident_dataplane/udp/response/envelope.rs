@@ -10,6 +10,7 @@ const UDP_SESSION_OWNERSHIP_MANAGER_OWNED: &str = "manager-owned";
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct UdpResponseEnvelope {
     payload: Vec<u8>,
     identity: UdpResponseIdentityEvidence,
+    expected_protocol_identity: Option<UdpResponseIdentityToken>,
     pub(in crate::production_runtime_owner::resident_dataplane::udp) execution_label: &'static str,
     pub(in crate::production_runtime_owner::resident_dataplane::udp) tls_underlay:
         Option<&'static str>,
@@ -35,6 +36,7 @@ impl UdpResponseEnvelope {
         Self {
             payload,
             identity: UdpResponseIdentityEvidence::CompatibilityUnverified,
+            expected_protocol_identity: None,
             execution_label,
             tls_underlay: None,
             quic_underlay: None,
@@ -51,6 +53,7 @@ impl UdpResponseEnvelope {
         Self {
             payload: Vec::new(),
             identity: UdpResponseIdentityEvidence::CompatibilityUnverified,
+            expected_protocol_identity: None,
             execution_label,
             tls_underlay: None,
             quic_underlay: None,
@@ -107,6 +110,15 @@ impl UdpResponseEnvelope {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn with_expected_protocol_identity(
+        mut self,
+        expected_identity: UdpResponseIdentityToken,
+    ) -> Self {
+        self.expected_protocol_identity = Some(expected_identity);
+        self
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn with_rejected_response_identity(
         mut self,
         reason: UdpResponseDropReason,
@@ -120,6 +132,28 @@ impl UdpResponseEnvelope {
         expectation: UdpFixedTargetExpectation,
     ) -> UdpFixedTargetValidation {
         self.identity.validate_fixed_target(expectation)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn fixed_target_expectation(
+        &self,
+        source: std::net::SocketAddr,
+    ) -> UdpFixedTargetExpectation {
+        match self.identity {
+            UdpResponseIdentityEvidence::CompatibilityUnverified => {
+                UdpFixedTargetExpectation::compatibility(source)
+            }
+            UdpResponseIdentityEvidence::Decoded {
+                observed_identity: Some(_),
+                ..
+            } => self.expected_protocol_identity.map_or_else(
+                || UdpFixedTargetExpectation::decoded_source(source),
+                |identity| UdpFixedTargetExpectation::with_protocol_identity(source, identity),
+            ),
+            UdpResponseIdentityEvidence::Decoded { .. }
+            | UdpResponseIdentityEvidence::Rejected(_) => {
+                UdpFixedTargetExpectation::decoded_source(source)
+            }
+        }
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn take_fixed_target_payload(

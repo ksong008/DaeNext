@@ -248,7 +248,7 @@ async fn send_resident_proxy_udp_bridge_response(
     expected_source: SocketAddr,
     mut response: UdpExchangeResult,
 ) -> Result<(), String> {
-    let expectation = UdpFixedTargetExpectation::compatibility(expected_source);
+    let expectation = response.fixed_target_expectation(expected_source);
     let payload = take_udp_response_for_fixed_target(&mut response, expectation)?;
     socket
         .send_to(&payload, peer)
@@ -316,7 +316,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
     }
     executor.shutdown().await;
     let exchange = exchange.and_then(|mut response| {
-        let expectation = UdpFixedTargetExpectation::compatibility(original_dst);
+        let expectation = response.fixed_target_expectation(original_dst);
         let payload = take_udp_response_for_fixed_target(&mut response, expectation)?;
         Ok((response, payload))
     });
@@ -412,7 +412,7 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
     }
     executor.shutdown().await;
     let mut response = response?;
-    let expectation = UdpFixedTargetExpectation::compatibility(original_dst);
+    let expectation = response.fixed_target_expectation(original_dst);
     let payload = take_udp_response_for_fixed_target(&mut response, expectation)?;
     dns_a_response_has_answer(id, &payload)
 }

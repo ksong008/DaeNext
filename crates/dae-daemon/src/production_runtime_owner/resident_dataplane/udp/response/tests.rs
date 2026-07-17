@@ -133,6 +133,28 @@ fn fixed_target_adapter_moves_the_existing_payload_without_copying() {
 }
 
 #[test]
+fn response_owned_expectation_preserves_compatibility_and_verified_modes() {
+    let expected_target = target(1, 443);
+    let expected_identity =
+        UdpResponseIdentityToken::from_protocol_identity(b"fixture", b"session-a").unwrap();
+
+    let compatibility = UdpExchangeResult::new(vec![1], "fixture");
+    assert_eq!(
+        compatibility
+            .validate_fixed_target(compatibility.fixed_target_expectation(expected_target)),
+        UdpFixedTargetValidation::CompatibilityUnverified
+    );
+
+    let verified = UdpExchangeResult::new(vec![1], "fixture")
+        .with_decoded_response_identity(Some(expected_target), Some(expected_identity))
+        .with_expected_protocol_identity(expected_identity);
+    assert_eq!(
+        verified.validate_fixed_target(verified.fixed_target_expectation(expected_target)),
+        UdpFixedTargetValidation::Validated
+    );
+}
+
+#[test]
 fn rejected_fixed_target_payload_is_consumed_before_forwarding() {
     let expected_target = target(1, 443);
     let mut response = UdpExchangeResult::new(vec![0x33; 4096], "fixture")

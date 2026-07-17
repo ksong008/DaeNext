@@ -103,7 +103,7 @@ async fn record_udp_session_exchange_result(
         Ok((event, mut response)) => {
             let (response_len, response_validation, forwarded_payload) = if response.reply_forwarded
             {
-                let expectation = UdpFixedTargetExpectation::compatibility(original_dst);
+                let expectation = response.fixed_target_expectation(original_dst);
                 let payload = response.take_fixed_target_payload(expectation);
                 let response_len = payload.payload_len();
                 let validation = payload.validation();
