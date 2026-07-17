@@ -288,6 +288,10 @@ pub(super) fn handle_stream(
     };
     let _ui_request = app.ui_runtime.request_lease(&request);
     let head_only = request.method == "HEAD";
+    if !app.api_only && is_static_request(&request) {
+        write_static_file_response(&mut stream, &app.web_root, &request, head_only)?;
+        return Ok(ProductHttpConnectionResult::Closed);
+    }
     if request.method == "GET"
         && (request.path == "/api/events/logs" || request.path == "/api/events/runtime")
     {
@@ -339,6 +343,10 @@ pub(super) fn handle_stream(
     let response = route_request_with_context(&app, &request, context);
     write_http_response_for_request(&mut stream, &request, &response, head_only)?;
     Ok(ProductHttpConnectionResult::Closed)
+}
+
+fn is_static_request(request: &HttpRequest) -> bool {
+    request.path != "/health" && !request.path.starts_with("/api")
 }
 
 fn detach_geodata_update_stream(

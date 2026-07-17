@@ -45,17 +45,19 @@ pub(crate) fn ensure_default_resources_for_user(
     let mut storage = user.json_storage.clone();
     set_json_storage(&mut storage, &paths, &values)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    let updated = tx
-        .execute(
-            "UPDATE users SET json_storage = ?1 WHERE id = ?2",
-            params![storage, user.id],
-        )
-        .map_err(sqlite_io_error)?;
-    if updated != 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "default resource user no longer exists",
-        ));
+    if storage != user.json_storage {
+        let updated = tx
+            .execute(
+                "UPDATE users SET json_storage = ?1 WHERE id = ?2",
+                params![storage, user.id],
+            )
+            .map_err(sqlite_io_error)?;
+        if updated != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "default resource user no longer exists",
+            ));
+        }
     }
     tx.commit().map_err(sqlite_io_error)?;
     Ok(response)
