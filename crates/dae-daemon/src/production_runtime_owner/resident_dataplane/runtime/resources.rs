@@ -233,6 +233,8 @@ impl ResidentRuntimeResourceConfig {
     }
 
     pub(crate) fn json(&self) -> Value {
+        let quic_udp =
+            QuicUdpDatagramResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         json!({
             "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 1,
@@ -258,6 +260,17 @@ impl ResidentRuntimeResourceConfig {
                 "limit": self.runtime_profile.profile.quic_endpoint_limit_default(),
                 "chargedBytes": self.runtime_profile.profile.quic_endpoint_charged_bytes_default(),
                 "scope": "process-wide connecting, ready, failed and draining Quinn Endpoint owners",
+            },
+            "quicUdpDatagrams": {
+                "profileSource": "runtimeProfile",
+                "pendingFragmentPackets": quic_udp.pending_fragment_packets(),
+                "pendingFragmentBytes": quic_udp.pending_fragment_bytes(),
+                "packetIdLeases": quic_udp.packet_id_leases(),
+                "pmtuRetries": quic_udp.pmtu_retries(),
+                "fragmentTtlMs": quic_udp.fragment_ttl().as_millis(),
+                "packetIdLeaseTtlMs": quic_udp.packet_id_lease_ttl().as_millis(),
+                "fragmentQuarantineTtlMs": quic_udp.fragment_quarantine_ttl().as_millis(),
+                "scope": "per logical QUIC UDP session; count and bytes are enforced independently",
             },
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),

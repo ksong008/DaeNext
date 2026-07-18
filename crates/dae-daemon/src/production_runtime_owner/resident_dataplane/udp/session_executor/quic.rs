@@ -2,12 +2,35 @@ use super::*;
 use std::future::poll_fn;
 use std::task::Poll;
 
+use crate::production_runtime_owner::resident_dataplane::QuicUdpDatagramResourceProfile;
+
 mod fragment_buffer;
 mod packet_id;
-use self::fragment_buffer::QuicUdpFragmentBuffer;
+use self::fragment_buffer::{QuicUdpFragmentBuffer, QuicUdpFragmentOutcome};
 use self::packet_id::QuicUdpPacketIdAllocator;
 
 const TUIC_ASSOCIATION_IDENTITY_DOMAIN: &[u8] = b"tuic-v5-association";
+
+async fn read_quic_udp_datagram_until_resource_expiry(
+    connection: quinn::Connection,
+    expiration: Option<Instant>,
+) -> Result<Option<Bytes>, quinn::ConnectionError> {
+    let Some(expiration) = expiration else {
+        return connection.read_datagram().await.map(Some);
+    };
+    tokio::select! {
+        response = connection.read_datagram() => response.map(Some),
+        _ = time::sleep_until(time::Instant::from_std(expiration)) => Ok(None),
+    }
+}
+
+fn earliest_expiration(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(expiration), None) | (None, Some(expiration)) => Some(expiration),
+        (None, None) => None,
+    }
+}
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria2QuicDatagramSession
 {
@@ -32,6 +55,7 @@ impl Hysteria2QuicDatagramSession {
         obfs: ResidentHysteria2ObfsPlan,
         port_hop_ports: Vec<u16>,
     ) -> Self {
+        let resources = QuicUdpDatagramResourceProfile::selected();
         Self {
             auth,
             tls_identity,
@@ -42,8 +66,8 @@ impl Hysteria2QuicDatagramSession {
             connection: None,
             auth_session: None,
             session_id: fastrand::u32(1..=u32::MAX),
-            fragments: QuicUdpFragmentBuffer::default(),
-            packet_ids: QuicUdpPacketIdAllocator::default(),
+            fragments: QuicUdpFragmentBuffer::new(resources, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH),
+            packet_ids: QuicUdpPacketIdAllocator::new(resources),
         }
     }
 
@@ -71,6 +95,8 @@ impl Hysteria2QuicDatagramSession {
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.fragments.expire();
+        self.packet_ids.expire();
         let response = {
             let connection = match self.connection.as_ref() {
                 Some(connection) => connection,
@@ -95,33 +121,47 @@ impl Hysteria2QuicDatagramSession {
         let connection = self
             .connection
             .as_ref()
-            .ok_or_else(|| "Hysteria2 QUIC connection is not initialized".to_owned())?;
-        let response = connection
-            .read_datagram()
+            .ok_or_else(|| "Hysteria2 QUIC connection is not initialized".to_owned())?
+            .clone();
+        let expiration = earliest_expiration(
+            self.fragments.next_expiration(),
+            self.packet_ids.next_expiration(),
+        );
+        let Some(response) = read_quic_udp_datagram_until_resource_expiry(connection, expiration)
             .await
-            .map_err(|err| format!("read Hysteria2 UDP datagram: {err}"))?;
+            .map_err(|err| format!("read Hysteria2 UDP datagram: {err}"))?
+        else {
+            self.fragments.expire();
+            self.packet_ids.expire();
+            return Ok(None);
+        };
         self.decode_response(&response)
     }
 
     fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
         let parsed = decode_hysteria2_udp_message(response)
             .map_err(|err| format!("decode Hysteria2 UDP datagram: {err}"))?;
-        let Some(payload) = self.fragments.push(
+        let outcome = self.fragments.push(
             parsed.packet_id(),
             parsed.fragment_id(),
             parsed.fragment_count(),
             parsed.into_payload(),
             "Hysteria2",
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(
+        )?;
+        let response = |payload| {
             UdpExchangeResult::new(payload, "quic-udp-datagram")
                 .with_quic_underlay("quinn-h3")
                 .with_session_executor("tokio-quic-datagram-session")
-                .with_underlay_reuse("quic-endpoint-and-connection-reused"),
-        ))
+                .with_underlay_reuse("quic-endpoint-and-connection-reused")
+        };
+        match outcome {
+            QuicUdpFragmentOutcome::Pending => Ok(None),
+            QuicUdpFragmentOutcome::Complete(payload) => Ok(Some(response(payload))),
+            QuicUdpFragmentOutcome::Late(payload) => Ok(Some(
+                response(payload)
+                    .with_rejected_response_identity(UdpResponseDropReason::LateResponse),
+            )),
+        }
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
@@ -215,6 +255,7 @@ impl TuicQuicDatagramSession {
         alpn: Vec<String>,
         allow_insecure: bool,
     ) -> Self {
+        let resources = QuicUdpDatagramResourceProfile::selected();
         Self {
             uuid,
             password,
@@ -223,8 +264,8 @@ impl TuicQuicDatagramSession {
             endpoint: None,
             connection: None,
             assoc_id: fastrand::u16(1..=u16::MAX),
-            fragments: QuicUdpFragmentBuffer::default(),
-            packet_ids: QuicUdpPacketIdAllocator::default(),
+            fragments: QuicUdpFragmentBuffer::new(resources, u16::MAX as usize),
+            packet_ids: QuicUdpPacketIdAllocator::new(resources),
             fixed_target: UdpSessionFixedTarget::default(),
         }
     }
@@ -255,6 +296,8 @@ impl TuicQuicDatagramSession {
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.fragments.expire();
+        self.packet_ids.expire();
         let response = {
             let connection = match self.connection.as_ref() {
                 Some(connection) => connection,
@@ -279,11 +322,20 @@ impl TuicQuicDatagramSession {
         let connection = self
             .connection
             .as_ref()
-            .ok_or_else(|| "TUIC QUIC connection is not initialized".to_owned())?;
-        let response = connection
-            .read_datagram()
+            .ok_or_else(|| "TUIC QUIC connection is not initialized".to_owned())?
+            .clone();
+        let expiration = earliest_expiration(
+            self.fragments.next_expiration(),
+            self.packet_ids.next_expiration(),
+        );
+        let Some(response) = read_quic_udp_datagram_until_resource_expiry(connection, expiration)
             .await
-            .map_err(|err| format!("read TUIC UDP datagram: {err}"))?;
+            .map_err(|err| format!("read TUIC UDP datagram: {err}"))?
+        else {
+            self.fragments.expire();
+            self.packet_ids.expire();
+            return Ok(None);
+        };
         self.decode_response(&response)
     }
 
@@ -299,17 +351,18 @@ impl TuicQuicDatagramSession {
             &parsed.assoc_id.to_be_bytes(),
         )
         .expect("static TUIC identity domain and association id are nonempty");
-        let base_response = || {
-            UdpExchangeResult::new(parsed.payload.clone(), "quic-udp-datagram")
+        let base_response = |payload| {
+            UdpExchangeResult::new(payload, "quic-udp-datagram")
                 .with_quic_underlay("quinn")
                 .with_session_executor("tokio-quic-datagram-session")
                 .with_underlay_reuse("quic-endpoint-and-connection-reused")
                 .with_expected_protocol_identity(expected_identity)
         };
         if parsed.assoc_id != self.assoc_id {
-            return Ok(Some(base_response().with_rejected_response_identity(
-                UdpResponseDropReason::CrossSessionIdentity,
-            )));
+            return Ok(Some(
+                base_response(parsed.payload)
+                    .with_rejected_response_identity(UdpResponseDropReason::CrossSessionIdentity),
+            ));
         }
         let source: SocketAddr = match parsed
             .target
@@ -318,34 +371,36 @@ impl TuicQuicDatagramSession {
         {
             Some(source) => source,
             None => {
-                return Ok(Some(base_response().with_rejected_response_identity(
-                    UdpResponseDropReason::MalformedIdentity,
-                )));
+                return Ok(Some(
+                    base_response(parsed.payload)
+                        .with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity),
+                ));
             }
         };
         if self.fixed_target.source() != Some(source) {
-            return Ok(Some(base_response().with_rejected_response_identity(
-                UdpResponseDropReason::UnexpectedWireSource,
-            )));
+            return Ok(Some(
+                base_response(parsed.payload)
+                    .with_rejected_response_identity(UdpResponseDropReason::UnexpectedWireSource),
+            ));
         }
-        let Some(payload) = self.fragments.push(
+        let outcome = self.fragments.push(
             parsed.packet_id,
             parsed.frag_id,
             parsed.frag_total,
             parsed.payload,
             "TUIC",
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(
-            UdpExchangeResult::new(payload, "quic-udp-datagram")
-                .with_quic_underlay("quinn")
-                .with_session_executor("tokio-quic-datagram-session")
-                .with_underlay_reuse("quic-endpoint-and-connection-reused")
-                .with_decoded_response_identity(Some(source), Some(observed_identity))
-                .with_expected_protocol_identity(expected_identity),
-        ))
+        )?;
+        match outcome {
+            QuicUdpFragmentOutcome::Pending => Ok(None),
+            QuicUdpFragmentOutcome::Complete(payload) => Ok(Some(
+                base_response(payload)
+                    .with_decoded_response_identity(Some(source), Some(observed_identity)),
+            )),
+            QuicUdpFragmentOutcome::Late(payload) => Ok(Some(
+                base_response(payload)
+                    .with_rejected_response_identity(UdpResponseDropReason::LateResponse),
+            )),
+        }
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
