@@ -147,11 +147,6 @@ impl Hysteria2QuicDatagramSession {
     fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
         let parsed = decode_hysteria2_udp_message(response)
             .map_err(|err| format!("decode Hysteria2 UDP datagram: {err}"))?;
-        let expected_identity = UdpResponseIdentityToken::from_protocol_identity(
-            HYSTERIA2_SESSION_IDENTITY_DOMAIN,
-            &self.session_id.to_be_bytes(),
-        )
-        .expect("static Hysteria2 identity domain and session id are nonempty");
         let observed_identity = UdpResponseIdentityToken::from_protocol_identity(
             HYSTERIA2_SESSION_IDENTITY_DOMAIN,
             &parsed.session_id().to_be_bytes(),
@@ -162,7 +157,6 @@ impl Hysteria2QuicDatagramSession {
                 .with_quic_underlay("quinn-h3")
                 .with_session_executor("tokio-quic-datagram-session")
                 .with_underlay_reuse("quic-endpoint-and-connection-reused")
-                .with_expected_protocol_identity(expected_identity)
         };
         if parsed.session_id() != self.session_id {
             return Ok(Some(
@@ -196,7 +190,7 @@ impl Hysteria2QuicDatagramSession {
             QuicUdpFragmentOutcome::Pending => Ok(None),
             QuicUdpFragmentOutcome::Complete(payload) => Ok(Some(
                 response(payload)
-                    .with_decoded_response_identity(Some(source), Some(observed_identity)),
+                    .with_session_bound_response_identity(source, Some(observed_identity)),
             )),
             QuicUdpFragmentOutcome::Late(payload) => Ok(Some(
                 response(payload)
@@ -383,11 +377,6 @@ impl TuicQuicDatagramSession {
 
     fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
         let parsed = parse_tuic_packet_frame(response)?;
-        let expected_identity = UdpResponseIdentityToken::from_protocol_identity(
-            TUIC_ASSOCIATION_IDENTITY_DOMAIN,
-            &self.assoc_id.to_be_bytes(),
-        )
-        .expect("static TUIC identity domain and association id are nonempty");
         let observed_identity = UdpResponseIdentityToken::from_protocol_identity(
             TUIC_ASSOCIATION_IDENTITY_DOMAIN,
             &parsed.assoc_id.to_be_bytes(),
@@ -398,7 +387,6 @@ impl TuicQuicDatagramSession {
                 .with_quic_underlay("quinn")
                 .with_session_executor("tokio-quic-datagram-session")
                 .with_underlay_reuse("quic-endpoint-and-connection-reused")
-                .with_expected_protocol_identity(expected_identity)
         };
         if parsed.assoc_id != self.assoc_id {
             return Ok(Some(
@@ -436,7 +424,7 @@ impl TuicQuicDatagramSession {
             QuicUdpFragmentOutcome::Pending => Ok(None),
             QuicUdpFragmentOutcome::Complete(payload) => Ok(Some(
                 base_response(payload)
-                    .with_decoded_response_identity(Some(source), Some(observed_identity)),
+                    .with_session_bound_response_identity(source, Some(observed_identity)),
             )),
             QuicUdpFragmentOutcome::Late(payload) => Ok(Some(
                 base_response(payload)

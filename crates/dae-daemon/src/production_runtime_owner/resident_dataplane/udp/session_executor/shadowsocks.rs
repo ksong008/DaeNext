@@ -154,11 +154,6 @@ impl Shadowsocks2022DatagramSession {
         let decoded = codec
             .decode_server_packet(response, ss2022_udp_unix_timestamp_now())
             .map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
-        let expected_identity = UdpResponseIdentityToken::from_protocol_identity(
-            SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN,
-            &codec.session_id(),
-        )
-        .expect("static Shadowsocks 2022 identity domain and session id are nonempty");
         let observed_identity = decoded.client_session_id.and_then(|session_id| {
             UdpResponseIdentityToken::from_protocol_identity(
                 SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN,
@@ -167,8 +162,7 @@ impl Shadowsocks2022DatagramSession {
         });
         let result = UdpExchangeResult::new(decoded.payload, "udp-datagram-aead-2022")
             .with_session_executor("tokio-datagram-relay")
-            .with_underlay_reuse("udp-socket-and-codec-session-reused")
-            .with_expected_protocol_identity(expected_identity);
+            .with_underlay_reuse("udp-socket-and-codec-session-reused");
         Ok(response_with_source_and_protocol_identity(
             result,
             &decoded.target,
@@ -193,7 +187,10 @@ fn response_with_source_and_protocol_identity(
     observed_identity: Option<UdpResponseIdentityToken>,
 ) -> UdpExchangeResult {
     match target.parse::<SocketAddr>() {
-        Ok(source) => result.with_decoded_response_identity(Some(source), observed_identity),
+        Ok(source) => match observed_identity {
+            Some(identity) => result.with_session_bound_response_identity(source, Some(identity)),
+            None => result.with_decoded_response_identity(Some(source), None),
+        },
         Err(_) => result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity),
     }
 }

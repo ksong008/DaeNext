@@ -147,8 +147,7 @@ fn response_owned_expectation_preserves_compatibility_and_verified_modes() {
     );
 
     let verified = UdpExchangeResult::new(vec![1], "fixture")
-        .with_decoded_response_identity(Some(expected_target), Some(expected_identity))
-        .with_expected_protocol_identity(expected_identity);
+        .with_session_bound_response_identity(expected_target, Some(expected_identity));
     assert_eq!(
         verified.validate_fixed_target(verified.fixed_target_expectation(expected_target)),
         UdpFixedTargetValidation::Validated
@@ -164,6 +163,17 @@ fn session_bound_source_uses_the_same_fixed_target_gate() {
     assert_eq!(
         response.validate_fixed_target(response.fixed_target_expectation(expected_target)),
         UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+    );
+}
+
+#[test]
+fn prevalidated_session_identity_does_not_require_expected_identity_from_the_consumer() {
+    let expected_target = target(1, 443);
+    let response = UdpExchangeResult::new(vec![1], "fixture")
+        .with_session_bound_response_identity(expected_target, Some(token(b"session-a")));
+    assert_eq!(
+        response.validate_fixed_target(response.fixed_target_expectation(expected_target)),
+        UdpFixedTargetValidation::Validated
     );
 }
 
