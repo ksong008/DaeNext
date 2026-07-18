@@ -351,6 +351,7 @@ pub(crate) fn start_resident_dataplane_workers(
             match tcp::start_xhttp_xmux_generation_owner(
                 reload_generation,
                 resource_config.tcp_flow_stack_bytes.value(),
+                resource_config.tcp_runtime_workers.value(),
             ) {
                 Ok(runtime) => runtime,
                 Err(err) => {
