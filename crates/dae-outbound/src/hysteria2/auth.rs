@@ -4,6 +4,7 @@ use bytes::Bytes;
 use h3::client;
 use http::{Request, StatusCode};
 
+use super::padding::auth_request_padding;
 use crate::error::OutboundError;
 
 const URL_HOST: &str = "hysteria";
@@ -12,7 +13,6 @@ const REQUEST_HEADER_AUTH: &str = "Hysteria-Auth";
 const RESPONSE_HEADER_UDP_ENABLED: &str = "Hysteria-UDP";
 const COMMON_HEADER_CC_RX: &str = "Hysteria-CC-RX";
 const COMMON_HEADER_PADDING: &str = "Hysteria-Padding";
-const AUTH_REQUEST_PADDING: &str = "0=256-2048,c,256-2048,c,256-2048,c,256-2048,c,256-2048";
 const STATUS_AUTH_OK: u16 = 233;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,13 +62,14 @@ pub async fn authenticate_hysteria2_connection(
         client,
         driver_task,
     };
+    let padding = auth_request_padding();
     let mut request_stream = h3
         .client
         .send_request(
             Request::post(format!("https://{URL_HOST}{URL_PATH}"))
                 .header(REQUEST_HEADER_AUTH, auth)
                 .header(COMMON_HEADER_CC_RX, rx.to_string())
-                .header(COMMON_HEADER_PADDING, AUTH_REQUEST_PADDING)
+                .header(COMMON_HEADER_PADDING, padding)
                 .body(())
                 .map_err(|err| bad_auth(format!("build Hysteria2 auth request: {err}")))?,
         )

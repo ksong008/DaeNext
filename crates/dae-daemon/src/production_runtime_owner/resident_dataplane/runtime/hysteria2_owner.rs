@@ -10,6 +10,7 @@ use dae_outbound::hysteria2::{
     Hysteria2CongestionNegotiation, Hysteria2CongestionRuntime,
     Hysteria2EffectiveCongestionController, Hysteria2ServerBandwidthResponse, Hysteria2UdpMessage,
     authenticate_hysteria2_connection, decode_hysteria2_udp_message,
+    hysteria2_padding_metrics_snapshot,
 };
 use dae_runtime_control::{
     AbsoluteDeadline, OwnerCancellationSignal, OwnerDrainReason, OwnerFailureClass,
@@ -957,6 +958,7 @@ impl Hysteria2OwnerRegistryHandle {
 
     pub(crate) fn metrics_snapshot(&self) -> Value {
         let index = self.index.lock().unwrap();
+        let padding = hysteria2_padding_metrics_snapshot();
         json!({
             "schemaVersion": 1,
             "owner": "resident-hysteria2-owner-registry",
@@ -988,6 +990,30 @@ impl Hysteria2OwnerRegistryHandle {
             "logicalLeaseRejections": self.metrics.logical_lease_rejections.load(Ordering::Relaxed),
             "shutdownTimedOut": self.metrics.shutdown_timed_out.load(Ordering::Relaxed),
             "portHopping": self.metrics.port_hopping.snapshot(),
+            "padding": {
+                "scope": "process-wide Hysteria2 auth and TCP request generation",
+                "contentRecorded": false,
+                "auth": {
+                    "range": {
+                        "minimumInclusive": dae_outbound::hysteria2::HYSTERIA2_AUTH_PADDING_MIN,
+                        "maximumExclusive": dae_outbound::hysteria2::HYSTERIA2_AUTH_PADDING_MAX_EXCLUSIVE,
+                    },
+                    "samples": padding.auth_samples,
+                    "bytes": padding.auth_bytes,
+                    "minimumObserved": padding.auth_min_observed,
+                    "maximumObserved": padding.auth_max_observed,
+                },
+                "tcpRequest": {
+                    "range": {
+                        "minimumInclusive": dae_outbound::hysteria2::HYSTERIA2_TCP_REQUEST_PADDING_MIN,
+                        "maximumExclusive": dae_outbound::hysteria2::HYSTERIA2_TCP_REQUEST_PADDING_MAX_EXCLUSIVE,
+                    },
+                    "samples": padding.tcp_request_samples,
+                    "bytes": padding.tcp_request_bytes,
+                    "minimumObserved": padding.tcp_request_min_observed,
+                    "maximumObserved": padding.tcp_request_max_observed,
+                },
+            },
             "congestion": {
                 "activeControllers": {
                     "brutal": self.metrics.active_brutal_controllers.load(Ordering::Relaxed),

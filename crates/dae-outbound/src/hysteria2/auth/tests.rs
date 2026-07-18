@@ -8,8 +8,12 @@ use http::{Response, StatusCode};
 use super::*;
 use crate::hysteria2::tls::{DEFAULT_HYSTERIA2_SERVER_NAME, build_hysteria2_server_config};
 use crate::hysteria2::underlay::raw_cert_sha256_hex;
-use crate::hysteria2::wire::{build_tcp_request_stream, build_tcp_response_stream};
-use crate::hysteria2::{Hysteria2TlsIdentity, build_hysteria2_runtime_client_config};
+use crate::hysteria2::wire::build_tcp_response_stream;
+use crate::hysteria2::{
+    HYSTERIA2_AUTH_PADDING_MAX_EXCLUSIVE, HYSTERIA2_AUTH_PADDING_MIN,
+    HYSTERIA2_FRAME_TYPE_TCP_REQUEST, HYSTERIA2_TCP_REQUEST_PADDING_MAX_EXCLUSIVE,
+    HYSTERIA2_TCP_REQUEST_PADDING_MIN, Hysteria2TlsIdentity, build_hysteria2_runtime_client_config,
+};
 
 const AUTH: &str = "hysteria2-auth-session-fixture";
 const TCP_TARGET: &str = "hysteria2-auth-session-target.invalid:443";
@@ -84,6 +88,20 @@ async fn run_auth_then_stream_server(endpoint: quinn::Endpoint) {
             .and_then(|value| value.to_str().ok()),
         Some(AUTH)
     );
+    let auth_padding = request
+        .headers()
+        .get(COMMON_HEADER_PADDING)
+        .and_then(|value| value.to_str().ok())
+        .unwrap();
+    assert!(
+        (HYSTERIA2_AUTH_PADDING_MIN..HYSTERIA2_AUTH_PADDING_MAX_EXCLUSIVE)
+            .contains(&auth_padding.len())
+    );
+    assert!(
+        auth_padding
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric())
+    );
     while stream.recv_data().await.unwrap().is_some() {}
     stream
         .send_response(
@@ -98,11 +116,23 @@ async fn run_auth_then_stream_server(endpoint: quinn::Endpoint) {
         .unwrap();
     stream.finish().await.unwrap();
 
-    let expected = build_tcp_request_stream(TCP_TARGET, &[]).unwrap();
     let (mut send, mut recv) = connection.accept_bi().await.unwrap();
-    let mut request = vec![0_u8; expected.len()];
-    recv.read_exact(&mut request).await.unwrap();
-    assert_eq!(request, expected);
+    assert_eq!(
+        read_test_varint(&mut recv).await,
+        HYSTERIA2_FRAME_TYPE_TCP_REQUEST
+    );
+    let target_len = read_test_varint(&mut recv).await as usize;
+    let mut target = vec![0_u8; target_len];
+    recv.read_exact(&mut target).await.unwrap();
+    assert_eq!(target, TCP_TARGET.as_bytes());
+    let padding_len = read_test_varint(&mut recv).await as usize;
+    assert!(
+        (HYSTERIA2_TCP_REQUEST_PADDING_MIN..HYSTERIA2_TCP_REQUEST_PADDING_MAX_EXCLUSIVE)
+            .contains(&padding_len)
+    );
+    let mut padding = vec![0_u8; padding_len];
+    recv.read_exact(&mut padding).await.unwrap();
+    assert!(padding.iter().all(u8::is_ascii_alphanumeric));
     send.write_all(&build_tcp_response_stream(true, "", &[]).unwrap())
         .await
         .unwrap();
@@ -111,4 +141,19 @@ async fn run_auth_then_stream_server(endpoint: quinn::Endpoint) {
     let _ = connection.closed().await;
     drop(incoming);
     endpoint.wait_idle().await;
+}
+
+async fn read_test_varint(recv: &mut quinn::RecvStream) -> u64 {
+    let mut first = [0_u8; 1];
+    recv.read_exact(&mut first).await.unwrap();
+    let length = 1_usize << (first[0] >> 6);
+    let mut value = u64::from(first[0] & 0x3f);
+    if length > 1 {
+        let mut rest = vec![0_u8; length - 1];
+        recv.read_exact(&mut rest).await.unwrap();
+        for byte in rest {
+            value = (value << 8) | u64::from(byte);
+        }
+    }
+    value
 }

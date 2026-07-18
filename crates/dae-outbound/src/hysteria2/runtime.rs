@@ -2,7 +2,8 @@ use tokio::io::AsyncWriteExt;
 
 use crate::error::OutboundError;
 
-use super::wire::build_tcp_request_stream;
+use super::padding::tcp_request_padding;
+use super::wire::build_tcp_request_stream_with_padding;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hysteria2TcpResponseHead {
@@ -14,7 +15,8 @@ pub async fn write_hysteria2_tcp_request(
     send: &mut quinn::SendStream,
     target: &str,
 ) -> Result<(), OutboundError> {
-    let request = build_tcp_request_stream(target, &[])?;
+    let padding = tcp_request_padding();
+    let request = build_tcp_request_stream_with_padding(target, &[], &padding)?;
     send.write_all(&request)
         .await
         .map_err(|err| bad_runtime(format!("write Hysteria2 TCP request: {err}")))?;
