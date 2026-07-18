@@ -80,13 +80,38 @@ struct QuicEndpointLiveEntry {
     record: QuicEndpointLiveRecord,
 }
 
-#[derive(Default)]
 struct QuicEndpointMetricsRegistry {
     // Evidence only: records contain no Endpoint, Connection, socket, task, or protocol state.
     // Physical ownership remains with each protocol caller until a protocol registry is migrated.
     next_id: u64,
     live: Vec<QuicEndpointLiveEntry>,
     generations: Vec<QuicEndpointGenerationEntry>,
+    inactive_generation_retention: usize,
+}
+
+impl Default for QuicEndpointMetricsRegistry {
+    fn default() -> Self {
+        Self {
+            next_id: 0,
+            live: Vec::new(),
+            generations: Vec::new(),
+            inactive_generation_retention: QuicEndpointObservabilityProfile::CURRENT
+                .retained_inactive_generations,
+        }
+    }
+}
+
+#[cfg(test)]
+impl QuicEndpointMetricsRegistry {
+    fn for_parallel_process_tests() -> Self {
+        // Parallel endpoint tests use distinct generations and inspect their just-completed
+        // evidence. Keep that bounded evidence from being evicted by an unrelated test before
+        // its assertion; local registry tests and production retain the low-cardinality profile.
+        Self {
+            inactive_generation_retention: 128,
+            ..Self::default()
+        }
+    }
 }
 
 impl QuicEndpointMetricsRegistry {
@@ -323,9 +348,9 @@ impl QuicEndpointMetricsRegistry {
             .map(|entry| entry.generation)
             .filter(|generation| !self.generation_has_live_endpoint(*generation))
             .collect::<Vec<_>>();
-        let remove = inactive.len().saturating_sub(
-            QuicEndpointObservabilityProfile::CURRENT.retained_inactive_generations,
-        );
+        let remove = inactive
+            .len()
+            .saturating_sub(self.inactive_generation_retention);
         for generation in inactive.into_iter().take(remove) {
             if let Ok(index) = self
                 .generations
@@ -544,8 +569,7 @@ impl QuicEndpointMetricsRegistry {
         current["observabilityProfile"] = json!({
             "model": QUIC_ENDPOINT_OBSERVABILITY_MODEL,
             "modelVersion": QUIC_ENDPOINT_OBSERVABILITY_MODEL_VERSION,
-            "retainedInactiveGenerations": QuicEndpointObservabilityProfile::CURRENT
-                .retained_inactive_generations,
+            "retainedInactiveGenerations": self.inactive_generation_retention,
             "liveGenerationsAlwaysRetained": true,
             "inactiveRetentionOrder": "highest-generation-id",
             "cumulativeCreationRetention": "current-and-bounded-inactive-generations",
@@ -627,7 +651,13 @@ fn state_name(state: PhysicalOwnerState) -> &'static str {
 
 fn registry() -> &'static Mutex<QuicEndpointMetricsRegistry> {
     static REGISTRY: OnceLock<Mutex<QuicEndpointMetricsRegistry>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(QuicEndpointMetricsRegistry::default()))
+    REGISTRY.get_or_init(|| {
+        #[cfg(test)]
+        let registry = QuicEndpointMetricsRegistry::for_parallel_process_tests();
+        #[cfg(not(test))]
+        let registry = QuicEndpointMetricsRegistry::default();
+        Mutex::new(registry)
+    })
 }
 
 pub(super) struct QuicEndpointObservation {
