@@ -27,6 +27,11 @@ pub(crate) fn build_tuic_proxy_plan(
     };
     let allow_insecure =
         parsed.allow_insecure || config.global.allow_insecure || parsed.disable_sni;
+    let congestion =
+        dae_outbound::tuic::TuicCongestionController::from_config(&parsed.congestion_control)
+            .map_err(|err| format!("validate TUIC congestion controller for {node_tag}: {err}"))?;
+    let udp_relay_mode = dae_outbound::tuic::TuicUdpRelayMode::from_config(&parsed.udp_relay_mode)
+        .map_err(|err| format!("validate TUIC UDP relay mode for {node_tag}: {err}"))?;
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -58,6 +63,8 @@ pub(crate) fn build_tuic_proxy_plan(
             password: parsed.password,
             alpn,
             allow_insecure,
+            congestion,
+            udp_relay_mode,
         },
         execution: None,
         chain_parent: None,

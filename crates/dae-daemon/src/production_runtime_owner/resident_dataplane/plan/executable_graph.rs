@@ -45,7 +45,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
     chain_parent_count: usize,
     udp_chain_admission: ResidentUdpChainAdmission,
-    quic_per_flow: bool,
+    quic_lifecycle_scope: QuicLifecycleScope,
     mark: u32,
     mptcp: bool,
 }
@@ -91,7 +91,7 @@ impl ResidentExecutableGraphDescriptor {
             utls_fingerprint: proxy.utls_fingerprint.clone(),
             chain_parent_count: chain_parent_count(proxy),
             udp_chain_admission: resident_udp_chain_admission(proxy),
-            quic_per_flow: is_quic_handler(&proxy.handler),
+            quic_lifecycle_scope: quic_lifecycle_scope(&proxy.handler),
             mark: proxy.mark,
             mptcp: proxy.mptcp,
         }
@@ -257,7 +257,7 @@ impl ResidentExecutableGraphDescriptor {
             "alpn": self.alpn,
             "flow": self.flow,
             "fingerprint": fingerprint,
-            "quicLifecycle": quic_lifecycle_value(self.quic_per_flow),
+            "quicLifecycle": quic_lifecycle_value(self.quic_lifecycle_scope),
             "unsupportedReason": unsupported_reason,
         })
     }
@@ -314,7 +314,10 @@ impl ResidentExecutableGraphDescriptor {
                 "pathEvidence": self.stream_path_evidence_value(),
             },
             "protocolFraming": self.protocol_framing,
-            "runtimeLimits": stream_wrapper_runtime_limits_value(&self.stream_wrapper),
+            "runtimeLimits": stream_wrapper_runtime_limits_value(
+                &self.stream_wrapper,
+                self.quic_lifecycle_scope,
+            ),
             "xhttpMode": if self.stream_wrapper == "xhttp" {
                 json!(self.xhttp_mode.as_str())
             } else {
@@ -383,8 +386,11 @@ impl ResidentExecutableGraphDescriptor {
             "cacheScope": "graph-and-reload-generation",
             "survivesReload": false,
             "cleanupPolicy": "drop-on-graph-diff-or-runtime-stop",
-            "sharedProviderCaches": shared_provider_cache_labels(&self.stream_wrapper),
-            "perFlowProviders": per_flow_provider_labels(self.quic_per_flow),
+            "sharedProviderCaches": shared_provider_cache_labels(
+                &self.stream_wrapper,
+                self.quic_lifecycle_scope,
+            ),
+            "perFlowProviders": per_flow_provider_labels(self.quic_lifecycle_scope),
         })
     }
 

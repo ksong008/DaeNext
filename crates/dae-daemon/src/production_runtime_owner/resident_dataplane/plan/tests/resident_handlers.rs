@@ -392,6 +392,8 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
             password: fixture_secret(),
             alpn: vec!["h3".to_owned()],
             allow_insecure: false,
+            congestion: dae_outbound::tuic::TuicCongestionController::Bbr,
+            udp_relay_mode: dae_outbound::tuic::TuicUdpRelayMode::Native,
         },
         ResidentProxyProtocolPlan::JuicityQuicTcp {
             uuid: fixture_client_id(),

@@ -13,6 +13,7 @@ pub(super) async fn probe_resident_candidate_udp_families(
     candidate: &plan::ResidentProxyProbePlan,
     stop: Option<&SharedResidentStopSignal>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> Result<Vec<ResidentUdpFamilyProbeResult>, HealthCheckRoundStatus> {
     let targets = match stop {
         Some(stop) => {
@@ -32,6 +33,7 @@ pub(super) async fn probe_resident_candidate_udp_families(
             targets.ipv4,
             stop,
             hysteria2_owner_registry.clone(),
+            tuic_owner_registry.clone(),
         )),
         Box::pin(probe_udp_family(
             candidate,
@@ -39,6 +41,7 @@ pub(super) async fn probe_resident_candidate_udp_families(
             targets.ipv6,
             stop,
             hysteria2_owner_registry.clone(),
+            tuic_owner_registry.clone(),
         )),
     );
     Ok(vec![ipv4?, ipv6?])
@@ -50,6 +53,7 @@ async fn probe_udp_family(
     family: plan::ResidentHealthTargetFamily,
     stop: Option<&SharedResidentStopSignal>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> Result<ResidentUdpFamilyProbeResult, HealthCheckRoundStatus> {
     match family {
         plan::ResidentHealthTargetFamily::Present(addrs) => {
@@ -71,6 +75,7 @@ async fn probe_udp_family(
                                 addr,
                                 &candidate.udp_check.lookup_host,
                                 hysteria2_owner_registry.clone(),
+                                tuic_owner_registry.clone(),
                             ) => result,
                         }
                     }
@@ -80,6 +85,7 @@ async fn probe_udp_family(
                             addr,
                             &candidate.udp_check.lookup_host,
                             hysteria2_owner_registry.clone(),
+                            tuic_owner_registry.clone(),
                         )
                         .await
                     }

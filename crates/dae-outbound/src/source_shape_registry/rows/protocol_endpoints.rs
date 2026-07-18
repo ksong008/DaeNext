@@ -78,7 +78,7 @@ pub(super) const BASELINE_QUIC_AUTH_ENDPOINT: SourceShapeRegistryRow = admitted_
     )
     .with_transport("quic-tls", "quic-stream", "quic-datagram")
     .with_runtime(
-        CALLER_SCOPED_HYSTERIA2_OWNERSHIP,
+        GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
         "registry:baseline-quic-auth-endpoint",
     ),
 );
@@ -87,7 +87,7 @@ pub(super) const BASELINE_QUIC_UUID_ENDPOINT: SourceShapeRegistryRow = admitted_
     registry_source("baseline-quic-uuid-endpoint", "tuic", &["tuic"])
         .with_transport("quic-tls", "quic-stream", "quic-packet")
         .with_runtime(
-            CALLER_SCOPED_TUIC_OWNERSHIP,
+            GENERATION_OWNED_TUIC_OWNERSHIP,
             "registry:baseline-quic-uuid-endpoint",
         ),
 );

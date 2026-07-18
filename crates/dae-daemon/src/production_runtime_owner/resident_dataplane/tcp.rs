@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 
 use super::{
     Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, ResidentStopSignal,
-    SharedResidentStopSignal, reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
+    SharedResidentStopSignal, TuicOwnerRegistryHandle, reset_resident_relay_idle_deadline,
+    resident_relay_idle_deadline,
 };
 
 use bytes::Bytes;
@@ -62,7 +63,8 @@ use dae_outbound::{
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
     tuic::{
-        authenticate_tuic_connection, build_tuic_runtime_client_config, write_tuic_connect_request,
+        TuicCongestionController, build_tuic_runtime_client_config_with_congestion,
+        write_tuic_connect_request,
     },
     vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,

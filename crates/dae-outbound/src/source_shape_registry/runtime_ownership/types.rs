@@ -5,8 +5,8 @@ pub enum RuntimeOwnershipModel {
     FlowStreamAndPacketSession,
     FlowStreamWithPacketPolicyClosed,
     FlowStreamAndAssociation,
-    CallerScopedHysteria2Transport,
-    CallerScopedTuicTransport,
+    GenerationOwnedHysteria2Transport,
+    GenerationOwnedTuicTransport,
     CallerScopedJuicityTransport,
     GenerationConnectUdpTransport,
     ConfiguredHttpTransport,
@@ -22,8 +22,8 @@ impl RuntimeOwnershipModel {
             Self::FlowStreamAndPacketSession => "flow-stream-and-packet-session",
             Self::FlowStreamWithPacketPolicyClosed => "flow-stream-with-packet-policy-closed",
             Self::FlowStreamAndAssociation => "flow-stream-and-association",
-            Self::CallerScopedHysteria2Transport => "caller-scoped-hysteria2-transport",
-            Self::CallerScopedTuicTransport => "caller-scoped-tuic-transport",
+            Self::GenerationOwnedHysteria2Transport => "generation-owned-hysteria2-transport",
+            Self::GenerationOwnedTuicTransport => "generation-owned-tuic-transport",
             Self::CallerScopedJuicityTransport => "caller-scoped-juicity-transport",
             Self::GenerationConnectUdpTransport => "generation-connect-udp-transport",
             Self::ConfiguredHttpTransport => "configured-http-transport",
@@ -222,6 +222,7 @@ pub enum RuntimeBudgetContract {
     FlowConcurrency,
     UdpSessionCountAndPayloadBytes,
     ConfiguredDnsActorCountAndPayloadBytes,
+    PhysicalOwnerCountAndChargedBytes,
     PhysicalOwnerCountAndChargedBytesMissing,
     PoolCountAndChargedBytes,
     ConfiguredConnectionCountWithChargedBytesMissing,
@@ -237,6 +238,7 @@ impl RuntimeBudgetContract {
             Self::ConfiguredDnsActorCountAndPayloadBytes => {
                 "configured-dns-actor-count-and-payload-bytes"
             }
+            Self::PhysicalOwnerCountAndChargedBytes => "physical-owner-count-and-charged-bytes",
             Self::PhysicalOwnerCountAndChargedBytesMissing => {
                 "physical-owner-count-and-charged-bytes-missing"
             }

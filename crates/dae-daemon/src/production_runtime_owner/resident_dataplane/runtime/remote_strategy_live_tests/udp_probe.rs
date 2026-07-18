@@ -23,6 +23,15 @@ pub(crate) fn resident_live_adapter_udp_probe(
     )
     .ok();
     let owner_registry = owner_runtime.as_ref().map(|(handle, _)| handle.clone());
+    let tuic_owner_runtime = start_tuic_owner_registry(
+        0,
+        Arc::clone(&owner_stop),
+        owner_resources.tcp_flow_stack_bytes.value(),
+    )
+    .ok();
+    let tuic_owner_registry = tuic_owner_runtime
+        .as_ref()
+        .map(|(handle, _)| handle.clone());
     let rows = resident_live_adapter_matrix_entries()
         .iter()
         .map(|entry| {
@@ -48,6 +57,7 @@ pub(crate) fn resident_live_adapter_udp_probe(
                                 payload,
                                 include_response_hex,
                                 owner_registry.clone(),
+                                tuic_owner_registry.clone(),
                             )),
                             Err(_) => json!({
                                 "status": "fail",
@@ -95,6 +105,9 @@ pub(crate) fn resident_live_adapter_udp_probe(
         .collect::<Vec<_>>();
     owner_stop.store(true, Ordering::Release);
     if let Some((_, thread)) = owner_runtime {
+        let _ = thread.join();
+    }
+    if let Some((_, thread)) = tuic_owner_runtime {
         let _ = thread.join();
     }
     let pass_count = rows

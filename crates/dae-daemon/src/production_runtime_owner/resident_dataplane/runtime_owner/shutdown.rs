@@ -42,11 +42,24 @@ pub(super) fn shutdown_resident_runtime_owner(
             && hysteria2_owners["currentUdpQueuedBytes"].as_u64() == Some(0)
             && hysteria2_owners["activeUdpSessionQuarantine"].as_u64() == Some(0)
             && hysteria2_owners["shutdownTimedOut"].as_bool() == Some(false));
+    let tuic_owners = owner
+        .tuic_owner_registry
+        .as_ref()
+        .map(TuicOwnerRegistryHandle::metrics_snapshot)
+        .unwrap_or(Value::Null);
+    let tuic_owners_released = tuic_owners.is_null()
+        || (tuic_owners["activeOwners"].as_u64() == Some(0)
+            && tuic_owners["activeLogicalLeases"].as_u64() == Some(0)
+            && tuic_owners["activeUdpAssociations"].as_u64() == Some(0)
+            && tuic_owners["currentUdpQueuedBytes"].as_u64() == Some(0)
+            && tuic_owners["activeAssociationQuarantine"].as_u64() == Some(0)
+            && tuic_owners["shutdownTimedOut"].as_bool() == Some(false));
     let shutdown_elapsed_ns = elapsed_nanos(started);
     let shutdown_passed = task_shutdown.panicked == 0
         && task_shutdown.timed_out == 0
         && udp_payload_released
         && hysteria2_owners_released
+        && tuic_owners_released
         && owned_cleanup["status"].as_str() == Some("pass")
         && event_writer["status"].as_str() == Some("pass");
 
@@ -71,6 +84,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         "udp_sessions_active_at_shutdown": legacy_udp_active,
         "udp_payload_admission": udp_payload_admission,
         "hysteria2_owners": hysteria2_owners,
+        "tuic_owners": tuic_owners,
         "owned_cleanup": owned_cleanup,
         "runtime_handle_owner": "resident-runtime-owner",
         "manual_probe_runtime_available": true,

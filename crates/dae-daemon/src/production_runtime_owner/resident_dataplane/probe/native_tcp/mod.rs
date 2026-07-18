@@ -24,9 +24,9 @@ use self::trojan::open_trojan_native_tcp_tunnel;
 use self::tunnel::NativeTcpTunnel;
 use self::vless::open_vless_native_tcp_tunnel;
 use self::vmess::open_vmess_native_tcp_tunnel;
-use super::super::Hysteria2OwnerRegistryHandle;
 use super::super::plan::{ResidentProxyPlan, ResidentTcpProbeDispatch};
 use super::super::tcp::QuicEndpointCallerClass;
+use super::super::{Hysteria2OwnerRegistryHandle, TuicOwnerRegistryHandle};
 
 #[allow(clippy::too_many_arguments)]
 pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_native_proxy_tcp_async(
@@ -38,6 +38,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
     method: &str,
     timeout: Duration,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     caller: QuicEndpointCallerClass,
 ) -> Result<(), String> {
     let owner_deadline =
@@ -47,6 +48,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
             Arc::clone(&proxy),
             target,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             caller,
             owner_deadline,
         )
@@ -81,6 +83,7 @@ async fn open_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
     target: &str,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     caller: QuicEndpointCallerClass,
     owner_deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
@@ -98,6 +101,7 @@ async fn open_native_tcp_tunnel(
                 proxy,
                 target,
                 hysteria2_owner_registry,
+                tuic_owner_registry,
                 caller,
                 owner_deadline,
             )

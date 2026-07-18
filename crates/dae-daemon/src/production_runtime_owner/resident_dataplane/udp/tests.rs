@@ -213,6 +213,7 @@ mod tests {
                 b"probe",
                 false,
                 None,
+                None,
             )
             .await;
             assert_eq!(result["status"], "protocol-closed");
@@ -244,7 +245,7 @@ mod tests {
             proxy.server_port.saturating_add(1),
         ));
         let bridge =
-            open_resident_proxy_udp_bridge_async(Arc::new(proxy), original_dst, None, None)
+            open_resident_proxy_udp_bridge_async(Arc::new(proxy), original_dst, None, None, None)
                 .await
                 .unwrap();
         let client =
@@ -340,14 +341,15 @@ mod tests {
         assert_eq!(parsed_hy2.target(), target);
         assert_eq!(parsed_hy2.payload(), payload);
 
-        let tuic = build_tuic_packet_frame(7, 9, &target, payload).unwrap();
-        let parsed_tuic = parse_tuic_packet_frame(&tuic).unwrap();
-        assert_eq!(parsed_tuic.assoc_id, 7);
-        assert_eq!(parsed_tuic.packet_id, 9);
-        assert_eq!(parsed_tuic.frag_total, 1);
-        assert_eq!(parsed_tuic.frag_id, 0);
-        assert_eq!(parsed_tuic.target.as_deref(), Some(target.as_str()));
-        assert_eq!(parsed_tuic.payload, payload);
+        let tuic =
+            encode_tuic_udp_packet(&TuicUdpPacket::new(7, 9, &target, payload).unwrap()).unwrap();
+        let parsed_tuic = decode_tuic_udp_packet(&tuic).unwrap();
+        assert_eq!(parsed_tuic.association_id(), 7);
+        assert_eq!(parsed_tuic.packet_id(), 9);
+        assert_eq!(parsed_tuic.fragment_count(), 1);
+        assert_eq!(parsed_tuic.fragment_id(), 0);
+        assert_eq!(parsed_tuic.target(), Some(target.as_str()));
+        assert_eq!(parsed_tuic.payload(), payload);
 
         let juicity_frame = seal_stream_packet_frame(&target, payload).unwrap();
         let juicity_request =
@@ -435,6 +437,8 @@ mod tests {
                     password: String::new(),
                     alpn: Vec::new(),
                     allow_insecure: false,
+                    congestion: dae_outbound::tuic::TuicCongestionController::Bbr,
+                    udp_relay_mode: dae_outbound::tuic::TuicUdpRelayMode::Native,
                 },
                 UdpExecutorShape::Tuic,
             ),

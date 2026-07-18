@@ -98,6 +98,7 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
         tuic.handler,
         ResidentProxyProtocolPlan::TuicQuicTcp {
             allow_insecure: true,
+            udp_relay_mode: dae_outbound::tuic::TuicUdpRelayMode::Native,
             ..
         }
     ));
@@ -142,25 +143,78 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
         juicity.handler,
         ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
     ));
-    let proxies = vec![hysteria2, tuic, juicity];
-    for proxy in &proxies {
+    for proxy in [&hysteria2, &tuic] {
         let graph = proxy.executable_graph_value();
         let lifecycle = &graph["runtimeComponents"]["underlayFactory"]["quicLifecycle"];
-        assert_eq!(lifecycle["endpointScope"], "per-flow");
-        assert_eq!(lifecycle["connectionScope"], "per-flow");
-        assert_eq!(lifecycle["clientConfigScope"], "per-flow");
-        assert_eq!(lifecycle["crossFlowConnectionReuse"], false);
+        assert_eq!(
+            lifecycle["endpointScope"],
+            "generation-graph-transport-owner"
+        );
+        assert_eq!(
+            lifecycle["connectionScope"],
+            "generation-graph-transport-owner"
+        );
+        assert_eq!(
+            lifecycle["clientConfigScope"],
+            "generation-graph-transport-owner"
+        );
+        assert_eq!(lifecycle["crossFlowConnectionReuse"], true);
         assert_eq!(
             graph["runtimeComponents"]["generationCache"]["perFlowProviders"],
-            serde_json::json!(["quic-client-config", "quic-endpoint", "quic-connection"])
+            serde_json::json!([])
         );
         assert!(
-            !graph["runtimeComponents"]["generationCache"]["sharedProviderCaches"]
+            graph["runtimeComponents"]["generationCache"]["sharedProviderCaches"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|provider| provider == "quic-client-config")
         );
     }
-    proxies
+
+    let juicity_graph = juicity.executable_graph_value();
+    let juicity_lifecycle = &juicity_graph["runtimeComponents"]["underlayFactory"]["quicLifecycle"];
+    assert_eq!(juicity_lifecycle["endpointScope"], "per-flow");
+    assert_eq!(juicity_lifecycle["connectionScope"], "per-flow");
+    assert_eq!(juicity_lifecycle["crossFlowConnectionReuse"], false);
+    assert_eq!(
+        juicity_graph["runtimeComponents"]["generationCache"]["perFlowProviders"],
+        serde_json::json!(["quic-client-config", "quic-endpoint", "quic-connection"])
+    );
+
+    vec![hysteria2, tuic, juicity]
+}
+
+#[test]
+fn tuic_stream_relay_mode_and_unknown_values_fail_before_runtime_construction() {
+    let config = resident_tcp_handler_config();
+    let mut link = TuicLink::parse(&tuic_fixture_url(
+        "tuic",
+        &fixture_host(FixtureEndpoint::Primary),
+        fixture_port(2),
+        false,
+    ))
+    .unwrap();
+
+    link.udp_relay_mode = "quic".to_owned();
+    let stream_error = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "tuic_stream_mode".to_owned(),
+        link.export_url(),
+    )
+    .unwrap_err();
+    assert!(stream_error.contains("QUIC stream UDP relay mode is not supported"));
+
+    let private_mode = "private-relay-token";
+    link.udp_relay_mode = private_mode.to_owned();
+    let unknown_error = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "tuic_unknown_mode".to_owned(),
+        link.export_url(),
+    )
+    .unwrap_err();
+    assert!(unknown_error.contains("unsupported UDP relay mode"));
+    assert!(!unknown_error.contains(private_mode));
 }

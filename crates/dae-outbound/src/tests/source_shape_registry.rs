@@ -503,31 +503,26 @@ fn runtime_ownership_ledger_keeps_raw_streams_intentionally_per_flow() {
 }
 
 #[test]
-fn runtime_ownership_ledger_exposes_caller_scoped_quic_cost_boundary() {
+fn runtime_ownership_ledger_exposes_generation_owned_quic_cost_boundary() {
     for (shape_id, model, packet_lease) in [
         (
             "baseline-quic-auth-endpoint",
-            "caller-scoped-hysteria2-transport",
+            "generation-owned-hysteria2-transport",
             "hysteria2-session",
         ),
         (
             "baseline-quic-uuid-endpoint",
-            "caller-scoped-tuic-transport",
+            "generation-owned-tuic-transport",
             "tuic-association",
         ),
         (
-            "baseline-quic-password-endpoint",
-            "caller-scoped-juicity-transport",
-            "juicity-packet-stream",
-        ),
-        (
             "quic-port-hopping-surface",
-            "caller-scoped-hysteria2-transport",
+            "generation-owned-hysteria2-transport",
             "hysteria2-session",
         ),
         (
             "verified-quic-security-underlay",
-            "caller-scoped-tuic-transport",
+            "generation-owned-tuic-transport",
             "tuic-association",
         ),
     ] {
@@ -537,7 +532,7 @@ fn runtime_ownership_ledger_exposes_caller_scoped_quic_cost_boundary() {
             .unwrap();
         let ledger = row.runtime_ownership_ledger();
         assert_eq!(ledger["model"], model, "{shape_id}");
-        assert_eq!(ledger["disposition"], "blocked", "{shape_id}");
+        assert_eq!(ledger["disposition"], "implemented", "{shape_id}");
         assert_eq!(
             ledger["callers"]["dataUdp"]["logicalLease"], packet_lease,
             "{shape_id}"
@@ -557,11 +552,38 @@ fn runtime_ownership_ledger_exposes_caller_scoped_quic_cost_boundary() {
             );
             assert_eq!(
                 ledger["callers"][caller]["budgetContract"],
-                "physical-owner-count-and-charged-bytes-missing",
+                "physical-owner-count-and-charged-bytes",
+                "{shape_id} {caller}"
+            );
+            assert_eq!(
+                ledger["callers"][caller]["lifecycleOwner"], "generation-runtime-owner",
+                "{shape_id} {caller}"
+            );
+            assert_eq!(
+                ledger["callers"][caller]["keyContract"], "generation-graph-and-transport",
                 "{shape_id} {caller}"
             );
         }
     }
+}
+
+#[test]
+fn runtime_ownership_ledger_keeps_unmigrated_juicity_transport_blocked() {
+    let row = source_shape_registry_rows()
+        .iter()
+        .find(|row| row.shape_id == "baseline-quic-password-endpoint")
+        .unwrap();
+    let ledger = row.runtime_ownership_ledger();
+    assert_eq!(ledger["model"], "caller-scoped-juicity-transport");
+    assert_eq!(ledger["disposition"], "blocked");
+    assert_eq!(
+        ledger["callers"]["dataUdp"]["logicalLease"],
+        "juicity-packet-stream"
+    );
+    assert_eq!(
+        ledger["callers"]["dataUdp"]["budgetContract"],
+        "physical-owner-count-and-charged-bytes-missing"
+    );
 }
 
 #[test]
@@ -600,7 +622,7 @@ fn runtime_ownership_source_evidence_does_not_claim_materialized_execution() {
 }
 
 #[test]
-fn runtime_ownership_dns_callers_keep_distinct_lifecycle_contracts() {
+fn shared_quic_dns_callers_use_generation_owner_contract() {
     let row = source_shape_registry_rows()
         .iter()
         .find(|row| row.shape_id == "baseline-quic-auth-endpoint")
@@ -609,7 +631,7 @@ fn runtime_ownership_dns_callers_keep_distinct_lifecycle_contracts() {
     let callers = &ledger["callers"];
     assert_eq!(
         callers["configuredDns"]["lifecycleOwner"],
-        "configured-dns-forwarder"
+        "generation-runtime-owner"
     );
     assert_eq!(
         callers["configuredDns"]["keyContract"],
@@ -617,11 +639,11 @@ fn runtime_ownership_dns_callers_keep_distinct_lifecycle_contracts() {
     );
     assert_eq!(
         callers["forcedManagedDns"]["lifecycleOwner"],
-        "udp-session-manager"
+        "generation-runtime-owner"
     );
     assert_eq!(
         callers["forcedManagedDns"]["keyContract"],
-        "udp-session-graph-target-and-transport"
+        "generation-graph-and-transport"
     );
 }
 
@@ -659,7 +681,7 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
     );
     assert!(
         !MATERIALIZED_STREAM_SECURITY_OWNERSHIP
-            .accepts_materialized(RuntimeOwnershipModel::CallerScopedHysteria2Transport)
+            .accepts_materialized(RuntimeOwnershipModel::GenerationOwnedHysteria2Transport)
     );
     assert!(
         !MATERIALIZED_CHAIN_OWNERSHIP
@@ -675,8 +697,8 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
     );
     for impossible_chain_model in [
         RuntimeOwnershipModel::FlowStreamAndAssociation,
-        RuntimeOwnershipModel::CallerScopedHysteria2Transport,
-        RuntimeOwnershipModel::CallerScopedTuicTransport,
+        RuntimeOwnershipModel::GenerationOwnedHysteria2Transport,
+        RuntimeOwnershipModel::GenerationOwnedTuicTransport,
         RuntimeOwnershipModel::CallerScopedJuicityTransport,
         RuntimeOwnershipModel::GenerationConnectUdpTransport,
         RuntimeOwnershipModel::ConfiguredHttpTransport,

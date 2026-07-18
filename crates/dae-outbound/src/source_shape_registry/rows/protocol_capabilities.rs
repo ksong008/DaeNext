@@ -84,7 +84,7 @@ pub(super) const QUIC_PORT_HOPPING_SURFACE: SourceShapeRegistryRow =
         )
         .with_transport("quic-tls", "quic-stream", "quic-datagram")
         .with_runtime(
-            CALLER_SCOPED_HYSTERIA2_OWNERSHIP,
+            GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
             "registry:quic-port-hopping-surface",
         ),
         QUIC_PORT_HOPPING_CAPABILITY,
@@ -95,7 +95,7 @@ pub(super) const VERIFIED_QUIC_SECURITY_UNDERLAY: SourceShapeRegistryRow =
         registry_source("verified-quic-security-underlay", "tuic", &["tuic"])
             .with_transport("verified-quic-tls", "quic-stream", "quic-packet")
             .with_runtime(
-                CALLER_SCOPED_TUIC_OWNERSHIP,
+                GENERATION_OWNED_TUIC_OWNERSHIP,
                 "registry:verified-quic-security-underlay",
             ),
         VERIFIED_QUIC_CAPABILITY,

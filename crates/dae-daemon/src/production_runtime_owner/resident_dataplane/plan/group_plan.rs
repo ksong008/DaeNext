@@ -63,6 +63,15 @@ impl ResidentProxyProbePlan {
     ) {
         Arc::make_mut(&mut self.proxy).apply_latency_probe_control_mark(mark);
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_tuic_transport_owner(
+        &self,
+    ) -> bool {
+        matches!(
+            &self.proxy.handler,
+            ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -432,6 +441,17 @@ impl ResidentProxyGroupPlan {
         &self,
     ) -> usize {
         self.candidates.len()
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_tuic_transport_owner(
+        &self,
+    ) -> bool {
+        self.candidates.iter().any(|candidate| {
+            matches!(
+                &candidate.proxy.handler,
+                ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+            )
+        })
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn annotation_latency_offset_count(

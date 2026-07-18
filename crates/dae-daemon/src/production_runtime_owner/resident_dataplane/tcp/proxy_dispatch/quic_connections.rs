@@ -109,13 +109,14 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
     mark: u32,
     alpn: &[String],
     allow_insecure: bool,
-    timeout: Duration,
+    congestion: TuicCongestionController,
+    deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
-    let deadline = dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout);
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
-    let client_config = build_tuic_runtime_client_config(alpn, allow_insecure)
-        .map_err(|err| format!("build TUIC QUIC client config: {err}"))?;
+    let client_config =
+        build_tuic_runtime_client_config_with_congestion(alpn, allow_insecure, congestion)
+            .map_err(|err| format!("build TUIC QUIC client config: {err}"))?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Tuic,
         caller,

@@ -22,6 +22,7 @@ pub(super) struct ResidentHealthScheduleContext {
     pub(super) bootstrap_candidate_concurrency: usize,
     pub(super) candidate_admission: Arc<tokio::sync::Semaphore>,
     pub(super) hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    pub(super) tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 }
 
 struct ResidentHealthRoundGuard {
@@ -66,6 +67,7 @@ pub(super) async fn run_resident_health_group_schedule(
         bootstrap_candidate_concurrency: bootstrap_concurrency,
         candidate_admission,
         hysteria2_owner_registry,
+        tuic_owner_registry,
     } = context;
     let interval = group.check_interval();
     let initial_jitter =
@@ -98,6 +100,7 @@ pub(super) async fn run_resident_health_group_schedule(
         bootstrap_concurrency,
         Arc::clone(&candidate_admission),
         hysteria2_owner_registry.clone(),
+        tuic_owner_registry.clone(),
     )
     .await;
     group.complete_health_bootstrap(bootstrap_status.is_cancelled());
@@ -117,6 +120,7 @@ pub(super) async fn run_resident_health_group_schedule(
             concurrency,
             Arc::clone(&candidate_admission),
             hysteria2_owner_registry.clone(),
+            tuic_owner_registry.clone(),
         )
         .await;
         if status.is_cancelled() {
@@ -138,6 +142,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) {
     loop {
         let request = tokio::select! {
@@ -160,6 +165,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
             concurrency,
             Arc::clone(&candidate_admission),
             hysteria2_owner_registry.clone(),
+            tuic_owner_registry.clone(),
         )
         .await
         .is_cancelled()
@@ -186,6 +192,7 @@ async fn run_resident_health_round(
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -197,6 +204,7 @@ async fn run_resident_health_round(
         concurrency.max(1),
         candidate_admission,
         hysteria2_owner_registry,
+        tuic_owner_registry,
     )
     .await;
     guard.finish(status);

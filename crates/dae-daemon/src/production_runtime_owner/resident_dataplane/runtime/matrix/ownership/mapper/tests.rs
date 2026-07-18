@@ -169,7 +169,7 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
                 Wrapper::QuicStream,
                 Udp::Hysteria2,
             ),
-            CALLER_SCOPED_HYSTERIA2_OWNERSHIP,
+            GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
         ),
         (
             shape(
@@ -178,7 +178,7 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
                 Wrapper::QuicStream,
                 Udp::Tuic,
             ),
-            CALLER_SCOPED_TUIC_OWNERSHIP,
+            GENERATION_OWNED_TUIC_OWNERSHIP,
         ),
         (
             shape(

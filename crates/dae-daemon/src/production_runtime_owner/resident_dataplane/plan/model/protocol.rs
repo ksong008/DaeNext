@@ -92,6 +92,8 @@ pub(crate) enum ResidentProxyProtocolPlan {
         password: String,
         alpn: Vec<String>,
         allow_insecure: bool,
+        congestion: dae_outbound::tuic::TuicCongestionController,
+        udp_relay_mode: dae_outbound::tuic::TuicUdpRelayMode,
     },
     JuicityQuicTcp {
         uuid: String,

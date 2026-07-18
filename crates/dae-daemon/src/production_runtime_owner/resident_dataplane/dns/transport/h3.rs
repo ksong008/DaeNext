@@ -78,6 +78,9 @@ async fn forward_dns_h3_to_routed_target_async(
             forwarders
                 .hysteria2_owner_registry()
                 .map_err(ResidentDnsTransportError::message)?,
+            forwarders
+                .tuic_owner_registry()
+                .map_err(ResidentDnsTransportError::message)?,
             context,
         )
         .await

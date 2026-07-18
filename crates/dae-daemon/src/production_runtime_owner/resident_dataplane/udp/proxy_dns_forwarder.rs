@@ -22,6 +22,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxy
     metrics: Arc<ResidentDataplaneMetrics>,
     actor_executor: Arc<ResidentDnsUdpActorExecutor>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     request_scoped_actor_pool: bool,
     closing: AtomicBool,
 }
@@ -58,6 +59,7 @@ impl ResidentProxyDnsUdpForwarder {
             metrics,
             actor_executor,
             None,
+            None,
         )
     }
 
@@ -68,6 +70,7 @@ impl ResidentProxyDnsUdpForwarder {
         metrics: Arc<ResidentDataplaneMetrics>,
         actor_executor: Arc<ResidentDnsUdpActorExecutor>,
         hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Result<Self, String> {
         proxy
             .execution_plan()
@@ -100,6 +103,7 @@ impl ResidentProxyDnsUdpForwarder {
             metrics,
             actor_executor,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             request_scoped_actor_pool,
             closing: AtomicBool::new(false),
         })
@@ -241,6 +245,7 @@ impl ResidentProxyDnsUdpForwarder {
                 .actor_partition(actor_index, self.actors.len());
             let metrics = Arc::clone(&self.metrics);
             let hysteria2_owner_registry = self.hysteria2_owner_registry.clone();
+            let tuic_owner_registry = self.tuic_owner_registry.clone();
             *handle = Some(
                 self.actor_executor
                     .spawn_actor(move || async move {
@@ -250,6 +255,7 @@ impl ResidentProxyDnsUdpForwarder {
                             runtime_config,
                             metrics,
                             hysteria2_owner_registry,
+                            tuic_owner_registry,
                         ))
                     })
                     .await?,
