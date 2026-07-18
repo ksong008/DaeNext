@@ -423,6 +423,7 @@ mod tests {
                     max_rx: 0,
                     obfs: ResidentHysteria2ObfsPlan::none(),
                     port_hop_ports: Vec::new(),
+                    port_hop_interval: Duration::ZERO,
                 },
                 UdpExecutorShape::Hysteria2,
             ),

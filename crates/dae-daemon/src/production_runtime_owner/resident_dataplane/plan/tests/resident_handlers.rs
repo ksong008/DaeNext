@@ -205,6 +205,33 @@ pub(super) fn resident_dataplane_plan_admits_quic_handlers() {
 }
 
 #[test]
+fn hysteria2_port_hopping_rejects_an_interval_below_the_official_minimum() {
+    let config = parse_config(
+        r#"
+        global {
+        udphop_interval: 4s
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let error = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "hy2_short_hop".to_owned(),
+        hysteria2_fixture_url_with_pin(
+            "hy2",
+            &fixture_hop_server(fixture_port(1), &format!(",{}", fixture_port(2))),
+            &fixture_pin_sha256(),
+        ),
+    )
+    .unwrap_err();
+    assert!(error.contains("must be at least 5000 ms"));
+    assert!(!error.contains(&fixture_secret()));
+}
+
+#[test]
 pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
     let variants = [
         ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] },
@@ -290,6 +317,7 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
             max_rx: 0,
             obfs: ResidentHysteria2ObfsPlan::none(),
             port_hop_ports: vec![fixture_port(1)],
+            port_hop_interval: Duration::from_secs(30),
         },
         ResidentProxyProtocolPlan::TuicQuicTcp {
             uuid: fixture_client_id(),

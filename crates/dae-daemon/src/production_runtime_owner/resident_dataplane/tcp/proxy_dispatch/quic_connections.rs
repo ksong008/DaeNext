@@ -6,17 +6,45 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentConne
     pub(in crate::production_runtime_owner::resident_dataplane) connection: quinn::Connection,
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) struct Hysteria2QuicConnectionRequest<
+    'a,
+> {
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: &'a ResidentProxyPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane) obfs: &'a ResidentHysteria2ObfsPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) port_hop_ports: &'a [u16],
+    pub(in crate::production_runtime_owner::resident_dataplane) port_hop_interval: Duration,
+    pub(in crate::production_runtime_owner::resident_dataplane) tls_identity:
+        &'a dae_outbound::hysteria2::Hysteria2TlsIdentity,
+    pub(in crate::production_runtime_owner::resident_dataplane) resources:
+        Hysteria2OwnerResourceProfile,
+    pub(in crate::production_runtime_owner::resident_dataplane) port_hopping_metrics:
+        Arc<Hysteria2PortHoppingMetrics>,
+    pub(in crate::production_runtime_owner::resident_dataplane) caller: QuicEndpointCallerClass,
+}
+
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hysteria2_quic_connection_candidates_async(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
-    obfs: &ResidentHysteria2ObfsPlan,
-    port_hop_ports: &[u16],
-    tls_identity: &dae_outbound::hysteria2::Hysteria2TlsIdentity,
+    request: Hysteria2QuicConnectionRequest<'_>,
     deadline: dae_runtime_control::AbsoluteDeadline,
-    caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
-    let candidates =
-        resolve_hysteria2_quic_remote_candidates_async(proxy, port_hop_ports, deadline).await?;
+    let Hysteria2QuicConnectionRequest {
+        proxy,
+        mark,
+        obfs,
+        port_hop_ports,
+        port_hop_interval,
+        tls_identity,
+        resources,
+        port_hopping_metrics,
+        caller,
+    } = request;
+    let candidates = resolve_hysteria2_quic_remote_candidates_async(
+        proxy,
+        port_hop_ports,
+        resources.port_hop_resolved_candidate_limit(),
+        deadline,
+    )
+    .await?;
     let client_config = build_hysteria2_runtime_client_config_with_udp_overhead(
         tls_identity,
         obfs.udp_packet_overhead(),
@@ -35,9 +63,26 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         deadline,
         "connect Hysteria2 QUIC endpoint",
         |remote, deadline, cancellation| {
+            let port_hopping = if port_hop_ports.is_empty() {
+                None
+            } else {
+                let remotes = candidates
+                    .iter()
+                    .copied()
+                    .filter(|candidate| candidate.is_ipv4() == remote.is_ipv4())
+                    .collect::<Vec<_>>();
+                Some(Hysteria2PortHoppingRuntimeConfig::new(
+                    remotes,
+                    port_hop_interval,
+                    mark,
+                    resources.port_hop_transition_socket_limit(),
+                    Arc::clone(&port_hopping_metrics),
+                )?)
+            };
             let mut endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
                 mark,
                 obfs,
+                port_hopping,
                 remote,
                 endpoint_context.clone(),
                 deadline,

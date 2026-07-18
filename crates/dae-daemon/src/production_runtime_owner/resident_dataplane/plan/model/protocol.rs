@@ -83,6 +83,7 @@ pub(crate) enum ResidentProxyProtocolPlan {
         max_rx: u64,
         obfs: ResidentHysteria2ObfsPlan,
         port_hop_ports: Vec<u16>,
+        port_hop_interval: Duration,
     },
     TuicQuicTcp {
         uuid: String,

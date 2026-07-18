@@ -29,7 +29,8 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
     ResidentProxyPlan, ResidentProxyProtocolPlan,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::{
-    ObservedQuicEndpoint, QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
+    Hysteria2PortHoppingMetrics, Hysteria2QuicConnectionRequest, ObservedQuicEndpoint,
+    QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
     open_hysteria2_quic_connection_candidates_async,
 };
 
@@ -105,6 +106,7 @@ impl Hysteria2OwnerIndex {
 
 #[derive(Default)]
 struct Hysteria2OwnerRegistryMetrics {
+    port_hopping: Arc<Hysteria2PortHoppingMetrics>,
     active_owners: AtomicUsize,
     high_water_owners: AtomicUsize,
     active_leases: AtomicUsize,
@@ -884,6 +886,7 @@ impl Hysteria2OwnerRegistryHandle {
             "commandQueueRejections": self.metrics.command_queue_rejections.load(Ordering::Relaxed),
             "logicalLeaseRejections": self.metrics.logical_lease_rejections.load(Ordering::Relaxed),
             "shutdownTimedOut": self.metrics.shutdown_timed_out.load(Ordering::Relaxed),
+            "portHopping": self.metrics.port_hopping.snapshot(),
             "budget": {
                 "owners": self.resources.owner_limit(),
                 "commandQueueDepth": self.resources.command_queue_depth(),
@@ -895,6 +898,8 @@ impl Hysteria2OwnerRegistryHandle {
                 "udpSessionQuarantineLimit": self.resources.udp_session_quarantine_limit(),
                 "udpSessionQuarantineTtlMs": self.resources.udp_session_quarantine_ttl().as_millis(),
                 "retryCooldownMs": self.resources.retry_cooldown().as_millis(),
+                "portHopResolvedCandidateLimit": self.resources.port_hop_resolved_candidate_limit(),
+                "portHopTransitionSocketLimit": self.resources.port_hop_transition_socket_limit(),
             },
         })
     }
@@ -1205,6 +1210,7 @@ async fn build_hysteria2_transport(
         max_rx,
         obfs,
         port_hop_ports,
+        port_hop_interval,
     } = &proxy.handler
     else {
         return Err(Hysteria2OwnerBuildError {
@@ -1214,13 +1220,18 @@ async fn build_hysteria2_transport(
         });
     };
     let connected = open_hysteria2_quic_connection_candidates_async(
-        &proxy,
-        proxy.mark,
-        obfs,
-        port_hop_ports,
-        tls_identity,
+        Hysteria2QuicConnectionRequest {
+            proxy: &proxy,
+            mark: proxy.mark,
+            obfs,
+            port_hop_ports,
+            port_hop_interval: *port_hop_interval,
+            tls_identity,
+            resources,
+            port_hopping_metrics: Arc::clone(&metrics.port_hopping),
+            caller,
+        },
         deadline,
-        caller,
     )
     .await
     .map_err(|detail| Hysteria2OwnerBuildError {

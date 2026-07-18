@@ -1,6 +1,10 @@
+use std::time::Duration;
+
 use crate::error::OutboundError;
 
 use super::link::server_contract;
+
+pub const HYSTERIA2_MIN_PORT_HOP_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hysteria2PortHopSchedule {

@@ -86,12 +86,26 @@ pub(crate) fn build_hysteria2_proxy_plan(
     }
     let obfs = resident_hysteria2_obfs_plan(&parsed.obfs, &parsed.obfs_password, &node_tag)?;
     let server = hysteria2_server_contract(&parsed.server);
+    let port_hop_interval = if server.port_hopping {
+        let nanos = u64::try_from(config.global.udphop_interval.as_nanos()).map_err(|_| {
+            format!("Hysteria2 port hopping interval is negative for node {node_tag}")
+        })?;
+        Duration::from_nanos(nanos)
+    } else {
+        Duration::ZERO
+    };
     let (server_port, port_hop_ports) = if server.port_hopping {
-        let schedule =
-            build_port_hop_schedule(&parsed.server, DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS, 1)
-                .map_err(|err| {
-                    format!("admit Hysteria2 port hopping for node {node_tag}: {err}")
-                })?;
+        if port_hop_interval < HYSTERIA2_MIN_PORT_HOP_INTERVAL {
+            return Err(format!(
+                "Hysteria2 port hopping interval for node {node_tag} must be at least {} ms",
+                HYSTERIA2_MIN_PORT_HOP_INTERVAL.as_millis()
+            ));
+        }
+        let interval_ms = u64::try_from(port_hop_interval.as_millis()).map_err(|_| {
+            format!("Hysteria2 port hopping interval is too large for node {node_tag}")
+        })?;
+        let schedule = build_port_hop_schedule(&parsed.server, interval_ms, 1)
+            .map_err(|err| format!("admit Hysteria2 port hopping for node {node_tag}: {err}"))?;
         let server_port = *schedule.selected_ports.first().ok_or_else(|| {
             format!("admit Hysteria2 port hopping for node {node_tag}: no selected port")
         })?;
@@ -150,6 +164,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
             max_rx: parsed.max_rx,
             obfs,
             port_hop_ports,
+            port_hop_interval,
         },
         execution: None,
         chain_parent: None,

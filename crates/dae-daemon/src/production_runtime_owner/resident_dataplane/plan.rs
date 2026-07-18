@@ -13,7 +13,7 @@ use dae_outbound::{
     FilterParam, HealthState, NetworkType, OutboundError, SelectionPolicy,
     http_proxy::{HttpProxyLink, HttpScheme},
     hysteria2::{
-        DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS, Hysteria2Link, build_port_hop_schedule,
+        HYSTERIA2_MIN_PORT_HOP_INTERVAL, Hysteria2Link, build_port_hop_schedule,
         server_contract as hysteria2_server_contract,
     },
     juicity::JuicityLink,

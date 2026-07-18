@@ -3,9 +3,9 @@ use std::num::NonZeroU64;
 use super::model::QuicEndpointUnderlay;
 
 pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA: &str = "quinn-endpoint-charge";
-pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA_VERSION: u64 = 1;
+pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA_VERSION: u64 = 2;
 pub(super) const QUIC_ENDPOINT_CHARGE_MODEL: &str = "quinn-0.11-receive-slab-safety-reserve";
-pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 2;
+pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 3;
 
 const QUINN_RECEIVE_DATAGRAM_LIMIT_BYTES: u64 = 64 * 1024;
 const QUINN_GRO_RECEIVE_SEGMENTS: usize = 64;
@@ -41,6 +41,7 @@ pub(super) struct QuicEndpointCharge {
     pub max_udp_payload_bytes: u64,
     pub receive_segments: u64,
     pub batch_size: u64,
+    pub udp_socket_count: u64,
 }
 
 impl QuicEndpointCharge {
@@ -49,16 +50,46 @@ impl QuicEndpointCharge {
         underlay: QuicEndpointUnderlay,
         uses_http3: bool,
     ) -> Result<Self, String> {
-        let receive_segments = match underlay {
-            QuicEndpointUnderlay::Salamander => QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS,
-            QuicEndpointUnderlay::Ordinary => conservative_platform_receive_segments(),
+        let receive_segments = if underlay.uses_single_datagram_receive() {
+            QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS
+        } else {
+            conservative_platform_receive_segments()
         };
-        Self::for_socket(endpoint_config, receive_segments, uses_http3)
+        Self::for_socket_count(
+            endpoint_config,
+            receive_segments,
+            underlay.socket_charge_count(),
+            uses_http3,
+        )
     }
 
+    #[cfg(test)]
     pub(super) fn for_socket(
         endpoint_config: &quinn::EndpointConfig,
         max_receive_segments: usize,
+        uses_http3: bool,
+    ) -> Result<Self, String> {
+        Self::for_socket_count(endpoint_config, max_receive_segments, 1, uses_http3)
+    }
+
+    pub(super) fn for_wrapped_underlay(
+        endpoint_config: &quinn::EndpointConfig,
+        max_receive_segments: usize,
+        underlay: QuicEndpointUnderlay,
+        uses_http3: bool,
+    ) -> Result<Self, String> {
+        Self::for_socket_count(
+            endpoint_config,
+            max_receive_segments,
+            underlay.socket_charge_count(),
+            uses_http3,
+        )
+    }
+
+    fn for_socket_count(
+        endpoint_config: &quinn::EndpointConfig,
+        max_receive_segments: usize,
+        udp_socket_count: usize,
         uses_http3: bool,
     ) -> Result<Self, String> {
         let max_udp_payload_bytes = endpoint_config
@@ -68,9 +99,12 @@ impl QuicEndpointCharge {
             .map_err(|_| "QUIC receive segment count does not fit u64".to_owned())?;
         let batch_size = u64::try_from(quinn::udp::BATCH_SIZE)
             .map_err(|_| "QUIC UDP batch size does not fit u64".to_owned())?;
+        let udp_socket_count = u64::try_from(udp_socket_count)
+            .map_err(|_| "QUIC UDP socket count does not fit u64".to_owned())?;
         let receive_slab_bytes = max_udp_payload_bytes
             .checked_mul(receive_segments)
             .and_then(|value| value.checked_mul(batch_size))
+            .and_then(|value| value.checked_mul(udp_socket_count))
             .ok_or_else(|| "QUIC receive-slab charge overflow".to_owned())?;
         let profile = QuicEndpointSafetyChargeProfile::OBSERVABILITY_BASELINE;
         let quic_transport_bytes = profile.quic_transport_bytes.get();
@@ -97,6 +131,7 @@ impl QuicEndpointCharge {
             max_udp_payload_bytes,
             receive_segments,
             batch_size,
+            udp_socket_count,
         })
     }
 }
@@ -126,6 +161,8 @@ pub(super) fn charge_model_json() -> serde_json::Value {
         "quinnUdpBatchSize": quinn::udp::BATCH_SIZE,
         "preSocketOrdinaryReceiveSegments": conservative_platform_receive_segments(),
         "preSocketSalamanderReceiveSegments": QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS,
+        "portHoppingSocketCountSource": "runtimeProfile",
+        "portHoppingChargeScope": "receive slabs and UDP sockets only; QUIC, HTTP/3, TLS and queue reserves remain one physical owner",
         "safetyReserve": {
             "quicTransportBytes": profile.quic_transport_bytes.get(),
             "http3Bytes": profile.http3_bytes.get(),

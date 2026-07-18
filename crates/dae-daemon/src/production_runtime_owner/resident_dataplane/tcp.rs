@@ -14,8 +14,8 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use super::{
-    Hysteria2OwnerRegistryHandle, ResidentStopSignal, SharedResidentStopSignal,
-    reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
+    Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, ResidentStopSignal,
+    SharedResidentStopSignal, reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
 };
 
 use bytes::Bytes;
@@ -163,13 +163,14 @@ use self::vless_handlers::*;
 mod proxy_dispatch;
 pub(super) use self::proxy_dispatch::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::proxy_dispatch::{
-    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
-    QuicEndpointOpenContext, QuicEndpointProtocol, ResidentConnectedQuicEndpoint,
-    connect_quic_endpoint_candidates_async, inherit_quic_endpoint_observation,
-    open_hysteria2_quic_connection_candidates_async, open_juicity_quic_connection_candidates_async,
-    open_marked_quic_endpoint_for_remote, open_tuic_quic_connection_candidates_async,
-    quic_endpoint_metrics_snapshot, relay_tcp_over_anytls_async, scope_quic_endpoint_observation,
-    wait_anytls_synack, write_anytls_frame,
+    Hysteria2PortHoppingMetrics, Hysteria2QuicConnectionRequest, ObservedQuicEndpoint,
+    QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointOpenContext,
+    QuicEndpointProtocol, ResidentConnectedQuicEndpoint, connect_quic_endpoint_candidates_async,
+    inherit_quic_endpoint_observation, open_hysteria2_quic_connection_candidates_async,
+    open_juicity_quic_connection_candidates_async, open_marked_quic_endpoint_for_remote,
+    open_tuic_quic_connection_candidates_async, quic_endpoint_metrics_snapshot,
+    relay_tcp_over_anytls_async, scope_quic_endpoint_observation, wait_anytls_synack,
+    write_anytls_frame,
 };
 mod plain_handlers;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::plain_handlers::http_proxy_connect_async;
