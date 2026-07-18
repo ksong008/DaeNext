@@ -41,6 +41,20 @@ fn reality(seed: u8) -> ResidentRealityUnderlayPlan {
     }
 }
 
+fn chrome_fingerprint() -> ResidentUtlsFingerprintPlan {
+    ResidentUtlsFingerprintPlan {
+        source: "link fp",
+        requested: "chrome".to_owned(),
+        name: "chrome".to_owned(),
+        canonical: "chrome_auto".to_owned(),
+        family: dae_outbound::shared_transport::UTLS_FAMILY_CHROME.to_owned(),
+        client: "Chrome".to_owned(),
+        randomized: false,
+        alpn_policy: dae_outbound::shared_transport::UTLS_ALPN_POLICY_AUTO.to_owned(),
+        default_alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
+    }
+}
+
 fn test_proxy(endpoint: &ResidentXhttpEndpointPlan) -> ResidentProxyPlan {
     ResidentProxyPlan {
         graph_id: "resident-graph:primary".to_owned(),
@@ -103,6 +117,7 @@ fn primary_key(
         mark,
         mptcp,
     )
+    .unwrap()
 }
 
 #[test]
@@ -134,6 +149,22 @@ fn equivalent_primary_endpoints_reuse_the_same_key() {
         first.quic_provenance_identity(),
         second.quic_provenance_identity()
     );
+}
+
+#[test]
+fn primary_h3_quic_tls_provider_partitions_xmux_key() {
+    let mut endpoint = endpoint(None);
+    endpoint.alpn = vec!["h3".to_owned()];
+    let rustls_proxy = test_proxy(&endpoint);
+    let mut boring_proxy = rustls_proxy.clone();
+    boring_proxy.utls_fingerprint = Some(chrome_fingerprint());
+    let resolved = resolved(&["192.0.2.30:443"]);
+
+    let rustls = primary_key(&rustls_proxy, &endpoint, &resolved, 0, false);
+    let boring = primary_key(&boring_proxy, &endpoint, &resolved, 0, false);
+    assert_ne!(rustls, boring);
+    assert!(format!("{rustls:?}").contains("quic_tls_provider: Some(Rustls)"));
+    assert!(format!("{boring:?}").contains("quic_tls_provider: Some(ChromeBoring)"));
 }
 
 #[test]
@@ -370,7 +401,8 @@ fn declared_endpoint_fragment_xmux_and_role_differences_partition() {
         endpoint.xmux.as_ref().unwrap(),
         0,
         false,
-    );
+    )
+    .unwrap();
     assert_ne!(base, download);
 }
 
@@ -387,7 +419,8 @@ fn download_reality_credentials_partition_without_exposing_secret_material() {
         first_endpoint.xmux.as_ref().unwrap(),
         0,
         false,
-    );
+    )
+    .unwrap();
     let second_endpoint = endpoint(Some(reality(4)));
     let second = XhttpXmuxKey::download(
         &proxy,
@@ -396,7 +429,8 @@ fn download_reality_credentials_partition_without_exposing_secret_material() {
         second_endpoint.xmux.as_ref().unwrap(),
         0,
         false,
-    );
+    )
+    .unwrap();
 
     assert_ne!(first, second);
     let debug = format!("{first:?}");

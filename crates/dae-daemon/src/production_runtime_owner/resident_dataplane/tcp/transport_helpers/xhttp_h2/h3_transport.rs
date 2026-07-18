@@ -1,3 +1,4 @@
+use super::h3_boring_tls::build_chrome_boring_xhttp_h3_client_config;
 use super::request::{xhttp_h3_packet_up_request, xhttp_h3_request, xhttp_session_path_suffix};
 use super::xmux::{
     XhttpXmuxClientLease, XhttpXmuxKey, XhttpXmuxRequestHandle, note_xhttp_xmux_request,
@@ -9,6 +10,8 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 use sha2::{Digest, Sha256};
+
+use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpQuicTlsProvider;
 
 pub(crate) struct XhttpH3Connection {
     endpoint: ObservedQuicEndpoint,
@@ -45,7 +48,7 @@ pub(super) async fn open_xhttp_h3_proxy_client(
         });
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-    let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, false);
+    let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, false)?;
     let provenance_identity = key.quic_provenance_identity();
     let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
         let connection = open_xhttp_h3_connection(
@@ -94,7 +97,7 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
         });
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-    let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, false);
+    let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, false)?;
     let provenance_identity = key.quic_provenance_identity();
     let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
         let connection = open_xhttp_h3_connection(
@@ -130,9 +133,10 @@ async fn open_xhttp_h3_connection(
 ) -> Result<XhttpH3Connection, String> {
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
-    let client_config = build_xhttp_h3_client_config(endpoint)?;
+    let tls_provider = xhttp_h3_tls_provider(proxy, role)?;
+    let client_config = build_xhttp_h3_client_config(endpoint, tls_provider)?;
     let transport_identity = shared_transport_identity
-        .unwrap_or_else(|| xhttp_h3_transport_identity(proxy, endpoint, role));
+        .unwrap_or_else(|| xhttp_h3_transport_identity(proxy, endpoint, role, tls_provider));
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::XhttpHttp3,
         QuicEndpointCallerClass::TcpData,
@@ -166,10 +170,16 @@ async fn open_xhttp_h3_connection(
     {
         Err(_) => {
             quic_endpoint.mark_failed();
+            connection.close(0x101_u32.into(), b"xhttp h3 client timeout");
+            quic_endpoint.close(0x101_u32.into(), b"xhttp h3 client timeout");
+            wait_quic_endpoint_idle_after_close(&quic_endpoint).await;
             return Err("create xHTTP H3 client timeout".to_owned());
         }
         Ok(Err(err)) => {
             quic_endpoint.mark_failed();
+            connection.close(0x101_u32.into(), b"xhttp h3 client failed");
+            quic_endpoint.close(0x101_u32.into(), b"xhttp h3 client failed");
+            wait_quic_endpoint_idle_after_close(&quic_endpoint).await;
             return Err(format!("create xHTTP H3 client: {err:?}"));
         }
         Ok(Ok(client)) => client,
@@ -190,9 +200,11 @@ fn xhttp_h3_transport_identity(
     proxy: &ResidentProxyPlan,
     endpoint: &ResidentXhttpEndpointPlan,
     role: QuicEndpointIdentityRole,
+    tls_provider: ResidentXhttpQuicTlsProvider,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     update_xhttp_h3_identity_part(&mut digest, b"dae/xhttp/h3-transport/v1");
+    update_xhttp_h3_identity_part(&mut digest, tls_provider.as_str().as_bytes());
     update_xhttp_h3_identity_part(&mut digest, endpoint.server_host.as_bytes());
     update_xhttp_h3_identity_part(&mut digest, &endpoint.server_port.to_be_bytes());
     update_xhttp_h3_identity_part(&mut digest, endpoint.server_name.as_bytes());
@@ -230,6 +242,19 @@ fn xhttp_h3_transport_identity(
         }
     }
     digest.finalize().into()
+}
+
+fn xhttp_h3_tls_provider(
+    proxy: &ResidentProxyPlan,
+    role: QuicEndpointIdentityRole,
+) -> Result<ResidentXhttpQuicTlsProvider, String> {
+    match role {
+        QuicEndpointIdentityRole::XhttpPrimary => {
+            ResidentXhttpQuicTlsProvider::for_primary(proxy.utls_fingerprint.as_ref())
+        }
+        QuicEndpointIdentityRole::XhttpDownload => Ok(ResidentXhttpQuicTlsProvider::Rustls),
+        _ => Err("xHTTP H3 received a non-xHTTP endpoint identity role".to_owned()),
+    }
 }
 
 fn update_xhttp_h3_identity_part(digest: &mut Sha256, part: &[u8]) {
@@ -371,7 +396,11 @@ async fn drain_xhttp_h3_response_body(
 
 fn build_xhttp_h3_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
+    tls_provider: ResidentXhttpQuicTlsProvider,
 ) -> Result<quinn::ClientConfig, String> {
+    if tls_provider == ResidentXhttpQuicTlsProvider::ChromeBoring {
+        return build_chrome_boring_xhttp_h3_client_config(endpoint);
+    }
     let mut crypto = if endpoint.allow_insecure {
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .dangerous()
@@ -393,7 +422,7 @@ fn build_xhttp_h3_client_config(
     Ok(config)
 }
 
-fn xhttp_h3_transport_config() -> Result<quinn::TransportConfig, String> {
+pub(super) fn xhttp_h3_transport_config() -> Result<quinn::TransportConfig, String> {
     let mut transport = quinn::TransportConfig::default();
     transport.keep_alive_interval(Some(Duration::from_secs(
         dae_outbound::shared_transport::XHTTP_H3_KEEPALIVE_SECS,

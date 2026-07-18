@@ -18,6 +18,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) use security::Reside
 pub(in crate::production_runtime_owner::resident_dataplane) use wrapper::ResidentStreamWrapperPlan;
 pub(crate) use xhttp::{
     ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
+    ResidentXhttpQuicTlsProvider,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use xhttp::{
     ResidentXhttpHttpVersion, ResidentXhttpMetaPlacement, ResidentXhttpMode,

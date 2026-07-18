@@ -74,5 +74,5 @@ pub(super) fn download_test_key(
         mptcp: false,
     };
     let resolved = XhttpResolvedEndpointIdentity::from_candidates(&[remote.parse().unwrap()]);
-    XhttpXmuxKey::download(&proxy, &endpoint, &resolved, &plan, 0, false)
+    XhttpXmuxKey::download(&proxy, &endpoint, &resolved, &plan, 0, false).unwrap()
 }

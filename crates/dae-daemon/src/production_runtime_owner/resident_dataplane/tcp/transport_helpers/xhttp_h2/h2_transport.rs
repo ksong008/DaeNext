@@ -27,7 +27,7 @@ pub(super) async fn open_xhttp_h2_proxy_sender(
         });
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-    let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, mptcp);
+    let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, mptcp)?;
     let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || async {
         let client = open_async_vless_tls_client_with_flow_at_candidates(
             proxy,
@@ -67,7 +67,7 @@ pub(super) async fn open_xhttp_h2_endpoint_sender(
         });
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-    let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, mptcp);
+    let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, mptcp)?;
     let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || async {
         let client = open_async_xhttp_endpoint_tls_client_at_candidates(
             endpoint,
