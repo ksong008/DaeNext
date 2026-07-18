@@ -46,6 +46,8 @@ impl ProxyDnsQueuedRequestBytes {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn into_pending(
         mut self,
+        metadata_permit: ResidentUdpPayloadPermit,
+        metadata_bytes: usize,
     ) -> ProxyDnsPendingRequestBytes {
         self.drop_reason = ProxyDnsQueuedDropReason::Rejected;
         self.metrics.proxy_dns_udp_queued_removed(self.bytes);
@@ -54,10 +56,14 @@ impl ProxyDnsQueuedRequestBytes {
             .take()
             .expect("queued proxy DNS byte owner must hold its admission permit");
         self.metrics.proxy_dns_udp_pending_added(self.bytes);
+        self.metrics
+            .proxy_dns_udp_pending_metadata_added(metadata_bytes);
         ProxyDnsPendingRequestBytes {
             _permit: permit,
+            _metadata_permit: metadata_permit,
             metrics: Arc::clone(&self.metrics),
             bytes: self.bytes,
+            metadata_bytes,
             drop_reason: ProxyDnsPendingDropReason::Rejected,
         }
     }
@@ -90,8 +96,10 @@ impl Drop for ProxyDnsQueuedRequestBytes {
 
 pub(in crate::production_runtime_owner::resident_dataplane) struct ProxyDnsPendingRequestBytes {
     _permit: ResidentUdpPayloadPermit,
+    _metadata_permit: ResidentUdpPayloadPermit,
     metrics: Arc<ResidentDataplaneMetrics>,
     bytes: usize,
+    metadata_bytes: usize,
     drop_reason: ProxyDnsPendingDropReason,
 }
 
@@ -120,6 +128,8 @@ impl ProxyDnsPendingRequestBytes {
 impl Drop for ProxyDnsPendingRequestBytes {
     fn drop(&mut self) {
         self.metrics.proxy_dns_udp_pending_removed(self.bytes);
+        self.metrics
+            .proxy_dns_udp_pending_metadata_removed(self.metadata_bytes);
         match self.drop_reason {
             ProxyDnsPendingDropReason::Rejected => {}
             ProxyDnsPendingDropReason::Abandoned => {
@@ -129,5 +139,43 @@ impl Drop for ProxyDnsPendingRequestBytes {
                 self.metrics.proxy_dns_udp_expired(self.bytes);
             }
         }
+    }
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) struct ProxyDnsResponseBytes {
+    payload: Option<Vec<u8>>,
+    _permit: ResidentUdpPayloadPermit,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    bytes: usize,
+}
+
+impl ProxyDnsResponseBytes {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new(
+        payload: Vec<u8>,
+        permit: ResidentUdpPayloadPermit,
+        metrics: Arc<ResidentDataplaneMetrics>,
+    ) -> Self {
+        let bytes = payload.len();
+        metrics.proxy_dns_udp_response_added(bytes);
+        Self {
+            payload: Some(payload),
+            _permit: permit,
+            metrics,
+            bytes,
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn into_payload(
+        mut self,
+    ) -> Vec<u8> {
+        self.payload
+            .take()
+            .expect("proxy DNS response byte owner must hold its payload")
+    }
+}
+
+impl Drop for ProxyDnsResponseBytes {
+    fn drop(&mut self) {
+        self.metrics.proxy_dns_udp_response_removed(self.bytes);
     }
 }

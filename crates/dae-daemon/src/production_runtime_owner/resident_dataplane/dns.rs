@@ -101,7 +101,7 @@ pub(crate) use self::reload::ResidentDnsReloadSnapshot;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::request::{
     ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
     ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
-    exchange_proxy_dns_framed_stream,
+    ProxyDnsResponseBytes, exchange_proxy_dns_framed_stream,
 };
 #[cfg(test)]
 use self::routing::parse_dns_upstream;
@@ -124,12 +124,14 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::transport:
 use self::transport::{
     forward_dns_tcp_asis_async, forward_dns_to_upstream_async, forward_dns_udp_async,
 };
+pub(in crate::production_runtime_owner::resident_dataplane) use self::upstream_model::ResidentDnsTransportOwnerObservation;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_model::{
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
     ResidentDnsForwarderEntryKind, ResidentDnsForwarderKey, ResidentDnsForwarderSelectionKey,
     ResidentDnsForwarderTransport, ResidentDnsH2Forwarder, ResidentDnsH2Recovery,
-    ResidentDnsH3Forwarder, ResidentDnsHttpsForwarder, ResidentDnsQuicForwarder,
-    ResidentDnsRequestAction, ResidentDnsResponseAction, ResidentDnsTcpForwarder,
+    ResidentDnsH3Forwarder, ResidentDnsHttpsForwarder, ResidentDnsProxyH3Forwarder,
+    ResidentDnsProxyQuicForwarder, ResidentDnsQuicForwarder, ResidentDnsRequestAction,
+    ResidentDnsResponseAction, ResidentDnsRetiredForwarder, ResidentDnsTcpForwarder,
     ResidentDnsTlsForwarder, ResidentDnsUdpForwarder, ResidentDnsUdpForwarderShard,
     ResidentDnsUpstream, ResidentDnsUpstreamScheme, ResidentDnsUpstreamTarget,
     ResidentDnsUpstreams,
@@ -188,16 +190,6 @@ async fn acquire_dns_permit<'a>(
     context: &'static str,
 ) -> Result<tokio::sync::SemaphorePermit<'a>, String> {
     time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, semaphore.acquire())
-        .await
-        .map_err(|_| format!("{context} concurrency wait timeout"))?
-        .map_err(|_| format!("{context} concurrency limiter is closed"))
-}
-
-async fn acquire_dns_owned_permit(
-    semaphore: Arc<Semaphore>,
-    context: &'static str,
-) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
-    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, semaphore.acquire_owned())
         .await
         .map_err(|_| format!("{context} concurrency wait timeout"))?
         .map_err(|_| format!("{context} concurrency limiter is closed"))
@@ -286,6 +278,16 @@ impl ResidentDnsPlan {
 
     pub(super) async fn shutdown_forwarders(&self, deadline: time::Instant) -> Value {
         self.forwarders.shutdown(deadline).await
+    }
+
+    pub(super) async fn probe_proxy_dns_udp_health(
+        &self,
+        proxy: Arc<ResidentProxyPlan>,
+        target: SocketAddr,
+        lookup_host: &str,
+    ) -> Result<(), String> {
+        let forwarder = self.forwarders.health_proxy_udp_forwarder(target, proxy)?;
+        super::udp::probe_resident_proxy_dns_udp_with_forwarder_async(forwarder, lookup_host).await
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn reload_handle(
@@ -574,9 +576,9 @@ pub(super) async fn handle_resident_dns_local_trace_async(
     }
     let mut trace = ResidentDnsTraceSummary::from_request(plan, &request)?;
     if dns_ipversion_preference_applies(plan, &request) {
-        let (response, transport_attempts) = capture_dns_transport_trace_async(
+        let (response, transport_attempts) = capture_dns_transport_trace_async(Box::pin(
             handle_resident_dns_request_async(plan, original_dst, payload, None),
-        )
+        ))
         .await;
         let response = response?;
         trace.cache = DNS_TRACE_CACHE_UNKNOWN.to_owned();
@@ -585,16 +587,17 @@ pub(super) async fn handle_resident_dns_local_trace_async(
         trace.transport_attempts = transport_attempts;
         return Ok(trace.finish(response, DNS_TRACE_REASON_IPVERSION));
     }
-    let (result, transport_attempts) =
-        capture_dns_transport_trace_async(handle_resident_dns_request_without_preference_trace(
+    let (result, transport_attempts) = capture_dns_transport_trace_async(Box::pin(
+        handle_resident_dns_request_without_preference_trace(
             plan,
             original_dst,
             payload,
             &request,
             None,
             trace,
-        ))
-        .await;
+        ),
+    ))
+    .await;
     result.map(|mut result| {
         result.trace.transport_attempts = transport_attempts;
         result

@@ -3,7 +3,7 @@ use crate::production_runtime_owner::resident_dataplane::{
     ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
     dns::{
         ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
-        ResidentDnsUdpActorExecutor, UdpRequestIdAllocator,
+        ResidentDnsTransportOwnerObservation, ResidentDnsUdpActorExecutor, UdpRequestIdAllocator,
     },
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -14,6 +14,7 @@ mod actor;
 use self::actor::{ResidentProxyDnsUdpActorHandle, start_proxy_dns_udp_actor};
 
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxyDnsUdpForwarder {
+    owner_observation: Arc<ResidentDnsTransportOwnerObservation>,
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
     next_actor: std::sync::atomic::AtomicUsize,
@@ -87,7 +88,12 @@ impl ResidentProxyDnsUdpForwarder {
         } else {
             1
         };
+        let owner_observation = ResidentDnsTransportOwnerObservation::new(
+            Arc::clone(&metrics),
+            std::mem::size_of::<Self>(),
+        );
         Ok(Self {
+            owner_observation,
             proxy,
             original_dst,
             next_actor: std::sync::atomic::AtomicUsize::new(0),
@@ -334,6 +340,12 @@ impl ResidentProxyDnsUdpForwarder {
             "actorsClosed": closed,
             "timedOut": timed_out,
         })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn owner_observation(
+        &self,
+    ) -> Arc<ResidentDnsTransportOwnerObservation> {
+        Arc::clone(&self.owner_observation)
     }
 
     #[cfg(test)]

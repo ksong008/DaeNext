@@ -131,7 +131,9 @@ impl ResidentUdpRuntimeConfig {
                 .min(self.dns_udp_forwarder_pending_limit)
                 .max(1),
             actor_worker_threads: self.runtime_worker_threads.max(1),
-            worker_stack_bytes: self.worker_stack_bytes,
+            worker_stack_bytes: self
+                .worker_stack_bytes
+                .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
             queue_depth: self.dns_udp_forwarder_queue_depth,
             pending_limit: self.dns_udp_forwarder_pending_limit,
             attempts: self.dns_udp_forwarder_attempts,
@@ -212,7 +214,8 @@ impl ResidentDnsUdpRuntimeConfig {
             direct_shards,
             proxy_actor_limit: profile.dns_proxy_udp_actors_default(),
             actor_worker_threads: actor_worker_threads.max(1),
-            worker_stack_bytes: RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+            worker_stack_bytes: RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT
+                .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
             queue_depth: profile.dns_udp_forwarder_queue_depth_default(),
             pending_limit: profile.dns_udp_forwarder_pending_limit_default(),
             attempts: profile.dns_udp_forwarder_attempts_default(),
@@ -351,6 +354,10 @@ mod tests {
         assert_eq!(dns.direct_shards, 3);
         assert_eq!(dns.proxy_actor_limit, 6);
         assert_eq!(dns.actor_worker_threads, 2);
+        assert_eq!(
+            dns.worker_stack_bytes,
+            RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN
+        );
         assert_eq!(dns.queue_depth, 80);
         assert_eq!(dns.pending_limit, 72);
         assert_eq!(dns.attempts, 4);

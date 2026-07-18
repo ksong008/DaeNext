@@ -1,14 +1,17 @@
 use super::*;
 
+#[cfg(test)]
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::production_runtime_owner::resident_dataplane::metrics::ProxiedDoh3CleanupMetricObservation;
 use crate::production_runtime_owner::resident_dataplane::udp::ResidentProxyUdpBridgeShutdownCompletion;
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 struct ProxiedDoh3CleanupProfile {
     drain_grace: std::time::Duration,
 }
 
+#[cfg(test)]
 impl ProxiedDoh3CleanupProfile {
     const CURRENT: Self = Self {
         drain_grace: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
@@ -19,12 +22,17 @@ impl ProxiedDoh3CleanupProfile {
 pub(in super::super) struct ProxiedDoh3CleanupDeadline(time::Instant);
 
 impl ProxiedDoh3CleanupDeadline {
+    #[cfg(test)]
     pub(in super::super) fn from_profile() -> Self {
         Self(time::Instant::now() + ProxiedDoh3CleanupProfile::CURRENT.drain_grace)
     }
 
     pub(in super::super) const fn instant(self) -> time::Instant {
         self.0
+    }
+
+    pub(in super::super) const fn from_instant(deadline: time::Instant) -> Self {
+        Self(deadline)
     }
 
     #[cfg(test)]

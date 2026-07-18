@@ -504,6 +504,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
+        let health_dns = Arc::clone(&dns);
         let hysteria2_owner_registry = owner
             .hysteria2_owner_registry()
             .expect("Hysteria2 owner registry is installed before health scheduler construction");
@@ -521,6 +522,7 @@ pub(crate) fn start_resident_dataplane_workers(
                     event_file,
                     event_lock,
                     metrics,
+                    health_dns,
                     health_check_concurrency,
                     health_bootstrap_concurrency,
                     health_runtime_config,

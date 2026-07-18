@@ -6,7 +6,7 @@ mod bytes;
 mod io;
 
 pub(in crate::production_runtime_owner::resident_dataplane) use self::bytes::{
-    ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes,
+    ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsResponseBytes,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use self::io::exchange_proxy_dns_framed_stream;
 
@@ -162,7 +162,6 @@ impl ProxyDnsRequestContext {
         }
     }
 
-    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn from_deadline(
         deadline: time::Instant,
     ) -> Self {

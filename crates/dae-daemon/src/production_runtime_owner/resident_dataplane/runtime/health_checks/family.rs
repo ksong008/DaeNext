@@ -5,11 +5,12 @@ pub(super) async fn run_resident_candidate_family_health_checks(
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
     owners: ResidentTransportOwnerRegistries,
+    dns: Arc<dns::ResidentDnsPlan>,
 ) -> HealthCheckRoundStatus {
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::BackgroundHealth,
         Some(candidate.proxy.execution_plan().runtime_generation()),
-        run_resident_candidate_family_health_checks_scoped(group, candidate, stop, owners),
+        run_resident_candidate_family_health_checks_scoped(group, candidate, stop, owners, dns),
     )
     .await
 }
@@ -19,6 +20,7 @@ async fn run_resident_candidate_family_health_checks_scoped(
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
     owners: ResidentTransportOwnerRegistries,
+    dns: Arc<dns::ResidentDnsPlan>,
 ) -> HealthCheckRoundStatus {
     let tcp_results = match super::tcp_family_probe::probe_resident_candidate_tcp_families(
         candidate,
@@ -44,7 +46,7 @@ async fn run_resident_candidate_family_health_checks_scoped(
     let udp_results = match super::udp_family_probe::probe_resident_candidate_udp_families(
         candidate,
         Some(&stop),
-        owners,
+        dns,
     )
     .await
     {

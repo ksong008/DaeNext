@@ -55,15 +55,23 @@ fn queued_bytes_transition_to_pending_and_release_exactly_once() {
     );
     assert_eq!(metrics.snapshot()["proxyDnsUdpQueuedCurrent"], 1);
     assert_eq!(metrics.snapshot()["proxyDnsUdpQueuedBytesCurrent"], 1500);
-    let pending = queued.into_pending();
+    let pending = queued.into_pending(admission.try_acquire(128).unwrap(), 128);
     assert_eq!(pending.bytes(), 1500);
     assert_eq!(metrics.snapshot()["proxyDnsUdpQueuedCurrent"], 0);
     assert_eq!(metrics.snapshot()["proxyDnsUdpPendingCurrent"], 1);
     assert_eq!(metrics.snapshot()["proxyDnsUdpPendingBytesCurrent"], 1500);
-    assert_eq!(admission.current(), 1500);
+    assert_eq!(
+        metrics.snapshot()["proxyDnsUdpPendingMetadataBytesCurrent"],
+        128
+    );
+    assert_eq!(admission.current(), 1628);
     drop(pending);
     assert_eq!(metrics.snapshot()["proxyDnsUdpPendingCurrent"], 0);
     assert_eq!(metrics.snapshot()["proxyDnsUdpPendingBytesCurrent"], 0);
+    assert_eq!(
+        metrics.snapshot()["proxyDnsUdpPendingMetadataBytesCurrent"],
+        0
+    );
     assert_eq!(admission.current(), 0);
 }
 
@@ -117,7 +125,7 @@ fn pending_drop_classifies_abandoned_and_expired_bytes() {
         1500,
         context,
     )
-    .into_pending();
+    .into_pending(admission.try_acquire(64).unwrap(), 64);
     abandoned.mark_abandoned();
     drop(abandoned);
     let mut expired = ProxyDnsQueuedRequestBytes::new(
@@ -126,13 +134,14 @@ fn pending_drop_classifies_abandoned_and_expired_bytes() {
         1600,
         context,
     )
-    .into_pending();
+    .into_pending(admission.try_acquire(64).unwrap(), 64);
     expired.mark_expired();
     drop(expired);
 
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot["proxyDnsUdpPendingCurrent"], 0);
     assert_eq!(snapshot["proxyDnsUdpPendingBytesCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingMetadataBytesCurrent"], 0);
     assert_eq!(snapshot["proxyDnsUdpAbandoned"], 1);
     assert_eq!(snapshot["proxyDnsUdpAbandonedBytes"], 1500);
     assert_eq!(snapshot["proxyDnsUdpExpired"], 1);

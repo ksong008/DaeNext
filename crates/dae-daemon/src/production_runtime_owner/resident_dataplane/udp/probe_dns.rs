@@ -1,6 +1,8 @@
 use super::*;
 use std::net::{IpAddr, Ipv4Addr};
 
+use crate::production_runtime_owner::resident_dataplane::dns::ProxyDnsRequestContext;
+
 const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
 
 mod shutdown;
@@ -50,6 +52,7 @@ impl ResidentProxyUdpBridge {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown_and_join(
         mut self,
     ) -> Result<(), String> {
@@ -459,40 +462,20 @@ async fn wait_for_udp_probe_response(
         .map(|(_, response)| response)
 }
 
-pub(crate) async fn probe_resident_proxy_dns_udp_async(
-    proxy: Arc<ResidentProxyPlan>,
-    original_dst: SocketAddr,
+pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_resident_proxy_dns_udp_with_forwarder_async(
+    forwarder: Arc<ResidentProxyDnsUdpForwarder>,
     lookup_host: &str,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
 ) -> Result<(), String> {
-    proxy
-        .execution_plan()
-        .udp
-        .agreement()
-        .admit_packet_relay("background DNS UDP probe")?;
     let id = fastrand::u16(0..=u16::MAX);
     let query = build_dns_a_query(id, lookup_host)?;
-    let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
-        Arc::clone(&proxy),
-        hysteria2_owner_registry,
-        tuic_owner_registry,
-        juicity_owner_registry,
-    );
-    let dns = ResidentDnsPlan::asis(proxy.mark);
-    let mut response = executor
-        .execute(&dns, &proxy, original_dst, &query)
+    let response = forwarder
+        .exchange_with_context(
+            &query,
+            ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
+        )
         .await
-        .map(|(_, response)| response);
-    if matches!(response.as_ref(), Ok(response) if !response.reply_forwarded) {
-        response = wait_for_udp_probe_response(&mut executor).await;
-    }
-    executor.shutdown().await;
-    let mut response = response?;
-    let expectation = response.fixed_target_expectation(original_dst);
-    let payload = take_udp_response_for_fixed_target(&mut response, expectation)?;
-    dns_a_response_has_answer(id, &payload)
+        .map_err(|error| error.to_string())?;
+    dns_a_response_has_answer(id, &response)
 }
 
 fn take_udp_response_for_fixed_target(

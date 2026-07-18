@@ -9,27 +9,55 @@ use super::wire::{
     read_dns_tcp_message_async, resident_dns_quic_client_config, restore_dns_response_id,
     write_dns_tcp_message_async,
 };
+use crate::production_runtime_owner::resident_dataplane::tcp::{
+    inherit_quic_endpoint_observation, wait_quic_endpoint_idle_after_close,
+};
+use serde_json::{Value, json};
 
 mod proxy;
 
 use self::proxy::forward_dns_quic_to_proxy_async;
+pub(super) use self::proxy::shutdown_cached_proxy_dns_quic;
 
 async fn forward_dns_quic_cached(
     forwarder: Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
     payload: &[u8],
+    context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, String> {
     let permits = {
-        let forwarder = forwarder.lock().await;
+        let forwarder = lock_dns_quic_forwarder(&forwarder, context, "read stream permits").await?;
         Arc::clone(&forwarder.permits)
     };
-    let _permit = acquire_dns_owned_permit(permits, "DNS QUIC stream pool").await?;
-    let (connection, upstream) = cached_dns_quic_connection(&forwarder).await?;
-    match forward_dns_over_quic_connection(&upstream, &connection, payload).await {
+    let _permit = context
+        .run(
+            ProxyDnsRequestStage::OwnerAcquire,
+            ProxyDnsRequestFailure::Capacity,
+            permits.acquire_owned(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let (connection, upstream) = cached_dns_quic_connection(&forwarder, context).await?;
+    let exchange = context
+        .run(
+            ProxyDnsRequestStage::Send,
+            ProxyDnsRequestFailure::Network,
+            forward_dns_over_quic_connection(&upstream, &connection, payload),
+        )
+        .await;
+    match exchange {
         Ok(response) => Ok(response),
         Err(first_err) => {
-            close_cached_dns_quic_connection(&forwarder).await;
-            let (connection, upstream) = cached_dns_quic_connection(&forwarder).await?;
-            forward_dns_over_quic_connection(&upstream, &connection, payload)
+            close_cached_dns_quic_connection(&forwarder, connection.stable_id(), context).await?;
+            context
+                .ensure(ProxyDnsRequestStage::Retry)
+                .map_err(|error| error.to_string())?;
+            let (connection, upstream) = cached_dns_quic_connection(&forwarder, context).await?;
+            context
+                .run(
+                    ProxyDnsRequestStage::Send,
+                    ProxyDnsRequestFailure::Network,
+                    forward_dns_over_quic_connection(&upstream, &connection, payload),
+                )
                 .await
                 .map_err(|retry_err| {
                     format!("DNS QUIC cached forwarder retry failed after {first_err}: {retry_err}")
@@ -40,26 +68,48 @@ async fn forward_dns_quic_cached(
 
 async fn cached_dns_quic_connection(
     forwarder: &Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
+    context: ProxyDnsRequestContext,
 ) -> Result<(quinn::Connection, ResidentDnsUpstream), String> {
-    {
-        let forwarder = forwarder.lock().await;
+    let task_executor = {
+        let forwarder = lock_dns_quic_forwarder(forwarder, context, "read connection").await?;
+        if forwarder.closing {
+            return Err("DNS QUIC forwarder is closing".to_owned());
+        }
         if let Some(connection) = forwarder.connection.as_ref() {
             return Ok((connection.clone(), forwarder.upstream.clone()));
         }
-    }
+        Arc::clone(&forwarder.task_executor)
+    };
+    let task_forwarder = Arc::clone(forwarder);
+    task_executor
+        .execute_owned_task(inherit_quic_endpoint_observation(async move {
+            open_cached_dns_quic_connection(&task_forwarder, context).await
+        }))
+        .await?
+}
+
+async fn open_cached_dns_quic_connection(
+    forwarder: &Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
+    context: ProxyDnsRequestContext,
+) -> Result<(quinn::Connection, ResidentDnsUpstream), String> {
     let open_lock = {
-        let forwarder = forwarder.lock().await;
+        let forwarder = lock_dns_quic_forwarder(forwarder, context, "read open lock").await?;
         Arc::clone(&forwarder.open_lock)
     };
-    let _open_guard = open_lock.lock().await;
+    let _open_guard = time::timeout_at(context.deadline(), open_lock.lock())
+        .await
+        .map_err(|_| "DNS QUIC open lock absolute deadline elapsed".to_owned())?;
     {
-        let forwarder = forwarder.lock().await;
+        let forwarder = lock_dns_quic_forwarder(forwarder, context, "recheck connection").await?;
+        if forwarder.closing {
+            return Err("DNS QUIC forwarder is closing".to_owned());
+        }
         if let Some(connection) = forwarder.connection.as_ref() {
             return Ok((connection.clone(), forwarder.upstream.clone()));
         }
     }
     let (upstream, generation, mark, fixed_remote) = {
-        let forwarder = forwarder.lock().await;
+        let forwarder = lock_dns_quic_forwarder(forwarder, context, "read endpoint plan").await?;
         (
             forwarder.upstream.clone(),
             forwarder.generation,
@@ -70,7 +120,14 @@ async fn cached_dns_quic_connection(
     let mut failures = Vec::new();
     let remotes = match fixed_remote {
         Some(remote) => vec![remote],
-        None => resolved_upstream_targets(&upstream).await?,
+        None => context
+            .run(
+                ProxyDnsRequestStage::OwnerAcquire,
+                ProxyDnsRequestFailure::Network,
+                resolved_upstream_targets(&upstream),
+            )
+            .await
+            .map_err(|error| error.to_string())?,
     };
     for remote in remotes {
         let open_context = configured_dns_quic_endpoint_context(
@@ -85,10 +142,34 @@ async fn cached_dns_quic_connection(
             "DNS QUIC handshake timeout",
             "connect DNS QUIC upstream",
         );
-        match connect_dns_quic_endpoint_async(&upstream, remote, mark, connect_contract).await {
+        let connected = context
+            .run(
+                ProxyDnsRequestStage::Connect,
+                ProxyDnsRequestFailure::Network,
+                connect_dns_quic_endpoint_async(&upstream, remote, mark, connect_contract),
+            )
+            .await;
+        match connected {
             Ok((endpoint, connection)) => {
                 endpoint.mark_ready();
-                let mut forwarder = forwarder.lock().await;
+                let mut forwarder =
+                    match lock_dns_quic_forwarder(forwarder, context, "install connection").await {
+                        Ok(forwarder) => forwarder,
+                        Err(error) => {
+                            connection.close(0_u32.into(), b"DNS QUIC install deadline elapsed");
+                            endpoint.close(0_u32.into(), b"DNS QUIC install deadline elapsed");
+                            let _ =
+                                time::timeout_at(context.deadline(), endpoint.wait_idle()).await;
+                            return Err(error);
+                        }
+                    };
+                if forwarder.closing {
+                    drop(forwarder);
+                    connection.close(0_u32.into(), b"DNS QUIC forwarder closing");
+                    endpoint.close(0_u32.into(), b"DNS QUIC forwarder closing");
+                    wait_quic_endpoint_idle_after_close(&endpoint).await;
+                    return Err("DNS QUIC forwarder closed during connect".to_owned());
+                }
                 forwarder.endpoint = Some(endpoint);
                 forwarder.connection = Some(connection.clone());
                 return Ok((connection, upstream));
@@ -103,9 +184,77 @@ async fn cached_dns_quic_connection(
     ))
 }
 
-async fn close_cached_dns_quic_connection(forwarder: &Arc<AsyncMutex<ResidentDnsQuicForwarder>>) {
-    let mut forwarder = forwarder.lock().await;
-    forwarder.close_connection();
+async fn close_cached_dns_quic_connection(
+    forwarder: &Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
+    failed_connection_id: usize,
+    context: ProxyDnsRequestContext,
+) -> Result<(), String> {
+    let endpoint = {
+        let mut forwarder =
+            lock_dns_quic_forwarder(forwarder, context, "reset failed connection").await?;
+        if forwarder
+            .connection
+            .as_ref()
+            .is_none_or(|connection| connection.stable_id() != failed_connection_id)
+        {
+            return Ok(());
+        }
+        if let Some(connection) = forwarder.connection.take() {
+            connection.close(0_u32.into(), b"DNS QUIC cached connection failed");
+        }
+        forwarder.endpoint.take()
+    };
+    if let Some(endpoint) = endpoint {
+        endpoint.close(0_u32.into(), b"DNS QUIC cached connection failed");
+        time::timeout_at(context.deadline(), endpoint.wait_idle())
+            .await
+            .map_err(|_| "DNS QUIC reset endpoint idle deadline elapsed".to_owned())?;
+    }
+    Ok(())
+}
+
+async fn lock_dns_quic_forwarder<'a>(
+    forwarder: &'a Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
+    context: ProxyDnsRequestContext,
+    action: &str,
+) -> Result<tokio::sync::MutexGuard<'a, ResidentDnsQuicForwarder>, String> {
+    time::timeout_at(context.deadline(), forwarder.lock())
+        .await
+        .map_err(|_| format!("DNS QUIC forwarder {action} absolute deadline elapsed"))
+}
+
+pub(super) async fn shutdown_cached_dns_quic(
+    forwarder: Arc<AsyncMutex<ResidentDnsQuicForwarder>>,
+    deadline: time::Instant,
+) -> Value {
+    let state = time::timeout_at(deadline, forwarder.lock()).await;
+    let Ok(mut state) = state else {
+        return json!({
+            "status": "fail",
+            "transport": "doq",
+            "error": "DNS QUIC forwarder lock deadline elapsed",
+        });
+    };
+    state.closing = true;
+    state.permits.close();
+    let connection = state.connection.take();
+    let endpoint = state.endpoint.take();
+    drop(state);
+    if let Some(connection) = connection {
+        connection.close(0_u32.into(), b"DNS QUIC cache shutdown");
+    }
+    let mut idle = true;
+    if let Some(endpoint) = endpoint {
+        endpoint.close(0_u32.into(), b"DNS QUIC cache shutdown");
+        idle = time::timeout_at(deadline, endpoint.wait_idle())
+            .await
+            .is_ok();
+    }
+    json!({
+        "status": if idle { "pass" } else { "fail" },
+        "transport": "doq",
+        "endpointIdle": idle,
+    })
 }
 
 pub(super) async fn forward_dns_quic_async(
@@ -119,7 +268,7 @@ pub(super) async fn forward_dns_quic_async(
         let forwarder = forwarders
             .quic_forwarder(upstream, plan.mark)
             .map_err(ResidentDnsTransportError::message)?;
-        return forward_dns_quic_cached(forwarder, payload)
+        return forward_dns_quic_cached(forwarder, payload, context)
             .await
             .map_err(ResidentDnsTransportError::message);
     }
@@ -163,39 +312,24 @@ async fn forward_dns_quic_to_routed_target_async(
     let started_at = std::time::Instant::now();
     let target = remote.target;
     let route = dns_transport_route_name(&remote.selection);
-    let result = match remote.selection {
+    let result = match &remote.selection {
         ResidentDnsUpstreamSelection::Direct { mark } => {
             let forwarder = forwarders
-                .quic_forwarder_for_target(
-                    upstream,
-                    target,
-                    mark,
-                    &ResidentDnsUpstreamSelection::Direct { mark },
-                )
+                .quic_forwarder_for_target(upstream, target, *mark, &remote.selection)
                 .map_err(ResidentDnsTransportError::message)?;
-            forward_dns_quic_cached(forwarder, payload)
+            forward_dns_quic_cached(forwarder, payload, context)
                 .await
                 .map_err(|err| format!("{target}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => forward_dns_quic_to_proxy_async(
-            upstream,
-            target,
-            payload,
-            proxy,
-            ResidentTransportOwnerRegistries::new(
-                Some(
-                    forwarders
-                        .hysteria2_owner_registry()
-                        .map_err(ResidentDnsTransportError::message)?,
-                ),
-                forwarders.tuic_owner_registry.clone(),
-                forwarders.juicity_owner_registry.clone(),
-            ),
-            context,
-        )
-        .await
-        .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target))),
+        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+            let forwarder = forwarders
+                .proxy_quic_forwarder(upstream, target, Arc::clone(proxy), &remote.selection)
+                .map_err(ResidentDnsTransportError::message)?;
+            forward_dns_quic_to_proxy_async(upstream, payload, forwarder, context)
+                .await
+                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target)))
+        }
     };
     record_dns_transport_trace(ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
@@ -207,14 +341,6 @@ async fn forward_dns_quic_to_routed_target_async(
         error: result.as_ref().err().map(ToString::to_string),
     });
     result
-}
-
-impl ResidentDnsQuicForwarder {
-    fn close_connection(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            connection.close(0_u32.into(), b"dns-query failed");
-        }
-    }
 }
 
 async fn forward_dns_over_quic_connection(
@@ -362,14 +488,4 @@ pub(super) fn managed_dns_quic_endpoint_context(
             remote.as_bytes(),
         ],
     )
-}
-
-pub(super) fn append_dns_proxy_udp_bridge_error(
-    err: String,
-    bridge: &ResidentProxyUdpBridge,
-) -> String {
-    match bridge.last_error() {
-        Some(bridge_err) => format!("{err}; proxy UDP bridge: {bridge_err}"),
-        None => err,
-    }
 }

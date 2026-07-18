@@ -7,6 +7,8 @@ mod plain;
 mod quic;
 mod route;
 mod tcp_udp;
+#[cfg(test)]
+mod test_support;
 mod tls_https;
 pub(in crate::production_runtime_owner::resident_dataplane) mod udp_multiplex;
 mod wire;

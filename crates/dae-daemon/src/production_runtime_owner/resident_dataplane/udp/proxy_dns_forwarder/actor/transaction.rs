@@ -3,7 +3,7 @@ use dae_dns::DnsPacketView;
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::dns::{
     ProxyDnsPendingRequestBytes, ProxyDnsRequestContext, ProxyDnsRequestError,
-    ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
+    ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage, ProxyDnsResponseBytes,
 };
 
 mod response;
@@ -17,7 +17,8 @@ pub(super) struct PendingProxyDnsUdpRequest {
     pub(super) context: ProxyDnsRequestContext,
     questions: Vec<PendingProxyDnsQuestion>,
     pub(super) bytes: ProxyDnsPendingRequestBytes,
-    pub(super) response: tokio::sync::oneshot::Sender<Result<Vec<u8>, ProxyDnsRequestError>>,
+    pub(super) response:
+        tokio::sync::oneshot::Sender<Result<ProxyDnsResponseBytes, ProxyDnsRequestError>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,7 +46,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
     next_generation: &mut u64,
     executor: &mut Option<Box<UdpSessionExecutor>>,
     runtime_config: &ResidentDnsUdpRuntimeConfig,
-    metrics: &ResidentDataplaneMetrics,
+    metrics: &Arc<ResidentDataplaneMetrics>,
     hysteria2_owner_registry: Option<&Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<&TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<&JuicityOwnerRegistryHandle>,
@@ -97,6 +98,35 @@ pub(super) async fn handle_proxy_dns_udp_request(
             qclass: question.qclass(),
         })
         .collect::<Vec<_>>();
+    let pending_metadata_bytes = std::mem::size_of::<PendingProxyDnsUdpRequest>()
+        .saturating_add(std::mem::size_of::<PendingProxyDnsDeadline>())
+        .saturating_add(
+            questions
+                .capacity()
+                .saturating_mul(std::mem::size_of::<PendingProxyDnsQuestion>()),
+        )
+        .saturating_add(questions.iter().fold(0_usize, |bytes, question| {
+            bytes.saturating_add(question.qname_wire.capacity())
+        }));
+    let pending_metadata_permit = match runtime_config
+        .payload_admission
+        .try_acquire(pending_metadata_bytes)
+    {
+        Ok(permit) => permit,
+        Err(error) => {
+            metrics.dns_udp_pending_rejected();
+            request.bytes.mark_rejected();
+            let _ = request.response.send(Err(ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::Pending,
+                    ProxyDnsRequestFailure::Capacity,
+                    format!(
+                        "proxied DNS UDP pending metadata byte limit reached: requested={}, current={}, limit={}",
+                        error.requested, error.current, error.limit
+                    ),
+                )));
+            return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
+        }
+    };
 
     if let Err(error) = request.context.ensure(ProxyDnsRequestStage::Identifier) {
         request.bytes.mark_expired();
@@ -130,7 +160,9 @@ pub(super) async fn handle_proxy_dns_udp_request(
         generation,
         context: request.context,
         questions,
-        bytes: request.bytes.into_pending(),
+        bytes: request
+            .bytes
+            .into_pending(pending_metadata_permit, pending_metadata_bytes),
         response: request.response,
     };
 
@@ -244,6 +276,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
             original_dst,
             response,
             metrics,
+            &runtime_config.payload_admission,
         )?;
     }
     if pending.contains_key(&upstream_id) {

@@ -6,6 +6,13 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
     allocator: Option<&AllocatorStatsSnapshot>,
     cgroup_memory: &Value,
 ) -> Value {
+    let resident_metrics = runtime.pointer("/residentDataplane/metrics");
+    let resident_metric = |name: &str| {
+        resident_metrics
+            .and_then(|metrics| metrics.get(name))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
     let quic = runtime
         .pointer("/residentDataplane/metrics/quicEndpoints")
         .cloned()
@@ -102,6 +109,22 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
             "currentUdpQueuedBytes": hysteria2["currentUdpQueuedBytes"].clone(),
             "budget": hysteria2["budget"].clone(),
         },
+        "dnsTransportOwners": {
+            "current": resident_metric("dnsTransportOwnersCurrent"),
+            "maximum": resident_metric("dnsTransportOwnersMaximum"),
+            "evictedCurrent": resident_metric("dnsTransportOwnersEvictedCurrent"),
+            "evictedMaximum": resident_metric("dnsTransportOwnersEvictedMaximum"),
+            "ownerStateBytesCurrent": resident_metric("dnsTransportOwnerBytesCurrent"),
+            "ownerStateBytesMaximum": resident_metric("dnsTransportOwnerBytesMaximum"),
+        },
+        "proxyDnsUdpBuffers": {
+            "queuedBytesCurrent": resident_metric("proxyDnsUdpQueuedBytesCurrent"),
+            "pendingPayloadBytesCurrent": resident_metric("proxyDnsUdpPendingBytesCurrent"),
+            "pendingMetadataBytesCurrent": resident_metric("proxyDnsUdpPendingMetadataBytesCurrent"),
+            "pendingMetadataBytesMaximum": resident_metric("proxyDnsUdpPendingMetadataBytesMaximum"),
+            "responseBytesCurrent": resident_metric("proxyDnsUdpResponseBytesCurrent"),
+            "responseBytesMaximum": resident_metric("proxyDnsUdpResponseBytesMaximum"),
+        },
         "generationOverlap": {
             "active": generation_overlap_active,
             "runtimeGeneration": runtime["runtimeGeneration"].clone(),
@@ -121,6 +144,8 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
             "rssAllocatorMapAndCgroupMustNotBeSummed": true,
             "allocatorLiveIsNotAnonymousRss": true,
             "mapVmallocIsNotAllocatorResident": true,
+            "dnsOwnerStateBytesAreALowerBound": true,
+            "dnsQuicEndpointChargesAreReportedSeparately": true,
         },
     })
 }

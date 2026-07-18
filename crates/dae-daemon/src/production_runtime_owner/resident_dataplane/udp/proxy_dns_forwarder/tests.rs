@@ -1,6 +1,7 @@
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpSettingsPlan;
+use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadAdmission;
 use dae_dns::DnsPacketView;
 use dae_outbound::shadowsocks::{decode_udp_packet, encode_udp_packet};
 use std::{
@@ -216,6 +217,60 @@ async fn expired_proxy_dns_request_is_rejected_before_actor_creation() {
     assert_eq!(snapshot["dnsUdpActorsOpened"], 0);
     assert_eq!(snapshot["proxyDnsUdpQueuedCurrent"], 0);
     assert_eq!(snapshot["proxyDnsUdpPendingCurrent"], 0);
+    assert_eq!(payload_admission.current(), 0);
+
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    assert_eq!(forwarder.shutdown(deadline).await["status"], "pass");
+    assert_eq!(actor_executor.shutdown(deadline).await["status"], "pass");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_metadata_admission_fails_before_the_network_executor_opens() {
+    let query = dns_query(0x5001, "metadata-limit.example");
+    let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    runtime.proxy_actor_limit = 1;
+    runtime.actor_worker_threads = 1;
+    runtime.attempts = 1;
+    runtime.payload_admission = ResidentUdpPayloadAdmission::new(0, query.len() + 1);
+    let payload_admission = runtime.payload_admission.clone();
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let actor_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+        runtime.clone(),
+        Arc::clone(&metrics),
+    ));
+    let forwarder = ResidentProxyDnsUdpForwarder::new(
+        Arc::new(proxy_plan(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9,
+        ))),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+        runtime,
+        Arc::clone(&metrics),
+        Arc::clone(&actor_executor),
+    )
+    .unwrap();
+
+    let error = forwarder
+        .exchange_with_context(
+            &query,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.stage(), ProxyDnsRequestStage::Pending);
+    assert_eq!(error.failure(), ProxyDnsRequestFailure::Capacity);
+    assert!(
+        error
+            .to_string()
+            .contains("pending metadata byte limit reached"),
+        "{error}"
+    );
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot["proxyDnsUdpExecutorsOpened"], 0);
+    assert_eq!(snapshot["proxyDnsUdpQueuedCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingMetadataBytesCurrent"], 0);
     assert_eq!(payload_admission.current(), 0);
 
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
@@ -479,7 +534,11 @@ async fn one_proxy_dns_udp_actor_multiplexes_out_of_order_responses_without_head
         while_first_is_pending["proxyDnsUdpPendingBytesCurrent"],
         first_len
     );
-    assert_eq!(payload_admission.current(), first_len);
+    let pending_metadata = while_first_is_pending["proxyDnsUdpPendingMetadataBytesCurrent"]
+        .as_u64()
+        .unwrap() as usize;
+    assert!(pending_metadata > 0);
+    assert_eq!(payload_admission.current(), first_len + pending_metadata);
 
     release_first.send(()).unwrap();
     let first_response = time::timeout(Duration::from_secs(1), first_response)
@@ -511,6 +570,8 @@ async fn one_proxy_dns_udp_actor_multiplexes_out_of_order_responses_without_head
     assert_eq!(snapshot["proxyDnsUdpQueuedBytesCurrent"], 0);
     assert_eq!(snapshot["proxyDnsUdpPendingCurrent"], 0);
     assert_eq!(snapshot["proxyDnsUdpPendingBytesCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingMetadataBytesCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpResponseBytesCurrent"], 0);
     assert_eq!(payload_admission.current(), 0);
 
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
@@ -578,6 +639,20 @@ async fn proxy_dns_udp_preserves_large_responses_and_releases_payload_bytes() {
     assert_eq!(snapshot["proxyDnsUdpQueuedBytesCurrent"], 0);
     assert_eq!(snapshot["proxyDnsUdpPendingCurrent"], 0);
     assert_eq!(snapshot["proxyDnsUdpPendingBytesCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpPendingMetadataBytesCurrent"], 0);
+    assert_eq!(snapshot["proxyDnsUdpResponseBytesCurrent"], 0);
+    assert!(
+        snapshot["proxyDnsUdpPendingMetadataBytesMaximum"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        snapshot["proxyDnsUdpResponseBytesMaximum"]
+            .as_u64()
+            .unwrap()
+            >= 4096
+    );
     assert_eq!(payload_admission.current(), 0);
 
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;

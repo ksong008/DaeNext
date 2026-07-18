@@ -10,10 +10,13 @@ use super::route::{
     select_dns_upstream_targets,
 };
 use super::wire::{doh_request_target, restore_dns_response_id};
+use crate::production_runtime_owner::resident_dataplane::tcp::inherit_quic_endpoint_observation;
+use serde_json::{Value, json};
 
 mod proxied;
 
 use self::proxied::forward_dns_h3_to_proxy_async;
+pub(super) use self::proxied::shutdown_cached_proxy_dns_h3;
 
 pub(super) async fn forward_dns_h3_async(
     upstream: &ResidentDnsUpstream,
@@ -64,26 +67,19 @@ async fn forward_dns_h3_to_routed_target_async(
             let forwarder = forwarders
                 .h3_forwarder(upstream, target, *mark, &remote.selection)
                 .map_err(ResidentDnsTransportError::message)?;
-            forward_dns_h3_cached(upstream, forwarder, payload)
+            forward_dns_h3_cached(upstream, forwarder, payload, context)
                 .await
                 .map_err(|err| format!("{target}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => forward_dns_h3_to_proxy_async(
-            upstream,
-            target,
-            payload,
-            Arc::clone(proxy),
-            Arc::clone(&forwarders.metrics),
-            forwarders
-                .hysteria2_owner_registry()
-                .map_err(ResidentDnsTransportError::message)?,
-            forwarders.tuic_owner_registry.clone(),
-            forwarders.juicity_owner_registry.clone(),
-            context,
-        )
-        .await
-        .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target))),
+        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+            let forwarder = forwarders
+                .proxy_h3_forwarder(upstream, target, Arc::clone(proxy), &remote.selection)
+                .map_err(ResidentDnsTransportError::message)?;
+            forward_dns_h3_to_proxy_async(upstream, payload, forwarder, context)
+                .await
+                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target)))
+        }
     };
     record_dns_transport_trace(ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
@@ -97,36 +93,46 @@ async fn forward_dns_h3_to_routed_target_async(
     result
 }
 
-impl ResidentDnsH3Forwarder {
-    fn close(&mut self) {
-        self.client = None;
-        if let Some(connection) = self.connection.take() {
-            connection.close(0_u32.into(), b"dns-query failed");
-        }
-        self.endpoint = None;
-        if let Some(task) = self.driver_task.take() {
-            task.abort();
-        }
-    }
-}
-
 async fn forward_dns_h3_cached(
     upstream: &ResidentDnsUpstream,
     forwarder: Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
     payload: &[u8],
+    context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, String> {
     let permits = {
-        let forwarder = forwarder.lock().await;
+        let forwarder = lock_dns_h3_forwarder(&forwarder, context, "read stream permits").await?;
         Arc::clone(&forwarder.permits)
     };
-    let _permit = acquire_dns_owned_permit(permits, "DNS H3 stream pool").await?;
-    let mut client = cached_dns_h3_client(&forwarder).await?;
-    match forward_dns_h3_with_client_async(upstream, payload, &mut client).await {
+    let _permit = context
+        .run(
+            ProxyDnsRequestStage::OwnerAcquire,
+            ProxyDnsRequestFailure::Capacity,
+            permits.acquire_owned(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let (mut client, connection_id) = cached_dns_h3_client(&forwarder, context).await?;
+    let exchange = context
+        .run(
+            ProxyDnsRequestStage::Send,
+            ProxyDnsRequestFailure::Network,
+            forward_dns_h3_with_client_async(upstream, payload, &mut client),
+        )
+        .await;
+    match exchange {
         Ok(response) => Ok(response),
         Err(first_err) => {
-            close_cached_dns_h3_client(&forwarder).await;
-            let mut client = cached_dns_h3_client(&forwarder).await?;
-            forward_dns_h3_with_client_async(upstream, payload, &mut client)
+            reset_cached_dns_h3_client(&forwarder, connection_id, context).await?;
+            context
+                .ensure(ProxyDnsRequestStage::Retry)
+                .map_err(|error| error.to_string())?;
+            let (mut client, _) = cached_dns_h3_client(&forwarder, context).await?;
+            context
+                .run(
+                    ProxyDnsRequestStage::Send,
+                    ProxyDnsRequestFailure::Network,
+                    forward_dns_h3_with_client_async(upstream, payload, &mut client),
+                )
                 .await
                 .map_err(|retry_err| {
                     format!("DNS H3 cached forwarder retry failed after {first_err}: {retry_err}")
@@ -137,26 +143,52 @@ async fn forward_dns_h3_cached(
 
 async fn cached_dns_h3_client(
     forwarder: &Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
-) -> Result<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>, String> {
-    {
-        let forwarder = forwarder.lock().await;
-        if let Some(client) = forwarder.client.as_ref() {
-            return Ok(client.clone());
+    context: ProxyDnsRequestContext,
+) -> Result<(h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>, usize), String> {
+    let task_executor = {
+        let forwarder = lock_dns_h3_forwarder(forwarder, context, "read client").await?;
+        if forwarder.closing {
+            return Err("DNS H3 forwarder is closing".to_owned());
         }
-    }
+        if let (Some(client), Some(connection)) =
+            (forwarder.client.as_ref(), forwarder.connection.as_ref())
+        {
+            return Ok((client.clone(), connection.stable_id()));
+        }
+        Arc::clone(&forwarder.task_executor)
+    };
+    let task_forwarder = Arc::clone(forwarder);
+    task_executor
+        .execute_owned_task(inherit_quic_endpoint_observation(async move {
+            open_cached_dns_h3_client(&task_forwarder, context).await
+        }))
+        .await?
+}
+
+async fn open_cached_dns_h3_client(
+    forwarder: &Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
+    context: ProxyDnsRequestContext,
+) -> Result<(h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>, usize), String> {
     let open_lock = {
-        let forwarder = forwarder.lock().await;
+        let forwarder = lock_dns_h3_forwarder(forwarder, context, "read open lock").await?;
         Arc::clone(&forwarder.open_lock)
     };
-    let _open_guard = open_lock.lock().await;
+    let _open_guard = time::timeout_at(context.deadline(), open_lock.lock())
+        .await
+        .map_err(|_| "DNS H3 open lock absolute deadline elapsed".to_owned())?;
     {
-        let forwarder = forwarder.lock().await;
-        if let Some(client) = forwarder.client.as_ref() {
-            return Ok(client.clone());
+        let forwarder = lock_dns_h3_forwarder(forwarder, context, "recheck client").await?;
+        if forwarder.closing {
+            return Err("DNS H3 forwarder is closing".to_owned());
+        }
+        if let (Some(client), Some(connection)) =
+            (forwarder.client.as_ref(), forwarder.connection.as_ref())
+        {
+            return Ok((client.clone(), connection.stable_id()));
         }
     }
     let (upstream, generation, target, mark) = {
-        let forwarder = forwarder.lock().await;
+        let forwarder = lock_dns_h3_forwarder(forwarder, context, "read endpoint plan").await?;
         (
             forwarder.upstream.clone(),
             forwarder.generation,
@@ -176,40 +208,163 @@ async fn cached_dns_h3_client(
         "DNS H3 handshake timeout",
         "connect DNS H3 upstream",
     );
-    let (endpoint, connection) =
-        connect_dns_quic_endpoint_async(&upstream, target, mark, connect_contract).await?;
+    let (endpoint, connection) = context
+        .run(
+            ProxyDnsRequestStage::Connect,
+            ProxyDnsRequestFailure::Network,
+            connect_dns_quic_endpoint_async(&upstream, target, mark, connect_contract),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
     let h3_connection = h3_quinn::Connection::new(connection.clone());
-    let h3_client = match time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        h3::client::new(h3_connection),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(|err| format!("create DNS H3 client: {err:?}")),
-        Err(_) => Err("create DNS H3 client timeout".to_owned()),
-    };
+    let h3_client = context
+        .run(
+            ProxyDnsRequestStage::Authenticate,
+            ProxyDnsRequestFailure::Network,
+            h3::client::new(h3_connection),
+        )
+        .await
+        .map_err(|error| error.to_string());
     let (mut driver, client) = match h3_client {
         Ok(client) => client,
         Err(error) => {
             endpoint.mark_failed();
+            connection.close(0_u32.into(), b"DNS H3 client creation failed");
+            endpoint.close(0_u32.into(), b"DNS H3 client creation failed");
+            let _ = time::timeout_at(context.deadline(), endpoint.wait_idle()).await;
             return Err(error);
         }
     };
+    let connection_id = connection.stable_id();
     endpoint.mark_ready();
     let driver_task = tokio::spawn(async move {
         let _ = poll_fn(|cx| driver.poll_close(cx)).await;
     });
-    let mut forwarder = forwarder.lock().await;
+    let mut forwarder = match lock_dns_h3_forwarder(forwarder, context, "install client").await {
+        Ok(forwarder) => forwarder,
+        Err(error) => {
+            drop(client);
+            connection.close(0_u32.into(), b"DNS H3 install deadline elapsed");
+            endpoint.close(0_u32.into(), b"DNS H3 install deadline elapsed");
+            driver_task.abort();
+            let _ = time::timeout_at(context.deadline(), async {
+                let _ = driver_task.await;
+                endpoint.wait_idle().await;
+            })
+            .await;
+            return Err(error);
+        }
+    };
+    if forwarder.closing {
+        drop(forwarder);
+        drop(client);
+        connection.close(0_u32.into(), b"DNS H3 forwarder closing");
+        endpoint.close(0_u32.into(), b"DNS H3 forwarder closing");
+        driver_task.abort();
+        let _ = time::timeout_at(context.deadline(), async {
+            let _ = driver_task.await;
+            endpoint.wait_idle().await;
+        })
+        .await;
+        return Err("DNS H3 forwarder closed during connect".to_owned());
+    }
     forwarder.endpoint = Some(endpoint);
     forwarder.connection = Some(connection);
     forwarder.client = Some(client.clone());
     forwarder.driver_task = Some(driver_task);
-    Ok(client)
+    Ok((client, connection_id))
 }
 
-async fn close_cached_dns_h3_client(forwarder: &Arc<AsyncMutex<ResidentDnsH3Forwarder>>) {
-    let mut forwarder = forwarder.lock().await;
-    forwarder.close();
+async fn reset_cached_dns_h3_client(
+    forwarder: &Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
+    failed_connection_id: usize,
+    context: ProxyDnsRequestContext,
+) -> Result<(), String> {
+    let (connection, endpoint, driver_task) = {
+        let mut forwarder =
+            lock_dns_h3_forwarder(forwarder, context, "reset failed client").await?;
+        if forwarder
+            .connection
+            .as_ref()
+            .is_none_or(|connection| connection.stable_id() != failed_connection_id)
+        {
+            return Ok(());
+        }
+        forwarder.client = None;
+        (
+            forwarder.connection.take(),
+            forwarder.endpoint.take(),
+            forwarder.driver_task.take(),
+        )
+    };
+    if let Some(connection) = connection {
+        connection.close(0_u32.into(), b"DNS H3 cached connection failed");
+    }
+    if let Some(mut task) = driver_task {
+        task.abort();
+        let _ = time::timeout_at(context.deadline(), &mut task)
+            .await
+            .map_err(|_| "DNS H3 reset driver join deadline elapsed".to_owned())?;
+    }
+    if let Some(endpoint) = endpoint {
+        endpoint.close(0_u32.into(), b"DNS H3 cached connection failed");
+        time::timeout_at(context.deadline(), endpoint.wait_idle())
+            .await
+            .map_err(|_| "DNS H3 reset endpoint idle deadline elapsed".to_owned())?;
+    }
+    Ok(())
+}
+
+async fn lock_dns_h3_forwarder<'a>(
+    forwarder: &'a Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
+    context: ProxyDnsRequestContext,
+    action: &str,
+) -> Result<tokio::sync::MutexGuard<'a, ResidentDnsH3Forwarder>, String> {
+    time::timeout_at(context.deadline(), forwarder.lock())
+        .await
+        .map_err(|_| format!("DNS H3 forwarder {action} absolute deadline elapsed"))
+}
+
+pub(super) async fn shutdown_cached_dns_h3(
+    forwarder: Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
+    deadline: time::Instant,
+) -> Value {
+    let state = time::timeout_at(deadline, forwarder.lock()).await;
+    let Ok(mut state) = state else {
+        return json!({
+            "status": "fail",
+            "transport": "doh3",
+            "error": "DNS H3 forwarder lock deadline elapsed",
+        });
+    };
+    state.closing = true;
+    state.permits.close();
+    state.client = None;
+    let connection = state.connection.take();
+    let endpoint = state.endpoint.take();
+    let driver_task = state.driver_task.take();
+    drop(state);
+    if let Some(connection) = connection {
+        connection.close(0_u32.into(), b"DNS H3 cache shutdown");
+    }
+    let mut driver_joined = true;
+    if let Some(mut task) = driver_task {
+        task.abort();
+        driver_joined = time::timeout_at(deadline, &mut task).await.is_ok();
+    }
+    let mut endpoint_idle = true;
+    if let Some(endpoint) = endpoint {
+        endpoint.close(0_u32.into(), b"DNS H3 cache shutdown");
+        endpoint_idle = time::timeout_at(deadline, endpoint.wait_idle())
+            .await
+            .is_ok();
+    }
+    json!({
+        "status": if endpoint_idle && driver_joined { "pass" } else { "fail" },
+        "transport": "doh3",
+        "endpointIdle": endpoint_idle,
+        "driverJoined": driver_joined,
+    })
 }
 
 async fn forward_dns_h3_with_client_async(

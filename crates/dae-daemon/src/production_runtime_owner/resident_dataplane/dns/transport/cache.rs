@@ -14,56 +14,93 @@ impl ResidentDnsForwarderCache {
                 "alreadyClosed": true,
             });
         }
-        let entries = match self.state.lock() {
-            Ok(mut state) => {
-                state.lru.clear();
-                std::mem::take(&mut state.entries)
-            }
-            Err(_) => {
+        let (entries, retired, health_entries, health_retired) = {
+            let Ok(mut state) = self.state.lock() else {
                 return json!({
                     "status": "fail",
                     "generation": self.udp_runtime.generation,
                     "error": "resident DNS forwarder cache lock poisoned",
                 });
-            }
+            };
+            let Ok(mut health_state) = self.health_state.lock() else {
+                return json!({
+                    "status": "fail",
+                    "generation": self.udp_runtime.generation,
+                    "error": "resident DNS health forwarder cache lock poisoned",
+                });
+            };
+            state.lru.clear();
+            health_state.lru.clear();
+            (
+                std::mem::take(&mut state.entries),
+                std::mem::take(&mut state.retired),
+                std::mem::take(&mut health_state.entries),
+                std::mem::take(&mut health_state.retired),
+            )
         };
         let entry_count = entries.len();
-        let proxy_forwarders = entries
-            .into_values()
-            .filter_map(|entry| match entry.kind {
-                ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => Some(forwarder),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let proxy_count = proxy_forwarders.len();
-        let proxy_shutdown = async move {
-            let mut shutdowns = proxy_forwarders
-                .into_iter()
-                .map(|forwarder| async move { forwarder.shutdown(deadline).await })
-                .collect::<futures_util::stream::FuturesUnordered<_>>();
-            let mut reports = Vec::with_capacity(proxy_count);
-            while let Some(report) = futures_util::StreamExt::next(&mut shutdowns).await {
-                reports.push(report);
+        let health_entry_count = health_entries.len();
+        let mut forwarders = Vec::with_capacity(
+            entry_count
+                .saturating_add(retired.len())
+                .saturating_add(health_entry_count)
+                .saturating_add(health_retired.len()),
+        );
+        for entry in entries.into_values() {
+            forwarders.push((entry.kind, entry.owner_observation, false));
+        }
+        for entry in health_entries.into_values() {
+            forwarders.push((entry.kind, entry.owner_observation, false));
+        }
+        for retired in retired {
+            if let Some((kind, owner_observation)) = retired.upgrade() {
+                forwarders.push((kind, owner_observation, true));
             }
-            reports
-        };
-        let (proxy_reports, direct_report) =
-            tokio::join!(proxy_shutdown, self.udp_executor.shutdown(deadline),);
-        let proxy_failed = proxy_reports
+        }
+        for retired in health_retired {
+            if let Some((kind, owner_observation)) = retired.upgrade() {
+                forwarders.push((kind, owner_observation, true));
+            }
+        }
+        let retired_count = forwarders.iter().filter(|(_, _, retired)| *retired).count();
+        let mut forwarder_reports = Vec::with_capacity(forwarders.len());
+        let mut releasable_owners = Vec::with_capacity(forwarders.len());
+        for (kind, owner_observation, retired) in forwarders {
+            let uses_shared_udp_executor = matches!(kind, ResidentDnsForwarderEntryKind::Udp(_));
+            let mut report = shutdown_dns_forwarder_entry(kind, deadline).await;
+            if let Some(report) = report.as_object_mut() {
+                report.insert("retired".to_owned(), Value::Bool(retired));
+            }
+            if report["status"].as_str() == Some("pass")
+                && let Some(owner_observation) = owner_observation
+            {
+                releasable_owners.push((owner_observation, uses_shared_udp_executor));
+            }
+            forwarder_reports.push(report);
+        }
+        let direct_report = self.udp_executor.shutdown(deadline).await;
+        let direct_udp_closed = direct_report["status"].as_str() == Some("pass");
+        for (owner, uses_shared_udp_executor) in releasable_owners {
+            if !uses_shared_udp_executor || direct_udp_closed {
+                owner.release();
+            }
+        }
+        let failed = forwarder_reports
             .iter()
             .filter(|report| report["status"].as_str() != Some("pass"))
             .count();
         json!({
-            "status": if proxy_failed == 0 && direct_report["status"].as_str() == Some("pass") {
+            "status": if failed == 0 && direct_report["status"].as_str() == Some("pass") {
                 "pass"
             } else {
                 "fail"
             },
             "generation": self.udp_runtime.generation,
             "entriesClosed": entry_count,
-            "proxyUdpForwarders": proxy_count,
-            "proxyUdpFailed": proxy_failed,
-            "proxyUdp": proxy_reports,
+            "healthEntriesClosed": health_entry_count,
+            "retiredOwnersClosed": retired_count,
+            "forwardersFailed": failed,
+            "forwarders": forwarder_reports,
             "directUdpActors": direct_report,
         })
     }
@@ -87,6 +124,11 @@ impl ResidentDnsForwarderCache {
             "QUIC",
             || {
                 Ok(Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
+                    owner_observation: ResidentDnsTransportOwnerObservation::new(
+                        Arc::clone(&self.metrics),
+                        std::mem::size_of::<ResidentDnsQuicForwarder>(),
+                    ),
+                    task_executor: Arc::clone(&self.udp_executor),
                     upstream: upstream.clone(),
                     generation: self.udp_runtime.generation,
                     mark,
@@ -95,6 +137,7 @@ impl ResidentDnsForwarderCache {
                     connection: None,
                     permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
                     open_lock: Arc::new(AsyncMutex::new(())),
+                    closing: false,
                 })))
             },
             |kind| match kind {
@@ -124,6 +167,11 @@ impl ResidentDnsForwarderCache {
             "QUIC",
             || {
                 Ok(Arc::new(AsyncMutex::new(ResidentDnsQuicForwarder {
+                    owner_observation: ResidentDnsTransportOwnerObservation::new(
+                        Arc::clone(&self.metrics),
+                        std::mem::size_of::<ResidentDnsQuicForwarder>(),
+                    ),
+                    task_executor: Arc::clone(&self.udp_executor),
                     upstream: upstream.clone(),
                     generation: self.udp_runtime.generation,
                     mark,
@@ -132,6 +180,7 @@ impl ResidentDnsForwarderCache {
                     connection: None,
                     permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
                     open_lock: Arc::new(AsyncMutex::new(())),
+                    closing: false,
                 })))
             },
             |kind| match kind {
@@ -139,6 +188,109 @@ impl ResidentDnsForwarderCache {
                 _ => None,
             },
             ResidentDnsForwarderEntryKind::Quic,
+        )
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn proxy_quic_forwarder(
+        &self,
+        upstream: &ResidentDnsUpstream,
+        target: SocketAddr,
+        proxy: Arc<ResidentProxyPlan>,
+        selection: &ResidentDnsUpstreamSelection,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsProxyQuicForwarder>>, String> {
+        let key = routed_dns_forwarder_key(
+            upstream,
+            target,
+            proxy.mark,
+            selection,
+            ResidentDnsForwarderTransport::ProxyQuic,
+        );
+        self.get_or_insert_forwarder_lazy(
+            key,
+            "proxied QUIC",
+            || {
+                Ok(Arc::new(AsyncMutex::new(ResidentDnsProxyQuicForwarder {
+                    owner_observation: ResidentDnsTransportOwnerObservation::new(
+                        Arc::clone(&self.metrics),
+                        std::mem::size_of::<ResidentDnsProxyQuicForwarder>(),
+                    ),
+                    task_executor: Arc::clone(&self.udp_executor),
+                    upstream: upstream.clone(),
+                    remote: target,
+                    proxy,
+                    owners: ResidentTransportOwnerRegistries::new(
+                        self.hysteria2_owner_registry.clone(),
+                        self.tuic_owner_registry.clone(),
+                        self.juicity_owner_registry.clone(),
+                    ),
+                    bridge: None,
+                    endpoint: None,
+                    connection: None,
+                    permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
+                    open_lock: Arc::new(AsyncMutex::new(())),
+                    closing: false,
+                    #[cfg(test)]
+                    client_config_override: None,
+                })))
+            },
+            |kind| match kind {
+                ResidentDnsForwarderEntryKind::ProxyQuic(forwarder) => Some(Arc::clone(forwarder)),
+                _ => None,
+            },
+            ResidentDnsForwarderEntryKind::ProxyQuic,
+        )
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn proxy_h3_forwarder(
+        &self,
+        upstream: &ResidentDnsUpstream,
+        target: SocketAddr,
+        proxy: Arc<ResidentProxyPlan>,
+        selection: &ResidentDnsUpstreamSelection,
+    ) -> Result<Arc<AsyncMutex<ResidentDnsProxyH3Forwarder>>, String> {
+        let key = routed_dns_forwarder_key(
+            upstream,
+            target,
+            proxy.mark,
+            selection,
+            ResidentDnsForwarderTransport::ProxyHttp3,
+        );
+        self.get_or_insert_forwarder_lazy(
+            key,
+            "proxied H3",
+            || {
+                Ok(Arc::new(AsyncMutex::new(ResidentDnsProxyH3Forwarder {
+                    owner_observation: ResidentDnsTransportOwnerObservation::new(
+                        Arc::clone(&self.metrics),
+                        std::mem::size_of::<ResidentDnsProxyH3Forwarder>(),
+                    ),
+                    task_executor: Arc::clone(&self.udp_executor),
+                    upstream: upstream.clone(),
+                    remote: target,
+                    proxy,
+                    owners: ResidentTransportOwnerRegistries::new(
+                        self.hysteria2_owner_registry.clone(),
+                        self.tuic_owner_registry.clone(),
+                        self.juicity_owner_registry.clone(),
+                    ),
+                    metrics: Arc::clone(&self.metrics),
+                    bridge: None,
+                    endpoint: None,
+                    connection: None,
+                    client: None,
+                    driver_task: None,
+                    permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
+                    open_lock: Arc::new(AsyncMutex::new(())),
+                    closing: false,
+                    #[cfg(test)]
+                    client_config_override: None,
+                })))
+            },
+            |kind| match kind {
+                ResidentDnsForwarderEntryKind::ProxyH3(forwarder) => Some(Arc::clone(forwarder)),
+                _ => None,
+            },
+            ResidentDnsForwarderEntryKind::ProxyH3,
         )
     }
 
@@ -164,6 +316,15 @@ impl ResidentDnsForwarderCache {
             || {
                 let shard_count = self.udp_runtime.direct_shards.max(1);
                 Ok(Arc::new(ResidentDnsUdpForwarder {
+                    owner_observation:
+                        ResidentDnsTransportOwnerObservation::new(
+                            Arc::clone(&self.metrics),
+                            std::mem::size_of::<ResidentDnsUdpForwarder>().saturating_add(
+                                shard_count.saturating_mul(std::mem::size_of::<
+                                    ResidentDnsUdpForwarderShard,
+                                >()),
+                            ),
+                        ),
                     target,
                     mark,
                     next_shard: std::sync::atomic::AtomicUsize::new(0),
@@ -234,6 +395,49 @@ impl ResidentDnsForwarderCache {
         )
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn health_proxy_udp_forwarder(
+        &self,
+        target: SocketAddr,
+        proxy: Arc<ResidentProxyPlan>,
+    ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
+        let key = ResidentDnsForwarderKey {
+            scheme: ResidentDnsUpstreamScheme::Udp,
+            authority: String::new(),
+            path: String::new(),
+            mark: proxy.mark,
+            target: Some(target),
+            selection: ResidentDnsForwarderSelectionKey::Proxy {
+                graph_link_hash: proxy.graph_link_hash.clone(),
+            },
+            transport: ResidentDnsForwarderTransport::ProxyUdpHealth,
+        };
+        self.get_or_insert_forwarder_lazy_in(
+            &self.health_state,
+            key,
+            "proxied UDP health",
+            || {
+                ResidentProxyDnsUdpForwarder::new_with_optional_transport_owner(
+                    proxy,
+                    target,
+                    self.udp_runtime.clone(),
+                    Arc::clone(&self.metrics),
+                    Arc::clone(&self.udp_executor),
+                    ResidentTransportOwnerRegistries::new(
+                        self.hysteria2_owner_registry.clone(),
+                        self.tuic_owner_registry.clone(),
+                        self.juicity_owner_registry.clone(),
+                    ),
+                )
+                .map(Arc::new)
+            },
+            |kind| match kind {
+                ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => Some(Arc::clone(forwarder)),
+                _ => None,
+            },
+            ResidentDnsForwarderEntryKind::ProxyUdp,
+        )
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn tcp_forwarder(
         &self,
         upstream: &ResidentDnsUpstream,
@@ -253,6 +457,10 @@ impl ResidentDnsForwarderCache {
             "TCP",
             || {
                 Ok(Arc::new(ResidentDnsTcpForwarder {
+                    owner_observation: ResidentDnsTransportOwnerObservation::new(
+                        Arc::clone(&self.metrics),
+                        std::mem::size_of::<ResidentDnsTcpForwarder>(),
+                    ),
                     upstream: upstream.clone(),
                     target,
                     mark,
@@ -287,6 +495,10 @@ impl ResidentDnsForwarderCache {
             "TLS",
             || {
                 Ok(Arc::new(ResidentDnsTlsForwarder {
+                    owner_observation: ResidentDnsTransportOwnerObservation::new(
+                        Arc::clone(&self.metrics),
+                        std::mem::size_of::<ResidentDnsTlsForwarder>(),
+                    ),
                     upstream: upstream.clone(),
                     target,
                     mark,
@@ -321,6 +533,10 @@ impl ResidentDnsForwarderCache {
             "HTTPS",
             || {
                 Ok(Arc::new(ResidentDnsHttpsForwarder {
+                    owner_observation: ResidentDnsTransportOwnerObservation::new(
+                        Arc::clone(&self.metrics),
+                        std::mem::size_of::<ResidentDnsHttpsForwarder>(),
+                    ),
                     upstream: upstream.clone(),
                     target,
                     mark,
@@ -359,6 +575,11 @@ impl ResidentDnsForwarderCache {
             "H3",
             || {
                 Ok(Arc::new(AsyncMutex::new(ResidentDnsH3Forwarder {
+                    owner_observation: ResidentDnsTransportOwnerObservation::new(
+                        Arc::clone(&self.metrics),
+                        std::mem::size_of::<ResidentDnsH3Forwarder>(),
+                    ),
+                    task_executor: Arc::clone(&self.udp_executor),
                     upstream: upstream.clone(),
                     generation: self.udp_runtime.generation,
                     target,
@@ -369,6 +590,7 @@ impl ResidentDnsForwarderCache {
                     driver_task: None,
                     permits: Arc::new(Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS)),
                     open_lock: Arc::new(AsyncMutex::new(())),
+                    closing: false,
                 })))
             },
             |kind| match kind {
@@ -392,11 +614,27 @@ impl ResidentDnsForwarderCache {
         Extract: FnOnce(&ResidentDnsForwarderEntryKind) -> Option<Arc<T>>,
         Wrap: FnOnce(Arc<T>) -> ResidentDnsForwarderEntryKind,
     {
+        self.get_or_insert_forwarder_lazy_in(&self.state, key, kind_name, build, extract, wrap)
+    }
+
+    fn get_or_insert_forwarder_lazy_in<T, Build, Extract, Wrap>(
+        &self,
+        cache_state: &Mutex<ResidentDnsForwarderCacheState>,
+        key: ResidentDnsForwarderKey,
+        kind_name: &str,
+        build: Build,
+        extract: Extract,
+        wrap: Wrap,
+    ) -> Result<Arc<T>, String>
+    where
+        Build: FnOnce() -> Result<Arc<T>, String>,
+        Extract: FnOnce(&ResidentDnsForwarderEntryKind) -> Option<Arc<T>>,
+        Wrap: FnOnce(Arc<T>) -> ResidentDnsForwarderEntryKind,
+    {
         if self.closing.load(std::sync::atomic::Ordering::Acquire) {
             return Err("resident DNS forwarder cache is closing".to_owned());
         }
-        let mut state = self
-            .state
+        let mut state = cache_state
             .lock()
             .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
         if self.closing.load(std::sync::atomic::Ordering::Acquire) {
@@ -420,11 +658,14 @@ impl ResidentDnsForwarderCache {
         }
         let last_used = next_dns_forwarder_tick(&mut state);
         let forwarder = build()?;
+        let kind = wrap(Arc::clone(&forwarder));
+        let owner_observation = kind.owner_observation();
         state.entries.insert(
             key.clone(),
             ResidentDnsForwarderEntry {
                 last_used,
-                kind: wrap(Arc::clone(&forwarder)),
+                kind,
+                owner_observation,
             },
         );
         state.lru.insert((last_used, key));
@@ -438,6 +679,173 @@ impl ResidentDnsForwarderCache {
             .map(|state| state.entries.len())
             .unwrap_or_default()
     }
+
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn health_len(&self) -> usize {
+        self.health_state
+            .lock()
+            .map(|state| state.entries.len())
+            .unwrap_or_default()
+    }
+}
+
+async fn shutdown_dns_forwarder_entry(
+    entry: ResidentDnsForwarderEntryKind,
+    deadline: time::Instant,
+) -> Value {
+    match entry {
+        ResidentDnsForwarderEntryKind::Quic(forwarder) => {
+            super::quic::shutdown_cached_dns_quic(forwarder, deadline).await
+        }
+        ResidentDnsForwarderEntryKind::ProxyQuic(forwarder) => {
+            super::quic::shutdown_cached_proxy_dns_quic(forwarder, deadline).await
+        }
+        ResidentDnsForwarderEntryKind::ProxyH3(forwarder) => {
+            super::h3::shutdown_cached_proxy_dns_h3(forwarder, deadline).await
+        }
+        ResidentDnsForwarderEntryKind::H3(forwarder) => {
+            super::h3::shutdown_cached_dns_h3(forwarder, deadline).await
+        }
+        ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => {
+            let report = forwarder.shutdown(deadline).await;
+            json!({
+                "status": report["status"].clone(),
+                "transport": "proxied-udp",
+                "owner": report,
+            })
+        }
+        ResidentDnsForwarderEntryKind::Udp(_) => json!({
+            "status": "pass",
+            "transport": "udp",
+            "cleanup": "shared actor executor",
+        }),
+        ResidentDnsForwarderEntryKind::Tcp(forwarder) => {
+            shutdown_dns_tcp_forwarder(forwarder, deadline).await
+        }
+        ResidentDnsForwarderEntryKind::Tls(forwarder) => {
+            shutdown_dns_tls_forwarder(forwarder, deadline).await
+        }
+        ResidentDnsForwarderEntryKind::Https(forwarder) => {
+            shutdown_dns_https_forwarder(forwarder, deadline).await
+        }
+    }
+}
+
+async fn shutdown_dns_tcp_forwarder(
+    forwarder: Arc<ResidentDnsTcpForwarder>,
+    deadline: time::Instant,
+) -> Value {
+    forwarder.permits.close();
+    let idle_cleared = match time::timeout_at(deadline, forwarder.idle.lock()).await {
+        Ok(mut idle) => {
+            idle.clear();
+            true
+        }
+        Err(_) => false,
+    };
+    let streams_released =
+        wait_for_dns_forwarder_permits(&forwarder.permits, DNS_STREAM_POOL_MAX_STREAMS, deadline)
+            .await;
+    json!({
+        "status": if idle_cleared && streams_released { "pass" } else { "fail" },
+        "transport": "tcp",
+        "idleCleared": idle_cleared,
+        "streamsReleased": streams_released,
+    })
+}
+
+async fn shutdown_dns_tls_forwarder(
+    forwarder: Arc<ResidentDnsTlsForwarder>,
+    deadline: time::Instant,
+) -> Value {
+    forwarder.permits.close();
+    let idle_cleared = match time::timeout_at(deadline, forwarder.idle.lock()).await {
+        Ok(mut idle) => {
+            idle.clear();
+            true
+        }
+        Err(_) => false,
+    };
+    let streams_released =
+        wait_for_dns_forwarder_permits(&forwarder.permits, DNS_STREAM_POOL_MAX_STREAMS, deadline)
+            .await;
+    json!({
+        "status": if idle_cleared && streams_released { "pass" } else { "fail" },
+        "transport": "tls",
+        "idleCleared": idle_cleared,
+        "streamsReleased": streams_released,
+    })
+}
+
+async fn shutdown_dns_https_forwarder(
+    forwarder: Arc<ResidentDnsHttpsForwarder>,
+    deadline: time::Instant,
+) -> Value {
+    forwarder.http1_permits.close();
+    forwarder.h2_permits.close();
+    let http1_idle_cleared = match time::timeout_at(deadline, forwarder.http1_idle.lock()).await {
+        Ok(mut idle) => {
+            idle.clear();
+            true
+        }
+        Err(_) => false,
+    };
+    let (h2_lock_acquired, h2) = match time::timeout_at(deadline, forwarder.h2.lock()).await {
+        Ok(mut h2) => (true, h2.take()),
+        Err(_) => (false, None),
+    };
+    let mut h2_driver_joined = h2.is_none();
+    if let Some(mut h2) = h2 {
+        h2.driver_task.abort();
+        h2_driver_joined = time::timeout_at(deadline, &mut h2.driver_task)
+            .await
+            .is_ok();
+    }
+    let http1_released = wait_for_dns_forwarder_permits(
+        &forwarder.http1_permits,
+        DNS_STREAM_POOL_MAX_STREAMS,
+        deadline,
+    )
+    .await;
+    let h2_released = wait_for_dns_forwarder_permits(
+        &forwarder.h2_permits,
+        DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS,
+        deadline,
+    )
+    .await;
+    json!({
+        "status": if http1_idle_cleared
+            && h2_lock_acquired
+            && h2_driver_joined
+            && http1_released
+            && h2_released
+        {
+            "pass"
+        } else {
+            "fail"
+        },
+        "transport": "https",
+        "http1IdleCleared": http1_idle_cleared,
+        "http1StreamsReleased": http1_released,
+        "h2StreamsReleased": h2_released,
+        "h2LockAcquired": h2_lock_acquired,
+        "h2DriverJoined": h2_driver_joined,
+    })
+}
+
+async fn wait_for_dns_forwarder_permits(
+    permits: &Semaphore,
+    capacity: usize,
+    deadline: time::Instant,
+) -> bool {
+    while permits.available_permits() < capacity {
+        let now = time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        time::sleep_until((now + std::time::Duration::from_millis(1)).min(deadline)).await;
+    }
+    true
 }
 
 fn routed_dns_forwarder_key(
@@ -459,13 +867,23 @@ fn routed_dns_forwarder_key(
 }
 
 fn evict_oldest_dns_forwarder(state: &mut ResidentDnsForwarderCacheState) {
+    state.retired.retain(ResidentDnsRetiredForwarder::is_alive);
     while let Some((last_used, key)) = state.lru.pop_first() {
         if state
             .entries
             .get(&key)
             .is_some_and(|entry| entry.last_used == last_used)
         {
-            state.entries.remove(&key);
+            if let Some(entry) = state.entries.remove(&key)
+                && entry.kind.retained_outside_cache()
+            {
+                if let Some(owner) = entry.owner_observation.as_ref() {
+                    owner.mark_evicted();
+                }
+                state
+                    .retired
+                    .push(ResidentDnsRetiredForwarder::from_entry(&entry));
+            }
             return;
         }
     }
@@ -497,6 +915,9 @@ fn next_dns_forwarder_tick(state: &mut ResidentDnsForwarderCacheState) -> u64 {
 mod tests {
     use super::*;
     use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    use crate::production_runtime_owner::resident_dataplane::dns::transport::test_support::{
+        Socks5UdpRelay, dns_a_test_response, socks5_dns_proxy,
+    };
     use crate::production_runtime_owner::resident_dataplane::plan::{
         ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan,
     };
@@ -611,6 +1032,10 @@ mod tests {
         let build = || {
             builds.set(builds.get() + 1);
             Ok(Arc::new(ResidentDnsTcpForwarder {
+                owner_observation: ResidentDnsTransportOwnerObservation::new(
+                    Arc::clone(&cache.metrics),
+                    std::mem::size_of::<ResidentDnsTcpForwarder>(),
+                ),
                 upstream: upstream.clone(),
                 target,
                 mark: 0,
@@ -644,6 +1069,170 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(builds.get(), 1);
+    }
+
+    #[test]
+    fn evicted_inflight_quic_owner_remains_charged_until_the_last_arc_drops() {
+        let cache = ResidentDnsForwarderCache::default();
+        let metrics = Arc::clone(&cache.metrics);
+        let quic = parse_dns_upstream(
+            0,
+            "quic-owner",
+            "quic://127.0.0.1:853",
+            "127.0.0.1:53".parse().unwrap(),
+            0,
+        )
+        .unwrap();
+        let retained = cache.quic_forwarder(&quic, 0).unwrap();
+        assert_eq!(cache.metrics.snapshot()["dnsTransportOwnersCurrent"], 1);
+
+        let tcp = parse_dns_upstream(
+            1,
+            "tcp-fill",
+            "tcp://127.0.0.1:53",
+            "127.0.0.1:53".parse().unwrap(),
+            0,
+        )
+        .unwrap();
+        let selection = ResidentDnsUpstreamSelection::Direct { mark: 0 };
+        for port in 1..=DNS_FORWARDER_CACHE_MAX_ENTRIES {
+            let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port as u16);
+            cache.tcp_forwarder(&tcp, target, 0, &selection).unwrap();
+        }
+
+        let evicted = cache.metrics.snapshot();
+        assert_eq!(cache.len(), DNS_FORWARDER_CACHE_MAX_ENTRIES);
+        assert_eq!(
+            evicted["dnsTransportOwnersCurrent"],
+            DNS_FORWARDER_CACHE_MAX_ENTRIES + 1
+        );
+        assert_eq!(evicted["dnsTransportOwnersEvictedCurrent"], 1);
+        let evicted_bytes = evicted["dnsTransportOwnerBytesCurrent"].as_u64().unwrap();
+        assert!(evicted_bytes > 0);
+        drop(retained);
+        let released = cache.metrics.snapshot();
+        assert_eq!(
+            released["dnsTransportOwnersCurrent"],
+            DNS_FORWARDER_CACHE_MAX_ENTRIES
+        );
+        assert_eq!(released["dnsTransportOwnersEvictedCurrent"], 0);
+        assert!(released["dnsTransportOwnerBytesCurrent"].as_u64().unwrap() < evicted_bytes);
+        drop(cache);
+        assert_eq!(metrics.snapshot()["dnsTransportOwnersCurrent"], 0);
+        assert_eq!(metrics.snapshot()["dnsTransportOwnerBytesCurrent"], 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn proxied_quic_and_h3_forwarders_reuse_separate_complete_keys() {
+        let cache = ResidentDnsForwarderCache::default();
+        let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 853);
+        let doq = parse_dns_upstream(
+            0,
+            "proxy-doq",
+            "quic://127.0.0.1:853",
+            "127.0.0.1:53".parse().unwrap(),
+            0,
+        )
+        .unwrap();
+        let doh3 = parse_dns_upstream(
+            1,
+            "proxy-doh3",
+            "h3://127.0.0.1:443/dns-query",
+            "127.0.0.1:53".parse().unwrap(),
+            0,
+        )
+        .unwrap();
+        let proxy = policy_closed_http_proxy();
+        let selection = ResidentDnsUpstreamSelection::Proxy {
+            proxy: Arc::clone(&proxy),
+        };
+
+        let first_doq = cache
+            .proxy_quic_forwarder(&doq, target, Arc::clone(&proxy), &selection)
+            .unwrap();
+        let second_doq = cache
+            .proxy_quic_forwarder(&doq, target, Arc::clone(&proxy), &selection)
+            .unwrap();
+        let first_doh3 = cache
+            .proxy_h3_forwarder(&doh3, target, Arc::clone(&proxy), &selection)
+            .unwrap();
+        let second_doh3 = cache
+            .proxy_h3_forwarder(&doh3, target, proxy, &selection)
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&first_doq, &second_doq));
+        assert!(Arc::ptr_eq(&first_doh3, &second_doh3));
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.metrics.snapshot()["dnsTransportOwnersCurrent"], 2);
+        drop(first_doq);
+        drop(second_doq);
+        drop(first_doh3);
+        drop(second_doh3);
+        let report = cache
+            .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+            .await;
+        assert_eq!(report["status"], "pass");
+        assert_eq!(cache.metrics.snapshot()["dnsTransportOwnersCurrent"], 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn background_dns_health_reuses_one_bounded_generation_forwarder() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut query = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+            for _ in 0..2 {
+                let (read, peer) = upstream.recv_from(&mut query).await.unwrap();
+                let response = dns_a_test_response(&query[..read], [192, 0, 2, 80]);
+                upstream.send_to(&response, peer).await.unwrap();
+            }
+        });
+        let socks = Socks5UdpRelay::start().await;
+        let proxy = socks5_dns_proxy(socks.address(), 7_370);
+        let cache = ResidentDnsForwarderCache::default();
+        let first = cache
+            .health_proxy_udp_forwarder(target, Arc::clone(&proxy))
+            .unwrap();
+        let second = cache
+            .health_proxy_udp_forwarder(target, Arc::clone(&proxy))
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.health_len(), 1);
+
+        crate::production_runtime_owner::resident_dataplane::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
+            Arc::clone(&first),
+            "health.example",
+        )
+        .await
+        .unwrap();
+        crate::production_runtime_owner::resident_dataplane::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
+            Arc::clone(&second),
+            "health.example",
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+
+        let active = cache.metrics.snapshot();
+        assert_eq!(active["dnsTransportOwnersCurrent"], 1);
+        assert_eq!(active["proxyDnsUdpExecutorsOpened"], 1);
+        assert_eq!(active["proxyDnsUdpExecutorsReused"], 1);
+        assert_eq!(socks.control_connections(), 1);
+        let report = cache
+            .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+            .await;
+        assert_eq!(report["status"], "pass", "{report}");
+        assert_eq!(report["entriesClosed"], 0);
+        assert_eq!(report["healthEntriesClosed"], 1);
+        assert_eq!(cache.metrics.snapshot()["dnsTransportOwnersCurrent"], 0);
+        assert_eq!(cache.metrics.snapshot()["dnsTransportOwnerBytesCurrent"], 0);
+        assert_eq!(
+            cache.metrics.snapshot()["dnsUdpActorsOpened"],
+            cache.metrics.snapshot()["dnsUdpActorsClosed"]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -680,5 +1269,80 @@ mod tests {
         assert!(handle.is_closed());
         assert_eq!(second["alreadyClosed"], true);
         assert!(reopen_error.contains("closing"), "{reopen_error}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn https_shutdown_does_not_report_an_h2_lock_timeout_as_joined() {
+        let cache = ResidentDnsForwarderCache::default();
+        let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 443);
+        let upstream = parse_dns_upstream(
+            0,
+            "https-lock",
+            "https://127.0.0.1:443/dns-query",
+            target,
+            0,
+        )
+        .unwrap();
+        let selection = ResidentDnsUpstreamSelection::Direct { mark: 0 };
+        let forwarder = cache
+            .https_forwarder(&upstream, target, 0, &selection)
+            .unwrap();
+        let h2_guard = forwarder.h2.lock().await;
+
+        let report =
+            shutdown_dns_https_forwarder(Arc::clone(&forwarder), time::Instant::now()).await;
+
+        assert_eq!(report["status"], "fail");
+        assert_eq!(report["h2LockAcquired"], false);
+        assert_eq!(report["h2DriverJoined"], true);
+        drop(h2_guard);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cache_shutdown_uses_one_deadline_for_every_forwarder() {
+        let cache = ResidentDnsForwarderCache::default();
+        let upstream = parse_dns_upstream(
+            0,
+            "tcp-deadline",
+            "tcp://127.0.0.1:53",
+            "127.0.0.1:53".parse().unwrap(),
+            0,
+        )
+        .unwrap();
+        let selection = ResidentDnsUpstreamSelection::Direct { mark: 0 };
+        let first = cache
+            .tcp_forwarder(
+                &upstream,
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
+                0,
+                &selection,
+            )
+            .unwrap();
+        let second = cache
+            .tcp_forwarder(
+                &upstream,
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 54),
+                0,
+                &selection,
+            )
+            .unwrap();
+        let first_idle = first.idle.lock().await;
+        let second_idle = second.idle.lock().await;
+        let started = std::time::Instant::now();
+
+        let report = cache
+            .shutdown(time::Instant::now() + std::time::Duration::from_millis(5))
+            .await;
+
+        assert_eq!(report["status"], "fail");
+        assert_eq!(report["forwardersFailed"], 2);
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+        let forwarders = report["forwarders"].as_array().unwrap();
+        assert_eq!(forwarders.len(), 2);
+        assert!(forwarders.iter().all(|forwarder| {
+            forwarder["status"] == "fail" && forwarder["idleCleared"] == false
+        }));
+        drop(second_idle);
+        drop(first_idle);
     }
 }

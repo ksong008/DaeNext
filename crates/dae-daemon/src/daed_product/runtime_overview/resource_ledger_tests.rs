@@ -71,7 +71,19 @@ fn total_resource_ledger_reconciles_bounded_surfaces_without_double_counting() {
                 "activeUdpSessions": 2,
                 "currentUdpQueuedBytes": 512,
                 "budget": { "owners": 32 }
-            }
+            },
+            "dnsTransportOwnersCurrent": 3,
+            "dnsTransportOwnersMaximum": 5,
+            "dnsTransportOwnersEvictedCurrent": 1,
+            "dnsTransportOwnersEvictedMaximum": 2,
+            "dnsTransportOwnerBytesCurrent": 12288,
+            "dnsTransportOwnerBytesMaximum": 20480,
+            "proxyDnsUdpQueuedBytesCurrent": 120,
+            "proxyDnsUdpPendingBytesCurrent": 256,
+            "proxyDnsUdpPendingMetadataBytesCurrent": 96,
+            "proxyDnsUdpPendingMetadataBytesMaximum": 384,
+            "proxyDnsUdpResponseBytesCurrent": 1500,
+            "proxyDnsUdpResponseBytesMaximum": 4096
         }}
     });
     let cgroup = json!({
@@ -99,6 +111,16 @@ fn total_resource_ledger_reconciles_bounded_surfaces_without_double_counting() {
     assert_eq!(ledger["ebpfMaps"]["capacitySnapshot"][0]["entries"], 4643);
     assert_eq!(ledger["ebpfMaps"]["currentEvidenceComplete"], true);
     assert_eq!(ledger["quicEndpoints"]["otherLiveGenerationCount"], 1);
+    assert_eq!(ledger["dnsTransportOwners"]["current"], 3);
+    assert_eq!(
+        ledger["dnsTransportOwners"]["ownerStateBytesCurrent"],
+        12288
+    );
+    assert_eq!(
+        ledger["proxyDnsUdpBuffers"]["pendingMetadataBytesCurrent"],
+        96
+    );
+    assert_eq!(ledger["proxyDnsUdpBuffers"]["responseBytesMaximum"], 4096);
     assert_eq!(ledger["generationOverlap"]["active"], true);
     assert_eq!(ledger["budget"]["cgroupLimitFinite"], true);
     assert_eq!(

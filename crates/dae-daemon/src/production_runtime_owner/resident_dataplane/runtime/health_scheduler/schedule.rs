@@ -18,6 +18,7 @@ pub(super) struct ResidentHealthScheduleContext {
     pub(super) event_file: PathBuf,
     pub(super) event_lock: Arc<Mutex<()>>,
     pub(super) metrics: Arc<ResidentDataplaneMetrics>,
+    pub(super) dns: Arc<dns::ResidentDnsPlan>,
     pub(super) periodic_candidate_concurrency: usize,
     pub(super) bootstrap_candidate_concurrency: usize,
     pub(super) candidate_admission: Arc<tokio::sync::Semaphore>,
@@ -64,6 +65,7 @@ pub(super) async fn run_resident_health_group_schedule(
         event_file,
         event_lock,
         metrics,
+        dns,
         periodic_candidate_concurrency: concurrency,
         bootstrap_candidate_concurrency: bootstrap_concurrency,
         candidate_admission,
@@ -101,6 +103,7 @@ pub(super) async fn run_resident_health_group_schedule(
         Arc::clone(&metrics),
         bootstrap_concurrency,
         Arc::clone(&candidate_admission),
+        Arc::clone(&dns),
         ResidentTransportOwnerRegistries::new(
             hysteria2_owner_registry.clone(),
             tuic_owner_registry.clone(),
@@ -124,6 +127,7 @@ pub(super) async fn run_resident_health_group_schedule(
             Arc::clone(&metrics),
             concurrency,
             Arc::clone(&candidate_admission),
+            Arc::clone(&dns),
             ResidentTransportOwnerRegistries::new(
                 hysteria2_owner_registry.clone(),
                 tuic_owner_registry.clone(),
@@ -147,6 +151,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
     stop: SharedResidentStopSignal,
     mut stop_rx: watch::Receiver<bool>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    dns: Arc<dns::ResidentDnsPlan>,
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
@@ -173,6 +178,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
             Arc::clone(&metrics),
             concurrency,
             Arc::clone(&candidate_admission),
+            Arc::clone(&dns),
             ResidentTransportOwnerRegistries::new(
                 hysteria2_owner_registry.clone(),
                 tuic_owner_registry.clone(),
@@ -203,6 +209,7 @@ async fn run_resident_health_round(
     metrics: Arc<ResidentDataplaneMetrics>,
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    dns: Arc<dns::ResidentDnsPlan>,
     owners: ResidentTransportOwnerRegistries,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
@@ -214,9 +221,8 @@ async fn run_resident_health_round(
         stop,
         concurrency.max(1),
         candidate_admission,
-        owners.hysteria2(),
-        owners.tuic(),
-        owners.juicity(),
+        dns,
+        owners,
     )
     .await;
     guard.finish(status);
