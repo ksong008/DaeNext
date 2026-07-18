@@ -2,6 +2,8 @@ use sha2::{Digest, Sha256};
 
 use super::link::{Hysteria2ServerContract, normalize_pin_sha256, server_contract};
 
+pub const HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD: usize = 8;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hysteria2UnderlayContract {
     pub input_network: String,

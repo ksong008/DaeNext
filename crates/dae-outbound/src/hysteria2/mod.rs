@@ -42,8 +42,8 @@ pub use tls_policy::{
     Hysteria2TlsIdentity, Hysteria2TlsPolicy, Hysteria2TrustAnchorIdentity,
 };
 pub use underlay::{
-    Hysteria2PinSha256Check, Hysteria2UnderlayContract, pin_sha256_matches_raw_cert,
-    raw_cert_sha256_hex, underlay_contract,
+    HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD, Hysteria2PinSha256Check, Hysteria2UnderlayContract,
+    pin_sha256_matches_raw_cert, raw_cert_sha256_hex, underlay_contract,
 };
 pub use wire::{
     HYSTERIA2_MAX_UDP_ADDRESS_LENGTH, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage,
