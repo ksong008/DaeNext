@@ -26,6 +26,7 @@ impl UdpSessionExecutor {
         match self {
             Self::Hysteria2(session) => session.set_owner_deadline(deadline),
             Self::Tuic(session) => session.set_owner_deadline(deadline),
+            Self::Juicity(session) => session.set_owner_deadline(deadline),
             _ => {}
         }
     }
@@ -89,6 +90,8 @@ mod trojan;
 mod vless;
 mod vless_standard;
 use self::anytls::AnyTlsPacketStreamSession;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::quic::exercise_juicity_udp_stream_session;
 use self::quic::{
     Hysteria2QuicDatagramSession, JuicityQuicStreamPacketSession, TuicQuicDatagramSession,
 };

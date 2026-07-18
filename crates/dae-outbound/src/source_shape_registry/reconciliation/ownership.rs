@@ -24,7 +24,7 @@ impl MaterializedSourceShape {
                 RuntimeOwnershipModel::GenerationOwnedHysteria2Transport
             }
             MaterializedProtocol::Tuic => RuntimeOwnershipModel::GenerationOwnedTuicTransport,
-            MaterializedProtocol::Juicity => RuntimeOwnershipModel::CallerScopedJuicityTransport,
+            MaterializedProtocol::Juicity => RuntimeOwnershipModel::GenerationOwnedJuicityTransport,
             MaterializedProtocol::ConnectUdpH2 | MaterializedProtocol::ConnectUdpH3 => {
                 RuntimeOwnershipModel::GenerationConnectUdpTransport
             }

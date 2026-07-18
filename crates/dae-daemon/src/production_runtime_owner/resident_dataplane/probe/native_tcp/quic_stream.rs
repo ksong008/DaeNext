@@ -4,20 +4,16 @@ use std::task::{Context, Poll};
 
 use dae_outbound::{
     hysteria2::{read_hysteria2_tcp_response, write_hysteria2_tcp_request},
-    juicity::{JuicityAuthStream, authenticate_juicity_connection, write_juicity_tcp_request},
+    juicity::write_juicity_tcp_request,
     tuic::write_tuic_connect_request,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::super::super::RESIDENT_CONNECT_TIMEOUT;
 use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
-use super::super::super::tcp::{
-    ObservedQuicEndpoint, QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
-    open_juicity_quic_connection_candidates_async,
-};
+use super::super::super::tcp::QuicEndpointCallerClass;
 use super::super::super::{
-    Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, TuicOwnerRegistryHandle,
-    TuicTransportLease,
+    Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, JuicityOwnerRegistryHandle,
+    JuicityTransportLease, TuicOwnerRegistryHandle, TuicTransportLease,
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
@@ -28,6 +24,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
     target: &str,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     caller: QuicEndpointCallerClass,
     deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
@@ -92,49 +89,28 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 send, recv, transport,
             )))
         }
-        ResidentProxyProtocolPlan::JuicityQuicTcp {
-            uuid,
-            password,
-            allow_insecure,
-            pinned_certchain_sha256,
-        } => {
-            let ResidentConnectedQuicEndpoint {
-                endpoint,
-                connection,
-                ..
-            } = open_juicity_quic_connection_candidates_async(
-                &selection.proxy,
-                selection.mark,
-                allow_insecure,
-                &pinned_certchain_sha256,
-                RESIDENT_CONNECT_TIMEOUT,
-                caller,
-            )
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
-            let (_, auth_stream) = authenticate_juicity_connection(&connection, &uuid, &password)
-                .await
-                .map_err(|err| {
-                    endpoint.mark_failed();
-                    NativeTcpProbeError::Open(format!(
-                        "authenticate native Juicity connection: {err}"
-                    ))
-                })?;
-            endpoint.mark_ready();
-            let (mut send, recv) = connection.open_bi().await.map_err(|err| {
-                NativeTcpProbeError::Open(format!("open native Juicity TCP stream: {err}"))
+        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
+            let owner_registry = juicity_owner_registry.ok_or_else(|| {
+                NativeTcpProbeError::Open(
+                    "Juicity transport owner registry is unavailable for native TCP probe"
+                        .to_owned(),
+                )
             })?;
+            let transport = owner_registry
+                .acquire(Arc::clone(&selection.proxy), caller, deadline)
+                .await
+                .map_err(NativeTcpProbeError::Open)?;
+            let (mut send, recv) = transport
+                .open_stream(deadline)
+                .await
+                .map_err(NativeTcpProbeError::Open)?;
             write_juicity_tcp_request(&mut send, target, &[])
                 .await
                 .map_err(|err| {
                     NativeTcpProbeError::Open(format!("write native Juicity TCP request: {err}"))
                 })?;
-            Ok(Box::new(QuicStreamNativeTcpTunnel::dedicated(
-                send,
-                recv,
-                connection,
-                endpoint,
-                Some(auth_stream),
+            Ok(Box::new(QuicStreamNativeTcpTunnel::shared_juicity(
+                send, recv, transport,
             )))
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
@@ -144,21 +120,13 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
 struct QuicStreamNativeTcpTunnel {
     send: quinn::SendStream,
     recv: quinn::RecvStream,
-    owner: QuicStreamNativeTcpOwner,
+    _owner: QuicStreamNativeTcpOwner,
 }
 
 enum QuicStreamNativeTcpOwner {
-    SharedHysteria2 {
-        _transport: Hysteria2TransportLease,
-    },
-    SharedTuic {
-        _transport: TuicTransportLease,
-    },
-    Dedicated {
-        connection: quinn::Connection,
-        endpoint: ObservedQuicEndpoint,
-        _juicity_auth_stream: Option<JuicityAuthStream>,
-    },
+    SharedHysteria2 { _transport: Hysteria2TransportLease },
+    SharedTuic { _transport: TuicTransportLease },
+    SharedJuicity { _transport: JuicityTransportLease },
 }
 
 impl QuicStreamNativeTcpTunnel {
@@ -170,26 +138,22 @@ impl QuicStreamNativeTcpTunnel {
         Self {
             send,
             recv,
-            owner: QuicStreamNativeTcpOwner::SharedHysteria2 {
+            _owner: QuicStreamNativeTcpOwner::SharedHysteria2 {
                 _transport: transport,
             },
         }
     }
 
-    fn dedicated(
+    fn shared_juicity(
         send: quinn::SendStream,
         recv: quinn::RecvStream,
-        connection: quinn::Connection,
-        endpoint: ObservedQuicEndpoint,
-        juicity_auth_stream: Option<JuicityAuthStream>,
+        transport: JuicityTransportLease,
     ) -> Self {
         Self {
             send,
             recv,
-            owner: QuicStreamNativeTcpOwner::Dedicated {
-                connection,
-                endpoint,
-                _juicity_auth_stream: juicity_auth_stream,
+            _owner: QuicStreamNativeTcpOwner::SharedJuicity {
+                _transport: transport,
             },
         }
     }
@@ -202,23 +166,9 @@ impl QuicStreamNativeTcpTunnel {
         Self {
             send,
             recv,
-            owner: QuicStreamNativeTcpOwner::SharedTuic {
+            _owner: QuicStreamNativeTcpOwner::SharedTuic {
                 _transport: transport,
             },
-        }
-    }
-}
-
-impl Drop for QuicStreamNativeTcpTunnel {
-    fn drop(&mut self) {
-        if let QuicStreamNativeTcpOwner::Dedicated {
-            connection,
-            endpoint,
-            ..
-        } = &self.owner
-        {
-            connection.close(0_u32.into(), b"native tcp probe done");
-            endpoint.close(0_u32.into(), b"native tcp probe done");
         }
     }
 }

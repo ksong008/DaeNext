@@ -306,6 +306,7 @@ fn create_proxy_session(
         active_sessions: Arc::clone(&context.active_sessions),
         hysteria2_owner_registry: context.hysteria2_owner_registry.clone(),
         tuic_owner_registry: context.tuic_owner_registry.clone(),
+        juicity_owner_registry: context.juicity_owner_registry.clone(),
     };
     let handle = spawn_udp_session_actor(
         key.clone(),

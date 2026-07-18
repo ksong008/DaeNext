@@ -174,12 +174,18 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
 
     let juicity_graph = juicity.executable_graph_value();
     let juicity_lifecycle = &juicity_graph["runtimeComponents"]["underlayFactory"]["quicLifecycle"];
-    assert_eq!(juicity_lifecycle["endpointScope"], "per-flow");
-    assert_eq!(juicity_lifecycle["connectionScope"], "per-flow");
-    assert_eq!(juicity_lifecycle["crossFlowConnectionReuse"], false);
+    assert_eq!(
+        juicity_lifecycle["endpointScope"],
+        "generation-graph-transport-owner"
+    );
+    assert_eq!(
+        juicity_lifecycle["connectionScope"],
+        "generation-graph-transport-owner"
+    );
+    assert_eq!(juicity_lifecycle["crossFlowConnectionReuse"], true);
     assert_eq!(
         juicity_graph["runtimeComponents"]["generationCache"]["perFlowProviders"],
-        serde_json::json!(["quic-client-config", "quic-endpoint", "quic-connection"])
+        serde_json::json!([])
     );
 
     vec![hysteria2, tuic, juicity]

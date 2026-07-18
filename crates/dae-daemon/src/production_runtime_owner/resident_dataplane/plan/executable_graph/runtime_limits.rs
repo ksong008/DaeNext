@@ -123,8 +123,8 @@ pub(super) fn per_flow_provider_labels(scope: QuicLifecycleScope) -> &'static [&
 pub(super) fn quic_lifecycle_scope(handler: &ResidentProxyProtocolPlan) -> QuicLifecycleScope {
     match handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
-        | ResidentProxyProtocolPlan::TuicQuicTcp { .. } => QuicLifecycleScope::GenerationOwned,
-        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => QuicLifecycleScope::PerFlow,
+        | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+        | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => QuicLifecycleScope::GenerationOwned,
         _ => QuicLifecycleScope::None,
     }
 }

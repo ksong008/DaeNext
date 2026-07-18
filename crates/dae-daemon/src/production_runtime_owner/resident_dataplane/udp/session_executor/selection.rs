@@ -17,7 +17,12 @@ impl UdpSessionExecutor {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet(
         proxy: &ResidentProxyPlan,
     ) -> Self {
-        Self::new_proxy_packet_with_optional_transport_owner(Arc::new(proxy.clone()), None, None)
+        Self::new_proxy_packet_with_optional_transport_owner(
+            Arc::new(proxy.clone()),
+            None,
+            None,
+            None,
+        )
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_with_transport_owner(
@@ -25,22 +30,30 @@ impl UdpSessionExecutor {
         original_dst: SocketAddr,
         owner_registry: Hysteria2OwnerRegistryHandle,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+        juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     ) -> Self {
         if original_dst.port() == DNS_DEFAULT_PORT {
             return Self::Dns;
         }
-        Self::new_proxy_packet_with_transport_owner(proxy, owner_registry, tuic_owner_registry)
+        Self::new_proxy_packet_with_transport_owner(
+            proxy,
+            owner_registry,
+            tuic_owner_registry,
+            juicity_owner_registry,
+        )
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet_with_transport_owner(
         proxy: Arc<ResidentProxyPlan>,
         owner_registry: Hysteria2OwnerRegistryHandle,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+        juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     ) -> Self {
         Self::new_proxy_packet_with_optional_transport_owner(
             proxy,
             Some(owner_registry),
             tuic_owner_registry,
+            juicity_owner_registry,
         )
     }
 
@@ -48,6 +61,7 @@ impl UdpSessionExecutor {
         proxy: Arc<ResidentProxyPlan>,
         owner_registry: Option<Hysteria2OwnerRegistryHandle>,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+        juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     ) -> Self {
         if let Some(reason) = resident_udp_chain_admission(&proxy).unsupported_reason() {
             return Self::fail_closed(reason);
@@ -119,18 +133,11 @@ impl UdpSessionExecutor {
                 tuic_owner_registry,
             )),
             (
-                ResidentProxyProtocolPlan::JuicityQuicTcp {
-                    uuid,
-                    password,
-                    allow_insecure,
-                    pinned_certchain_sha256,
-                },
+                ResidentProxyProtocolPlan::JuicityQuicTcp { .. },
                 ResidentUdpExecutorFactory::JuicityStreamPacket,
             ) => Self::Juicity(JuicityQuicStreamPacketSession::new(
-                uuid.clone(),
-                password.clone(),
-                *allow_insecure,
-                pinned_certchain_sha256.clone(),
+                Arc::clone(&proxy),
+                juicity_owner_registry,
             )),
             (_, ResidentUdpExecutorFactory::PolicyClosed(reason)) => {
                 Self::fail_closed(reason.reason())

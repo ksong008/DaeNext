@@ -154,10 +154,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
     mark: u32,
     allow_insecure: bool,
     pinned_certchain_sha256: &str,
-    timeout: Duration,
+    deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
-    let deadline = dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout);
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
     let client_config =
         build_juicity_runtime_client_config(allow_insecure, pinned_certchain_sha256)

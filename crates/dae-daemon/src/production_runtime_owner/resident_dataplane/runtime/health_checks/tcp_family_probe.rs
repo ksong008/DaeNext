@@ -29,8 +29,7 @@ impl ResidentTcpFamilyProbeResult {
 pub(super) async fn probe_resident_candidate_tcp_families(
     candidate: &plan::ResidentProxyProbePlan,
     stop: Option<&SharedResidentStopSignal>,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    owners: ResidentTransportOwnerRegistries,
     caller: QuicEndpointCallerClass,
 ) -> Result<Vec<ResidentTcpFamilyProbeResult>, HealthCheckRoundStatus> {
     let targets = match stop {
@@ -50,8 +49,7 @@ pub(super) async fn probe_resident_candidate_tcp_families(
             NetworkType::TCP4,
             targets.ipv4,
             stop,
-            hysteria2_owner_registry.clone(),
-            tuic_owner_registry.clone(),
+            owners.clone(),
             caller,
         )),
         Box::pin(probe_tcp_family(
@@ -59,8 +57,7 @@ pub(super) async fn probe_resident_candidate_tcp_families(
             NetworkType::TCP6,
             targets.ipv6,
             stop,
-            hysteria2_owner_registry.clone(),
-            tuic_owner_registry.clone(),
+            owners.clone(),
             caller,
         )),
     );
@@ -72,8 +69,7 @@ async fn probe_tcp_family(
     network_type: NetworkType,
     family: plan::ResidentHealthTargetFamily,
     stop: Option<&SharedResidentStopSignal>,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    owners: ResidentTransportOwnerRegistries,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentTcpFamilyProbeResult, HealthCheckRoundStatus> {
     match family {
@@ -97,8 +93,7 @@ async fn probe_tcp_family(
                             result = probe_resident_candidate_tcp_target_endpoint_async(
                                 candidate,
                                 &target,
-                                hysteria2_owner_registry.clone(),
-                                tuic_owner_registry.clone(),
+                                owners.clone(),
                                 caller,
                             ) => result,
                         }
@@ -107,8 +102,7 @@ async fn probe_tcp_family(
                         probe_resident_candidate_tcp_target_endpoint_async(
                             candidate,
                             &target,
-                            hysteria2_owner_registry.clone(),
-                            tuic_owner_registry.clone(),
+                            owners.clone(),
                             caller,
                         )
                         .await

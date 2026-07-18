@@ -568,21 +568,29 @@ fn runtime_ownership_ledger_exposes_generation_owned_quic_cost_boundary() {
 }
 
 #[test]
-fn runtime_ownership_ledger_keeps_unmigrated_juicity_transport_blocked() {
+fn runtime_ownership_ledger_records_generation_owned_juicity_transport() {
     let row = source_shape_registry_rows()
         .iter()
         .find(|row| row.shape_id == "baseline-quic-password-endpoint")
         .unwrap();
     let ledger = row.runtime_ownership_ledger();
-    assert_eq!(ledger["model"], "caller-scoped-juicity-transport");
-    assert_eq!(ledger["disposition"], "blocked");
+    assert_eq!(ledger["model"], "generation-owned-juicity-transport");
+    assert_eq!(ledger["disposition"], "implemented");
     assert_eq!(
         ledger["callers"]["dataUdp"]["logicalLease"],
         "juicity-packet-stream"
     );
     assert_eq!(
         ledger["callers"]["dataUdp"]["budgetContract"],
-        "physical-owner-count-and-charged-bytes-missing"
+        "physical-owner-count-and-charged-bytes"
+    );
+    assert_eq!(
+        ledger["callers"]["dataUdp"]["lifecycleOwner"],
+        "generation-runtime-owner"
+    );
+    assert_eq!(
+        ledger["callers"]["dataUdp"]["keyContract"],
+        "generation-graph-and-transport"
     );
 }
 
@@ -699,7 +707,7 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
         RuntimeOwnershipModel::FlowStreamAndAssociation,
         RuntimeOwnershipModel::GenerationOwnedHysteria2Transport,
         RuntimeOwnershipModel::GenerationOwnedTuicTransport,
-        RuntimeOwnershipModel::CallerScopedJuicityTransport,
+        RuntimeOwnershipModel::GenerationOwnedJuicityTransport,
         RuntimeOwnershipModel::GenerationConnectUdpTransport,
         RuntimeOwnershipModel::ConfiguredHttpTransport,
     ] {

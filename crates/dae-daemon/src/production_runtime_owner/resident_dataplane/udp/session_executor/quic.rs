@@ -500,30 +500,38 @@ impl TuicQuicDatagramSession {
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct JuicityQuicStreamPacketSession
 {
-    uuid: String,
-    password: String,
-    allow_insecure: bool,
-    pinned_certchain_sha256: String,
-    endpoint: Option<ObservedQuicEndpoint>,
-    connection: Option<quinn::Connection>,
-    auth_stream: Option<dae_outbound::juicity::JuicityAuthStream>,
+    proxy: Arc<ResidentProxyPlan>,
+    owner_registry: Option<JuicityOwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
+    transport: Option<JuicityTransportLease>,
+    send: Option<quinn::SendStream>,
+    recv: Option<quinn::RecvStream>,
+    response_buffer: Vec<u8>,
+    first_packet: bool,
+    fixed_target: UdpSessionFixedTarget,
 }
 
 impl JuicityQuicStreamPacketSession {
     pub(super) fn new(
-        uuid: String,
-        password: String,
-        allow_insecure: bool,
-        pinned_certchain_sha256: String,
+        proxy: Arc<ResidentProxyPlan>,
+        owner_registry: Option<JuicityOwnerRegistryHandle>,
     ) -> Self {
         Self {
-            uuid,
-            password,
-            allow_insecure,
-            pinned_certchain_sha256,
-            endpoint: None,
-            connection: None,
-            auth_stream: None,
+            proxy,
+            owner_registry,
+            owner_deadline: None,
+            transport: None,
+            send: None,
+            recv: None,
+            response_buffer: Vec::new(),
+            first_packet: true,
+            fixed_target: UdpSessionFixedTarget::default(),
+        }
+    }
+
+    pub(super) fn set_owner_deadline(&mut self, deadline: dae_runtime_control::AbsoluteDeadline) {
+        if self.transport.is_none() {
+            self.owner_deadline = Some(deadline);
         }
     }
 
@@ -533,88 +541,115 @@ impl JuicityQuicStreamPacketSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        self.ensure_open(proxy).await?;
-        let connection = self
-            .connection
-            .as_ref()
-            .ok_or_else(|| "Juicity QUIC connection is not initialized".to_owned())?;
+        if proxy.graph_link_hash != self.proxy.graph_link_hash {
+            return Err("Juicity UDP session proxy identity changed".to_owned());
+        }
+        self.fixed_target
+            .bind(original_dst, "Juicity UDP stream session")?;
+        let deadline = self.owner_deadline.take().unwrap_or_else(|| {
+            dae_runtime_control::AbsoluteDeadline::from_now(
+                Instant::now(),
+                RESIDENT_UDP_RESPONSE_TIMEOUT,
+            )
+        });
+        self.ensure_open(deadline).await?;
         let request_frame = seal_stream_packet_frame(&original_dst.to_string(), payload)
             .map_err(|err| format!("build Juicity UDP stream packet: {err}"))?;
-        let request =
-            build_juicity_stream_packet_request(&original_dst.to_string(), &request_frame.encoded)?;
-        let (mut send, mut recv) =
-            time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connection.open_bi())
-                .await
-                .map_err(|_| "open Juicity UDP stream timeout".to_owned())?
-                .map_err(|err| format!("open Juicity UDP stream: {err}"))?;
-        time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, send.write_all(&request))
-            .await
-            .map_err(|_| "write Juicity UDP stream packet timeout".to_owned())?
-            .map_err(|err| format!("write Juicity UDP stream packet: {err}"))?;
-        send.finish()
-            .map_err(|err| format!("finish Juicity UDP stream packet: {err}"))?;
-        let response = time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            read_juicity_stream_packet_response(&mut recv),
-        )
-        .await
-        .map_err(|_| "read Juicity UDP stream response timeout".to_owned())??;
-        let parsed = decode_stream_packet_frame(&response)
-            .map_err(|err| format!("decode Juicity UDP stream packet: {err}"))?;
-        Ok(juicity_udp_response_result(parsed.target, parsed.payload))
-    }
-
-    async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
-        if self.connection.is_some() && self.auth_stream.is_some() {
-            return Ok(());
+        let request = if self.first_packet {
+            build_juicity_stream_packet_request(&original_dst.to_string(), &request_frame.encoded)?
+        } else {
+            request_frame.encoded
+        };
+        let remaining = deadline
+            .remaining_at(Instant::now())
+            .ok_or_else(|| "write Juicity UDP stream packet deadline elapsed".to_owned())?;
+        let send = self
+            .send
+            .as_mut()
+            .ok_or_else(|| "Juicity UDP stream writer is not initialized".to_owned())?;
+        match time::timeout(remaining, send.write_all(&request)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                self.reset_stream();
+                return Err(format!("write Juicity UDP stream packet: {err}"));
+            }
+            Err(_) => {
+                self.reset_stream();
+                return Err("write Juicity UDP stream packet deadline elapsed".to_owned());
+            }
         }
-        let ResidentConnectedQuicEndpoint {
-            endpoint,
-            connection,
-            ..
-        } = open_juicity_quic_connection_candidates_async(
-            proxy,
-            proxy.mark,
-            self.allow_insecure,
-            &self.pinned_certchain_sha256,
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            QuicEndpointCallerClass::UdpData,
-        )
-        .await?;
-        let (_auth_report, auth_stream) = match time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            authenticate_juicity_connection(&connection, &self.uuid, &self.password),
+        self.first_packet = false;
+        let remaining = deadline
+            .remaining_at(Instant::now())
+            .ok_or_else(|| "read Juicity UDP stream response deadline elapsed".to_owned())?;
+        let recv = self
+            .recv
+            .as_mut()
+            .ok_or_else(|| "Juicity UDP stream reader is not initialized".to_owned())?;
+        let response = match time::timeout(
+            remaining,
+            read_juicity_stream_packet_response(recv, &mut self.response_buffer),
         )
         .await
         {
-            Err(_) => {
-                endpoint.mark_failed();
-                return Err("Juicity QUIC auth timeout".to_owned());
-            }
+            Ok(Ok(response)) => response,
             Ok(Err(err)) => {
-                endpoint.mark_failed();
-                return Err(format!("authenticate Juicity QUIC connection: {err}"));
+                self.reset_stream();
+                return Err(err);
             }
-            Ok(Ok(auth)) => auth,
+            Err(_) => {
+                self.reset_stream();
+                return Err("read Juicity UDP stream response deadline elapsed".to_owned());
+            }
         };
-        endpoint.mark_ready();
-        self.auth_stream = Some(auth_stream);
-        self.connection = Some(connection);
-        self.endpoint = Some(endpoint);
+        Ok(juicity_udp_response_result(
+            response.target,
+            response.payload,
+        ))
+    }
+
+    async fn ensure_open(
+        &mut self,
+        deadline: dae_runtime_control::AbsoluteDeadline,
+    ) -> Result<(), String> {
+        if self.transport.is_some() && self.send.is_some() && self.recv.is_some() {
+            return Ok(());
+        }
+        let registry = self.owner_registry.as_ref().ok_or_else(|| {
+            "Juicity transport owner registry is unavailable for UDP session".to_owned()
+        })?;
+        let transport = registry
+            .acquire(
+                Arc::clone(&self.proxy),
+                QuicEndpointCallerClass::UdpData,
+                deadline,
+            )
+            .await?;
+        let (send, recv) = transport.open_stream(deadline).await?;
+        self.transport = Some(transport);
+        self.send = Some(send);
+        self.recv = Some(recv);
+        self.first_packet = true;
         Ok(())
     }
 
+    fn reset_stream(&mut self) {
+        self.send.take();
+        self.recv.take();
+        self.transport.take();
+        self.response_buffer.clear();
+        self.first_packet = true;
+    }
+
     pub(super) async fn shutdown(&mut self) {
-        if let Some(auth_stream) = self.auth_stream.as_mut() {
-            let _ = auth_stream.finish().await;
+        if let Some(mut send) = self.send.take() {
+            let _ = send.finish();
         }
-        self.auth_stream.take();
-        if let Some(connection) = self.connection.take() {
-            connection.close(0_u32.into(), b"resident juicity udp session done");
-        }
-        if let Some(endpoint) = self.endpoint.take() {
-            endpoint.wait_idle().await;
-        }
+        self.recv.take();
+        self.transport.take();
+        self.response_buffer.clear();
+        self.first_packet = true;
+        self.fixed_target.clear();
     }
 }
 
@@ -627,6 +662,36 @@ fn juicity_udp_response_result(target: String, payload: Vec<u8>) -> UdpExchangeR
         Ok(source) => result.with_decoded_response_identity(Some(source), None),
         Err(_) => result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity),
     }
+}
+
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) async fn exercise_juicity_udp_stream_session(
+    proxy: Arc<ResidentProxyPlan>,
+    registry: JuicityOwnerRegistryHandle,
+    target: SocketAddr,
+    payloads: &[&[u8]],
+) -> Result<(u64, Vec<Vec<u8>>), String> {
+    let mut session = JuicityQuicStreamPacketSession::new(proxy, Some(registry));
+    let mut responses = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        let proxy = Arc::clone(&session.proxy);
+        let mut response = session.exchange(&proxy, target, payload).await?;
+        let expectation = response.fixed_target_expectation(target);
+        let payload = response
+            .take_fixed_target_payload(expectation)
+            .into_payload()
+            .map_err(|validation| {
+                format!("Juicity test response validation failed: {validation:?}")
+            })?;
+        responses.push(payload);
+    }
+    let owner_id = session
+        .transport
+        .as_ref()
+        .map(JuicityTransportLease::physical_owner_id)
+        .ok_or_else(|| "Juicity test session did not retain its transport lease".to_owned())?;
+    session.shutdown().await;
+    Ok((owner_id, responses))
 }
 
 #[cfg(test)]

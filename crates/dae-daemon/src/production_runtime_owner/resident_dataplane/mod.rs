@@ -120,8 +120,49 @@ mod tuic_owner;
 pub(crate) use self::tuic_owner::{
     TuicOwnerRegistryHandle, TuicTransportLease, TuicUdpAssociationLease, start_tuic_owner_registry,
 };
+#[path = "runtime/juicity_owner.rs"]
+mod juicity_owner;
+pub(crate) use self::juicity_owner::{
+    JuicityOwnerRegistryHandle, JuicityTransportLease, start_juicity_owner_registry,
+};
+
+#[derive(Clone, Default)]
+pub(crate) struct ResidentTransportOwnerRegistries {
+    hysteria2: Option<Hysteria2OwnerRegistryHandle>,
+    tuic: Option<TuicOwnerRegistryHandle>,
+    juicity: Option<JuicityOwnerRegistryHandle>,
+}
+
+impl ResidentTransportOwnerRegistries {
+    pub(crate) fn new(
+        hysteria2: Option<Hysteria2OwnerRegistryHandle>,
+        tuic: Option<TuicOwnerRegistryHandle>,
+        juicity: Option<JuicityOwnerRegistryHandle>,
+    ) -> Self {
+        Self {
+            hysteria2,
+            tuic,
+            juicity,
+        }
+    }
+
+    pub(crate) fn hysteria2(&self) -> Option<Hysteria2OwnerRegistryHandle> {
+        self.hysteria2.clone()
+    }
+
+    pub(crate) fn tuic(&self) -> Option<TuicOwnerRegistryHandle> {
+        self.tuic.clone()
+    }
+
+    pub(crate) fn juicity(&self) -> Option<JuicityOwnerRegistryHandle> {
+        self.juicity.clone()
+    }
+}
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
+#[cfg(test)]
+#[path = "runtime/juicity_owner_live_tests.rs"]
+mod juicity_owner_live_tests;
 #[cfg(test)]
 #[path = "runtime/tuic_owner_live_tests.rs"]
 mod tuic_owner_live_tests;

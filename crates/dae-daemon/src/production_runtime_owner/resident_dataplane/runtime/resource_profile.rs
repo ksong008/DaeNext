@@ -92,6 +92,24 @@ const HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT: usize = 3;
 const LOW_MEMORY_TUIC_OWNER_LIMIT: usize = 8;
 const BALANCED_TUIC_OWNER_LIMIT: usize = 32;
 const HIGH_PERFORMANCE_TUIC_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_JUICITY_OWNER_LIMIT: usize = 8;
+const BALANCED_JUICITY_OWNER_LIMIT: usize = 32;
+const HIGH_PERFORMANCE_JUICITY_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_JUICITY_CONNECTIONS_PER_POOL: usize = 2;
+const BALANCED_JUICITY_CONNECTIONS_PER_POOL: usize = 4;
+const HIGH_PERFORMANCE_JUICITY_CONNECTIONS_PER_POOL: usize = 8;
+const LOW_MEMORY_JUICITY_LOGICAL_STREAMS_PER_CONNECTION: usize = 24;
+const BALANCED_JUICITY_LOGICAL_STREAMS_PER_CONNECTION: usize = 64;
+const HIGH_PERFORMANCE_JUICITY_LOGICAL_STREAMS_PER_CONNECTION: usize = 128;
+const LOW_MEMORY_JUICITY_RESERVED_STREAMS_PER_CONNECTION: usize = 1;
+const BALANCED_JUICITY_RESERVED_STREAMS_PER_CONNECTION: usize = 3;
+const HIGH_PERFORMANCE_JUICITY_RESERVED_STREAMS_PER_CONNECTION: usize = 5;
+const LOW_MEMORY_JUICITY_OWNER_COMMAND_QUEUE_DEPTH: usize = 32;
+const BALANCED_JUICITY_OWNER_COMMAND_QUEUE_DEPTH: usize = 128;
+const HIGH_PERFORMANCE_JUICITY_OWNER_COMMAND_QUEUE_DEPTH: usize = 512;
+const LOW_MEMORY_JUICITY_RETRY_COOLDOWN_SECONDS: u64 = 5;
+const BALANCED_JUICITY_RETRY_COOLDOWN_SECONDS: u64 = 3;
+const HIGH_PERFORMANCE_JUICITY_RETRY_COOLDOWN_SECONDS: u64 = 1;
 const LOW_MEMORY_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 64;
 const BALANCED_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 256;
 const HIGH_PERFORMANCE_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 1_024;
@@ -196,6 +214,107 @@ pub(crate) struct TuicOwnerResourceProfile {
     association_quarantine_limit: usize,
     association_quarantine_ttl: Duration,
     retry_cooldown: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct JuicityOwnerResourceProfile {
+    owner_limit: usize,
+    connections_per_pool: usize,
+    logical_streams_per_connection: usize,
+    reserved_streams_per_connection: usize,
+    command_queue_depth: usize,
+    retry_cooldown: Duration,
+}
+
+impl JuicityOwnerResourceProfile {
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        match profile {
+            ResidentRuntimeProfile::LowMemory => Self {
+                owner_limit: LOW_MEMORY_JUICITY_OWNER_LIMIT,
+                connections_per_pool: LOW_MEMORY_JUICITY_CONNECTIONS_PER_POOL,
+                logical_streams_per_connection: LOW_MEMORY_JUICITY_LOGICAL_STREAMS_PER_CONNECTION,
+                reserved_streams_per_connection: LOW_MEMORY_JUICITY_RESERVED_STREAMS_PER_CONNECTION,
+                command_queue_depth: LOW_MEMORY_JUICITY_OWNER_COMMAND_QUEUE_DEPTH,
+                retry_cooldown: Duration::from_secs(LOW_MEMORY_JUICITY_RETRY_COOLDOWN_SECONDS),
+            },
+            ResidentRuntimeProfile::Balanced => Self {
+                owner_limit: BALANCED_JUICITY_OWNER_LIMIT,
+                connections_per_pool: BALANCED_JUICITY_CONNECTIONS_PER_POOL,
+                logical_streams_per_connection: BALANCED_JUICITY_LOGICAL_STREAMS_PER_CONNECTION,
+                reserved_streams_per_connection: BALANCED_JUICITY_RESERVED_STREAMS_PER_CONNECTION,
+                command_queue_depth: BALANCED_JUICITY_OWNER_COMMAND_QUEUE_DEPTH,
+                retry_cooldown: Duration::from_secs(BALANCED_JUICITY_RETRY_COOLDOWN_SECONDS),
+            },
+            ResidentRuntimeProfile::HighPerformance => Self {
+                owner_limit: HIGH_PERFORMANCE_JUICITY_OWNER_LIMIT,
+                connections_per_pool: HIGH_PERFORMANCE_JUICITY_CONNECTIONS_PER_POOL,
+                logical_streams_per_connection:
+                    HIGH_PERFORMANCE_JUICITY_LOGICAL_STREAMS_PER_CONNECTION,
+                reserved_streams_per_connection:
+                    HIGH_PERFORMANCE_JUICITY_RESERVED_STREAMS_PER_CONNECTION,
+                command_queue_depth: HIGH_PERFORMANCE_JUICITY_OWNER_COMMAND_QUEUE_DEPTH,
+                retry_cooldown: Duration::from_secs(
+                    HIGH_PERFORMANCE_JUICITY_RETRY_COOLDOWN_SECONDS,
+                ),
+            },
+        }
+    }
+
+    pub(crate) fn selected() -> Self {
+        static SELECTED: std::sync::OnceLock<JuicityOwnerResourceProfile> =
+            std::sync::OnceLock::new();
+        *SELECTED.get_or_init(|| {
+            Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+        })
+    }
+
+    pub(crate) const fn owner_limit(self) -> usize {
+        self.owner_limit
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn with_owner_limit(mut self, owner_limit: usize) -> Self {
+        self.owner_limit = owner_limit;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn with_pool_shape(
+        mut self,
+        connections_per_pool: usize,
+        logical_streams_per_connection: usize,
+        reserved_streams_per_connection: usize,
+    ) -> Self {
+        self.connections_per_pool = connections_per_pool;
+        self.logical_streams_per_connection = logical_streams_per_connection;
+        self.reserved_streams_per_connection = reserved_streams_per_connection;
+        self
+    }
+
+    pub(crate) const fn connections_per_pool(self) -> usize {
+        self.connections_per_pool
+    }
+
+    pub(crate) const fn logical_streams_per_connection(self) -> usize {
+        self.logical_streams_per_connection
+    }
+
+    pub(crate) const fn reserved_streams_per_connection(self) -> usize {
+        self.reserved_streams_per_connection
+    }
+
+    pub(crate) const fn usable_streams_per_connection(self) -> usize {
+        self.logical_streams_per_connection
+            .saturating_sub(self.reserved_streams_per_connection)
+    }
+
+    pub(crate) const fn command_queue_depth(self) -> usize {
+        self.command_queue_depth
+    }
+
+    pub(crate) const fn retry_cooldown(self) -> Duration {
+        self.retry_cooldown
+    }
 }
 
 impl TuicOwnerResourceProfile {
