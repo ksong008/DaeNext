@@ -306,6 +306,17 @@ mod tests {
     }
 
     #[test]
+    fn resident_dns_udp_response_is_bound_to_the_original_destination() {
+        let original_dst: SocketAddr = "192.0.2.53:53".parse().unwrap();
+        let (_, mut response) =
+            resident_dns_udp_exchange_result(original_dst, b"dns-response".to_vec());
+        let expectation = response.fixed_target_expectation(original_dst);
+        let payload = response.take_fixed_target_payload(expectation);
+        assert_eq!(payload.validation(), UdpFixedTargetValidation::Validated);
+        assert_eq!(payload.into_payload().unwrap(), b"dns-response");
+    }
+
+    #[test]
     fn resident_udp_quic_wire_helpers_roundtrip() {
         const CONFIGURED_UDP_TARGET_PORT: u16 = 8053;
         let target = format!("udp-target:{CONFIGURED_UDP_TARGET_PORT}");

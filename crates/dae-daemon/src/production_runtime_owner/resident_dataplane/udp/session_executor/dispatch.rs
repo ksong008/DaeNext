@@ -11,7 +11,7 @@ impl UdpSessionExecutor {
         match self {
             Self::Dns => handle_resident_dns_udp_async(dns, original_dst, payload)
                 .await
-                .map(resident_dns_udp_exchange_result),
+                .map(|response| resident_dns_udp_exchange_result(original_dst, response)),
             _ => {
                 self.execute_proxy_packet(proxy, original_dst, payload)
                     .await

@@ -16,15 +16,20 @@ impl UdpExchangeSessionScope {
 }
 
 pub(super) fn resident_dns_udp_exchange_result(
+    original_dst: SocketAddr,
     response: Vec<u8>,
 ) -> (&'static str, UdpExchangeResult) {
-    ("udp_dns_packet_finished", resident_dns_udp_result(response))
+    (
+        "udp_dns_packet_finished",
+        resident_dns_udp_result(original_dst, response),
+    )
 }
 
-fn resident_dns_udp_result(response: Vec<u8>) -> UdpExchangeResult {
+fn resident_dns_udp_result(original_dst: SocketAddr, response: Vec<u8>) -> UdpExchangeResult {
     UdpExchangeResult::new(response, "resident-dns-udp")
         .with_session_executor("tokio-dns-datagram")
         .with_underlay_reuse("not-required-independent-datagram")
+        .with_session_bound_response_identity(original_dst, None)
 }
 
 pub(super) async fn record_udp_exchange_result(
