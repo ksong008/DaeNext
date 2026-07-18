@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use sha2::{Digest, Sha256};
 
 use crate::production_runtime_owner::resident_dataplane::plan::{
-    ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan,
+    ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpQuicTlsProvider,
 };
 
 use super::super::resolved_endpoint::XhttpResolvedEndpointIdentity;
@@ -41,6 +41,7 @@ struct XhttpSecurityIdentity {
     trust: XhttpTrustIdentity,
     reality: Option<[u8; 32]>,
     fingerprint: Option<[u8; 32]>,
+    quic_tls_provider: Option<ResidentXhttpQuicTlsProvider>,
     tls_fragment: Option<(usize, usize, u64, u64)>,
 }
 
@@ -75,7 +76,7 @@ impl XhttpXmuxKey {
         xmux: &ResidentXhttpXmuxPlan,
         mark: u32,
         mptcp: bool,
-    ) -> Self {
+    ) -> Result<Self, String> {
         Self::new(
             XhttpCarrierRole::Primary,
             proxy,
@@ -94,7 +95,7 @@ impl XhttpXmuxKey {
         xmux: &ResidentXhttpXmuxPlan,
         mark: u32,
         mptcp: bool,
-    ) -> Self {
+    ) -> Result<Self, String> {
         // Download endpoints use the fixed rustls endpoint client. The primary source fingerprint
         // remains represented by the full graph hash, while no inactive fingerprint option is
         // projected as a download transport setting.
@@ -117,28 +118,38 @@ impl XhttpXmuxKey {
         fingerprint: Option<&ResidentUtlsFingerprintPlan>,
         xmux: &ResidentXhttpXmuxPlan,
         socket: XhttpSocketIdentity,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let xmux = xmux.clone().official_normalized();
-        Self {
+        let carrier_protocol = match endpoint.http_version() {
+            ResidentXhttpHttpVersion::H3 => XhttpCarrierProtocol::Http3,
+            ResidentXhttpHttpVersion::H1 | ResidentXhttpHttpVersion::H2 => {
+                XhttpCarrierProtocol::Http2
+            }
+        };
+        let quic_tls_provider = match (role, carrier_protocol) {
+            (XhttpCarrierRole::Primary, XhttpCarrierProtocol::Http3) => {
+                Some(ResidentXhttpQuicTlsProvider::for_primary(fingerprint)?)
+            }
+            (XhttpCarrierRole::Download, XhttpCarrierProtocol::Http3) => {
+                Some(ResidentXhttpQuicTlsProvider::Rustls)
+            }
+            (_, XhttpCarrierProtocol::Http2) => None,
+        };
+        Ok(Self {
             role,
             graph: graph_identity(proxy),
             runtime_generation: xmux.runtime_generation,
             declared_server_host: endpoint.server_host.clone(),
             declared_server_port: endpoint.server_port,
             resolved_endpoint: resolved_endpoint.clone(),
-            carrier_protocol: match endpoint.http_version() {
-                ResidentXhttpHttpVersion::H3 => XhttpCarrierProtocol::Http3,
-                ResidentXhttpHttpVersion::H1 | ResidentXhttpHttpVersion::H2 => {
-                    XhttpCarrierProtocol::Http2
-                }
-            },
+            carrier_protocol,
             server_name: endpoint.server_name.clone(),
             alpn: endpoint.alpn.clone(),
-            security: security_identity(endpoint, fingerprint),
+            security: security_identity(endpoint, fingerprint, quic_tls_provider),
             request_route_identity: request_route_identity(endpoint),
             xmux,
             socket,
-        }
+        })
     }
 
     pub(super) fn runtime_generation(&self) -> u64 {
@@ -181,6 +192,10 @@ impl XhttpXmuxKey {
                 trust: XhttpTrustIdentity::WebPkiRoots,
                 reality: None,
                 fingerprint: None,
+                quic_tls_provider: match protocol {
+                    ResidentXhttpHttpVersion::H3 => Some(ResidentXhttpQuicTlsProvider::Rustls),
+                    ResidentXhttpHttpVersion::H1 | ResidentXhttpHttpVersion::H2 => None,
+                },
                 tls_fragment: None,
             },
             request_route_identity: identity_digest("xhttp-test-route", &[b"/xhttp"]),
@@ -238,6 +253,7 @@ fn graph_identity(proxy: &ResidentProxyPlan) -> Vec<XhttpGraphNodeIdentity> {
 fn security_identity(
     endpoint: &ResidentXhttpEndpointPlan,
     fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+    quic_tls_provider: Option<ResidentXhttpQuicTlsProvider>,
 ) -> XhttpSecurityIdentity {
     XhttpSecurityIdentity {
         trust: if endpoint.reality.is_some() {
@@ -249,6 +265,7 @@ fn security_identity(
         },
         reality: endpoint.reality.as_ref().map(reality_identity),
         fingerprint: fingerprint.map(fingerprint_identity),
+        quic_tls_provider,
         tls_fragment: endpoint.tls_fragment.as_ref().map(|fragment| {
             (
                 fragment.min_length,

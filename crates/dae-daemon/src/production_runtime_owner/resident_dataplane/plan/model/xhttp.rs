@@ -17,6 +17,40 @@ pub(crate) struct ResidentUtlsFingerprintPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) default_alpn: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ResidentXhttpQuicTlsProvider {
+    Rustls,
+    ChromeBoring,
+}
+
+impl ResidentXhttpQuicTlsProvider {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn for_primary(
+        fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+    ) -> Result<Self, String> {
+        let Some(fingerprint) = fingerprint else {
+            return Ok(Self::Rustls);
+        };
+        if fingerprint.family == dae_outbound::shared_transport::UTLS_FAMILY_CHROME
+            && fingerprint.canonical == "chrome_auto"
+            && matches!(fingerprint.name.as_str(), "chrome" | "chrome_auto")
+            && !fingerprint.randomized
+        {
+            return Ok(Self::ChromeBoring);
+        }
+        Err(format!(
+            "xHTTP HTTP/3 QUIC TLS supports only chrome/chrome_auto fingerprint; requested {}",
+            fingerprint.name
+        ))
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rustls => "quinn-rustls",
+            Self::ChromeBoring => "quinn-boringssl-chrome",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentRealityUnderlayPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) public_key: [u8; 32],

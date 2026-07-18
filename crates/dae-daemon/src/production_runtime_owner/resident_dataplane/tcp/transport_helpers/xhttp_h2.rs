@@ -10,6 +10,8 @@ mod xmux;
 
 mod request;
 
+mod h3_boring_tls;
+
 mod h3_transport;
 use self::h3_transport::{XhttpH3Connection, XhttpH3EndpointClient};
 

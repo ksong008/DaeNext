@@ -2,15 +2,15 @@ use super::*;
 
 pub(super) fn validate_resident_xhttp_primary_quic_tls_features(
     http_version: ResidentXhttpHttpVersion,
-    has_fingerprint: bool,
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     node_tag: &str,
 ) -> Result<(), String> {
-    if http_version != ResidentXhttpHttpVersion::H3 || !has_fingerprint {
+    if http_version != ResidentXhttpHttpVersion::H3 {
         return Ok(());
     }
-    Err(format!(
-        "resident dataplane vless xHTTP HTTP/3 uses QUIC TLS and does not admit a uTLS fingerprint for node {node_tag}"
-    ))
+    ResidentXhttpQuicTlsProvider::for_primary(fingerprint)
+        .map(|_| ())
+        .map_err(|err| format!("resident dataplane vless {err} for node {node_tag}"))
 }
 
 pub(super) fn validate_resident_xhttp_reality_http_version(

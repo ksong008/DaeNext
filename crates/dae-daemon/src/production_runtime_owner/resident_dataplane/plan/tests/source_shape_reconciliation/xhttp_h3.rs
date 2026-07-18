@@ -1,7 +1,7 @@
 use super::*;
 
 const XHTTP_H3_ALPN: &str = "h3";
-const XHTTP_H3_FINGERPRINT: &str = "chrome_102";
+const XHTTP_H3_UNSUPPORTED_FINGERPRINT: &str = "chrome_102";
 const REALITY_PUBLIC_KEY_LEN: usize = 32;
 
 const XHTTP_H3_FRAGMENT_CONFIG: &str = r#"
@@ -68,15 +68,28 @@ fn builder_xhttp_h3_materializes_quic_tls_and_normalizes_global_fragment() {
 }
 
 #[test]
-fn builder_xhttp_h3_rejects_explicit_fingerprint() {
+fn builder_xhttp_h3_admits_only_chrome_auto_fingerprint_provider() {
+    let source = vless_xhttp_parser_fixture_url("packet-up", XHTTP_H3_ALPN, "");
+    for fingerprint in ["chrome", "chrome_auto"] {
+        let mut link = VLESSLink::parse(&source).unwrap();
+        link.fingerprint = fingerprint.to_owned();
+        let proxy = build(&link.export_url()).unwrap();
+        assert_eq!(
+            ResidentXhttpQuicTlsProvider::for_primary(proxy.utls_fingerprint.as_ref()).unwrap(),
+            ResidentXhttpQuicTlsProvider::ChromeBoring
+        );
+    }
+}
+
+#[test]
+fn builder_xhttp_h3_rejects_other_fingerprints() {
     let source = vless_xhttp_parser_fixture_url("packet-up", XHTTP_H3_ALPN, "");
     let mut link = VLESSLink::parse(&source).unwrap();
-    link.fingerprint = XHTTP_H3_FINGERPRINT.to_owned();
+    link.fingerprint = XHTTP_H3_UNSUPPORTED_FINGERPRINT.to_owned();
 
     let error = build(&link.export_url()).unwrap_err();
-    assert!(error.contains("HTTP/3 uses QUIC TLS"), "{error}");
     assert!(
-        error.contains("does not admit a uTLS fingerprint"),
+        error.contains("supports only chrome/chrome_auto fingerprint"),
         "{error}"
     );
 }

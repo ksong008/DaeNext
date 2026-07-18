@@ -114,7 +114,7 @@ pub(crate) fn build_vless_proxy_plan(
     if let Some(http_version) = xhttp_primary_http_version {
         validate_resident_xhttp_primary_quic_tls_features(
             http_version,
-            utls_fingerprint.is_some(),
+            utls_fingerprint.as_ref(),
             &node_tag,
         )?;
     }

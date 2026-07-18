@@ -482,14 +482,10 @@ pub(super) fn validate_resident_xhttp_settings_for_mode(
 
 pub(super) fn validate_resident_xhttp_primary_quic_tls_features(
     http_version: ResidentXhttpHttpVersion,
-    has_fingerprint: bool,
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     node_tag: &str,
 ) -> Result<(), String> {
-    quic_tls::validate_resident_xhttp_primary_quic_tls_features(
-        http_version,
-        has_fingerprint,
-        node_tag,
-    )
+    quic_tls::validate_resident_xhttp_primary_quic_tls_features(http_version, fingerprint, node_tag)
 }
 
 fn validate_resident_xhttp_endpoint_alpn(alpn: &[String], node_tag: &str) -> Result<(), String> {
