@@ -26,6 +26,7 @@ pub(crate) struct ResidentRuntimeOwner {
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+    h2_carrier_generation_owner: Option<H2CarrierGenerationOwnerHandle>,
     xhttp_xmux_generation_owner: Option<tcp::XhttpXmuxGenerationOwnerHandle>,
     xhttp_xmux_owner_thread: Option<JoinHandle<()>>,
 }
@@ -86,6 +87,7 @@ impl ResidentRuntimeOwner {
             tuic_owner_registry: None,
             juicity_owner_registry: None,
             anytls_owner_registry: None,
+            h2_carrier_generation_owner: None,
             xhttp_xmux_generation_owner: None,
             xhttp_xmux_owner_thread: None,
         }
@@ -145,6 +147,15 @@ impl ResidentRuntimeOwner {
 
     pub(crate) fn anytls_owner_registry(&self) -> Option<AnyTlsOwnerRegistryHandle> {
         self.anytls_owner_registry.clone()
+    }
+
+    pub(crate) fn install_h2_carrier_generation_owner(
+        &mut self,
+        handle: H2CarrierGenerationOwnerHandle,
+        thread: JoinHandle<()>,
+    ) {
+        self.h2_carrier_generation_owner = Some(handle);
+        self.register_thread("h2-carrier-owner", "protocol-transport-owner", thread);
     }
 
     pub(crate) fn install_xhttp_xmux_generation_owner(
@@ -263,6 +274,7 @@ impl ResidentRuntimeOwner {
             "tuicOwners": self.tuic_owner_registry.as_ref().map(TuicOwnerRegistryHandle::metrics_snapshot),
             "juicityOwners": self.juicity_owner_registry.as_ref().map(JuicityOwnerRegistryHandle::metrics_snapshot),
             "anytlsOwners": self.anytls_owner_registry.as_ref().map(AnyTlsOwnerRegistryHandle::metrics_snapshot),
+            "h2CarrierOwners": self.h2_carrier_generation_owner.as_ref().map(H2CarrierGenerationOwnerHandle::metrics_snapshot),
             "xhttpXmuxOwner": self.xhttp_xmux_generation_owner.as_ref().map(tcp::XhttpXmuxGenerationOwnerHandle::metrics_snapshot),
             "tasks": self.tasks.iter().map(|task| {
                 json!({
@@ -307,6 +319,11 @@ impl ResidentRuntimeOwner {
             .anytls_owner_registry
             .as_ref()
             .map(AnyTlsOwnerRegistryHandle::metrics_snapshot)
+            .unwrap_or(Value::Null);
+        snapshot["h2CarrierOwners"] = self
+            .h2_carrier_generation_owner
+            .as_ref()
+            .map(H2CarrierGenerationOwnerHandle::metrics_snapshot)
             .unwrap_or(Value::Null);
         snapshot["xhttpXmuxOwner"] = self
             .xhttp_xmux_generation_owner
@@ -377,6 +394,7 @@ impl ResidentRuntimeOwner {
             "tuicOwners": self.tuic_owner_registry.as_ref().map(TuicOwnerRegistryHandle::metrics_snapshot),
             "juicityOwners": self.juicity_owner_registry.as_ref().map(JuicityOwnerRegistryHandle::metrics_snapshot),
             "anytlsOwners": self.anytls_owner_registry.as_ref().map(AnyTlsOwnerRegistryHandle::metrics_snapshot),
+            "h2CarrierOwners": self.h2_carrier_generation_owner.as_ref().map(H2CarrierGenerationOwnerHandle::metrics_snapshot),
             "xhttpXmuxOwner": self.xhttp_xmux_generation_owner.as_ref().map(tcp::XhttpXmuxGenerationOwnerHandle::metrics_snapshot),
         })
     }
@@ -540,12 +558,17 @@ pub(crate) fn run_resident_manual_latency_probe_helper(
         .values()
         .filter_map(|probe| probe.as_ref().ok())
         .any(plan::ResidentProxyProbePlan::requires_anytls_transport_owner);
+    let requires_h2_carrier_owner = manual_probe_plans
+        .values()
+        .filter_map(|probe| probe.as_ref().ok())
+        .any(plan::ResidentProxyProbePlan::requires_h2_carrier_owner);
     let owner_scope = ManualProbeTransportOwnerScope::start(
         config,
         reload_generation,
         requires_tuic_owner,
         requires_juicity_owner,
         requires_anytls_owner,
+        requires_h2_carrier_owner,
     )
     .ok();
     let snapshots = probe_resident_manual_latency_snapshots(
@@ -598,12 +621,17 @@ where
         .values()
         .filter_map(|probe| probe.as_ref().ok())
         .any(plan::ResidentProxyProbePlan::requires_anytls_transport_owner);
+    let requires_h2_carrier_owner = manual_probe_plans
+        .values()
+        .filter_map(|probe| probe.as_ref().ok())
+        .any(plan::ResidentProxyProbePlan::requires_h2_carrier_owner);
     let owner_scope = ManualProbeTransportOwnerScope::start(
         config,
         reload_generation,
         requires_tuic_owner,
         requires_juicity_owner,
         requires_anytls_owner,
+        requires_h2_carrier_owner,
     )
     .ok();
     let result = probe_resident_manual_latency_snapshots_streaming(
@@ -647,11 +675,13 @@ struct ManualProbeTransportOwnerScope {
     tuic_handle: Option<TuicOwnerRegistryHandle>,
     juicity_handle: Option<JuicityOwnerRegistryHandle>,
     anytls_handle: Option<AnyTlsOwnerRegistryHandle>,
+    h2_carrier_handle: Option<H2CarrierGenerationOwnerHandle>,
     stop: SharedResidentStopSignal,
     hysteria2_thread: Option<JoinHandle<()>>,
     tuic_thread: Option<JoinHandle<()>>,
     juicity_thread: Option<JoinHandle<()>>,
     anytls_thread: Option<JoinHandle<()>>,
+    h2_carrier_thread: Option<JoinHandle<()>>,
 }
 
 impl ManualProbeTransportOwnerScope {
@@ -661,6 +691,7 @@ impl ManualProbeTransportOwnerScope {
         requires_tuic_owner: bool,
         requires_juicity_owner: bool,
         requires_anytls_owner: bool,
+        requires_h2_carrier_owner: bool,
     ) -> Result<Self, String> {
         let resources = ResidentRuntimeResourceConfig::from_config(config);
         let stop = ResidentStopSignal::shared();
@@ -726,16 +757,44 @@ impl ManualProbeTransportOwnerScope {
         } else {
             (None, None)
         };
+        let (h2_carrier_handle, h2_carrier_thread) = if requires_h2_carrier_owner {
+            match start_h2_carrier_generation_owner(
+                reload_generation,
+                Arc::clone(&stop),
+                resources.tcp_flow_stack_bytes.value(),
+                resources.tcp_runtime_workers.value(),
+            ) {
+                Ok((handle, thread)) => (Some(handle), Some(thread)),
+                Err(err) => {
+                    stop.store(true, Ordering::Release);
+                    if let Some(thread) = tuic_thread {
+                        let _ = thread.join();
+                    }
+                    if let Some(thread) = juicity_thread {
+                        let _ = thread.join();
+                    }
+                    if let Some(thread) = anytls_thread {
+                        let _ = thread.join();
+                    }
+                    let _ = thread.join();
+                    return Err(err);
+                }
+            }
+        } else {
+            (None, None)
+        };
         Ok(Self {
             hysteria2_handle: handle,
             tuic_handle,
             juicity_handle,
             anytls_handle,
+            h2_carrier_handle,
             stop,
             hysteria2_thread: Some(thread),
             tuic_thread,
             juicity_thread,
             anytls_thread,
+            h2_carrier_thread,
         })
     }
 }
@@ -755,6 +814,10 @@ impl Drop for ManualProbeTransportOwnerScope {
         if let Some(thread) = self.anytls_thread.take() {
             let _ = thread.join();
         }
+        if let Some(thread) = self.h2_carrier_thread.take() {
+            let _ = thread.join();
+        }
+        self.h2_carrier_handle = None;
     }
 }
 

@@ -86,14 +86,10 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         return open_vless_xhttp_native_tcp_tunnel(selection, request).await;
     }
 
-    let mut client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
     match execution.wrapper {
         ResidentStreamWrapperPlan::Grpc => {
-            let (mut h2_send, mut h2_recv, connection_task) =
-                open_grpc_h2_stream(client, &selection.proxy, &request)
+            let (mut h2_send, mut h2_recv, carrier_lease) =
+                open_grpc_h2_stream(&selection.proxy, &request)
                     .await
                     .map_err(NativeTcpProbeError::Open)?;
             let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
@@ -111,15 +107,14 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                     true,
                 )
                 .await;
-                connection_task.abort();
+                drop(carrier_lease);
                 stop.store(true, Ordering::Relaxed);
             });
             return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
         }
         ResidentStreamWrapperPlan::H2 => {
-            let (mut h2_send, response_task, connection_task) =
+            let (mut h2_send, response_task, carrier_lease) =
                 open_h2_body_stream_with_deferred_response(
-                    client,
                     &selection.proxy,
                     vec![Bytes::from(request)],
                     "VLESS H2",
@@ -142,13 +137,17 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                     "VLESS H2",
                 )
                 .await;
-                connection_task.abort();
+                drop(carrier_lease);
                 stop.store(true, Ordering::Relaxed);
             });
             return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
         }
         _ => {}
     }
+    let mut client =
+        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
     if execution.wrapper == ResidentStreamWrapperPlan::WebSocket {
         let options =
             HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);

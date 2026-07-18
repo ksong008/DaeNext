@@ -26,10 +26,6 @@ pub(crate) async fn handle_vless_h2_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
-    let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let initial_chunks = vless_h2_initial_data_chunks(
         &key,
@@ -37,13 +33,10 @@ pub(crate) async fn handle_vless_h2_tcp_connection_async(
         &selection.route.dial_target,
         &sniff.payload,
     )?;
-    let (mut h2_send, response_task, connection_task) = open_h2_body_stream_with_deferred_response(
-        client,
-        &selection.proxy,
-        initial_chunks,
-        "VLESS H2",
-    )
-    .await?;
+    let (mut h2_send, response_task, carrier_lease) =
+        open_h2_body_stream_with_deferred_response(&selection.proxy, initial_chunks, "VLESS H2")
+            .await?;
+    let tls_underlay = carrier_lease.tls_underlay();
     let mut initial_stats = DirectTcpRelayStats::default();
     if !sniff.payload.is_empty() {
         initial_stats.client_to_direct += sniff.payload.len();
@@ -61,7 +54,6 @@ pub(crate) async fn handle_vless_h2_tcp_connection_async(
         "VLESS H2",
     )
     .await;
-    connection_task.abort();
     result
         .map(|stats| {
             let mut event = generic_proxy_tcp_finished_event(
@@ -132,10 +124,6 @@ pub(crate) async fn handle_vless_grpc_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
-    let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let request = packet::first_write_bytes(
         &key,
@@ -146,8 +134,9 @@ pub(crate) async fn handle_vless_grpc_tcp_connection_async(
         &sniff.payload,
     )
     .map_err(|err| format!("build VLESS gRPC TCP request: {err}"))?;
-    let (mut h2_send, mut h2_recv, connection_task) =
-        open_grpc_h2_stream(client, &selection.proxy, &request).await?;
+    let (mut h2_send, mut h2_recv, carrier_lease) =
+        open_grpc_h2_stream(&selection.proxy, &request).await?;
+    let tls_underlay = carrier_lease.tls_underlay();
     let mut initial_stats = DirectTcpRelayStats::default();
     if !sniff.payload.is_empty() {
         initial_stats.client_to_direct += sniff.payload.len();
@@ -164,7 +153,6 @@ pub(crate) async fn handle_vless_grpc_tcp_connection_async(
         true,
     )
     .await;
-    connection_task.abort();
     result
         .map(|stats| {
             let mut event = generic_proxy_tcp_finished_event(

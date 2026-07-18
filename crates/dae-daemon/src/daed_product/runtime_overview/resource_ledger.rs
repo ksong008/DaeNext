@@ -25,6 +25,10 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
         .pointer("/residentDataplane/metrics/anytlsOwners")
         .cloned()
         .unwrap_or(Value::Null);
+    let h2_carriers = runtime
+        .pointer("/residentDataplane/metrics/h2CarrierOwners")
+        .cloned()
+        .unwrap_or(Value::Null);
     let runtime_profile = runtime
         .pointer("/residentDataplane/metrics/resources/runtimeProfile")
         .cloned()
@@ -128,6 +132,22 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
             "admissionEnforced": anytls["admissionEnforced"].clone(),
             "budget": anytls["budget"].clone(),
         },
+        "h2CarrierOwners": {
+            "registeredKeys": h2_carriers["registeredKeys"].clone(),
+            "registeredBuildTasks": h2_carriers["registeredBuildTasks"].clone(),
+            "registeredDriverTasks": h2_carriers["registeredDriverTasks"].clone(),
+            "reservedPhysicalConnections": h2_carriers["reservedPhysicalConnections"].clone(),
+            "highWaterReservedPhysicalConnections": h2_carriers["highWaterReservedPhysicalConnections"].clone(),
+            "activePhysicalConnections": h2_carriers["activePhysicalConnections"].clone(),
+            "highWaterPhysicalConnections": h2_carriers["highWaterPhysicalConnections"].clone(),
+            "activeLogicalStreams": h2_carriers["activeLogicalStreams"].clone(),
+            "highWaterLogicalStreams": h2_carriers["highWaterLogicalStreams"].clone(),
+            "activeBuilds": h2_carriers["activeBuilds"].clone(),
+            "ownerStateBytesLowerBound": h2_carriers["ownerStateBytesLowerBound"].clone(),
+            "admissionEnforced": h2_carriers["admissionEnforced"].clone(),
+            "shutdownTimedOut": h2_carriers["shutdownTimedOut"].clone(),
+            "budget": h2_carriers["budget"].clone(),
+        },
         "dnsTransportOwners": {
             "current": resident_metric("dnsTransportOwnersCurrent"),
             "maximum": resident_metric("dnsTransportOwnersMaximum"),
@@ -167,6 +187,7 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
             "dnsQuicEndpointChargesAreReportedSeparately": true,
             "anytlsLogicalBufferBytesAreProfileCharges": true,
             "anytlsOwnerStateBytesAreALowerBound": true,
+            "h2CarrierOwnerStateBytesAreALowerBound": true,
         },
     })
 }

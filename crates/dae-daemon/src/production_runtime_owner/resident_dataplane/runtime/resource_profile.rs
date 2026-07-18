@@ -128,6 +128,9 @@ const ANYTLS_IDLE_SESSION_TIMEOUT_SECONDS: u64 = 30;
 const ANYTLS_IDLE_SESSION_PROBE_THRESHOLD_SECONDS: u64 = 3;
 const ANYTLS_IDLE_SESSION_PROBE_TIMEOUT_SECONDS: u64 = 2;
 const ANYTLS_SID_QUARANTINE_TTL_SECONDS: u64 = 10;
+const LOW_MEMORY_H2_CARRIER_OWNER_LIMIT: usize = 8;
+const BALANCED_H2_CARRIER_OWNER_LIMIT: usize = 32;
+const HIGH_PERFORMANCE_H2_CARRIER_OWNER_LIMIT: usize = 128;
 const LOW_MEMORY_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 64;
 const BALANCED_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 256;
 const HIGH_PERFORMANCE_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 1_024;
@@ -257,6 +260,38 @@ pub(crate) struct AnyTlsOwnerResourceProfile {
     idle_probe_timeout: Duration,
     sid_quarantine_limit: usize,
     sid_quarantine_ttl: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct H2CarrierOwnerResourceProfile {
+    owner_limit: usize,
+}
+
+impl H2CarrierOwnerResourceProfile {
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        let owner_limit = match profile {
+            ResidentRuntimeProfile::LowMemory => LOW_MEMORY_H2_CARRIER_OWNER_LIMIT,
+            ResidentRuntimeProfile::Balanced => BALANCED_H2_CARRIER_OWNER_LIMIT,
+            ResidentRuntimeProfile::HighPerformance => HIGH_PERFORMANCE_H2_CARRIER_OWNER_LIMIT,
+        };
+        Self { owner_limit }
+    }
+
+    pub(crate) fn selected() -> Self {
+        static SELECTED: std::sync::OnceLock<H2CarrierOwnerResourceProfile> =
+            std::sync::OnceLock::new();
+        *SELECTED.get_or_init(|| {
+            Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+        })
+    }
+
+    pub(crate) const fn owner_limit(self) -> usize {
+        self.owner_limit
+    }
+
+    pub(crate) const fn physical_connection_limit(self) -> usize {
+        self.owner_limit
+    }
 }
 
 impl AnyTlsOwnerResourceProfile {

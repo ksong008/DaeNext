@@ -229,15 +229,8 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
         ResidentStreamWrapperPlan::Grpc if execution.security.is_tls_stream() => {
-            let client = open_async_resident_tls_client_with_flow(
-                &selection.proxy,
-                selection.mark,
-                selection.mptcp,
-            )
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
-            let (mut h2_send, mut h2_recv, connection_task) =
-                open_grpc_h2_stream(client, &selection.proxy, &session.first_write)
+            let (mut h2_send, mut h2_recv, carrier_lease) =
+                open_grpc_h2_stream(&selection.proxy, &session.first_write)
                     .await
                     .map_err(NativeTcpProbeError::Open)?;
             let task = tokio::spawn(async move {
@@ -251,21 +244,14 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     &metrics,
                 )
                 .await;
-                connection_task.abort();
+                drop(carrier_lease);
                 stop.store(true, Ordering::Relaxed);
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
         }
         ResidentStreamWrapperPlan::H2 if execution.security.is_tls_stream() => {
-            let client = open_async_resident_tls_client_with_flow(
-                &selection.proxy,
-                selection.mark,
-                selection.mptcp,
-            )
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
-            let (mut h2_send, mut h2_recv, connection_task) =
-                open_h2_body_stream(client, &selection.proxy, &session.first_write, "VMess H2")
+            let (mut h2_send, mut h2_recv, carrier_lease) =
+                open_h2_body_stream(&selection.proxy, &session.first_write, "VMess H2")
                     .await
                     .map_err(NativeTcpProbeError::Open)?;
             let task = tokio::spawn(async move {
@@ -279,7 +265,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     &metrics,
                 )
                 .await;
-                connection_task.abort();
+                drop(carrier_lease);
                 stop.store(true, Ordering::Relaxed);
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))

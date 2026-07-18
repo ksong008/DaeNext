@@ -4,6 +4,8 @@ pub(crate) struct GrpcH2Response {
     response: Option<h2::client::ResponseFuture>,
     recv_stream: Option<h2::RecvStream>,
     header_deadline: Pin<Box<time::Sleep>>,
+    grpc_status_seen: bool,
+    completed: bool,
 }
 
 impl GrpcH2Response {
@@ -12,10 +14,15 @@ impl GrpcH2Response {
             response: Some(response),
             recv_stream: None,
             header_deadline: Box::pin(time::sleep(RESIDENT_CONNECT_TIMEOUT)),
+            grpc_status_seen: false,
+            completed: false,
         }
     }
 
     pub(crate) async fn next_data(&mut self) -> Result<Option<Bytes>, String> {
+        if self.completed {
+            return Ok(None);
+        }
         self.ensure_headers().await?;
         let recv_stream = self
             .recv_stream
@@ -30,7 +37,20 @@ impl GrpcH2Response {
                 Ok(Some(bytes))
             }
             Some(Err(err)) => Err(format!("read gRPC HTTP/2 response data: {err}")),
-            None => Ok(None),
+            None => {
+                let trailers = recv_stream
+                    .trailers()
+                    .await
+                    .map_err(|err| format!("read gRPC HTTP/2 response trailers: {err}"))?;
+                if let Some(trailers) = trailers.as_ref() {
+                    self.grpc_status_seen |= validate_grpc_status(trailers, "trailers")?;
+                }
+                if !self.grpc_status_seen {
+                    return Err("gRPC HTTP/2 response ended without grpc-status".to_owned());
+                }
+                self.completed = true;
+                Ok(None)
+            }
         }
     }
 
@@ -55,27 +75,43 @@ impl GrpcH2Response {
         if !response.status().is_success() {
             return Err(format!("gRPC HTTP/2 response status {}", response.status()));
         }
+        self.grpc_status_seen |= validate_grpc_status(response.headers(), "headers")?;
         self.recv_stream = Some(response.into_body());
         Ok(())
     }
 }
 
-pub(crate) async fn open_grpc_h2_stream(
-    client: AsyncResidentTlsClient,
-    proxy: &ResidentProxyPlan,
-    first_payload: &[u8],
-) -> Result<
-    (
-        h2::SendStream<Bytes>,
-        GrpcH2Response,
-        tokio::task::JoinHandle<()>,
-    ),
-    String,
-> {
-    let request = grpc_h2_request(proxy)?;
-    open_grpc_h2_stream_on_io(client, request, first_payload).await
+fn validate_grpc_status(headers: &http::HeaderMap, location: &str) -> Result<bool, String> {
+    let Some(status) = headers.get("grpc-status") else {
+        return Ok(false);
+    };
+    let status = status
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| format!("gRPC HTTP/2 {location} contains malformed grpc-status"))?;
+    if status != 0 {
+        return Err(format!(
+            "gRPC HTTP/2 {location} reported grpc-status {status}"
+        ));
+    }
+    Ok(true)
 }
 
+pub(crate) async fn open_grpc_h2_stream(
+    proxy: &ResidentProxyPlan,
+    first_payload: &[u8],
+) -> Result<(h2::SendStream<Bytes>, GrpcH2Response, H2CarrierLease), String> {
+    let request = grpc_h2_request(proxy)?;
+    let deadline =
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
+    let lease = acquire_h2_carrier(Arc::new(proxy.clone()), deadline).await?;
+    let (response, mut send_stream) = lease.open_request(request, false, deadline, "gRPC").await?;
+    send_grpc_hunk(&mut send_stream, first_payload, false).await?;
+    Ok((send_stream, GrpcH2Response::new(response), lease))
+}
+
+#[cfg(test)]
 pub(super) async fn open_grpc_h2_stream_on_io<T>(
     client: T,
     request: http::Request<()>,

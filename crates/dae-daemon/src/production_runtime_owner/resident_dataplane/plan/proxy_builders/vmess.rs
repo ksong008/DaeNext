@@ -115,6 +115,7 @@ pub(crate) fn build_vmess_proxy_plan(
         None
     };
     let alpn = resident_raw_tls_alpn(Vec::new(), net.as_str(), utls_fingerprint.as_ref());
+    validate_resident_h2_carrier_alpn(&alpn, &net, &node_tag)?;
     let allow_insecure = tls == "tls" && (parsed.allow_insecure || config.global.allow_insecure);
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {

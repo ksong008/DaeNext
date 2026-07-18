@@ -254,10 +254,6 @@ pub(crate) async fn handle_trojan_grpc_tls_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
-    let client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
-    let tls_underlay = async_resident_tls_underlay_name(&client);
     let request = trojan_packet::tcp_request_header(
         password,
         "tcp",
@@ -265,8 +261,9 @@ pub(crate) async fn handle_trojan_grpc_tls_tcp_connection_async(
         &sniff.payload,
     )
     .map_err(|err| format!("build Trojan gRPC TCP request: {err}"))?;
-    let (mut h2_send, mut h2_recv, connection_task) =
-        open_grpc_h2_stream(client, &selection.proxy, &request).await?;
+    let (mut h2_send, mut h2_recv, carrier_lease) =
+        open_grpc_h2_stream(&selection.proxy, &request).await?;
+    let tls_underlay = carrier_lease.tls_underlay();
     let mut initial_stats = DirectTcpRelayStats::default();
     if !sniff.payload.is_empty() {
         initial_stats.client_to_direct += sniff.payload.len();
@@ -283,7 +280,6 @@ pub(crate) async fn handle_trojan_grpc_tls_tcp_connection_async(
         false,
     )
     .await;
-    connection_task.abort();
     match result {
         Ok(stats) => {
             let mut event = generic_proxy_tcp_finished_event(

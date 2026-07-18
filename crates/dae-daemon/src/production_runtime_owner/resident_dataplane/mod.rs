@@ -129,6 +129,15 @@ mod anytls_owner;
 pub(crate) use self::anytls_owner::{
     AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, start_anytls_owner_registry,
 };
+#[path = "runtime/h2_carrier_owner.rs"]
+mod h2_carrier_owner;
+pub(crate) use self::h2_carrier_owner::{
+    H2CarrierGenerationOwnerHandle, H2CarrierLease, acquire_h2_carrier,
+    start_h2_carrier_generation_owner,
+};
+#[cfg(test)]
+#[path = "runtime/h2_carrier_owner_live_tests.rs"]
+mod h2_carrier_owner_live_tests;
 
 #[derive(Clone, Default)]
 pub(crate) struct ResidentTransportOwnerRegistries {

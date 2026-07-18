@@ -56,6 +56,8 @@ pub(crate) fn build_trojan_proxy_plan(
         String::new()
     };
     let graph = resident_graph_identity(&link);
+    let alpn = resident_raw_tls_alpn(parsed_alpn, net.as_str(), utls_fingerprint.as_ref());
+    validate_resident_h2_carrier_alpn(&alpn, &net, &node_tag)?;
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
         graph_link_hash: graph.link_hash,
@@ -67,7 +69,7 @@ pub(crate) fn build_trojan_proxy_plan(
         server_host: parsed.server,
         server_port: parsed.port,
         server_name: parsed.sni,
-        alpn: resident_raw_tls_alpn(parsed_alpn, net.as_str(), utls_fingerprint.as_ref()),
+        alpn,
         flow: String::new(),
         net,
         stream_host,

@@ -49,7 +49,7 @@ pub(super) enum TrojanUdpCarrier {
         send_stream: h2::SendStream<Bytes>,
         response: GrpcH2Response,
         response_buf: GrpcHunkReadBuffer,
-        connection_task: tokio::task::JoinHandle<()>,
+        _carrier_lease: H2CarrierLease,
         tls_underlay: &'static str,
     },
 }
@@ -60,10 +60,10 @@ impl TrojanUdpCarrier {
         proxy: &ResidentProxyPlan,
         initial_packet: &[u8],
     ) -> Result<Self, String> {
-        let mut client = open_async_resident_tls_client(proxy).await?;
-        let tls_underlay = async_resident_tls_underlay_name(&client);
         match kind {
             TrojanUdpCarrierKind::Tls => {
+                let mut client = open_async_resident_tls_client(proxy).await?;
+                let tls_underlay = async_resident_tls_underlay_name(&client);
                 write_async_tls_plain_all(
                     &mut client,
                     initial_packet,
@@ -76,6 +76,8 @@ impl TrojanUdpCarrier {
                 })
             }
             TrojanUdpCarrierKind::WebSocket => {
+                let mut client = open_async_resident_tls_client(proxy).await?;
+                let tls_underlay = async_resident_tls_underlay_name(&client);
                 let options = HttpUpgradeOptions::new(&proxy.stream_host, &proxy.stream_path);
                 websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
                 write_websocket_packet(
@@ -91,6 +93,8 @@ impl TrojanUdpCarrier {
                 })
             }
             TrojanUdpCarrierKind::HttpUpgrade => {
+                let mut client = open_async_resident_tls_client(proxy).await?;
+                let tls_underlay = async_resident_tls_underlay_name(&client);
                 let options = HttpUpgradeOptions::new(&proxy.stream_host, &proxy.stream_path);
                 httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
                 write_async_tls_plain_all(
@@ -105,13 +109,14 @@ impl TrojanUdpCarrier {
                 })
             }
             TrojanUdpCarrierKind::Grpc => {
-                let (send_stream, response, connection_task) =
-                    open_grpc_h2_stream(client, proxy, initial_packet).await?;
+                let (send_stream, response, carrier_lease) =
+                    open_grpc_h2_stream(proxy, initial_packet).await?;
+                let tls_underlay = carrier_lease.tls_underlay();
                 Ok(Self::Grpc {
                     send_stream,
                     response,
                     response_buf: GrpcHunkReadBuffer::default(),
-                    connection_task,
+                    _carrier_lease: carrier_lease,
                     tls_underlay,
                 })
             }
@@ -231,13 +236,8 @@ impl TrojanUdpCarrier {
             Self::Tls { client, .. }
             | Self::WebSocket { client, .. }
             | Self::HttpUpgrade { client, .. } => client.shutdown().await,
-            Self::Grpc {
-                send_stream,
-                connection_task,
-                ..
-            } => {
+            Self::Grpc { send_stream, .. } => {
                 let _ = send_grpc_hunk(send_stream, &[], true).await;
-                connection_task.abort();
             }
         }
     }

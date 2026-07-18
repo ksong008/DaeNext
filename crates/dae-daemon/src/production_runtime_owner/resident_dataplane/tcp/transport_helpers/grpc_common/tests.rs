@@ -59,3 +59,53 @@ async fn grpc_stream_open_does_not_wait_for_response_headers_before_upload_can_c
     server_task.abort();
     let _ = server_task.await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn grpc_response_requires_a_success_terminal_status() {
+    for (status, expected_error) in [
+        (Some("0"), None),
+        (Some("7"), Some("reported grpc-status 7")),
+        (None, Some("ended without grpc-status")),
+    ] {
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let server_task = tokio::spawn(async move {
+            let mut connection = h2::server::handshake(server_io).await.unwrap();
+            let (request, mut respond) = connection.accept().await.unwrap().unwrap();
+            let response = http::Response::builder()
+                .status(200)
+                .version(http::Version::HTTP_2)
+                .body(())
+                .unwrap();
+            let mut send = respond.send_response(response, status.is_none()).unwrap();
+            if let Some(status) = status {
+                let mut trailers = http::HeaderMap::new();
+                trailers.insert("grpc-status", status.parse().unwrap());
+                send.send_trailers(trailers).unwrap();
+            }
+            drop(request);
+            let _ = time::timeout(Duration::from_millis(200), connection.accept()).await;
+        });
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .version(http::Version::HTTP_2)
+            .uri("https://grpc.fixture.invalid/GunService/Tun")
+            .body(())
+            .unwrap();
+        let (_, mut response, connection_task) =
+            open_grpc_h2_stream_on_io(client_io, request, b"protocol-header")
+                .await
+                .unwrap();
+        let terminal = response.next_data().await;
+        match expected_error {
+            Some(expected) => {
+                let error = terminal.unwrap_err();
+                assert!(error.contains(expected), "{error}");
+            }
+            None => assert!(terminal.unwrap().is_none()),
+        }
+        connection_task.abort();
+        let _ = connection_task.await;
+        server_task.abort();
+        let _ = server_task.await;
+    }
+}

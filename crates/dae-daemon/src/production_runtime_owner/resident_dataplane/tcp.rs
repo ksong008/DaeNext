@@ -14,10 +14,11 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use super::{
-    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle,
-    Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle, ResidentStopSignal,
-    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
-    reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
+    Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle,
+    ResidentStopSignal, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
+    TuicOwnerRegistryHandle, acquire_h2_carrier, reset_resident_relay_idle_deadline,
+    resident_relay_idle_deadline,
 };
 
 use bytes::Bytes;
