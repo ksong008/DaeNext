@@ -3,7 +3,8 @@ use super::h2_transport::{
     refresh_xhttp_h2_packet_up_client_if_needed, send_xhttp_h2_packet_up_request,
 };
 use super::h3_transport::{
-    refresh_xhttp_h3_packet_up_client_if_needed, send_xhttp_h3_packet_up_request,
+    note_xhttp_h3_stream_error, refresh_xhttp_h3_packet_up_client_if_needed,
+    send_xhttp_h3_packet_up_request,
 };
 use super::*;
 use bytes::{Buf, Bytes};
@@ -68,7 +69,15 @@ pub(crate) async fn send_xhttp_packet_up_request(
                 xmux_request,
             )
             .await?;
-            send_xhttp_h3_packet_up_request(client, endpoint, session_id, seq, payload).await
+            send_xhttp_h3_packet_up_request(
+                client,
+                endpoint,
+                session_id,
+                seq,
+                payload,
+                xmux_request.as_ref(),
+            )
+            .await
         }
     }
 }
@@ -110,7 +119,9 @@ pub(crate) async fn poll_xhttp_download_data(
                 None => Ok(None),
             }
         }
-        XhttpDownloadClient::H3 { recv, .. } => {
+        XhttpDownloadClient::H3 {
+            recv, xmux_lease, ..
+        } => {
             let data_future = recv.recv_data();
             tokio::pin!(data_future);
             let data = poll_fn(|cx| match data_future.as_mut().poll(cx) {
@@ -124,7 +135,10 @@ pub(crate) async fn poll_xhttp_download_data(
                     Ok(Some(chunk.copy_to_bytes(remaining)))
                 }
                 Some(Ok(None)) => Err("xHTTP H3 download stream closed".to_owned()),
-                Some(Err(err)) => Err(format!("read xHTTP H3 download data: {err:?}")),
+                Some(Err(err)) => {
+                    note_xhttp_h3_stream_error(&err, xmux_lease.as_ref());
+                    Err(format!("read xHTTP H3 download data: {err:?}"))
+                }
                 None => Ok(None),
             }
         }
@@ -164,13 +178,18 @@ pub(crate) async fn read_xhttp_download_data(
             Some(Err(err)) => Err(format!("read xHTTP HTTP/2 download data: {err}")),
             None => Ok(None),
         },
-        XhttpDownloadClient::H3 { recv, .. } => match recv.recv_data().await {
+        XhttpDownloadClient::H3 {
+            recv, xmux_lease, ..
+        } => match recv.recv_data().await {
             Ok(Some(mut chunk)) => {
                 let remaining = chunk.remaining();
                 Ok(Some(chunk.copy_to_bytes(remaining)))
             }
             Ok(None) => Ok(None),
-            Err(err) => Err(format!("read xHTTP H3 download data: {err:?}")),
+            Err(err) => {
+                note_xhttp_h3_stream_error(&err, xmux_lease.as_ref());
+                Err(format!("read xHTTP H3 download data: {err:?}"))
+            }
         },
         XhttpDownloadClient::H3StreamOne { recv } => match recv.recv_data().await {
             Ok(Some(mut chunk)) => {
@@ -254,33 +273,49 @@ pub(crate) async fn send_xhttp_stream_data(
             )
             .await
         }
-        XhttpStreamUploadClient::H3 { stream, .. } => {
+        XhttpStreamUploadClient::H3 {
+            stream, xmux_lease, ..
+        } => {
             if !payload.is_empty() {
                 time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(payload))
                     .await
                     .map_err(|_| "send xHTTP H3 stream body timeout".to_owned())?
-                    .map_err(|err| format!("send xHTTP H3 stream body: {err:?}"))?;
+                    .map_err(|err| {
+                        note_xhttp_h3_stream_error(&err, xmux_lease.as_ref());
+                        format!("send xHTTP H3 stream body: {err:?}")
+                    })?;
             }
             if end_stream {
                 time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
                     .await
                     .map_err(|_| "finish xHTTP H3 stream body timeout".to_owned())?
-                    .map_err(|err| format!("finish xHTTP H3 stream body: {err:?}"))?;
+                    .map_err(|err| {
+                        note_xhttp_h3_stream_error(&err, xmux_lease.as_ref());
+                        format!("finish xHTTP H3 stream body: {err:?}")
+                    })?;
             }
             Ok(())
         }
-        XhttpStreamUploadClient::H3StreamOne { send, .. } => {
+        XhttpStreamUploadClient::H3StreamOne {
+            send, xmux_lease, ..
+        } => {
             if !payload.is_empty() {
                 time::timeout(RESIDENT_CONNECT_TIMEOUT, send.send_data(payload))
                     .await
                     .map_err(|_| "send xHTTP H3 stream-one body timeout".to_owned())?
-                    .map_err(|err| format!("send xHTTP H3 stream-one body: {err:?}"))?;
+                    .map_err(|err| {
+                        note_xhttp_h3_stream_error(&err, xmux_lease.as_ref());
+                        format!("send xHTTP H3 stream-one body: {err:?}")
+                    })?;
             }
             if end_stream {
                 time::timeout(RESIDENT_CONNECT_TIMEOUT, send.finish())
                     .await
                     .map_err(|_| "finish xHTTP H3 stream-one body timeout".to_owned())?
-                    .map_err(|err| format!("finish xHTTP H3 stream-one body: {err:?}"))?;
+                    .map_err(|err| {
+                        note_xhttp_h3_stream_error(&err, xmux_lease.as_ref());
+                        format!("finish xHTTP H3 stream-one body: {err:?}")
+                    })?;
             }
             Ok(())
         }

@@ -95,4 +95,4 @@ unsafe extern "C" fn decompress_brotli_certificate(
 
 #[cfg(test)]
 #[path = "h3_boring_tls_tests.rs"]
-mod tests;
+pub(super) mod tests;

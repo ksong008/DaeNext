@@ -11,10 +11,11 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 use sha2::{Digest, Sha256};
 
+use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpQuicTlsProvider;
 
 pub(crate) struct XhttpH3Connection {
-    endpoint: ObservedQuicEndpoint,
+    endpoint: Arc<std::sync::Mutex<Option<ObservedQuicEndpoint>>>,
     connection: quinn::Connection,
     pub(super) client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     driver_task: tokio::task::JoinHandle<()>,
@@ -198,12 +199,21 @@ async fn open_xhttp_h3_connection(
         }
         Ok(Ok(client)) => client,
     };
+    quic_endpoint.mark_ready();
+    let endpoint = Arc::new(std::sync::Mutex::new(Some(quic_endpoint)));
+    let driver_endpoint = Arc::clone(&endpoint);
     let driver_task = tokio::spawn(async move {
         let _ = poll_fn(|cx| driver.poll_close(cx)).await;
+        let endpoint = driver_endpoint
+            .lock()
+            .ok()
+            .and_then(|mut endpoint| endpoint.take());
+        if let Some(endpoint) = endpoint {
+            endpoint.wait_idle().await;
+        }
     });
-    quic_endpoint.mark_ready();
     Ok(XhttpH3Connection {
-        endpoint: quic_endpoint,
+        endpoint,
         connection,
         client,
         driver_task,
@@ -281,16 +291,85 @@ impl XhttpH3Connection {
         self.driver_task.is_finished()
     }
 
+    fn take_endpoint(&self) -> Option<ObservedQuicEndpoint> {
+        self.endpoint
+            .lock()
+            .ok()
+            .and_then(|mut endpoint| endpoint.take())
+    }
+
     pub(super) fn abort_with_reason(self, reason: &[u8]) {
         self.connection.close(0_u32.into(), reason);
+        if let Some(endpoint) = self.take_endpoint() {
+            endpoint.close(0_u32.into(), reason);
+        }
         self.driver_task.abort();
     }
 
-    pub(super) async fn close(self, reason: &[u8]) {
+    pub(super) async fn close(mut self, reason: &[u8]) {
         self.connection.close(0_u32.into(), reason);
-        self.driver_task.abort();
-        self.endpoint.wait_idle().await;
+        if let Some(endpoint) = self.take_endpoint() {
+            endpoint.close(0_u32.into(), reason);
+            self.driver_task.abort();
+            endpoint.wait_idle().await;
+        } else if time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, &mut self.driver_task)
+            .await
+            .is_err()
+        {
+            self.driver_task.abort();
+        }
     }
+}
+
+fn xhttp_h3_stream_error_retires_carrier(error: &h3::error::StreamError) -> bool {
+    match error {
+        h3::error::StreamError::ConnectionError(_)
+        | h3::error::StreamError::RemoteClosing
+        | h3::error::StreamError::Undefined(_) => true,
+        h3::error::StreamError::RemoteTerminate { code, .. }
+        | h3::error::StreamError::StreamError { code, .. } => {
+            *code == h3::error::Code::H3_REQUEST_REJECTED
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn note_xhttp_h3_stream_error(
+    error: &h3::error::StreamError,
+    xmux_lease: Option<&XhttpXmuxClientLease>,
+) {
+    if xhttp_h3_stream_error_retires_carrier(error)
+        && let Some(lease) = xmux_lease
+    {
+        lease.retire_physical();
+    }
+}
+
+fn note_xhttp_h3_request_error(
+    error: &h3::error::StreamError,
+    xmux_request: Option<&XhttpXmuxRequestHandle>,
+) {
+    if xhttp_h3_stream_error_retires_carrier(error)
+        && let Some(request) = xmux_request
+    {
+        request.retire_physical();
+    }
+}
+
+pub(super) async fn open_xhttp_h3_request(
+    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    request: http::Request<()>,
+    xmux_lease: Option<&XhttpXmuxClientLease>,
+    timeout_error: &'static str,
+    error_context: &'static str,
+) -> Result<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>, String> {
+    let result = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
+        .await
+        .map_err(|_| timeout_error.to_owned())?;
+    result.map_err(|error| {
+        note_xhttp_h3_stream_error(&error, xmux_lease);
+        format!("{error_context}: {error:?}")
+    })
 }
 
 pub(crate) async fn open_xhttp_h3_download_stream(
@@ -306,18 +385,28 @@ pub(crate) async fn open_xhttp_h3_download_stream(
         &xhttp_session_path_suffix(session_id, None),
         false,
     )?;
-    let mut stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
-        .await
-        .map_err(|_| "xHTTP H3 download request timeout".to_owned())?
-        .map_err(|err| format!("send xHTTP H3 download request: {err:?}"))?;
+    let mut stream = open_xhttp_h3_request(
+        &mut client,
+        request,
+        xmux_lease,
+        "xHTTP H3 download request timeout",
+        "send xHTTP H3 download request",
+    )
+    .await?;
     time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
         .await
         .map_err(|_| "finish xHTTP H3 download request timeout".to_owned())?
-        .map_err(|err| format!("finish xHTTP H3 download request: {err:?}"))?;
+        .map_err(|err| {
+            note_xhttp_h3_stream_error(&err, xmux_lease);
+            format!("finish xHTTP H3 download request: {err:?}")
+        })?;
     let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
         .await
         .map_err(|_| "xHTTP H3 download response timeout".to_owned())?
-        .map_err(|err| format!("read xHTTP H3 download response: {err:?}"))?;
+        .map_err(|err| {
+            note_xhttp_h3_stream_error(&err, xmux_lease);
+            format!("read xHTTP H3 download response: {err:?}")
+        })?;
     if !response.status().is_success() {
         return Err(format!(
             "xHTTP H3 download response status {}",
@@ -333,33 +422,46 @@ pub(crate) async fn send_xhttp_h3_packet_up_request(
     session_id: &str,
     seq: u64,
     payload: Bytes,
+    xmux_request: Option<&XhttpXmuxRequestHandle>,
 ) -> Result<(), String> {
     let (request, body) = xhttp_h3_packet_up_request(endpoint, session_id, seq, payload)?;
-    let mut stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
+    let stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
         .await
-        .map_err(|_| "xHTTP H3 packet-up request timeout".to_owned())?
-        .map_err(|err| format!("send xHTTP H3 packet-up request: {err:?}"))?;
+        .map_err(|_| "xHTTP H3 packet-up request timeout".to_owned())?;
+    let mut stream = stream.map_err(|error| {
+        note_xhttp_h3_request_error(&error, xmux_request);
+        format!("send xHTTP H3 packet-up request: {error:?}")
+    })?;
     if let Some(body) = body {
         time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(body))
             .await
             .map_err(|_| "send xHTTP H3 packet-up body timeout".to_owned())?
-            .map_err(|err| format!("send xHTTP H3 packet-up body: {err:?}"))?;
+            .map_err(|err| {
+                note_xhttp_h3_request_error(&err, xmux_request);
+                format!("send xHTTP H3 packet-up body: {err:?}")
+            })?;
     }
     time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
         .await
         .map_err(|_| "finish xHTTP H3 packet-up body timeout".to_owned())?
-        .map_err(|err| format!("finish xHTTP H3 packet-up body: {err:?}"))?;
+        .map_err(|err| {
+            note_xhttp_h3_request_error(&err, xmux_request);
+            format!("finish xHTTP H3 packet-up body: {err:?}")
+        })?;
     let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
         .await
         .map_err(|_| "xHTTP H3 packet-up response timeout".to_owned())?
-        .map_err(|err| format!("recv xHTTP H3 packet-up response: {err:?}"))?;
+        .map_err(|err| {
+            note_xhttp_h3_request_error(&err, xmux_request);
+            format!("recv xHTTP H3 packet-up response: {err:?}")
+        })?;
     if !response.status().is_success() {
         return Err(format!(
             "xHTTP H3 packet-up response status {}",
             response.status()
         ));
     }
-    drain_xhttp_h3_response_body(stream).await
+    drain_xhttp_h3_response_body(stream, xmux_request).await
 }
 
 pub(super) async fn refresh_xhttp_h3_packet_up_client_if_needed(
@@ -396,17 +498,46 @@ pub(super) async fn refresh_xhttp_h3_packet_up_client_if_needed(
 
 async fn drain_xhttp_h3_response_body(
     mut stream: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    xmux_request: Option<&XhttpXmuxRequestHandle>,
 ) -> Result<(), String> {
     loop {
         let chunk = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_data())
             .await
             .map_err(|_| "xHTTP H3 packet-up response body timeout".to_owned())?
-            .map_err(|err| format!("read xHTTP H3 packet-up response body: {err:?}"))?;
+            .map_err(|err| {
+                note_xhttp_h3_request_error(&err, xmux_request);
+                format!("read xHTTP H3 packet-up response body: {err:?}")
+            })?;
         if chunk.is_none() {
             return Ok(());
         }
     }
 }
+
+#[cfg(test)]
+mod request_error_tests {
+    use super::*;
+
+    #[test]
+    fn remote_goaway_retires_the_h3_carrier() {
+        assert!(xhttp_h3_stream_error_retires_carrier(
+            &h3::error::StreamError::RemoteClosing
+        ));
+    }
+
+    #[test]
+    fn request_header_limit_does_not_retire_the_h3_carrier() {
+        assert!(!xhttp_h3_stream_error_retires_carrier(
+            &h3::error::StreamError::HeaderTooBig {
+                actual_size: 2,
+                max_size: 1,
+            }
+        ));
+    }
+}
+
+#[cfg(test)]
+mod owner_live_tests;
 
 fn build_xhttp_h3_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
