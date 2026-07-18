@@ -1,0 +1,13 @@
+[package]
+name = "boring-sys"
+version = "4.99.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+name = "boring_sys"
+path = "src/lib.rs"
+
+[dependencies]
+boring-sys-upstream = { package = "boring-sys", version = "5.1" }

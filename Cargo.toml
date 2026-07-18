@@ -30,6 +30,8 @@ resolver = "3"
 rustls = { git = "https://github.com/Watfaq/rustls.git", branch = "watfaq/0.23.40" }
 tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "watfaq/0.26.4" }
 boring-sys = { path = "vendor/boring-sys" }
+boring-sys-v4-compat = { package = "boring-sys", path = "vendor/boring-sys-v4-compat" }
+boring-v4-compat = { package = "boring", path = "vendor/boring-v4-compat" }
 
 [workspace.package]
 version = "3.1.0"
@@ -89,6 +91,7 @@ md-5 = "0.10"
 object = { version = "0.36.7", default-features = false, features = ["elf", "read_core", "std"] }
 percent-encoding = "2.3"
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+quinn-boring = { git = "https://github.com/quinn-rs/quinn-boring.git", rev = "8aeaa43a82ffa75cb4621a7fb1211c10f047d02e", default-features = false }
 quinn-proto = { version = "0.11.14", default-features = false }
 udp = { package = "quinn-udp", version = "0.5", default-features = false, features = ["tracing"] }
 regex = "1"
