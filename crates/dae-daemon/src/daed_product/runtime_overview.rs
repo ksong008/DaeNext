@@ -9,6 +9,8 @@ mod interfaces;
 pub(super) use self::interfaces::*;
 mod resource_pools;
 pub(super) use self::resource_pools::*;
+mod resource_ledger;
+pub(super) use self::resource_ledger::*;
 mod idle_reclaim;
 pub(super) use self::idle_reclaim::*;
 mod cgroup_memory;

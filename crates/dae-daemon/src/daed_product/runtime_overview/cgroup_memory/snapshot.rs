@@ -1,6 +1,7 @@
 use super::*;
 
 const CGROUP_MEMORY_CURRENT_FILE: &str = "memory.current";
+const CGROUP_MEMORY_PEAK_FILE: &str = "memory.peak";
 const CGROUP_MEMORY_MAX_FILE: &str = "memory.max";
 const CGROUP_MEMORY_HIGH_FILE: &str = "memory.high";
 const CGROUP_MEMORY_EVENTS_FILE: &str = "memory.events";
@@ -16,6 +17,7 @@ const CGROUP_MEMORY_STAT_FIELDS: &[&str] = &[
     "sock",
     "shmem",
     "slab",
+    "vmalloc",
     "file_mapped",
     "file_dirty",
     "file_writeback",
@@ -26,6 +28,7 @@ pub(super) fn read_cgroup_memory_snapshot(
     generation: u64,
 ) -> io::Result<Value> {
     let current_bytes = read_cgroup_required_bytes(&location.path, CGROUP_MEMORY_CURRENT_FILE)?;
+    let peak_bytes = read_cgroup_required_bytes(&location.path, CGROUP_MEMORY_PEAK_FILE).ok();
     let max_bytes = read_cgroup_optional_limit(&location.path, CGROUP_MEMORY_MAX_FILE)?;
     let high_bytes = read_cgroup_optional_limit(&location.path, CGROUP_MEMORY_HIGH_FILE)?;
     let events =
@@ -45,6 +48,7 @@ pub(super) fn read_cgroup_memory_snapshot(
         "cgroupPath": location.cgroup_path,
         "mountPoint": location.mount_point,
         "currentBytes": current_bytes.to_string(),
+        "peakBytes": peak_bytes.map(|bytes| json!(bytes.to_string())).unwrap_or(Value::Null),
         "maxBytes": max_bytes.map(|bytes| json!(bytes.to_string())).unwrap_or(Value::Null),
         "highBytes": high_bytes.map(|bytes| json!(bytes.to_string())).unwrap_or(Value::Null),
         "usageRatio": usage_ratio.map(Value::from).unwrap_or(Value::Null),
