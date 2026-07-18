@@ -53,6 +53,39 @@ fn production_quinn_endpoint_constructors_are_centralized() {
     );
 }
 
+#[test]
+fn production_hysteria2_transport_construction_is_registry_owned() {
+    const CONNECTION_CONSTRUCTOR: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/proxy_dispatch/quic_connections.rs";
+    const TRANSPORT_OWNER: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/runtime/hysteria2_owner.rs";
+    let allowed = [CONNECTION_CONSTRUCTOR, TRANSPORT_OWNER, SOURCE_GATE_TEST];
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let root = repo.join("crates/dae-daemon/src/production_runtime_owner/resident_dataplane");
+    let mut files = Vec::new();
+    collect_rust_files(&root, &mut files);
+    let restricted = [
+        "open_hysteria2_quic_connection_candidates_async(",
+        "authenticate_hysteria2_connection(",
+    ];
+    let mut offenders = Vec::new();
+    for file in files {
+        let relative = file.strip_prefix(&repo).unwrap().to_string_lossy();
+        let source = std::fs::read_to_string(&file).unwrap();
+        for constructor in restricted {
+            if source.contains(constructor) && !allowed.contains(&relative.as_ref()) {
+                offenders.push(format!("{relative} contains {constructor}"));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "production Hysteria2 Endpoint/auth construction must remain behind the generation-owned registry:\n{}",
+        offenders.join("\n")
+    );
+}
+
 fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();

@@ -304,6 +304,7 @@ fn create_proxy_session(
         metrics: Arc::clone(&context.metrics),
         udp_reply: context.udp_reply.clone(),
         active_sessions: Arc::clone(&context.active_sessions),
+        hysteria2_owner_registry: context.hysteria2_owner_registry.clone(),
     };
     let handle = spawn_udp_session_actor(
         key.clone(),

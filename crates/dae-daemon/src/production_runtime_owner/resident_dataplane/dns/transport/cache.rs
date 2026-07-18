@@ -212,12 +212,13 @@ impl ResidentDnsForwarderCache {
             key,
             "proxied UDP",
             || {
-                ResidentProxyDnsUdpForwarder::new(
+                ResidentProxyDnsUdpForwarder::new_with_optional_transport_owner(
                     proxy,
                     target,
                     self.udp_runtime.clone(),
                     Arc::clone(&self.metrics),
                     Arc::clone(&self.udp_executor),
+                    self.hysteria2_owner_registry.clone(),
                 )
                 .map(Arc::new)
             },

@@ -29,6 +29,8 @@ impl ResidentTcpFamilyProbeResult {
 pub(super) async fn probe_resident_candidate_tcp_families(
     candidate: &plan::ResidentProxyProbePlan,
     stop: Option<&SharedResidentStopSignal>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    caller: QuicEndpointCallerClass,
 ) -> Result<Vec<ResidentTcpFamilyProbeResult>, HealthCheckRoundStatus> {
     let targets = match stop {
         Some(stop) => {
@@ -47,12 +49,16 @@ pub(super) async fn probe_resident_candidate_tcp_families(
             NetworkType::TCP4,
             targets.ipv4,
             stop,
+            hysteria2_owner_registry.clone(),
+            caller,
         )),
         Box::pin(probe_tcp_family(
             candidate,
             NetworkType::TCP6,
             targets.ipv6,
             stop,
+            hysteria2_owner_registry.clone(),
+            caller,
         )),
     );
     Ok(vec![ipv4?, ipv6?])
@@ -63,6 +69,8 @@ async fn probe_tcp_family(
     network_type: NetworkType,
     family: plan::ResidentHealthTargetFamily,
     stop: Option<&SharedResidentStopSignal>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    caller: QuicEndpointCallerClass,
 ) -> Result<ResidentTcpFamilyProbeResult, HealthCheckRoundStatus> {
     match family {
         plan::ResidentHealthTargetFamily::Present(addrs) => {
@@ -82,11 +90,22 @@ async fn probe_tcp_family(
                             _ = wait_until_stopped_async(Arc::clone(stop)) => {
                                 return Err(HealthCheckRoundStatus::Cancelled);
                             }
-                            result = probe_resident_candidate_tcp_target_endpoint_async(candidate, &target) => result,
+                            result = probe_resident_candidate_tcp_target_endpoint_async(
+                                candidate,
+                                &target,
+                                hysteria2_owner_registry.clone(),
+                                caller,
+                            ) => result,
                         }
                     }
                     None => {
-                        probe_resident_candidate_tcp_target_endpoint_async(candidate, &target).await
+                        probe_resident_candidate_tcp_target_endpoint_async(
+                            candidate,
+                            &target,
+                            hysteria2_owner_registry.clone(),
+                            caller,
+                        )
+                        .await
                     }
                 };
                 match result {

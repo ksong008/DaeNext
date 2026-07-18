@@ -21,6 +21,7 @@ pub(super) struct ResidentHealthScheduleContext {
     pub(super) periodic_candidate_concurrency: usize,
     pub(super) bootstrap_candidate_concurrency: usize,
     pub(super) candidate_admission: Arc<tokio::sync::Semaphore>,
+    pub(super) hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 }
 
 struct ResidentHealthRoundGuard {
@@ -64,6 +65,7 @@ pub(super) async fn run_resident_health_group_schedule(
         periodic_candidate_concurrency: concurrency,
         bootstrap_candidate_concurrency: bootstrap_concurrency,
         candidate_admission,
+        hysteria2_owner_registry,
     } = context;
     let interval = group.check_interval();
     let initial_jitter =
@@ -95,6 +97,7 @@ pub(super) async fn run_resident_health_group_schedule(
         Arc::clone(&metrics),
         bootstrap_concurrency,
         Arc::clone(&candidate_admission),
+        hysteria2_owner_registry.clone(),
     )
     .await;
     group.complete_health_bootstrap(bootstrap_status.is_cancelled());
@@ -113,6 +116,7 @@ pub(super) async fn run_resident_health_group_schedule(
             Arc::clone(&metrics),
             concurrency,
             Arc::clone(&candidate_admission),
+            hysteria2_owner_registry.clone(),
         )
         .await;
         if status.is_cancelled() {
@@ -124,6 +128,7 @@ pub(super) async fn run_resident_health_group_schedule(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_resident_health_resuscitation_dispatcher(
     proxy_groups: SharedResidentProxyGroupMap,
     mut receiver: Receiver<ResidentHealthResuscitationRequest>,
@@ -132,6 +137,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
     metrics: Arc<ResidentDataplaneMetrics>,
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) {
     loop {
         let request = tokio::select! {
@@ -153,6 +159,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
             Arc::clone(&metrics),
             concurrency,
             Arc::clone(&candidate_admission),
+            hysteria2_owner_registry.clone(),
         )
         .await
         .is_cancelled()
@@ -178,6 +185,7 @@ async fn run_resident_health_round(
     metrics: Arc<ResidentDataplaneMetrics>,
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -188,6 +196,7 @@ async fn run_resident_health_round(
         stop,
         concurrency.max(1),
         candidate_admission,
+        hysteria2_owner_registry,
     )
     .await;
     guard.finish(status);

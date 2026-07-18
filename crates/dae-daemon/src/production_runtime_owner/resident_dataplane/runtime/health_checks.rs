@@ -31,6 +31,7 @@ pub(super) async fn run_resident_group_health_check_round_async(
     stop: SharedResidentStopSignal,
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -45,6 +46,7 @@ pub(super) async fn run_resident_group_health_check_round_async(
         concurrency.max(1),
         stop,
         candidate_admission,
+        hysteria2_owner_registry,
     )
     .await;
     drop(candidates);
@@ -58,6 +60,7 @@ async fn run_resident_group_health_checks_concurrent_async(
     concurrency: usize,
     stop: SharedResidentStopSignal,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -68,6 +71,7 @@ async fn run_resident_group_health_checks_concurrent_async(
             candidates,
             stop,
             candidate_admission,
+            hysteria2_owner_registry,
         )
         .await;
     }
@@ -81,12 +85,14 @@ async fn run_resident_group_health_checks_concurrent_async(
             let group = Arc::clone(&group);
             let stop = Arc::clone(&stop);
             let candidate_admission = Arc::clone(&candidate_admission);
+            let hysteria2_owner_registry = hysteria2_owner_registry.clone();
             handles.push(tokio::spawn(async move {
                 run_resident_candidate_health_check_until_stopped(
                     &group,
                     &candidate,
                     stop,
                     candidate_admission,
+                    hysteria2_owner_registry,
                 )
                 .await
             }));
@@ -108,7 +114,8 @@ pub(crate) async fn run_resident_group_health_checks_async(
     let stop = ResidentStopSignal::shared();
     let admission = Arc::new(tokio::sync::Semaphore::new(candidates.len().max(1)));
     let _ =
-        run_resident_group_health_checks_until_stopped(group, candidates, stop, admission).await;
+        run_resident_group_health_checks_until_stopped(group, candidates, stop, admission, None)
+            .await;
 }
 
 async fn run_resident_group_health_checks_until_stopped(
@@ -116,6 +123,7 @@ async fn run_resident_group_health_checks_until_stopped(
     candidates: &[plan::ResidentProxyProbePlan],
     stop: SharedResidentStopSignal,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     for candidate in candidates {
         if stop.load(Ordering::Relaxed) {
@@ -126,6 +134,7 @@ async fn run_resident_group_health_checks_until_stopped(
             candidate,
             Arc::clone(&stop),
             Arc::clone(&candidate_admission),
+            hysteria2_owner_registry.clone(),
         )
         .await
             == HealthCheckRoundStatus::Cancelled
@@ -141,6 +150,7 @@ async fn run_resident_candidate_health_check_until_stopped(
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -152,7 +162,13 @@ async fn run_resident_candidate_health_check_until_stopped(
             Ok(permit) => permit,
             Err(status) => return status,
         };
-    let status = run_resident_candidate_family_health_checks(group, candidate, stop).await;
+    let status = run_resident_candidate_family_health_checks(
+        group,
+        candidate,
+        stop,
+        hysteria2_owner_registry,
+    )
+    .await;
     drop(permit);
     status
 }
@@ -211,9 +227,15 @@ pub(crate) fn run_resident_group_health_checks(
 async fn probe_resident_candidate_tcp_latency_snapshot_scoped(
     candidate: plan::ResidentProxyProbePlan,
     reload_generation: u64,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> Value {
     let checked_at = unix_now_secs();
-    let probe = probe_resident_candidate_tcp_endpoint_async(&candidate).await;
+    let probe = probe_resident_candidate_tcp_endpoint_async(
+        &candidate,
+        hysteria2_owner_registry,
+        QuicEndpointCallerClass::ManualProbe,
+    )
+    .await;
     let latency_ms = probe.latency_ms;
     let family_results = probe
         .family_results
@@ -256,11 +278,16 @@ async fn probe_resident_candidate_tcp_latency_snapshot_scoped(
 pub(crate) async fn probe_resident_candidate_manual_latency_snapshot(
     candidate: plan::ResidentProxyProbePlan,
     reload_generation: u64,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> Value {
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::ManualProbe,
         Some(dae_runtime_control::OwnerGeneration::new(reload_generation)),
-        probe_resident_candidate_tcp_latency_snapshot_scoped(candidate, reload_generation),
+        probe_resident_candidate_tcp_latency_snapshot_scoped(
+            candidate,
+            reload_generation,
+            hysteria2_owner_registry,
+        ),
     )
     .await
 }
@@ -478,10 +505,13 @@ struct ResidentTcpTargetProbeResult {
 
 pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    caller: QuicEndpointCallerClass,
 ) -> ResidentTcpProbeResult {
-    let family_results = probe_resident_candidate_tcp_families(candidate, None)
-        .await
-        .unwrap_or_default();
+    let family_results =
+        probe_resident_candidate_tcp_families(candidate, None, hysteria2_owner_registry, caller)
+            .await
+            .unwrap_or_default();
     let preferred = preferred_tcp_family_probe_result(&family_results);
     ResidentTcpProbeResult {
         network_type: preferred.map(|result| result.network_type),
@@ -562,6 +592,8 @@ fn tcp_probe_failure_message(results: &[ResidentTcpTargetProbeResult]) -> Option
 async fn probe_resident_candidate_tcp_target_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
     target: &plan::ResidentTcpCheckTarget,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    caller: QuicEndpointCallerClass,
 ) -> Result<i64, String> {
     let started = Instant::now();
     probe_native_proxy_tcp_async(
@@ -572,6 +604,8 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
         &candidate.tcp_check.path,
         &candidate.tcp_check.method,
         candidate.tcp_probe_timeout,
+        hysteria2_owner_registry,
+        caller,
     )
     .await?;
     Ok(elapsed_millis(started.elapsed()))
@@ -707,6 +741,7 @@ mod tests {
             2,
             stop,
             Arc::new(tokio::sync::Semaphore::new(2)),
+            None,
         ));
 
         assert_eq!(status, HealthCheckRoundStatus::Cancelled);

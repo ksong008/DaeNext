@@ -30,6 +30,7 @@ pub(super) async fn forward_dns_h3_to_proxy_async(
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     lifecycle::run_proxied_doh3_exchange_with_context(
@@ -39,6 +40,7 @@ pub(super) async fn forward_dns_h3_to_proxy_async(
             payload.to_vec(),
             proxy,
             metrics,
+            hysteria2_owner_registry,
             context,
         ),
         context,
@@ -52,6 +54,7 @@ struct ProxiedDoh3Exchange {
     payload: Vec<u8>,
     proxy: Arc<ResidentProxyPlan>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     context: ProxyDnsRequestContext,
     resources: ProxiedDoh3Resources,
 }
@@ -63,6 +66,7 @@ impl ProxiedDoh3Exchange {
         payload: Vec<u8>,
         proxy: Arc<ResidentProxyPlan>,
         metrics: Arc<ResidentDataplaneMetrics>,
+        hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
         context: ProxyDnsRequestContext,
     ) -> Self {
         Self {
@@ -71,6 +75,7 @@ impl ProxiedDoh3Exchange {
             payload,
             proxy,
             metrics,
+            hysteria2_owner_registry,
             context,
             resources: ProxiedDoh3Resources::default(),
         }
@@ -82,7 +87,14 @@ impl ProxiedDoh3Exchange {
             .run(
                 ProxyDnsRequestStage::OwnerAcquire,
                 ProxyDnsRequestFailure::Network,
-                open_resident_proxy_udp_bridge_async(Arc::clone(&self.proxy), self.remote),
+                open_resident_proxy_udp_bridge_async(
+                    Arc::clone(&self.proxy),
+                    self.remote,
+                    Some(self.hysteria2_owner_registry.clone()),
+                    Some(dae_runtime_control::AbsoluteDeadline::at(
+                        self.context.deadline().into_std(),
+                    )),
+                ),
             )
             .await?;
         self.resources.bridge = Some(bridge);

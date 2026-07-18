@@ -178,11 +178,18 @@ async fn forward_dns_quic_to_routed_target_async(
                 .map_err(|err| format!("{target}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_quic_to_proxy_async(upstream, target, payload, proxy, context)
-                .await
-                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target)))
-        }
+        ResidentDnsUpstreamSelection::Proxy { proxy } => forward_dns_quic_to_proxy_async(
+            upstream,
+            target,
+            payload,
+            proxy,
+            forwarders
+                .hysteria2_owner_registry()
+                .map_err(ResidentDnsTransportError::message)?,
+            context,
+        )
+        .await
+        .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target))),
     };
     record_dns_transport_trace(ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),

@@ -36,7 +36,7 @@ pub(super) struct PendingProxyDnsDeadline {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_proxy_dns_udp_request(
-    proxy: &ResidentProxyPlan,
+    proxy: &Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
     mut request: ResidentProxyDnsUdpRequest,
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
@@ -46,6 +46,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
     executor: &mut Option<Box<UdpSessionExecutor>>,
     runtime_config: &ResidentDnsUdpRuntimeConfig,
     metrics: &ResidentDataplaneMetrics,
+    hysteria2_owner_registry: Option<&Hysteria2OwnerRegistryHandle>,
 ) -> Result<ProxyDnsRequestOutcome, ProxyDnsRequestError> {
     if let Err(error) = request.context.ensure(ProxyDnsRequestStage::Queued) {
         request.bytes.mark_expired();
@@ -148,7 +149,12 @@ pub(super) async fn handle_proxy_dns_udp_request(
 
     let opening_executor = executor.is_none();
     if opening_executor {
-        *executor = Some(Box::new(UdpSessionExecutor::new_proxy_packet(proxy)));
+        *executor = Some(Box::new(
+            UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
+                Arc::clone(proxy),
+                hysteria2_owner_registry.cloned(),
+            ),
+        ));
         metrics.proxy_dns_udp_executor_opened();
     } else {
         metrics.proxy_dns_udp_executor_reused();
@@ -163,6 +169,9 @@ pub(super) async fn handle_proxy_dns_udp_request(
         let _ = transaction.response.send(Err(error.clone()));
         return Err(error);
     };
+    executor.set_owner_acquisition_deadline(dae_runtime_control::AbsoluteDeadline::at(
+        transaction.context.deadline().into_std(),
+    ));
 
     let execution_stage = if opening_executor {
         ProxyDnsRequestStage::Connect

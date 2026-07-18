@@ -331,11 +331,18 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
                 .map_err(|err| format!("{remote}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => {
-            forward_dns_tcp_to_proxy_async(upstream, remote, payload, Arc::clone(proxy), context)
-                .await
-                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote)))
-        }
+        ResidentDnsUpstreamSelection::Proxy { proxy } => forward_dns_tcp_to_proxy_async(
+            upstream,
+            remote,
+            payload,
+            Arc::clone(proxy),
+            forwarders
+                .hysteria2_owner_registry()
+                .map_err(ResidentDnsTransportError::message)?,
+            context,
+        )
+        .await
+        .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote))),
     };
     record_dns_transport_trace(ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
@@ -428,6 +435,7 @@ async fn forward_dns_tcp_to_proxy_async(
     target: SocketAddr,
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     exchange_resident_proxy_dns_tcp_async(
@@ -436,6 +444,7 @@ async fn forward_dns_tcp_to_proxy_async(
         payload,
         DNS_TCP_MESSAGE_READ_LIMIT,
         context,
+        hysteria2_owner_registry,
     )
     .await
     .map_err(|error| {

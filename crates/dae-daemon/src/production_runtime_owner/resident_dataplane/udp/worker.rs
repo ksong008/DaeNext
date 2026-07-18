@@ -21,6 +21,7 @@ pub(crate) fn resident_udp_loop(
     active_sessions: Arc<AtomicUsize>,
     runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
 ) -> Value {
     run_resident_udp_session_manager(
         socket,
@@ -38,5 +39,6 @@ pub(crate) fn resident_udp_loop(
         active_sessions,
         runtime_config,
         health_resuscitation,
+        hysteria2_owner_registry,
     )
 }

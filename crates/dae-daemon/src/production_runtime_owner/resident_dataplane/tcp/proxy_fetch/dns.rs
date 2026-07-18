@@ -4,6 +4,7 @@ use crate::production_runtime_owner::resident_dataplane::dns::{
     exchange_proxy_dns_framed_stream,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn exchange_resident_proxy_dns_tcp_stream_async<F, Fut>(
     proxy: Arc<ResidentProxyPlan>,
     target: &str,
@@ -11,6 +12,7 @@ pub(crate) async fn exchange_resident_proxy_dns_tcp_stream_async<F, Fut>(
     sniff_payload: Vec<u8>,
     sniff_domain: String,
     context: ProxyDnsRequestContext,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     exchange: F,
 ) -> Result<Vec<u8>, ProxyDnsRequestError>
 where
@@ -50,6 +52,10 @@ where
         accepted,
         peer,
         listen_addr,
+        Some(hysteria2_owner_registry),
+        Some(dae_runtime_control::AbsoluteDeadline::at(
+            context.deadline().into_std(),
+        )),
     );
 
     let response_result = exchange(client).await;
@@ -89,6 +95,7 @@ pub(crate) async fn exchange_resident_proxy_dns_tcp_async(
     payload: &[u8],
     response_limit: usize,
     context: ProxyDnsRequestContext,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     exchange_resident_proxy_dns_tcp_stream_async(
         proxy,
@@ -97,6 +104,7 @@ pub(crate) async fn exchange_resident_proxy_dns_tcp_async(
         Vec::new(),
         String::new(),
         context,
+        hysteria2_owner_registry,
         |client| async move {
             exchange_proxy_dns_tcp_loopback(client, payload, response_limit, context).await
         },

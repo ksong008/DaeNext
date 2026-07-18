@@ -5,13 +5,21 @@ pub(super) async fn forward_dns_quic_to_proxy_async(
     remote: SocketAddr,
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let generation = proxy.execution_plan().runtime_generation();
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::ManagedDns,
         Some(generation),
-        forward_dns_quic_to_proxy_with_context(upstream, remote, payload, proxy, context),
+        forward_dns_quic_to_proxy_with_context(
+            upstream,
+            remote,
+            payload,
+            proxy,
+            hysteria2_owner_registry,
+            context,
+        ),
     )
     .await
 }
@@ -21,13 +29,21 @@ async fn forward_dns_quic_to_proxy_with_context(
     remote: SocketAddr,
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let bridge = context
         .run(
             ProxyDnsRequestStage::OwnerAcquire,
             ProxyDnsRequestFailure::Network,
-            open_resident_proxy_udp_bridge_async(Arc::clone(&proxy), remote),
+            open_resident_proxy_udp_bridge_async(
+                Arc::clone(&proxy),
+                remote,
+                Some(hysteria2_owner_registry),
+                Some(dae_runtime_control::AbsoluteDeadline::at(
+                    context.deadline().into_std(),
+                )),
+            ),
         )
         .await?;
     let mut endpoint = match open_proxy_dns_quic_endpoint(

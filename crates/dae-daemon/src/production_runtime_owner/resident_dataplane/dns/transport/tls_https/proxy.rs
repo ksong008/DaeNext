@@ -5,6 +5,7 @@ pub(super) async fn forward_dns_tls_to_proxy_async(
     target: SocketAddr,
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let target = target.to_string();
@@ -15,6 +16,7 @@ pub(super) async fn forward_dns_tls_to_proxy_async(
         Vec::new(),
         upstream.target.host.clone(),
         context,
+        hysteria2_owner_registry,
         |stream| async move {
             let mut tls = open_proxy_dns_tls_stream(upstream, stream, &[], context).await?;
             exchange_proxy_dns_framed_stream(&mut tls, payload, DNS_TCP_MESSAGE_READ_LIMIT, context)
@@ -35,6 +37,7 @@ pub(super) async fn forward_dns_https_to_proxy_async(
     target: SocketAddr,
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let target = target.to_string();
@@ -45,6 +48,7 @@ pub(super) async fn forward_dns_https_to_proxy_async(
         Vec::new(),
         upstream.target.host.clone(),
         context,
+        hysteria2_owner_registry,
         |stream| async move { forward_proxy_dns_https(upstream, stream, payload, context).await },
     )
     .await

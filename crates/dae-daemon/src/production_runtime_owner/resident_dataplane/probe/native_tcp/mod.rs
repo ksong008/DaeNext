@@ -24,8 +24,11 @@ use self::trojan::open_trojan_native_tcp_tunnel;
 use self::tunnel::NativeTcpTunnel;
 use self::vless::open_vless_native_tcp_tunnel;
 use self::vmess::open_vmess_native_tcp_tunnel;
+use super::super::Hysteria2OwnerRegistryHandle;
 use super::super::plan::{ResidentProxyPlan, ResidentTcpProbeDispatch};
+use super::super::tcp::QuicEndpointCallerClass;
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_native_proxy_tcp_async(
     proxy: Arc<ResidentProxyPlan>,
     scheme: &str,
@@ -34,9 +37,21 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
     path: &str,
     method: &str,
     timeout: Duration,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    caller: QuicEndpointCallerClass,
 ) -> Result<(), String> {
+    let owner_deadline =
+        dae_runtime_control::AbsoluteDeadline::from_now(std::time::Instant::now(), timeout);
     let probe = async {
-        match open_native_tcp_tunnel(Arc::clone(&proxy), target).await {
+        match open_native_tcp_tunnel(
+            Arc::clone(&proxy),
+            target,
+            hysteria2_owner_registry,
+            caller,
+            owner_deadline,
+        )
+        .await
+        {
             Ok(mut tunnel) => {
                 probe_native_tcp_tunnel(&mut *tunnel, scheme, host, path, method, timeout).await
             }
@@ -65,6 +80,9 @@ where
 async fn open_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
     target: &str,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    caller: QuicEndpointCallerClass,
+    owner_deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     match proxy.execution_plan().protocol.probe_dispatch() {
         ResidentTcpProbeDispatch::Basic => open_basic_native_tcp_tunnel(proxy, target).await,
@@ -75,7 +93,16 @@ async fn open_native_tcp_tunnel(
         ResidentTcpProbeDispatch::Shadowsocks => {
             open_shadowsocks_native_tcp_tunnel(proxy, target).await
         }
-        ResidentTcpProbeDispatch::Quic => open_quic_stream_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::Quic => {
+            open_quic_stream_native_tcp_tunnel(
+                proxy,
+                target,
+                hysteria2_owner_registry,
+                caller,
+                owner_deadline,
+            )
+            .await
+        }
     }
 }
 
