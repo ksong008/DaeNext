@@ -9,7 +9,7 @@ use http::{Response, StatusCode};
 use quinn::crypto::rustls::QuicServerConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio::sync::oneshot;
+use tokio::sync::{Barrier, Notify, oneshot};
 
 use crate::production_runtime_owner::resident_dataplane::plan::build_resident_proxy_plan_for_node;
 use crate::production_runtime_owner::resident_dataplane::tcp::quic_endpoint_metrics_snapshot;
@@ -20,16 +20,29 @@ const UDP_ENABLED_HEADER: &str = "Hysteria-UDP";
 const BANDWIDTH_HEADER: &str = "Hysteria-CC-RX";
 const AUTH_PATH: &str = "/auth";
 
+#[derive(Clone, Copy)]
+enum Hysteria2OwnerAuthBehavior {
+    UdpEnabled,
+    TcpOnly,
+    Reject,
+    WaitForRelease,
+}
+
 struct Hysteria2OwnerTestServer {
     address: SocketAddr,
     auth_count: Arc<AtomicUsize>,
     connection_count: Arc<AtomicUsize>,
     current_connection: Arc<Mutex<Option<quinn::Connection>>>,
+    auth_release: Arc<Notify>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Hysteria2OwnerTestServer {
     async fn start() -> Self {
+        Self::start_with_auth(Hysteria2OwnerAuthBehavior::UdpEnabled).await
+    }
+
+    async fn start_with_auth(auth_behavior: Hysteria2OwnerAuthBehavior) -> Self {
         let certified = generate_simple_self_signed(vec![SERVER_NAME.to_owned()]).unwrap();
         let certificate = certified.cert.der().clone();
         let private_key =
@@ -51,21 +64,30 @@ impl Hysteria2OwnerTestServer {
         let auth_count = Arc::new(AtomicUsize::new(0));
         let connection_count = Arc::new(AtomicUsize::new(0));
         let current_connection = Arc::new(Mutex::new(None));
+        let auth_release = Arc::new(Notify::new());
         let task_auth_count = Arc::clone(&auth_count);
         let task_connection_count = Arc::clone(&connection_count);
         let task_current_connection = Arc::clone(&current_connection);
+        let task_auth_release = Arc::clone(&auth_release);
         let task = tokio::spawn(async move {
             while let Some(connecting) = endpoint.accept().await {
                 let task_auth_count = Arc::clone(&task_auth_count);
                 let task_connection_count = Arc::clone(&task_connection_count);
                 let task_current_connection = Arc::clone(&task_current_connection);
+                let task_auth_release = Arc::clone(&task_auth_release);
                 tokio::spawn(async move {
                     let Ok(connection) = connecting.await else {
                         return;
                     };
                     task_connection_count.fetch_add(1, Ordering::Relaxed);
                     *task_current_connection.lock().unwrap() = Some(connection.clone());
-                    serve_hysteria2_owner_connection(connection, task_auth_count).await;
+                    serve_hysteria2_owner_connection(
+                        connection,
+                        task_auth_count,
+                        auth_behavior,
+                        task_auth_release,
+                    )
+                    .await;
                 });
             }
         });
@@ -74,6 +96,7 @@ impl Hysteria2OwnerTestServer {
             auth_count,
             connection_count,
             current_connection,
+            auth_release,
             task,
         }
     }
@@ -82,6 +105,10 @@ impl Hysteria2OwnerTestServer {
         if let Some(connection) = self.current_connection.lock().unwrap().as_ref() {
             connection.close(0_u32.into(), b"owner rebuild test");
         }
+    }
+
+    fn release_auth(&self) {
+        self.auth_release.notify_one();
     }
 }
 
@@ -94,6 +121,8 @@ impl Drop for Hysteria2OwnerTestServer {
 async fn serve_hysteria2_owner_connection(
     connection: quinn::Connection,
     auth_count: Arc<AtomicUsize>,
+    auth_behavior: Hysteria2OwnerAuthBehavior,
+    auth_release: Arc<Notify>,
 ) {
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let Ok(mut incoming): Result<server::Connection<h3_quinn::Connection, Bytes>, _> =
@@ -110,19 +139,35 @@ async fn serve_hysteria2_owner_connection(
     assert_eq!(request.uri().path(), AUTH_PATH);
     assert!(request.headers().contains_key(AUTH_HEADER));
     while stream.recv_data().await.unwrap().is_some() {}
-    stream
-        .send_response(
-            Response::builder()
-                .status(StatusCode::from_u16(233).unwrap())
-                .header(UDP_ENABLED_HEADER, "true")
-                .header(BANDWIDTH_HEADER, "0")
-                .body(())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    stream.finish().await.unwrap();
     auth_count.fetch_add(1, Ordering::Relaxed);
+    if matches!(auth_behavior, Hysteria2OwnerAuthBehavior::WaitForRelease) {
+        auth_release.notified().await;
+    }
+    let status = match auth_behavior {
+        Hysteria2OwnerAuthBehavior::Reject => StatusCode::UNAUTHORIZED,
+        Hysteria2OwnerAuthBehavior::UdpEnabled
+        | Hysteria2OwnerAuthBehavior::TcpOnly
+        | Hysteria2OwnerAuthBehavior::WaitForRelease => StatusCode::from_u16(233).unwrap(),
+    };
+    let udp_enabled = !matches!(
+        auth_behavior,
+        Hysteria2OwnerAuthBehavior::TcpOnly | Hysteria2OwnerAuthBehavior::Reject
+    );
+    let response = Response::builder()
+        .status(status)
+        .header(
+            UDP_ENABLED_HEADER,
+            if udp_enabled { "true" } else { "false" },
+        )
+        .header(BANDWIDTH_HEADER, "0")
+        .body(())
+        .unwrap();
+    if stream.send_response(response).await.is_err() {
+        return;
+    }
+    if stream.finish().await.is_err() {
+        return;
+    }
 
     let stream_connection = connection.clone();
     let stream_task = tokio::spawn(async move {
@@ -192,6 +237,14 @@ async fn read_test_varint(recv: &mut quinn::RecvStream) -> u64 {
 }
 
 fn owner_test_proxy(address: SocketAddr, generation: u64) -> Arc<ResidentProxyPlan> {
+    owner_test_proxy_for_authority(&address.to_string(), generation, "owner-test-auth")
+}
+
+fn owner_test_proxy_for_authority(
+    authority: &str,
+    generation: u64,
+    auth: &str,
+) -> Arc<ResidentProxyPlan> {
     let sections = dae_config::parser::parse_config(
         r#"
         global {
@@ -204,10 +257,7 @@ fn owner_test_proxy(address: SocketAddr, generation: u64) -> Arc<ResidentProxyPl
     )
     .unwrap();
     let config = dae_config::schema::build_config(&sections).unwrap();
-    let link = format!(
-        "hysteria2://owner-test-auth@{}?insecure=1&sni={SERVER_NAME}#owner-test",
-        address
-    );
+    let link = format!("hysteria2://{auth}@{authority}?insecure=1&sni={SERVER_NAME}#owner-test",);
     let mut proxy = build_resident_proxy_plan_for_node(
         &config,
         "owner-test".to_owned(),
@@ -262,6 +312,18 @@ async fn wait_until(mut predicate: impl FnMut() -> bool) {
     })
     .await
     .expect("owner integration state reached before timeout");
+}
+
+async fn stop_owner_registry(
+    stop: SharedResidentStopSignal,
+    owner_thread: JoinHandle<()>,
+) -> Duration {
+    let started = Instant::now();
+    stop.store(true, Ordering::Release);
+    tokio::task::spawn_blocking(move || owner_thread.join().unwrap())
+        .await
+        .unwrap();
+    started.elapsed()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -378,12 +440,7 @@ async fn generation_owner_reuses_auth_across_runtimes_and_rebuilds_after_remote_
     exchange_tcp(replacement.connection(), "tcp-rebuilt.invalid:443").await;
     drop(replacement);
 
-    let shutdown_started = Instant::now();
-    stop.store(true, Ordering::Release);
-    tokio::task::spawn_blocking(move || owner_thread.join().unwrap())
-        .await
-        .unwrap();
-    assert!(shutdown_started.elapsed() < Duration::from_secs(2));
+    assert!(stop_owner_registry(stop, owner_thread).await < Duration::from_secs(2));
     let owner_snapshot = registry.metrics_snapshot();
     assert_eq!(owner_snapshot["activeOwners"], 0);
     assert_eq!(owner_snapshot["activeLogicalLeases"], 0);
@@ -392,4 +449,355 @@ async fn generation_owner_reuses_auth_across_runtimes_and_rebuilds_after_remote_
     let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
     assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
     assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_auth_waiter_does_not_cancel_the_generation_owner_build() {
+    let server =
+        Hysteria2OwnerTestServer::start_with_auth(Hysteria2OwnerAuthBehavior::WaitForRelease).await;
+    let generation = 9_903;
+    let proxy = owner_test_proxy(server.address, generation);
+    let stop = ResidentStopSignal::shared();
+    let (registry, owner_thread) = start_hysteria2_owner_registry(
+        generation,
+        Arc::clone(&stop),
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+    )
+    .unwrap();
+
+    let first_registry = registry.clone();
+    let first_proxy = Arc::clone(&proxy);
+    let first = tokio::spawn(async move {
+        first_registry
+            .acquire(
+                first_proxy,
+                QuicEndpointCallerClass::TcpData,
+                owner_deadline(),
+            )
+            .await
+    });
+    wait_until(|| server.auth_count.load(Ordering::Relaxed) == 1).await;
+
+    let observer_registry = registry.clone();
+    let observer_proxy = Arc::clone(&proxy);
+    let observer = tokio::spawn(async move {
+        observer_registry
+            .acquire(
+                observer_proxy,
+                QuicEndpointCallerClass::ManagedDns,
+                owner_deadline(),
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    first.abort();
+    match first.await {
+        Err(error) => assert!(error.is_cancelled()),
+        Ok(_) => panic!("the first acquisition waiter must be cancelled"),
+    }
+    server.release_auth();
+
+    let lease = observer.await.unwrap().unwrap();
+    exchange_tcp(lease.connection(), "cancelled-waiter.invalid:443").await;
+    assert_eq!(server.auth_count.load(Ordering::Relaxed), 1);
+    assert_eq!(server.connection_count.load(Ordering::Relaxed), 1);
+    assert_eq!(registry.metrics_snapshot()["cumulativeBuilds"], 1);
+    drop(lease);
+
+    assert!(stop_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
+    let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
+    assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
+    assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn simultaneous_auth_failure_waiters_share_one_connection_attempt() {
+    let server =
+        Hysteria2OwnerTestServer::start_with_auth(Hysteria2OwnerAuthBehavior::Reject).await;
+    let generation = 9_904;
+    let proxy = owner_test_proxy(server.address, generation);
+    let stop = ResidentStopSignal::shared();
+    let (registry, owner_thread) = start_hysteria2_owner_registry(
+        generation,
+        Arc::clone(&stop),
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+    )
+    .unwrap();
+    let waiter_count = 8;
+    let barrier = Arc::new(Barrier::new(waiter_count + 1));
+    let mut waiters = Vec::with_capacity(waiter_count);
+    for _ in 0..waiter_count {
+        let registry = registry.clone();
+        let proxy = Arc::clone(&proxy);
+        let barrier = Arc::clone(&barrier);
+        waiters.push(tokio::spawn(async move {
+            barrier.wait().await;
+            registry
+                .acquire(
+                    proxy,
+                    QuicEndpointCallerClass::BackgroundHealth,
+                    owner_deadline(),
+                )
+                .await
+                .err()
+                .expect("rejected authentication must fail acquisition")
+        }));
+    }
+    barrier.wait().await;
+
+    for waiter in waiters {
+        let error = waiter.await.unwrap();
+        assert!(
+            error.contains("authentication rejected")
+                || error.contains("operation=hysteria2-owner-auth")
+                || error.contains("authenticate Hysteria2 owner"),
+            "unexpected shared authentication failure: {error}"
+        );
+    }
+    assert_eq!(server.auth_count.load(Ordering::Relaxed), 1);
+    assert_eq!(server.connection_count.load(Ordering::Relaxed), 1);
+    let owner_snapshot = registry.metrics_snapshot();
+    assert_eq!(owner_snapshot["cumulativeBuilds"], 1);
+    assert_eq!(owner_snapshot["cumulativeBuildFailures"], 1);
+
+    assert!(stop_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
+    let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
+    assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
+    assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tcp_only_auth_rejects_udp_without_reauthenticating() {
+    let server =
+        Hysteria2OwnerTestServer::start_with_auth(Hysteria2OwnerAuthBehavior::TcpOnly).await;
+    let generation = 9_905;
+    let proxy = owner_test_proxy(server.address, generation);
+    let stop = ResidentStopSignal::shared();
+    let (registry, owner_thread) = start_hysteria2_owner_registry(
+        generation,
+        Arc::clone(&stop),
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+    )
+    .unwrap();
+
+    let tcp = registry
+        .acquire(
+            Arc::clone(&proxy),
+            QuicEndpointCallerClass::TcpData,
+            owner_deadline(),
+        )
+        .await
+        .unwrap();
+    let connection_id = tcp.connection().stable_id();
+    exchange_tcp(tcp.connection(), "tcp-only.invalid:443").await;
+    let udp_transport = registry
+        .acquire(
+            Arc::clone(&proxy),
+            QuicEndpointCallerClass::UdpData,
+            owner_deadline(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(udp_transport.connection().stable_id(), connection_id);
+    let error = match udp_transport.open_udp_session() {
+        Ok(_) => panic!("TCP-only Hysteria2 auth must reject a UDP session"),
+        Err(error) => error,
+    };
+    assert!(error.contains("did not negotiate UDP support"));
+    assert_eq!(server.auth_count.load(Ordering::Relaxed), 1);
+    assert_eq!(server.connection_count.load(Ordering::Relaxed), 1);
+    drop(tcp);
+
+    assert!(stop_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
+    let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
+    assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
+    assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlapping_generations_drain_independently_across_reloads() {
+    let server = Hysteria2OwnerTestServer::start().await;
+    let first_generation = 9_906;
+    let second_generation = 9_907;
+    let first_proxy = owner_test_proxy(server.address, first_generation);
+    let second_proxy = owner_test_proxy(server.address, second_generation);
+    let first_stop = ResidentStopSignal::shared();
+    let second_stop = ResidentStopSignal::shared();
+    let (first_registry, first_thread) = start_hysteria2_owner_registry(
+        first_generation,
+        Arc::clone(&first_stop),
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+    )
+    .unwrap();
+    let (second_registry, second_thread) = start_hysteria2_owner_registry(
+        second_generation,
+        Arc::clone(&second_stop),
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+    )
+    .unwrap();
+
+    let first = first_registry
+        .acquire(
+            first_proxy,
+            QuicEndpointCallerClass::TcpData,
+            owner_deadline(),
+        )
+        .await
+        .unwrap();
+    let second = second_registry
+        .acquire(
+            second_proxy,
+            QuicEndpointCallerClass::TcpData,
+            owner_deadline(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        first.connection().stable_id(),
+        second.connection().stable_id()
+    );
+    wait_until(|| server.auth_count.load(Ordering::Relaxed) == 2).await;
+    drop(first);
+
+    assert!(
+        stop_owner_registry(first_stop, first_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE
+    );
+    let first_endpoint_snapshot = quic_endpoint_metrics_snapshot(first_generation);
+    assert_eq!(first_endpoint_snapshot["liveStates"]["total"], 0);
+    assert_eq!(first_endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+    assert_eq!(second_registry.metrics_snapshot()["activeOwners"], 1);
+    exchange_tcp(second.connection(), "overlap-survivor.invalid:443").await;
+    drop(second);
+
+    assert!(
+        stop_owner_registry(second_stop, second_thread).await
+            < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE
+    );
+    let second_endpoint_snapshot = quic_endpoint_metrics_snapshot(second_generation);
+    assert_eq!(second_endpoint_snapshot["liveStates"]["total"], 0);
+    assert_eq!(second_endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn five_owner_reload_cycles_return_endpoint_resources_to_zero() {
+    let server = Hysteria2OwnerTestServer::start().await;
+    let first_generation = 9_908;
+
+    for offset in 0..5 {
+        let generation = first_generation + offset;
+        let proxy = owner_test_proxy(server.address, generation);
+        let stop = ResidentStopSignal::shared();
+        let (registry, owner_thread) = start_hysteria2_owner_registry(
+            generation,
+            Arc::clone(&stop),
+            RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+        )
+        .unwrap();
+        let lease = registry
+            .acquire(
+                proxy,
+                QuicEndpointCallerClass::BackgroundHealth,
+                owner_deadline(),
+            )
+            .await
+            .unwrap();
+        exchange_tcp(lease.connection(), "reload-cycle.invalid:443").await;
+        drop(lease);
+        assert!(
+            stop_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE
+        );
+        let owner_snapshot = registry.metrics_snapshot();
+        assert_eq!(owner_snapshot["activeOwners"], 0);
+        assert_eq!(owner_snapshot["activeLogicalLeases"], 0);
+        assert_eq!(owner_snapshot["activeUdpSessions"], 0);
+        let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
+        assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
+        assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+    }
+    assert_eq!(server.auth_count.load(Ordering::Relaxed), 5);
+    assert_eq!(server.connection_count.load(Ordering::Relaxed), 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ten_no_response_nodes_release_all_endpoint_resources() {
+    let blackhole = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+    let authority = format!("localhost:{}", blackhole.local_addr().unwrap().port());
+    let generation = 9_913;
+    let stop = ResidentStopSignal::shared();
+    let (registry, owner_thread) = start_hysteria2_owner_registry(
+        generation,
+        Arc::clone(&stop),
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+    )
+    .unwrap();
+    let node_count = 10;
+    let owner_limit = registry.metrics_snapshot()["budget"]["owners"]
+        .as_u64()
+        .unwrap() as usize;
+    let admitted_node_count = node_count.min(owner_limit);
+    let barrier = Arc::new(Barrier::new(node_count + 1));
+    let mut attempts = Vec::with_capacity(node_count);
+    for node in 0..node_count {
+        let registry = registry.clone();
+        let proxy = owner_test_proxy_for_authority(
+            &authority,
+            generation,
+            &format!("no-response-auth-{node}"),
+        );
+        let barrier = Arc::clone(&barrier);
+        attempts.push(tokio::spawn(async move {
+            barrier.wait().await;
+            registry
+                .acquire(
+                    proxy,
+                    QuicEndpointCallerClass::BackgroundHealth,
+                    AbsoluteDeadline::from_now(Instant::now(), Duration::from_millis(300)),
+                )
+                .await
+        }));
+    }
+    barrier.wait().await;
+    for attempt in attempts {
+        let result = attempt.await.unwrap();
+        assert!(
+            result.is_err(),
+            "a no-response node must not acquire an owner"
+        );
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let owner_snapshot = registry.metrics_snapshot();
+    assert_eq!(
+        owner_snapshot["cumulativeBuilds"], admitted_node_count,
+        "unexpected no-response owner snapshot: {owner_snapshot}"
+    );
+    assert_eq!(
+        owner_snapshot["cumulativeBuildFailures"],
+        admitted_node_count
+    );
+    assert_eq!(
+        owner_snapshot["ownerLimitRejections"],
+        node_count - admitted_node_count
+    );
+    assert_eq!(owner_snapshot["activeOwners"], 0);
+    assert_eq!(owner_snapshot["activeLogicalLeases"], 0);
+    wait_until(|| {
+        let snapshot = quic_endpoint_metrics_snapshot(generation);
+        snapshot["liveStates"]["total"] == 0 && snapshot["endpointDriverTasks"]["live"] == 0
+    })
+    .await;
+    let settled_endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
+    assert_eq!(settled_endpoint_snapshot["liveStates"]["total"], 0);
+    assert_eq!(settled_endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+    assert_eq!(settled_endpoint_snapshot["chargedBytes"]["total"], 0);
+
+    assert!(stop_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
+    let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
+    assert!(
+        endpoint_snapshot["cumulativeCreations"].as_u64().unwrap() >= admitted_node_count as u64
+    );
+    assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
+    assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+    assert_eq!(endpoint_snapshot["chargedBytes"]["total"], 0);
+    assert_eq!(endpoint_snapshot["chargedBytes"]["udpSocketCount"], 0);
+    drop(blackhole);
 }
