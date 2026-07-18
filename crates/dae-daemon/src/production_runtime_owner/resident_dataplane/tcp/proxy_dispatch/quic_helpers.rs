@@ -1,7 +1,8 @@
 use super::*;
 
 use crate::production_runtime_owner::resident_dataplane::{
-    authority_from_host_port, resolve_socket_addr_candidates, try_socket_addr_candidates,
+    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, authority_from_host_port,
+    resolve_socket_addr_candidates, try_socket_addr_candidates,
 };
 
 use std::fmt;
@@ -447,7 +448,7 @@ where
                     Err(err) => {
                         endpoint.mark_failed();
                         endpoint.close(0_u32.into(), b"resolved candidate connect failed");
-                        endpoint.wait_idle().await;
+                        wait_quic_endpoint_idle_after_close(&endpoint).await;
                         return Err(format!("start QUIC connect: {err}"));
                     }
                 };
@@ -460,13 +461,13 @@ where
                     Ok(Err(err)) => {
                         endpoint.mark_failed();
                         endpoint.close(0_u32.into(), b"resolved candidate connect failed");
-                        endpoint.wait_idle().await;
+                        wait_quic_endpoint_idle_after_close(&endpoint).await;
                         Err(format!("await QUIC connect: {err}"))
                     }
                     Err(_) => {
                         endpoint.mark_failed();
                         endpoint.close(0_u32.into(), b"resolved candidate connect timeout");
-                        endpoint.wait_idle().await;
+                        wait_quic_endpoint_idle_after_close(&endpoint).await;
                         Err("QUIC connect timeout".to_owned())
                     }
                 }
@@ -474,6 +475,12 @@ where
         })
         .await?;
     Ok((remote, endpoint, connection))
+}
+
+pub(crate) async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
+    time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, endpoint.wait_idle())
+        .await
+        .is_ok()
 }
 
 pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {

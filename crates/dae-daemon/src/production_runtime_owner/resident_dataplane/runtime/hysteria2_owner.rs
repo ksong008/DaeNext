@@ -34,7 +34,7 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
 use crate::production_runtime_owner::resident_dataplane::tcp::{
     Hysteria2PortHoppingMetrics, Hysteria2QuicConnectionRequest, ObservedQuicEndpoint,
     QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
-    open_hysteria2_quic_connection_candidates_async,
+    open_hysteria2_quic_connection_candidates_async, wait_quic_endpoint_idle_after_close,
 };
 
 const HYSTERIA2_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/hysteria2-owner/v1";
@@ -708,7 +708,7 @@ impl Hysteria2SharedTransport {
             .close(0_u32.into(), b"resident hysteria2 owner draining");
         self.endpoint
             .close(0_u32.into(), b"resident hysteria2 owner draining");
-        self.endpoint.wait_idle().await;
+        wait_quic_endpoint_idle_after_close(&self.endpoint).await;
     }
 }
 
@@ -1438,7 +1438,7 @@ async fn build_hysteria2_transport(
         None => {
             endpoint.mark_failed();
             endpoint.close(0_u32.into(), b"hysteria2 owner auth deadline elapsed");
-            endpoint.wait_idle().await;
+            wait_quic_endpoint_idle_after_close(&endpoint).await;
             return Err(Hysteria2OwnerBuildError {
                 class: OwnerFailureClass::Cancelled,
                 operation: "hysteria2-owner-auth-deadline",
@@ -1460,7 +1460,7 @@ async fn build_hysteria2_transport(
         Ok(Ok(session)) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth rejected");
-            endpoint.wait_idle().await;
+            wait_quic_endpoint_idle_after_close(&endpoint).await;
             return Err(Hysteria2OwnerBuildError {
                 class: OwnerFailureClass::Authentication,
                 operation: "hysteria2-owner-auth-status",
@@ -1473,7 +1473,7 @@ async fn build_hysteria2_transport(
         Ok(Err(err)) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth failed");
-            endpoint.wait_idle().await;
+            wait_quic_endpoint_idle_after_close(&endpoint).await;
             return Err(Hysteria2OwnerBuildError {
                 class: OwnerFailureClass::Authentication,
                 operation: "hysteria2-owner-auth",
@@ -1483,7 +1483,7 @@ async fn build_hysteria2_transport(
         Err(_) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth timeout");
-            endpoint.wait_idle().await;
+            wait_quic_endpoint_idle_after_close(&endpoint).await;
             return Err(Hysteria2OwnerBuildError {
                 class: OwnerFailureClass::Cancelled,
                 operation: "hysteria2-owner-auth-timeout",
