@@ -1,4 +1,5 @@
 mod auth;
+mod capability;
 mod congestion;
 pub mod contract;
 mod dataplane;
@@ -15,6 +16,9 @@ mod wire;
 
 pub use auth::{
     Hysteria2AuthReport, Hysteria2AuthenticatedSession, authenticate_hysteria2_connection,
+};
+pub use capability::{
+    Hysteria2CapabilityDisposition, Hysteria2CapabilityLedgerEntry, hysteria2_capability_ledger,
 };
 pub use congestion::{
     Hysteria2BbrProfile, Hysteria2CongestionConfig, Hysteria2CongestionController,
