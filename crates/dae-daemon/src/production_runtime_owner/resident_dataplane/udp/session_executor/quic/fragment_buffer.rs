@@ -220,6 +220,10 @@ impl QuicUdpFragmentBuffer {
         self.pending.values().map(|entry| entry.expires_at).min()
     }
 
+    pub(super) fn contains_pending(&self, packet_id: u16) -> bool {
+        self.pending.contains_key(&packet_id)
+    }
+
     pub(super) fn expire(&mut self) {
         self.expire_at(Instant::now());
     }

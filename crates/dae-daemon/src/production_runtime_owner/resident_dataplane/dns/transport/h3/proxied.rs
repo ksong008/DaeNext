@@ -24,6 +24,7 @@ use self::lifecycle::{
 #[cfg(test)]
 mod tests;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn forward_dns_h3_to_proxy_async(
     upstream: &ResidentDnsUpstream,
     remote: SocketAddr,
@@ -31,6 +32,7 @@ pub(super) async fn forward_dns_h3_to_proxy_async(
     proxy: Arc<ResidentProxyPlan>,
     metrics: Arc<ResidentDataplaneMetrics>,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: TuicOwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     lifecycle::run_proxied_doh3_exchange_with_context(
@@ -41,6 +43,7 @@ pub(super) async fn forward_dns_h3_to_proxy_async(
             proxy,
             metrics,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             context,
         ),
         context,
@@ -55,11 +58,13 @@ struct ProxiedDoh3Exchange {
     proxy: Arc<ResidentProxyPlan>,
     metrics: Arc<ResidentDataplaneMetrics>,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: TuicOwnerRegistryHandle,
     context: ProxyDnsRequestContext,
     resources: ProxiedDoh3Resources,
 }
 
 impl ProxiedDoh3Exchange {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         upstream: ResidentDnsUpstream,
         remote: SocketAddr,
@@ -67,6 +72,7 @@ impl ProxiedDoh3Exchange {
         proxy: Arc<ResidentProxyPlan>,
         metrics: Arc<ResidentDataplaneMetrics>,
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+        tuic_owner_registry: TuicOwnerRegistryHandle,
         context: ProxyDnsRequestContext,
     ) -> Self {
         Self {
@@ -76,6 +82,7 @@ impl ProxiedDoh3Exchange {
             proxy,
             metrics,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             context,
             resources: ProxiedDoh3Resources::default(),
         }
@@ -91,6 +98,7 @@ impl ProxiedDoh3Exchange {
                     Arc::clone(&self.proxy),
                     self.remote,
                     Some(self.hysteria2_owner_registry.clone()),
+                    Some(self.tuic_owner_registry.clone()),
                     Some(dae_runtime_control::AbsoluteDeadline::at(
                         self.context.deadline().into_std(),
                     )),

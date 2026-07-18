@@ -1,7 +1,7 @@
 use dae_outbound::{
-    CALLER_SCOPED_HYSTERIA2_OWNERSHIP, CALLER_SCOPED_JUICITY_OWNERSHIP,
-    CALLER_SCOPED_TUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP,
+    CALLER_SCOPED_JUICITY_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP,
     FLOW_STREAM_PACKET_OWNERSHIP, FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+    GENERATION_OWNED_HYSTERIA2_OWNERSHIP, GENERATION_OWNED_TUIC_OWNERSHIP,
     MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, RuntimeOwnershipProfile,
 };
 
@@ -167,14 +167,14 @@ fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
             &[SecurityDimension::QuicTls],
             WrapperDimension::QuicStream,
             UdpDimension::Hysteria2,
-            CALLER_SCOPED_HYSTERIA2_OWNERSHIP,
+            GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
         ),
         Protocol::Tuic => exact_profile(
             shape,
             &[SecurityDimension::QuicTls],
             WrapperDimension::QuicStream,
             UdpDimension::Tuic,
-            CALLER_SCOPED_TUIC_OWNERSHIP,
+            GENERATION_OWNED_TUIC_OWNERSHIP,
         ),
         Protocol::Juicity => exact_profile(
             shape,

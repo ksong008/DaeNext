@@ -8,20 +8,37 @@ pub(super) fn fingerprint_template_mode_label(
         .unwrap_or("Unresolved")
 }
 
-pub(super) fn quic_lifecycle_value(quic_per_flow: bool) -> Value {
-    if !quic_per_flow {
-        return Value::Null;
-    }
-    json!({
-        "endpointScope": "per-flow",
-        "connectionScope": "per-flow",
-        "clientConfigScope": "per-flow",
-        "crossFlowConnectionReuse": false,
-        "pooling": "not-implemented",
-    })
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum QuicLifecycleScope {
+    None,
+    PerFlow,
+    GenerationOwned,
 }
 
-pub(super) fn stream_wrapper_runtime_limits_value(stream_wrapper: &str) -> Value {
+pub(super) fn quic_lifecycle_value(scope: QuicLifecycleScope) -> Value {
+    match scope {
+        QuicLifecycleScope::None => Value::Null,
+        QuicLifecycleScope::PerFlow => json!({
+            "endpointScope": "per-flow",
+            "connectionScope": "per-flow",
+            "clientConfigScope": "per-flow",
+            "crossFlowConnectionReuse": false,
+            "pooling": "not-implemented",
+        }),
+        QuicLifecycleScope::GenerationOwned => json!({
+            "endpointScope": "generation-graph-transport-owner",
+            "connectionScope": "generation-graph-transport-owner",
+            "clientConfigScope": "generation-graph-transport-owner",
+            "crossFlowConnectionReuse": true,
+            "pooling": "single-flight-physical-owner",
+        }),
+    }
+}
+
+pub(super) fn stream_wrapper_runtime_limits_value(
+    stream_wrapper: &str,
+    quic_scope: QuicLifecycleScope,
+) -> Value {
     match stream_wrapper {
         "grpc" => json!({
             "messageCompression": "identity-only",
@@ -34,6 +51,11 @@ pub(super) fn stream_wrapper_runtime_limits_value(stream_wrapper: &str) -> Value
             "carrierScope": "per-flow-tls-carrier",
             "logicalStreamsPerCarrier": 1,
             "crossFlowCarrierReuse": false,
+        }),
+        "quic-stream" if quic_scope == QuicLifecycleScope::GenerationOwned => json!({
+            "carrierScope": "generation-graph-transport-owner",
+            "logicalStreamsPerCarrier": "bounded-by-runtime-profile",
+            "crossFlowCarrierReuse": true,
         }),
         "quic-stream" => json!({
             "carrierScope": "per-flow-quic-connection",
@@ -63,7 +85,18 @@ pub(super) fn stream_wrapper_runtime_limits_value(stream_wrapper: &str) -> Value
     }
 }
 
-pub(super) fn shared_provider_cache_labels(stream_wrapper: &str) -> &'static [&'static str] {
+pub(super) fn shared_provider_cache_labels(
+    stream_wrapper: &str,
+    quic_scope: QuicLifecycleScope,
+) -> &'static [&'static str] {
+    if quic_scope == QuicLifecycleScope::GenerationOwned {
+        return &[
+            "quic-client-config",
+            "quic-endpoint",
+            "quic-connection",
+            "protocol-transport-owner",
+        ];
+    }
     match stream_wrapper {
         "connect-udp-h2" => &[
             "tls-client-config",
@@ -79,19 +112,19 @@ pub(super) fn shared_provider_cache_labels(stream_wrapper: &str) -> &'static [&'
     }
 }
 
-pub(super) fn per_flow_provider_labels(quic_per_flow: bool) -> &'static [&'static str] {
-    if quic_per_flow {
+pub(super) fn per_flow_provider_labels(scope: QuicLifecycleScope) -> &'static [&'static str] {
+    if scope == QuicLifecycleScope::PerFlow {
         &["quic-client-config", "quic-endpoint", "quic-connection"]
     } else {
         &[]
     }
 }
 
-pub(super) fn is_quic_handler(handler: &ResidentProxyProtocolPlan) -> bool {
-    matches!(
-        handler,
+pub(super) fn quic_lifecycle_scope(handler: &ResidentProxyProtocolPlan) -> QuicLifecycleScope {
+    match handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
-            | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-            | ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
-    )
+        | ResidentProxyProtocolPlan::TuicQuicTcp { .. } => QuicLifecycleScope::GenerationOwned,
+        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => QuicLifecycleScope::PerFlow,
+        _ => QuicLifecycleScope::None,
+    }
 }

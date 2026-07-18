@@ -21,9 +21,9 @@ impl MaterializedSourceShape {
         match self.protocol {
             MaterializedProtocol::Socks5 => RuntimeOwnershipModel::FlowStreamAndAssociation,
             MaterializedProtocol::Hysteria2 => {
-                RuntimeOwnershipModel::CallerScopedHysteria2Transport
+                RuntimeOwnershipModel::GenerationOwnedHysteria2Transport
             }
-            MaterializedProtocol::Tuic => RuntimeOwnershipModel::CallerScopedTuicTransport,
+            MaterializedProtocol::Tuic => RuntimeOwnershipModel::GenerationOwnedTuicTransport,
             MaterializedProtocol::Juicity => RuntimeOwnershipModel::CallerScopedJuicityTransport,
             MaterializedProtocol::ConnectUdpH2 | MaterializedProtocol::ConnectUdpH3 => {
                 RuntimeOwnershipModel::GenerationConnectUdpTransport

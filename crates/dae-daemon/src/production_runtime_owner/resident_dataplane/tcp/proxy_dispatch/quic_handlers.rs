@@ -9,6 +9,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     hysteria2_owner_registry: Option<&Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<&TuicOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<Value, String> {
     match &selection.proxy.handler {
@@ -31,16 +32,10 @@ pub(crate) async fn handle_quic_tcp_connection_async(
             )
             .await
         }
-        ResidentProxyProtocolPlan::TuicQuicTcp {
-            uuid,
-            password,
-            alpn,
-            allow_insecure,
-        } => {
-            let uuid = uuid.clone();
-            let password = password.clone();
-            let alpn = alpn.clone();
-            let allow_insecure = *allow_insecure;
+        ResidentProxyProtocolPlan::TuicQuicTcp { .. } => {
+            let tuic_owner_registry = tuic_owner_registry.ok_or_else(|| {
+                "TUIC transport owner registry is unavailable for TCP flow".to_owned()
+            })?;
             handle_tuic_quic_tcp_connection_async(
                 inbound,
                 peer,
@@ -49,10 +44,8 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 stop,
                 sniff,
                 metrics,
-                &uuid,
-                &password,
-                &alpn,
-                allow_insecure,
+                tuic_owner_registry,
+                owner_deadline,
             )
             .await
         }
@@ -223,32 +216,23 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
     stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
-    uuid: &str,
-    password: &str,
-    alpn: &[String],
-    allow_insecure: bool,
+    tuic_owner_registry: &TuicOwnerRegistryHandle,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<Value, String> {
-    let ResidentConnectedQuicEndpoint {
-        endpoint,
-        connection,
-        ..
-    } = open_tuic_quic_connection_candidates_async(
-        &selection.proxy,
-        selection.mark,
-        alpn,
-        allow_insecure,
-        RESIDENT_CONNECT_TIMEOUT,
-        QuicEndpointCallerClass::TcpData,
-    )
-    .await?;
-    let auth_report = match authenticate_tuic_connection(&connection, uuid, password).await {
-        Ok(report) => report,
-        Err(err) => {
-            endpoint.mark_failed();
-            return Err(format!("authenticate TUIC QUIC connection: {err}"));
-        }
-    };
-    endpoint.mark_ready();
+    let deadline = owner_deadline.unwrap_or_else(|| {
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT)
+    });
+    let transport = tuic_owner_registry
+        .acquire(
+            Arc::clone(&selection.proxy),
+            QuicEndpointCallerClass::TcpData,
+            deadline,
+        )
+        .await?;
+    let connection = transport.connection();
+    let auth_report = transport.auth_report().clone();
+    let remote = transport.remote();
+    let congestion = transport.congestion().as_str();
     let (mut send, mut recv) = connection
         .open_bi()
         .await
@@ -271,8 +255,6 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
     match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
         Ok(mut stats) => {
             stats.client_to_direct += initial_stats.client_to_direct;
-            connection.close(0_u32.into(), b"resident tuic done");
-            endpoint.wait_idle().await;
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,
@@ -291,11 +273,11 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
                 Some("quinn"),
             );
             event["tuic_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
+            event["tuic_congestion"] = json!(congestion);
+            event["tuic_remote_family"] = json!(if remote.is_ipv4() { "ipv4" } else { "ipv6" });
             Ok(event)
         }
         Err(err) => {
-            connection.close(0x101_u32.into(), b"resident tuic relay failed");
-            endpoint.wait_idle().await;
             let mut event = generic_proxy_tcp_failed_event(
                 peer,
                 original_dst,
@@ -314,6 +296,8 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
                 Some("quinn"),
             );
             event["tuic_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
+            event["tuic_congestion"] = json!(congestion);
+            event["tuic_remote_family"] = json!(if remote.is_ipv4() { "ipv4" } else { "ipv6" });
             Ok(event)
         }
     }

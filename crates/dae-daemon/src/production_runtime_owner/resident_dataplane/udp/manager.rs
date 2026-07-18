@@ -68,6 +68,7 @@ pub(super) fn run_resident_udp_session_manager(
     runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> Value {
     let mut runtime_builder = if runtime_config.runtime_worker_threads > 0 {
         let mut builder = tokio::runtime::Builder::new_multi_thread();
@@ -108,6 +109,7 @@ pub(super) fn run_resident_udp_session_manager(
         runtime_config,
         health_resuscitation,
         hysteria2_owner_registry,
+        tuic_owner_registry,
     ))
 }
 
@@ -128,6 +130,7 @@ async fn run_resident_udp_session_manager_async(
     runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> Value {
     let session_limit = runtime_config.session_limit;
     let session_queue_depth = runtime_config.session_queue_depth;
@@ -244,6 +247,7 @@ async fn run_resident_udp_session_manager_async(
         udp_reply.clone(),
         Arc::clone(&active_sessions),
         hysteria2_owner_registry,
+        tuic_owner_registry,
     );
     let session_shard_handle = session_shards.handle();
     let payload_pool = UdpPayloadPool::new(runtime_config.payload_pool_capacity());

@@ -61,10 +61,10 @@ mod real_plan_tests;
 mod tests {
     use super::*;
     use dae_outbound::{
-        CALLER_SCOPED_HYSTERIA2_OWNERSHIP, CALLER_SCOPED_JUICITY_OWNERSHIP,
-        CALLER_SCOPED_TUIC_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP, LogicalLeaseKind,
-        MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, PhysicalCarrierKind, RuntimeOwnershipModel,
-        RuntimeRouteAdmission,
+        CALLER_SCOPED_JUICITY_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP,
+        GENERATION_OWNED_HYSTERIA2_OWNERSHIP, GENERATION_OWNED_TUIC_OWNERSHIP, LogicalLeaseKind,
+        MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, PhysicalCarrierKind, RuntimeLifecycleOwner,
+        RuntimeOwnershipModel, RuntimeRouteAdmission,
     };
     use plan::{
         ResidentExecutionPlan, ResidentProtocolShape as Protocol,
@@ -89,7 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn quic_execution_exposes_caller_scoped_physical_transport() {
+    fn shared_quic_execution_exposes_generation_owned_physical_transport() {
         let ownership = materialized_runtime_ownership(execution(
             Protocol::Hysteria2,
             Security::QuicTls,
@@ -97,10 +97,14 @@ mod tests {
             Udp::Hysteria2Datagram,
         ));
 
-        assert_eq!(ownership, CALLER_SCOPED_HYSTERIA2_OWNERSHIP);
+        assert_eq!(ownership, GENERATION_OWNED_HYSTERIA2_OWNERSHIP);
         assert_eq!(
             ownership.model,
-            RuntimeOwnershipModel::CallerScopedHysteria2Transport
+            RuntimeOwnershipModel::GenerationOwnedHysteria2Transport
+        );
+        assert_eq!(
+            ownership.data_tcp.lifecycle_owner,
+            RuntimeLifecycleOwner::GenerationRuntime
         );
     }
 
@@ -119,7 +123,7 @@ mod tests {
             Udp::JuicityStreamPacket,
         ));
 
-        assert_eq!(tuic, CALLER_SCOPED_TUIC_OWNERSHIP);
+        assert_eq!(tuic, GENERATION_OWNED_TUIC_OWNERSHIP);
         assert_eq!(
             tuic.data_udp.logical_lease,
             LogicalLeaseKind::TuicAssociation

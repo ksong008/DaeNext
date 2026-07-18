@@ -81,6 +81,9 @@ async fn forward_dns_tls_to_routed_target_async(
             forwarders
                 .hysteria2_owner_registry()
                 .map_err(ResidentDnsTransportError::message)?,
+            forwarders
+                .tuic_owner_registry()
+                .map_err(ResidentDnsTransportError::message)?,
             context,
         )
         .await
@@ -246,6 +249,9 @@ async fn forward_dns_https_to_routed_target_async(
             Arc::clone(proxy),
             forwarders
                 .hysteria2_owner_registry()
+                .map_err(ResidentDnsTransportError::message)?,
+            forwarders
+                .tuic_owner_registry()
                 .map_err(ResidentDnsTransportError::message)?,
             context,
         )

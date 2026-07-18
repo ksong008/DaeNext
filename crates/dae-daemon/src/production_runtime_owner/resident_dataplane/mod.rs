@@ -115,8 +115,16 @@ pub(crate) use self::hysteria2_owner::{
     Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, Hysteria2UdpSessionLease,
     start_hysteria2_owner_registry,
 };
+#[path = "runtime/tuic_owner.rs"]
+mod tuic_owner;
+pub(crate) use self::tuic_owner::{
+    TuicOwnerRegistryHandle, TuicTransportLease, TuicUdpAssociationLease, start_tuic_owner_registry,
+};
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
+#[cfg(test)]
+#[path = "runtime/tuic_owner_live_tests.rs"]
+mod tuic_owner_live_tests;
 pub(super) use self::health_checks::*;
 #[path = "runtime/health_scheduler.rs"]
 mod health_scheduler;

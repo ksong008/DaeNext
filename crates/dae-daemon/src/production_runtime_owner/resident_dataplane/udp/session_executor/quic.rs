@@ -1,31 +1,18 @@
 use super::*;
-use std::future::poll_fn;
-use std::task::Poll;
 
 use crate::production_runtime_owner::resident_dataplane::QuicUdpDatagramResourceProfile;
 
 mod fragment_buffer;
 mod hysteria2_datagram;
 mod packet_id;
+mod tuic_datagram;
 use self::fragment_buffer::{QuicUdpFragmentBuffer, QuicUdpFragmentOutcome};
 use self::hysteria2_datagram::send_hysteria2_udp_message;
 use self::packet_id::QuicUdpPacketIdAllocator;
+use self::tuic_datagram::send_tuic_udp_packet;
 
 const TUIC_ASSOCIATION_IDENTITY_DOMAIN: &[u8] = b"tuic-v5-association";
 const HYSTERIA2_SESSION_IDENTITY_DOMAIN: &[u8] = b"hysteria2-udp-session";
-
-async fn read_quic_udp_datagram_until_resource_expiry(
-    connection: quinn::Connection,
-    expiration: Option<Instant>,
-) -> Result<Option<Bytes>, quinn::ConnectionError> {
-    let Some(expiration) = expiration else {
-        return connection.read_datagram().await.map(Some);
-    };
-    tokio::select! {
-        response = connection.read_datagram() => response.map(Some),
-        _ = time::sleep_until(time::Instant::from_std(expiration)) => Ok(None),
-    }
-}
 
 fn earliest_expiration(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
     match (left, right) {
@@ -251,59 +238,80 @@ impl Hysteria2QuicDatagramSession {
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuicDatagramSession {
-    uuid: String,
-    password: String,
-    alpn: Vec<String>,
-    allow_insecure: bool,
-    endpoint: Option<ObservedQuicEndpoint>,
-    connection: Option<quinn::Connection>,
+    proxy: Option<Arc<ResidentProxyPlan>>,
+    owner_registry: Option<TuicOwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
+    udp_association: Option<TuicUdpAssociationLease>,
     assoc_id: u16,
     fragments: QuicUdpFragmentBuffer,
+    fragment_sources: std::collections::BTreeMap<u16, SocketAddr>,
     packet_ids: QuicUdpPacketIdAllocator,
+    resources: QuicUdpDatagramResourceProfile,
     fixed_target: UdpSessionFixedTarget,
 }
 
 impl TuicQuicDatagramSession {
     pub(super) fn new(
-        uuid: String,
-        password: String,
-        alpn: Vec<String>,
-        allow_insecure: bool,
+        proxy: Arc<ResidentProxyPlan>,
+        owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Self {
         let resources = QuicUdpDatagramResourceProfile::selected();
         Self {
-            uuid,
-            password,
-            alpn,
-            allow_insecure,
-            endpoint: None,
-            connection: None,
-            assoc_id: fastrand::u16(1..=u16::MAX),
+            proxy: Some(proxy),
+            owner_registry,
+            owner_deadline: None,
+            udp_association: None,
+            assoc_id: 0,
             fragments: QuicUdpFragmentBuffer::new(resources, u16::MAX as usize),
+            fragment_sources: std::collections::BTreeMap::new(),
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
+            resources,
             fixed_target: UdpSessionFixedTarget::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_for_test() -> Self {
+        let resources = QuicUdpDatagramResourceProfile::selected();
+        Self {
+            proxy: None,
+            owner_registry: None,
+            owner_deadline: None,
+            udp_association: None,
+            assoc_id: 0,
+            fragments: QuicUdpFragmentBuffer::new(resources, u16::MAX as usize),
+            fragment_sources: std::collections::BTreeMap::new(),
+            packet_ids: QuicUdpPacketIdAllocator::new(resources),
+            resources,
+            fixed_target: UdpSessionFixedTarget::default(),
+        }
+    }
+
+    pub(super) fn set_owner_deadline(&mut self, deadline: dae_runtime_control::AbsoluteDeadline) {
+        if self.udp_association.is_none() {
+            self.owner_deadline = Some(deadline);
         }
     }
 
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        _proxy: &ResidentProxyPlan,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         self.fixed_target
             .bind(original_dst, "TUIC UDP association")?;
-        self.ensure_open(proxy).await?;
+        self.ensure_open().await?;
         let connection = self
-            .connection
+            .udp_association
             .as_ref()
-            .ok_or_else(|| "TUIC QUIC connection is not initialized".to_owned())?;
+            .ok_or_else(|| "TUIC UDP association is not initialized".to_owned())?
+            .connection();
         let packet_id = self.packet_ids.allocate()?;
         let request =
-            build_tuic_packet_frame(self.assoc_id, packet_id, &original_dst.to_string(), payload)?;
-        connection
-            .send_datagram(Bytes::from(request))
-            .map_err(|err| format!("send TUIC UDP datagram: {err}"))?;
+            TuicUdpPacket::new(self.assoc_id, packet_id, original_dst.to_string(), payload)
+                .map_err(|err| format!("build TUIC UDP packet: {err}"))?;
+        send_tuic_udp_packet(connection, &request, &mut self.packet_ids, self.resources)?;
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
         }
@@ -312,53 +320,51 @@ impl TuicQuicDatagramSession {
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
         self.fragments.expire();
+        self.prune_fragment_sources();
         self.packet_ids.expire();
         let response = {
-            let connection = match self.connection.as_ref() {
-                Some(connection) => connection,
+            let association = match self.udp_association.as_mut() {
+                Some(association) => association,
                 None => return Ok(None),
             };
-            let read = connection.read_datagram();
-            tokio::pin!(read);
-            poll_fn(|cx| match read.as_mut().poll(cx) {
-                Poll::Ready(response) => Poll::Ready(Some(response)),
-                Poll::Pending => Poll::Ready(None),
-            })
-            .await
+            association.try_receive()?
         };
         let Some(response) = response else {
             return Ok(None);
         };
-        let response = response.map_err(|err| format!("read TUIC UDP datagram: {err}"))?;
-        self.decode_response(&response)
+        self.decode_response(response)
     }
 
     pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        let connection = self
-            .connection
-            .as_ref()
-            .ok_or_else(|| "TUIC QUIC connection is not initialized".to_owned())?
-            .clone();
+        if self.udp_association.is_none() {
+            return Err("TUIC UDP association is not initialized".to_owned());
+        }
         let expiration = earliest_expiration(
             self.fragments.next_expiration(),
             self.packet_ids.next_expiration(),
         );
-        let Some(response) = read_quic_udp_datagram_until_resource_expiry(connection, expiration)
-            .await
-            .map_err(|err| format!("read TUIC UDP datagram: {err}"))?
+        let Some(response) = self
+            .udp_association
+            .as_mut()
+            .expect("TUIC UDP association was checked above")
+            .receive_until(expiration)
+            .await?
         else {
             self.fragments.expire();
+            self.prune_fragment_sources();
             self.packet_ids.expire();
             return Ok(None);
         };
-        self.decode_response(&response)
+        self.decode_response(response)
     }
 
-    fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
-        let parsed = parse_tuic_packet_frame(response)?;
+    fn decode_response(
+        &mut self,
+        parsed: TuicUdpPacket,
+    ) -> Result<Option<UdpExchangeResult>, String> {
         let observed_identity = UdpResponseIdentityToken::from_protocol_identity(
             TUIC_ASSOCIATION_IDENTITY_DOMAIN,
-            &parsed.assoc_id.to_be_bytes(),
+            &parsed.association_id().to_be_bytes(),
         )
         .expect("static TUIC identity domain and association id are nonempty");
         let base_response = |payload| {
@@ -367,49 +373,82 @@ impl TuicQuicDatagramSession {
                 .with_session_executor("tokio-quic-datagram-session")
                 .with_underlay_reuse("quic-endpoint-and-connection-reused")
         };
-        if parsed.assoc_id != self.assoc_id {
+        if parsed.association_id() != self.assoc_id {
             return Ok(Some(
-                base_response(parsed.payload)
+                base_response(parsed.into_payload())
                     .with_rejected_response_identity(UdpResponseDropReason::CrossSessionIdentity),
             ));
         }
-        let source: SocketAddr = match parsed
-            .target
-            .as_deref()
-            .and_then(|target| target.parse().ok())
-        {
-            Some(source) => source,
-            None => {
-                return Ok(Some(
-                    base_response(parsed.payload)
-                        .with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity),
-                ));
-            }
+        let source = match parsed.target() {
+            Some(target) => match target.parse::<SocketAddr>() {
+                Ok(source) => Some(source),
+                Err(_) => {
+                    return Ok(Some(
+                        base_response(parsed.into_payload()).with_rejected_response_identity(
+                            UdpResponseDropReason::MalformedIdentity,
+                        ),
+                    ));
+                }
+            },
+            None => None,
         };
-        if self.fixed_target.source() != Some(source) {
+        if source.is_some_and(|source| self.fixed_target.source() != Some(source)) {
             return Ok(Some(
-                base_response(parsed.payload)
+                base_response(parsed.into_payload())
                     .with_rejected_response_identity(UdpResponseDropReason::UnexpectedWireSource),
             ));
         }
+        let packet_id = parsed.packet_id();
+        let fragment_count = parsed.fragment_count();
+        if fragment_count > 1
+            && let Some(source) = source
+        {
+            self.fragment_sources.insert(packet_id, source);
+        }
         let outcome = self.fragments.push(
-            parsed.packet_id,
-            parsed.frag_id,
-            parsed.frag_total,
-            parsed.payload,
+            packet_id,
+            parsed.fragment_id(),
+            fragment_count,
+            parsed.into_payload(),
             "TUIC",
-        )?;
+        );
+        if outcome.is_err() {
+            self.prune_fragment_sources();
+        }
+        let outcome = outcome?;
         match outcome {
             QuicUdpFragmentOutcome::Pending => Ok(None),
-            QuicUdpFragmentOutcome::Complete(payload) => Ok(Some(
-                base_response(payload)
-                    .with_session_bound_response_identity(source, Some(observed_identity)),
-            )),
-            QuicUdpFragmentOutcome::Late(payload) => Ok(Some(
-                base_response(payload)
-                    .with_rejected_response_identity(UdpResponseDropReason::LateResponse),
-            )),
+            QuicUdpFragmentOutcome::Complete(payload) => {
+                let source = if fragment_count == 1 {
+                    source
+                } else {
+                    self.fragment_sources.remove(&packet_id)
+                };
+                let Some(source) = source else {
+                    return Ok(Some(
+                        base_response(payload).with_rejected_response_identity(
+                            UdpResponseDropReason::MalformedIdentity,
+                        ),
+                    ));
+                };
+                Ok(Some(
+                    base_response(payload)
+                        .with_session_bound_response_identity(source, Some(observed_identity)),
+                ))
+            }
+            QuicUdpFragmentOutcome::Late(payload) => {
+                self.prune_fragment_sources();
+                Ok(Some(
+                    base_response(payload)
+                        .with_rejected_response_identity(UdpResponseDropReason::LateResponse),
+                ))
+            }
         }
+    }
+
+    fn prune_fragment_sources(&mut self) {
+        self.fragment_sources
+            .retain(|packet_id, _| self.fragments.contains_pending(*packet_id));
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
@@ -419,53 +458,41 @@ impl TuicQuicDatagramSession {
             .with_underlay_reuse("quic-endpoint-and-connection-reused")
     }
 
-    async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
-        if self.connection.is_some() {
+    async fn ensure_open(&mut self) -> Result<(), String> {
+        if self.udp_association.is_some() {
             return Ok(());
         }
-        let ResidentConnectedQuicEndpoint {
-            endpoint,
-            connection,
-            ..
-        } = open_tuic_quic_connection_candidates_async(
-            proxy,
-            proxy.mark,
-            &self.alpn,
-            self.allow_insecure,
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            QuicEndpointCallerClass::UdpData,
-        )
-        .await?;
-        match time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            authenticate_tuic_connection(&connection, &self.uuid, &self.password),
-        )
-        .await
-        {
-            Err(_) => {
-                endpoint.mark_failed();
-                return Err("TUIC QUIC auth timeout".to_owned());
-            }
-            Ok(Err(err)) => {
-                endpoint.mark_failed();
-                return Err(format!("authenticate TUIC QUIC connection: {err}"));
-            }
-            Ok(Ok(_)) => {}
-        }
-        endpoint.mark_ready();
-        self.connection = Some(connection);
-        self.endpoint = Some(endpoint);
+        let owner_registry = self.owner_registry.as_ref().ok_or_else(|| {
+            "TUIC transport owner registry is unavailable for UDP association".to_owned()
+        })?;
+        let proxy = self
+            .proxy
+            .as_ref()
+            .ok_or_else(|| "TUIC proxy owner identity is unavailable".to_owned())?;
+        let deadline = self.owner_deadline.take().unwrap_or_else(|| {
+            dae_runtime_control::AbsoluteDeadline::from_now(
+                Instant::now(),
+                RESIDENT_UDP_RESPONSE_TIMEOUT,
+            )
+        });
+        let transport = owner_registry
+            .acquire(
+                Arc::clone(proxy),
+                QuicEndpointCallerClass::UdpData,
+                deadline,
+            )
+            .await?;
+        let udp_association = transport.open_udp_association()?;
+        self.assoc_id = udp_association.association_id();
+        self.udp_association = Some(udp_association);
         Ok(())
     }
 
     pub(super) async fn shutdown(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            connection.close(0_u32.into(), b"resident tuic udp session done");
-        }
-        if let Some(endpoint) = self.endpoint.take() {
-            endpoint.wait_idle().await;
-        }
+        self.udp_association = None;
+        self.assoc_id = 0;
         self.fragments.clear();
+        self.fragment_sources.clear();
         self.packet_ids.clear();
         self.fixed_target.clear();
     }
@@ -618,13 +645,7 @@ mod tests {
             Some("quic-endpoint-and-connection-reused")
         );
 
-        let tuic = TuicQuicDatagramSession::new(
-            "uuid".to_owned(),
-            "password".to_owned(),
-            Vec::new(),
-            true,
-        )
-        .pending_response_result();
+        let tuic = TuicQuicDatagramSession::new_for_test().pending_response_result();
         assert!(!tuic.reply_forwarded);
         assert!(tuic.payload_for_test().is_empty());
         assert_eq!(tuic.execution_label, "quic-udp-datagram");
@@ -723,29 +744,24 @@ mod tests {
     fn tuic_rejects_cross_association_and_wrong_target_before_reassembly() {
         let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
         let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
-        let mut session = TuicQuicDatagramSession::new(
-            "uuid".to_owned(),
-            "password".to_owned(),
-            Vec::new(),
-            true,
-        );
+        let mut session = TuicQuicDatagramSession::new_for_test();
         session.assoc_id = 7;
         session
             .fixed_target
             .bind(target, "TUIC UDP association")
             .unwrap();
 
-        for (frame, reason) in [
+        for (packet, reason) in [
             (
-                build_tuic_packet_frame(8, 1, &target.to_string(), b"cross-session").unwrap(),
+                TuicUdpPacket::new(8, 1, target.to_string(), b"cross-session").unwrap(),
                 UdpResponseDropReason::CrossSessionIdentity,
             ),
             (
-                build_tuic_packet_frame(7, 2, &other.to_string(), b"wrong-target").unwrap(),
+                TuicUdpPacket::new(7, 2, other.to_string(), b"wrong-target").unwrap(),
                 UdpResponseDropReason::UnexpectedWireSource,
             ),
         ] {
-            let mut response = session.decode_response(&frame).unwrap().unwrap();
+            let mut response = session.decode_response(packet).unwrap().unwrap();
             let expectation = response.fixed_target_expectation(target);
             assert_eq!(
                 response.take_fixed_target_payload(expectation).validation(),
@@ -753,13 +769,60 @@ mod tests {
             );
         }
 
-        let frame = build_tuic_packet_frame(7, 3, &target.to_string(), b"response").unwrap();
-        let mut response = session.decode_response(&frame).unwrap().unwrap();
+        let packet = TuicUdpPacket::new(7, 3, target.to_string(), b"response").unwrap();
+        let mut response = session.decode_response(packet).unwrap().unwrap();
         let expectation = response.fixed_target_expectation(target);
         assert_eq!(
             response.take_fixed_target_payload(expectation).validation(),
             UdpFixedTargetValidation::Validated
         );
+    }
+
+    #[test]
+    fn tuic_reassembles_out_of_order_fragments_with_first_fragment_source() {
+        let target: SocketAddr = "[2001:db8::20]:5353".parse().unwrap();
+        let other: SocketAddr = "[2001:db8::21]:5353".parse().unwrap();
+        let mut session = TuicQuicDatagramSession::new_for_test();
+        session.assoc_id = 7;
+        session
+            .fixed_target
+            .bind(target, "TUIC UDP association")
+            .unwrap();
+
+        let wrong = TuicUdpPacket::new(7, 1, other.to_string(), vec![1; 1_500]).unwrap();
+        let wrong_fragments = fragment_tuic_udp_packet(&wrong, 2, 1_000).unwrap();
+        let mut rejected = session
+            .decode_response(wrong_fragments[0].clone())
+            .unwrap()
+            .unwrap();
+        let expectation = rejected.fixed_target_expectation(target);
+        assert_eq!(
+            rejected.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+        );
+        assert_eq!(session.fragments.snapshot().pending_packets, 0);
+
+        let payload = vec![5; 1_500];
+        let packet = TuicUdpPacket::new(7, 3, target.to_string(), &payload).unwrap();
+        let fragments = fragment_tuic_udp_packet(&packet, 4, 1_000).unwrap();
+        assert!(
+            session
+                .decode_response(fragments[1].clone())
+                .unwrap()
+                .is_none()
+        );
+        assert!(session.fragment_sources.is_empty());
+
+        let mut response = session
+            .decode_response(fragments[0].clone())
+            .unwrap()
+            .unwrap();
+        let expectation = response.fixed_target_expectation(target);
+        let validated = response.take_fixed_target_payload(expectation);
+        assert_eq!(validated.validation(), UdpFixedTargetValidation::Validated);
+        assert_eq!(validated.into_payload().unwrap(), payload);
+        assert!(session.fragment_sources.is_empty());
+        assert_eq!(session.fragments.snapshot().pending_bytes, 0);
     }
 
     #[test]

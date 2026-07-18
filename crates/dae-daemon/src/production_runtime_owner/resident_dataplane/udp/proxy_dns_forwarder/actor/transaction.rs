@@ -47,6 +47,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
     runtime_config: &ResidentDnsUdpRuntimeConfig,
     metrics: &ResidentDataplaneMetrics,
     hysteria2_owner_registry: Option<&Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<&TuicOwnerRegistryHandle>,
 ) -> Result<ProxyDnsRequestOutcome, ProxyDnsRequestError> {
     if let Err(error) = request.context.ensure(ProxyDnsRequestStage::Queued) {
         request.bytes.mark_expired();
@@ -153,6 +154,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
             UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
                 Arc::clone(proxy),
                 hysteria2_owner_registry.cloned(),
+                tuic_owner_registry.cloned(),
             ),
         ));
         metrics.proxy_dns_udp_executor_opened();

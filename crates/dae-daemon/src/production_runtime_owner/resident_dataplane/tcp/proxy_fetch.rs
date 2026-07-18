@@ -40,6 +40,7 @@ pub(crate) async fn fetch_resident_proxy_http_response_async(
     response_limit: usize,
     timeout: Duration,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> Result<Vec<u8>, String> {
     let sniff_payload = if tls { Vec::new() } else { request.to_vec() };
     exchange_resident_proxy_tcp_stream_async(
@@ -50,6 +51,7 @@ pub(crate) async fn fetch_resident_proxy_http_response_async(
         host.to_owned(),
         timeout,
         hysteria2_owner_registry,
+        tuic_owner_registry,
         |client| async move {
             if tls {
                 fetch_resident_proxy_https_response_async(
@@ -115,6 +117,7 @@ pub(crate) async fn exchange_resident_proxy_tcp_stream_async<F, Fut>(
     sniff_domain: String,
     timeout: Duration,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     exchange: F,
 ) -> Result<Vec<u8>, String>
 where
@@ -145,6 +148,7 @@ where
         peer,
         listen_addr,
         hysteria2_owner_registry,
+        tuic_owner_registry,
         Some(owner_deadline),
     );
 
@@ -179,6 +183,7 @@ fn start_resident_proxy_tcp_handler(
     peer: SocketAddr,
     listen_addr: SocketAddr,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> ResidentProxyTcpHandlerGuard {
     let selection = TcpProxySelection {
@@ -251,6 +256,7 @@ fn start_resident_proxy_tcp_handler(
                 &sniff,
                 &handler_metrics,
                 hysteria2_owner_registry.as_ref(),
+                tuic_owner_registry.as_ref(),
                 owner_deadline,
             )
             .await

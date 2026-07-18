@@ -219,6 +219,7 @@ impl ResidentDnsForwarderCache {
                     Arc::clone(&self.metrics),
                     Arc::clone(&self.udp_executor),
                     self.hysteria2_owner_registry.clone(),
+                    self.tuic_owner_registry.clone(),
                 )
                 .map(Arc::new)
             },

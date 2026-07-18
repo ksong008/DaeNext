@@ -28,6 +28,8 @@ pub(crate) struct ResidentTcpRouter {
         Option<ResidentHealthResuscitationHandle>,
     pub(in crate::production_runtime_owner::resident_dataplane) hysteria2_owner_registry:
         Option<Hysteria2OwnerRegistryHandle>,
+    pub(in crate::production_runtime_owner::resident_dataplane) tuic_owner_registry:
+        Option<TuicOwnerRegistryHandle>,
 }
 
 impl ResidentTcpRouter {
@@ -43,6 +45,7 @@ impl ResidentTcpRouter {
         mptcp: bool,
         health_resuscitation: ResidentHealthResuscitationHandle,
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Result<Self, String> {
         if proxies.is_empty() {
             return Err("resident TCP router needs at least one proxy outbound".to_owned());
@@ -67,6 +70,7 @@ impl ResidentTcpRouter {
             mptcp,
             Some(health_resuscitation),
             Some(hysteria2_owner_registry),
+            tuic_owner_registry,
         )
     }
 
@@ -83,6 +87,7 @@ impl ResidentTcpRouter {
         mptcp: bool,
         health_resuscitation: Option<ResidentHealthResuscitationHandle>,
         hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Result<Self, String> {
         if proxies.is_empty() {
             return Err("resident TCP router needs at least one proxy outbound".to_owned());
@@ -100,6 +105,7 @@ impl ResidentTcpRouter {
             mptcp,
             health_resuscitation,
             hysteria2_owner_registry,
+            tuic_owner_registry,
         })
     }
 
@@ -128,6 +134,7 @@ impl ResidentTcpRouter {
             mptcp,
             None,
             None,
+            None,
         )
     }
 
@@ -154,6 +161,7 @@ impl ResidentTcpRouter {
             sniffing_timeout,
             so_mark_from_dae,
             mptcp,
+            None,
             None,
             None,
         )

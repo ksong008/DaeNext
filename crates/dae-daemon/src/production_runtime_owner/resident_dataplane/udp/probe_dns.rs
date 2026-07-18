@@ -92,6 +92,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<ResidentProxyUdpBridge, String> {
     #[cfg(test)]
@@ -100,6 +101,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
             proxy,
             original_dst,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             owner_deadline,
             None,
         )
@@ -111,6 +113,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
             proxy,
             original_dst,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             owner_deadline,
         )
         .await
@@ -123,13 +126,15 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     original_dst: SocketAddr,
     observation: Arc<ResidentProxyUdpBridgeTestObservation>,
 ) -> Result<ResidentProxyUdpBridge, String> {
-    open_resident_proxy_udp_bridge_inner(proxy, original_dst, None, None, Some(observation)).await
+    open_resident_proxy_udp_bridge_inner(proxy, original_dst, None, None, None, Some(observation))
+        .await
 }
 
 async fn open_resident_proxy_udp_bridge_inner(
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) -> Result<ResidentProxyUdpBridge, String> {
@@ -163,6 +168,7 @@ async fn open_resident_proxy_udp_bridge_inner(
             shutdown_rx,
             task_error,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             owner_deadline,
             test_observation,
         )
@@ -175,6 +181,7 @@ async fn open_resident_proxy_udp_bridge_inner(
             shutdown_rx,
             task_error,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             owner_deadline,
         )
         .await;
@@ -191,6 +198,7 @@ fn resident_proxy_udp_bridge_bind_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn resident_proxy_udp_bridge_loop(
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
@@ -198,12 +206,14 @@ async fn resident_proxy_udp_bridge_loop(
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
     last_error: Arc<Mutex<Option<String>>>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) {
     let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
         Arc::clone(&proxy),
         hysteria2_owner_registry,
+        tuic_owner_registry,
     );
     if let Some(deadline) = owner_deadline {
         executor.set_owner_acquisition_deadline(deadline);
@@ -312,6 +322,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
     payload: &[u8],
     include_response_hex: bool,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> serde_json::Value {
     let started = Instant::now();
     let agreement = proxy.execution_plan().udp.agreement();
@@ -343,6 +354,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
     let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
         Arc::clone(&proxy),
         hysteria2_owner_registry,
+        tuic_owner_registry,
     );
     let dns = ResidentDnsPlan::asis(proxy.mark);
     let mut exchange = executor
@@ -434,6 +446,7 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
     original_dst: SocketAddr,
     lookup_host: &str,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> Result<(), String> {
     proxy
         .execution_plan()
@@ -445,6 +458,7 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
     let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
         Arc::clone(&proxy),
         hysteria2_owner_registry,
+        tuic_owner_registry,
     );
     let dns = ResidentDnsPlan::asis(proxy.mark);
     let mut response = executor

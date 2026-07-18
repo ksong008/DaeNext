@@ -30,6 +30,7 @@ pub(super) async fn probe_resident_candidate_tcp_families(
     candidate: &plan::ResidentProxyProbePlan,
     stop: Option<&SharedResidentStopSignal>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     caller: QuicEndpointCallerClass,
 ) -> Result<Vec<ResidentTcpFamilyProbeResult>, HealthCheckRoundStatus> {
     let targets = match stop {
@@ -50,6 +51,7 @@ pub(super) async fn probe_resident_candidate_tcp_families(
             targets.ipv4,
             stop,
             hysteria2_owner_registry.clone(),
+            tuic_owner_registry.clone(),
             caller,
         )),
         Box::pin(probe_tcp_family(
@@ -58,6 +60,7 @@ pub(super) async fn probe_resident_candidate_tcp_families(
             targets.ipv6,
             stop,
             hysteria2_owner_registry.clone(),
+            tuic_owner_registry.clone(),
             caller,
         )),
     );
@@ -70,6 +73,7 @@ async fn probe_tcp_family(
     family: plan::ResidentHealthTargetFamily,
     stop: Option<&SharedResidentStopSignal>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentTcpFamilyProbeResult, HealthCheckRoundStatus> {
     match family {
@@ -94,6 +98,7 @@ async fn probe_tcp_family(
                                 candidate,
                                 &target,
                                 hysteria2_owner_registry.clone(),
+                                tuic_owner_registry.clone(),
                                 caller,
                             ) => result,
                         }
@@ -103,6 +108,7 @@ async fn probe_tcp_family(
                             candidate,
                             &target,
                             hysteria2_owner_registry.clone(),
+                            tuic_owner_registry.clone(),
                             caller,
                         )
                         .await

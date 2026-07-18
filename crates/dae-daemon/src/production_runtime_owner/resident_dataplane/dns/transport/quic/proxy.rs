@@ -6,6 +6,7 @@ pub(super) async fn forward_dns_quic_to_proxy_async(
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: TuicOwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let generation = proxy.execution_plan().runtime_generation();
@@ -18,6 +19,7 @@ pub(super) async fn forward_dns_quic_to_proxy_async(
             payload,
             proxy,
             hysteria2_owner_registry,
+            tuic_owner_registry,
             context,
         ),
     )
@@ -30,6 +32,7 @@ async fn forward_dns_quic_to_proxy_with_context(
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: TuicOwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let bridge = context
@@ -40,6 +43,7 @@ async fn forward_dns_quic_to_proxy_with_context(
                 Arc::clone(&proxy),
                 remote,
                 Some(hysteria2_owner_registry),
+                Some(tuic_owner_registry),
                 Some(dae_runtime_control::AbsoluteDeadline::at(
                     context.deadline().into_std(),
                 )),

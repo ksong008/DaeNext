@@ -230,6 +230,34 @@ pub(crate) fn start_resident_dataplane_workers(
         }
     };
     owner.install_hysteria2_owner_registry(hysteria2_owner_registry, hysteria2_owner_thread);
+    let requires_tuic_owner = proxy_groups
+        .values()
+        .any(|group| group.requires_tuic_transport_owner());
+    if requires_tuic_owner {
+        let (tuic_owner_registry, tuic_owner_thread) = match start_tuic_owner_registry(
+            reload_generation,
+            owner.stop_handle(),
+            resource_config.tcp_flow_stack_bytes.value(),
+        ) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let cleanup = owner.shutdown();
+                return (
+                    json!({
+                        "status": "fail",
+                        "enabled": true,
+                        "error": err,
+                        "cleanup": cleanup,
+                        "event_file": Value::Null,
+                        "event_file_status": "disabled",
+                        "event_log": "product-log-sink",
+                    }),
+                    None,
+                );
+            }
+        };
+        owner.install_tuic_owner_registry(tuic_owner_registry, tuic_owner_thread);
+    }
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::clone(&default_group);
     let mut manual_probe_plans = plan::build_resident_manual_probe_plans(config);
@@ -291,6 +319,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 owner.hysteria2_owner_registry().expect(
                     "Hysteria2 owner registry is installed before DNS runtime construction",
                 ),
+                owner.tuic_owner_registry(),
             )
             .with_domain_routing(dns_domain_routing.clone())
             .with_upstream_routing(Some(dns_upstream_router)),
@@ -335,6 +364,7 @@ pub(crate) fn start_resident_dataplane_workers(
         owner
             .hysteria2_owner_registry()
             .expect("Hysteria2 owner registry is installed before TCP router construction"),
+        owner.tuic_owner_registry(),
     ) {
         Ok(router) => Arc::new(router),
         Err(err) => {
@@ -419,6 +449,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let hysteria2_owner_registry = owner
             .hysteria2_owner_registry()
             .expect("Hysteria2 owner registry is installed before health scheduler construction");
+        let tuic_owner_registry = owner.tuic_owner_registry();
         owner.spawn_thread(
             "health-check-scheduler",
             "health-check-scheduler",
@@ -435,6 +466,7 @@ pub(crate) fn start_resident_dataplane_workers(
                     health_bootstrap_concurrency,
                     health_runtime_config,
                     Some(hysteria2_owner_registry),
+                    tuic_owner_registry,
                 )
             },
         );
@@ -454,6 +486,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let hysteria2_owner_registry = owner
             .hysteria2_owner_registry()
             .expect("Hysteria2 owner registry is installed before UDP manager construction");
+        let tuic_owner_registry = owner.tuic_owner_registry();
         let cleanup_reporter = owner.cleanup_reporter("udp-session-manager");
         owner.spawn_thread("udp-session-manager", "udp-session-manager", move || {
             let report = resident_udp_loop(
@@ -473,6 +506,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 udp_runtime_config,
                 health_resuscitation,
                 hysteria2_owner_registry,
+                tuic_owner_registry,
             );
             cleanup_reporter.finish(report);
         });

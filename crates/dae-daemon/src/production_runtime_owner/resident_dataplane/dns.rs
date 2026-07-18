@@ -56,7 +56,8 @@ use super::udp::{
 };
 use super::{
     Hysteria2OwnerRegistryHandle, RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT,
-    ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig, apply_resident_udp_socket_buffer_tuning,
+    ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig, TuicOwnerRegistryHandle,
+    apply_resident_udp_socket_buffer_tuning,
 };
 use super::{ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl};
 
@@ -269,11 +270,13 @@ impl ResidentDnsPlan {
         runtime: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Self {
         self.forwarders = Arc::new(ResidentDnsForwarderCache::new_with_transport_owner(
             runtime,
             metrics,
             hysteria2_owner_registry,
+            tuic_owner_registry,
         ));
         self
     }

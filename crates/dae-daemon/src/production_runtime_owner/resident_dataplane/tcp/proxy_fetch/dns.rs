@@ -13,6 +13,7 @@ pub(crate) async fn exchange_resident_proxy_dns_tcp_stream_async<F, Fut>(
     sniff_domain: String,
     context: ProxyDnsRequestContext,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: TuicOwnerRegistryHandle,
     exchange: F,
 ) -> Result<Vec<u8>, ProxyDnsRequestError>
 where
@@ -53,6 +54,7 @@ where
         peer,
         listen_addr,
         Some(hysteria2_owner_registry),
+        Some(tuic_owner_registry),
         Some(dae_runtime_control::AbsoluteDeadline::at(
             context.deadline().into_std(),
         )),
@@ -96,6 +98,7 @@ pub(crate) async fn exchange_resident_proxy_dns_tcp_async(
     response_limit: usize,
     context: ProxyDnsRequestContext,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: TuicOwnerRegistryHandle,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     exchange_resident_proxy_dns_tcp_stream_async(
         proxy,
@@ -105,6 +108,7 @@ pub(crate) async fn exchange_resident_proxy_dns_tcp_async(
         String::new(),
         context,
         hysteria2_owner_registry,
+        tuic_owner_registry,
         |client| async move {
             exchange_proxy_dns_tcp_loopback(client, payload, response_limit, context).await
         },

@@ -8,6 +8,7 @@ const EXPLICIT_NON_PRODUCTION_CONSTRUCTORS: &[&str] = &[
     SOURCE_GATE_TEST,
     "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/proxy_dispatch/quic_helpers_port_hopping_tests.rs",
     "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/runtime/hysteria2_owner_live_tests.rs",
+    "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/runtime/tuic_owner_live_tests.rs",
     "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/transport_helpers/xhttp_h2/h3_boring_tls_tests.rs",
     "crates/dae-outbound/src/hysteria2/auth/tests.rs",
     "crates/dae-outbound/src/hysteria2/quic_loopback.rs",
@@ -85,6 +86,40 @@ fn production_hysteria2_transport_construction_is_registry_owned() {
     assert!(
         offenders.is_empty(),
         "production Hysteria2 Endpoint/auth construction must remain behind the generation-owned registry:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn production_tuic_transport_construction_is_registry_owned() {
+    const CONNECTION_CONSTRUCTOR: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/proxy_dispatch/quic_connections.rs";
+    const TRANSPORT_OWNER: &str =
+        "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/runtime/tuic_owner.rs";
+    let allowed = [CONNECTION_CONSTRUCTOR, TRANSPORT_OWNER, SOURCE_GATE_TEST];
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let root = repo.join("crates/dae-daemon/src/production_runtime_owner/resident_dataplane");
+    let mut files = Vec::new();
+    collect_rust_files(&root, &mut files);
+    let restricted = [
+        "open_tuic_quic_connection_candidates_async(",
+        "authenticate_tuic_connection(",
+    ];
+    let mut offenders = Vec::new();
+    for file in files {
+        let relative = file.strip_prefix(&repo).unwrap().to_string_lossy();
+        let source = std::fs::read_to_string(&file).unwrap();
+        for constructor in restricted {
+            if source.contains(constructor) && !allowed.contains(&relative.as_ref()) {
+                offenders.push(format!("{relative} contains {constructor}"));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "production TUIC Endpoint/auth construction must remain behind the generation-owned registry:\n{}",
         offenders.join("\n")
     );
 }

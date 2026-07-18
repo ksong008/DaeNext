@@ -339,6 +339,9 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
             forwarders
                 .hysteria2_owner_registry()
                 .map_err(ResidentDnsTransportError::message)?,
+            forwarders
+                .tuic_owner_registry()
+                .map_err(ResidentDnsTransportError::message)?,
             context,
         )
         .await
@@ -436,6 +439,7 @@ async fn forward_dns_tcp_to_proxy_async(
     payload: &[u8],
     proxy: Arc<ResidentProxyPlan>,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: TuicOwnerRegistryHandle,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     exchange_resident_proxy_dns_tcp_async(
@@ -445,6 +449,7 @@ async fn forward_dns_tcp_to_proxy_async(
         DNS_TCP_MESSAGE_READ_LIMIT,
         context,
         hysteria2_owner_registry,
+        tuic_owner_registry,
     )
     .await
     .map_err(|error| {

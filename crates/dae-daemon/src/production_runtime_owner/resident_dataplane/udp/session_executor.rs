@@ -23,8 +23,10 @@ impl UdpSessionExecutor {
         &mut self,
         deadline: dae_runtime_control::AbsoluteDeadline,
     ) {
-        if let Self::Hysteria2(session) = self {
-            session.set_owner_deadline(deadline);
+        match self {
+            Self::Hysteria2(session) => session.set_owner_deadline(deadline),
+            Self::Tuic(session) => session.set_owner_deadline(deadline),
+            _ => {}
         }
     }
 

@@ -290,6 +290,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     &sniff,
                     &metrics,
                     router.hysteria2_owner_registry.as_ref(),
+                    router.tuic_owner_registry.as_ref(),
                     None,
                 )
                 .await

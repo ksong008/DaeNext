@@ -89,6 +89,34 @@ const LOW_MEMORY_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT: usize = 8_192;
 const BALANCED_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT: usize = 32_768;
 const HIGH_PERFORMANCE_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT: usize = 131_072;
 const HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT: usize = 3;
+const LOW_MEMORY_TUIC_OWNER_LIMIT: usize = 8;
+const BALANCED_TUIC_OWNER_LIMIT: usize = 32;
+const HIGH_PERFORMANCE_TUIC_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 64;
+const BALANCED_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 256;
+const HIGH_PERFORMANCE_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 1_024;
+const LOW_MEMORY_TUIC_LOGICAL_LEASE_LIMIT: usize = 128;
+const BALANCED_TUIC_LOGICAL_LEASE_LIMIT: usize = 1_024;
+const HIGH_PERFORMANCE_TUIC_LOGICAL_LEASE_LIMIT: usize = 4_096;
+const LOW_MEMORY_TUIC_UDP_ASSOCIATION_LIMIT: usize = 32;
+const BALANCED_TUIC_UDP_ASSOCIATION_LIMIT: usize = 256;
+const HIGH_PERFORMANCE_TUIC_UDP_ASSOCIATION_LIMIT: usize = 1_024;
+const LOW_MEMORY_TUIC_UDP_ASSOCIATION_QUEUE_DEPTH: usize = 32;
+const BALANCED_TUIC_UDP_ASSOCIATION_QUEUE_DEPTH: usize = 128;
+const HIGH_PERFORMANCE_TUIC_UDP_ASSOCIATION_QUEUE_DEPTH: usize = 256;
+const LOW_MEMORY_TUIC_UDP_ASSOCIATION_QUEUE_BYTES: usize = 128 * 1024;
+const BALANCED_TUIC_UDP_ASSOCIATION_QUEUE_BYTES: usize = 256 * 1024;
+const HIGH_PERFORMANCE_TUIC_UDP_ASSOCIATION_QUEUE_BYTES: usize = 512 * 1024;
+const LOW_MEMORY_TUIC_UDP_OWNER_QUEUE_BYTES: usize = 2 * 1024 * 1024;
+const BALANCED_TUIC_UDP_OWNER_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+const HIGH_PERFORMANCE_TUIC_UDP_OWNER_QUEUE_BYTES: usize = 64 * 1024 * 1024;
+const LOW_MEMORY_TUIC_ASSOCIATION_QUARANTINE_LIMIT: usize = 128;
+const BALANCED_TUIC_ASSOCIATION_QUARANTINE_LIMIT: usize = 1_024;
+const HIGH_PERFORMANCE_TUIC_ASSOCIATION_QUARANTINE_LIMIT: usize = 4_096;
+const TUIC_ASSOCIATION_QUARANTINE_TTL_SECONDS: u64 = 10;
+const LOW_MEMORY_TUIC_RETRY_COOLDOWN_SECONDS: u64 = 5;
+const BALANCED_TUIC_RETRY_COOLDOWN_SECONDS: u64 = 3;
+const HIGH_PERFORMANCE_TUIC_RETRY_COOLDOWN_SECONDS: u64 = 1;
 const LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY: usize = 64;
 const BALANCED_DNS_FAST_PATH_CONCURRENCY: usize = 512;
 const HIGH_PERFORMANCE_DNS_FAST_PATH_CONCURRENCY: usize = 1_024;
@@ -154,6 +182,122 @@ pub(crate) struct Hysteria2OwnerResourceProfile {
     retry_cooldown: Duration,
     port_hop_resolved_candidate_limit: usize,
     port_hop_transition_socket_limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TuicOwnerResourceProfile {
+    owner_limit: usize,
+    command_queue_depth: usize,
+    logical_lease_limit: usize,
+    udp_association_limit: usize,
+    udp_association_queue_depth: usize,
+    udp_association_queue_bytes: usize,
+    udp_owner_queue_bytes: usize,
+    association_quarantine_limit: usize,
+    association_quarantine_ttl: Duration,
+    retry_cooldown: Duration,
+}
+
+impl TuicOwnerResourceProfile {
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        match profile {
+            ResidentRuntimeProfile::LowMemory => Self {
+                owner_limit: LOW_MEMORY_TUIC_OWNER_LIMIT,
+                command_queue_depth: LOW_MEMORY_TUIC_OWNER_COMMAND_QUEUE_DEPTH,
+                logical_lease_limit: LOW_MEMORY_TUIC_LOGICAL_LEASE_LIMIT,
+                udp_association_limit: LOW_MEMORY_TUIC_UDP_ASSOCIATION_LIMIT,
+                udp_association_queue_depth: LOW_MEMORY_TUIC_UDP_ASSOCIATION_QUEUE_DEPTH,
+                udp_association_queue_bytes: LOW_MEMORY_TUIC_UDP_ASSOCIATION_QUEUE_BYTES,
+                udp_owner_queue_bytes: LOW_MEMORY_TUIC_UDP_OWNER_QUEUE_BYTES,
+                association_quarantine_limit: LOW_MEMORY_TUIC_ASSOCIATION_QUARANTINE_LIMIT,
+                association_quarantine_ttl: Duration::from_secs(
+                    TUIC_ASSOCIATION_QUARANTINE_TTL_SECONDS,
+                ),
+                retry_cooldown: Duration::from_secs(LOW_MEMORY_TUIC_RETRY_COOLDOWN_SECONDS),
+            },
+            ResidentRuntimeProfile::Balanced => Self {
+                owner_limit: BALANCED_TUIC_OWNER_LIMIT,
+                command_queue_depth: BALANCED_TUIC_OWNER_COMMAND_QUEUE_DEPTH,
+                logical_lease_limit: BALANCED_TUIC_LOGICAL_LEASE_LIMIT,
+                udp_association_limit: BALANCED_TUIC_UDP_ASSOCIATION_LIMIT,
+                udp_association_queue_depth: BALANCED_TUIC_UDP_ASSOCIATION_QUEUE_DEPTH,
+                udp_association_queue_bytes: BALANCED_TUIC_UDP_ASSOCIATION_QUEUE_BYTES,
+                udp_owner_queue_bytes: BALANCED_TUIC_UDP_OWNER_QUEUE_BYTES,
+                association_quarantine_limit: BALANCED_TUIC_ASSOCIATION_QUARANTINE_LIMIT,
+                association_quarantine_ttl: Duration::from_secs(
+                    TUIC_ASSOCIATION_QUARANTINE_TTL_SECONDS,
+                ),
+                retry_cooldown: Duration::from_secs(BALANCED_TUIC_RETRY_COOLDOWN_SECONDS),
+            },
+            ResidentRuntimeProfile::HighPerformance => Self {
+                owner_limit: HIGH_PERFORMANCE_TUIC_OWNER_LIMIT,
+                command_queue_depth: HIGH_PERFORMANCE_TUIC_OWNER_COMMAND_QUEUE_DEPTH,
+                logical_lease_limit: HIGH_PERFORMANCE_TUIC_LOGICAL_LEASE_LIMIT,
+                udp_association_limit: HIGH_PERFORMANCE_TUIC_UDP_ASSOCIATION_LIMIT,
+                udp_association_queue_depth: HIGH_PERFORMANCE_TUIC_UDP_ASSOCIATION_QUEUE_DEPTH,
+                udp_association_queue_bytes: HIGH_PERFORMANCE_TUIC_UDP_ASSOCIATION_QUEUE_BYTES,
+                udp_owner_queue_bytes: HIGH_PERFORMANCE_TUIC_UDP_OWNER_QUEUE_BYTES,
+                association_quarantine_limit: HIGH_PERFORMANCE_TUIC_ASSOCIATION_QUARANTINE_LIMIT,
+                association_quarantine_ttl: Duration::from_secs(
+                    TUIC_ASSOCIATION_QUARANTINE_TTL_SECONDS,
+                ),
+                retry_cooldown: Duration::from_secs(HIGH_PERFORMANCE_TUIC_RETRY_COOLDOWN_SECONDS),
+            },
+        }
+    }
+
+    pub(crate) fn selected() -> Self {
+        static SELECTED: std::sync::OnceLock<TuicOwnerResourceProfile> = std::sync::OnceLock::new();
+        *SELECTED.get_or_init(|| {
+            Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+        })
+    }
+
+    pub(crate) const fn owner_limit(self) -> usize {
+        self.owner_limit
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn with_owner_limit(mut self, owner_limit: usize) -> Self {
+        self.owner_limit = owner_limit;
+        self
+    }
+
+    pub(crate) const fn command_queue_depth(self) -> usize {
+        self.command_queue_depth
+    }
+
+    pub(crate) const fn logical_lease_limit(self) -> usize {
+        self.logical_lease_limit
+    }
+
+    pub(crate) const fn udp_association_limit(self) -> usize {
+        self.udp_association_limit
+    }
+
+    pub(crate) const fn udp_association_queue_depth(self) -> usize {
+        self.udp_association_queue_depth
+    }
+
+    pub(crate) const fn udp_association_queue_bytes(self) -> usize {
+        self.udp_association_queue_bytes
+    }
+
+    pub(crate) const fn udp_owner_queue_bytes(self) -> usize {
+        self.udp_owner_queue_bytes
+    }
+
+    pub(crate) const fn association_quarantine_limit(self) -> usize {
+        self.association_quarantine_limit
+    }
+
+    pub(crate) const fn association_quarantine_ttl(self) -> Duration {
+        self.association_quarantine_ttl
+    }
+
+    pub(crate) const fn retry_cooldown(self) -> Duration {
+        self.retry_cooldown
+    }
 }
 
 impl Hysteria2OwnerResourceProfile {

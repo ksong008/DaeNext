@@ -5,6 +5,7 @@ pub(super) async fn run_resident_candidate_family_health_checks(
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::BackgroundHealth,
@@ -14,6 +15,7 @@ pub(super) async fn run_resident_candidate_family_health_checks(
             candidate,
             stop,
             hysteria2_owner_registry,
+            tuic_owner_registry,
         ),
     )
     .await
@@ -24,11 +26,13 @@ async fn run_resident_candidate_family_health_checks_scoped(
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     let tcp_results = match super::tcp_family_probe::probe_resident_candidate_tcp_families(
         candidate,
         Some(&stop),
         hysteria2_owner_registry.clone(),
+        tuic_owner_registry.clone(),
         QuicEndpointCallerClass::BackgroundHealth,
     )
     .await
@@ -50,6 +54,7 @@ async fn run_resident_candidate_family_health_checks_scoped(
         candidate,
         Some(&stop),
         hysteria2_owner_registry,
+        tuic_owner_registry,
     )
     .await
     {

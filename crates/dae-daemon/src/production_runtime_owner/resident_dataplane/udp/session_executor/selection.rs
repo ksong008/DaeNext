@@ -17,30 +17,37 @@ impl UdpSessionExecutor {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet(
         proxy: &ResidentProxyPlan,
     ) -> Self {
-        Self::new_proxy_packet_with_optional_transport_owner(Arc::new(proxy.clone()), None)
+        Self::new_proxy_packet_with_optional_transport_owner(Arc::new(proxy.clone()), None, None)
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_with_transport_owner(
         proxy: Arc<ResidentProxyPlan>,
         original_dst: SocketAddr,
         owner_registry: Hysteria2OwnerRegistryHandle,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Self {
         if original_dst.port() == DNS_DEFAULT_PORT {
             return Self::Dns;
         }
-        Self::new_proxy_packet_with_transport_owner(proxy, owner_registry)
+        Self::new_proxy_packet_with_transport_owner(proxy, owner_registry, tuic_owner_registry)
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet_with_transport_owner(
         proxy: Arc<ResidentProxyPlan>,
         owner_registry: Hysteria2OwnerRegistryHandle,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Self {
-        Self::new_proxy_packet_with_optional_transport_owner(proxy, Some(owner_registry))
+        Self::new_proxy_packet_with_optional_transport_owner(
+            proxy,
+            Some(owner_registry),
+            tuic_owner_registry,
+        )
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet_with_optional_transport_owner(
         proxy: Arc<ResidentProxyPlan>,
         owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Self {
         if let Some(reason) = resident_udp_chain_admission(&proxy).unsupported_reason() {
             return Self::fail_closed(reason);
@@ -105,18 +112,11 @@ impl UdpSessionExecutor {
                 owner_registry,
             )),
             (
-                ResidentProxyProtocolPlan::TuicQuicTcp {
-                    uuid,
-                    password,
-                    alpn,
-                    allow_insecure,
-                },
+                ResidentProxyProtocolPlan::TuicQuicTcp { .. },
                 ResidentUdpExecutorFactory::TuicPacket,
             ) => Self::Tuic(TuicQuicDatagramSession::new(
-                uuid.clone(),
-                password.clone(),
-                alpn.clone(),
-                *allow_insecure,
+                Arc::clone(&proxy),
+                tuic_owner_registry,
             )),
             (
                 ResidentProxyProtocolPlan::JuicityQuicTcp {

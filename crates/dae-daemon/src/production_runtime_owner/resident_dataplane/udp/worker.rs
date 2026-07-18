@@ -22,6 +22,7 @@ pub(crate) fn resident_udp_loop(
     runtime_config: ResidentUdpRuntimeConfig,
     health_resuscitation: ResidentHealthResuscitationHandle,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
 ) -> Value {
     run_resident_udp_session_manager(
         socket,
@@ -40,5 +41,6 @@ pub(crate) fn resident_udp_loop(
         runtime_config,
         health_resuscitation,
         hysteria2_owner_registry,
+        tuic_owner_registry,
     )
 }

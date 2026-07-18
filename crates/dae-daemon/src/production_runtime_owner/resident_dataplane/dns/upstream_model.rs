@@ -124,6 +124,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Arc<ResidentDataplaneMetrics>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) hysteria2_owner_registry:
         Option<Hysteria2OwnerRegistryHandle>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) tuic_owner_registry:
+        Option<TuicOwnerRegistryHandle>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) closing:
         std::sync::atomic::AtomicBool,
 }
@@ -141,6 +143,7 @@ impl Default for ResidentDnsForwarderCache {
             udp_runtime,
             metrics,
             hysteria2_owner_registry: None,
+            tuic_owner_registry: None,
             closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -160,6 +163,7 @@ impl ResidentDnsForwarderCache {
             udp_runtime,
             metrics,
             hysteria2_owner_registry: None,
+            tuic_owner_registry: None,
             closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -168,9 +172,11 @@ impl ResidentDnsForwarderCache {
         udp_runtime: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Self {
         let mut cache = Self::new(udp_runtime, metrics);
         cache.hysteria2_owner_registry = Some(hysteria2_owner_registry);
+        cache.tuic_owner_registry = tuic_owner_registry;
         cache
     }
 
@@ -179,6 +185,14 @@ impl ResidentDnsForwarderCache {
     ) -> Result<Hysteria2OwnerRegistryHandle, String> {
         self.hysteria2_owner_registry.clone().ok_or_else(|| {
             "Hysteria2 transport owner registry is unavailable for proxied DNS".to_owned()
+        })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn tuic_owner_registry(
+        &self,
+    ) -> Result<TuicOwnerRegistryHandle, String> {
+        self.tuic_owner_registry.clone().ok_or_else(|| {
+            "TUIC transport owner registry is unavailable for proxied DNS".to_owned()
         })
     }
 }
