@@ -286,6 +286,34 @@ pub(crate) fn start_resident_dataplane_workers(
         };
         owner.install_juicity_owner_registry(juicity_owner_registry, juicity_owner_thread);
     }
+    let requires_xhttp_xmux_owner = proxy_groups
+        .values()
+        .any(|group| group.requires_xhttp_xmux_owner());
+    if requires_xhttp_xmux_owner {
+        let (xhttp_xmux_owner, xhttp_xmux_owner_thread) =
+            match tcp::start_xhttp_xmux_generation_owner(
+                reload_generation,
+                resource_config.tcp_flow_stack_bytes.value(),
+            ) {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    let cleanup = owner.shutdown();
+                    return (
+                        json!({
+                            "status": "fail",
+                            "enabled": true,
+                            "error": err,
+                            "cleanup": cleanup,
+                            "event_file": Value::Null,
+                            "event_file_status": "disabled",
+                            "event_log": "product-log-sink",
+                        }),
+                        None,
+                    );
+                }
+            };
+        owner.install_xhttp_xmux_generation_owner(xhttp_xmux_owner, xhttp_xmux_owner_thread);
+    }
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::clone(&default_group);
     let mut manual_probe_plans = plan::build_resident_manual_probe_plans(config);

@@ -3,12 +3,61 @@ use super::*;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-static XHTTP_XMUX_H3_MANAGERS: OnceLock<
-    Mutex<HashMap<XhttpXmuxKey, XhttpXmuxManagerHandle<XhttpXmuxH3Manager>>>,
-> = OnceLock::new();
+pub(super) struct XhttpH3GenerationManagers {
+    managers: Mutex<HashMap<XhttpXmuxKey, XhttpXmuxManagerHandle<XhttpXmuxH3Manager>>>,
+}
+
+impl XhttpH3GenerationManagers {
+    pub(super) fn new() -> Self {
+        Self {
+            managers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(super) fn metrics_snapshot(&self) -> Value {
+        let Ok(managers) = self.managers.lock() else {
+            return json!({
+                "managers": Value::Null,
+                "clients": Value::Null,
+                "opening": Value::Null,
+                "leases": Value::Null,
+                "lockedManagers": 1,
+            });
+        };
+        let mut clients = 0_usize;
+        let mut opening = 0_usize;
+        let mut leases = 0_usize;
+        let mut locked_managers = 0_usize;
+        for manager in managers.values() {
+            opening = opening.saturating_add(manager.lifecycle.opening());
+            match manager.manager.try_lock() {
+                Ok(state) => {
+                    clients = clients.saturating_add(state.clients.len());
+                    leases = state.clients.iter().fold(leases, |leases, client| {
+                        leases.saturating_add(
+                            client
+                                .usage
+                                .open_usage
+                                .load(std::sync::atomic::Ordering::Acquire)
+                                .max(0) as usize,
+                        )
+                    });
+                }
+                Err(_) => locked_managers = locked_managers.saturating_add(1),
+            }
+        }
+        json!({
+            "managers": managers.len(),
+            "clients": clients,
+            "opening": opening,
+            "leases": leases,
+            "lockedManagers": locked_managers,
+        })
+    }
+}
 
 struct XhttpXmuxH3ClientEntry {
     pub(super) client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
@@ -226,16 +275,23 @@ impl XhttpXmuxH3Manager {
         self.lifecycle.waiter(deadline)
     }
 
-    fn force_close(&mut self) -> usize {
+    fn take_connections(&mut self) -> Vec<XhttpH3Connection> {
         self.lifecycle.close();
-        let mut closed = 0_usize;
-        for client in self.clients.drain(..) {
-            client
-                .connection
-                .abort_with_reason(b"resident xhttp h3 xmux runtime cleanup");
-            closed = closed.saturating_add(1);
-        }
+        let connections = self
+            .clients
+            .drain(..)
+            .map(|client| client.connection)
+            .collect();
         self.lifecycle.notify();
+        connections
+    }
+
+    fn force_close(&mut self) -> usize {
+        let connections = self.take_connections();
+        let closed = connections.len();
+        for connection in connections {
+            connection.abort_with_reason(b"resident xhttp h3 xmux runtime cleanup");
+        }
         closed
     }
 }
@@ -272,26 +328,22 @@ impl Drop for PendingXhttpH3Client {
     }
 }
 
-pub(super) fn clear_xhttp_h3_xmux_managers(runtime_generation: u64) -> XhttpXmuxManagerClearReport {
-    let Some(managers) = XHTTP_XMUX_H3_MANAGERS.get() else {
-        return XhttpXmuxManagerClearReport::default();
+pub(super) async fn clear_xhttp_h3_xmux_managers(
+    generation: &XhttpH3GenerationManagers,
+    deadline: tokio::time::Instant,
+) -> XhttpXmuxManagerClearReport {
+    let drained = match generation.managers.lock() {
+        Ok(mut managers) => managers
+            .drain()
+            .map(|(_, manager)| manager)
+            .collect::<Vec<_>>(),
+        Err(_) => {
+            return XhttpXmuxManagerClearReport {
+                locked_managers: 1,
+                ..XhttpXmuxManagerClearReport::default()
+            };
+        }
     };
-    let Ok(mut managers) = managers.lock() else {
-        return XhttpXmuxManagerClearReport {
-            locked_managers: 1,
-            ..XhttpXmuxManagerClearReport::default()
-        };
-    };
-    let keys = managers
-        .keys()
-        .filter(|key| key.runtime_generation() == runtime_generation)
-        .cloned()
-        .collect::<Vec<_>>();
-    let drained = keys
-        .into_iter()
-        .filter_map(|key| managers.remove(&key))
-        .collect::<Vec<_>>();
-    drop(managers);
 
     let mut report = XhttpXmuxManagerClearReport {
         managers: drained.len(),
@@ -301,19 +353,32 @@ pub(super) fn clear_xhttp_h3_xmux_managers(runtime_generation: u64) -> XhttpXmux
         manager.lifecycle.close();
     }
     for manager in drained {
-        let (clients, deferred) = close_xhttp_h3_manager(&manager);
+        let (clients, deferred) = close_xhttp_h3_manager(&manager, deadline).await;
         report.clients = report.clients.saturating_add(clients);
         report.locked_managers = report.locked_managers.saturating_add(usize::from(deferred));
     }
     report
 }
 
-fn close_xhttp_h3_manager(manager: &XhttpXmuxManagerHandle<XhttpXmuxH3Manager>) -> (usize, bool) {
+async fn close_xhttp_h3_manager(
+    manager: &XhttpXmuxManagerHandle<XhttpXmuxH3Manager>,
+    deadline: tokio::time::Instant,
+) -> (usize, bool) {
     manager.lifecycle.close();
-    match manager.manager.try_lock() {
-        Ok(mut state) => (state.force_close(), false),
-        Err(_) => (0, true),
+    let Ok(mut state) = tokio::time::timeout_at(deadline, manager.manager.lock()).await else {
+        return (0, true);
+    };
+    let connections = state.take_connections();
+    let clients = connections.len();
+    drop(state);
+    for connection in connections {
+        let _ = tokio::time::timeout_at(
+            deadline,
+            connection.close(b"resident xhttp h3 xmux runtime cleanup"),
+        )
+        .await;
     }
+    (clients, false)
 }
 
 pub(in super::super) async fn select_xhttp_h3_xmux_client<F, Fut>(
@@ -323,11 +388,13 @@ pub(in super::super) async fn select_xhttp_h3_xmux_client<F, Fut>(
 ) -> Result<XhttpXmuxH3SelectedClient, String>
 where
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<XhttpH3EndpointClient, String>>,
+    Fut: Future<Output = Result<XhttpH3EndpointClient, String>> + Send + 'static,
 {
+    let generation = xhttp_xmux_generation_owner(key.runtime_generation())?;
     let manager = {
-        let mut managers = XHTTP_XMUX_H3_MANAGERS
-            .get_or_init(|| Mutex::new(HashMap::new()))
+        let mut managers = generation
+            .h3
+            .managers
             .lock()
             .map_err(|_| "resident xHTTP H3 xmux manager lock poisoned".to_owned())?;
         managers
@@ -363,10 +430,11 @@ where
                 let Some(new_client) = new_client.take() else {
                     return Err("resident xHTTP H3 xmux new client was already consumed".to_owned());
                 };
-                let mut client = match new_client().await {
-                    Ok(client) => PendingXhttpH3Client::new(client),
-                    Err(err) => return Err(err),
-                };
+                let open = new_client();
+                let mut client = execute_xhttp_xmux_owner_task(&generation, async move {
+                    open.await.map(PendingXhttpH3Client::new)
+                })
+                .await??;
                 let mut state = manager.manager.lock().await;
                 return state.complete_new_client(client.take(), &opening);
             }
