@@ -57,6 +57,34 @@ const HIGH_PERFORMANCE_QUIC_UDP_PMTU_RETRIES: usize = 4;
 const QUIC_UDP_FRAGMENT_TTL_SECONDS: u64 = 10;
 const QUIC_UDP_PACKET_ID_LEASE_TTL_SECONDS: u64 = 10;
 const QUIC_UDP_FRAGMENT_QUARANTINE_TTL_SECONDS: u64 = 10;
+const LOW_MEMORY_HYSTERIA2_OWNER_LIMIT: usize = 8;
+const BALANCED_HYSTERIA2_OWNER_LIMIT: usize = 32;
+const HIGH_PERFORMANCE_HYSTERIA2_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH: usize = 64;
+const BALANCED_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH: usize = 256;
+const HIGH_PERFORMANCE_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH: usize = 1_024;
+const LOW_MEMORY_HYSTERIA2_LOGICAL_LEASE_LIMIT: usize = 128;
+const BALANCED_HYSTERIA2_LOGICAL_LEASE_LIMIT: usize = 1_024;
+const HIGH_PERFORMANCE_HYSTERIA2_LOGICAL_LEASE_LIMIT: usize = 4_096;
+const LOW_MEMORY_HYSTERIA2_UDP_SESSION_LIMIT: usize = 32;
+const BALANCED_HYSTERIA2_UDP_SESSION_LIMIT: usize = 256;
+const HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_LIMIT: usize = 1_024;
+const LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH: usize = 32;
+const BALANCED_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH: usize = 128;
+const HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH: usize = 256;
+const LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUEUE_BYTES: usize = 128 * 1024;
+const BALANCED_HYSTERIA2_UDP_SESSION_QUEUE_BYTES: usize = 256 * 1024;
+const HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUEUE_BYTES: usize = 512 * 1024;
+const LOW_MEMORY_HYSTERIA2_UDP_OWNER_QUEUE_BYTES: usize = 2 * 1024 * 1024;
+const BALANCED_HYSTERIA2_UDP_OWNER_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+const HIGH_PERFORMANCE_HYSTERIA2_UDP_OWNER_QUEUE_BYTES: usize = 64 * 1024 * 1024;
+const LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT: usize = 128;
+const BALANCED_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT: usize = 1_024;
+const HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT: usize = 4_096;
+const HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS: u64 = 10;
+const LOW_MEMORY_HYSTERIA2_RETRY_COOLDOWN_SECONDS: u64 = 5;
+const BALANCED_HYSTERIA2_RETRY_COOLDOWN_SECONDS: u64 = 3;
+const HIGH_PERFORMANCE_HYSTERIA2_RETRY_COOLDOWN_SECONDS: u64 = 1;
 const LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY: usize = 64;
 const BALANCED_DNS_FAST_PATH_CONCURRENCY: usize = 512;
 const HIGH_PERFORMANCE_DNS_FAST_PATH_CONCURRENCY: usize = 1_024;
@@ -106,6 +134,135 @@ pub(crate) struct QuicUdpDatagramResourceProfile {
     fragment_ttl: Duration,
     packet_id_lease_ttl: Duration,
     fragment_quarantine_ttl: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Hysteria2OwnerResourceProfile {
+    owner_limit: usize,
+    command_queue_depth: usize,
+    logical_lease_limit: usize,
+    udp_session_limit: usize,
+    udp_session_queue_depth: usize,
+    udp_session_queue_bytes: usize,
+    udp_owner_queue_bytes: usize,
+    udp_session_quarantine_limit: usize,
+    udp_session_quarantine_ttl: Duration,
+    retry_cooldown: Duration,
+}
+
+impl Hysteria2OwnerResourceProfile {
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        match profile {
+            ResidentRuntimeProfile::LowMemory => Self {
+                owner_limit: LOW_MEMORY_HYSTERIA2_OWNER_LIMIT,
+                command_queue_depth: LOW_MEMORY_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
+                logical_lease_limit: LOW_MEMORY_HYSTERIA2_LOGICAL_LEASE_LIMIT,
+                udp_session_limit: LOW_MEMORY_HYSTERIA2_UDP_SESSION_LIMIT,
+                udp_session_queue_depth: LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH,
+                udp_session_queue_bytes: LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUEUE_BYTES,
+                udp_owner_queue_bytes: LOW_MEMORY_HYSTERIA2_UDP_OWNER_QUEUE_BYTES,
+                udp_session_quarantine_limit: LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
+                udp_session_quarantine_ttl: Duration::from_secs(
+                    HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
+                ),
+                retry_cooldown: Duration::from_secs(LOW_MEMORY_HYSTERIA2_RETRY_COOLDOWN_SECONDS),
+            },
+            ResidentRuntimeProfile::Balanced => Self {
+                owner_limit: BALANCED_HYSTERIA2_OWNER_LIMIT,
+                command_queue_depth: BALANCED_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
+                logical_lease_limit: BALANCED_HYSTERIA2_LOGICAL_LEASE_LIMIT,
+                udp_session_limit: BALANCED_HYSTERIA2_UDP_SESSION_LIMIT,
+                udp_session_queue_depth: BALANCED_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH,
+                udp_session_queue_bytes: BALANCED_HYSTERIA2_UDP_SESSION_QUEUE_BYTES,
+                udp_owner_queue_bytes: BALANCED_HYSTERIA2_UDP_OWNER_QUEUE_BYTES,
+                udp_session_quarantine_limit: BALANCED_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
+                udp_session_quarantine_ttl: Duration::from_secs(
+                    HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
+                ),
+                retry_cooldown: Duration::from_secs(BALANCED_HYSTERIA2_RETRY_COOLDOWN_SECONDS),
+            },
+            ResidentRuntimeProfile::HighPerformance => Self {
+                owner_limit: HIGH_PERFORMANCE_HYSTERIA2_OWNER_LIMIT,
+                command_queue_depth: HIGH_PERFORMANCE_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
+                logical_lease_limit: HIGH_PERFORMANCE_HYSTERIA2_LOGICAL_LEASE_LIMIT,
+                udp_session_limit: HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_LIMIT,
+                udp_session_queue_depth: HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH,
+                udp_session_queue_bytes: HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUEUE_BYTES,
+                udp_owner_queue_bytes: HIGH_PERFORMANCE_HYSTERIA2_UDP_OWNER_QUEUE_BYTES,
+                udp_session_quarantine_limit:
+                    HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
+                udp_session_quarantine_ttl: Duration::from_secs(
+                    HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
+                ),
+                retry_cooldown: Duration::from_secs(
+                    HIGH_PERFORMANCE_HYSTERIA2_RETRY_COOLDOWN_SECONDS,
+                ),
+            },
+        }
+    }
+
+    pub(crate) fn selected() -> Self {
+        static SELECTED: std::sync::OnceLock<Hysteria2OwnerResourceProfile> =
+            std::sync::OnceLock::new();
+        *SELECTED.get_or_init(|| {
+            Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+        })
+    }
+
+    pub(crate) const fn owner_limit(self) -> usize {
+        self.owner_limit
+    }
+
+    pub(crate) const fn command_queue_depth(self) -> usize {
+        self.command_queue_depth
+    }
+
+    pub(crate) const fn logical_lease_limit(self) -> usize {
+        self.logical_lease_limit
+    }
+
+    pub(crate) const fn udp_session_limit(self) -> usize {
+        self.udp_session_limit
+    }
+
+    pub(crate) const fn udp_session_queue_depth(self) -> usize {
+        self.udp_session_queue_depth
+    }
+
+    pub(crate) const fn udp_session_queue_bytes(self) -> usize {
+        self.udp_session_queue_bytes
+    }
+
+    pub(crate) const fn udp_owner_queue_bytes(self) -> usize {
+        self.udp_owner_queue_bytes
+    }
+
+    pub(crate) const fn udp_session_quarantine_limit(self) -> usize {
+        self.udp_session_quarantine_limit
+    }
+
+    pub(crate) const fn udp_session_quarantine_ttl(self) -> Duration {
+        self.udp_session_quarantine_ttl
+    }
+
+    pub(crate) const fn retry_cooldown(self) -> Duration {
+        self.retry_cooldown
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_udp_session_limits_for_test(
+        session_limit: usize,
+        queue_depth: usize,
+    ) -> Self {
+        let mut resources = Self::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
+        resources.udp_session_limit = session_limit;
+        resources.udp_session_queue_depth = queue_depth;
+        resources.udp_session_queue_bytes = 4_096;
+        resources.udp_owner_queue_bytes = 4_096;
+        resources.udp_session_quarantine_limit = session_limit.saturating_mul(2).max(1);
+        resources.udp_session_quarantine_ttl = Duration::from_secs(10);
+        resources
+    }
 }
 
 impl QuicUdpDatagramResourceProfile {
@@ -430,6 +587,16 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "quicUdpFragmentPendingBytes": LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_BYTES,
                 "quicUdpPacketIdLeases": LOW_MEMORY_QUIC_UDP_PACKET_ID_LEASES,
                 "quicUdpPmtuRetries": LOW_MEMORY_QUIC_UDP_PMTU_RETRIES,
+                "hysteria2OwnerLimit": LOW_MEMORY_HYSTERIA2_OWNER_LIMIT,
+                "hysteria2OwnerCommandQueueDepth": LOW_MEMORY_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
+                "hysteria2LogicalLeaseLimit": LOW_MEMORY_HYSTERIA2_LOGICAL_LEASE_LIMIT,
+                "hysteria2UdpSessionLimit": LOW_MEMORY_HYSTERIA2_UDP_SESSION_LIMIT,
+                "hysteria2UdpSessionQueueDepth": LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH,
+                "hysteria2UdpSessionQueueBytes": LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUEUE_BYTES,
+                "hysteria2UdpOwnerQueueBytes": LOW_MEMORY_HYSTERIA2_UDP_OWNER_QUEUE_BYTES,
+                "hysteria2UdpSessionQuarantineLimit": LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
+                "hysteria2UdpSessionQuarantineTtlSeconds": HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
+                "hysteria2RetryCooldownSeconds": LOW_MEMORY_HYSTERIA2_RETRY_COOLDOWN_SECONDS,
                 "dnsFastPathConcurrencyDefault": LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": LOW_MEMORY_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": LOW_MEMORY_DNS_UDP_FORWARDER_QUEUE_DEPTH,
@@ -452,6 +619,16 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "quicUdpFragmentPendingBytes": BALANCED_QUIC_UDP_FRAGMENT_PENDING_BYTES,
                 "quicUdpPacketIdLeases": BALANCED_QUIC_UDP_PACKET_ID_LEASES,
                 "quicUdpPmtuRetries": BALANCED_QUIC_UDP_PMTU_RETRIES,
+                "hysteria2OwnerLimit": BALANCED_HYSTERIA2_OWNER_LIMIT,
+                "hysteria2OwnerCommandQueueDepth": BALANCED_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
+                "hysteria2LogicalLeaseLimit": BALANCED_HYSTERIA2_LOGICAL_LEASE_LIMIT,
+                "hysteria2UdpSessionLimit": BALANCED_HYSTERIA2_UDP_SESSION_LIMIT,
+                "hysteria2UdpSessionQueueDepth": BALANCED_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH,
+                "hysteria2UdpSessionQueueBytes": BALANCED_HYSTERIA2_UDP_SESSION_QUEUE_BYTES,
+                "hysteria2UdpOwnerQueueBytes": BALANCED_HYSTERIA2_UDP_OWNER_QUEUE_BYTES,
+                "hysteria2UdpSessionQuarantineLimit": BALANCED_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
+                "hysteria2UdpSessionQuarantineTtlSeconds": HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
+                "hysteria2RetryCooldownSeconds": BALANCED_HYSTERIA2_RETRY_COOLDOWN_SECONDS,
                 "dnsFastPathConcurrencyDefault": BALANCED_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": BALANCED_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": BALANCED_DNS_UDP_FORWARDER_QUEUE_DEPTH,
@@ -474,6 +651,16 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "quicUdpFragmentPendingBytes": HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_BYTES,
                 "quicUdpPacketIdLeases": HIGH_PERFORMANCE_QUIC_UDP_PACKET_ID_LEASES,
                 "quicUdpPmtuRetries": HIGH_PERFORMANCE_QUIC_UDP_PMTU_RETRIES,
+                "hysteria2OwnerLimit": HIGH_PERFORMANCE_HYSTERIA2_OWNER_LIMIT,
+                "hysteria2OwnerCommandQueueDepth": HIGH_PERFORMANCE_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
+                "hysteria2LogicalLeaseLimit": HIGH_PERFORMANCE_HYSTERIA2_LOGICAL_LEASE_LIMIT,
+                "hysteria2UdpSessionLimit": HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_LIMIT,
+                "hysteria2UdpSessionQueueDepth": HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUEUE_DEPTH,
+                "hysteria2UdpSessionQueueBytes": HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUEUE_BYTES,
+                "hysteria2UdpOwnerQueueBytes": HIGH_PERFORMANCE_HYSTERIA2_UDP_OWNER_QUEUE_BYTES,
+                "hysteria2UdpSessionQuarantineLimit": HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
+                "hysteria2UdpSessionQuarantineTtlSeconds": HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
+                "hysteria2RetryCooldownSeconds": HIGH_PERFORMANCE_HYSTERIA2_RETRY_COOLDOWN_SECONDS,
                 "dnsFastPathConcurrencyDefault": HIGH_PERFORMANCE_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": HIGH_PERFORMANCE_DNS_FAST_PATH_QUEUE_DEPTH,
                 "dnsUdpForwarderQueueDepthDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_QUEUE_DEPTH,
@@ -613,6 +800,51 @@ mod tests {
             low_quic_udp.fragment_quarantine_ttl(),
             Duration::from_secs(10)
         );
+        let low_hysteria2 =
+            Hysteria2OwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
+        let balanced_hysteria2 =
+            Hysteria2OwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::Balanced);
+        let high_hysteria2 = Hysteria2OwnerResourceProfile::from_runtime_profile(
+            ResidentRuntimeProfile::HighPerformance,
+        );
+        assert!(low_hysteria2.owner_limit() < balanced_hysteria2.owner_limit());
+        assert!(balanced_hysteria2.owner_limit() < high_hysteria2.owner_limit());
+        assert!(low_hysteria2.command_queue_depth() < balanced_hysteria2.command_queue_depth());
+        assert!(balanced_hysteria2.command_queue_depth() < high_hysteria2.command_queue_depth());
+        assert!(low_hysteria2.logical_lease_limit() < balanced_hysteria2.logical_lease_limit());
+        assert!(balanced_hysteria2.logical_lease_limit() < high_hysteria2.logical_lease_limit());
+        assert!(low_hysteria2.udp_session_limit() < balanced_hysteria2.udp_session_limit());
+        assert!(balanced_hysteria2.udp_session_limit() < high_hysteria2.udp_session_limit());
+        assert!(
+            low_hysteria2.udp_session_queue_depth() < balanced_hysteria2.udp_session_queue_depth()
+        );
+        assert!(
+            balanced_hysteria2.udp_session_queue_depth() < high_hysteria2.udp_session_queue_depth()
+        );
+        assert!(
+            low_hysteria2.udp_session_queue_bytes() < balanced_hysteria2.udp_session_queue_bytes()
+        );
+        assert!(
+            balanced_hysteria2.udp_session_queue_bytes() < high_hysteria2.udp_session_queue_bytes()
+        );
+        assert!(low_hysteria2.udp_owner_queue_bytes() < balanced_hysteria2.udp_owner_queue_bytes());
+        assert!(
+            balanced_hysteria2.udp_owner_queue_bytes() < high_hysteria2.udp_owner_queue_bytes()
+        );
+        assert!(
+            low_hysteria2.udp_session_quarantine_limit()
+                < balanced_hysteria2.udp_session_quarantine_limit()
+        );
+        assert!(
+            balanced_hysteria2.udp_session_quarantine_limit()
+                < high_hysteria2.udp_session_quarantine_limit()
+        );
+        assert_eq!(
+            low_hysteria2.udp_session_quarantine_ttl(),
+            balanced_hysteria2.udp_session_quarantine_ttl()
+        );
+        assert!(low_hysteria2.retry_cooldown() > balanced_hysteria2.retry_cooldown());
+        assert!(balanced_hysteria2.retry_cooldown() > high_hysteria2.retry_cooldown());
         assert_eq!(
             ResidentRuntimeProfile::LowMemory.udp_runtime_shards_default(64),
             1
