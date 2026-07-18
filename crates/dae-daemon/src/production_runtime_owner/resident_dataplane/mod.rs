@@ -109,6 +109,12 @@ pub(crate) use self::resource_profile::{
 pub(super) use self::resource_profile::{
     resident_datapath_postflight_interval_seconds_default, selected_resident_runtime_profile_name,
 };
+#[path = "runtime/hysteria2_owner.rs"]
+mod hysteria2_owner;
+pub(crate) use self::hysteria2_owner::{
+    Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, Hysteria2UdpSessionLease,
+    start_hysteria2_owner_registry,
+};
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 pub(super) use self::health_checks::*;

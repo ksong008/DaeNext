@@ -235,6 +235,8 @@ impl ResidentRuntimeResourceConfig {
     pub(crate) fn json(&self) -> Value {
         let quic_udp =
             QuicUdpDatagramResourceProfile::from_runtime_profile(self.runtime_profile.profile);
+        let hysteria2 =
+            Hysteria2OwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         json!({
             "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 1,
@@ -271,6 +273,20 @@ impl ResidentRuntimeResourceConfig {
                 "packetIdLeaseTtlMs": quic_udp.packet_id_lease_ttl().as_millis(),
                 "fragmentQuarantineTtlMs": quic_udp.fragment_quarantine_ttl().as_millis(),
                 "scope": "per logical QUIC UDP session; count and bytes are enforced independently",
+            },
+            "hysteria2Owners": {
+                "profileSource": "runtimeProfile",
+                "ownerLimit": hysteria2.owner_limit(),
+                "commandQueueDepth": hysteria2.command_queue_depth(),
+                "logicalLeaseLimit": hysteria2.logical_lease_limit(),
+                "udpSessionLimit": hysteria2.udp_session_limit(),
+                "udpSessionQueueDepth": hysteria2.udp_session_queue_depth(),
+                "udpSessionQueueBytes": hysteria2.udp_session_queue_bytes(),
+                "udpOwnerQueueBytes": hysteria2.udp_owner_queue_bytes(),
+                "udpSessionQuarantineLimit": hysteria2.udp_session_quarantine_limit(),
+                "udpSessionQuarantineTtlMs": hysteria2.udp_session_quarantine_ttl().as_millis(),
+                "retryCooldownMs": hysteria2.retry_cooldown().as_millis(),
+                "scope": "one generation and normalized node identity per shared Hysteria2 QUIC and H3 owner",
             },
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),
