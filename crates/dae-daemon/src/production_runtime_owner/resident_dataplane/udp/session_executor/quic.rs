@@ -12,6 +12,7 @@ use self::hysteria2_datagram::send_hysteria2_udp_message;
 use self::packet_id::QuicUdpPacketIdAllocator;
 
 const TUIC_ASSOCIATION_IDENTITY_DOMAIN: &[u8] = b"tuic-v5-association";
+const HYSTERIA2_SESSION_IDENTITY_DOMAIN: &[u8] = b"hysteria2-udp-session";
 
 async fn read_quic_udp_datagram_until_resource_expiry(
     connection: quinn::Connection,
@@ -48,6 +49,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria
     fragments: QuicUdpFragmentBuffer,
     packet_ids: QuicUdpPacketIdAllocator,
     resources: QuicUdpDatagramResourceProfile,
+    fixed_target: UdpSessionFixedTarget,
 }
 
 impl Hysteria2QuicDatagramSession {
@@ -72,6 +74,7 @@ impl Hysteria2QuicDatagramSession {
             fragments: QuicUdpFragmentBuffer::new(resources, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH),
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
             resources,
+            fixed_target: UdpSessionFixedTarget::default(),
         }
     }
 
@@ -81,6 +84,8 @@ impl Hysteria2QuicDatagramSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
+        self.fixed_target
+            .bind(original_dst, "Hysteria2 UDP session")?;
         self.ensure_open(proxy).await?;
         let connection = self
             .connection
@@ -142,6 +147,44 @@ impl Hysteria2QuicDatagramSession {
     fn decode_response(&mut self, response: &[u8]) -> Result<Option<UdpExchangeResult>, String> {
         let parsed = decode_hysteria2_udp_message(response)
             .map_err(|err| format!("decode Hysteria2 UDP datagram: {err}"))?;
+        let expected_identity = UdpResponseIdentityToken::from_protocol_identity(
+            HYSTERIA2_SESSION_IDENTITY_DOMAIN,
+            &self.session_id.to_be_bytes(),
+        )
+        .expect("static Hysteria2 identity domain and session id are nonempty");
+        let observed_identity = UdpResponseIdentityToken::from_protocol_identity(
+            HYSTERIA2_SESSION_IDENTITY_DOMAIN,
+            &parsed.session_id().to_be_bytes(),
+        )
+        .expect("static Hysteria2 identity domain and session id are nonempty");
+        let response = |payload| {
+            UdpExchangeResult::new(payload, "quic-udp-datagram")
+                .with_quic_underlay("quinn-h3")
+                .with_session_executor("tokio-quic-datagram-session")
+                .with_underlay_reuse("quic-endpoint-and-connection-reused")
+                .with_expected_protocol_identity(expected_identity)
+        };
+        if parsed.session_id() != self.session_id {
+            return Ok(Some(
+                response(parsed.into_payload())
+                    .with_rejected_response_identity(UdpResponseDropReason::CrossSessionIdentity),
+            ));
+        }
+        let source = match parsed.target().parse::<SocketAddr>() {
+            Ok(source) => source,
+            Err(_) => {
+                return Ok(Some(
+                    response(parsed.into_payload())
+                        .with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity),
+                ));
+            }
+        };
+        if self.fixed_target.source() != Some(source) {
+            return Ok(Some(
+                response(parsed.into_payload())
+                    .with_rejected_response_identity(UdpResponseDropReason::UnexpectedWireSource),
+            ));
+        }
         let outcome = self.fragments.push(
             parsed.packet_id(),
             parsed.fragment_id(),
@@ -149,15 +192,12 @@ impl Hysteria2QuicDatagramSession {
             parsed.into_payload(),
             "Hysteria2",
         )?;
-        let response = |payload| {
-            UdpExchangeResult::new(payload, "quic-udp-datagram")
-                .with_quic_underlay("quinn-h3")
-                .with_session_executor("tokio-quic-datagram-session")
-                .with_underlay_reuse("quic-endpoint-and-connection-reused")
-        };
         match outcome {
             QuicUdpFragmentOutcome::Pending => Ok(None),
-            QuicUdpFragmentOutcome::Complete(payload) => Ok(Some(response(payload))),
+            QuicUdpFragmentOutcome::Complete(payload) => Ok(Some(
+                response(payload)
+                    .with_decoded_response_identity(Some(source), Some(observed_identity)),
+            )),
             QuicUdpFragmentOutcome::Late(payload) => Ok(Some(
                 response(payload)
                     .with_rejected_response_identity(UdpResponseDropReason::LateResponse),
@@ -233,6 +273,7 @@ impl Hysteria2QuicDatagramSession {
         }
         self.fragments.clear();
         self.packet_ids.clear();
+        self.fixed_target.clear();
     }
 }
 
@@ -638,6 +679,114 @@ mod tests {
             tuic.underlay_reuse,
             Some("quic-endpoint-and-connection-reused")
         );
+    }
+
+    #[test]
+    fn hysteria2_rejects_cross_session_and_wrong_target_before_reassembly() {
+        let target: SocketAddr = "192.0.2.10:53".parse().unwrap();
+        let other: SocketAddr = "192.0.2.11:53".parse().unwrap();
+        let mut session = Hysteria2QuicDatagramSession::new(
+            "auth".to_owned(),
+            dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+                "fixture.invalid",
+                false,
+                false,
+                "",
+            )
+            .unwrap(),
+            0,
+            ResidentHysteria2ObfsPlan::none(),
+            Vec::new(),
+        );
+        session.session_id = 7;
+        session
+            .fixed_target
+            .bind(target, "Hysteria2 UDP session")
+            .unwrap();
+
+        for (message, reason) in [
+            (
+                Hysteria2UdpMessage::new(8, target.to_string(), b"cross-session").unwrap(),
+                UdpResponseDropReason::CrossSessionIdentity,
+            ),
+            (
+                Hysteria2UdpMessage::new(7, other.to_string(), b"wrong-target").unwrap(),
+                UdpResponseDropReason::UnexpectedWireSource,
+            ),
+        ] {
+            let frame = encode_hysteria2_udp_message(&message).unwrap();
+            let mut response = session.decode_response(&frame).unwrap().unwrap();
+            let expectation = response.fixed_target_expectation(target);
+            assert_eq!(
+                response.take_fixed_target_payload(expectation).validation(),
+                UdpFixedTargetValidation::Dropped(reason)
+            );
+            assert_eq!(session.fragments.snapshot().pending_packets, 0);
+            assert_eq!(session.fragments.snapshot().pending_bytes, 0);
+        }
+
+        let message = Hysteria2UdpMessage::new(7, target.to_string(), b"response").unwrap();
+        let frame = encode_hysteria2_udp_message(&message).unwrap();
+        let mut response = session.decode_response(&frame).unwrap().unwrap();
+        let expectation = response.fixed_target_expectation(target);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Validated
+        );
+    }
+
+    #[test]
+    fn hysteria2_validates_every_fragment_identity_before_buffering() {
+        let target: SocketAddr = "[2001:db8::10]:5353".parse().unwrap();
+        let other: SocketAddr = "[2001:db8::11]:5353".parse().unwrap();
+        let mut session = Hysteria2QuicDatagramSession::new(
+            "auth".to_owned(),
+            dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+                "fixture.invalid",
+                false,
+                false,
+                "",
+            )
+            .unwrap(),
+            0,
+            ResidentHysteria2ObfsPlan::none(),
+            Vec::new(),
+        );
+        session.session_id = 9;
+        session
+            .fixed_target
+            .bind(target, "Hysteria2 UDP session")
+            .unwrap();
+
+        let wrong = Hysteria2UdpMessage::new(9, other.to_string(), vec![1; 1_500]).unwrap();
+        let wrong_fragment = fragment_hysteria2_udp_message(&wrong, 1, 1_200).unwrap();
+        let frame = encode_hysteria2_udp_message(&wrong_fragment[0]).unwrap();
+        let mut response = session.decode_response(&frame).unwrap().unwrap();
+        let expectation = response.fixed_target_expectation(target);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+        );
+        assert_eq!(session.fragments.snapshot().pending_packets, 0);
+
+        let message = Hysteria2UdpMessage::new(9, target.to_string(), vec![5; 1_500]).unwrap();
+        let fragments = fragment_hysteria2_udp_message(&message, 2, 1_200).unwrap();
+        assert!(
+            session
+                .decode_response(&encode_hysteria2_udp_message(&fragments[1]).unwrap())
+                .unwrap()
+                .is_none()
+        );
+        let mut response = session
+            .decode_response(&encode_hysteria2_udp_message(&fragments[0]).unwrap())
+            .unwrap()
+            .unwrap();
+        let expectation = response.fixed_target_expectation(target);
+        assert_eq!(
+            response.take_fixed_target_payload(expectation).validation(),
+            UdpFixedTargetValidation::Validated
+        );
+        assert_eq!(session.fragments.snapshot().pending_bytes, 0);
     }
 
     #[test]
