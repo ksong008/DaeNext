@@ -189,10 +189,6 @@ impl UdpResponseIdentityEvidence {
             Self::Decoded {
                 wire_source,
                 observed_identity,
-            }
-            | Self::SessionBound {
-                wire_source,
-                observed_identity,
             } => {
                 let UdpFixedTargetExpectationMode::Decoded { protocol_identity } = expectation.mode
                 else {
@@ -222,6 +218,38 @@ impl UdpResponseIdentityEvidence {
                     (None, Some(_)) => UdpFixedTargetValidation::Dropped(
                         UdpResponseDropReason::UnexpectedProtocolIdentity,
                     ),
+                    _ => UdpFixedTargetValidation::Validated,
+                }
+            }
+            Self::SessionBound {
+                wire_source,
+                observed_identity,
+            } => {
+                let UdpFixedTargetExpectationMode::Decoded { protocol_identity } = expectation.mode
+                else {
+                    return UdpFixedTargetValidation::Dropped(
+                        UdpResponseDropReason::UnexpectedIdentityEvidence,
+                    );
+                };
+                let Some(wire_source) = wire_source else {
+                    return UdpFixedTargetValidation::Dropped(
+                        UdpResponseDropReason::MissingWireSource,
+                    );
+                };
+                if !same_fixed_target(wire_source, expectation.source) {
+                    return UdpFixedTargetValidation::Dropped(
+                        UdpResponseDropReason::UnexpectedWireSource,
+                    );
+                }
+                match (protocol_identity, observed_identity) {
+                    (Some(_), None) => UdpFixedTargetValidation::Dropped(
+                        UdpResponseDropReason::MissingProtocolIdentity,
+                    ),
+                    (Some(expected), Some(observed)) if expected != observed => {
+                        UdpFixedTargetValidation::Dropped(
+                            UdpResponseDropReason::UnexpectedProtocolIdentity,
+                        )
+                    }
                     _ => UdpFixedTargetValidation::Validated,
                 }
             }
