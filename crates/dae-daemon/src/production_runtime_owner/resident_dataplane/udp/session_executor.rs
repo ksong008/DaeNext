@@ -19,6 +19,15 @@ pub(super) enum UdpSessionExecutor {
 }
 
 impl UdpSessionExecutor {
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn set_owner_acquisition_deadline(
+        &mut self,
+        deadline: dae_runtime_control::AbsoluteDeadline,
+    ) {
+        if let Self::Hysteria2(session) = self {
+            session.set_owner_deadline(deadline);
+        }
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn runtime_disposition(
         &self,

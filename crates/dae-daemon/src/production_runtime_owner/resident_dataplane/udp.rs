@@ -6,17 +6,18 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use super::SharedResidentStopSignal;
+use super::{Hysteria2OwnerRegistryHandle, Hysteria2UdpSessionLease, SharedResidentStopSignal};
 
 use bytes::Bytes;
 use dae_datapath::TcpDialMode;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
+#[cfg(test)]
+use dae_outbound::hysteria2::decode_hysteria2_udp_message;
 use dae_outbound::{
     anytls::{contract as anytls_contract, link as anytls_link},
     hysteria2::{
-        HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2AuthenticatedSession, Hysteria2UdpMessage,
-        authenticate_hysteria2_connection, decode_hysteria2_udp_message,
-        encode_hysteria2_udp_message, fragment_hysteria2_udp_message,
+        HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage, encode_hysteria2_udp_message,
+        fragment_hysteria2_udp_message,
     },
     juicity::{
         authenticate_juicity_connection, decode_stream_packet_frame, seal_stream_packet_frame,
@@ -56,13 +57,14 @@ use super::dns::{
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
 #[cfg(test)]
+use super::plan::ResidentHysteria2ObfsPlan;
+#[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentHysteria2ObfsPlan, ResidentProtocolShape, ResidentProxyGroupPlan, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentStreamPacketTransport, ResidentUdpExecutionAgreement,
-    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, ResidentXhttpHttpVersion,
-    ResidentXhttpMode, SharedResidentProxyGroupMap, UdpPacketSemantics,
-    resident_udp_chain_admission,
+    ResidentProtocolShape, ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentStreamPacketTransport, ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition,
+    ResidentUdpExecutorFactory, ResidentXhttpHttpVersion, ResidentXhttpMode,
+    SharedResidentProxyGroupMap, UdpPacketSemantics, resident_udp_chain_admission,
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,
@@ -72,11 +74,11 @@ use super::tcp::{
     close_xhttp_upload_client, collect_vmess_grpc_decrypted,
     decode_vmess_grpc_response_stream_async, httpupgrade_handshake_over_resident_tls_async,
     inherit_quic_endpoint_observation, open_grpc_h2_stream, open_h2_body_stream,
-    open_hysteria2_quic_connection_candidates_async, open_juicity_quic_connection_candidates_async,
-    open_tuic_quic_connection_candidates_async, open_xhttp_packet_up_parts,
-    open_xhttp_stream_parts, poll_xhttp_download_data, read_xhttp_download_data, send_grpc_hunk,
-    send_h2_data, send_h2_data_with_context, send_xhttp_packet_up_request, send_xhttp_stream_data,
-    set_socket_mark, websocket_handshake_over_resident_tls_async,
+    open_juicity_quic_connection_candidates_async, open_tuic_quic_connection_candidates_async,
+    open_xhttp_packet_up_parts, open_xhttp_stream_parts, poll_xhttp_download_data,
+    read_xhttp_download_data, send_grpc_hunk, send_h2_data, send_h2_data_with_context,
+    send_xhttp_packet_up_request, send_xhttp_stream_data, set_socket_mark,
+    websocket_handshake_over_resident_tls_async,
     write_websocket_binary_frame_over_resident_tls_async,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};

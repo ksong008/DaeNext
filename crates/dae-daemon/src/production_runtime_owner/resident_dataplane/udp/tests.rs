@@ -207,7 +207,14 @@ mod tests {
                 components["probeExecutor"]["udp"]["unsupportedReason"],
                 agreement.unsupported_reason().unwrap()
             );
-            let result = probe_resident_proxy_udp_async(&proxy, target, b"probe", false).await;
+            let result = probe_resident_proxy_udp_async(
+                Arc::new(proxy.clone()),
+                target,
+                b"probe",
+                false,
+                None,
+            )
+            .await;
             assert_eq!(result["status"], "protocol-closed");
             assert_eq!(result["ok"], true);
             assert_eq!(result["protocol_closed"], true);
@@ -236,9 +243,10 @@ mod tests {
             Ipv4Addr::LOCALHOST,
             proxy.server_port.saturating_add(1),
         ));
-        let bridge = open_resident_proxy_udp_bridge_async(Arc::new(proxy), original_dst)
-            .await
-            .unwrap();
+        let bridge =
+            open_resident_proxy_udp_bridge_async(Arc::new(proxy), original_dst, None, None)
+                .await
+                .unwrap();
         let client =
             tokio::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
                 .await

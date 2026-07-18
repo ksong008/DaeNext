@@ -45,6 +45,7 @@ struct ResidentUdpSessionShardContext {
     session_queue_depth: usize,
     cleanup_queue_depth: usize,
     direct_response_buffer_idle_timeout: Duration,
+    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
 }
 
 #[derive(Clone)]
@@ -72,6 +73,7 @@ impl ResidentUdpSessionShardPool {
         metrics: Arc<ResidentDataplaneMetrics>,
         udp_reply: UdpReplyHandle,
         active_sessions: Arc<AtomicUsize>,
+        hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     ) -> Self {
         let shard_count = runtime_config.runtime_shards.max(1);
         let queue_depth = runtime_config.per_shard_dispatch_queue_depth();
@@ -88,6 +90,7 @@ impl ResidentUdpSessionShardPool {
             session_queue_depth: runtime_config.session_queue_depth,
             cleanup_queue_depth: runtime_config.per_shard_cleanup_queue_depth(),
             direct_response_buffer_idle_timeout: runtime_config.direct_response_buffer_idle_timeout,
+            hysteria2_owner_registry,
         };
         let mut senders = Vec::with_capacity(shard_count);
         let mut stops = Vec::with_capacity(shard_count);

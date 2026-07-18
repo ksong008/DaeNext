@@ -30,7 +30,7 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
-    open_hysteria2_quic_connection_candidates_until_async,
+    open_hysteria2_quic_connection_candidates_async,
 };
 
 const HYSTERIA2_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/hysteria2-owner/v1";
@@ -1213,7 +1213,7 @@ async fn build_hysteria2_transport(
             detail: "Hysteria2 owner received a non-Hysteria2 proxy shape".to_owned(),
         });
     };
-    let connected = open_hysteria2_quic_connection_candidates_until_async(
+    let connected = open_hysteria2_quic_connection_candidates_async(
         &proxy,
         proxy.mark,
         obfs,
@@ -1488,4 +1488,29 @@ mod tests {
         assert_eq!(snapshot["activeLogicalLeases"], 0);
     }
 
+    #[test]
+    fn daemon_hysteria2_consumers_receive_the_generation_owner_handle() {
+        let consumers = [
+            include_str!("../tcp/accept_loop.rs"),
+            include_str!("../tcp/proxy_fetch.rs"),
+            include_str!("../udp/session_actor.rs"),
+            include_str!("../udp/proxy_dns_forwarder.rs"),
+            include_str!("health_scheduler.rs"),
+            include_str!("../probe/native_tcp/quic_stream.rs"),
+            include_str!("../subscription_fetch.rs"),
+        ];
+        for source in consumers {
+            assert!(
+                source.contains("hysteria2_owner_registry"),
+                "every production Hysteria2 consumer must receive an explicit owner registry"
+            );
+        }
+        assert!(
+            include_str!("../udp/session_executor/quic.rs").contains("Hysteria2UdpSessionLease")
+        );
+        assert!(
+            include_str!("../tcp/proxy_dispatch/quic_handlers.rs")
+                .contains("Hysteria2OwnerRegistryHandle")
+        );
+    }
 }

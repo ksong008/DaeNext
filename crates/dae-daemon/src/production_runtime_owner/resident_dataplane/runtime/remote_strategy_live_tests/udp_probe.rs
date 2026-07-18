@@ -14,6 +14,15 @@ pub(crate) fn resident_live_adapter_udp_probe(
         .enable_io()
         .enable_time()
         .build();
+    let owner_stop = ResidentStopSignal::shared();
+    let owner_resources = ResidentRuntimeResourceConfig::from_config(config);
+    let owner_runtime = start_hysteria2_owner_registry(
+        0,
+        Arc::clone(&owner_stop),
+        owner_resources.tcp_flow_stack_bytes.value(),
+    )
+    .ok();
+    let owner_registry = owner_runtime.as_ref().map(|(handle, _)| handle.clone());
     let rows = resident_live_adapter_matrix_entries()
         .iter()
         .map(|entry| {
@@ -31,12 +40,14 @@ pub(crate) fn resident_live_adapter_udp_probe(
                     node.link.clone(),
                 ) {
                     Ok(proxy) => {
+                        let proxy = Arc::new(proxy);
                         let mut probe = match &probe_runtime {
                             Ok(runtime) => runtime.block_on(probe_resident_proxy_udp_async(
-                                &proxy,
+                                Arc::clone(&proxy),
                                 target,
                                 payload,
                                 include_response_hex,
+                                owner_registry.clone(),
                             )),
                             Err(_) => json!({
                                 "status": "fail",
@@ -82,6 +93,10 @@ pub(crate) fn resident_live_adapter_udp_probe(
             })
         })
         .collect::<Vec<_>>();
+    owner_stop.store(true, Ordering::Release);
+    if let Some((_, thread)) = owner_runtime {
+        let _ = thread.join();
+    }
     let pass_count = rows
         .iter()
         .filter(|row| row["status"].as_str() == Some("pass"))

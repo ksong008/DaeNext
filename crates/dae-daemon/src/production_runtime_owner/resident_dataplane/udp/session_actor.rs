@@ -34,6 +34,7 @@ pub(super) struct UdpSessionActorContext {
     pub(super) metrics: Arc<ResidentDataplaneMetrics>,
     pub(super) udp_reply: UdpReplyHandle,
     pub(super) active_sessions: Arc<AtomicUsize>,
+    pub(super) hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
 }
 
 pub(super) fn spawn_udp_session_actor(
@@ -94,9 +95,16 @@ async fn run_udp_session_actor(
                 packets += 1;
                 if executor.is_none() {
                     executor = Some(if managed.force_proxy_packet {
-                        UdpSessionExecutor::new_proxy_packet(&managed.proxy)
+                        UdpSessionExecutor::new_proxy_packet_with_transport_owner(
+                            Arc::clone(&managed.proxy),
+                            context.hysteria2_owner_registry.clone(),
+                        )
                     } else {
-                        UdpSessionExecutor::new(&managed.proxy, managed.original_dst)
+                        UdpSessionExecutor::new_with_transport_owner(
+                            Arc::clone(&managed.proxy),
+                            managed.original_dst,
+                            context.hysteria2_owner_registry.clone(),
+                        )
                     });
                     session_proxy = Some(Arc::clone(&managed.proxy));
                 }

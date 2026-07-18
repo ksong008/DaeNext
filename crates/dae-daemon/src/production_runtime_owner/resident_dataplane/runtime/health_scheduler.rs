@@ -121,6 +121,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
     per_group_candidate_concurrency: usize,
     bootstrap_candidate_concurrency: usize,
     runtime_config: ResidentHealthRuntimeConfig,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) {
     let per_group_candidate_concurrency = per_group_candidate_concurrency.max(1);
     let bootstrap_candidate_concurrency = bootstrap_candidate_concurrency.max(1);
@@ -173,6 +174,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
                     periodic_candidate_concurrency: per_group_candidate_concurrency,
                     bootstrap_candidate_concurrency,
                     candidate_admission: Arc::clone(&global_candidate_admission),
+                    hysteria2_owner_registry: hysteria2_owner_registry.clone(),
                 },
             ));
         }
@@ -185,6 +187,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
                 Arc::clone(&metrics),
                 per_group_candidate_concurrency,
                 Arc::clone(&global_candidate_admission),
+                hysteria2_owner_registry.clone(),
             ));
         }
         while let Some(result) = tasks.join_next().await {

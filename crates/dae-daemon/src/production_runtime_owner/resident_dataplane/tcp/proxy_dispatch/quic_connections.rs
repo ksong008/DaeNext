@@ -12,27 +12,6 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
     obfs: &ResidentHysteria2ObfsPlan,
     port_hop_ports: &[u16],
     tls_identity: &dae_outbound::hysteria2::Hysteria2TlsIdentity,
-    timeout: Duration,
-    caller: QuicEndpointCallerClass,
-) -> Result<ResidentConnectedQuicEndpoint, String> {
-    open_hysteria2_quic_connection_candidates_until_async(
-        proxy,
-        mark,
-        obfs,
-        port_hop_ports,
-        tls_identity,
-        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout),
-        caller,
-    )
-    .await
-}
-
-pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hysteria2_quic_connection_candidates_until_async(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
-    obfs: &ResidentHysteria2ObfsPlan,
-    port_hop_ports: &[u16],
-    tls_identity: &dae_outbound::hysteria2::Hysteria2TlsIdentity,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {

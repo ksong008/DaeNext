@@ -30,6 +30,7 @@ impl Drop for ResidentProxyTcpHandlerGuard {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn fetch_resident_proxy_http_response_async(
     proxy: Arc<ResidentProxyPlan>,
     tls: bool,
@@ -38,6 +39,7 @@ pub(crate) async fn fetch_resident_proxy_http_response_async(
     request: &[u8],
     response_limit: usize,
     timeout: Duration,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> Result<Vec<u8>, String> {
     let sniff_payload = if tls { Vec::new() } else { request.to_vec() };
     exchange_resident_proxy_tcp_stream_async(
@@ -47,6 +49,7 @@ pub(crate) async fn fetch_resident_proxy_http_response_async(
         sniff_payload,
         host.to_owned(),
         timeout,
+        hysteria2_owner_registry,
         |client| async move {
             if tls {
                 fetch_resident_proxy_https_response_async(
@@ -103,6 +106,7 @@ pub(crate) fn sanitize_probe_event(event: Value) -> String {
         .to_owned()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn exchange_resident_proxy_tcp_stream_async<F, Fut>(
     proxy: Arc<ResidentProxyPlan>,
     target: &str,
@@ -110,12 +114,14 @@ pub(crate) async fn exchange_resident_proxy_tcp_stream_async<F, Fut>(
     sniff_payload: Vec<u8>,
     sniff_domain: String,
     timeout: Duration,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     exchange: F,
 ) -> Result<Vec<u8>, String>
 where
     F: FnOnce(TokioTcpStream) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<u8>, String>>,
 {
+    let owner_deadline = dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout);
     let listener = bind_resident_proxy_fetch_loopback_listener(timeout).await?;
     let listen_addr = listener
         .local_addr()
@@ -138,6 +144,8 @@ where
         accepted,
         peer,
         listen_addr,
+        hysteria2_owner_registry,
+        Some(owner_deadline),
     );
 
     let response_result = exchange(client).await;
@@ -170,6 +178,8 @@ fn start_resident_proxy_tcp_handler(
     accepted: TokioTcpStream,
     peer: SocketAddr,
     listen_addr: SocketAddr,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> ResidentProxyTcpHandlerGuard {
     let selection = TcpProxySelection {
         mark: proxy.mark,
@@ -240,6 +250,8 @@ fn start_resident_proxy_tcp_handler(
                 handler_stop,
                 &sniff,
                 &handler_metrics,
+                hysteria2_owner_registry.as_ref(),
+                owner_deadline,
             )
             .await
         } else {

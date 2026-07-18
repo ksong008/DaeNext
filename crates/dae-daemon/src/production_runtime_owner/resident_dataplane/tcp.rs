@@ -14,8 +14,8 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use super::{
-    ResidentStopSignal, SharedResidentStopSignal, reset_resident_relay_idle_deadline,
-    resident_relay_idle_deadline,
+    Hysteria2OwnerRegistryHandle, ResidentStopSignal, SharedResidentStopSignal,
+    reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
 };
 
 use bytes::Bytes;
@@ -31,7 +31,7 @@ use dae_outbound::{
     anytls::{AnyTlsFrame, contract as anytls_contract, link as anytls_link},
     http_proxy::{HttpConnectOptions, request as http_request},
     hysteria2::{
-        HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD, authenticate_hysteria2_connection,
+        HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD,
         build_hysteria2_runtime_client_config_with_udp_overhead, read_hysteria2_tcp_response,
         write_hysteria2_tcp_request,
     },

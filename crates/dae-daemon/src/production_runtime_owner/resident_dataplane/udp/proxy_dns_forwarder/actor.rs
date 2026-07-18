@@ -62,6 +62,7 @@ pub(super) fn start_proxy_dns_udp_actor(
     original_dst: SocketAddr,
     runtime_config: ResidentDnsUdpRuntimeConfig,
     metrics: Arc<ResidentDataplaneMetrics>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> ResidentDnsUdpActorRegistration<ResidentProxyDnsUdpActorHandle> {
     let (sender, receiver) = tokio::sync::mpsc::channel(runtime_config.queue_depth.max(1));
     let (lifecycle, stop_receiver) = ResidentDnsUdpActorLifecycle::new();
@@ -80,6 +81,7 @@ pub(super) fn start_proxy_dns_udp_actor(
             stop_receiver,
             actor_config,
             Arc::clone(&metric_guard.metrics),
+            hysteria2_owner_registry,
         )
         .await;
         metric_guard.fatal
@@ -183,6 +185,7 @@ async fn run_proxy_dns_udp_actor(
     mut stop: tokio::sync::oneshot::Receiver<()>,
     runtime_config: ResidentDnsUdpRuntimeConfig,
     metrics: Arc<ResidentDataplaneMetrics>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> bool {
     let pending_limit = runtime_config.pending_limit.max(1);
     let mut pending = HashMap::<u16, PendingProxyDnsUdpRequest>::new();
@@ -246,6 +249,7 @@ async fn run_proxy_dns_udp_actor(
                     &mut executor,
                     &runtime_config,
                     &metrics,
+                    hysteria2_owner_registry.as_ref(),
                 )
                 .await
                 {

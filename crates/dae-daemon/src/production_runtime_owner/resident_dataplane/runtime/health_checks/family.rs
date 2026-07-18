@@ -4,11 +4,17 @@ pub(super) async fn run_resident_candidate_family_health_checks(
     group: &plan::ResidentProxyGroupPlan,
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::BackgroundHealth,
         Some(candidate.proxy.execution_plan().runtime_generation()),
-        run_resident_candidate_family_health_checks_scoped(group, candidate, stop),
+        run_resident_candidate_family_health_checks_scoped(
+            group,
+            candidate,
+            stop,
+            hysteria2_owner_registry,
+        ),
     )
     .await
 }
@@ -17,10 +23,13 @@ async fn run_resident_candidate_family_health_checks_scoped(
     group: &plan::ResidentProxyGroupPlan,
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> HealthCheckRoundStatus {
     let tcp_results = match super::tcp_family_probe::probe_resident_candidate_tcp_families(
         candidate,
         Some(&stop),
+        hysteria2_owner_registry.clone(),
+        QuicEndpointCallerClass::BackgroundHealth,
     )
     .await
     {
@@ -40,6 +49,7 @@ async fn run_resident_candidate_family_health_checks_scoped(
     let udp_results = match super::udp_family_probe::probe_resident_candidate_udp_families(
         candidate,
         Some(&stop),
+        hysteria2_owner_registry,
     )
     .await
     {

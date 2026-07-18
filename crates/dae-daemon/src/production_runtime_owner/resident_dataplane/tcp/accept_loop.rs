@@ -289,6 +289,8 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     Arc::clone(&stop),
                     &sniff,
                     &metrics,
+                    router.hysteria2_owner_registry.as_ref(),
+                    None,
                 )
                 .await
             } else {

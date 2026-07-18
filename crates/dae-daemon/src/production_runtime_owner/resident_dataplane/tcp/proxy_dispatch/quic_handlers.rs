@@ -8,20 +8,15 @@ pub(crate) async fn handle_quic_tcp_connection_async(
     stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
+    hysteria2_owner_registry: Option<&Hysteria2OwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<Value, String> {
     match &selection.proxy.handler {
-        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
-            auth,
-            tls_identity,
-            max_rx,
-            obfs,
-            port_hop_ports,
-        } => {
-            let auth = auth.clone();
-            let tls_identity = tls_identity.clone();
-            let max_rx = *max_rx;
-            let obfs = obfs.clone();
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { port_hop_ports, .. } => {
             let port_hop_ports = port_hop_ports.clone();
+            let hysteria2_owner_registry = hysteria2_owner_registry.ok_or_else(|| {
+                "Hysteria2 transport owner registry is unavailable for TCP flow".to_owned()
+            })?;
             handle_hysteria2_quic_tcp_connection_async(
                 inbound,
                 peer,
@@ -30,10 +25,8 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 stop,
                 sniff,
                 metrics,
-                &auth,
-                &tls_identity,
-                max_rx,
-                &obfs,
+                hysteria2_owner_registry,
+                owner_deadline,
                 &port_hop_ports,
             )
             .await
@@ -101,72 +94,42 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
-    auth: &str,
-    tls_identity: &dae_outbound::hysteria2::Hysteria2TlsIdentity,
-    max_rx: u64,
-    obfs: &ResidentHysteria2ObfsPlan,
+    hysteria2_owner_registry: &Hysteria2OwnerRegistryHandle,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     port_hop_ports: &[u16],
 ) -> Result<Value, String> {
-    let ResidentConnectedQuicEndpoint {
-        remote,
-        endpoint,
-        connection,
-    } = open_hysteria2_quic_connection_candidates_async(
-        &selection.proxy,
-        selection.mark,
-        obfs,
-        port_hop_ports,
-        tls_identity,
-        RESIDENT_CONNECT_TIMEOUT,
-        QuicEndpointCallerClass::TcpData,
-    )
-    .await?;
+    let deadline = owner_deadline.unwrap_or_else(|| {
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT)
+    });
+    let transport = hysteria2_owner_registry
+        .acquire(
+            Arc::clone(&selection.proxy),
+            QuicEndpointCallerClass::TcpData,
+            deadline,
+        )
+        .await?;
+    let remote = transport.remote();
+    let connection = transport.connection();
     let port_hopping = !port_hop_ports.is_empty();
-    let auth_session =
-        match authenticate_hysteria2_connection(connection.clone(), auth, max_rx).await {
-            Ok(session) => session,
-            Err(err) => {
-                endpoint.mark_failed();
-                return Err(format!("authenticate Hysteria2 QUIC connection: {err}"));
-            }
-        };
-    if !auth_session.report().auth_ok {
-        endpoint.mark_failed();
-        connection.close(0x101_u32.into(), b"resident hysteria2 auth failed");
-        let mut event = generic_proxy_tcp_failed_event(
-            peer,
-            original_dst,
-            &selection,
-            sniff,
-            "hysteria2",
-            &format!("Hysteria2 auth status {}", auth_session.report().status),
-            "async-proxy-quic-tcp",
-        );
-        event["quic_underlay"] = json!("quinn-h3");
-        event["hysteria2_port_hopping"] = json!(port_hopping);
-        event["hysteria2_selected_port"] = json!(remote.port());
-        append_proxy_tcp_execution_fields(
-            &mut event,
-            "async-proxy-quic-tcp",
-            "hysteria2",
-            None,
-            Some("quinn-h3"),
-        );
-        return Ok(event);
-    }
-    endpoint.mark_ready();
-    let (mut send, mut recv) = connection
-        .open_bi()
-        .await
-        .map_err(|err| format!("open Hysteria2 TCP stream: {err}"))?;
-    write_hysteria2_tcp_request(&mut send, &selection.route.dial_target)
-        .await
-        .map_err(|err| format!("write Hysteria2 TCP request: {err}"))?;
-    let response = read_hysteria2_tcp_response(&mut recv)
-        .await
-        .map_err(|err| format!("read Hysteria2 TCP response: {err}"))?;
+    let remaining = deadline
+        .remaining_at(Instant::now())
+        .ok_or_else(|| "Hysteria2 TCP stream setup deadline elapsed".to_owned())?;
+    let ((mut send, mut recv), response) = time::timeout(remaining, async {
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|err| format!("open Hysteria2 TCP stream: {err}"))?;
+        write_hysteria2_tcp_request(&mut send, &selection.route.dial_target)
+            .await
+            .map_err(|err| format!("write Hysteria2 TCP request: {err}"))?;
+        let response = read_hysteria2_tcp_response(&mut recv)
+            .await
+            .map_err(|err| format!("read Hysteria2 TCP response: {err}"))?;
+        Ok::<_, String>(((send, recv), response))
+    })
+    .await
+    .map_err(|_| "Hysteria2 TCP stream setup deadline elapsed".to_owned())??;
     if !response.ok {
-        connection.close(0x101_u32.into(), b"resident hysteria2 tcp response failed");
         let mut event = generic_proxy_tcp_failed_event(
             peer,
             original_dst,
@@ -203,8 +166,6 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
         Ok(mut stats) => {
             stats.client_to_direct += initial_stats.client_to_direct;
-            connection.close(0_u32.into(), b"resident hysteria2 done");
-            endpoint.wait_idle().await;
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,
@@ -224,12 +185,10 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
                 None,
                 Some("quinn-h3"),
             );
-            event["hysteria2_udp_enabled"] = json!(auth_session.report().udp_enabled);
+            event["hysteria2_udp_enabled"] = json!(transport.auth_report().udp_enabled);
             Ok(event)
         }
         Err(err) => {
-            connection.close(0x101_u32.into(), b"resident hysteria2 relay failed");
-            endpoint.wait_idle().await;
             let mut event = generic_proxy_tcp_failed_event(
                 peer,
                 original_dst,
@@ -249,7 +208,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
                 None,
                 Some("quinn-h3"),
             );
-            event["hysteria2_udp_enabled"] = json!(auth_session.report().udp_enabled);
+            event["hysteria2_udp_enabled"] = json!(transport.auth_report().udp_enabled);
             Ok(event)
         }
     }

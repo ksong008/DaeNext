@@ -75,6 +75,9 @@ async fn forward_dns_h3_to_routed_target_async(
             payload,
             Arc::clone(proxy),
             Arc::clone(&forwarders.metrics),
+            forwarders
+                .hysteria2_owner_registry()
+                .map_err(ResidentDnsTransportError::message)?,
             context,
         )
         .await

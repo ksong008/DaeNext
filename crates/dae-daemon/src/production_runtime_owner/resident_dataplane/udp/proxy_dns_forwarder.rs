@@ -21,6 +21,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxy
     runtime_config: ResidentDnsUdpRuntimeConfig,
     metrics: Arc<ResidentDataplaneMetrics>,
     actor_executor: Arc<ResidentDnsUdpActorExecutor>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     request_scoped_actor_pool: bool,
     closing: AtomicBool,
 }
@@ -42,12 +43,31 @@ impl Drop for ResidentProxyDnsUdpActorLoadGuard<'_> {
 }
 
 impl ResidentProxyDnsUdpForwarder {
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         proxy: Arc<ResidentProxyPlan>,
         original_dst: SocketAddr,
         runtime_config: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
         actor_executor: Arc<ResidentDnsUdpActorExecutor>,
+    ) -> Result<Self, String> {
+        Self::new_with_optional_transport_owner(
+            proxy,
+            original_dst,
+            runtime_config,
+            metrics,
+            actor_executor,
+            None,
+        )
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new_with_optional_transport_owner(
+        proxy: Arc<ResidentProxyPlan>,
+        original_dst: SocketAddr,
+        runtime_config: ResidentDnsUdpRuntimeConfig,
+        metrics: Arc<ResidentDataplaneMetrics>,
+        actor_executor: Arc<ResidentDnsUdpActorExecutor>,
+        hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     ) -> Result<Self, String> {
         proxy
             .execution_plan()
@@ -79,6 +99,7 @@ impl ResidentProxyDnsUdpForwarder {
             runtime_config,
             metrics,
             actor_executor,
+            hysteria2_owner_registry,
             request_scoped_actor_pool,
             closing: AtomicBool::new(false),
         })
@@ -219,6 +240,7 @@ impl ResidentProxyDnsUdpForwarder {
                 .runtime_config
                 .actor_partition(actor_index, self.actors.len());
             let metrics = Arc::clone(&self.metrics);
+            let hysteria2_owner_registry = self.hysteria2_owner_registry.clone();
             *handle = Some(
                 self.actor_executor
                     .spawn_actor(move || async move {
@@ -227,6 +249,7 @@ impl ResidentProxyDnsUdpForwarder {
                             original_dst,
                             runtime_config,
                             metrics,
+                            hysteria2_owner_registry,
                         ))
                     })
                     .await?,

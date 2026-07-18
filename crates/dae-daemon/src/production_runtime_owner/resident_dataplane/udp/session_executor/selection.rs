@@ -2,6 +2,7 @@ use super::*;
 use dae_dns::DNS_DEFAULT_PORT;
 
 impl UdpSessionExecutor {
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new(
         proxy: &ResidentProxyPlan,
         original_dst: SocketAddr,
@@ -12,10 +13,36 @@ impl UdpSessionExecutor {
         Self::new_proxy_packet(proxy)
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet(
         proxy: &ResidentProxyPlan,
     ) -> Self {
-        if let Some(reason) = resident_udp_chain_admission(proxy).unsupported_reason() {
+        Self::new_proxy_packet_with_optional_transport_owner(Arc::new(proxy.clone()), None)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_with_transport_owner(
+        proxy: Arc<ResidentProxyPlan>,
+        original_dst: SocketAddr,
+        owner_registry: Hysteria2OwnerRegistryHandle,
+    ) -> Self {
+        if original_dst.port() == DNS_DEFAULT_PORT {
+            return Self::Dns;
+        }
+        Self::new_proxy_packet_with_transport_owner(proxy, owner_registry)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet_with_transport_owner(
+        proxy: Arc<ResidentProxyPlan>,
+        owner_registry: Hysteria2OwnerRegistryHandle,
+    ) -> Self {
+        Self::new_proxy_packet_with_optional_transport_owner(proxy, Some(owner_registry))
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn new_proxy_packet_with_optional_transport_owner(
+        proxy: Arc<ResidentProxyPlan>,
+        owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    ) -> Self {
+        if let Some(reason) = resident_udp_chain_admission(&proxy).unsupported_reason() {
             return Self::fail_closed(reason);
         }
 
@@ -71,20 +98,11 @@ impl UdpSessionExecutor {
                 ResidentUdpExecutorFactory::AnyTlsPacketStream,
             ) => Self::AnyTls(AnyTlsPacketStreamSession::new(auth.clone())),
             (
-                ResidentProxyProtocolPlan::Hysteria2QuicTcp {
-                    auth,
-                    tls_identity,
-                    max_rx,
-                    obfs,
-                    port_hop_ports,
-                },
+                ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. },
                 ResidentUdpExecutorFactory::Hysteria2Datagram,
             ) => Self::Hysteria2(Hysteria2QuicDatagramSession::new(
-                auth.clone(),
-                tls_identity.clone(),
-                *max_rx,
-                obfs.clone(),
-                port_hop_ports.clone(),
+                Arc::clone(&proxy),
+                owner_registry,
             )),
             (
                 ResidentProxyProtocolPlan::TuicQuicTcp {

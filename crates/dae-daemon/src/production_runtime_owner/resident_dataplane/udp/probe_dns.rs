@@ -91,14 +91,29 @@ impl Drop for ResidentProxyUdpBridge {
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_resident_proxy_udp_bridge_async(
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<ResidentProxyUdpBridge, String> {
     #[cfg(test)]
     {
-        open_resident_proxy_udp_bridge_inner(proxy, original_dst, None).await
+        open_resident_proxy_udp_bridge_inner(
+            proxy,
+            original_dst,
+            hysteria2_owner_registry,
+            owner_deadline,
+            None,
+        )
+        .await
     }
     #[cfg(not(test))]
     {
-        open_resident_proxy_udp_bridge_inner(proxy, original_dst).await
+        open_resident_proxy_udp_bridge_inner(
+            proxy,
+            original_dst,
+            hysteria2_owner_registry,
+            owner_deadline,
+        )
+        .await
     }
 }
 
@@ -108,12 +123,14 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     original_dst: SocketAddr,
     observation: Arc<ResidentProxyUdpBridgeTestObservation>,
 ) -> Result<ResidentProxyUdpBridge, String> {
-    open_resident_proxy_udp_bridge_inner(proxy, original_dst, Some(observation)).await
+    open_resident_proxy_udp_bridge_inner(proxy, original_dst, None, None, Some(observation)).await
 }
 
 async fn open_resident_proxy_udp_bridge_inner(
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) -> Result<ResidentProxyUdpBridge, String> {
     let socket = tokio::net::UdpSocket::bind(resident_proxy_udp_bridge_bind_addr())
@@ -145,11 +162,22 @@ async fn open_resident_proxy_udp_bridge_inner(
             socket,
             shutdown_rx,
             task_error,
+            hysteria2_owner_registry,
+            owner_deadline,
             test_observation,
         )
         .await;
         #[cfg(not(test))]
-        resident_proxy_udp_bridge_loop(proxy, original_dst, socket, shutdown_rx, task_error).await;
+        resident_proxy_udp_bridge_loop(
+            proxy,
+            original_dst,
+            socket,
+            shutdown_rx,
+            task_error,
+            hysteria2_owner_registry,
+            owner_deadline,
+        )
+        .await;
     }));
     Ok(ResidentProxyUdpBridge {
         local_addr,
@@ -169,9 +197,17 @@ async fn resident_proxy_udp_bridge_loop(
     socket: tokio::net::UdpSocket,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
     last_error: Arc<Mutex<Option<String>>>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) {
-    let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
+    let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
+        Arc::clone(&proxy),
+        hysteria2_owner_registry,
+    );
+    if let Some(deadline) = owner_deadline {
+        executor.set_owner_acquisition_deadline(deadline);
+    }
     let mut buf = vec![0_u8; RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY];
     let mut last_peer = None;
     loop {
@@ -271,14 +307,15 @@ pub(crate) const RESIDENT_UDP_PROBE_PUBLIC_ERROR: &str =
     "resident UDP probe failed; protected detail redacted";
 
 pub(crate) async fn probe_resident_proxy_udp_async(
-    proxy: &ResidentProxyPlan,
+    proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
     payload: &[u8],
     include_response_hex: bool,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> serde_json::Value {
     let started = Instant::now();
     let agreement = proxy.execution_plan().udp.agreement();
-    let handler = resident_udp_proxy_handler_name(proxy);
+    let handler = resident_udp_proxy_handler_name(&proxy);
     let packet_semantics = agreement.packet_semantics();
     if let Some(reason) = agreement.unsupported_reason() {
         return json!({
@@ -296,17 +333,20 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             "error": reason,
             "graphId": proxy.graph_id,
             "packetSession": udp_probe_packet_session_value(
-                proxy,
+                &proxy,
                 original_dst,
                 handler,
                 packet_semantics,
             ),
         });
     }
-    let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);
+    let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
+        Arc::clone(&proxy),
+        hysteria2_owner_registry,
+    );
     let dns = ResidentDnsPlan::asis(proxy.mark);
     let mut exchange = executor
-        .execute(&dns, proxy, original_dst, payload)
+        .execute(&dns, &proxy, original_dst, payload)
         .await
         .map(|(_, response)| response);
     if let Ok(response) = &exchange
@@ -336,7 +376,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
                 "payload_match": payload_match,
                 "elapsed_ms": started.elapsed().as_millis(),
                 "graphId": proxy.graph_id,
-                "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
+                "packetSession": udp_probe_packet_session_value(&proxy, original_dst, handler, packet_semantics),
             });
             response.append_execution_fields(&mut report, handler, &proxy.graph_id);
             if let Some(tls_underlay) = response.tls_underlay {
@@ -363,7 +403,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             "payload_match": false,
             "elapsed_ms": started.elapsed().as_millis(),
             "graphId": proxy.graph_id,
-            "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
+            "packetSession": udp_probe_packet_session_value(&proxy, original_dst, handler, packet_semantics),
             "reasonId": "udp-probe-exchange-failed",
             "error": RESIDENT_UDP_PROBE_PUBLIC_ERROR,
         }),
@@ -390,9 +430,10 @@ async fn wait_for_udp_probe_response(
 }
 
 pub(crate) async fn probe_resident_proxy_dns_udp_async(
-    proxy: &ResidentProxyPlan,
+    proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
     lookup_host: &str,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
 ) -> Result<(), String> {
     proxy
         .execution_plan()
@@ -401,10 +442,13 @@ pub(crate) async fn probe_resident_proxy_dns_udp_async(
         .admit_packet_relay("background DNS UDP probe")?;
     let id = fastrand::u16(0..=u16::MAX);
     let query = build_dns_a_query(id, lookup_host)?;
-    let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);
+    let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
+        Arc::clone(&proxy),
+        hysteria2_owner_registry,
+    );
     let dns = ResidentDnsPlan::asis(proxy.mark);
     let mut response = executor
-        .execute(&dns, proxy, original_dst, &query)
+        .execute(&dns, &proxy, original_dst, &query)
         .await
         .map(|(_, response)| response);
     if matches!(response.as_ref(), Ok(response) if !response.reply_forwarded) {
