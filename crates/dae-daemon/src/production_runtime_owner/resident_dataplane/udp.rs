@@ -16,7 +16,7 @@ use dae_outbound::{
     hysteria2::{
         HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2AuthenticatedSession, Hysteria2UdpMessage,
         authenticate_hysteria2_connection, decode_hysteria2_udp_message,
-        encode_hysteria2_udp_message,
+        encode_hysteria2_udp_message, fragment_hysteria2_udp_message,
     },
     juicity::{
         authenticate_juicity_connection, decode_stream_packet_frame, seal_stream_packet_frame,

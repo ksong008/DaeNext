@@ -18,8 +18,11 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
     let deadline = dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout);
     let candidates =
         resolve_hysteria2_quic_remote_candidates_async(proxy, port_hop_ports, deadline).await?;
-    let client_config = build_hysteria2_runtime_client_config(tls_identity)
-        .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?;
+    let client_config = build_hysteria2_runtime_client_config_with_udp_overhead(
+        tls_identity,
+        obfs.udp_packet_overhead(),
+    )
+    .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Hysteria2,
         caller,

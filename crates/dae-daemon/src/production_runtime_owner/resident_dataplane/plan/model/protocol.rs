@@ -134,6 +134,16 @@ impl ResidentHysteria2ObfsPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn is_salamander(&self) -> bool {
         self.mode == "salamander"
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn udp_packet_overhead(
+        &self,
+    ) -> usize {
+        if self.is_salamander() {
+            dae_outbound::hysteria2::HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD
+        } else {
+            0
+        }
+    }
 }
 
 impl ResidentProxyProtocolPlan {

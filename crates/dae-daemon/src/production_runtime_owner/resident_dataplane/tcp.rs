@@ -31,8 +31,9 @@ use dae_outbound::{
     anytls::{AnyTlsFrame, contract as anytls_contract, link as anytls_link},
     http_proxy::{HttpConnectOptions, request as http_request},
     hysteria2::{
-        authenticate_hysteria2_connection, build_hysteria2_runtime_client_config,
-        read_hysteria2_tcp_response, write_hysteria2_tcp_request,
+        HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD, authenticate_hysteria2_connection,
+        build_hysteria2_runtime_client_config_with_udp_overhead, read_hysteria2_tcp_response,
+        write_hysteria2_tcp_request,
     },
     juicity::{
         authenticate_juicity_connection, build_juicity_runtime_client_config,
