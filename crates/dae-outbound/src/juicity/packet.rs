@@ -8,6 +8,9 @@ pub const JUICITY_UNDERLAY_AUTH_IV_LEN: usize = 32;
 pub const JUICITY_UNDERLAY_AUTH_PSK_LEN: usize = 32;
 pub const JUICITY_TRANSPORT_PACKET_CONN_CIPHER: &str = "chacha20-poly1305";
 pub const JUICITY_TRANSPORT_PACKET_CONN_REUSED_INFO: &str = "juicity reused info";
+pub const JUICITY_STREAM_PACKET_MAX_METADATA_LEN: usize = 1 + 1 + u8::MAX as usize + 2;
+pub const JUICITY_STREAM_PACKET_MAX_FRAME_LEN: usize =
+    JUICITY_STREAM_PACKET_MAX_METADATA_LEN + 2 + u16::MAX as usize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JuicityUdpPacketConnKind {
@@ -202,6 +205,44 @@ pub fn decode_stream_packet_frame(input: &[u8]) -> Result<JuicityStreamPacketFra
     })
 }
 
+pub fn stream_packet_frame_len(input: &[u8]) -> Result<Option<usize>, OutboundError> {
+    let Some(atyp) = input.first().copied() else {
+        return Ok(None);
+    };
+    let metadata_len = match atyp {
+        1 => 1 + 4 + 2,
+        4 => 1 + 16 + 2,
+        3 => {
+            let Some(domain_len) = input.get(1).copied() else {
+                return Ok(None);
+            };
+            1 + 1 + domain_len as usize + 2
+        }
+        _ => {
+            return Err(OutboundError::BadJuicity(format!(
+                "juicity stream packet address type is invalid: {atyp}"
+            )));
+        }
+    };
+    if input.len() < metadata_len + 2 {
+        return Ok(None);
+    }
+    let payload_len = u16::from_be_bytes([input[metadata_len], input[metadata_len + 1]]) as usize;
+    Ok(Some(metadata_len + 2 + payload_len))
+}
+
+pub fn decode_stream_packet_frame_prefix(
+    input: &[u8],
+) -> Result<Option<(JuicityStreamPacketFrame, usize)>, OutboundError> {
+    let Some(frame_len) = stream_packet_frame_len(input)? else {
+        return Ok(None);
+    };
+    if input.len() < frame_len {
+        return Ok(None);
+    }
+    decode_stream_packet_frame(&input[..frame_len]).map(|frame| Some((frame, frame_len)))
+}
+
 pub fn packet_state_smoke(
     port_zero_target: &str,
     stream_target: &str,
@@ -264,4 +305,59 @@ pub fn packet_state_smoke(
 fn deterministic_byte(seed: u8, offset: usize) -> u8 {
     seed.wrapping_add((offset as u8).wrapping_mul(17))
         .wrapping_add(3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_packet_prefix_decoder_preserves_trailing_frame() {
+        let first = seal_stream_packet_frame("192.0.2.10:53", b"first").unwrap();
+        let second = seal_stream_packet_frame("[2001:db8::10]:5353", b"second").unwrap();
+        let mut joined = first.encoded.clone();
+        joined.extend_from_slice(&second.encoded);
+
+        let (decoded_first, first_len) =
+            decode_stream_packet_frame_prefix(&joined).unwrap().unwrap();
+        assert_eq!(decoded_first.target, "192.0.2.10:53");
+        assert_eq!(decoded_first.payload, b"first");
+        assert_eq!(first_len, first.encoded.len());
+
+        let (decoded_second, second_len) = decode_stream_packet_frame_prefix(&joined[first_len..])
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded_second.target, "[2001:db8::10]:5353");
+        assert_eq!(decoded_second.payload, b"second");
+        assert_eq!(second_len, second.encoded.len());
+    }
+
+    #[test]
+    fn stream_packet_prefix_decoder_waits_for_every_wire_shape() {
+        for target in ["192.0.2.20:443", "[2001:db8::20]:443", "packet.example:443"] {
+            let frame = seal_stream_packet_frame(target, b"payload").unwrap();
+            for prefix_len in 0..frame.encoded.len() {
+                assert_eq!(
+                    decode_stream_packet_frame_prefix(&frame.encoded[..prefix_len]).unwrap(),
+                    None,
+                    "prefix_len={prefix_len} target={target}"
+                );
+            }
+            let (decoded, consumed) = decode_stream_packet_frame_prefix(&frame.encoded)
+                .unwrap()
+                .unwrap();
+            assert_eq!(decoded.target, target);
+            assert_eq!(decoded.payload, b"payload");
+            assert_eq!(consumed, frame.encoded.len());
+        }
+    }
+
+    #[test]
+    fn stream_packet_frame_bound_is_derived_from_wire_widths() {
+        assert_eq!(JUICITY_STREAM_PACKET_MAX_METADATA_LEN, 259);
+        assert_eq!(
+            JUICITY_STREAM_PACKET_MAX_FRAME_LEN,
+            JUICITY_STREAM_PACKET_MAX_METADATA_LEN + 2 + u16::MAX as usize
+        );
+    }
 }
