@@ -58,6 +58,7 @@ enum ResidentProxyDnsUdpActorEvent {
     Deadline,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn start_proxy_dns_udp_actor(
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
@@ -66,6 +67,7 @@ pub(super) fn start_proxy_dns_udp_actor(
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> ResidentDnsUdpActorRegistration<ResidentProxyDnsUdpActorHandle> {
     let (sender, receiver) = tokio::sync::mpsc::channel(runtime_config.queue_depth.max(1));
     let (lifecycle, stop_receiver) = ResidentDnsUdpActorLifecycle::new();
@@ -87,6 +89,7 @@ pub(super) fn start_proxy_dns_udp_actor(
             hysteria2_owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
+            anytls_owner_registry,
         )
         .await;
         metric_guard.fatal
@@ -194,6 +197,7 @@ async fn run_proxy_dns_udp_actor(
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> bool {
     let pending_limit = runtime_config.pending_limit.max(1);
     let mut pending = HashMap::<u16, PendingProxyDnsUdpRequest>::new();
@@ -260,6 +264,7 @@ async fn run_proxy_dns_udp_actor(
                     hysteria2_owner_registry.as_ref(),
                     tuic_owner_registry.as_ref(),
                     juicity_owner_registry.as_ref(),
+                    anytls_owner_registry.as_ref(),
                 )
                 .await
                 {

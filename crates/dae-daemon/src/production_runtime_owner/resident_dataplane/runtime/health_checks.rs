@@ -241,6 +241,7 @@ async fn probe_resident_candidate_tcp_latency_snapshot_scoped(
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> Value {
     let checked_at = unix_now_secs();
     let probe = probe_resident_candidate_tcp_endpoint_async(
@@ -249,7 +250,8 @@ async fn probe_resident_candidate_tcp_latency_snapshot_scoped(
             hysteria2_owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
-        ),
+        )
+        .with_anytls(anytls_owner_registry),
         QuicEndpointCallerClass::ManualProbe,
     )
     .await;
@@ -298,6 +300,7 @@ pub(crate) async fn probe_resident_candidate_manual_latency_snapshot(
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> Value {
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::ManualProbe,
@@ -308,6 +311,7 @@ pub(crate) async fn probe_resident_candidate_manual_latency_snapshot(
             hysteria2_owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
+            anytls_owner_registry,
         ),
     )
     .await
@@ -627,6 +631,7 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
         owners.hysteria2(),
         owners.tuic(),
         owners.juicity(),
+        owners.anytls(),
         caller,
     )
     .await?;

@@ -21,6 +21,10 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
         .pointer("/residentDataplane/metrics/hysteria2Owners")
         .cloned()
         .unwrap_or(Value::Null);
+    let anytls = runtime
+        .pointer("/residentDataplane/metrics/anytlsOwners")
+        .cloned()
+        .unwrap_or(Value::Null);
     let runtime_profile = runtime
         .pointer("/residentDataplane/metrics/resources/runtimeProfile")
         .cloned()
@@ -109,6 +113,21 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
             "currentUdpQueuedBytes": hysteria2["currentUdpQueuedBytes"].clone(),
             "budget": hysteria2["budget"].clone(),
         },
+        "anytlsOwners": {
+            "mode": anytls["mode"].clone(),
+            "concurrentLogicalMultiplexing": anytls["concurrentLogicalMultiplexing"].clone(),
+            "registeredKeys": anytls["registeredKeys"].clone(),
+            "registeredPhysicalSessions": anytls["registeredPhysicalSessions"].clone(),
+            "activePhysicalSessions": anytls["activePhysicalSessions"].clone(),
+            "idlePhysicalSessions": anytls["idlePhysicalSessions"].clone(),
+            "activeLogicalStreams": anytls["activeLogicalStreams"].clone(),
+            "ownerStateBytesLowerBound": anytls["ownerStateBytesLowerBound"].clone(),
+            "ownerPaddingSchemeBytes": anytls["ownerPaddingSchemeBytes"].clone(),
+            "currentLogicalBufferBytes": anytls["currentLogicalBufferBytes"].clone(),
+            "highWaterLogicalBufferBytes": anytls["highWaterLogicalBufferBytes"].clone(),
+            "admissionEnforced": anytls["admissionEnforced"].clone(),
+            "budget": anytls["budget"].clone(),
+        },
         "dnsTransportOwners": {
             "current": resident_metric("dnsTransportOwnersCurrent"),
             "maximum": resident_metric("dnsTransportOwnersMaximum"),
@@ -146,6 +165,8 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
             "mapVmallocIsNotAllocatorResident": true,
             "dnsOwnerStateBytesAreALowerBound": true,
             "dnsQuicEndpointChargesAreReportedSeparately": true,
+            "anytlsLogicalBufferBytesAreProfileCharges": true,
+            "anytlsOwnerStateBytesAreALowerBound": true,
         },
     })
 }

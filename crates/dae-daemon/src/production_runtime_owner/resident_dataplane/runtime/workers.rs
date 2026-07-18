@@ -286,6 +286,34 @@ pub(crate) fn start_resident_dataplane_workers(
         };
         owner.install_juicity_owner_registry(juicity_owner_registry, juicity_owner_thread);
     }
+    let requires_anytls_owner = proxy_groups
+        .values()
+        .any(|group| group.requires_anytls_transport_owner());
+    if requires_anytls_owner {
+        let (anytls_owner_registry, anytls_owner_thread) = match start_anytls_owner_registry(
+            reload_generation,
+            owner.stop_handle(),
+            resource_config.tcp_flow_stack_bytes.value(),
+        ) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let cleanup = owner.shutdown();
+                return (
+                    json!({
+                        "status": "fail",
+                        "enabled": true,
+                        "error": err,
+                        "cleanup": cleanup,
+                        "event_file": Value::Null,
+                        "event_file_status": "disabled",
+                        "event_log": "product-log-sink",
+                    }),
+                    None,
+                );
+            }
+        };
+        owner.install_anytls_owner_registry(anytls_owner_registry, anytls_owner_thread);
+    }
     let requires_xhttp_xmux_owner = proxy_groups
         .values()
         .any(|group| group.requires_xhttp_xmux_owner());
@@ -377,6 +405,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 ),
                 owner.tuic_owner_registry(),
                 owner.juicity_owner_registry(),
+                owner.anytls_owner_registry(),
             )
             .with_domain_routing(dns_domain_routing.clone())
             .with_upstream_routing(Some(dns_upstream_router)),
@@ -423,6 +452,7 @@ pub(crate) fn start_resident_dataplane_workers(
             .expect("Hysteria2 owner registry is installed before TCP router construction"),
         owner.tuic_owner_registry(),
         owner.juicity_owner_registry(),
+        owner.anytls_owner_registry(),
     ) {
         Ok(router) => Arc::new(router),
         Err(err) => {
@@ -510,6 +540,7 @@ pub(crate) fn start_resident_dataplane_workers(
             .expect("Hysteria2 owner registry is installed before health scheduler construction");
         let tuic_owner_registry = owner.tuic_owner_registry();
         let juicity_owner_registry = owner.juicity_owner_registry();
+        let anytls_owner_registry = owner.anytls_owner_registry();
         owner.spawn_thread(
             "health-check-scheduler",
             "health-check-scheduler",
@@ -529,6 +560,7 @@ pub(crate) fn start_resident_dataplane_workers(
                     Some(hysteria2_owner_registry),
                     tuic_owner_registry,
                     juicity_owner_registry,
+                    anytls_owner_registry,
                 )
             },
         );
@@ -550,6 +582,7 @@ pub(crate) fn start_resident_dataplane_workers(
             .expect("Hysteria2 owner registry is installed before UDP manager construction");
         let tuic_owner_registry = owner.tuic_owner_registry();
         let juicity_owner_registry = owner.juicity_owner_registry();
+        let anytls_owner_registry = owner.anytls_owner_registry();
         let cleanup_reporter = owner.cleanup_reporter("udp-session-manager");
         owner.spawn_thread("udp-session-manager", "udp-session-manager", move || {
             let report = resident_udp_loop(
@@ -571,6 +604,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 hysteria2_owner_registry,
                 tuic_owner_registry,
                 juicity_owner_registry,
+                anytls_owner_registry,
             );
             cleanup_reporter.finish(report);
         });

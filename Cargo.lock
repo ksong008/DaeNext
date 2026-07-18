@@ -816,6 +816,7 @@ dependencies = [
  "dae-core-types",
  "dae-golden",
  "fastrand",
+ "getrandom 0.3.4",
  "h3",
  "h3-quinn",
  "hkdf",

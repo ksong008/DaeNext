@@ -8,59 +8,35 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
-    auth: &str,
+    owner_registry: Option<&AnyTlsOwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<Value, String> {
-    let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
-    let tls_underlay = async_resident_tls_underlay_name(&client);
-    let sid = 1_u32;
-    client
-        .write_plain_all(
-            &anytls_link::handshake_auth_bytes(auth),
-            "write AnyTLS auth handshake",
+    let owner_registry = owner_registry.ok_or_else(|| {
+        "AnyTLS generation transport owner is unavailable for TCP execution".to_owned()
+    })?;
+    let owner_deadline = owner_deadline.unwrap_or_else(|| {
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT)
+    });
+    let mut logical = owner_registry
+        .acquire(
+            Arc::clone(&selection.proxy),
+            selection.route.dial_target.clone(),
+            owner_deadline,
         )
         .await?;
-    write_anytls_frame(
-        &mut client,
-        anytls_contract::CMD_SETTINGS,
-        sid,
-        &anytls_link::settings_bytes(),
-        "write AnyTLS settings",
-    )
-    .await?;
-    write_anytls_frame(
-        &mut client,
-        anytls_contract::CMD_SYN,
-        sid,
-        &[],
-        "write AnyTLS SYN",
-    )
-    .await?;
-    let target_addr = anytls_link::socks_addr(&selection.route.dial_target)
-        .map_err(|err| format!("build AnyTLS target address: {err}"))?;
-    write_anytls_frame(
-        &mut client,
-        anytls_contract::CMD_PSH,
-        sid,
-        &target_addr,
-        "write AnyTLS target",
-    )
-    .await?;
+    let tls_underlay = logical.tls_underlay();
+    let sid = logical.sid();
+    let physical_instance = logical.physical_instance_id();
+    let physical_reused = logical.reused();
     if !sniff.payload.is_empty() {
-        write_anytls_frame(
-            &mut client,
-            anytls_contract::CMD_PSH,
-            sid,
-            &sniff.payload,
-            "write AnyTLS initial payload",
-        )
-        .await?;
+        logical
+            .write_all(&sniff.payload)
+            .await
+            .map_err(|error| format!("write AnyTLS initial logical payload: {error}"))?;
         metrics.add_upload(sniff.payload.len());
     }
-    wait_anytls_synack(&mut client, sid).await?;
 
-    match relay_tcp_over_anytls_async(inbound, &mut client, stop, sid, metrics).await {
+    match relay_tcp_over_anytls_async(inbound, &mut logical, stop, metrics).await {
         Ok(mut stats) => {
             stats.client_to_direct += sniff.payload.len();
             let mut event = generic_proxy_tcp_finished_event(
@@ -73,6 +49,7 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
                 "async-proxy-frame-tls",
             );
             event["tls_underlay"] = json!(tls_underlay);
+            append_anytls_owner_event_fields(&mut event, sid, physical_instance, physical_reused);
             append_proxy_tcp_execution_fields(
                 &mut event,
                 "async-proxy-frame-tls",
@@ -93,6 +70,7 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
                 "async-proxy-frame-tls",
             );
             event["tls_underlay"] = json!(tls_underlay);
+            append_anytls_owner_event_fields(&mut event, sid, physical_instance, physical_reused);
             append_proxy_tcp_execution_fields(
                 &mut event,
                 "async-proxy-frame-tls",
@@ -105,62 +83,29 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     }
 }
 
-pub(crate) async fn write_anytls_frame(
-    client: &mut AsyncResidentTlsClient,
-    cmd: u8,
+fn append_anytls_owner_event_fields(
+    event: &mut Value,
     sid: u32,
-    data: &[u8],
-    label: &str,
-) -> Result<(), String> {
-    let frame = anytls_link::frame(cmd, sid, data);
-    client.write_plain_all(&frame, label).await
-}
-
-pub(crate) async fn wait_anytls_synack(
-    client: &mut AsyncResidentTlsClient,
-    sid: u32,
-) -> Result<(), String> {
-    loop {
-        let frame = read_anytls_frame(client).await?;
-        match frame.cmd {
-            cmd if cmd == anytls_contract::CMD_SYNACK
-                && frame.sid == sid
-                && frame.data.is_empty() =>
-            {
-                return Ok(());
-            }
-            anytls_contract::CMD_WASTE
-            | anytls_contract::CMD_SERVER_SETTINGS
-            | anytls_contract::CMD_UPDATE_PADDING
-            | anytls_contract::CMD_HEART_RESPONSE => {}
-            cmd if cmd == anytls_contract::CMD_ALERT => {
-                return Err(format!(
-                    "AnyTLS alert before SYNACK: {} bytes",
-                    frame.data.len()
-                ));
-            }
-            cmd => {
-                return Err(format!(
-                    "unexpected AnyTLS frame before SYNACK: cmd={cmd} sid={} len={}",
-                    frame.sid,
-                    frame.data.len()
-                ));
-            }
-        }
-    }
+    physical_instance: u64,
+    physical_reused: bool,
+) {
+    event["anytlsSid"] = json!(sid);
+    event["anytlsPhysicalInstance"] = json!(physical_instance);
+    event["anytlsPhysicalReused"] = json!(physical_reused);
+    event["anytlsMode"] = json!("bounded-idle-reuse");
 }
 
 pub(crate) async fn relay_tcp_over_anytls_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
-    client: &mut AsyncResidentTlsClient,
+    logical: &mut AnyTlsLogicalStreamLease,
     stop: SharedResidentStopSignal,
-    sid: u32,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut stats = DirectTcpRelayStats::default();
     let mut inbound_closed = false;
     let mut proxy_closed = false;
     let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut proxy_buf = [0_u8; 16 * 1024];
     let mut stop_listener = stop.listener();
     let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
     let local_close_drain_deadline = resident_relay_idle_deadline(ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT);
@@ -175,14 +120,7 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                 match read {
                     Ok(0) => {
                         inbound_closed = true;
-                        let _ = write_anytls_frame(
-                            client,
-                            anytls_contract::CMD_FIN,
-                            sid,
-                            &[],
-                            "write AnyTLS FIN",
-                        )
-                        .await;
+                        let _ = logical.shutdown().await;
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         reset_resident_relay_idle_deadline(
                             local_close_drain_deadline.as_mut(),
@@ -191,28 +129,16 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                         local_close_drain_active = true;
                     }
                     Ok(read) => {
-                        write_anytls_frame(
-                            client,
-                            anytls_contract::CMD_PSH,
-                            sid,
-                            &inbound_buf[..read],
-                            "write client payload to AnyTLS",
-                        )
-                        .await?;
+                        logical.write_all(&inbound_buf[..read]).await.map_err(|error| {
+                            format!("write client payload to AnyTLS logical stream: {error}")
+                        })?;
                         stats.client_to_direct += read;
                         metrics.add_upload(read);
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
-                        let _ = write_anytls_frame(
-                            client,
-                            anytls_contract::CMD_FIN,
-                            sid,
-                            &[],
-                            "write AnyTLS FIN after client close",
-                        )
-                        .await;
+                        let _ = logical.shutdown().await;
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         reset_resident_relay_idle_deadline(
                             local_close_drain_deadline.as_mut(),
@@ -223,42 +149,28 @@ pub(crate) async fn relay_tcp_over_anytls_async(
                     Err(err) => return Err(format!("read inbound TCP for AnyTLS relay: {err}")),
                 }
             }
-            frame = read_anytls_frame(client), if !proxy_closed => {
-                let frame = frame?;
-                match frame.cmd {
-                    cmd if cmd == anytls_contract::CMD_PSH && frame.sid == sid => {
-                        if !frame.data.is_empty() {
-                            if let Err(err) = inbound.write_all(&frame.data).await {
-                                if is_graceful_stream_close_error(&err) {
-                                    break;
-                                }
-                                return Err(format!("write AnyTLS payload to client: {err}"));
-                            }
-                            stats.direct_to_client += frame.data.len();
-                            metrics.add_download(frame.data.len());
-                        }
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    cmd if cmd == anytls_contract::CMD_FIN && frame.sid == sid => {
+            read = logical.read(&mut proxy_buf), if !proxy_closed => {
+                match read {
+                    Ok(0) => {
                         proxy_closed = true;
                         let _ = inbound.shutdown().await;
                     }
-                    anytls_contract::CMD_WASTE
-                    | anytls_contract::CMD_SERVER_SETTINGS
-                    | anytls_contract::CMD_UPDATE_PADDING
-                    | anytls_contract::CMD_HEART_RESPONSE => {
+                    Ok(read) => {
+                        if let Err(err) = inbound.write_all(&proxy_buf[..read]).await {
+                            if is_graceful_stream_close_error(&err) {
+                                break;
+                            }
+                            return Err(format!("write AnyTLS payload to client: {err}"));
+                        }
+                        stats.direct_to_client += read;
+                        metrics.add_download(read);
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
-                    cmd if cmd == anytls_contract::CMD_ALERT => {
-                        return Err(format!("AnyTLS alert frame: sid={} len={}", frame.sid, frame.data.len()));
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        proxy_closed = true;
+                        let _ = inbound.shutdown().await;
                     }
-                    cmd => {
-                        return Err(format!(
-                            "unexpected AnyTLS relay frame: cmd={cmd} sid={} len={}",
-                            frame.sid,
-                            frame.data.len()
-                        ));
-                    }
+                    Err(err) => return Err(format!("read AnyTLS logical response: {err}")),
                 }
             }
             _ = &mut local_close_drain_deadline, if local_close_drain_active => break,

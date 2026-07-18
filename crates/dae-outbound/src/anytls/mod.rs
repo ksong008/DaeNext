@@ -1,6 +1,7 @@
 pub mod contract;
 mod dataplane;
 pub mod link;
+mod padding;
 mod session_reuse_dataplane;
 mod udp_packet_dataplane;
 
@@ -9,6 +10,7 @@ pub use dataplane::{
     tcp_session_frame_exchange_over_tls_stream, write_frame_to_stream,
 };
 pub use link::{AnyTLSLink, AnyTLSUnderlayContract};
+pub use padding::AnyTlsPaddingScheme;
 pub use session_reuse_dataplane::{
     AnyTlsLogicalStreamExchangeReport, AnyTlsSessionReuseExchangeReport,
     AnyTlsStreamLifecycleFrames, stream_lifecycle_frames,

@@ -125,6 +125,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) {
     let per_group_candidate_concurrency = per_group_candidate_concurrency.max(1);
     let bootstrap_candidate_concurrency = bootstrap_candidate_concurrency.max(1);
@@ -181,6 +182,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
                     hysteria2_owner_registry: hysteria2_owner_registry.clone(),
                     tuic_owner_registry: tuic_owner_registry.clone(),
                     juicity_owner_registry: juicity_owner_registry.clone(),
+                    anytls_owner_registry: anytls_owner_registry.clone(),
                 },
             ));
         }
@@ -197,6 +199,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
                 hysteria2_owner_registry.clone(),
                 tuic_owner_registry.clone(),
                 juicity_owner_registry.clone(),
+                anytls_owner_registry.clone(),
             ));
         }
         while let Some(result) = tasks.join_next().await {

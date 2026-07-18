@@ -70,6 +70,7 @@ pub(super) fn run_resident_udp_session_manager(
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> Value {
     let mut runtime_builder = if runtime_config.runtime_worker_threads > 0 {
         let mut builder = tokio::runtime::Builder::new_multi_thread();
@@ -112,6 +113,7 @@ pub(super) fn run_resident_udp_session_manager(
         hysteria2_owner_registry,
         tuic_owner_registry,
         juicity_owner_registry,
+        anytls_owner_registry,
     ))
 }
 
@@ -134,6 +136,7 @@ async fn run_resident_udp_session_manager_async(
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> Value {
     let session_limit = runtime_config.session_limit;
     let session_queue_depth = runtime_config.session_queue_depth;
@@ -252,6 +255,7 @@ async fn run_resident_udp_session_manager_async(
         hysteria2_owner_registry,
         tuic_owner_registry,
         juicity_owner_registry,
+        anytls_owner_registry,
     );
     let session_shard_handle = session_shards.handle();
     let payload_pool = UdpPayloadPool::new(runtime_config.payload_pool_capacity());

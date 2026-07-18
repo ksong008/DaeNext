@@ -55,6 +55,7 @@ where
         owners.hysteria2(),
         owners.tuic(),
         owners.juicity(),
+        owners.anytls(),
         Some(dae_runtime_control::AbsoluteDeadline::at(
             context.deadline().into_std(),
         )),

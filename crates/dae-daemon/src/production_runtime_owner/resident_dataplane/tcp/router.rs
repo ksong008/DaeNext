@@ -32,6 +32,8 @@ pub(crate) struct ResidentTcpRouter {
         Option<TuicOwnerRegistryHandle>,
     pub(in crate::production_runtime_owner::resident_dataplane) juicity_owner_registry:
         Option<JuicityOwnerRegistryHandle>,
+    pub(in crate::production_runtime_owner::resident_dataplane) anytls_owner_registry:
+        Option<AnyTlsOwnerRegistryHandle>,
 }
 
 impl ResidentTcpRouter {
@@ -49,6 +51,7 @@ impl ResidentTcpRouter {
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Result<Self, String> {
         if proxies.is_empty() {
             return Err("resident TCP router needs at least one proxy outbound".to_owned());
@@ -75,6 +78,7 @@ impl ResidentTcpRouter {
             Some(hysteria2_owner_registry),
             tuic_owner_registry,
             juicity_owner_registry,
+            anytls_owner_registry,
         )
     }
 
@@ -93,6 +97,7 @@ impl ResidentTcpRouter {
         hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Result<Self, String> {
         if proxies.is_empty() {
             return Err("resident TCP router needs at least one proxy outbound".to_owned());
@@ -112,6 +117,7 @@ impl ResidentTcpRouter {
             hysteria2_owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
+            anytls_owner_registry,
         })
     }
 
@@ -142,6 +148,7 @@ impl ResidentTcpRouter {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -168,6 +175,7 @@ impl ResidentTcpRouter {
             sniffing_timeout,
             so_mark_from_dae,
             mptcp,
+            None,
             None,
             None,
             None,

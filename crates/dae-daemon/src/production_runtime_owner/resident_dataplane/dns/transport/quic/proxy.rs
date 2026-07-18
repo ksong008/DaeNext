@@ -147,6 +147,7 @@ async fn open_cached_proxy_dns_quic_connection(
                 owners.hysteria2(),
                 owners.tuic(),
                 owners.juicity(),
+                owners.anytls(),
                 Some(dae_runtime_control::AbsoluteDeadline::at(
                     context.deadline().into_std(),
                 )),

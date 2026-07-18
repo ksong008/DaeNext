@@ -27,7 +27,8 @@ use self::vmess::open_vmess_native_tcp_tunnel;
 use super::super::plan::{ResidentProxyPlan, ResidentTcpProbeDispatch};
 use super::super::tcp::QuicEndpointCallerClass;
 use super::super::{
-    Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle, TuicOwnerRegistryHandle,
+    AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
+    TuicOwnerRegistryHandle,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -42,6 +43,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     caller: QuicEndpointCallerClass,
 ) -> Result<(), String> {
     let owner_deadline =
@@ -53,6 +55,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
             hysteria2_owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
+            anytls_owner_registry,
             caller,
             owner_deadline,
         )
@@ -83,12 +86,14 @@ where
     })?
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn open_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
     target: &str,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     caller: QuicEndpointCallerClass,
     owner_deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
@@ -97,7 +102,10 @@ async fn open_native_tcp_tunnel(
         ResidentTcpProbeDispatch::Vless => open_vless_native_tcp_tunnel(proxy, target).await,
         ResidentTcpProbeDispatch::Vmess => open_vmess_native_tcp_tunnel(proxy, target).await,
         ResidentTcpProbeDispatch::Trojan => open_trojan_native_tcp_tunnel(proxy, target).await,
-        ResidentTcpProbeDispatch::AnyTls => open_frame_tls_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::AnyTls => {
+            open_frame_tls_native_tcp_tunnel(proxy, target, anytls_owner_registry, owner_deadline)
+                .await
+        }
         ResidentTcpProbeDispatch::Shadowsocks => {
             open_shadowsocks_native_tcp_tunnel(proxy, target).await
         }

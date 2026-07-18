@@ -22,6 +22,7 @@ impl UdpSessionExecutor {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -31,6 +32,7 @@ impl UdpSessionExecutor {
         owner_registry: Hysteria2OwnerRegistryHandle,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Self {
         if original_dst.port() == DNS_DEFAULT_PORT {
             return Self::Dns;
@@ -40,6 +42,7 @@ impl UdpSessionExecutor {
             owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
+            anytls_owner_registry,
         )
     }
 
@@ -48,12 +51,14 @@ impl UdpSessionExecutor {
         owner_registry: Hysteria2OwnerRegistryHandle,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Self {
         Self::new_proxy_packet_with_optional_transport_owner(
             proxy,
             Some(owner_registry),
             tuic_owner_registry,
             juicity_owner_registry,
+            anytls_owner_registry,
         )
     }
 
@@ -62,6 +67,7 @@ impl UdpSessionExecutor {
         owner_registry: Option<Hysteria2OwnerRegistryHandle>,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Self {
         if let Some(reason) = resident_udp_chain_admission(&proxy).unsupported_reason() {
             return Self::fail_closed(reason);
@@ -115,9 +121,12 @@ impl UdpSessionExecutor {
                 ResidentUdpExecutorFactory::Vmess(transport),
             ) => Self::new_vmess(id, transport),
             (
-                ResidentProxyProtocolPlan::AnyTlsTcpTls { auth },
+                ResidentProxyProtocolPlan::AnyTlsTcpTls { .. },
                 ResidentUdpExecutorFactory::AnyTlsPacketStream,
-            ) => Self::AnyTls(AnyTlsPacketStreamSession::new(auth.clone())),
+            ) => Self::AnyTls(AnyTlsPacketStreamSession::new(
+                Arc::clone(&proxy),
+                anytls_owner_registry,
+            )),
             (
                 ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. },
                 ResidentUdpExecutorFactory::Hysteria2Datagram,

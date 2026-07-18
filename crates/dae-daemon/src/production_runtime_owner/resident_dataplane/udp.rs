@@ -7,9 +7,10 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use super::{
-    Hysteria2OwnerRegistryHandle, Hysteria2UdpSessionLease, JuicityOwnerRegistryHandle,
-    JuicityTransportLease, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    TuicOwnerRegistryHandle, TuicUdpAssociationLease,
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle,
+    Hysteria2UdpSessionLease, JuicityOwnerRegistryHandle, JuicityTransportLease,
+    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
+    TuicUdpAssociationLease,
 };
 
 use bytes::Bytes;
@@ -22,7 +23,7 @@ use dae_outbound::juicity::decode_stream_packet_frame;
 #[cfg(test)]
 use dae_outbound::tuic::decode_tuic_udp_packet;
 use dae_outbound::{
-    anytls::{contract as anytls_contract, link as anytls_link},
+    anytls::link as anytls_link,
     hysteria2::{
         HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage, encode_hysteria2_udp_message,
         fragment_hysteria2_udp_message,
@@ -114,6 +115,8 @@ mod session_executor;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::clear_connect_udp_h2_pools;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::clear_connect_udp_h3_pools;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::connect_udp_pool_metrics_snapshot;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::exercise_anytls_udp_stream_session;
 #[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::exercise_juicity_udp_stream_session;
 use self::session_executor::*;

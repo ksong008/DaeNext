@@ -344,7 +344,8 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
                 ),
                 forwarders.tuic_owner_registry.clone(),
                 forwarders.juicity_owner_registry.clone(),
-            ),
+            )
+            .with_anytls(forwarders.anytls_owner_registry.clone()),
             context,
         )
         .await

@@ -124,12 +124,18 @@ mod juicity_owner;
 pub(crate) use self::juicity_owner::{
     JuicityOwnerRegistryHandle, JuicityTransportLease, start_juicity_owner_registry,
 };
+#[path = "runtime/anytls_owner.rs"]
+mod anytls_owner;
+pub(crate) use self::anytls_owner::{
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, start_anytls_owner_registry,
+};
 
 #[derive(Clone, Default)]
 pub(crate) struct ResidentTransportOwnerRegistries {
     hysteria2: Option<Hysteria2OwnerRegistryHandle>,
     tuic: Option<TuicOwnerRegistryHandle>,
     juicity: Option<JuicityOwnerRegistryHandle>,
+    anytls: Option<AnyTlsOwnerRegistryHandle>,
 }
 
 impl ResidentTransportOwnerRegistries {
@@ -142,7 +148,13 @@ impl ResidentTransportOwnerRegistries {
             hysteria2,
             tuic,
             juicity,
+            anytls: None,
         }
+    }
+
+    pub(crate) fn with_anytls(mut self, anytls: Option<AnyTlsOwnerRegistryHandle>) -> Self {
+        self.anytls = anytls;
+        self
     }
 
     pub(crate) fn hysteria2(&self) -> Option<Hysteria2OwnerRegistryHandle> {
@@ -156,7 +168,14 @@ impl ResidentTransportOwnerRegistries {
     pub(crate) fn juicity(&self) -> Option<JuicityOwnerRegistryHandle> {
         self.juicity.clone()
     }
+
+    pub(crate) fn anytls(&self) -> Option<AnyTlsOwnerRegistryHandle> {
+        self.anytls.clone()
+    }
 }
+#[cfg(test)]
+#[path = "runtime/anytls_owner_live_tests.rs"]
+mod anytls_owner_live_tests;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 #[cfg(test)]

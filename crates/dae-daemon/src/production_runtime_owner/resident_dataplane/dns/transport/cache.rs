@@ -222,7 +222,8 @@ impl ResidentDnsForwarderCache {
                         self.hysteria2_owner_registry.clone(),
                         self.tuic_owner_registry.clone(),
                         self.juicity_owner_registry.clone(),
-                    ),
+                    )
+                    .with_anytls(self.anytls_owner_registry.clone()),
                     bridge: None,
                     endpoint: None,
                     connection: None,
@@ -272,7 +273,8 @@ impl ResidentDnsForwarderCache {
                         self.hysteria2_owner_registry.clone(),
                         self.tuic_owner_registry.clone(),
                         self.juicity_owner_registry.clone(),
-                    ),
+                    )
+                    .with_anytls(self.anytls_owner_registry.clone()),
                     metrics: Arc::clone(&self.metrics),
                     bridge: None,
                     endpoint: None,
@@ -383,7 +385,8 @@ impl ResidentDnsForwarderCache {
                         self.hysteria2_owner_registry.clone(),
                         self.tuic_owner_registry.clone(),
                         self.juicity_owner_registry.clone(),
-                    ),
+                    )
+                    .with_anytls(self.anytls_owner_registry.clone()),
                 )
                 .map(Arc::new)
             },
@@ -426,7 +429,8 @@ impl ResidentDnsForwarderCache {
                         self.hysteria2_owner_registry.clone(),
                         self.tuic_owner_registry.clone(),
                         self.juicity_owner_registry.clone(),
-                    ),
+                    )
+                    .with_anytls(self.anytls_owner_registry.clone()),
                 )
                 .map(Arc::new)
             },

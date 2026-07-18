@@ -65,6 +65,22 @@ pub(super) fn shutdown_resident_runtime_owner(
             && juicity_owners["activeBuilds"].as_u64() == Some(0)
             && juicity_owners["activeLogicalLeases"].as_u64() == Some(0)
             && juicity_owners["shutdownTimedOut"].as_bool() == Some(false));
+    let anytls_owners = owner
+        .anytls_owner_registry
+        .as_ref()
+        .map(AnyTlsOwnerRegistryHandle::metrics_snapshot)
+        .unwrap_or(Value::Null);
+    let anytls_owners_released = anytls_owners.is_null()
+        || (anytls_owners["registeredKeys"].as_u64() == Some(0)
+            && anytls_owners["registeredPhysicalSessions"].as_u64() == Some(0)
+            && anytls_owners["activePhysicalSessions"].as_u64() == Some(0)
+            && anytls_owners["idlePhysicalSessions"].as_u64() == Some(0)
+            && anytls_owners["activeLogicalStreams"].as_u64() == Some(0)
+            && anytls_owners["currentLogicalBufferBytes"].as_u64() == Some(0)
+            && anytls_owners["ownerStateBytesLowerBound"].as_u64() == Some(0)
+            && anytls_owners["ownerPaddingSchemeBytes"].as_u64() == Some(0)
+            && anytls_owners["activeBuilds"].as_u64() == Some(0)
+            && anytls_owners["shutdownTimedOut"].as_bool() == Some(false));
     let shutdown_elapsed_ns = elapsed_nanos(started);
     let shutdown_passed = task_shutdown.panicked == 0
         && task_shutdown.timed_out == 0
@@ -72,6 +88,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         && hysteria2_owners_released
         && tuic_owners_released
         && juicity_owners_released
+        && anytls_owners_released
         && owned_cleanup["status"].as_str() == Some("pass")
         && event_writer["status"].as_str() == Some("pass");
 
@@ -98,6 +115,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         "hysteria2_owners": hysteria2_owners,
         "tuic_owners": tuic_owners,
         "juicity_owners": juicity_owners,
+        "anytls_owners": anytls_owners,
         "owned_cleanup": owned_cleanup,
         "runtime_handle_owner": "resident-runtime-owner",
         "manual_probe_runtime_available": true,

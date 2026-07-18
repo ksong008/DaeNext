@@ -25,6 +25,7 @@ pub(super) struct ResidentHealthScheduleContext {
     pub(super) hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     pub(super) tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     pub(super) juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    pub(super) anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 }
 
 struct ResidentHealthRoundGuard {
@@ -72,6 +73,7 @@ pub(super) async fn run_resident_health_group_schedule(
         hysteria2_owner_registry,
         tuic_owner_registry,
         juicity_owner_registry,
+        anytls_owner_registry,
     } = context;
     let interval = group.check_interval();
     let initial_jitter =
@@ -108,7 +110,8 @@ pub(super) async fn run_resident_health_group_schedule(
             hysteria2_owner_registry.clone(),
             tuic_owner_registry.clone(),
             juicity_owner_registry.clone(),
-        ),
+        )
+        .with_anytls(anytls_owner_registry.clone()),
     )
     .await;
     group.complete_health_bootstrap(bootstrap_status.is_cancelled());
@@ -132,7 +135,8 @@ pub(super) async fn run_resident_health_group_schedule(
                 hysteria2_owner_registry.clone(),
                 tuic_owner_registry.clone(),
                 juicity_owner_registry.clone(),
-            ),
+            )
+            .with_anytls(anytls_owner_registry.clone()),
         )
         .await;
         if status.is_cancelled() {
@@ -157,6 +161,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) {
     loop {
         let request = tokio::select! {
@@ -183,7 +188,8 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
                 hysteria2_owner_registry.clone(),
                 tuic_owner_registry.clone(),
                 juicity_owner_registry.clone(),
-            ),
+            )
+            .with_anytls(anytls_owner_registry.clone()),
         )
         .await
         .is_cancelled()

@@ -237,6 +237,7 @@ impl ResidentRuntimeResourceConfig {
             QuicUdpDatagramResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         let hysteria2 =
             Hysteria2OwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
+        let anytls = AnyTlsOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         json!({
             "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 1,
@@ -289,6 +290,22 @@ impl ResidentRuntimeResourceConfig {
                 "portHopResolvedCandidateLimit": hysteria2.port_hop_resolved_candidate_limit(),
                 "portHopTransitionSocketLimit": hysteria2.port_hop_transition_socket_limit(),
                 "scope": "one generation and normalized node identity per shared Hysteria2 QUIC and H3 owner",
+            },
+            "anytlsOwners": {
+                "profileSource": "runtimeProfile",
+                "ownerLimit": anytls.owner_limit(),
+                "physicalSessionLimit": anytls.physical_session_limit(),
+                "physicalSessionsPerOwner": anytls.physical_sessions_per_owner(),
+                "commandQueueDepth": anytls.command_queue_depth(),
+                "physicalControlQueueDepth": anytls.physical_control_queue_depth(),
+                "logicalBufferBytesPerDirection": anytls.logical_buffer_bytes(),
+                "idleSessionsPerOwner": anytls.idle_session_limit(),
+                "idleSessionTimeoutMs": anytls.idle_session_timeout().as_millis(),
+                "idleProbeThresholdMs": anytls.idle_probe_threshold().as_millis(),
+                "idleProbeTimeoutMs": anytls.idle_probe_timeout().as_millis(),
+                "sidQuarantineLimit": anytls.sid_quarantine_limit(),
+                "sidQuarantineTtlMs": anytls.sid_quarantine_ttl().as_millis(),
+                "scope": "one generation and complete AnyTLS physical-session identity; one active logical SID per physical session",
             },
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),

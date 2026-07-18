@@ -307,6 +307,7 @@ fn create_proxy_session(
         hysteria2_owner_registry: context.hysteria2_owner_registry.clone(),
         tuic_owner_registry: context.tuic_owner_registry.clone(),
         juicity_owner_registry: context.juicity_owner_registry.clone(),
+        anytls_owner_registry: context.anytls_owner_registry.clone(),
     };
     let handle = spawn_udp_session_actor(
         key.clone(),
