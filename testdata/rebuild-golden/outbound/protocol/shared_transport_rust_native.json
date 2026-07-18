@@ -43,7 +43,6 @@
     "backoff": 1.5,
     "clean_cache_hook": "CleanGlobalRoundTripperCache",
     "default_alpn": [
-      "h2",
       "http/1.1"
     ],
     "initial_polling_ms": 100,

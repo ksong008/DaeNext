@@ -24,6 +24,7 @@ fn builder_witnesses_protocol_specific_meek_and_h2_rows() {
     reality_meek.flow.clear();
     reality_meek.host.clear();
     reality_meek.path = "https://meek.fixture.invalid/resource".to_owned();
+    reality_meek.alpn = dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned();
     assert_witness(
         "vless-meek-reality-stream-wrapper",
         reality_meek.export_url(),

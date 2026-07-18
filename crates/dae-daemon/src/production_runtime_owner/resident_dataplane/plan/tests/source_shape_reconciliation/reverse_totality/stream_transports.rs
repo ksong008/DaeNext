@@ -20,6 +20,7 @@ fn meek_tls_and_reality_variants_have_exact_dispositions() {
         link.flow.clear();
         link.host.clear();
         link.path = meek_url();
+        link.alpn = dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned();
         link.fingerprint = fingerprint.to_owned();
         let source = link.export_url();
         let shape = assert_exact_source(
