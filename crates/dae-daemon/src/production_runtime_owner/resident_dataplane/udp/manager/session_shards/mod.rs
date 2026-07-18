@@ -48,6 +48,7 @@ struct ResidentUdpSessionShardContext {
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 }
 
 #[derive(Clone)]
@@ -78,6 +79,7 @@ impl ResidentUdpSessionShardPool {
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Self {
         let shard_count = runtime_config.runtime_shards.max(1);
         let queue_depth = runtime_config.per_shard_dispatch_queue_depth();
@@ -97,6 +99,7 @@ impl ResidentUdpSessionShardPool {
             hysteria2_owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
+            anytls_owner_registry,
         };
         let mut senders = Vec::with_capacity(shard_count);
         let mut stops = Vec::with_capacity(shard_count);

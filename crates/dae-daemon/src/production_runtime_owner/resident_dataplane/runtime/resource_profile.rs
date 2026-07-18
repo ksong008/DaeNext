@@ -110,6 +110,24 @@ const HIGH_PERFORMANCE_JUICITY_OWNER_COMMAND_QUEUE_DEPTH: usize = 512;
 const LOW_MEMORY_JUICITY_RETRY_COOLDOWN_SECONDS: u64 = 5;
 const BALANCED_JUICITY_RETRY_COOLDOWN_SECONDS: u64 = 3;
 const HIGH_PERFORMANCE_JUICITY_RETRY_COOLDOWN_SECONDS: u64 = 1;
+const LOW_MEMORY_ANYTLS_OWNER_LIMIT: usize = 8;
+const BALANCED_ANYTLS_OWNER_LIMIT: usize = 32;
+const HIGH_PERFORMANCE_ANYTLS_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_ANYTLS_COMMAND_QUEUE_DEPTH: usize = 64;
+const BALANCED_ANYTLS_COMMAND_QUEUE_DEPTH: usize = 256;
+const HIGH_PERFORMANCE_ANYTLS_COMMAND_QUEUE_DEPTH: usize = 1_024;
+const ANYTLS_PHYSICAL_CONTROL_QUEUE_DEPTH: usize = 1;
+const LOW_MEMORY_ANYTLS_LOGICAL_BUFFER_BYTES: usize = 64 * 1024;
+const BALANCED_ANYTLS_LOGICAL_BUFFER_BYTES: usize = 128 * 1024;
+const HIGH_PERFORMANCE_ANYTLS_LOGICAL_BUFFER_BYTES: usize = 256 * 1024;
+const LOW_MEMORY_ANYTLS_SID_QUARANTINE_LIMIT: usize = 128;
+const BALANCED_ANYTLS_SID_QUARANTINE_LIMIT: usize = 1_024;
+const HIGH_PERFORMANCE_ANYTLS_SID_QUARANTINE_LIMIT: usize = 4_096;
+const ANYTLS_IDLE_SESSION_LIMIT: usize = 1;
+const ANYTLS_IDLE_SESSION_TIMEOUT_SECONDS: u64 = 30;
+const ANYTLS_IDLE_SESSION_PROBE_THRESHOLD_SECONDS: u64 = 3;
+const ANYTLS_IDLE_SESSION_PROBE_TIMEOUT_SECONDS: u64 = 2;
+const ANYTLS_SID_QUARANTINE_TTL_SECONDS: u64 = 10;
 const LOW_MEMORY_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 64;
 const BALANCED_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 256;
 const HIGH_PERFORMANCE_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 1_024;
@@ -224,6 +242,129 @@ pub(crate) struct JuicityOwnerResourceProfile {
     reserved_streams_per_connection: usize,
     command_queue_depth: usize,
     retry_cooldown: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AnyTlsOwnerResourceProfile {
+    owner_limit: usize,
+    physical_session_limit: usize,
+    physical_sessions_per_owner: usize,
+    command_queue_depth: usize,
+    logical_buffer_bytes: usize,
+    idle_session_limit: usize,
+    idle_session_timeout: Duration,
+    idle_probe_threshold: Duration,
+    idle_probe_timeout: Duration,
+    sid_quarantine_limit: usize,
+    sid_quarantine_ttl: Duration,
+}
+
+impl AnyTlsOwnerResourceProfile {
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        match profile {
+            ResidentRuntimeProfile::LowMemory => Self::new(
+                LOW_MEMORY_ANYTLS_OWNER_LIMIT,
+                LOW_MEMORY_TCP_CONNECTION_LIMIT + LOW_MEMORY_UDP_SESSION_LIMIT,
+                LOW_MEMORY_ANYTLS_COMMAND_QUEUE_DEPTH,
+                LOW_MEMORY_ANYTLS_LOGICAL_BUFFER_BYTES,
+                LOW_MEMORY_ANYTLS_SID_QUARANTINE_LIMIT,
+            ),
+            ResidentRuntimeProfile::Balanced => Self::new(
+                BALANCED_ANYTLS_OWNER_LIMIT,
+                BALANCED_TCP_CONNECTION_LIMIT + BALANCED_UDP_SESSION_LIMIT,
+                BALANCED_ANYTLS_COMMAND_QUEUE_DEPTH,
+                BALANCED_ANYTLS_LOGICAL_BUFFER_BYTES,
+                BALANCED_ANYTLS_SID_QUARANTINE_LIMIT,
+            ),
+            ResidentRuntimeProfile::HighPerformance => Self::new(
+                HIGH_PERFORMANCE_ANYTLS_OWNER_LIMIT,
+                HIGH_PERFORMANCE_TCP_CONNECTION_LIMIT + HIGH_PERFORMANCE_UDP_SESSION_LIMIT,
+                HIGH_PERFORMANCE_ANYTLS_COMMAND_QUEUE_DEPTH,
+                HIGH_PERFORMANCE_ANYTLS_LOGICAL_BUFFER_BYTES,
+                HIGH_PERFORMANCE_ANYTLS_SID_QUARANTINE_LIMIT,
+            ),
+        }
+    }
+
+    const fn new(
+        owner_limit: usize,
+        physical_session_limit: usize,
+        command_queue_depth: usize,
+        logical_buffer_bytes: usize,
+        sid_quarantine_limit: usize,
+    ) -> Self {
+        Self {
+            owner_limit,
+            physical_session_limit,
+            physical_sessions_per_owner: physical_session_limit,
+            command_queue_depth,
+            logical_buffer_bytes,
+            idle_session_limit: ANYTLS_IDLE_SESSION_LIMIT,
+            idle_session_timeout: Duration::from_secs(ANYTLS_IDLE_SESSION_TIMEOUT_SECONDS),
+            idle_probe_threshold: Duration::from_secs(ANYTLS_IDLE_SESSION_PROBE_THRESHOLD_SECONDS),
+            idle_probe_timeout: Duration::from_secs(ANYTLS_IDLE_SESSION_PROBE_TIMEOUT_SECONDS),
+            sid_quarantine_limit,
+            sid_quarantine_ttl: Duration::from_secs(ANYTLS_SID_QUARANTINE_TTL_SECONDS),
+        }
+    }
+
+    pub(crate) fn selected() -> Self {
+        static SELECTED: std::sync::OnceLock<AnyTlsOwnerResourceProfile> =
+            std::sync::OnceLock::new();
+        *SELECTED.get_or_init(|| {
+            Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+        })
+    }
+
+    pub(crate) const fn owner_limit(self) -> usize {
+        self.owner_limit
+    }
+    pub(crate) const fn physical_session_limit(self) -> usize {
+        self.physical_session_limit
+    }
+    pub(crate) const fn physical_sessions_per_owner(self) -> usize {
+        self.physical_sessions_per_owner
+    }
+    pub(crate) const fn command_queue_depth(self) -> usize {
+        self.command_queue_depth
+    }
+    pub(crate) const fn physical_control_queue_depth(self) -> usize {
+        ANYTLS_PHYSICAL_CONTROL_QUEUE_DEPTH
+    }
+    pub(crate) const fn logical_buffer_bytes(self) -> usize {
+        self.logical_buffer_bytes
+    }
+    pub(crate) const fn idle_session_limit(self) -> usize {
+        self.idle_session_limit
+    }
+    pub(crate) const fn idle_session_timeout(self) -> Duration {
+        self.idle_session_timeout
+    }
+    pub(crate) const fn idle_probe_threshold(self) -> Duration {
+        self.idle_probe_threshold
+    }
+    pub(crate) const fn idle_probe_timeout(self) -> Duration {
+        self.idle_probe_timeout
+    }
+    pub(crate) const fn sid_quarantine_limit(self) -> usize {
+        self.sid_quarantine_limit
+    }
+    pub(crate) const fn sid_quarantine_ttl(self) -> Duration {
+        self.sid_quarantine_ttl
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_idle_policy_for_test(
+        mut self,
+        idle_session_timeout: Duration,
+        idle_probe_threshold: Duration,
+        idle_probe_timeout: Duration,
+    ) -> Self {
+        self.idle_session_timeout = idle_session_timeout;
+        self.idle_probe_threshold = idle_probe_threshold;
+        self.idle_probe_timeout = idle_probe_timeout;
+        self
+    }
 }
 
 impl JuicityOwnerResourceProfile {

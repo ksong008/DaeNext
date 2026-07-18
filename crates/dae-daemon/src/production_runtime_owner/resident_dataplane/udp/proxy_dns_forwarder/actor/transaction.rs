@@ -50,6 +50,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
     hysteria2_owner_registry: Option<&Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<&TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<&JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<&AnyTlsOwnerRegistryHandle>,
 ) -> Result<ProxyDnsRequestOutcome, ProxyDnsRequestError> {
     if let Err(error) = request.context.ensure(ProxyDnsRequestStage::Queued) {
         request.bytes.mark_expired();
@@ -189,6 +190,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
                 hysteria2_owner_registry.cloned(),
                 tuic_owner_registry.cloned(),
                 juicity_owner_registry.cloned(),
+                anytls_owner_registry.cloned(),
             ),
         ));
         metrics.proxy_dns_udp_executor_opened();

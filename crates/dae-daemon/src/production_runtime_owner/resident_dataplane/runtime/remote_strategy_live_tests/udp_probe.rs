@@ -47,6 +47,21 @@ pub(crate) fn resident_live_adapter_udp_probe(
     let juicity_owner_registry = juicity_owner_runtime
         .as_ref()
         .map(|(handle, _)| handle.clone());
+    let anytls_owner_runtime = node_shapes
+        .iter()
+        .any(|node| node.scheme.eq_ignore_ascii_case("anytls"))
+        .then(|| {
+            start_anytls_owner_registry(
+                0,
+                Arc::clone(&owner_stop),
+                owner_resources.tcp_flow_stack_bytes.value(),
+            )
+            .ok()
+        })
+        .flatten();
+    let anytls_owner_registry = anytls_owner_runtime
+        .as_ref()
+        .map(|(handle, _)| handle.clone());
     let rows = resident_live_adapter_matrix_entries()
         .iter()
         .map(|entry| {
@@ -74,6 +89,7 @@ pub(crate) fn resident_live_adapter_udp_probe(
                                 owner_registry.clone(),
                                 tuic_owner_registry.clone(),
                                 juicity_owner_registry.clone(),
+                                anytls_owner_registry.clone(),
                             )),
                             Err(_) => json!({
                                 "status": "fail",
@@ -127,6 +143,9 @@ pub(crate) fn resident_live_adapter_udp_probe(
         let _ = thread.join();
     }
     if let Some((_, thread)) = juicity_owner_runtime {
+        let _ = thread.join();
+    }
+    if let Some((_, thread)) = anytls_owner_runtime {
         let _ = thread.join();
     }
     let pass_count = rows

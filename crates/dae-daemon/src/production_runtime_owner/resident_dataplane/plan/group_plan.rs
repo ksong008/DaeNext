@@ -81,6 +81,12 @@ impl ResidentProxyProbePlan {
             ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
         )
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_anytls_transport_owner(
+        &self,
+    ) -> bool {
+        self.proxy.requires_anytls_transport_owner()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -472,6 +478,14 @@ impl ResidentProxyGroupPlan {
                 ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
             )
         })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_anytls_transport_owner(
+        &self,
+    ) -> bool {
+        self.candidates
+            .iter()
+            .any(|candidate| candidate.proxy.requires_anytls_transport_owner())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn requires_xhttp_xmux_owner(

@@ -24,6 +24,7 @@ pub(crate) fn resident_udp_loop(
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> Value {
     run_resident_udp_session_manager(
         socket,
@@ -44,5 +45,6 @@ pub(crate) fn resident_udp_loop(
         hysteria2_owner_registry,
         tuic_owner_registry,
         juicity_owner_registry,
+        anytls_owner_registry,
     )
 }

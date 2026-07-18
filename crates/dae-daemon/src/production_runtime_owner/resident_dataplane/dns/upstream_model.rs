@@ -134,6 +134,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<TuicOwnerRegistryHandle>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) juicity_owner_registry:
         Option<JuicityOwnerRegistryHandle>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) anytls_owner_registry:
+        Option<AnyTlsOwnerRegistryHandle>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) closing:
         std::sync::atomic::AtomicBool,
 }
@@ -154,6 +156,7 @@ impl Default for ResidentDnsForwarderCache {
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
             juicity_owner_registry: None,
+            anytls_owner_registry: None,
             closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -176,6 +179,7 @@ impl ResidentDnsForwarderCache {
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
             juicity_owner_registry: None,
+            anytls_owner_registry: None,
             closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -186,11 +190,13 @@ impl ResidentDnsForwarderCache {
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Self {
         let mut cache = Self::new(udp_runtime, metrics);
         cache.hysteria2_owner_registry = Some(hysteria2_owner_registry);
         cache.tuic_owner_registry = tuic_owner_registry;
         cache.juicity_owner_registry = juicity_owner_registry;
+        cache.anytls_owner_registry = anytls_owner_registry;
         cache
     }
 

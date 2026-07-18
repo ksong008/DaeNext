@@ -146,6 +146,15 @@ impl ResidentProxyPlan {
                 .is_some_and(|parent| parent.requires_xhttp_xmux_owner())
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_anytls_transport_owner(
+        &self,
+    ) -> bool {
+        matches!(
+            &self.handler,
+            ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
+        )
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn compact_allocations(&mut self) {
         compact_string(&mut self.graph_id);
         compact_string(&mut self.graph_link_hash);

@@ -278,6 +278,8 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     Arc::clone(&stop),
                     &sniff,
                     &metrics,
+                    router.anytls_owner_registry.as_ref(),
+                    None,
                 )
                 .await
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Quic {

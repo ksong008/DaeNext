@@ -1,4 +1,5 @@
 use super::*;
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_frame_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
@@ -7,6 +8,8 @@ pub(crate) async fn handle_frame_tls_tcp_connection_async(
     stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
+    anytls_owner_registry: Option<&AnyTlsOwnerRegistryHandle>,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<Value, String> {
     let wrapper = selection.proxy.execution_plan().wrapper;
     match &selection.proxy.handler {
@@ -90,8 +93,7 @@ pub(crate) async fn handle_frame_tls_tcp_connection_async(
             )
             .await
         }
-        ResidentProxyProtocolPlan::AnyTlsTcpTls { auth } => {
-            let auth = auth.clone();
+        ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => {
             handle_anytls_tls_tcp_connection_async(
                 inbound,
                 peer,
@@ -100,7 +102,8 @@ pub(crate) async fn handle_frame_tls_tcp_connection_async(
                 stop,
                 sniff,
                 metrics,
-                &auth,
+                anytls_owner_registry,
+                owner_deadline,
             )
             .await
         }

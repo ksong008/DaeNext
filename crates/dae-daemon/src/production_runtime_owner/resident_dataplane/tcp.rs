@@ -14,9 +14,10 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use super::{
-    Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle,
-    ResidentStopSignal, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    TuicOwnerRegistryHandle, reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle,
+    Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle, ResidentStopSignal,
+    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
+    reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
 };
 
 use bytes::Bytes;
@@ -31,7 +32,7 @@ use dae_ebpf_support::{
 #[cfg(test)]
 use dae_outbound::hysteria2::build_hysteria2_runtime_client_config_with_udp_overhead;
 use dae_outbound::{
-    anytls::{AnyTlsFrame, contract as anytls_contract, link as anytls_link},
+    anytls::{AnyTlsFrame, contract as anytls_contract},
     http_proxy::{HttpConnectOptions, request as http_request},
     hysteria2::{
         HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD, Hysteria2CongestionRuntime,
@@ -170,8 +171,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::proxy_disp
     inherit_quic_endpoint_observation, open_hysteria2_quic_connection_candidates_async,
     open_juicity_quic_connection_candidates_async, open_marked_quic_endpoint_for_remote,
     open_tuic_quic_connection_candidates_async, quic_endpoint_metrics_snapshot,
-    relay_tcp_over_anytls_async, scope_quic_endpoint_observation, wait_anytls_synack,
-    write_anytls_frame,
+    scope_quic_endpoint_observation,
 };
 mod plain_handlers;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::plain_handlers::http_proxy_connect_async;

@@ -42,6 +42,7 @@ pub(crate) async fn fetch_resident_proxy_http_response_async(
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> Result<Vec<u8>, String> {
     let sniff_payload = if tls { Vec::new() } else { request.to_vec() };
     exchange_resident_proxy_tcp_stream_async(
@@ -54,6 +55,7 @@ pub(crate) async fn fetch_resident_proxy_http_response_async(
         hysteria2_owner_registry,
         tuic_owner_registry,
         juicity_owner_registry,
+        anytls_owner_registry,
         |client| async move {
             if tls {
                 fetch_resident_proxy_https_response_async(
@@ -121,6 +123,7 @@ pub(crate) async fn exchange_resident_proxy_tcp_stream_async<F, Fut>(
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     exchange: F,
 ) -> Result<Vec<u8>, String>
 where
@@ -153,6 +156,7 @@ where
         hysteria2_owner_registry,
         tuic_owner_registry,
         juicity_owner_registry,
+        anytls_owner_registry,
         Some(owner_deadline),
     );
 
@@ -189,6 +193,7 @@ fn start_resident_proxy_tcp_handler(
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> ResidentProxyTcpHandlerGuard {
     let selection = TcpProxySelection {
@@ -249,6 +254,8 @@ fn start_resident_proxy_tcp_handler(
                 handler_stop,
                 &sniff,
                 &handler_metrics,
+                anytls_owner_registry.as_ref(),
+                owner_deadline,
             )
             .await
         } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Quic {

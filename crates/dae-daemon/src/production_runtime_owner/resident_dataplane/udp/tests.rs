@@ -1,6 +1,6 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
-mod tests {
+pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -215,6 +215,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await;
             assert_eq!(result["status"], "protocol-closed");
@@ -248,6 +249,7 @@ mod tests {
         let bridge = open_resident_proxy_udp_bridge_async(
             Arc::new(proxy),
             original_dst,
+            None,
             None,
             None,
             None,
@@ -896,7 +898,9 @@ mod tests {
         }
     }
 
-    fn test_udp_proxy(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn test_udp_proxy(
+        handler: ResidentProxyProtocolPlan,
+    ) -> ResidentProxyPlan {
         ResidentProxyPlan {
             graph_id: "resident-graph:redacted".to_owned(),
             graph_link_hash: "sha256:redacted".to_owned(),
