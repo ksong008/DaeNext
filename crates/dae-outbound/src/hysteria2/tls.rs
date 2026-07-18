@@ -17,6 +17,8 @@ pub const DEFAULT_HYSTERIA2_ALPN: &str = Hysteria2ApplicationProtocol::Http3.wir
 pub const DEFAULT_HYSTERIA2_SERVER_NAME: &str = "localhost";
 pub const DEFAULT_HYSTERIA2_KEEPALIVE_SECS: u64 = 10;
 pub const DEFAULT_HYSTERIA2_MAX_IDLE_TIMEOUT_SECS: u64 = 30;
+pub const DEFAULT_HYSTERIA2_MTU_DISCOVERY_UPPER_BOUND: u16 = 1452;
+const HYSTERIA2_MINIMUM_QUIC_UDP_PAYLOAD: u16 = 1200;
 
 pub(super) fn build_hysteria2_server_config(
     server_name: &str,
@@ -36,12 +38,19 @@ pub(super) fn build_hysteria2_server_config(
         QuicServerConfig::try_from(crypto)
             .map_err(|err| bad_tls(format!("Hysteria2 server QUIC TLS: {err}")))?,
     ));
-    config.transport_config(Arc::new(hysteria2_transport_config()?));
+    config.transport_config(Arc::new(hysteria2_transport_config(0)?));
     Ok((config, cert_der))
 }
 
 pub fn build_hysteria2_runtime_client_config(
     identity: &Hysteria2TlsIdentity,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    build_hysteria2_runtime_client_config_with_udp_overhead(identity, 0)
+}
+
+pub fn build_hysteria2_runtime_client_config_with_udp_overhead(
+    identity: &Hysteria2TlsIdentity,
+    udp_packet_overhead: usize,
 ) -> Result<quinn::ClientConfig, OutboundError> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -50,7 +59,7 @@ pub fn build_hysteria2_runtime_client_config(
         QuicClientConfig::try_from(crypto)
             .map_err(|err| bad_tls(format!("Hysteria2 client QUIC TLS: {err}")))?,
     ));
-    config.transport_config(Arc::new(hysteria2_transport_config()?));
+    config.transport_config(Arc::new(hysteria2_transport_config(udp_packet_overhead)?));
     Ok(config)
 }
 
@@ -93,7 +102,9 @@ pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {
         .unwrap_or_default()
 }
 
-fn hysteria2_transport_config() -> Result<quinn::TransportConfig, OutboundError> {
+fn hysteria2_transport_config(
+    udp_packet_overhead: usize,
+) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
     transport.keep_alive_interval(Some(Duration::from_secs(DEFAULT_HYSTERIA2_KEEPALIVE_SECS)));
     transport.max_idle_timeout(Some(
@@ -103,7 +114,25 @@ fn hysteria2_transport_config() -> Result<quinn::TransportConfig, OutboundError>
     ));
     transport.datagram_receive_buffer_size(Some(64 * 1024));
     transport.datagram_send_buffer_size(64 * 1024);
+    let mtu_upper_bound = hysteria2_mtu_discovery_upper_bound(udp_packet_overhead)?;
+    let mut mtu_discovery = quinn::MtuDiscoveryConfig::default();
+    mtu_discovery.upper_bound(mtu_upper_bound);
+    transport.mtu_discovery_config(Some(mtu_discovery));
     Ok(transport)
+}
+
+fn hysteria2_mtu_discovery_upper_bound(udp_packet_overhead: usize) -> Result<u16, OutboundError> {
+    let udp_packet_overhead = u16::try_from(udp_packet_overhead)
+        .map_err(|_| bad_tls("Hysteria2 UDP packet overhead exceeds u16"))?;
+    let upper_bound = DEFAULT_HYSTERIA2_MTU_DISCOVERY_UPPER_BOUND
+        .checked_sub(udp_packet_overhead)
+        .ok_or_else(|| bad_tls("Hysteria2 UDP packet overhead exceeds MTU upper bound"))?;
+    if upper_bound < HYSTERIA2_MINIMUM_QUIC_UDP_PAYLOAD {
+        return Err(bad_tls(format!(
+            "Hysteria2 UDP packet overhead leaves QUIC MTU below {HYSTERIA2_MINIMUM_QUIC_UDP_PAYLOAD} bytes"
+        )));
+    }
+    Ok(upper_bound)
 }
 
 fn bad_tls(message: impl Into<String>) -> OutboundError {

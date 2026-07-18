@@ -32,7 +32,10 @@ pub use quic_loopback::{
 pub use runtime::{
     Hysteria2TcpResponseHead, read_hysteria2_tcp_response, write_hysteria2_tcp_request,
 };
-pub use tls::build_hysteria2_runtime_client_config;
+pub use tls::{
+    DEFAULT_HYSTERIA2_MTU_DISCOVERY_UPPER_BOUND, build_hysteria2_runtime_client_config,
+    build_hysteria2_runtime_client_config_with_udp_overhead,
+};
 pub use tls_policy::{
     Hysteria2ApplicationProtocol, Hysteria2CertificateVerification,
     Hysteria2ClientCertificateIdentity, Hysteria2EncryptedClientHelloIdentity,
