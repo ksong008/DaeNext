@@ -5,8 +5,10 @@ use std::task::Poll;
 use crate::production_runtime_owner::resident_dataplane::QuicUdpDatagramResourceProfile;
 
 mod fragment_buffer;
+mod hysteria2_datagram;
 mod packet_id;
 use self::fragment_buffer::{QuicUdpFragmentBuffer, QuicUdpFragmentOutcome};
+use self::hysteria2_datagram::send_hysteria2_udp_message;
 use self::packet_id::QuicUdpPacketIdAllocator;
 
 const TUIC_ASSOCIATION_IDENTITY_DOMAIN: &[u8] = b"tuic-v5-association";
@@ -45,6 +47,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria
     session_id: u32,
     fragments: QuicUdpFragmentBuffer,
     packet_ids: QuicUdpPacketIdAllocator,
+    resources: QuicUdpDatagramResourceProfile,
 }
 
 impl Hysteria2QuicDatagramSession {
@@ -68,6 +71,7 @@ impl Hysteria2QuicDatagramSession {
             session_id: fastrand::u32(1..=u32::MAX),
             fragments: QuicUdpFragmentBuffer::new(resources, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH),
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
+            resources,
         }
     }
 
@@ -83,11 +87,8 @@ impl Hysteria2QuicDatagramSession {
             .as_ref()
             .ok_or_else(|| "Hysteria2 QUIC connection is not initialized".to_owned())?;
         let request = Hysteria2UdpMessage::new(self.session_id, original_dst.to_string(), payload)
-            .and_then(|message| encode_hysteria2_udp_message(&message))
             .map_err(|err| format!("build Hysteria2 UDP datagram: {err}"))?;
-        connection
-            .send_datagram(Bytes::from(request))
-            .map_err(|err| format!("send Hysteria2 UDP datagram: {err}"))?;
+        send_hysteria2_udp_message(connection, &request, &mut self.packet_ids, self.resources)?;
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
         }

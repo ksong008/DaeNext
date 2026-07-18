@@ -18,7 +18,6 @@ use blake2::{
     digest::{Update, VariableOutput},
 };
 
-const HYSTERIA2_SALAMANDER_SALT_LEN: usize = 8;
 const HYSTERIA2_SALAMANDER_HASH_LEN: usize = 32;
 pub(crate) async fn relay_tcp_over_quic_stream_async(
     inbound: &mut TokioTcpStream,
@@ -309,8 +308,8 @@ impl quinn::AsyncUdpSocket for Hysteria2SalamanderUdpSocket {
 }
 
 fn salamander_obfuscate_packet(key: &[u8], payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(HYSTERIA2_SALAMANDER_SALT_LEN + payload.len());
-    let mut salt = [0_u8; HYSTERIA2_SALAMANDER_SALT_LEN];
+    let mut out = Vec::with_capacity(HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD + payload.len());
+    let mut salt = [0_u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD];
     if getrandom::fill(&mut salt).is_err() {
         fastrand::fill(&mut salt);
     }
@@ -344,16 +343,16 @@ fn salamander_deobfuscate_one(
     buf: &mut IoSliceMut<'_>,
     meta: &mut udp::RecvMeta,
 ) -> bool {
-    if meta.len <= HYSTERIA2_SALAMANDER_SALT_LEN || meta.len > buf.len() {
+    if meta.len <= HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD || meta.len > buf.len() {
         return false;
     }
     let raw = &mut buf[..meta.len];
-    let mut salt = [0_u8; HYSTERIA2_SALAMANDER_SALT_LEN];
-    salt.copy_from_slice(&raw[..HYSTERIA2_SALAMANDER_SALT_LEN]);
+    let mut salt = [0_u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD];
+    salt.copy_from_slice(&raw[..HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD]);
     let hash = salamander_hash(key, &salt);
-    let payload_len = raw.len() - HYSTERIA2_SALAMANDER_SALT_LEN;
+    let payload_len = raw.len() - HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD;
     for index in 0..payload_len {
-        raw[index] = raw[index + HYSTERIA2_SALAMANDER_SALT_LEN]
+        raw[index] = raw[index + HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD]
             ^ hash[index % HYSTERIA2_SALAMANDER_HASH_LEN];
     }
     meta.len = payload_len;
@@ -361,7 +360,7 @@ fn salamander_deobfuscate_one(
     true
 }
 
-fn salamander_hash(key: &[u8], salt: &[u8; HYSTERIA2_SALAMANDER_SALT_LEN]) -> [u8; 32] {
+fn salamander_hash(key: &[u8], salt: &[u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD]) -> [u8; 32] {
     let mut hasher =
         Blake2bVar::new(HYSTERIA2_SALAMANDER_HASH_LEN).expect("BLAKE2b-256 output length is valid");
     hasher.update(key);
@@ -490,9 +489,17 @@ mod tests {
     fn hysteria2_salamander_packet_wrapper_roundtrips_payload() {
         let key = b"obfs-secret";
         let payload = b"fixture-quic-packet";
+        assert_eq!(ResidentHysteria2ObfsPlan::none().udp_packet_overhead(), 0);
+        assert_eq!(
+            ResidentHysteria2ObfsPlan::salamander("fixture-key".to_owned()).udp_packet_overhead(),
+            HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD
+        );
         let packet = salamander_obfuscate_packet(key, payload);
-        assert_eq!(packet.len(), HYSTERIA2_SALAMANDER_SALT_LEN + payload.len());
-        assert_ne!(&packet[HYSTERIA2_SALAMANDER_SALT_LEN..], payload);
+        assert_eq!(
+            packet.len(),
+            HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD + payload.len()
+        );
+        assert_ne!(&packet[HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD..], payload);
 
         let mut storage = packet;
         let len = storage.len();
