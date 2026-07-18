@@ -27,7 +27,7 @@ fn cancellation_test_plan(runtime_generation: u64) -> ResidentXhttpXmuxPlan {
 fn start_test_owner(
     generation: u64,
 ) -> (XhttpXmuxGenerationOwnerHandle, std::thread::JoinHandle<()>) {
-    start_xhttp_xmux_generation_owner(generation, XHTTP_XMUX_TEST_OWNER_STACK_BYTES).unwrap()
+    start_xhttp_xmux_generation_owner(generation, XHTTP_XMUX_TEST_OWNER_STACK_BYTES, 1).unwrap()
 }
 
 fn stop_test_owner(

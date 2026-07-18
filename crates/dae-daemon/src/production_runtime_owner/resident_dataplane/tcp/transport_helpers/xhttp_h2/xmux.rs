@@ -37,6 +37,7 @@ struct XhttpXmuxGenerationOwner {
     runtime_generation: u64,
     closing: AtomicBool,
     runtime: tokio::runtime::Handle,
+    runtime_worker_threads: usize,
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     h2: XhttpH2GenerationManagers,
     h3: XhttpH3GenerationManagers,
@@ -49,12 +50,19 @@ pub(crate) struct XhttpXmuxGenerationOwnerHandle {
 
 impl XhttpXmuxGenerationOwnerHandle {
     pub(crate) fn metrics_snapshot(&self) -> Value {
+        let executor = if self.owner.runtime_worker_threads == 1 {
+            "current-thread"
+        } else {
+            "multi-thread"
+        };
         json!({
             "schemaVersion": 1,
             "owner": "generation-owned-xhttp-xmux",
             "reloadGeneration": self.owner.runtime_generation,
             "closing": self.owner.closing.load(Ordering::Acquire),
-            "persistentRuntime": "dedicated-current-thread",
+            "persistentRuntime": format!("dedicated-{executor}"),
+            "executor": executor,
+            "runtimeWorkerThreads": self.owner.runtime_worker_threads,
             "h2": self.owner.h2.metrics_snapshot(),
             "h3": self.owner.h3.metrics_snapshot(),
         })
@@ -64,17 +72,29 @@ impl XhttpXmuxGenerationOwnerHandle {
 pub(crate) fn start_xhttp_xmux_generation_owner(
     runtime_generation: u64,
     thread_stack_bytes: usize,
+    runtime_worker_threads: usize,
 ) -> Result<(XhttpXmuxGenerationOwnerHandle, JoinHandle<()>), String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| format!("build resident xHTTP xmux owner runtime: {err}"))?;
+    let runtime_worker_threads = runtime_worker_threads.max(1);
+    let runtime = if runtime_worker_threads == 1 {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(runtime_worker_threads)
+            .thread_name("resident-xhttp-xmux-runtime")
+            .thread_stack_size(thread_stack_bytes)
+            .enable_all()
+            .build()
+    }
+    .map_err(|err| format!("build resident xHTTP xmux owner runtime: {err}"))?;
     let runtime_handle = runtime.handle().clone();
     let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
     let owner = Arc::new(XhttpXmuxGenerationOwner {
         runtime_generation,
         closing: AtomicBool::new(false),
         runtime: runtime_handle,
+        runtime_worker_threads,
         shutdown: Mutex::new(Some(shutdown)),
         h2: XhttpH2GenerationManagers::new(),
         h3: XhttpH3GenerationManagers::new(),
@@ -398,5 +418,35 @@ mod tests {
         assert!(can_release_retiring_owner(
             usage.open_usage.load(Ordering::Acquire)
         ));
+    }
+
+    #[test]
+    fn xhttp_xmux_runtime_follows_the_normalized_worker_count() {
+        let current_generation = fastrand::u64(..);
+        let (current, current_thread) =
+            start_xhttp_xmux_generation_owner(current_generation, 1024 * 1024, 1).unwrap();
+        let current_metrics = current.metrics_snapshot();
+        assert_eq!(current_metrics["executor"], "current-thread");
+        assert_eq!(current_metrics["runtimeWorkerThreads"], 1);
+        assert_eq!(
+            current_metrics["persistentRuntime"],
+            "dedicated-current-thread"
+        );
+        assert!(
+            shutdown_xhttp_xmux_generation_owner(&current, current_thread, Duration::from_secs(1),)
+                .owner_thread_joined
+        );
+
+        let multi_generation = current_generation.wrapping_add(1);
+        let (multi, multi_thread) =
+            start_xhttp_xmux_generation_owner(multi_generation, 1024 * 1024, 2).unwrap();
+        let multi_metrics = multi.metrics_snapshot();
+        assert_eq!(multi_metrics["executor"], "multi-thread");
+        assert_eq!(multi_metrics["runtimeWorkerThreads"], 2);
+        assert_eq!(multi_metrics["persistentRuntime"], "dedicated-multi-thread");
+        assert!(
+            shutdown_xhttp_xmux_generation_owner(&multi, multi_thread, Duration::from_secs(1),)
+                .owner_thread_joined
+        );
     }
 }
