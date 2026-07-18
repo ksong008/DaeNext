@@ -11,6 +11,10 @@ pub(super) struct XhttpH2EndpointSender {
     pub(super) xmux_lease: Option<XhttpXmuxClientLease>,
 }
 
+type XhttpH2OwnerOpenFuture = Pin<
+    Box<dyn std::future::Future<Output = Result<XhttpH2EndpointSender, String>> + Send + 'static>,
+>;
+
 pub(super) async fn open_xhttp_h2_proxy_sender(
     proxy: &ResidentProxyPlan,
     endpoint: &ResidentXhttpEndpointPlan,
@@ -28,19 +32,23 @@ pub(super) async fn open_xhttp_h2_proxy_sender(
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
     let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, mptcp)?;
-    let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || async {
-        let client = open_async_vless_tls_client_with_flow_at_candidates(
-            proxy,
-            resolved.candidates(),
-            mark,
-            mptcp,
-        )
-        .await?;
-        let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
-        Ok(XhttpH2EndpointSender {
-            sender,
-            connection_task: Some(connection_task),
-            xmux_lease: None,
+    let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || -> XhttpH2OwnerOpenFuture {
+        let owner_proxy = proxy.clone();
+        let owner_candidates = resolved.candidates().to_vec();
+        Box::pin(async move {
+            let client = open_async_vless_tls_client_with_flow_at_candidates(
+                &owner_proxy,
+                &owner_candidates,
+                mark,
+                mptcp,
+            )
+            .await?;
+            let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            Ok(XhttpH2EndpointSender {
+                sender,
+                connection_task: Some(connection_task),
+                xmux_lease: None,
+            })
         })
     })
     .await?;
@@ -68,19 +76,23 @@ pub(super) async fn open_xhttp_h2_endpoint_sender(
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
     let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, mptcp)?;
-    let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || async {
-        let client = open_async_xhttp_endpoint_tls_client_at_candidates(
-            endpoint,
-            resolved.candidates(),
-            mark,
-            mptcp,
-        )
-        .await?;
-        let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
-        Ok(XhttpH2EndpointSender {
-            sender,
-            connection_task: Some(connection_task),
-            xmux_lease: None,
+    let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || -> XhttpH2OwnerOpenFuture {
+        let owner_endpoint = endpoint.clone();
+        let owner_candidates = resolved.candidates().to_vec();
+        Box::pin(async move {
+            let client = open_async_xhttp_endpoint_tls_client_at_candidates(
+                &owner_endpoint,
+                &owner_candidates,
+                mark,
+                mptcp,
+            )
+            .await?;
+            let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            Ok(XhttpH2EndpointSender {
+                sender,
+                connection_task: Some(connection_task),
+                xmux_lease: None,
+            })
         })
     })
     .await?;

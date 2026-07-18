@@ -474,6 +474,14 @@ impl ResidentProxyGroupPlan {
         })
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_xhttp_xmux_owner(
+        &self,
+    ) -> bool {
+        self.candidates
+            .iter()
+            .any(|candidate| candidate.proxy.requires_xhttp_xmux_owner())
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn annotation_latency_offset_count(
         &self,
     ) -> usize {

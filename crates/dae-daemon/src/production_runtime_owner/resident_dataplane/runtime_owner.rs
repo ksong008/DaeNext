@@ -25,6 +25,8 @@ pub(crate) struct ResidentRuntimeOwner {
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    xhttp_xmux_generation_owner: Option<tcp::XhttpXmuxGenerationOwnerHandle>,
+    xhttp_xmux_owner_thread: Option<JoinHandle<()>>,
 }
 
 #[derive(Clone)]
@@ -81,6 +83,8 @@ impl ResidentRuntimeOwner {
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
             juicity_owner_registry: None,
+            xhttp_xmux_generation_owner: None,
+            xhttp_xmux_owner_thread: None,
         }
     }
 
@@ -125,6 +129,27 @@ impl ResidentRuntimeOwner {
 
     pub(crate) fn juicity_owner_registry(&self) -> Option<JuicityOwnerRegistryHandle> {
         self.juicity_owner_registry.clone()
+    }
+
+    pub(crate) fn install_xhttp_xmux_generation_owner(
+        &mut self,
+        handle: tcp::XhttpXmuxGenerationOwnerHandle,
+        thread: JoinHandle<()>,
+    ) {
+        self.xhttp_xmux_generation_owner = Some(handle);
+        self.xhttp_xmux_owner_thread = Some(thread);
+    }
+
+    pub(crate) fn shutdown_xhttp_xmux_generation_owner(
+        &mut self,
+    ) -> Option<tcp::XhttpXmuxClearReport> {
+        let handle = self.xhttp_xmux_generation_owner.take()?;
+        let thread = self.xhttp_xmux_owner_thread.take()?;
+        Some(tcp::shutdown_xhttp_xmux_generation_owner(
+            &handle,
+            thread,
+            RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+        ))
     }
 
     pub(crate) fn stop_handle(&self) -> SharedResidentStopSignal {
@@ -220,6 +245,7 @@ impl ResidentRuntimeOwner {
             "hysteria2Owners": self.hysteria2_owner_registry.as_ref().map(Hysteria2OwnerRegistryHandle::metrics_snapshot),
             "tuicOwners": self.tuic_owner_registry.as_ref().map(TuicOwnerRegistryHandle::metrics_snapshot),
             "juicityOwners": self.juicity_owner_registry.as_ref().map(JuicityOwnerRegistryHandle::metrics_snapshot),
+            "xhttpXmuxOwner": self.xhttp_xmux_generation_owner.as_ref().map(tcp::XhttpXmuxGenerationOwnerHandle::metrics_snapshot),
             "tasks": self.tasks.iter().map(|task| {
                 json!({
                     "name": task.name,
@@ -259,6 +285,11 @@ impl ResidentRuntimeOwner {
             .as_ref()
             .map(JuicityOwnerRegistryHandle::metrics_snapshot)
             .unwrap_or(Value::Null);
+        snapshot["xhttpXmuxOwner"] = self
+            .xhttp_xmux_generation_owner
+            .as_ref()
+            .map(tcp::XhttpXmuxGenerationOwnerHandle::metrics_snapshot)
+            .unwrap_or(Value::Null);
         snapshot
     }
 
@@ -271,7 +302,37 @@ impl ResidentRuntimeOwner {
     }
 
     pub(crate) fn shutdown(&mut self) -> Value {
-        shutdown_resident_runtime_owner(self, RESIDENT_RUNTIME_TASK_JOIN_GRACE)
+        let xhttp_xmux = self.shutdown_xhttp_xmux_generation_owner();
+        let xhttp_xmux_released = xhttp_xmux.as_ref().is_none_or(|report| {
+            !report.cleanup_timed_out
+                && report.owner_thread_joined
+                && report.h2.locked_managers == 0
+                && report.h3.locked_managers == 0
+        });
+        let mut shutdown = shutdown_resident_runtime_owner(self, RESIDENT_RUNTIME_TASK_JOIN_GRACE);
+        shutdown["xhttpXmuxOwnerCleanup"] = xhttp_xmux
+            .map(|report| {
+                json!({
+                    "status": if xhttp_xmux_released { "pass" } else { "fail" },
+                    "cleanupTimedOut": report.cleanup_timed_out,
+                    "ownerThreadJoined": report.owner_thread_joined,
+                    "h2": {
+                        "managers": report.h2.managers,
+                        "clients": report.h2.clients,
+                        "lockedManagers": report.h2.locked_managers,
+                    },
+                    "h3": {
+                        "managers": report.h3.managers,
+                        "clients": report.h3.clients,
+                        "lockedManagers": report.h3.locked_managers,
+                    },
+                })
+            })
+            .unwrap_or(Value::Null);
+        if !xhttp_xmux_released {
+            shutdown["status"] = json!("fail");
+        }
+        shutdown
     }
 
     #[cfg(test)]
@@ -292,6 +353,7 @@ impl ResidentRuntimeOwner {
             "hysteria2Owners": self.hysteria2_owner_registry.as_ref().map(Hysteria2OwnerRegistryHandle::metrics_snapshot),
             "tuicOwners": self.tuic_owner_registry.as_ref().map(TuicOwnerRegistryHandle::metrics_snapshot),
             "juicityOwners": self.juicity_owner_registry.as_ref().map(JuicityOwnerRegistryHandle::metrics_snapshot),
+            "xhttpXmuxOwner": self.xhttp_xmux_generation_owner.as_ref().map(tcp::XhttpXmuxGenerationOwnerHandle::metrics_snapshot),
         })
     }
 

@@ -3,12 +3,61 @@ use super::*;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-static XHTTP_XMUX_H2_MANAGERS: OnceLock<
-    Mutex<HashMap<XhttpXmuxKey, XhttpXmuxManagerHandle<XhttpXmuxH2Manager>>>,
-> = OnceLock::new();
+pub(super) struct XhttpH2GenerationManagers {
+    managers: Mutex<HashMap<XhttpXmuxKey, XhttpXmuxManagerHandle<XhttpXmuxH2Manager>>>,
+}
+
+impl XhttpH2GenerationManagers {
+    pub(super) fn new() -> Self {
+        Self {
+            managers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(super) fn metrics_snapshot(&self) -> Value {
+        let Ok(managers) = self.managers.lock() else {
+            return json!({
+                "managers": Value::Null,
+                "clients": Value::Null,
+                "opening": Value::Null,
+                "leases": Value::Null,
+                "lockedManagers": 1,
+            });
+        };
+        let mut clients = 0_usize;
+        let mut opening = 0_usize;
+        let mut leases = 0_usize;
+        let mut locked_managers = 0_usize;
+        for manager in managers.values() {
+            opening = opening.saturating_add(manager.lifecycle.opening());
+            match manager.manager.try_lock() {
+                Ok(state) => {
+                    clients = clients.saturating_add(state.clients.len());
+                    leases = state.clients.iter().fold(leases, |leases, client| {
+                        leases.saturating_add(
+                            client
+                                .usage
+                                .open_usage
+                                .load(std::sync::atomic::Ordering::Acquire)
+                                .max(0) as usize,
+                        )
+                    });
+                }
+                Err(_) => locked_managers = locked_managers.saturating_add(1),
+            }
+        }
+        json!({
+            "managers": managers.len(),
+            "clients": clients,
+            "opening": opening,
+            "leases": leases,
+            "lockedManagers": locked_managers,
+        })
+    }
+}
 
 struct XhttpXmuxH2ClientEntry {
     pub(super) sender: h2::client::SendRequest<Bytes>,
@@ -224,14 +273,23 @@ impl XhttpXmuxH2Manager {
         self.lifecycle.waiter(deadline)
     }
 
-    fn force_close(&mut self) -> usize {
+    fn take_connection_tasks(&mut self) -> Vec<tokio::task::JoinHandle<()>> {
         self.lifecycle.close();
-        let mut closed = 0_usize;
-        for client in self.clients.drain(..) {
-            client.connection_task.abort();
-            closed = closed.saturating_add(1);
-        }
+        let tasks = self
+            .clients
+            .drain(..)
+            .map(|client| client.connection_task)
+            .collect();
         self.lifecycle.notify();
+        tasks
+    }
+
+    fn force_close(&mut self) -> usize {
+        let tasks = self.take_connection_tasks();
+        let closed = tasks.len();
+        for task in tasks {
+            task.abort();
+        }
         closed
     }
 }
@@ -268,26 +326,22 @@ impl Drop for PendingXhttpH2Sender {
     }
 }
 
-pub(super) fn clear_xhttp_h2_xmux_managers(runtime_generation: u64) -> XhttpXmuxManagerClearReport {
-    let Some(managers) = XHTTP_XMUX_H2_MANAGERS.get() else {
-        return XhttpXmuxManagerClearReport::default();
+pub(super) async fn clear_xhttp_h2_xmux_managers(
+    generation: &XhttpH2GenerationManagers,
+    deadline: tokio::time::Instant,
+) -> XhttpXmuxManagerClearReport {
+    let drained = match generation.managers.lock() {
+        Ok(mut managers) => managers
+            .drain()
+            .map(|(_, manager)| manager)
+            .collect::<Vec<_>>(),
+        Err(_) => {
+            return XhttpXmuxManagerClearReport {
+                locked_managers: 1,
+                ..XhttpXmuxManagerClearReport::default()
+            };
+        }
     };
-    let Ok(mut managers) = managers.lock() else {
-        return XhttpXmuxManagerClearReport {
-            locked_managers: 1,
-            ..XhttpXmuxManagerClearReport::default()
-        };
-    };
-    let keys = managers
-        .keys()
-        .filter(|key| key.runtime_generation() == runtime_generation)
-        .cloned()
-        .collect::<Vec<_>>();
-    let drained = keys
-        .into_iter()
-        .filter_map(|key| managers.remove(&key))
-        .collect::<Vec<_>>();
-    drop(managers);
 
     let mut report = XhttpXmuxManagerClearReport {
         managers: drained.len(),
@@ -297,19 +351,29 @@ pub(super) fn clear_xhttp_h2_xmux_managers(runtime_generation: u64) -> XhttpXmux
         manager.lifecycle.close();
     }
     for manager in drained {
-        let (clients, deferred) = close_xhttp_h2_manager(&manager);
+        let (clients, deferred) = close_xhttp_h2_manager(&manager, deadline).await;
         report.clients = report.clients.saturating_add(clients);
         report.locked_managers = report.locked_managers.saturating_add(usize::from(deferred));
     }
     report
 }
 
-fn close_xhttp_h2_manager(manager: &XhttpXmuxManagerHandle<XhttpXmuxH2Manager>) -> (usize, bool) {
+async fn close_xhttp_h2_manager(
+    manager: &XhttpXmuxManagerHandle<XhttpXmuxH2Manager>,
+    deadline: tokio::time::Instant,
+) -> (usize, bool) {
     manager.lifecycle.close();
-    match manager.manager.try_lock() {
-        Ok(mut state) => (state.force_close(), false),
-        Err(_) => (0, true),
+    let Ok(mut state) = tokio::time::timeout_at(deadline, manager.manager.lock()).await else {
+        return (0, true);
+    };
+    let tasks = state.take_connection_tasks();
+    let clients = tasks.len();
+    drop(state);
+    for mut task in tasks {
+        task.abort();
+        let _ = tokio::time::timeout_at(deadline, &mut task).await;
     }
+    (clients, false)
 }
 
 pub(in super::super) async fn select_xhttp_h2_xmux_client<F, Fut>(
@@ -319,11 +383,13 @@ pub(in super::super) async fn select_xhttp_h2_xmux_client<F, Fut>(
 ) -> Result<XhttpXmuxH2SelectedClient, String>
 where
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<XhttpH2EndpointSender, String>>,
+    Fut: Future<Output = Result<XhttpH2EndpointSender, String>> + Send + 'static,
 {
+    let generation = xhttp_xmux_generation_owner(key.runtime_generation())?;
     let manager = {
-        let mut managers = XHTTP_XMUX_H2_MANAGERS
-            .get_or_init(|| Mutex::new(HashMap::new()))
+        let mut managers = generation
+            .h2
+            .managers
             .lock()
             .map_err(|_| "resident xHTTP H2 xmux manager lock poisoned".to_owned())?;
         managers
@@ -359,10 +425,11 @@ where
                 let Some(new_sender) = new_sender.take() else {
                     return Err("resident xHTTP H2 xmux new sender was already consumed".to_owned());
                 };
-                let mut sender = match new_sender().await {
-                    Ok(sender) => PendingXhttpH2Sender::new(sender),
-                    Err(err) => return Err(err),
-                };
+                let open = new_sender();
+                let mut sender = execute_xhttp_xmux_owner_task(&generation, async move {
+                    open.await.map(PendingXhttpH2Sender::new)
+                })
+                .await??;
                 let mut state = manager.manager.lock().await;
                 return state.complete_new_client(sender.take(), &opening);
             }

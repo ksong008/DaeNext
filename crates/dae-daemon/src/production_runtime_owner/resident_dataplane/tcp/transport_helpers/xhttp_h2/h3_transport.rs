@@ -25,6 +25,10 @@ pub(super) struct XhttpH3EndpointClient {
     pub(super) connection: Option<XhttpH3Connection>,
     pub(super) xmux_lease: Option<XhttpXmuxClientLease>,
 }
+
+type XhttpH3OwnerOpenFuture = Pin<
+    Box<dyn std::future::Future<Output = Result<XhttpH3EndpointClient, String>> + Send + 'static>,
+>;
 pub(super) async fn open_xhttp_h3_proxy_client(
     proxy: &ResidentProxyPlan,
     endpoint: &ResidentXhttpEndpointPlan,
@@ -50,20 +54,25 @@ pub(super) async fn open_xhttp_h3_proxy_client(
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
     let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, false)?;
     let provenance_identity = key.quic_provenance_identity();
-    let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
-        let connection = open_xhttp_h3_connection(
-            proxy,
-            endpoint,
-            resolved.candidates(),
-            mark,
-            QuicEndpointIdentityRole::XhttpPrimary,
-            Some(provenance_identity),
-        )
-        .await?;
-        Ok(XhttpH3EndpointClient {
-            client: connection.client.clone(),
-            connection: Some(connection),
-            xmux_lease: None,
+    let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || -> XhttpH3OwnerOpenFuture {
+        let owner_proxy = proxy.clone();
+        let owner_endpoint = endpoint.clone();
+        let owner_candidates = resolved.candidates().to_vec();
+        Box::pin(async move {
+            let connection = open_xhttp_h3_connection(
+                &owner_proxy,
+                &owner_endpoint,
+                &owner_candidates,
+                mark,
+                QuicEndpointIdentityRole::XhttpPrimary,
+                Some(provenance_identity),
+            )
+            .await?;
+            Ok(XhttpH3EndpointClient {
+                client: connection.client.clone(),
+                connection: Some(connection),
+                xmux_lease: None,
+            })
         })
     })
     .await?;
@@ -99,20 +108,25 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
     let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, false)?;
     let provenance_identity = key.quic_provenance_identity();
-    let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
-        let connection = open_xhttp_h3_connection(
-            proxy,
-            endpoint,
-            resolved.candidates(),
-            mark,
-            QuicEndpointIdentityRole::XhttpDownload,
-            Some(provenance_identity),
-        )
-        .await?;
-        Ok(XhttpH3EndpointClient {
-            client: connection.client.clone(),
-            connection: Some(connection),
-            xmux_lease: None,
+    let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || -> XhttpH3OwnerOpenFuture {
+        let owner_proxy = proxy.clone();
+        let owner_endpoint = endpoint.clone();
+        let owner_candidates = resolved.candidates().to_vec();
+        Box::pin(async move {
+            let connection = open_xhttp_h3_connection(
+                &owner_proxy,
+                &owner_endpoint,
+                &owner_candidates,
+                mark,
+                QuicEndpointIdentityRole::XhttpDownload,
+                Some(provenance_identity),
+            )
+            .await?;
+            Ok(XhttpH3EndpointClient {
+                client: connection.client.clone(),
+                connection: Some(connection),
+                xmux_lease: None,
+            })
         })
     })
     .await?;

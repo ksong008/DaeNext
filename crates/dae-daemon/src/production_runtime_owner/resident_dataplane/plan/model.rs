@@ -132,6 +132,20 @@ impl ResidentProxyPlan {
         }
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_xhttp_xmux_owner(
+        &self,
+    ) -> bool {
+        self.xhttp_xmux.is_some()
+            || self
+                .xhttp_download
+                .as_ref()
+                .is_some_and(|download| download.xmux.is_some())
+            || self
+                .chain_parent
+                .as_ref()
+                .is_some_and(|parent| parent.requires_xhttp_xmux_owner())
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn compact_allocations(&mut self) {
         compact_string(&mut self.graph_id);
         compact_string(&mut self.graph_link_hash);

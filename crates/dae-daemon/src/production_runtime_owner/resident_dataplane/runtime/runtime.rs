@@ -55,27 +55,35 @@ impl ResidentDataplaneRuntime {
         if let Some(maintenance) = self.domain_routing_maintenance.take() {
             maintenance.stop();
         }
-        steps.push(self.owner.shutdown());
-        let xmux = tcp::clear_xhttp_xmux_managers(reload_generation);
+        let xmux = self.owner.shutdown_xhttp_xmux_generation_owner();
         steps.push(json!({
             "name": "clear-resident-xhttp-xmux-managers",
             "reloadGeneration": reload_generation,
-            "status": if xmux.h2.locked_managers == 0 && xmux.h3.locked_managers == 0 {
+            "enabled": xmux.is_some(),
+            "status": if xmux.as_ref().is_none_or(|report|
+                !report.cleanup_timed_out
+                    && report.owner_thread_joined
+                    && report.h2.locked_managers == 0
+                    && report.h3.locked_managers == 0
+            ) {
                 "pass"
             } else {
-                "partial"
+                "fail"
             },
             "h2": {
-                "managers": xmux.h2.managers,
-                "clients": xmux.h2.clients,
-                "lockedManagers": xmux.h2.locked_managers,
+                "managers": xmux.as_ref().map(|report| report.h2.managers).unwrap_or(0),
+                "clients": xmux.as_ref().map(|report| report.h2.clients).unwrap_or(0),
+                "lockedManagers": xmux.as_ref().map(|report| report.h2.locked_managers).unwrap_or(0),
             },
             "h3": {
-                "managers": xmux.h3.managers,
-                "clients": xmux.h3.clients,
-                "lockedManagers": xmux.h3.locked_managers,
+                "managers": xmux.as_ref().map(|report| report.h3.managers).unwrap_or(0),
+                "clients": xmux.as_ref().map(|report| report.h3.clients).unwrap_or(0),
+                "lockedManagers": xmux.as_ref().map(|report| report.h3.locked_managers).unwrap_or(0),
             },
+            "cleanupTimedOut": xmux.as_ref().is_some_and(|report| report.cleanup_timed_out),
+            "ownerThreadJoined": xmux.as_ref().is_none_or(|report| report.owner_thread_joined),
         }));
+        steps.push(self.owner.shutdown());
         let connect_udp_h2 = udp::clear_connect_udp_h2_pools(reload_generation);
         steps.push(json!({
             "name": "clear-resident-connect-udp-h2-pools",
