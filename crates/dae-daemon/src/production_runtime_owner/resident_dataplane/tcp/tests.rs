@@ -379,6 +379,7 @@ fn grpc_h2_request_declares_identity_encoding() {
 
     let request = grpc_h2_request(&proxy).unwrap();
 
+    assert_eq!(request.version(), http::Version::HTTP_2);
     assert_eq!(
         request.uri().to_string(),
         "https://edge.transport.invalid/GunService/Tun"

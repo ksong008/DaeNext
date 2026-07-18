@@ -29,6 +29,7 @@ pub(crate) fn grpc_h2_request(proxy: &ResidentProxyPlan) -> Result<http::Request
     );
     http::Request::builder()
         .method(http::Method::POST)
+        .version(http::Version::HTTP_2)
         .uri(uri)
         .header(http::header::CONTENT_TYPE, GRPC_CONTENT_TYPE_APPLICATION)
         .header(GRPC_TE_HEADER, GRPC_TE_TRAILERS)

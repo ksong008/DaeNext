@@ -79,6 +79,23 @@ pub(super) fn resident_raw_tls_alpn(
         .unwrap_or_default()
 }
 
+pub(super) fn validate_resident_h2_carrier_alpn(
+    alpn: &[String],
+    net: &str,
+    node_tag: &str,
+) -> Result<(), String> {
+    if matches!(net, "grpc" | "h2")
+        && !alpn
+            .iter()
+            .any(|protocol| protocol.eq_ignore_ascii_case(UTLS_ALPN_H2))
+    {
+        return Err(format!(
+            "resident dataplane {net} carrier requires TLS ALPN h2 for node {node_tag}"
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn resolve_optional_resident_utls_fingerprint(
     source: &'static str,
     requested: &str,

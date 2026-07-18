@@ -81,6 +81,21 @@ pub(super) fn shutdown_resident_runtime_owner(
             && anytls_owners["ownerPaddingSchemeBytes"].as_u64() == Some(0)
             && anytls_owners["activeBuilds"].as_u64() == Some(0)
             && anytls_owners["shutdownTimedOut"].as_bool() == Some(false));
+    let h2_carrier_owners = owner
+        .h2_carrier_generation_owner
+        .as_ref()
+        .map(H2CarrierGenerationOwnerHandle::metrics_snapshot)
+        .unwrap_or(Value::Null);
+    let h2_carrier_owners_released = h2_carrier_owners.is_null()
+        || (h2_carrier_owners["registeredKeys"].as_u64() == Some(0)
+            && h2_carrier_owners["registeredBuildTasks"].as_u64() == Some(0)
+            && h2_carrier_owners["registeredDriverTasks"].as_u64() == Some(0)
+            && h2_carrier_owners["reservedPhysicalConnections"].as_u64() == Some(0)
+            && h2_carrier_owners["activePhysicalConnections"].as_u64() == Some(0)
+            && h2_carrier_owners["activeLogicalStreams"].as_u64() == Some(0)
+            && h2_carrier_owners["activeBuilds"].as_u64() == Some(0)
+            && h2_carrier_owners["ownerStateBytesLowerBound"].as_u64() == Some(0)
+            && h2_carrier_owners["shutdownTimedOut"].as_bool() == Some(false));
     let shutdown_elapsed_ns = elapsed_nanos(started);
     let shutdown_passed = task_shutdown.panicked == 0
         && task_shutdown.timed_out == 0
@@ -89,6 +104,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         && tuic_owners_released
         && juicity_owners_released
         && anytls_owners_released
+        && h2_carrier_owners_released
         && owned_cleanup["status"].as_str() == Some("pass")
         && event_writer["status"].as_str() == Some("pass");
 
@@ -116,6 +132,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         "tuic_owners": tuic_owners,
         "juicity_owners": juicity_owners,
         "anytls_owners": anytls_owners,
+        "h2_carrier_owners": h2_carrier_owners,
         "owned_cleanup": owned_cleanup,
         "runtime_handle_owner": "resident-runtime-owner",
         "manual_probe_runtime_available": true,

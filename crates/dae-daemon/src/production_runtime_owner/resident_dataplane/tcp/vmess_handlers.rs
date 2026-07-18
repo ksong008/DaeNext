@@ -417,14 +417,11 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
-    let client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
-    let tls_underlay = async_resident_tls_underlay_name(&client);
     let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
         .map_err(|err| format!("build VMess gRPC AEAD TCP session: {err}"))?;
-    let (mut h2_send, mut h2_recv, connection_task) =
-        open_grpc_h2_stream(client, &selection.proxy, &session.first_write).await?;
+    let (mut h2_send, mut h2_recv, carrier_lease) =
+        open_grpc_h2_stream(&selection.proxy, &session.first_write).await?;
+    let tls_underlay = carrier_lease.tls_underlay();
     let mut initial_stats = DirectTcpRelayStats::default();
     if !sniff.payload.is_empty() {
         initial_stats.client_to_direct += sniff.payload.len();
@@ -441,7 +438,6 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
         metrics,
     )
     .await;
-    connection_task.abort();
     result
         .map(|stats| {
             let mut event = generic_proxy_tcp_finished_event(
@@ -498,14 +494,11 @@ pub(super) async fn handle_vmess_h2_proxy_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
-    let client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
-    let tls_underlay = async_resident_tls_underlay_name(&client);
     let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
         .map_err(|err| format!("build VMess H2 AEAD TCP session: {err}"))?;
-    let (mut h2_send, mut h2_recv, connection_task) =
-        open_h2_body_stream(client, &selection.proxy, &session.first_write, "VMess H2").await?;
+    let (mut h2_send, mut h2_recv, carrier_lease) =
+        open_h2_body_stream(&selection.proxy, &session.first_write, "VMess H2").await?;
+    let tls_underlay = carrier_lease.tls_underlay();
     let mut initial_stats = DirectTcpRelayStats::default();
     if !sniff.payload.is_empty() {
         initial_stats.client_to_direct += sniff.payload.len();
@@ -522,7 +515,6 @@ pub(super) async fn handle_vmess_h2_proxy_tcp_connection_async(
         metrics,
     )
     .await;
-    connection_task.abort();
     result
         .map(|stats| {
             let mut event = generic_proxy_tcp_finished_event(

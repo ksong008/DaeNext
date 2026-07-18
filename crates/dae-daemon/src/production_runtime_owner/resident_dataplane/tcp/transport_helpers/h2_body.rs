@@ -4,56 +4,35 @@ use bytes::BytesMut;
 const H2_UPLOAD_READ_CHUNK: usize = 16 * 1024;
 
 pub(crate) async fn open_h2_body_stream(
-    client: AsyncResidentTlsClient,
     proxy: &ResidentProxyPlan,
     first_payload: &[u8],
     context: &str,
-) -> Result<
-    (
-        h2::SendStream<Bytes>,
-        h2::RecvStream,
-        tokio::task::JoinHandle<()>,
-    ),
-    String,
-> {
+) -> Result<(h2::SendStream<Bytes>, h2::RecvStream, H2CarrierLease), String> {
     let initial_chunks = if first_payload.is_empty() {
         Vec::new()
     } else {
         vec![Bytes::copy_from_slice(first_payload)]
     };
-    open_h2_body_stream_with_initial_chunks(client, proxy, initial_chunks, context).await
+    open_h2_body_stream_with_initial_chunks(proxy, initial_chunks, context).await
 }
 
 pub(crate) async fn open_h2_body_stream_with_initial_chunks(
-    client: AsyncResidentTlsClient,
     proxy: &ResidentProxyPlan,
     initial_chunks: Vec<Bytes>,
     context: &str,
-) -> Result<
-    (
-        h2::SendStream<Bytes>,
-        h2::RecvStream,
-        tokio::task::JoinHandle<()>,
-    ),
-    String,
-> {
-    let (mut sender, connection) =
-        time::timeout(RESIDENT_CONNECT_TIMEOUT, h2::client::handshake(client))
-            .await
-            .map_err(|_| format!("{context} HTTP/2 handshake timeout"))?
-            .map_err(|err| format!("{context} HTTP/2 client handshake: {err}"))?;
-    let connection_task = tokio::spawn(async move {
-        let _ = connection.await;
-    });
+) -> Result<(h2::SendStream<Bytes>, h2::RecvStream, H2CarrierLease), String> {
+    let deadline =
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
+    let lease = acquire_h2_carrier(Arc::new(proxy.clone()), deadline).await?;
     let uri = format!(
         "https://{}{}",
         h2_body_authority(proxy),
         h2_body_request_path(&proxy.stream_path)
     );
     let request = h2_body_request(uri, context)?;
-    let (response, mut send_stream) = sender
-        .send_request(request, false)
-        .map_err(|err| format!("send {context} HTTP/2 request headers: {err}"))?;
+    let (response, mut send_stream) = lease
+        .open_request(request, false, deadline, context)
+        .await?;
     for chunk in initial_chunks {
         if !chunk.is_empty() {
             send_h2_data_with_context(&mut send_stream, chunk, false, context).await?;
@@ -64,17 +43,15 @@ pub(crate) async fn open_h2_body_stream_with_initial_chunks(
         .map_err(|_| format!("{context} HTTP/2 response headers timeout"))?
         .map_err(|err| format!("read {context} HTTP/2 response headers: {err}"))?;
     if response.status() != http::StatusCode::OK {
-        connection_task.abort();
         return Err(format!(
             "{context} HTTP/2 response status {}",
             response.status()
         ));
     }
-    Ok((send_stream, response.into_body(), connection_task))
+    Ok((send_stream, response.into_body(), lease))
 }
 
 pub(crate) async fn open_h2_body_stream_with_deferred_response(
-    client: AsyncResidentTlsClient,
     proxy: &ResidentProxyPlan,
     initial_chunks: Vec<Bytes>,
     context: &'static str,
@@ -82,27 +59,22 @@ pub(crate) async fn open_h2_body_stream_with_deferred_response(
     (
         h2::SendStream<Bytes>,
         tokio::task::JoinHandle<Result<h2::RecvStream, String>>,
-        tokio::task::JoinHandle<()>,
+        H2CarrierLease,
     ),
     String,
 > {
-    let (mut sender, connection) =
-        time::timeout(RESIDENT_CONNECT_TIMEOUT, h2::client::handshake(client))
-            .await
-            .map_err(|_| format!("{context} HTTP/2 handshake timeout"))?
-            .map_err(|err| format!("{context} HTTP/2 client handshake: {err}"))?;
-    let connection_task = tokio::spawn(async move {
-        let _ = connection.await;
-    });
+    let deadline =
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
+    let lease = acquire_h2_carrier(Arc::new(proxy.clone()), deadline).await?;
     let uri = format!(
         "https://{}{}",
         h2_body_authority(proxy),
         h2_body_request_path(&proxy.stream_path)
     );
     let request = h2_body_request(uri, context)?;
-    let (response, mut send_stream) = sender
-        .send_request(request, false)
-        .map_err(|err| format!("send {context} HTTP/2 request headers: {err}"))?;
+    let (response, mut send_stream) = lease
+        .open_request(request, false, deadline, context)
+        .await?;
     for chunk in initial_chunks {
         if !chunk.is_empty() {
             send_h2_data_with_context(&mut send_stream, chunk, false, context).await?;
@@ -123,7 +95,7 @@ pub(crate) async fn open_h2_body_stream_with_deferred_response(
         }
         Ok(response.into_body())
     });
-    Ok((send_stream, response_task, connection_task))
+    Ok((send_stream, response_task, lease))
 }
 
 // Deferred H2 relay keeps stream halves, state, metrics, and protocol toggles explicit.
@@ -475,9 +447,28 @@ fn h2_body_request_path(path: &str) -> String {
 fn h2_body_request(uri: String, context: &str) -> Result<http::Request<()>, String> {
     http::Request::builder()
         .method(http::Method::PUT)
+        .version(http::Version::HTTP_2)
         .uri(uri)
         .header(http::header::ACCEPT_ENCODING, "identity")
         .header(http::header::USER_AGENT, "dae-rust-native-resident")
         .body(())
         .map_err(|err| format!("build {context} HTTP/2 request: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_h2_body_request_uses_http2_pseudo_header_encoding() {
+        let request = h2_body_request(
+            "https://transport.invalid/tunnel".to_owned(),
+            "legacy carrier test",
+        )
+        .unwrap();
+
+        assert_eq!(request.version(), http::Version::HTTP_2);
+        assert_eq!(request.method(), http::Method::PUT);
+        assert_eq!(request.uri().authority().unwrap(), "transport.invalid");
+    }
 }

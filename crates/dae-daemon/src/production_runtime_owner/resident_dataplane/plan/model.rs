@@ -155,6 +155,17 @@ impl ResidentProxyPlan {
         )
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_h2_carrier_owner(
+        &self,
+    ) -> bool {
+        let execution = self.execution_plan();
+        execution.security.is_tls_stream()
+            && matches!(
+                execution.wrapper,
+                ResidentStreamWrapperPlan::Grpc | ResidentStreamWrapperPlan::H2
+            )
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn compact_allocations(&mut self) {
         compact_string(&mut self.graph_id);
         compact_string(&mut self.graph_link_hash);

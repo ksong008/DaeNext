@@ -314,6 +314,35 @@ pub(crate) fn start_resident_dataplane_workers(
         };
         owner.install_anytls_owner_registry(anytls_owner_registry, anytls_owner_thread);
     }
+    let requires_h2_carrier_owner = proxy_groups
+        .values()
+        .any(|group| group.requires_h2_carrier_owner());
+    if requires_h2_carrier_owner {
+        let (h2_carrier_owner, h2_carrier_thread) = match start_h2_carrier_generation_owner(
+            reload_generation,
+            owner.stop_handle(),
+            resource_config.tcp_flow_stack_bytes.value(),
+            resource_config.tcp_runtime_workers.value(),
+        ) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let cleanup = owner.shutdown();
+                return (
+                    json!({
+                        "status": "fail",
+                        "enabled": true,
+                        "error": err,
+                        "cleanup": cleanup,
+                        "event_file": Value::Null,
+                        "event_file_status": "disabled",
+                        "event_log": "product-log-sink",
+                    }),
+                    None,
+                );
+            }
+        };
+        owner.install_h2_carrier_generation_owner(h2_carrier_owner, h2_carrier_thread);
+    }
     let requires_xhttp_xmux_owner = proxy_groups
         .values()
         .any(|group| group.requires_xhttp_xmux_owner());

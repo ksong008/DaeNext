@@ -43,14 +43,14 @@ pub(super) enum VlessStandardUdpUnderlay {
     GrpcTls {
         send_stream: h2::SendStream<Bytes>,
         response: GrpcH2Response,
-        connection_task: tokio::task::JoinHandle<()>,
+        _carrier_lease: H2CarrierLease,
         response_buf: GrpcHunkReadBuffer,
         tls_underlay: &'static str,
     },
     H2Tls {
         send_stream: h2::SendStream<Bytes>,
         recv_stream: h2::RecvStream,
-        connection_task: tokio::task::JoinHandle<()>,
+        _carrier_lease: H2CarrierLease,
         tls_underlay: &'static str,
     },
 }
@@ -167,27 +167,25 @@ impl VlessStandardUdpUnderlay {
                 })
             }
             VlessStandardUdpWrapperKind::GrpcTls => {
-                let client = open_async_resident_tls_client(proxy).await?;
-                let tls_underlay = async_resident_tls_underlay_name(&client);
-                let (send_stream, response, connection_task) =
-                    open_grpc_h2_stream(client, proxy, initial_packet).await?;
+                let (send_stream, response, carrier_lease) =
+                    open_grpc_h2_stream(proxy, initial_packet).await?;
+                let tls_underlay = carrier_lease.tls_underlay();
                 Ok(Self::GrpcTls {
                     send_stream,
                     response,
-                    connection_task,
+                    _carrier_lease: carrier_lease,
                     response_buf: GrpcHunkReadBuffer::default(),
                     tls_underlay,
                 })
             }
             VlessStandardUdpWrapperKind::H2Tls => {
-                let client = open_async_resident_tls_client(proxy).await?;
-                let tls_underlay = async_resident_tls_underlay_name(&client);
-                let (send_stream, recv_stream, connection_task) =
-                    open_h2_body_stream(client, proxy, initial_packet, "VLESS H2 UDP").await?;
+                let (send_stream, recv_stream, carrier_lease) =
+                    open_h2_body_stream(proxy, initial_packet, "VLESS H2 UDP").await?;
+                let tls_underlay = carrier_lease.tls_underlay();
                 Ok(Self::H2Tls {
                     send_stream,
                     recv_stream,
-                    connection_task,
+                    _carrier_lease: carrier_lease,
                     tls_underlay,
                 })
             }
@@ -309,22 +307,12 @@ impl VlessStandardUdpUnderlay {
             | Self::HttpUpgradeTls { client, .. } => {
                 client.shutdown().await;
             }
-            Self::GrpcTls {
-                send_stream,
-                connection_task,
-                ..
-            } => {
+            Self::GrpcTls { send_stream, .. } => {
                 let _ = send_grpc_hunk(send_stream, &[], true).await;
-                connection_task.abort();
             }
-            Self::H2Tls {
-                send_stream,
-                connection_task,
-                ..
-            } => {
+            Self::H2Tls { send_stream, .. } => {
                 let _ = send_h2_data_with_context(send_stream, Bytes::new(), true, "VLESS H2 UDP")
                     .await;
-                connection_task.abort();
             }
         }
     }

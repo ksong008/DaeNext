@@ -238,6 +238,8 @@ impl ResidentRuntimeResourceConfig {
         let hysteria2 =
             Hysteria2OwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         let anytls = AnyTlsOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
+        let h2_carriers =
+            H2CarrierOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         json!({
             "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 1,
@@ -306,6 +308,15 @@ impl ResidentRuntimeResourceConfig {
                 "sidQuarantineLimit": anytls.sid_quarantine_limit(),
                 "sidQuarantineTtlMs": anytls.sid_quarantine_ttl().as_millis(),
                 "scope": "one generation and complete AnyTLS physical-session identity; one active logical SID per physical session",
+            },
+            "h2CarrierOwners": {
+                "profileSource": "runtimeProfile",
+                "ownerLimit": h2_carriers.owner_limit(),
+                "physicalConnectionLimit": h2_carriers.physical_connection_limit(),
+                "reusablePhysicalConnectionsPerOwner": 1,
+                "drainingConnectionsCountTowardPhysicalBudget": true,
+                "runtimeWorkerThreads": self.tcp_runtime_workers.json(),
+                "scope": "one generation and complete TLS HTTP/2 carrier identity; server SETTINGS controls logical stream concurrency",
             },
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),

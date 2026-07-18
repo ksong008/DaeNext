@@ -7,10 +7,10 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use super::{
-    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle,
-    Hysteria2UdpSessionLease, JuicityOwnerRegistryHandle, JuicityTransportLease,
-    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
-    TuicUdpAssociationLease,
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
+    Hysteria2OwnerRegistryHandle, Hysteria2UdpSessionLease, JuicityOwnerRegistryHandle,
+    JuicityTransportLease, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
+    TuicOwnerRegistryHandle, TuicUdpAssociationLease,
 };
 
 use bytes::Bytes;

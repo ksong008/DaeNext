@@ -364,14 +364,13 @@ async fn open_vmess_underlay(
             })
         }
         VmessAeadUdpWrapperKind::GrpcTls => {
-            let client = open_async_resident_tls_client(proxy).await?;
-            let tls_underlay = async_resident_tls_underlay_name(&client);
-            let (send_stream, response, connection_task) =
-                open_grpc_h2_stream(client, proxy, first_write).await?;
+            let (send_stream, response, carrier_lease) =
+                open_grpc_h2_stream(proxy, first_write).await?;
+            let tls_underlay = carrier_lease.tls_underlay();
             Ok(VmessAeadUdpUnderlay::GrpcTls {
                 send_stream,
                 response,
-                connection_task,
+                _carrier_lease: carrier_lease,
                 encrypted_writer: None,
                 decrypted_rx: None,
                 decoder: None,
@@ -464,7 +463,7 @@ enum VmessAeadUdpUnderlay {
     GrpcTls {
         send_stream: h2::SendStream<Bytes>,
         response: GrpcH2Response,
-        connection_task: tokio::task::JoinHandle<()>,
+        _carrier_lease: H2CarrierLease,
         encrypted_writer: Option<tokio::io::DuplexStream>,
         decrypted_rx: Option<tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
         decoder: Option<tokio::task::JoinHandle<Result<(), String>>>,
@@ -530,7 +529,6 @@ impl VmessAeadUdpUnderlay {
             }
             Self::GrpcTls {
                 send_stream,
-                connection_task,
                 encrypted_writer,
                 decoder,
                 ..
@@ -540,7 +538,6 @@ impl VmessAeadUdpUnderlay {
                     let _ = writer.shutdown().await;
                 }
                 encrypted_writer.take();
-                connection_task.abort();
                 if let Some(decoder) = decoder.take() {
                     let _ = decoder.await;
                 }

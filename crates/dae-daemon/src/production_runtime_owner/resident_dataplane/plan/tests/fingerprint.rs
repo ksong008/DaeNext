@@ -2,6 +2,19 @@ use super::*;
 
 const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 
+#[test]
+fn h2_only_carriers_require_h2_in_the_offered_alpn_set() {
+    let h2 = vec![UTLS_ALPN_H2.to_owned()];
+    let compatible = vec![UTLS_ALPN_H2.to_owned(), UTLS_ALPN_HTTP_1_1.to_owned()];
+    let h1 = vec![UTLS_ALPN_HTTP_1_1.to_owned()];
+
+    assert!(validate_resident_h2_carrier_alpn(&h2, "grpc", "node").is_ok());
+    assert!(validate_resident_h2_carrier_alpn(&compatible, "h2", "node").is_ok());
+    let error = validate_resident_h2_carrier_alpn(&h1, "grpc", "node").unwrap_err();
+    assert!(error.contains("requires TLS ALPN h2"), "{error}");
+    assert!(validate_resident_h2_carrier_alpn(&h1, "websocket", "node").is_ok());
+}
+
 fn fingerprint_config(global_tls_fields: &str, source: String) -> Config {
     fingerprint_config_with_mark(1234, global_tls_fields, source)
 }

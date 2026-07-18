@@ -59,6 +59,31 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
 
     let request = trojan_packet::tcp_request_header(&password, "tcp", target, &[])
         .map_err(|err| NativeTcpProbeError::Open(format!("build native Trojan request: {err}")))?;
+    if wrapper == ResidentStreamWrapperPlan::Grpc {
+        let (mut h2_send, mut h2_recv, carrier_lease) =
+            open_grpc_h2_stream(&selection.proxy, &request)
+                .await
+                .map_err(NativeTcpProbeError::Open)?;
+        let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
+        let stop = ResidentStopSignal::shared();
+        let relay_stop = Arc::clone(&stop);
+        let metrics = ResidentDataplaneMetrics::default();
+        let task = tokio::spawn(async move {
+            let _ = relay_tcp_over_grpc_h2(
+                &mut relay_side,
+                &mut h2_send,
+                &mut h2_recv,
+                relay_stop,
+                Default::default(),
+                &metrics,
+                false,
+            )
+            .await;
+            drop(carrier_lease);
+            stop.store(true, Ordering::Relaxed);
+        });
+        return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
+    }
     let mut client =
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
             .await
@@ -110,27 +135,6 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
                     &metrics,
                 )
                 .await;
-                stop.store(true, Ordering::Relaxed);
-            });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
-        }
-        ResidentStreamWrapperPlan::Grpc => {
-            let (mut h2_send, mut h2_recv, connection_task) =
-                open_grpc_h2_stream(client, &selection.proxy, &request)
-                    .await
-                    .map_err(NativeTcpProbeError::Open)?;
-            let task = tokio::spawn(async move {
-                let _ = relay_tcp_over_grpc_h2(
-                    &mut relay_side,
-                    &mut h2_send,
-                    &mut h2_recv,
-                    relay_stop,
-                    Default::default(),
-                    &metrics,
-                    false,
-                )
-                .await;
-                connection_task.abort();
                 stop.store(true, Ordering::Relaxed);
             });
             Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
