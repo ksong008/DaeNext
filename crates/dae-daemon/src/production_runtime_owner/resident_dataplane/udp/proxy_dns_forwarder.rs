@@ -23,6 +23,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxy
     actor_executor: Arc<ResidentDnsUdpActorExecutor>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     request_scoped_actor_pool: bool,
     closing: AtomicBool,
 }
@@ -58,8 +59,7 @@ impl ResidentProxyDnsUdpForwarder {
             runtime_config,
             metrics,
             actor_executor,
-            None,
-            None,
+            ResidentTransportOwnerRegistries::default(),
         )
     }
 
@@ -69,8 +69,7 @@ impl ResidentProxyDnsUdpForwarder {
         runtime_config: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
         actor_executor: Arc<ResidentDnsUdpActorExecutor>,
-        hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+        owners: ResidentTransportOwnerRegistries,
     ) -> Result<Self, String> {
         proxy
             .execution_plan()
@@ -102,8 +101,9 @@ impl ResidentProxyDnsUdpForwarder {
             runtime_config,
             metrics,
             actor_executor,
-            hysteria2_owner_registry,
-            tuic_owner_registry,
+            hysteria2_owner_registry: owners.hysteria2(),
+            tuic_owner_registry: owners.tuic(),
+            juicity_owner_registry: owners.juicity(),
             request_scoped_actor_pool,
             closing: AtomicBool::new(false),
         })
@@ -246,6 +246,7 @@ impl ResidentProxyDnsUdpForwarder {
             let metrics = Arc::clone(&self.metrics);
             let hysteria2_owner_registry = self.hysteria2_owner_registry.clone();
             let tuic_owner_registry = self.tuic_owner_registry.clone();
+            let juicity_owner_registry = self.juicity_owner_registry.clone();
             *handle = Some(
                 self.actor_executor
                     .spawn_actor(move || async move {
@@ -256,6 +257,7 @@ impl ResidentProxyDnsUdpForwarder {
                             metrics,
                             hysteria2_owner_registry,
                             tuic_owner_registry,
+                            juicity_owner_registry,
                         ))
                     })
                     .await?,

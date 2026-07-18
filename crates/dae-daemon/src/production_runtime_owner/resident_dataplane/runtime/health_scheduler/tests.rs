@@ -106,6 +106,7 @@ fn health_scheduler_retains_shared_group_arcs_and_stops_without_a_round() {
         ResidentHealthRuntimeConfig::from_parallelism(1, 2, 2, 2),
         None,
         None,
+        None,
     );
     assert_eq!(metrics.snapshot()["healthRoundsStartedTotal"], 0);
     assert_eq!(metrics.snapshot()["healthRoundsActive"], 0);
@@ -160,6 +161,7 @@ async fn shared_health_schedule_runs_one_zero_interval_round_and_updates_selecto
             candidate_admission: Arc::new(tokio::sync::Semaphore::new(1)),
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
+            juicity_owner_registry: None,
         },
     )
     .await;
@@ -233,6 +235,7 @@ fn fixed_group_runs_one_bootstrap_round_without_retaining_health_runtime() {
             ResidentHealthRuntimeConfig::from_parallelism(1, 1, 1, 1),
             None,
             None,
+            None,
         );
         let _ = done_tx.send(group);
     });
@@ -298,6 +301,7 @@ async fn udp_resuscitation_runs_on_the_shared_health_runtime() {
         Arc::clone(&metrics),
         1,
         Arc::new(tokio::sync::Semaphore::new(1)),
+        None,
         None,
         None,
     ));

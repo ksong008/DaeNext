@@ -23,6 +23,7 @@ pub(super) struct ResidentHealthScheduleContext {
     pub(super) candidate_admission: Arc<tokio::sync::Semaphore>,
     pub(super) hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     pub(super) tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    pub(super) juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
 }
 
 struct ResidentHealthRoundGuard {
@@ -68,6 +69,7 @@ pub(super) async fn run_resident_health_group_schedule(
         candidate_admission,
         hysteria2_owner_registry,
         tuic_owner_registry,
+        juicity_owner_registry,
     } = context;
     let interval = group.check_interval();
     let initial_jitter =
@@ -99,8 +101,11 @@ pub(super) async fn run_resident_health_group_schedule(
         Arc::clone(&metrics),
         bootstrap_concurrency,
         Arc::clone(&candidate_admission),
-        hysteria2_owner_registry.clone(),
-        tuic_owner_registry.clone(),
+        ResidentTransportOwnerRegistries::new(
+            hysteria2_owner_registry.clone(),
+            tuic_owner_registry.clone(),
+            juicity_owner_registry.clone(),
+        ),
     )
     .await;
     group.complete_health_bootstrap(bootstrap_status.is_cancelled());
@@ -119,8 +124,11 @@ pub(super) async fn run_resident_health_group_schedule(
             Arc::clone(&metrics),
             concurrency,
             Arc::clone(&candidate_admission),
-            hysteria2_owner_registry.clone(),
-            tuic_owner_registry.clone(),
+            ResidentTransportOwnerRegistries::new(
+                hysteria2_owner_registry.clone(),
+                tuic_owner_registry.clone(),
+                juicity_owner_registry.clone(),
+            ),
         )
         .await;
         if status.is_cancelled() {
@@ -143,6 +151,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
     candidate_admission: Arc<tokio::sync::Semaphore>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
 ) {
     loop {
         let request = tokio::select! {
@@ -164,8 +173,11 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
             Arc::clone(&metrics),
             concurrency,
             Arc::clone(&candidate_admission),
-            hysteria2_owner_registry.clone(),
-            tuic_owner_registry.clone(),
+            ResidentTransportOwnerRegistries::new(
+                hysteria2_owner_registry.clone(),
+                tuic_owner_registry.clone(),
+                juicity_owner_registry.clone(),
+            ),
         )
         .await
         .is_cancelled()
@@ -191,8 +203,7 @@ async fn run_resident_health_round(
     metrics: Arc<ResidentDataplaneMetrics>,
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    owners: ResidentTransportOwnerRegistries,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -203,8 +214,9 @@ async fn run_resident_health_round(
         stop,
         concurrency.max(1),
         candidate_admission,
-        hysteria2_owner_registry,
-        tuic_owner_registry,
+        owners.hysteria2(),
+        owners.tuic(),
+        owners.juicity(),
     )
     .await;
     guard.finish(status);

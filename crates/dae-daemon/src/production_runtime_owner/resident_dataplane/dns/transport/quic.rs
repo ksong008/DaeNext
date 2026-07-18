@@ -183,12 +183,15 @@ async fn forward_dns_quic_to_routed_target_async(
             target,
             payload,
             proxy,
-            forwarders
-                .hysteria2_owner_registry()
-                .map_err(ResidentDnsTransportError::message)?,
-            forwarders
-                .tuic_owner_registry()
-                .map_err(ResidentDnsTransportError::message)?,
+            ResidentTransportOwnerRegistries::new(
+                Some(
+                    forwarders
+                        .hysteria2_owner_registry()
+                        .map_err(ResidentDnsTransportError::message)?,
+                ),
+                forwarders.tuic_owner_registry.clone(),
+                forwarders.juicity_owner_registry.clone(),
+            ),
             context,
         )
         .await

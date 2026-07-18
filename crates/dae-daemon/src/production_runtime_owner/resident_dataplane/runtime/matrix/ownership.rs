@@ -61,8 +61,8 @@ mod real_plan_tests;
 mod tests {
     use super::*;
     use dae_outbound::{
-        CALLER_SCOPED_JUICITY_OWNERSHIP, CONFIGURED_HTTP_OWNERSHIP,
-        GENERATION_OWNED_HYSTERIA2_OWNERSHIP, GENERATION_OWNED_TUIC_OWNERSHIP, LogicalLeaseKind,
+        CONFIGURED_HTTP_OWNERSHIP, GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
+        GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_TUIC_OWNERSHIP, LogicalLeaseKind,
         MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, PhysicalCarrierKind, RuntimeLifecycleOwner,
         RuntimeOwnershipModel, RuntimeRouteAdmission,
     };
@@ -128,7 +128,7 @@ mod tests {
             tuic.data_udp.logical_lease,
             LogicalLeaseKind::TuicAssociation
         );
-        assert_eq!(juicity, CALLER_SCOPED_JUICITY_OWNERSHIP);
+        assert_eq!(juicity, GENERATION_OWNED_JUICITY_OWNERSHIP);
         assert_eq!(
             juicity.data_udp.logical_lease,
             LogicalLeaseKind::JuicityPacketStream

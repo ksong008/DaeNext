@@ -14,9 +14,9 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use super::{
-    Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, ResidentStopSignal,
-    SharedResidentStopSignal, TuicOwnerRegistryHandle, reset_resident_relay_idle_deadline,
-    resident_relay_idle_deadline,
+    Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle,
+    ResidentStopSignal, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
+    TuicOwnerRegistryHandle, reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
 };
 
 use bytes::Bytes;
@@ -38,10 +38,7 @@ use dae_outbound::{
         build_hysteria2_runtime_client_config_with_congestion, read_hysteria2_tcp_response,
         write_hysteria2_tcp_request,
     },
-    juicity::{
-        authenticate_juicity_connection, build_juicity_runtime_client_config,
-        write_juicity_tcp_request,
-    },
+    juicity::{build_juicity_runtime_client_config, write_juicity_tcp_request},
     shadowsocks::{
         AeadStreamCodec, ShadowsocksMetadata, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
         Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions, Ss2022TcpClientStreamEncoder,

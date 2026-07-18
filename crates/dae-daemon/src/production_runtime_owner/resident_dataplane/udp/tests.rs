@@ -214,6 +214,7 @@ mod tests {
                 false,
                 None,
                 None,
+                None,
             )
             .await;
             assert_eq!(result["status"], "protocol-closed");
@@ -244,10 +245,16 @@ mod tests {
             Ipv4Addr::LOCALHOST,
             proxy.server_port.saturating_add(1),
         ));
-        let bridge =
-            open_resident_proxy_udp_bridge_async(Arc::new(proxy), original_dst, None, None, None)
-                .await
-                .unwrap();
+        let bridge = open_resident_proxy_udp_bridge_async(
+            Arc::new(proxy),
+            original_dst,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let client =
             tokio::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
                 .await

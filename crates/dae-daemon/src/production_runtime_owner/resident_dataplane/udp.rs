@@ -7,7 +7,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use super::{
-    Hysteria2OwnerRegistryHandle, Hysteria2UdpSessionLease, SharedResidentStopSignal,
+    Hysteria2OwnerRegistryHandle, Hysteria2UdpSessionLease, JuicityOwnerRegistryHandle,
+    JuicityTransportLease, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
     TuicOwnerRegistryHandle, TuicUdpAssociationLease,
 };
 
@@ -17,6 +18,8 @@ use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 #[cfg(test)]
 use dae_outbound::hysteria2::decode_hysteria2_udp_message;
 #[cfg(test)]
+use dae_outbound::juicity::decode_stream_packet_frame;
+#[cfg(test)]
 use dae_outbound::tuic::decode_tuic_udp_packet;
 use dae_outbound::{
     anytls::{contract as anytls_contract, link as anytls_link},
@@ -25,7 +28,8 @@ use dae_outbound::{
         fragment_hysteria2_udp_message,
     },
     juicity::{
-        authenticate_juicity_connection, decode_stream_packet_frame, seal_stream_packet_frame,
+        JUICITY_STREAM_PACKET_MAX_FRAME_LEN, JuicityStreamPacketFrame,
+        decode_stream_packet_frame_prefix, seal_stream_packet_frame,
     },
     shadowsocks::{
         Ss2022UdpCodec, decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
@@ -73,16 +77,15 @@ use super::plan::{
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,
-    ObservedQuicEndpoint, QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
-    XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts, XhttpStreamUploadClient,
-    XhttpUploadClient, close_xhttp_download_client, close_xhttp_stream_upload_client,
-    close_xhttp_upload_client, collect_vmess_grpc_decrypted,
+    QuicEndpointCallerClass, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
+    XhttpStreamUploadClient, XhttpUploadClient, close_xhttp_download_client,
+    close_xhttp_stream_upload_client, close_xhttp_upload_client, collect_vmess_grpc_decrypted,
     decode_vmess_grpc_response_stream_async, httpupgrade_handshake_over_resident_tls_async,
     inherit_quic_endpoint_observation, open_grpc_h2_stream, open_h2_body_stream,
-    open_juicity_quic_connection_candidates_async, open_xhttp_packet_up_parts,
-    open_xhttp_stream_parts, poll_xhttp_download_data, read_xhttp_download_data, send_grpc_hunk,
-    send_h2_data, send_h2_data_with_context, send_xhttp_packet_up_request, send_xhttp_stream_data,
-    set_socket_mark, websocket_handshake_over_resident_tls_async,
+    open_xhttp_packet_up_parts, open_xhttp_stream_parts, poll_xhttp_download_data,
+    read_xhttp_download_data, send_grpc_hunk, send_h2_data, send_h2_data_with_context,
+    send_xhttp_packet_up_request, send_xhttp_stream_data, set_socket_mark,
+    websocket_handshake_over_resident_tls_async,
     write_websocket_binary_frame_over_resident_tls_async,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};
@@ -111,6 +114,8 @@ mod session_executor;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::clear_connect_udp_h2_pools;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::clear_connect_udp_h3_pools;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::connect_udp_pool_metrics_snapshot;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::exercise_juicity_udp_stream_session;
 use self::session_executor::*;
 mod vmess_session;
 use self::vmess_session::*;
@@ -130,6 +135,8 @@ use self::stream_helpers::*;
 mod stream_read;
 use self::stream_read::*;
 mod quic_helpers;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::quic_helpers::build_juicity_stream_packet_request;
 use self::quic_helpers::*;
 mod vless_xudp;
 use self::vless_xudp::*;

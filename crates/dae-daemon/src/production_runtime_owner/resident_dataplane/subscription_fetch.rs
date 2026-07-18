@@ -51,6 +51,29 @@ pub(crate) fn fetch_http_url_via_default_proxy(
     } else {
         (None, None)
     };
+    let requires_juicity_owner = matches!(
+        &proxy.handler,
+        plan::ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
+    );
+    let (juicity_owner_registry, juicity_owner_thread) = if requires_juicity_owner {
+        match start_juicity_owner_registry(
+            0,
+            Arc::clone(&owner_stop),
+            resources.tcp_flow_stack_bytes.value(),
+        ) {
+            Ok((handle, thread)) => (Some(handle), Some(thread)),
+            Err(err) => {
+                owner_stop.store(true, Ordering::Release);
+                let _ = owner_thread.join();
+                if let Some(thread) = tuic_owner_thread {
+                    let _ = thread.join();
+                }
+                return Err(err);
+            }
+        }
+    } else {
+        (None, None)
+    };
     let response = runtime.block_on(fetch_resident_proxy_http_response_async(
         Arc::new(proxy),
         tls,
@@ -61,11 +84,15 @@ pub(crate) fn fetch_http_url_via_default_proxy(
         Duration::from_secs(20),
         Some(hysteria2_owner_registry),
         tuic_owner_registry,
+        juicity_owner_registry,
     ));
     drop(runtime);
     owner_stop.store(true, Ordering::Release);
     let _ = owner_thread.join();
     if let Some(thread) = tuic_owner_thread {
+        let _ = thread.join();
+    }
+    if let Some(thread) = juicity_owner_thread {
         let _ = thread.join();
     }
     response

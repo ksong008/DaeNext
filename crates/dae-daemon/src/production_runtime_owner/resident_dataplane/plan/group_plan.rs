@@ -72,6 +72,15 @@ impl ResidentProxyProbePlan {
             ResidentProxyProtocolPlan::TuicQuicTcp { .. }
         )
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_juicity_transport_owner(
+        &self,
+    ) -> bool {
+        matches!(
+            &self.proxy.handler,
+            ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -450,6 +459,17 @@ impl ResidentProxyGroupPlan {
             matches!(
                 &candidate.proxy.handler,
                 ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+            )
+        })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_juicity_transport_owner(
+        &self,
+    ) -> bool {
+        self.candidates.iter().any(|candidate| {
+            matches!(
+                &candidate.proxy.handler,
+                ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
             )
         })
     }

@@ -187,7 +187,7 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
                 Wrapper::QuicStream,
                 Udp::Juicity,
             ),
-            CALLER_SCOPED_JUICITY_OWNERSHIP,
+            GENERATION_OWNED_JUICITY_OWNERSHIP,
         ),
     ];
 

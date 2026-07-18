@@ -10,6 +10,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     hysteria2_owner_registry: Option<&Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<&TuicOwnerRegistryHandle>,
+    juicity_owner_registry: Option<&JuicityOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<Value, String> {
     match &selection.proxy.handler {
@@ -49,16 +50,10 @@ pub(crate) async fn handle_quic_tcp_connection_async(
             )
             .await
         }
-        ResidentProxyProtocolPlan::JuicityQuicTcp {
-            uuid,
-            password,
-            allow_insecure,
-            pinned_certchain_sha256,
-        } => {
-            let uuid = uuid.clone();
-            let password = password.clone();
-            let allow_insecure = *allow_insecure;
-            let pinned_certchain_sha256 = pinned_certchain_sha256.clone();
+        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
+            let juicity_owner_registry = juicity_owner_registry.ok_or_else(|| {
+                "Juicity transport owner registry is unavailable for TCP flow".to_owned()
+            })?;
             handle_juicity_quic_tcp_connection_async(
                 inbound,
                 peer,
@@ -67,10 +62,8 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 stop,
                 sniff,
                 metrics,
-                &uuid,
-                &password,
-                allow_insecure,
-                &pinned_certchain_sha256,
+                juicity_owner_registry,
+                owner_deadline,
             )
             .await
         }
@@ -312,37 +305,30 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
     stop: SharedResidentStopSignal,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
-    uuid: &str,
-    password: &str,
-    allow_insecure: bool,
-    pinned_certchain_sha256: &str,
+    owner_registry: &JuicityOwnerRegistryHandle,
+    owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<Value, String> {
-    let ResidentConnectedQuicEndpoint {
-        endpoint,
-        connection,
-        ..
-    } = open_juicity_quic_connection_candidates_async(
-        &selection.proxy,
-        selection.mark,
-        allow_insecure,
-        pinned_certchain_sha256,
-        RESIDENT_CONNECT_TIMEOUT,
-        QuicEndpointCallerClass::TcpData,
-    )
-    .await?;
-    let (auth_report, mut auth_stream) =
-        match authenticate_juicity_connection(&connection, uuid, password).await {
-            Ok(auth) => auth,
-            Err(err) => {
-                endpoint.mark_failed();
-                return Err(format!("authenticate Juicity QUIC connection: {err}"));
-            }
-        };
-    endpoint.mark_ready();
-    let (mut send, mut recv) = connection
-        .open_bi()
-        .await
-        .map_err(|err| format!("open Juicity TCP stream: {err}"))?;
+    let deadline = owner_deadline.unwrap_or_else(|| {
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT)
+    });
+    let transport = owner_registry
+        .acquire(
+            Arc::clone(&selection.proxy),
+            QuicEndpointCallerClass::TcpData,
+            deadline,
+        )
+        .await?;
+    let physical_owner_id = transport.physical_owner_id();
+    let auth_token_nonzero = transport.auth_token_nonzero();
+    let (allow_insecure, certchain_pinned) = match &selection.proxy.handler {
+        ResidentProxyProtocolPlan::JuicityQuicTcp {
+            allow_insecure,
+            pinned_certchain_sha256,
+            ..
+        } => (*allow_insecure, !pinned_certchain_sha256.is_empty()),
+        _ => return Err("Juicity owner received a non-Juicity TCP selection".to_owned()),
+    };
+    let (mut send, mut recv) = transport.open_stream(deadline).await?;
     write_juicity_tcp_request(&mut send, &selection.route.dial_target, &sniff.payload)
         .await
         .map_err(|err| format!("write Juicity TCP request: {err}"))?;
@@ -355,9 +341,6 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
     match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
         Ok(mut stats) => {
             stats.client_to_direct += initial_stats.client_to_direct;
-            let _ = auth_stream.finish().await;
-            connection.close(0_u32.into(), b"resident juicity done");
-            endpoint.wait_idle().await;
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,
@@ -375,15 +358,13 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
                 None,
                 Some("quinn-h3"),
             );
-            event["juicity_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
-            event["juicity_certchain_pinned"] = json!(!pinned_certchain_sha256.is_empty());
+            event["juicity_auth_token_nonzero"] = json!(auth_token_nonzero);
+            event["juicity_certchain_pinned"] = json!(certchain_pinned);
             event["juicity_allow_insecure"] = json!(allow_insecure);
+            event["juicity_physical_owner_id"] = json!(physical_owner_id);
             Ok(event)
         }
         Err(err) => {
-            let _ = auth_stream.finish().await;
-            connection.close(0x101_u32.into(), b"resident juicity relay failed");
-            endpoint.wait_idle().await;
             let mut event = generic_proxy_tcp_failed_event(
                 peer,
                 original_dst,
@@ -401,9 +382,10 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
                 None,
                 Some("quinn-h3"),
             );
-            event["juicity_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
-            event["juicity_certchain_pinned"] = json!(!pinned_certchain_sha256.is_empty());
+            event["juicity_auth_token_nonzero"] = json!(auth_token_nonzero);
+            event["juicity_certchain_pinned"] = json!(certchain_pinned);
             event["juicity_allow_insecure"] = json!(allow_insecure);
+            event["juicity_physical_owner_id"] = json!(physical_owner_id);
             Ok(event)
         }
     }

@@ -96,7 +96,7 @@ pub(super) const BASELINE_QUIC_PASSWORD_ENDPOINT: SourceShapeRegistryRow = admit
     registry_source("baseline-quic-password-endpoint", "juicity", &["juicity"])
         .with_transport("quic-tls", "quic-stream", "quic-stream-packet")
         .with_runtime(
-            CALLER_SCOPED_JUICITY_OWNERSHIP,
+            GENERATION_OWNED_JUICITY_OWNERSHIP,
             "registry:baseline-quic-password-endpoint",
         ),
 );

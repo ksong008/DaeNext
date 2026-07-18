@@ -12,8 +12,7 @@ pub(super) struct ResidentUdpFamilyProbeResult {
 pub(super) async fn probe_resident_candidate_udp_families(
     candidate: &plan::ResidentProxyProbePlan,
     stop: Option<&SharedResidentStopSignal>,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    owners: ResidentTransportOwnerRegistries,
 ) -> Result<Vec<ResidentUdpFamilyProbeResult>, HealthCheckRoundStatus> {
     let targets = match stop {
         Some(stop) => {
@@ -32,16 +31,14 @@ pub(super) async fn probe_resident_candidate_udp_families(
             NetworkType::DNS_UDP4,
             targets.ipv4,
             stop,
-            hysteria2_owner_registry.clone(),
-            tuic_owner_registry.clone(),
+            owners.clone(),
         )),
         Box::pin(probe_udp_family(
             candidate,
             NetworkType::DNS_UDP6,
             targets.ipv6,
             stop,
-            hysteria2_owner_registry.clone(),
-            tuic_owner_registry.clone(),
+            owners.clone(),
         )),
     );
     Ok(vec![ipv4?, ipv6?])
@@ -52,8 +49,7 @@ async fn probe_udp_family(
     network_type: NetworkType,
     family: plan::ResidentHealthTargetFamily,
     stop: Option<&SharedResidentStopSignal>,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    owners: ResidentTransportOwnerRegistries,
 ) -> Result<ResidentUdpFamilyProbeResult, HealthCheckRoundStatus> {
     match family {
         plan::ResidentHealthTargetFamily::Present(addrs) => {
@@ -74,8 +70,9 @@ async fn probe_udp_family(
                                 Arc::clone(&candidate.proxy),
                                 addr,
                                 &candidate.udp_check.lookup_host,
-                                hysteria2_owner_registry.clone(),
-                                tuic_owner_registry.clone(),
+                                owners.hysteria2(),
+                                owners.tuic(),
+                                owners.juicity(),
                             ) => result,
                         }
                     }
@@ -84,8 +81,9 @@ async fn probe_udp_family(
                             Arc::clone(&candidate.proxy),
                             addr,
                             &candidate.udp_check.lookup_host,
-                            hysteria2_owner_registry.clone(),
-                            tuic_owner_registry.clone(),
+                            owners.hysteria2(),
+                            owners.tuic(),
+                            owners.juicity(),
                         )
                         .await
                     }

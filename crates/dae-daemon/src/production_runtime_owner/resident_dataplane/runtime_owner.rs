@@ -24,6 +24,7 @@ pub(crate) struct ResidentRuntimeOwner {
     cleanup_inventory: ResidentRuntimeCleanupInventory,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
 }
 
 #[derive(Clone)]
@@ -34,6 +35,7 @@ pub(crate) struct ResidentManualProbeHandle {
     resource_config: ResidentRuntimeResourceConfig,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
 }
 
 impl std::fmt::Debug for ResidentRuntimeOwner {
@@ -78,6 +80,7 @@ impl ResidentRuntimeOwner {
             cleanup_inventory: ResidentRuntimeCleanupInventory::default(),
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
+            juicity_owner_registry: None,
         }
     }
 
@@ -109,6 +112,19 @@ impl ResidentRuntimeOwner {
 
     pub(crate) fn tuic_owner_registry(&self) -> Option<TuicOwnerRegistryHandle> {
         self.tuic_owner_registry.clone()
+    }
+
+    pub(crate) fn install_juicity_owner_registry(
+        &mut self,
+        handle: JuicityOwnerRegistryHandle,
+        thread: JoinHandle<()>,
+    ) {
+        self.juicity_owner_registry = Some(handle);
+        self.register_thread("juicity-owner-registry", "protocol-transport-owner", thread);
+    }
+
+    pub(crate) fn juicity_owner_registry(&self) -> Option<JuicityOwnerRegistryHandle> {
+        self.juicity_owner_registry.clone()
     }
 
     pub(crate) fn stop_handle(&self) -> SharedResidentStopSignal {
@@ -151,6 +167,7 @@ impl ResidentRuntimeOwner {
             resource_config: self.resource_config.clone(),
             hysteria2_owner_registry: self.hysteria2_owner_registry.clone(),
             tuic_owner_registry: self.tuic_owner_registry.clone(),
+            juicity_owner_registry: self.juicity_owner_registry.clone(),
         }
     }
 
@@ -202,6 +219,7 @@ impl ResidentRuntimeOwner {
             "eventWriter": self.event_writer.metrics_snapshot(),
             "hysteria2Owners": self.hysteria2_owner_registry.as_ref().map(Hysteria2OwnerRegistryHandle::metrics_snapshot),
             "tuicOwners": self.tuic_owner_registry.as_ref().map(TuicOwnerRegistryHandle::metrics_snapshot),
+            "juicityOwners": self.juicity_owner_registry.as_ref().map(JuicityOwnerRegistryHandle::metrics_snapshot),
             "tasks": self.tasks.iter().map(|task| {
                 json!({
                     "name": task.name,
@@ -236,6 +254,11 @@ impl ResidentRuntimeOwner {
             .as_ref()
             .map(TuicOwnerRegistryHandle::metrics_snapshot)
             .unwrap_or(Value::Null);
+        snapshot["juicityOwners"] = self
+            .juicity_owner_registry
+            .as_ref()
+            .map(JuicityOwnerRegistryHandle::metrics_snapshot)
+            .unwrap_or(Value::Null);
         snapshot
     }
 
@@ -268,6 +291,7 @@ impl ResidentRuntimeOwner {
             "eventWriter": self.event_writer.metrics_snapshot(),
             "hysteria2Owners": self.hysteria2_owner_registry.as_ref().map(Hysteria2OwnerRegistryHandle::metrics_snapshot),
             "tuicOwners": self.tuic_owner_registry.as_ref().map(TuicOwnerRegistryHandle::metrics_snapshot),
+            "juicityOwners": self.juicity_owner_registry.as_ref().map(JuicityOwnerRegistryHandle::metrics_snapshot),
         })
     }
 
@@ -308,8 +332,11 @@ impl ResidentManualProbeHandle {
             links,
             self.reload_generation,
             self.probe_concurrency(),
-            self.hysteria2_owner_registry.clone(),
-            self.tuic_owner_registry.clone(),
+            ResidentTransportOwnerRegistries::new(
+                self.hysteria2_owner_registry.clone(),
+                self.tuic_owner_registry.clone(),
+                self.juicity_owner_registry.clone(),
+            ),
         )
     }
 
@@ -418,19 +445,33 @@ pub(crate) fn run_resident_manual_latency_probe_helper(
         .values()
         .filter_map(|probe| probe.as_ref().ok())
         .any(plan::ResidentProxyProbePlan::requires_tuic_transport_owner);
-    let owner_scope =
-        ManualProbeTransportOwnerScope::start(config, reload_generation, requires_tuic_owner).ok();
+    let requires_juicity_owner = manual_probe_plans
+        .values()
+        .filter_map(|probe| probe.as_ref().ok())
+        .any(plan::ResidentProxyProbePlan::requires_juicity_transport_owner);
+    let owner_scope = ManualProbeTransportOwnerScope::start(
+        config,
+        reload_generation,
+        requires_tuic_owner,
+        requires_juicity_owner,
+    )
+    .ok();
     let snapshots = probe_resident_manual_latency_snapshots(
         &manual_probe_plans,
         links,
         reload_generation,
         concurrency,
-        owner_scope
-            .as_ref()
-            .map(|scope| scope.hysteria2_handle.clone()),
-        owner_scope
-            .as_ref()
-            .and_then(|scope| scope.tuic_handle.clone()),
+        ResidentTransportOwnerRegistries::new(
+            owner_scope
+                .as_ref()
+                .map(|scope| scope.hysteria2_handle.clone()),
+            owner_scope
+                .as_ref()
+                .and_then(|scope| scope.tuic_handle.clone()),
+            owner_scope
+                .as_ref()
+                .and_then(|scope| scope.juicity_handle.clone()),
+        ),
     );
     drop(owner_scope);
     snapshots
@@ -452,19 +493,33 @@ where
         .values()
         .filter_map(|probe| probe.as_ref().ok())
         .any(plan::ResidentProxyProbePlan::requires_tuic_transport_owner);
-    let owner_scope =
-        ManualProbeTransportOwnerScope::start(config, reload_generation, requires_tuic_owner).ok();
+    let requires_juicity_owner = manual_probe_plans
+        .values()
+        .filter_map(|probe| probe.as_ref().ok())
+        .any(plan::ResidentProxyProbePlan::requires_juicity_transport_owner);
+    let owner_scope = ManualProbeTransportOwnerScope::start(
+        config,
+        reload_generation,
+        requires_tuic_owner,
+        requires_juicity_owner,
+    )
+    .ok();
     let result = probe_resident_manual_latency_snapshots_streaming(
         &manual_probe_plans,
         links,
         reload_generation,
         concurrency,
-        owner_scope
-            .as_ref()
-            .map(|scope| scope.hysteria2_handle.clone()),
-        owner_scope
-            .as_ref()
-            .and_then(|scope| scope.tuic_handle.clone()),
+        ResidentTransportOwnerRegistries::new(
+            owner_scope
+                .as_ref()
+                .map(|scope| scope.hysteria2_handle.clone()),
+            owner_scope
+                .as_ref()
+                .and_then(|scope| scope.tuic_handle.clone()),
+            owner_scope
+                .as_ref()
+                .and_then(|scope| scope.juicity_handle.clone()),
+        ),
         &mut on_snapshot,
     );
     drop(owner_scope);
@@ -483,9 +538,11 @@ fn apply_manual_probe_runtime_generation(
 struct ManualProbeTransportOwnerScope {
     hysteria2_handle: Hysteria2OwnerRegistryHandle,
     tuic_handle: Option<TuicOwnerRegistryHandle>,
+    juicity_handle: Option<JuicityOwnerRegistryHandle>,
     stop: SharedResidentStopSignal,
     hysteria2_thread: Option<JoinHandle<()>>,
     tuic_thread: Option<JoinHandle<()>>,
+    juicity_thread: Option<JoinHandle<()>>,
 }
 
 impl ManualProbeTransportOwnerScope {
@@ -493,6 +550,7 @@ impl ManualProbeTransportOwnerScope {
         config: &Config,
         reload_generation: u64,
         requires_tuic_owner: bool,
+        requires_juicity_owner: bool,
     ) -> Result<Self, String> {
         let resources = ResidentRuntimeResourceConfig::from_config(config);
         let stop = ResidentStopSignal::shared();
@@ -517,12 +575,33 @@ impl ManualProbeTransportOwnerScope {
         } else {
             (None, None)
         };
+        let (juicity_handle, juicity_thread) = if requires_juicity_owner {
+            match start_juicity_owner_registry(
+                reload_generation,
+                Arc::clone(&stop),
+                resources.tcp_flow_stack_bytes.value(),
+            ) {
+                Ok((handle, thread)) => (Some(handle), Some(thread)),
+                Err(err) => {
+                    stop.store(true, Ordering::Release);
+                    if let Some(thread) = tuic_thread {
+                        let _ = thread.join();
+                    }
+                    let _ = thread.join();
+                    return Err(err);
+                }
+            }
+        } else {
+            (None, None)
+        };
         Ok(Self {
             hysteria2_handle: handle,
             tuic_handle,
+            juicity_handle,
             stop,
             hysteria2_thread: Some(thread),
             tuic_thread,
+            juicity_thread,
         })
     }
 }
@@ -536,6 +615,9 @@ impl Drop for ManualProbeTransportOwnerScope {
         if let Some(thread) = self.tuic_thread.take() {
             let _ = thread.join();
         }
+        if let Some(thread) = self.juicity_thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -544,8 +626,7 @@ fn probe_resident_manual_latency_snapshots(
     links: &[String],
     reload_generation: u64,
     concurrency: usize,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    owners: ResidentTransportOwnerRegistries,
 ) -> Vec<Value> {
     if links.is_empty() {
         return Vec::new();
@@ -611,8 +692,7 @@ fn probe_resident_manual_latency_snapshots(
             &mut task_queue,
             concurrency,
             reload_generation,
-            hysteria2_owner_registry.clone(),
-            tuic_owner_registry.clone(),
+            owners.clone(),
         );
         while let Some(result) = handles.join_next().await {
             if let Ok(value) = result {
@@ -623,8 +703,7 @@ fn probe_resident_manual_latency_snapshots(
                 &mut task_queue,
                 concurrency,
                 reload_generation,
-                hysteria2_owner_registry.clone(),
-                tuic_owner_registry.clone(),
+                owners.clone(),
             );
         }
         values
@@ -639,8 +718,7 @@ fn probe_resident_manual_latency_snapshots_streaming<F>(
     links: &[String],
     reload_generation: u64,
     concurrency: usize,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    owners: ResidentTransportOwnerRegistries,
     on_snapshot: &mut F,
 ) -> Result<(), String>
 where
@@ -708,8 +786,7 @@ where
             &mut task_queue,
             concurrency,
             reload_generation,
-            hysteria2_owner_registry.clone(),
-            tuic_owner_registry.clone(),
+            owners.clone(),
         );
         while let Some(result) = handles.join_next().await {
             if let Ok(value) = result {
@@ -720,8 +797,7 @@ where
                 &mut task_queue,
                 concurrency,
                 reload_generation,
-                hysteria2_owner_registry.clone(),
-                tuic_owner_registry.clone(),
+                owners.clone(),
             );
         }
         Ok::<(), String>(())
@@ -735,22 +811,21 @@ fn fill_manual_probe_join_set(
     task_queue: &mut std::collections::VecDeque<plan::ResidentProxyProbePlan>,
     concurrency: usize,
     reload_generation: u64,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    owners: ResidentTransportOwnerRegistries,
 ) {
     let concurrency = concurrency.max(1);
     while handles.len() < concurrency {
         let Some(candidate) = task_queue.pop_front() else {
             break;
         };
-        let hysteria2_owner_registry = hysteria2_owner_registry.clone();
-        let tuic_owner_registry = tuic_owner_registry.clone();
+        let owners = owners.clone();
         handles.spawn(async move {
             probe_resident_candidate_manual_latency_snapshot(
                 candidate,
                 reload_generation,
-                hysteria2_owner_registry.clone(),
-                tuic_owner_registry.clone(),
+                owners.hysteria2(),
+                owners.tuic(),
+                owners.juicity(),
             )
             .await
         });
@@ -916,6 +991,7 @@ mod tests {
             resource_config: ResidentRuntimeResourceConfig::from_config(&config),
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
+            juicity_owner_registry: None,
         };
 
         assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
@@ -968,6 +1044,7 @@ mod tests {
             resource_config: ResidentRuntimeResourceConfig::from_config(&config),
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
+            juicity_owner_registry: None,
         };
         let snapshot = json!({
             "linkHash": candidate.link_hash,
