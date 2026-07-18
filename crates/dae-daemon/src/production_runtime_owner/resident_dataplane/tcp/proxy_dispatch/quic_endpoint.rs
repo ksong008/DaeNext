@@ -126,9 +126,10 @@ pub(super) fn open_observed_quic_endpoint(
     let socket = runtime
         .wrap_udp_socket(socket)
         .map_err(|error| format!("wrap QUIC UDP socket: {error}"))?;
-    let charge = QuicEndpointCharge::for_socket(
+    let charge = QuicEndpointCharge::for_wrapped_underlay(
         &endpoint_config,
         socket.max_receive_segments(),
+        underlay,
         context.protocol().uses_http3(),
     )?;
     if charge.total_bytes > admission_charge.total_bytes {

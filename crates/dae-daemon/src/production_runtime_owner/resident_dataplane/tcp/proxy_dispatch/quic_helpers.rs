@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::production_runtime_owner::resident_dataplane::{
-    resolve_socket_addr_candidates, try_socket_addr_candidates,
+    authority_from_host_port, resolve_socket_addr_candidates, try_socket_addr_candidates,
 };
 
 use std::fmt;
@@ -118,33 +118,18 @@ pub(crate) fn open_marked_quic_endpoint_for_remote(
 pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
     mark: u32,
     obfs: &ResidentHysteria2ObfsPlan,
+    port_hopping: Option<Hysteria2PortHoppingRuntimeConfig>,
     remote: SocketAddr,
     context: QuicEndpointOpenContext,
     deadline: AbsoluteDeadline,
     cancellation: &OwnerCancellationSignal,
 ) -> Result<ObservedQuicEndpoint, String> {
-    open_marked_hysteria2_quic_endpoint_with_bind(
-        mark,
-        obfs,
-        remote,
-        quic_bind_addr_for_remote(remote),
-        context,
-        deadline,
-        cancellation,
-    )
-}
-
-fn open_marked_hysteria2_quic_endpoint_with_bind(
-    mark: u32,
-    obfs: &ResidentHysteria2ObfsPlan,
-    remote: SocketAddr,
-    bind: SocketAddr,
-    context: QuicEndpointOpenContext,
-    deadline: AbsoluteDeadline,
-    cancellation: &OwnerCancellationSignal,
-) -> Result<ObservedQuicEndpoint, String> {
+    let bind = quic_bind_addr_for_remote(remote);
+    let transition_socket_limit = port_hopping
+        .as_ref()
+        .map(|config| config.transition_socket_limit);
     let runtime = quinn::default_runtime();
-    let runtime = if obfs.is_salamander() {
+    let mut runtime = if obfs.is_salamander() {
         let runtime = runtime.ok_or_else(|| "no quinn runtime available".to_owned())?;
         Some(Arc::new(Hysteria2SalamanderRuntime {
             inner: runtime,
@@ -153,10 +138,21 @@ fn open_marked_hysteria2_quic_endpoint_with_bind(
     } else {
         runtime
     };
-    let underlay = if obfs.is_salamander() {
-        QuicEndpointUnderlay::Salamander
-    } else {
-        QuicEndpointUnderlay::Ordinary
+    if let Some(config) = port_hopping {
+        let inner = runtime.ok_or_else(|| "no quinn runtime available".to_owned())?;
+        runtime = Some(Arc::new(Hysteria2PortHoppingRuntime::new(
+            inner, config, remote,
+        )));
+    }
+    let underlay = match (obfs.is_salamander(), transition_socket_limit) {
+        (false, None) => QuicEndpointUnderlay::Ordinary,
+        (true, None) => QuicEndpointUnderlay::Salamander,
+        (false, Some(transition_socket_limit)) => QuicEndpointUnderlay::PortHopping {
+            transition_socket_limit,
+        },
+        (true, Some(transition_socket_limit)) => QuicEndpointUnderlay::SalamanderPortHopping {
+            transition_socket_limit,
+        },
     };
     open_marked_quic_endpoint_with_runtime(
         mark,
@@ -386,18 +382,43 @@ pub(crate) async fn resolve_proxy_udp_addr_candidates_async(
 pub(crate) async fn resolve_hysteria2_quic_remote_candidates_async(
     proxy: &ResidentProxyPlan,
     port_hop_ports: &[u16],
+    resolved_candidate_limit: usize,
     deadline: AbsoluteDeadline,
 ) -> Result<Vec<SocketAddr>, String> {
-    let selected_port = if port_hop_ports.is_empty() {
-        proxy.server_port
-    } else {
-        port_hop_ports[fastrand::usize(..port_hop_ports.len())]
-    };
-    let target = format!("{}:{selected_port}", proxy.server_host);
+    let target = authority_from_host_port(&proxy.server_host, proxy.server_port);
     let timeout = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "resolve Hysteria2 QUIC endpoint: connect deadline elapsed".to_owned())?;
-    resolve_socket_addr_candidates(&target, timeout, "resolve Hysteria2 QUIC endpoint").await
+    let resolved =
+        resolve_socket_addr_candidates(&target, timeout, "resolve Hysteria2 QUIC endpoint").await?;
+    if port_hop_ports.is_empty() {
+        return Ok(resolved);
+    }
+    expand_hysteria2_port_hop_candidates(&resolved, port_hop_ports, resolved_candidate_limit)
+}
+
+fn expand_hysteria2_port_hop_candidates(
+    resolved: &[SocketAddr],
+    port_hop_ports: &[u16],
+    resolved_candidate_limit: usize,
+) -> Result<Vec<SocketAddr>, String> {
+    let candidate_count = resolved
+        .len()
+        .checked_mul(port_hop_ports.len())
+        .ok_or_else(|| "Hysteria2 resolved port-hopping candidate count overflow".to_owned())?;
+    if candidate_count > resolved_candidate_limit {
+        return Err(format!(
+            "Hysteria2 resolved port-hopping candidate count {candidate_count} exceeds budget {resolved_candidate_limit}"
+        ));
+    }
+    let mut candidates = Vec::with_capacity(candidate_count);
+    for resolved_addr in resolved {
+        for &port in port_hop_ports {
+            candidates.push(SocketAddr::new(resolved_addr.ip(), port));
+        }
+    }
+    fastrand::shuffle(&mut candidates);
+    Ok(candidates)
 }
 
 pub(crate) async fn connect_quic_endpoint_candidates_async<F>(
@@ -475,6 +496,7 @@ pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::production_runtime_owner::resident_dataplane::ResidentRuntimeProfile;
 
     #[test]
     fn quic_bind_addr_follows_remote_ip_family() {
@@ -483,6 +505,28 @@ mod tests {
 
         assert!(quic_bind_addr_for_remote(v4_remote).is_ipv4());
         assert!(quic_bind_addr_for_remote(v6_remote).is_ipv6());
+    }
+
+    #[test]
+    fn hysteria2_port_hop_candidates_expand_both_address_families_with_a_hard_budget() {
+        let resolved = [
+            "192.0.2.1:443".parse().unwrap(),
+            "[2001:db8::1]:443".parse().unwrap(),
+        ];
+        let mut candidates =
+            expand_hysteria2_port_hop_candidates(&resolved, &[443, 8443], 4).unwrap();
+        candidates.sort_unstable();
+        let mut expected = vec![
+            "192.0.2.1:443".parse().unwrap(),
+            "192.0.2.1:8443".parse().unwrap(),
+            "[2001:db8::1]:443".parse().unwrap(),
+            "[2001:db8::1]:8443".parse().unwrap(),
+        ];
+        expected.sort_unstable();
+        assert_eq!(candidates, expected);
+
+        let error = expand_hysteria2_port_hop_candidates(&resolved, &[443, 8443], 3).unwrap_err();
+        assert!(error.contains("candidate count 4 exceeds budget 3"));
     }
 
     #[test]
@@ -530,6 +574,7 @@ mod tests {
         let endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
             0,
             &ResidentHysteria2ObfsPlan::salamander("test-obfs-key".to_owned()),
+            None,
             "127.0.0.1:443".parse().unwrap(),
             context,
             AbsoluteDeadline::from_now(Instant::now(), Duration::from_secs(1)),
@@ -551,4 +596,62 @@ mod tests {
         endpoint.wait_idle().await;
         drop(endpoint);
     }
+
+    #[tokio::test]
+    async fn salamander_port_hopping_charges_three_udp_sockets_but_one_quic_owner() {
+        let generation = dae_runtime_control::OwnerGeneration::new(8_205);
+        let context = QuicEndpointOpenContext::from_identity_parts(
+            QuicEndpointProtocol::Hysteria2,
+            QuicEndpointCallerClass::BackgroundHealth,
+            generation,
+            QuicEndpointIdentityRole::ProtocolCarrier,
+            &[b"salamander-port-hopping-charge-test"],
+        );
+        let cancellation = OwnerCancellationSignal::new();
+        let metrics = Arc::new(Hysteria2PortHoppingMetrics::default());
+        let resources =
+            Hysteria2OwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
+        let port_hopping = Hysteria2PortHoppingRuntimeConfig::new(
+            vec![
+                "127.0.0.1:443".parse().unwrap(),
+                "127.0.0.1:8443".parse().unwrap(),
+            ],
+            Duration::from_secs(30),
+            0,
+            resources.port_hop_transition_socket_limit(),
+            Arc::clone(&metrics),
+        )
+        .unwrap();
+        let endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
+            0,
+            &ResidentHysteria2ObfsPlan::salamander("test-obfs-key".to_owned()),
+            Some(port_hopping),
+            "127.0.0.1:443".parse().unwrap(),
+            context,
+            AbsoluteDeadline::from_now(Instant::now(), Duration::from_secs(1)),
+            &cancellation,
+        )
+        .unwrap();
+        endpoint.mark_ready();
+        let snapshot = quic_endpoint_metrics_snapshot(generation.get());
+        assert_eq!(snapshot["liveStates"]["total"], 1);
+        assert_eq!(
+            snapshot["endpoints"][0]["underlay"],
+            "salamander-port-hopping"
+        );
+        let charge = &snapshot["endpoints"][0]["chargedBytes"];
+        assert_eq!(charge["receiveSegments"], 1);
+        assert_eq!(charge["udpSocketCount"], 3);
+        assert_eq!(metrics.snapshot()["activeSockets"], 1);
+
+        endpoint.close(0_u32.into(), b"port hopping charge test complete");
+        endpoint.wait_idle().await;
+        drop(endpoint);
+        tokio::task::yield_now().await;
+        assert_eq!(metrics.snapshot()["activeSockets"], 0);
+    }
 }
+
+#[cfg(test)]
+#[path = "quic_helpers_port_hopping_tests.rs"]
+mod port_hopping_live_tests;

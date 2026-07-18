@@ -104,6 +104,8 @@ impl QuicEndpointAddressFamily {
 pub(crate) enum QuicEndpointUnderlay {
     Ordinary,
     Salamander,
+    PortHopping { transition_socket_limit: usize },
+    SalamanderPortHopping { transition_socket_limit: usize },
 }
 
 impl QuicEndpointUnderlay {
@@ -111,6 +113,24 @@ impl QuicEndpointUnderlay {
         match self {
             Self::Ordinary => "ordinary",
             Self::Salamander => "salamander",
+            Self::PortHopping { .. } => "port-hopping",
+            Self::SalamanderPortHopping { .. } => "salamander-port-hopping",
+        }
+    }
+
+    pub(super) const fn uses_single_datagram_receive(self) -> bool {
+        matches!(self, Self::Salamander | Self::SalamanderPortHopping { .. })
+    }
+
+    pub(super) const fn socket_charge_count(self) -> usize {
+        match self {
+            Self::Ordinary | Self::Salamander => 1,
+            Self::PortHopping {
+                transition_socket_limit,
+            }
+            | Self::SalamanderPortHopping {
+                transition_socket_limit,
+            } => transition_socket_limit,
         }
     }
 }

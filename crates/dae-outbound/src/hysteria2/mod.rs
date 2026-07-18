@@ -22,7 +22,10 @@ pub use dataplane::{
     run_true_quic_dataplane_smoke,
 };
 pub use link::{Hysteria2Link, Hysteria2ServerContract, server_contract};
-pub use port_hopping::{Hysteria2PortHopSchedule, build_port_hop_schedule, parse_port_union};
+pub use port_hopping::{
+    HYSTERIA2_MIN_PORT_HOP_INTERVAL, Hysteria2PortHopSchedule, build_port_hop_schedule,
+    parse_port_union,
+};
 pub use quic_loopback::{
     DEFAULT_HYSTERIA2_ALPN, DEFAULT_HYSTERIA2_KEEPALIVE_SECS,
     DEFAULT_HYSTERIA2_MAX_IDLE_TIMEOUT_SECS, DEFAULT_HYSTERIA2_SERVER_NAME,

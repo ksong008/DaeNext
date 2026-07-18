@@ -358,6 +358,7 @@ impl QuicEndpointMetricsRegistry {
         let mut tls_bytes = 0_u64;
         let mut queue_bytes = 0_u64;
         let mut total_bytes = 0_u64;
+        let mut udp_socket_charge_count = 0_u64;
         for record in &records {
             match record.state {
                 PhysicalOwnerState::Connecting => connecting += 1,
@@ -383,6 +384,7 @@ impl QuicEndpointMetricsRegistry {
                 tls_bytes += charge.tls_bytes;
                 queue_bytes += charge.queue_bytes;
                 total_bytes += charge.total_bytes;
+                udp_socket_charge_count += charge.udp_socket_count;
             }
         }
         let creations_total = generation_metrics
@@ -442,6 +444,7 @@ impl QuicEndpointMetricsRegistry {
                         "maxUdpPayload": charge.max_udp_payload_bytes,
                         "receiveSegments": charge.receive_segments,
                         "batchSize": charge.batch_size,
+                        "udpSocketCount": charge.udp_socket_count,
                     },
                     "admissionChargedBytes": record.provenance.admission_charge.total_bytes,
                 })
@@ -505,6 +508,7 @@ impl QuicEndpointMetricsRegistry {
                 "tls": tls_bytes,
                 "queue": queue_bytes,
                 "total": total_bytes,
+                "udpSocketCount": udp_socket_charge_count,
             },
             "chargeModel": charge_model_json(),
             "admission": admission_snapshot(),

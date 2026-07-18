@@ -73,8 +73,11 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
         hysteria2_hopping.handler,
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             ref port_hop_ports,
+            port_hop_interval,
             ..
         } if port_hop_ports == &vec![fixture_port(1), fixture_port(2), fixture_port(3)]
+            && port_hop_interval
+                == Duration::from_nanos(config.global.udphop_interval.as_nanos() as u64)
     ));
 
     let tuic = build_resident_proxy_plan_for_node(
