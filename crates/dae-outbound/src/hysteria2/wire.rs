@@ -101,14 +101,28 @@ pub(super) fn build_tcp_request_stream(
     target: &str,
     payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
+    build_tcp_request_stream_with_padding(target, payload, &[])
+}
+
+pub(super) fn build_tcp_request_stream_with_padding(
+    target: &str,
+    payload: &[u8],
+    padding: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
     if target.is_empty() {
         return Err(bad_wire("Hysteria2 TCP target cannot be empty"));
     }
-    let mut out = Vec::with_capacity(16 + target.len() + payload.len());
+    if padding.len() > 4_096 {
+        return Err(bad_wire(
+            "Hysteria2 TCP request padding exceeds protocol limit",
+        ));
+    }
+    let mut out = Vec::with_capacity(16 + target.len() + padding.len() + payload.len());
     append_quic_varint(&mut out, HYSTERIA2_FRAME_TYPE_TCP_REQUEST)?;
     append_quic_varint(&mut out, target.len() as u64)?;
     out.extend_from_slice(target.as_bytes());
-    append_quic_varint(&mut out, 0)?;
+    append_quic_varint(&mut out, padding.len() as u64)?;
+    out.extend_from_slice(padding);
     out.extend_from_slice(payload);
     Ok(out)
 }
@@ -391,6 +405,28 @@ fn bad_wire(message: impl Into<String>) -> OutboundError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tcp_request_padding_is_encoded_and_excluded_from_the_payload() {
+        let padding = vec![b'p'; 257];
+        let encoded = build_tcp_request_stream_with_padding(
+            "target.example:443",
+            b"application-payload",
+            &padding,
+        )
+        .unwrap();
+        let decoded = parse_tcp_request_stream(&encoded).unwrap();
+        assert_eq!(decoded.target, "target.example:443");
+        assert_eq!(decoded.payload, b"application-payload");
+        assert_eq!(
+            decoded.consumed_len,
+            encoded.len() - b"application-payload".len()
+        );
+        assert!(
+            build_tcp_request_stream_with_padding("target.example:443", &[], &vec![0; 4_097])
+                .is_err()
+        );
+    }
 
     #[test]
     fn udp_message_roundtrips_supported_payload_and_address_shapes() {

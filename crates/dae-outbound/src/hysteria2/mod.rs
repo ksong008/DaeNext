@@ -3,6 +3,7 @@ mod congestion;
 pub mod contract;
 mod dataplane;
 pub mod link;
+mod padding;
 pub mod port_hopping;
 mod quic_loopback;
 mod runtime;
@@ -29,6 +30,11 @@ pub use dataplane::{
     run_true_quic_dataplane_smoke,
 };
 pub use link::{Hysteria2Link, Hysteria2ServerContract, server_contract};
+pub use padding::{
+    HYSTERIA2_AUTH_PADDING_MAX_EXCLUSIVE, HYSTERIA2_AUTH_PADDING_MIN,
+    HYSTERIA2_TCP_REQUEST_PADDING_MAX_EXCLUSIVE, HYSTERIA2_TCP_REQUEST_PADDING_MIN,
+    Hysteria2PaddingMetricsSnapshot, hysteria2_padding_metrics_snapshot,
+};
 pub use port_hopping::{
     HYSTERIA2_MIN_PORT_HOP_INTERVAL, Hysteria2PortHopSchedule, build_port_hop_schedule,
     parse_port_union,
