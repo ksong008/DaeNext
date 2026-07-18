@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 mod bounded_cleanup;
 mod h3_server;
+mod persistent_cache;
 mod production_resources;
 mod resource_balance;
 

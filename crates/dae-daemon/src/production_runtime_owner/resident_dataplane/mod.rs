@@ -33,8 +33,7 @@ use self::plan::{build_resident_dataplane_plan, build_resident_dataplane_plan_wi
 use self::probe::*;
 use self::tcp::{ResidentTcpRouter, ResidentTcpRuntimeConfig, resident_tcp_accept_loop};
 use self::udp::{
-    probe_resident_proxy_dns_udp_async, probe_resident_proxy_udp_async, resident_udp_loop,
-    resident_udp_proxy_handler_name,
+    probe_resident_proxy_udp_async, resident_udp_loop, resident_udp_proxy_handler_name,
 };
 use super::resident_routing::{
     ResidentGeodataStore, build_resident_userspace_routing_matcher_with_geodata,

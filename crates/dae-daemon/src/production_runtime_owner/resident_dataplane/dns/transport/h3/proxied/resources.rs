@@ -1,4 +1,5 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::udp::ResidentProxyUdpBridgeShutdownCompletion;
 
 use super::lifecycle::{
     ProxiedDoh3CleanupDeadline, ProxiedDoh3DriverCompletion, ProxiedDoh3EndpointCompletion,

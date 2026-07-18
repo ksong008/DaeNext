@@ -1,5 +1,9 @@
 use super::transport::udp_multiplex::{ResidentDnsUdpActorExecutor, ResidentDnsUdpMultiplexHandle};
 use super::*;
+use std::sync::{
+    Weak,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 mod h2_recovery;
@@ -116,6 +120,8 @@ impl Eq for ResidentDnsUpstreamTarget {}
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsForwarderCache {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) state:
         Mutex<ResidentDnsForwarderCacheState>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) health_state:
+        Mutex<ResidentDnsForwarderCacheState>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) udp_executor:
         Arc<ResidentDnsUdpActorExecutor>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) udp_runtime:
@@ -138,6 +144,7 @@ impl Default for ResidentDnsForwarderCache {
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
         Self {
             state: Mutex::new(ResidentDnsForwarderCacheState::default()),
+            health_state: Mutex::new(ResidentDnsForwarderCacheState::default()),
             udp_executor: Arc::new(ResidentDnsUdpActorExecutor::new(
                 udp_runtime.clone(),
                 Arc::clone(&metrics),
@@ -159,6 +166,7 @@ impl ResidentDnsForwarderCache {
     ) -> Self {
         Self {
             state: Mutex::new(ResidentDnsForwarderCacheState::default()),
+            health_state: Mutex::new(ResidentDnsForwarderCacheState::default()),
             udp_executor: Arc::new(ResidentDnsUdpActorExecutor::new(
                 udp_runtime.clone(),
                 Arc::clone(&metrics),
@@ -221,23 +229,188 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) lru:
         BTreeSet<(u64, ResidentDnsForwarderKey)>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) next_tick: u64,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) retired:
+        Vec<ResidentDnsRetiredForwarder>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsRetiredForwarder
+{
+    kind: ResidentDnsRetiredForwarderKind,
+    owner_observation: Option<Weak<ResidentDnsTransportOwnerObservation>>,
+}
+
+enum ResidentDnsRetiredForwarderKind {
+    Quic(Weak<AsyncMutex<ResidentDnsQuicForwarder>>),
+    ProxyQuic(Weak<AsyncMutex<ResidentDnsProxyQuicForwarder>>),
+    ProxyH3(Weak<AsyncMutex<ResidentDnsProxyH3Forwarder>>),
+    Udp(Weak<ResidentDnsUdpForwarder>),
+    ProxyUdp(Weak<ResidentProxyDnsUdpForwarder>),
+    Tcp(Weak<ResidentDnsTcpForwarder>),
+    Tls(Weak<ResidentDnsTlsForwarder>),
+    Https(Weak<ResidentDnsHttpsForwarder>),
+    H3(Weak<AsyncMutex<ResidentDnsH3Forwarder>>),
+}
+
+impl ResidentDnsRetiredForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn from_entry(
+        entry: &ResidentDnsForwarderEntry,
+    ) -> Self {
+        let kind = match &entry.kind {
+            ResidentDnsForwarderEntryKind::Quic(forwarder) => {
+                ResidentDnsRetiredForwarderKind::Quic(Arc::downgrade(forwarder))
+            }
+            ResidentDnsForwarderEntryKind::ProxyQuic(forwarder) => {
+                ResidentDnsRetiredForwarderKind::ProxyQuic(Arc::downgrade(forwarder))
+            }
+            ResidentDnsForwarderEntryKind::ProxyH3(forwarder) => {
+                ResidentDnsRetiredForwarderKind::ProxyH3(Arc::downgrade(forwarder))
+            }
+            ResidentDnsForwarderEntryKind::Udp(forwarder) => {
+                ResidentDnsRetiredForwarderKind::Udp(Arc::downgrade(forwarder))
+            }
+            ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => {
+                ResidentDnsRetiredForwarderKind::ProxyUdp(Arc::downgrade(forwarder))
+            }
+            ResidentDnsForwarderEntryKind::Tcp(forwarder) => {
+                ResidentDnsRetiredForwarderKind::Tcp(Arc::downgrade(forwarder))
+            }
+            ResidentDnsForwarderEntryKind::Tls(forwarder) => {
+                ResidentDnsRetiredForwarderKind::Tls(Arc::downgrade(forwarder))
+            }
+            ResidentDnsForwarderEntryKind::Https(forwarder) => {
+                ResidentDnsRetiredForwarderKind::Https(Arc::downgrade(forwarder))
+            }
+            ResidentDnsForwarderEntryKind::H3(forwarder) => {
+                ResidentDnsRetiredForwarderKind::H3(Arc::downgrade(forwarder))
+            }
+        };
+        Self {
+            kind,
+            owner_observation: entry.owner_observation.as_ref().map(Arc::downgrade),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn is_alive(&self) -> bool {
+        match &self.kind {
+            ResidentDnsRetiredForwarderKind::Quic(forwarder) => forwarder.strong_count() > 0,
+            ResidentDnsRetiredForwarderKind::ProxyQuic(forwarder) => forwarder.strong_count() > 0,
+            ResidentDnsRetiredForwarderKind::ProxyH3(forwarder) => forwarder.strong_count() > 0,
+            ResidentDnsRetiredForwarderKind::Udp(forwarder) => forwarder.strong_count() > 0,
+            ResidentDnsRetiredForwarderKind::ProxyUdp(forwarder) => forwarder.strong_count() > 0,
+            ResidentDnsRetiredForwarderKind::Tcp(forwarder) => forwarder.strong_count() > 0,
+            ResidentDnsRetiredForwarderKind::Tls(forwarder) => forwarder.strong_count() > 0,
+            ResidentDnsRetiredForwarderKind::Https(forwarder) => forwarder.strong_count() > 0,
+            ResidentDnsRetiredForwarderKind::H3(forwarder) => forwarder.strong_count() > 0,
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn upgrade(
+        &self,
+    ) -> Option<(
+        ResidentDnsForwarderEntryKind,
+        Option<Arc<ResidentDnsTransportOwnerObservation>>,
+    )> {
+        let kind = match &self.kind {
+            ResidentDnsRetiredForwarderKind::Quic(forwarder) => {
+                ResidentDnsForwarderEntryKind::Quic(forwarder.upgrade()?)
+            }
+            ResidentDnsRetiredForwarderKind::ProxyQuic(forwarder) => {
+                ResidentDnsForwarderEntryKind::ProxyQuic(forwarder.upgrade()?)
+            }
+            ResidentDnsRetiredForwarderKind::ProxyH3(forwarder) => {
+                ResidentDnsForwarderEntryKind::ProxyH3(forwarder.upgrade()?)
+            }
+            ResidentDnsRetiredForwarderKind::Udp(forwarder) => {
+                ResidentDnsForwarderEntryKind::Udp(forwarder.upgrade()?)
+            }
+            ResidentDnsRetiredForwarderKind::ProxyUdp(forwarder) => {
+                ResidentDnsForwarderEntryKind::ProxyUdp(forwarder.upgrade()?)
+            }
+            ResidentDnsRetiredForwarderKind::Tcp(forwarder) => {
+                ResidentDnsForwarderEntryKind::Tcp(forwarder.upgrade()?)
+            }
+            ResidentDnsRetiredForwarderKind::Tls(forwarder) => {
+                ResidentDnsForwarderEntryKind::Tls(forwarder.upgrade()?)
+            }
+            ResidentDnsRetiredForwarderKind::Https(forwarder) => {
+                ResidentDnsForwarderEntryKind::Https(forwarder.upgrade()?)
+            }
+            ResidentDnsRetiredForwarderKind::H3(forwarder) => {
+                ResidentDnsForwarderEntryKind::H3(forwarder.upgrade()?)
+            }
+        };
+        Some((
+            kind,
+            self.owner_observation.as_ref().and_then(Weak::upgrade),
+        ))
+    }
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsForwarderEntry {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) last_used: u64,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) kind:
         ResidentDnsForwarderEntryKind,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Option<Arc<ResidentDnsTransportOwnerObservation>>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsForwarderEntryKind
 {
     Quic(Arc<AsyncMutex<ResidentDnsQuicForwarder>>),
+    ProxyQuic(Arc<AsyncMutex<ResidentDnsProxyQuicForwarder>>),
+    ProxyH3(Arc<AsyncMutex<ResidentDnsProxyH3Forwarder>>),
     Udp(Arc<ResidentDnsUdpForwarder>),
     ProxyUdp(Arc<ResidentProxyDnsUdpForwarder>),
     Tcp(Arc<ResidentDnsTcpForwarder>),
     Tls(Arc<ResidentDnsTlsForwarder>),
     Https(Arc<ResidentDnsHttpsForwarder>),
     H3(Arc<AsyncMutex<ResidentDnsH3Forwarder>>),
+}
+
+impl ResidentDnsForwarderEntryKind {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn owner_observation(
+        &self,
+    ) -> Option<Arc<ResidentDnsTransportOwnerObservation>> {
+        match self {
+            Self::Quic(forwarder) => forwarder
+                .try_lock()
+                .ok()
+                .map(|forwarder| Arc::clone(&forwarder.owner_observation)),
+            Self::ProxyQuic(forwarder) => forwarder
+                .try_lock()
+                .ok()
+                .map(|forwarder| Arc::clone(&forwarder.owner_observation)),
+            Self::ProxyH3(forwarder) => forwarder
+                .try_lock()
+                .ok()
+                .map(|forwarder| Arc::clone(&forwarder.owner_observation)),
+            Self::Udp(forwarder) => Some(Arc::clone(&forwarder.owner_observation)),
+            Self::ProxyUdp(forwarder) => Some(forwarder.owner_observation()),
+            Self::Tcp(forwarder) => Some(Arc::clone(&forwarder.owner_observation)),
+            Self::Tls(forwarder) => Some(Arc::clone(&forwarder.owner_observation)),
+            Self::Https(forwarder) => Some(Arc::clone(&forwarder.owner_observation)),
+            Self::H3(forwarder) => forwarder
+                .try_lock()
+                .ok()
+                .map(|forwarder| Arc::clone(&forwarder.owner_observation)),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn retained_outside_cache(
+        &self,
+    ) -> bool {
+        match self {
+            Self::Quic(forwarder) => Arc::strong_count(forwarder) > 1,
+            Self::ProxyQuic(forwarder) => Arc::strong_count(forwarder) > 1,
+            Self::ProxyH3(forwarder) => Arc::strong_count(forwarder) > 1,
+            Self::Udp(forwarder) => Arc::strong_count(forwarder) > 1,
+            Self::ProxyUdp(forwarder) => Arc::strong_count(forwarder) > 1,
+            Self::Tcp(forwarder) => Arc::strong_count(forwarder) > 1,
+            Self::Tls(forwarder) => Arc::strong_count(forwarder) > 1,
+            Self::Https(forwarder) => Arc::strong_count(forwarder) > 1,
+            Self::H3(forwarder) => Arc::strong_count(forwarder) > 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -258,8 +431,11 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsForwarderTransport
 {
     Quic,
+    ProxyQuic,
+    ProxyHttp3,
     Udp,
     ProxyUdp,
+    ProxyUdpHealth,
     Tcp,
     Tls,
     Https,
@@ -287,7 +463,55 @@ impl ResidentDnsForwarderSelectionKey {
     }
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsTransportOwnerObservation
+{
+    metrics: Arc<ResidentDataplaneMetrics>,
+    charged_bytes: usize,
+    evicted: AtomicBool,
+    released: AtomicBool,
+}
+
+impl ResidentDnsTransportOwnerObservation {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new(
+        metrics: Arc<ResidentDataplaneMetrics>,
+        charged_bytes: usize,
+    ) -> Arc<Self> {
+        metrics.dns_transport_owner_opened(charged_bytes);
+        Arc::new(Self {
+            metrics,
+            charged_bytes,
+            evicted: AtomicBool::new(false),
+            released: AtomicBool::new(false),
+        })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn mark_evicted(&self) {
+        if !self.evicted.swap(true, Ordering::AcqRel) {
+            self.metrics.dns_transport_owner_evicted();
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn release(&self) {
+        if !self.released.swap(true, Ordering::AcqRel) {
+            self.metrics.dns_transport_owner_released(
+                self.charged_bytes,
+                self.evicted.load(Ordering::Acquire),
+            );
+        }
+    }
+}
+
+impl Drop for ResidentDnsTransportOwnerObservation {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsQuicForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Arc<ResidentDnsTransportOwnerObservation>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) task_executor:
+        Arc<ResidentDnsUdpActorExecutor>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) generation: u64,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
@@ -299,9 +523,68 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<quinn::Connection>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: Arc<AsyncMutex<()>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) closing: bool,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsProxyQuicForwarder
+{
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Arc<ResidentDnsTransportOwnerObservation>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) task_executor:
+        Arc<ResidentDnsUdpActorExecutor>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) remote: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) proxy: Arc<ResidentProxyPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owners:
+        ResidentTransportOwnerRegistries,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) bridge:
+        Option<ResidentProxyUdpBridge>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) endpoint:
+        Option<ObservedQuicEndpoint>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
+        Option<quinn::Connection>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: Arc<AsyncMutex<()>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) closing: bool,
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) client_config_override:
+        Option<quinn::ClientConfig>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsProxyH3Forwarder
+{
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Arc<ResidentDnsTransportOwnerObservation>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) task_executor:
+        Arc<ResidentDnsUdpActorExecutor>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) remote: SocketAddr,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) proxy: Arc<ResidentProxyPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owners:
+        ResidentTransportOwnerRegistries,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) metrics:
+        Arc<ResidentDataplaneMetrics>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) bridge:
+        Option<ResidentProxyUdpBridge>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) endpoint:
+        Option<ObservedQuicEndpoint>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
+        Option<quinn::Connection>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) client:
+        Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) driver_task:
+        Option<tokio::task::JoinHandle<()>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: Arc<AsyncMutex<()>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) closing: bool,
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) client_config_override:
+        Option<quinn::ClientConfig>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Arc<ResidentDnsTransportOwnerObservation>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) next_shard:
@@ -321,6 +604,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTcpForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Arc<ResidentDnsTransportOwnerObservation>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
@@ -330,6 +615,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTlsForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Arc<ResidentDnsTransportOwnerObservation>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
@@ -339,6 +626,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsHttpsForwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Arc<ResidentDnsTransportOwnerObservation>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
@@ -361,6 +650,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsH3Forwarder {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
+        Arc<ResidentDnsTransportOwnerObservation>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) task_executor:
+        Arc<ResidentDnsUdpActorExecutor>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) generation: u64,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
@@ -375,12 +668,39 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<tokio::task::JoinHandle<()>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: Arc<AsyncMutex<()>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) closing: bool,
 }
 
 impl Drop for ResidentDnsQuicForwarder {
     fn drop(&mut self) {
         if let Some(connection) = self.connection.take() {
             connection.close(0_u32.into(), b"dns forwarder dropped");
+        }
+    }
+}
+
+impl Drop for ResidentDnsProxyQuicForwarder {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            connection.close(0_u32.into(), b"proxied DNS forwarder dropped");
+        }
+        if let Some(endpoint) = self.endpoint.take() {
+            endpoint.close(0_u32.into(), b"proxied DNS forwarder dropped");
+        }
+    }
+}
+
+impl Drop for ResidentDnsProxyH3Forwarder {
+    fn drop(&mut self) {
+        self.client = None;
+        if let Some(connection) = self.connection.take() {
+            connection.close(0_u32.into(), b"proxied DNS H3 forwarder dropped");
+        }
+        if let Some(endpoint) = self.endpoint.take() {
+            endpoint.close(0_u32.into(), b"proxied DNS H3 forwarder dropped");
+        }
+        if let Some(task) = self.driver_task.take() {
+            task.abort();
         }
     }
 }

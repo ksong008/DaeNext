@@ -31,9 +31,8 @@ pub(super) async fn run_resident_group_health_check_round_async(
     stop: SharedResidentStopSignal,
     concurrency: usize,
     candidate_admission: Arc<tokio::sync::Semaphore>,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    dns: Arc<dns::ResidentDnsPlan>,
+    owners: ResidentTransportOwnerRegistries,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
@@ -48,11 +47,8 @@ pub(super) async fn run_resident_group_health_check_round_async(
         concurrency.max(1),
         stop,
         candidate_admission,
-        ResidentTransportOwnerRegistries::new(
-            hysteria2_owner_registry,
-            tuic_owner_registry,
-            juicity_owner_registry,
-        ),
+        dns,
+        owners,
     )
     .await;
     drop(candidates);
@@ -66,6 +62,7 @@ async fn run_resident_group_health_checks_concurrent_async(
     concurrency: usize,
     stop: SharedResidentStopSignal,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    dns: Arc<dns::ResidentDnsPlan>,
     owners: ResidentTransportOwnerRegistries,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
@@ -77,6 +74,7 @@ async fn run_resident_group_health_checks_concurrent_async(
             candidates,
             stop,
             candidate_admission,
+            dns,
             owners,
         )
         .await;
@@ -91,6 +89,7 @@ async fn run_resident_group_health_checks_concurrent_async(
             let group = Arc::clone(&group);
             let stop = Arc::clone(&stop);
             let candidate_admission = Arc::clone(&candidate_admission);
+            let dns = Arc::clone(&dns);
             let owners = owners.clone();
             handles.push(tokio::spawn(async move {
                 run_resident_candidate_health_check_until_stopped(
@@ -98,6 +97,7 @@ async fn run_resident_group_health_checks_concurrent_async(
                     &candidate,
                     stop,
                     candidate_admission,
+                    dns,
                     owners,
                 )
                 .await
@@ -119,11 +119,13 @@ pub(crate) async fn run_resident_group_health_checks_async(
 ) {
     let stop = ResidentStopSignal::shared();
     let admission = Arc::new(tokio::sync::Semaphore::new(candidates.len().max(1)));
+    let dns = Arc::new(dns::ResidentDnsPlan::asis(0));
     let _ = run_resident_group_health_checks_until_stopped(
         group,
         candidates,
         stop,
         admission,
+        dns,
         ResidentTransportOwnerRegistries::default(),
     )
     .await;
@@ -134,6 +136,7 @@ async fn run_resident_group_health_checks_until_stopped(
     candidates: &[plan::ResidentProxyProbePlan],
     stop: SharedResidentStopSignal,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    dns: Arc<dns::ResidentDnsPlan>,
     owners: ResidentTransportOwnerRegistries,
 ) -> HealthCheckRoundStatus {
     for candidate in candidates {
@@ -145,6 +148,7 @@ async fn run_resident_group_health_checks_until_stopped(
             candidate,
             Arc::clone(&stop),
             Arc::clone(&candidate_admission),
+            Arc::clone(&dns),
             owners.clone(),
         )
         .await
@@ -161,6 +165,7 @@ async fn run_resident_candidate_health_check_until_stopped(
     candidate: &plan::ResidentProxyProbePlan,
     stop: SharedResidentStopSignal,
     candidate_admission: Arc<tokio::sync::Semaphore>,
+    dns: Arc<dns::ResidentDnsPlan>,
     owners: ResidentTransportOwnerRegistries,
 ) -> HealthCheckRoundStatus {
     if stop.load(Ordering::Relaxed) {
@@ -173,7 +178,8 @@ async fn run_resident_candidate_health_check_until_stopped(
             Ok(permit) => permit,
             Err(status) => return status,
         };
-    let status = run_resident_candidate_family_health_checks(group, candidate, stop, owners).await;
+    let status =
+        run_resident_candidate_family_health_checks(group, candidate, stop, owners, dns).await;
     drop(permit);
     status
 }
@@ -757,6 +763,7 @@ mod tests {
             2,
             stop,
             Arc::new(tokio::sync::Semaphore::new(2)),
+            Arc::new(dns::ResidentDnsPlan::asis(0)),
             ResidentTransportOwnerRegistries::default(),
         ));
 

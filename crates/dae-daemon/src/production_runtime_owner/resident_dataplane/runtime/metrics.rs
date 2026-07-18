@@ -63,10 +63,20 @@ pub(crate) struct ResidentDataplaneMetrics {
     proxy_dns_udp_queued_bytes_current: AtomicU64,
     proxy_dns_udp_pending_current: AtomicU64,
     proxy_dns_udp_pending_bytes_current: AtomicU64,
+    proxy_dns_udp_pending_metadata_bytes_current: AtomicU64,
+    proxy_dns_udp_pending_metadata_bytes_maximum: AtomicU64,
+    proxy_dns_udp_response_bytes_current: AtomicU64,
+    proxy_dns_udp_response_bytes_maximum: AtomicU64,
     proxy_dns_udp_abandoned: AtomicU64,
     proxy_dns_udp_abandoned_bytes: AtomicU64,
     proxy_dns_udp_expired: AtomicU64,
     proxy_dns_udp_expired_bytes: AtomicU64,
+    dns_transport_owners_current: AtomicU64,
+    dns_transport_owners_maximum: AtomicU64,
+    dns_transport_owners_evicted_current: AtomicU64,
+    dns_transport_owners_evicted_maximum: AtomicU64,
+    dns_transport_owner_bytes_current: AtomicU64,
+    dns_transport_owner_bytes_maximum: AtomicU64,
     proxied_doh3_cleanup: ProxiedDoh3CleanupMetrics,
     udp_response_validated: AtomicU64,
     udp_response_compatibility_unverified: AtomicU64,
@@ -89,6 +99,42 @@ fn subtract_metric(metric: &AtomicU64, value: u64) {
 }
 
 impl ResidentDataplaneMetrics {
+    pub(super) fn dns_transport_owner_opened(&self, charged_bytes: usize) {
+        let current = self
+            .dns_transport_owners_current
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.dns_transport_owners_maximum
+            .fetch_max(current, Ordering::Relaxed);
+        let bytes = charged_bytes as u64;
+        let current_bytes = self
+            .dns_transport_owner_bytes_current
+            .fetch_add(bytes, Ordering::Relaxed)
+            .saturating_add(bytes);
+        self.dns_transport_owner_bytes_maximum
+            .fetch_max(current_bytes, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_transport_owner_evicted(&self) {
+        let current = self
+            .dns_transport_owners_evicted_current
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.dns_transport_owners_evicted_maximum
+            .fetch_max(current, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_transport_owner_released(&self, charged_bytes: usize, evicted: bool) {
+        subtract_metric(&self.dns_transport_owners_current, 1);
+        subtract_metric(
+            &self.dns_transport_owner_bytes_current,
+            charged_bytes as u64,
+        );
+        if evicted {
+            subtract_metric(&self.dns_transport_owners_evicted_current, 1);
+        }
+    }
+
     pub(super) fn tcp_opened(&self) {
         self.active_tcp_connections.fetch_add(1, Ordering::Relaxed);
     }
@@ -347,6 +393,37 @@ impl ResidentDataplaneMetrics {
         self.dns_udp_pending_removed(1);
     }
 
+    pub(super) fn proxy_dns_udp_pending_metadata_added(&self, bytes: usize) {
+        let bytes = bytes as u64;
+        let current = self
+            .proxy_dns_udp_pending_metadata_bytes_current
+            .fetch_add(bytes, Ordering::Relaxed)
+            .saturating_add(bytes);
+        self.proxy_dns_udp_pending_metadata_bytes_maximum
+            .fetch_max(current, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_udp_pending_metadata_removed(&self, bytes: usize) {
+        subtract_metric(
+            &self.proxy_dns_udp_pending_metadata_bytes_current,
+            bytes as u64,
+        );
+    }
+
+    pub(super) fn proxy_dns_udp_response_added(&self, bytes: usize) {
+        let bytes = bytes as u64;
+        let current = self
+            .proxy_dns_udp_response_bytes_current
+            .fetch_add(bytes, Ordering::Relaxed)
+            .saturating_add(bytes);
+        self.proxy_dns_udp_response_bytes_maximum
+            .fetch_max(current, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_udp_response_removed(&self, bytes: usize) {
+        subtract_metric(&self.proxy_dns_udp_response_bytes_current, bytes as u64);
+    }
+
     pub(super) fn proxy_dns_udp_abandoned(&self, bytes: usize) {
         self.proxy_dns_udp_abandoned.fetch_add(1, Ordering::Relaxed);
         self.proxy_dns_udp_abandoned_bytes
@@ -503,10 +580,20 @@ impl ResidentDataplaneMetrics {
             "proxyDnsUdpQueuedBytesCurrent": self.proxy_dns_udp_queued_bytes_current.load(Ordering::Relaxed),
             "proxyDnsUdpPendingCurrent": self.proxy_dns_udp_pending_current.load(Ordering::Relaxed),
             "proxyDnsUdpPendingBytesCurrent": self.proxy_dns_udp_pending_bytes_current.load(Ordering::Relaxed),
+            "proxyDnsUdpPendingMetadataBytesCurrent": self.proxy_dns_udp_pending_metadata_bytes_current.load(Ordering::Relaxed),
+            "proxyDnsUdpPendingMetadataBytesMaximum": self.proxy_dns_udp_pending_metadata_bytes_maximum.load(Ordering::Relaxed),
+            "proxyDnsUdpResponseBytesCurrent": self.proxy_dns_udp_response_bytes_current.load(Ordering::Relaxed),
+            "proxyDnsUdpResponseBytesMaximum": self.proxy_dns_udp_response_bytes_maximum.load(Ordering::Relaxed),
             "proxyDnsUdpAbandoned": self.proxy_dns_udp_abandoned.load(Ordering::Relaxed),
             "proxyDnsUdpAbandonedBytes": self.proxy_dns_udp_abandoned_bytes.load(Ordering::Relaxed),
             "proxyDnsUdpExpired": self.proxy_dns_udp_expired.load(Ordering::Relaxed),
             "proxyDnsUdpExpiredBytes": self.proxy_dns_udp_expired_bytes.load(Ordering::Relaxed),
+            "dnsTransportOwnersCurrent": self.dns_transport_owners_current.load(Ordering::Relaxed),
+            "dnsTransportOwnersMaximum": self.dns_transport_owners_maximum.load(Ordering::Relaxed),
+            "dnsTransportOwnersEvictedCurrent": self.dns_transport_owners_evicted_current.load(Ordering::Relaxed),
+            "dnsTransportOwnersEvictedMaximum": self.dns_transport_owners_evicted_maximum.load(Ordering::Relaxed),
+            "dnsTransportOwnerBytesCurrent": self.dns_transport_owner_bytes_current.load(Ordering::Relaxed),
+            "dnsTransportOwnerBytesMaximum": self.dns_transport_owner_bytes_maximum.load(Ordering::Relaxed),
             "proxiedDoh3Cleanup": self.proxied_doh3_cleanup.snapshot(),
             "udpResponseValidated": self.udp_response_validated.load(Ordering::Relaxed),
             "udpResponseCompatibilityUnverified": self.udp_response_compatibility_unverified.load(Ordering::Relaxed),

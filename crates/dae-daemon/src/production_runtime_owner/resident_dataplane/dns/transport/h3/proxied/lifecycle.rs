@@ -1,11 +1,14 @@
 use std::future::Future;
 
 use super::*;
+#[cfg(test)]
 use crate::production_runtime_owner::resident_dataplane::dns::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
+#[cfg(test)]
 use crate::production_runtime_owner::resident_dataplane::udp::ResidentProxyUdpBridgeShutdownCompletion;
 
+#[cfg(test)]
 mod cleanup;
 mod model;
 mod tasks;
@@ -15,12 +18,15 @@ pub(super) use self::model::{
     ProxiedDoh3EndpointCompletion,
 };
 
+#[cfg(test)]
 pub(super) const PROXIED_DOH3_CANCELLED: &str = "proxied DNS over HTTP/3 request cancelled";
 
+#[cfg(test)]
 pub(super) struct ProxiedDoh3Cancellation {
     sender: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
+#[cfg(test)]
 impl ProxiedDoh3Cancellation {
     pub(super) fn new(sender: tokio::sync::oneshot::Sender<()>) -> Self {
         Self {
@@ -33,6 +39,7 @@ impl ProxiedDoh3Cancellation {
     }
 }
 
+#[cfg(test)]
 impl Drop for ProxiedDoh3Cancellation {
     fn drop(&mut self) {
         if let Some(sender) = self.sender.take() {
@@ -41,6 +48,7 @@ impl Drop for ProxiedDoh3Cancellation {
     }
 }
 
+#[cfg(test)]
 pub(super) trait ProxiedDoh3ExchangeTarget: Send {
     fn exchange(&mut self) -> impl Future<Output = Result<Vec<u8>, ProxyDnsRequestError>> + Send;
 
@@ -76,6 +84,7 @@ where
     run_cancelable_proxied_doh3_exchange_with_context(target, None).await
 }
 
+#[cfg(test)]
 async fn run_cancelable_proxied_doh3_exchange_with_context<T>(
     target: T,
     context: Option<ProxyDnsRequestContext>,
@@ -99,6 +108,7 @@ where
     result
 }
 
+#[cfg(test)]
 pub(super) async fn run_proxied_doh3_exchange_with_context<T>(
     target: T,
     context: ProxyDnsRequestContext,
@@ -122,6 +132,7 @@ where
         .0
 }
 
+#[cfg(test)]
 async fn run_owned_proxied_doh3_exchange_with_context<T>(
     mut target: T,
     mut cancelled: tokio::sync::oneshot::Receiver<()>,
@@ -135,6 +146,7 @@ where
         .0
 }
 
+#[cfg(test)]
 async fn run_owned_proxied_doh3_exchange_with_outcome<T>(
     target: &mut T,
     cancelled: &mut tokio::sync::oneshot::Receiver<()>,
@@ -161,6 +173,7 @@ where
     (result, cleanup)
 }
 
+#[cfg(test)]
 async fn run_proxied_doh3_exchange_phase<T>(
     target: &mut T,
     context: Option<ProxyDnsRequestContext>,

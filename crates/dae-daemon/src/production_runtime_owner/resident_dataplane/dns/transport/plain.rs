@@ -600,6 +600,11 @@ mod tests {
             Arc::clone(&metrics),
         ));
         let forwarder = ResidentDnsUdpForwarder {
+            owner_observation: ResidentDnsTransportOwnerObservation::new(
+                Arc::clone(&metrics),
+                std::mem::size_of::<ResidentDnsUdpForwarder>()
+                    .saturating_add(std::mem::size_of::<ResidentDnsUdpForwarderShard>()),
+            ),
             target,
             mark: 0,
             next_shard: std::sync::atomic::AtomicUsize::new(0),

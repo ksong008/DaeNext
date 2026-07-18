@@ -3,8 +3,8 @@ use std::collections::{HashMap, VecDeque};
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::dns::{
     ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext, ProxyDnsRequestError,
-    ProxyDnsRequestFailure, ProxyDnsRequestStage, ResidentDnsUdpActorLifecycle,
-    ResidentDnsUdpActorRegistration,
+    ProxyDnsRequestFailure, ProxyDnsRequestStage, ProxyDnsResponseBytes,
+    ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
 };
 use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadAdmission;
 
@@ -35,7 +35,8 @@ pub(super) struct ResidentProxyDnsUdpRequest {
     pub(super) payload: Vec<u8>,
     pub(super) context: ProxyDnsRequestContext,
     pub(super) bytes: ProxyDnsQueuedRequestBytes,
-    pub(super) response: tokio::sync::oneshot::Sender<Result<Vec<u8>, ProxyDnsRequestError>>,
+    pub(super) response:
+        tokio::sync::oneshot::Sender<Result<ProxyDnsResponseBytes, ProxyDnsRequestError>>,
 }
 
 struct ResidentProxyDnsUdpActorMetricGuard {
@@ -171,7 +172,7 @@ impl ResidentProxyDnsUdpActorHandle {
             response: response_tx,
         });
         match time::timeout_at(context.deadline(), response_rx).await {
-            Ok(Ok(result)) => result,
+            Ok(Ok(result)) => result.map(ProxyDnsResponseBytes::into_payload),
             Ok(Err(_)) => Err(ProxyDnsRequestError::new(
                 ProxyDnsRequestStage::Read,
                 ProxyDnsRequestFailure::Network,
@@ -289,6 +290,7 @@ async fn run_proxy_dns_udp_actor(
                     original_dst,
                     response,
                     &metrics,
+                    &runtime_config.payload_admission,
                 ) {
                     let reset_deadline = pending
                         .values()

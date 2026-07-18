@@ -1,4 +1,9 @@
 use std::sync::Arc;
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use super::{
     ResidentDnsUdpActorRegistration, ResidentDnsUdpMultiplexHandle, open_connected_dns_udp_socket,
@@ -20,6 +25,24 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUd
     pool: tokio::sync::Mutex<Option<Arc<ResidentDnsUdpActorPool>>>,
     actors: std::sync::Mutex<Vec<ResidentDnsUdpActorTask>>,
     closing: std::sync::atomic::AtomicBool,
+}
+
+struct ResidentDnsOwnedTask<T> {
+    task: tokio::task::JoinHandle<T>,
+}
+
+impl<T> Future for ResidentDnsOwnedTask<T> {
+    type Output = Result<T, tokio::task::JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.task).poll(context)
+    }
+}
+
+impl<T> Drop for ResidentDnsOwnedTask<T> {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 impl Default for ResidentDnsUdpActorExecutor {
@@ -99,6 +122,31 @@ impl ResidentDnsUdpActorExecutor {
             .await
             .map_err(|_| "shared DNS UDP actor exited before initialization".to_owned())??;
         self.register_actor(opened).await
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn execute_owned_task<
+        T,
+        Task,
+    >(
+        &self,
+        task: Task,
+    ) -> Result<T, String>
+    where
+        T: Send + 'static,
+        Task: Future<Output = T> + Send + 'static,
+    {
+        if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("shared DNS transport task executor is closing".to_owned());
+        }
+        let runtime_handle = self.pool().await?.runtime_handle()?;
+        if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("shared DNS transport task executor is closing".to_owned());
+        }
+        ResidentDnsOwnedTask {
+            task: runtime_handle.spawn(task),
+        }
+        .await
+        .map_err(|error| format!("shared DNS transport owner task failed: {error}"))
     }
 
     async fn pool(&self) -> Result<Arc<ResidentDnsUdpActorPool>, String> {

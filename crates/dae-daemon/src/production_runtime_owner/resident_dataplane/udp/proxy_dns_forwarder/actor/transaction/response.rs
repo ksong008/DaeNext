@@ -1,4 +1,4 @@
-use dae_dns::{DnsPacketView, restore_packed_response_request_id};
+use dae_dns::DnsPacketView;
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::udp::{
@@ -11,10 +11,11 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwa
     id_allocator: &mut UdpRequestIdAllocator,
     expected_source: SocketAddr,
     mut response: UdpExchangeResult,
-    metrics: &ResidentDataplaneMetrics,
+    metrics: &Arc<ResidentDataplaneMetrics>,
+    payload_admission: &ResidentUdpPayloadAdmission,
 ) -> Result<(), ProxyDnsRequestError> {
     let expectation = response.fixed_target_expectation(expected_source);
-    let payload = match response.take_fixed_target_payload(expectation) {
+    let mut payload = match response.take_fixed_target_payload(expectation) {
         UdpFixedTargetPayload::Accepted {
             payload,
             validation,
@@ -75,15 +76,37 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwa
     };
     remove_proxy_dns_udp_deadline(deadlines, response_id, request.generation);
     id_allocator.release(response_id);
-    let restored =
-        restore_packed_response_request_id(&payload, request.original_id).ok_or_else(|| {
-            ProxyDnsRequestError::new(
+    let response_permit = match payload_admission.try_acquire(payload.len()) {
+        Ok(permit) => permit,
+        Err(error) => {
+            let result = Err(ProxyDnsRequestError::new(
                 ProxyDnsRequestStage::Read,
-                ProxyDnsRequestFailure::Protocol,
-                "proxied DNS UDP response is too short to restore request id",
-            )
-        });
-    if request.response.send(restored).is_err() {
+                ProxyDnsRequestFailure::Capacity,
+                format!(
+                    "proxied DNS UDP response byte limit reached: requested={}, current={}, limit={}",
+                    error.requested, error.current, error.limit
+                ),
+            ));
+            if request.response.send(result).is_err() {
+                request.bytes.mark_abandoned();
+            }
+            return Ok(());
+        }
+    };
+    let Some(id_bytes) = payload.get_mut(0..2) else {
+        let result = Err(ProxyDnsRequestError::new(
+            ProxyDnsRequestStage::Read,
+            ProxyDnsRequestFailure::Protocol,
+            "proxied DNS UDP response is too short to restore request id",
+        ));
+        if request.response.send(result).is_err() {
+            request.bytes.mark_abandoned();
+        }
+        return Ok(());
+    };
+    id_bytes.copy_from_slice(&request.original_id.to_be_bytes());
+    let restored = ProxyDnsResponseBytes::new(payload, response_permit, Arc::clone(metrics));
+    if request.response.send(Ok(restored)).is_err() {
         request.bytes.mark_abandoned();
     }
     Ok(())
