@@ -89,6 +89,7 @@ md-5 = "0.10"
 object = { version = "0.36.7", default-features = false, features = ["elf", "read_core", "std"] }
 percent-encoding = "2.3"
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+quinn-proto = { version = "0.11.14", default-features = false }
 udp = { package = "quinn-udp", version = "0.5", default-features = false, features = ["tracing"] }
 regex = "1"
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }

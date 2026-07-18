@@ -109,6 +109,9 @@ fn hysteria2_source(hopping: bool, insecure: bool, pin: Option<&str>) -> String 
         obfs_password: String::new(),
         max_tx: 0,
         max_rx: 0,
+        max_tx_configured: false,
+        max_rx_configured: false,
+        congestion: Default::default(),
     }
     .export_url()
 }

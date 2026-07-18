@@ -21,6 +21,7 @@ hkdf.workspace = true
 md-5.workspace = true
 percent-encoding.workspace = true
 quinn.workspace = true
+quinn-proto.workspace = true
 rcgen.workspace = true
 regex.workspace = true
 rustls.workspace = true

@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
 use dae_outbound::hysteria2::{
-    Hysteria2AuthReport, Hysteria2AuthenticatedSession, Hysteria2UdpMessage,
+    Hysteria2AuthReport, Hysteria2AuthenticatedSession, Hysteria2BbrProfile,
+    Hysteria2CongestionNegotiation, Hysteria2CongestionRuntime,
+    Hysteria2EffectiveCongestionController, Hysteria2ServerBandwidthResponse, Hysteria2UdpMessage,
     authenticate_hysteria2_connection, decode_hysteria2_udp_message,
 };
 use dae_runtime_control::{
@@ -132,6 +134,22 @@ struct Hysteria2OwnerRegistryMetrics {
     high_water_udp_session_quarantine: AtomicUsize,
     next_transport_instance: AtomicU64,
     shutdown_timed_out: AtomicBool,
+    active_brutal_controllers: AtomicUsize,
+    active_bbr_controllers: AtomicUsize,
+    active_reno_controllers: AtomicUsize,
+    high_water_brutal_controllers: AtomicUsize,
+    high_water_bbr_controllers: AtomicUsize,
+    high_water_reno_controllers: AtomicUsize,
+    cumulative_bandwidth_auto: AtomicU64,
+    cumulative_bandwidth_zero: AtomicU64,
+    cumulative_bandwidth_known: AtomicU64,
+    last_max_tx: AtomicU64,
+    last_max_rx: AtomicU64,
+    last_server_rx: AtomicU64,
+    last_effective_tx: AtomicU64,
+    last_controller: AtomicU8,
+    last_bbr_profile: AtomicU8,
+    last_loss_compensation: AtomicBool,
 }
 
 impl Hysteria2OwnerRegistryMetrics {
@@ -189,6 +207,88 @@ impl Hysteria2OwnerRegistryMetrics {
 
     fn udp_session_quarantine_released(&self, count: usize) {
         subtract_count(&self.active_udp_session_quarantine, count);
+    }
+
+    fn congestion_negotiated(
+        self: &Arc<Self>,
+        negotiation: Hysteria2CongestionNegotiation,
+    ) -> Hysteria2CongestionObservation {
+        let (active, high_water, controller_code) = match negotiation.controller {
+            Hysteria2EffectiveCongestionController::Brutal => (
+                &self.active_brutal_controllers,
+                &self.high_water_brutal_controllers,
+                1,
+            ),
+            Hysteria2EffectiveCongestionController::Bbr => (
+                &self.active_bbr_controllers,
+                &self.high_water_bbr_controllers,
+                2,
+            ),
+            Hysteria2EffectiveCongestionController::Reno => (
+                &self.active_reno_controllers,
+                &self.high_water_reno_controllers,
+                3,
+            ),
+        };
+        let current = active.fetch_add(1, Ordering::AcqRel) + 1;
+        update_high_water(high_water, current);
+        match negotiation.server_response {
+            Hysteria2ServerBandwidthResponse::Auto => {
+                self.cumulative_bandwidth_auto
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Hysteria2ServerBandwidthResponse::Unlimited => {
+                self.cumulative_bandwidth_zero
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Hysteria2ServerBandwidthResponse::Known => {
+                self.cumulative_bandwidth_known
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Hysteria2ServerBandwidthResponse::Pending => {}
+        }
+        self.last_max_tx
+            .store(negotiation.max_tx, Ordering::Relaxed);
+        self.last_max_rx
+            .store(negotiation.max_rx, Ordering::Relaxed);
+        self.last_server_rx
+            .store(negotiation.server_rx, Ordering::Relaxed);
+        self.last_effective_tx
+            .store(negotiation.effective_tx, Ordering::Relaxed);
+        self.last_controller
+            .store(controller_code, Ordering::Relaxed);
+        self.last_bbr_profile.store(
+            match negotiation.profile {
+                Hysteria2BbrProfile::Standard => 1,
+                Hysteria2BbrProfile::Conservative => 2,
+                Hysteria2BbrProfile::Aggressive => 3,
+            },
+            Ordering::Relaxed,
+        );
+        self.last_loss_compensation
+            .store(negotiation.loss_compensation, Ordering::Relaxed);
+        Hysteria2CongestionObservation {
+            metrics: Arc::clone(self),
+            controller: negotiation.controller,
+        }
+    }
+}
+
+struct Hysteria2CongestionObservation {
+    metrics: Arc<Hysteria2OwnerRegistryMetrics>,
+    controller: Hysteria2EffectiveCongestionController,
+}
+
+impl Drop for Hysteria2CongestionObservation {
+    fn drop(&mut self) {
+        let active = match self.controller {
+            Hysteria2EffectiveCongestionController::Brutal => {
+                &self.metrics.active_brutal_controllers
+            }
+            Hysteria2EffectiveCongestionController::Bbr => &self.metrics.active_bbr_controllers,
+            Hysteria2EffectiveCongestionController::Reno => &self.metrics.active_reno_controllers,
+        };
+        subtract_active(active);
     }
 }
 
@@ -572,6 +672,7 @@ pub(crate) struct Hysteria2SharedTransport {
     endpoint: ObservedQuicEndpoint,
     connection: quinn::Connection,
     auth_report: Hysteria2AuthReport,
+    _congestion_observation: Hysteria2CongestionObservation,
     leases: Arc<Hysteria2LogicalLeaseAdmission>,
     udp_sessions: Arc<Hysteria2UdpSessionManager>,
 }
@@ -887,6 +988,42 @@ impl Hysteria2OwnerRegistryHandle {
             "logicalLeaseRejections": self.metrics.logical_lease_rejections.load(Ordering::Relaxed),
             "shutdownTimedOut": self.metrics.shutdown_timed_out.load(Ordering::Relaxed),
             "portHopping": self.metrics.port_hopping.snapshot(),
+            "congestion": {
+                "activeControllers": {
+                    "brutal": self.metrics.active_brutal_controllers.load(Ordering::Relaxed),
+                    "bbr": self.metrics.active_bbr_controllers.load(Ordering::Relaxed),
+                    "reno": self.metrics.active_reno_controllers.load(Ordering::Relaxed),
+                },
+                "highWaterControllers": {
+                    "brutal": self.metrics.high_water_brutal_controllers.load(Ordering::Relaxed),
+                    "bbr": self.metrics.high_water_bbr_controllers.load(Ordering::Relaxed),
+                    "reno": self.metrics.high_water_reno_controllers.load(Ordering::Relaxed),
+                },
+                "cumulativeServerResponses": {
+                    "auto": self.metrics.cumulative_bandwidth_auto.load(Ordering::Relaxed),
+                    "zero": self.metrics.cumulative_bandwidth_zero.load(Ordering::Relaxed),
+                    "known": self.metrics.cumulative_bandwidth_known.load(Ordering::Relaxed),
+                },
+                "lastNegotiated": {
+                    "maxTx": self.metrics.last_max_tx.load(Ordering::Relaxed),
+                    "maxRx": self.metrics.last_max_rx.load(Ordering::Relaxed),
+                    "serverRx": self.metrics.last_server_rx.load(Ordering::Relaxed),
+                    "effectiveTx": self.metrics.last_effective_tx.load(Ordering::Relaxed),
+                    "controller": match self.metrics.last_controller.load(Ordering::Relaxed) {
+                        1 => "brutal",
+                        2 => "bbr",
+                        3 => "reno",
+                        _ => "pending",
+                    },
+                    "bbrProfile": match self.metrics.last_bbr_profile.load(Ordering::Relaxed) {
+                        1 => "standard",
+                        2 => "conservative",
+                        3 => "aggressive",
+                        _ => "pending",
+                    },
+                    "lossCompensation": self.metrics.last_loss_compensation.load(Ordering::Relaxed),
+                },
+            },
             "budget": {
                 "owners": self.resources.owner_limit(),
                 "commandQueueDepth": self.resources.command_queue_depth(),
@@ -1207,7 +1344,9 @@ async fn build_hysteria2_transport(
     let ResidentProxyProtocolPlan::Hysteria2QuicTcp {
         auth,
         tls_identity,
+        max_tx,
         max_rx,
+        congestion,
         obfs,
         port_hop_ports,
         port_hop_interval,
@@ -1219,6 +1358,15 @@ async fn build_hysteria2_transport(
             detail: "Hysteria2 owner received a non-Hysteria2 proxy shape".to_owned(),
         });
     };
+    let congestion_runtime = Arc::new(
+        Hysteria2CongestionRuntime::new(*congestion, *max_tx, *max_rx).map_err(|err| {
+            Hysteria2OwnerBuildError {
+                class: OwnerFailureClass::Transport,
+                operation: "hysteria2-owner-congestion",
+                detail: err.to_string(),
+            }
+        })?,
+    );
     let connected = open_hysteria2_quic_connection_candidates_async(
         Hysteria2QuicConnectionRequest {
             proxy: &proxy,
@@ -1227,6 +1375,7 @@ async fn build_hysteria2_transport(
             port_hop_ports,
             port_hop_interval: *port_hop_interval,
             tls_identity,
+            congestion: Arc::clone(&congestion_runtime),
             resources,
             port_hopping_metrics: Arc::clone(&metrics.port_hopping),
             caller,
@@ -1259,7 +1408,11 @@ async fn build_hysteria2_transport(
     };
     let auth_session = match time::timeout(
         remaining,
-        authenticate_hysteria2_connection(connection.clone(), auth, *max_rx),
+        authenticate_hysteria2_connection(
+            connection.clone(),
+            auth,
+            congestion_runtime.requested_rx(),
+        ),
     )
     .await
     {
@@ -1298,8 +1451,12 @@ async fn build_hysteria2_transport(
             });
         }
     };
+    congestion_runtime
+        .apply_server_response(auth_session.report().rx_auto, auth_session.report().rx);
     endpoint.mark_ready();
     let auth_report = auth_session.report().clone();
+    let congestion = congestion_runtime.negotiation();
+    let congestion_observation = metrics.congestion_negotiated(congestion);
     let identity = key.redacted_identity();
     let instance_id = metrics.next_transport_instance();
     Ok((
@@ -1310,6 +1467,7 @@ async fn build_hysteria2_transport(
             endpoint,
             connection,
             auth_report,
+            _congestion_observation: congestion_observation,
             leases: Hysteria2LogicalLeaseAdmission::new(
                 resources.logical_lease_limit(),
                 Arc::clone(&metrics),

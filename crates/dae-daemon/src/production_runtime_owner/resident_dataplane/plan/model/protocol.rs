@@ -80,7 +80,9 @@ pub(crate) enum ResidentProxyProtocolPlan {
     Hysteria2QuicTcp {
         auth: String,
         tls_identity: dae_outbound::hysteria2::Hysteria2TlsIdentity,
+        max_tx: u64,
         max_rx: u64,
+        congestion: Hysteria2CongestionConfig,
         obfs: ResidentHysteria2ObfsPlan,
         port_hop_ports: Vec<u16>,
         port_hop_interval: Duration,

@@ -24,6 +24,9 @@ fn hysteria2_fixture_url_with_tls_mode(server: &str, insecure: bool, pin_sha256:
         obfs_password: String::new(),
         max_tx: 0,
         max_rx: 0,
+        max_tx_configured: false,
+        max_rx_configured: false,
+        congestion: Default::default(),
     }
     .export_url()
 }
@@ -41,6 +44,9 @@ pub(crate) fn hysteria2_salamander_fixture_url(add: &str, port: u16) -> String {
         obfs_password: fixture_secret(),
         max_tx: 0,
         max_rx: 0,
+        max_tx_configured: false,
+        max_rx_configured: false,
+        congestion: Default::default(),
     }
     .export_url()
 }

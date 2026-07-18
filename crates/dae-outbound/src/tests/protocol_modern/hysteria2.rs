@@ -169,3 +169,54 @@ pub(super) fn hysteria2_tls_fields_without_runtime_support_fail_before_construct
         assert!(!message.contains(secret_value));
     }
 }
+
+#[test]
+pub(super) fn hysteria2_bandwidth_directions_and_congestion_options_round_trip_independently() {
+    let max_tx = crate::hysteria2::Hysteria2Link::parse(
+        "hysteria2://auth@example.com:443?maxTx=12500000&congestion=reno&disableLossCompensation=1#tx",
+    )
+    .unwrap();
+    assert!(max_tx.max_tx_configured);
+    assert!(!max_tx.max_rx_configured);
+    assert_eq!(max_tx.max_tx, 12_500_000);
+    assert_eq!(max_tx.max_rx, 0);
+    assert_eq!(
+        max_tx.congestion.controller,
+        crate::hysteria2::Hysteria2CongestionController::Reno
+    );
+    assert!(max_tx.congestion.disable_loss_compensation);
+    assert_eq!(
+        max_tx.export_url(),
+        "hysteria2://auth@example.com:443?congestion=reno&disableLossCompensation=1&maxTx=12500000#tx"
+    );
+
+    let max_rx = crate::hysteria2::Hysteria2Link::parse(
+        "hysteria2://auth@example.com:443?maxRx=25000000#rx",
+    )
+    .unwrap();
+    assert!(!max_rx.max_tx_configured);
+    assert!(max_rx.max_rx_configured);
+    assert_eq!(max_rx.max_tx, 0);
+    assert_eq!(max_rx.max_rx, 25_000_000);
+    assert_eq!(
+        max_rx.export_url(),
+        "hysteria2://auth@example.com:443?maxRx=25000000#rx"
+    );
+
+    let neither =
+        crate::hysteria2::Hysteria2Link::parse("hysteria2://auth@example.com:443#none").unwrap();
+    assert!(!neither.max_tx_configured);
+    assert!(!neither.max_rx_configured);
+}
+
+#[test]
+pub(super) fn hysteria2_unsupported_congestion_shapes_fail_without_echoing_values() {
+    for link in [
+        "hysteria2://auth@example.com:443?congestion=must-not-echo#bad-controller",
+        "hysteria2://auth@example.com:443?bbrProfile=must-not-echo#bad-profile",
+        "hysteria2://auth@example.com:443?congestion=reno&bbrProfile=aggressive#bad-combination",
+    ] {
+        let error = crate::hysteria2::Hysteria2Link::parse(link).unwrap_err();
+        assert!(!error.to_string().contains("must-not-echo"));
+    }
+}

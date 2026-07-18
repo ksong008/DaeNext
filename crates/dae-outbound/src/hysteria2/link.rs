@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use crate::error::OutboundError;
 
+use super::Hysteria2CongestionConfig;
 use super::port_hopping::parse_port_union;
 
 const UNSUPPORTED_TLS_QUERY_FIELDS: [&str; 4] = ["ca", "clientCertificate", "clientKey", "ech"];
@@ -19,6 +20,9 @@ pub struct Hysteria2Link {
     pub obfs_password: String,
     pub max_tx: u64,
     pub max_rx: u64,
+    pub max_tx_configured: bool,
+    pub max_rx_configured: bool,
+    pub congestion: Hysteria2CongestionConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,12 +56,33 @@ impl Hysteria2Link {
                 .ok_or_else(|| OutboundError::BadHysteria2("invalid insecure".to_owned()))?,
             _ => false,
         };
-        let mut max_tx = 0;
-        let mut max_rx = 0;
-        if query_value(&query, "maxTx").is_some() && query_value(&query, "maxRx").is_some() {
-            max_tx = parse_u64(query_value(&query, "maxTx").as_deref().unwrap_or(""))?;
-            max_rx = parse_u64(query_value(&query, "maxRx").as_deref().unwrap_or(""))?;
-        }
+        let max_tx_value = query_value(&query, "maxTx");
+        let max_rx_value = query_value(&query, "maxRx");
+        let max_tx = max_tx_value
+            .as_deref()
+            .map(parse_u64)
+            .transpose()?
+            .unwrap_or(0);
+        let max_rx = max_rx_value
+            .as_deref()
+            .map(parse_u64)
+            .transpose()?
+            .unwrap_or(0);
+        let disable_loss_compensation = query_value(&query, "disableLossCompensation")
+            .map(|value| {
+                parse_bool(&value).ok_or_else(|| {
+                    OutboundError::BadHysteria2(
+                        "invalid Hysteria2 disableLossCompensation".to_owned(),
+                    )
+                })
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let congestion = Hysteria2CongestionConfig::new(
+            query_value(&query, "congestion").as_deref().unwrap_or(""),
+            query_value(&query, "bbrProfile").as_deref().unwrap_or(""),
+            disable_loss_compensation,
+        )?;
         let server = normalize_server_with_mport(server, query_value(&query, "mport").as_deref())?;
         Ok(Self {
             name: percent_decode(name)?,
@@ -74,6 +99,9 @@ impl Hysteria2Link {
                 .unwrap_or_default(),
             max_tx,
             max_rx,
+            max_tx_configured: max_tx_value.is_some(),
+            max_rx_configured: max_rx_value.is_some(),
+            congestion,
         })
     }
 
@@ -103,9 +131,26 @@ impl Hysteria2Link {
         if !self.obfs_password.is_empty() {
             query.push(("obfs-password", Cow::Borrowed(&self.obfs_password)));
         }
-        if self.max_tx > 0 && self.max_rx > 0 {
+        if self.max_tx_configured {
             query.push(("maxTx", Cow::Owned(self.max_tx.to_string())));
+        }
+        if self.max_rx_configured {
             query.push(("maxRx", Cow::Owned(self.max_rx.to_string())));
+        }
+        if self.congestion.controller != Default::default() {
+            query.push((
+                "congestion",
+                Cow::Borrowed(self.congestion.controller.as_str()),
+            ));
+        }
+        if self.congestion.bbr_profile != Default::default() {
+            query.push((
+                "bbrProfile",
+                Cow::Borrowed(self.congestion.bbr_profile.as_str()),
+            ));
+        }
+        if self.congestion.disable_loss_compensation {
+            query.push(("disableLossCompensation", Cow::Borrowed("1")));
         }
         query.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.as_ref().cmp(b.1.as_ref())));
         if !query.is_empty() {

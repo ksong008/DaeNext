@@ -16,6 +16,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct Hysteria2Quic
     pub(in crate::production_runtime_owner::resident_dataplane) port_hop_interval: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) tls_identity:
         &'a dae_outbound::hysteria2::Hysteria2TlsIdentity,
+    pub(in crate::production_runtime_owner::resident_dataplane) congestion:
+        Arc<Hysteria2CongestionRuntime>,
     pub(in crate::production_runtime_owner::resident_dataplane) resources:
         Hysteria2OwnerResourceProfile,
     pub(in crate::production_runtime_owner::resident_dataplane) port_hopping_metrics:
@@ -34,6 +36,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         port_hop_ports,
         port_hop_interval,
         tls_identity,
+        congestion,
         resources,
         port_hopping_metrics,
         caller,
@@ -45,9 +48,10 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         deadline,
     )
     .await?;
-    let client_config = build_hysteria2_runtime_client_config_with_udp_overhead(
+    let client_config = build_hysteria2_runtime_client_config_with_congestion(
         tls_identity,
         obfs.udp_packet_overhead(),
+        Some(congestion),
     )
     .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(

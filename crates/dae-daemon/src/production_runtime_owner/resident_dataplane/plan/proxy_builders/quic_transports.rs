@@ -131,6 +131,24 @@ pub(crate) fn build_hysteria2_proxy_plan(
         &parsed.pin_sha256,
     )
     .map_err(|err| format!("build Hysteria2 TLS policy for node {node_tag}: {err}"))?;
+    let global_max_tx = parse_hysteria2_bandwidth(&config.global.bandwidth_max_tx)
+        .map_err(|err| format!("parse Hysteria2 MaxTx for node {node_tag}: {err}"))?;
+    let global_max_rx = parse_hysteria2_bandwidth(&config.global.bandwidth_max_rx)
+        .map_err(|err| format!("parse Hysteria2 MaxRx for node {node_tag}: {err}"))?;
+    let max_tx = if parsed.max_tx_configured {
+        parsed.max_tx
+    } else {
+        global_max_tx
+    };
+    let max_rx = if parsed.max_rx_configured {
+        parsed.max_rx
+    } else {
+        global_max_rx
+    };
+    let congestion = parsed
+        .congestion
+        .validate_quinn()
+        .map_err(|err| format!("admit Hysteria2 congestion for node {node_tag}: {err}"))?;
     let allow_insecure = tls_identity.policy().allow_insecure();
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
@@ -161,7 +179,9 @@ pub(crate) fn build_hysteria2_proxy_plan(
         handler: ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
             tls_identity,
-            max_rx: parsed.max_rx,
+            max_tx,
+            max_rx,
+            congestion,
             obfs,
             port_hop_ports,
             port_hop_interval,
