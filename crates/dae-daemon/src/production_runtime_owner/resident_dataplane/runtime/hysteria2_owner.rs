@@ -1723,3 +1723,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "hysteria2_owner_live_tests.rs"]
+mod live_tests;
