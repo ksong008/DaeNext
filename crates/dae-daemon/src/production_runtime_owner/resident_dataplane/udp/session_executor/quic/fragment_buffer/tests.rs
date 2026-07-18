@@ -1,94 +1,172 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::ResidentRuntimeProfile;
 
-#[test]
-fn fragments_reassemble_by_packet_id() {
-    let mut buffer = QuicUdpFragmentBuffer::default();
-    assert!(
-        buffer
-            .push(7, 1, 3, b"middle-".to_vec(), "Hysteria2")
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        buffer
-            .push(7, 2, 3, b"tail".to_vec(), "Hysteria2")
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        buffer
-            .push(7, 0, 3, b"head-".to_vec(), "Hysteria2")
-            .unwrap()
-            .unwrap(),
-        b"head-middle-tail"
-    );
+fn resources() -> QuicUdpDatagramResourceProfile {
+    QuicUdpDatagramResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory)
+}
+
+fn buffer(max_reassembled_bytes: usize) -> QuicUdpFragmentBuffer {
+    QuicUdpFragmentBuffer::new(resources(), max_reassembled_bytes)
 }
 
 #[test]
-fn expired_incomplete_packets_no_longer_hold_capacity() {
+fn fragments_reassemble_by_packet_id() {
+    let mut buffer = buffer(4_096);
+    assert!(matches!(
+        buffer
+            .push(7, 1, 3, b"middle-".to_vec(), "Hysteria2")
+            .unwrap(),
+        QuicUdpFragmentOutcome::Pending
+    ));
+    assert!(matches!(
+        buffer.push(7, 2, 3, b"tail".to_vec(), "Hysteria2").unwrap(),
+        QuicUdpFragmentOutcome::Pending
+    ));
+    let outcome = buffer
+        .push(7, 0, 3, b"head-".to_vec(), "Hysteria2")
+        .unwrap();
+    let QuicUdpFragmentOutcome::Complete(payload) = outcome else {
+        panic!("complete fragment set must yield one payload");
+    };
+    assert_eq!(payload, b"head-middle-tail");
+    let snapshot = buffer.snapshot();
+    assert_eq!(snapshot.pending_packets, 0);
+    assert_eq!(snapshot.pending_bytes, 0);
+    assert_eq!(snapshot.quarantined_packets, 1);
+    assert_eq!(snapshot.high_water_packets, 1);
+    assert_eq!(snapshot.high_water_bytes, b"head-middle-tail".len());
+}
+
+#[test]
+fn expired_incomplete_packets_release_count_and_bytes() {
     let now = Instant::now();
-    let mut buffer = QuicUdpFragmentBuffer::default();
-    for packet_id in 0..QUIC_UDP_FRAGMENT_MAX_PENDING as u16 {
-        assert!(
+    let mut buffer = buffer(4_096);
+    for packet_id in 0..resources().pending_fragment_packets() as u16 {
+        assert!(matches!(
             buffer
                 .push_at(now, packet_id, 0, 2, vec![1], "TUIC")
-                .unwrap()
-                .is_none()
-        );
+                .unwrap(),
+            QuicUdpFragmentOutcome::Pending
+        ));
     }
     assert!(
         buffer
             .push_at(
                 now,
-                QUIC_UDP_FRAGMENT_MAX_PENDING as u16,
+                resources().pending_fragment_packets() as u16,
                 0,
                 2,
                 vec![2],
                 "TUIC",
             )
             .unwrap_err()
-            .contains("buffer is full")
+            .contains("packet budget is full")
     );
 
-    assert!(
-        buffer
-            .push_at(
-                now + QUIC_UDP_FRAGMENT_TTL,
-                QUIC_UDP_FRAGMENT_MAX_PENDING as u16,
-                0,
-                2,
-                vec![2],
-                "TUIC",
-            )
-            .unwrap()
-            .is_none()
+    buffer.expire_at(now + resources().fragment_ttl());
+    let snapshot = buffer.snapshot();
+    assert_eq!(snapshot.pending_packets, 0);
+    assert_eq!(snapshot.pending_bytes, 0);
+    assert_eq!(
+        snapshot.expired_packets,
+        resources().pending_fragment_packets() as u64
     );
-    assert_eq!(buffer.pending.len(), 1);
 }
 
 #[test]
-fn late_fragment_does_not_join_an_expired_packet() {
+fn late_fragment_is_quarantined_instead_of_starting_a_new_packet() {
     let now = Instant::now();
-    let mut buffer = QuicUdpFragmentBuffer::default();
-    assert!(
+    let mut buffer = buffer(4_096);
+    assert!(matches!(
         buffer
             .push_at(now, 9, 0, 2, b"old".to_vec(), "Hysteria2")
-            .unwrap()
-            .is_none()
-    );
+            .unwrap(),
+        QuicUdpFragmentOutcome::Pending
+    ));
 
+    buffer.expire_at(now + resources().fragment_ttl());
+    let outcome = buffer
+        .push_at(
+            now + resources().fragment_ttl(),
+            9,
+            1,
+            2,
+            b"late".to_vec(),
+            "Hysteria2",
+        )
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        QuicUdpFragmentOutcome::Late(payload) if payload.len() == 4
+    ));
+    let snapshot = buffer.snapshot();
+    assert_eq!(snapshot.pending_packets, 0);
+    assert_eq!(snapshot.pending_bytes, 0);
+    assert_eq!(snapshot.late_fragments, 1);
+}
+
+#[test]
+fn duplicate_replacement_keeps_exact_byte_accounting() {
+    let now = Instant::now();
+    let mut buffer = buffer(4_096);
+    assert!(matches!(
+        buffer.push_at(now, 11, 0, 2, vec![1; 100], "TUIC").unwrap(),
+        QuicUdpFragmentOutcome::Pending
+    ));
+    assert!(matches!(
+        buffer.push_at(now, 11, 0, 2, vec![2; 10], "TUIC").unwrap(),
+        QuicUdpFragmentOutcome::Pending
+    ));
+    let snapshot = buffer.snapshot();
+    assert_eq!(snapshot.pending_packets, 1);
+    assert_eq!(snapshot.pending_bytes, 10);
+    assert_eq!(snapshot.duplicate_fragments, 1);
+
+    let outcome = buffer.push_at(now, 11, 1, 2, vec![3; 20], "TUIC").unwrap();
+    let QuicUdpFragmentOutcome::Complete(payload) = outcome else {
+        panic!("replacement fragment set must complete");
+    };
+    assert_eq!(payload.len(), 30);
+    assert_eq!(&payload[..10], &[2; 10]);
+    assert_eq!(&payload[10..], &[3; 20]);
+    assert_eq!(buffer.snapshot().pending_bytes, 0);
+}
+
+#[test]
+fn global_fragment_byte_budget_is_independent_from_packet_count() {
+    let now = Instant::now();
+    let mut buffer = buffer(u16::MAX as usize);
+    for packet_id in [1, 2] {
+        assert!(matches!(
+            buffer
+                .push_at(now, packet_id, 0, 2, vec![1; 60 * 1024], "TUIC")
+                .unwrap(),
+            QuicUdpFragmentOutcome::Pending
+        ));
+    }
     assert!(
         buffer
-            .push_at(
-                now + QUIC_UDP_FRAGMENT_TTL,
-                9,
-                1,
-                2,
-                b"late".to_vec(),
-                "Hysteria2",
-            )
-            .unwrap()
-            .is_none()
+            .push_at(now, 3, 0, 2, vec![1; 60 * 1024], "TUIC")
+            .unwrap_err()
+            .contains("byte budget exceeded")
     );
-    assert_eq!(buffer.pending.get(&9).unwrap().parts.len(), 1);
+    let snapshot = buffer.snapshot();
+    assert_eq!(snapshot.pending_packets, 2);
+    assert_eq!(snapshot.pending_bytes, 120 * 1024);
+    assert_eq!(snapshot.rejected_fragments, 1);
+    assert_eq!(snapshot.rejected_bytes, 60 * 1024);
+}
+
+#[test]
+fn clear_reconciles_all_active_fragment_resources() {
+    let mut buffer = buffer(4_096);
+    assert!(matches!(
+        buffer.push(12, 0, 2, vec![1; 512], "Hysteria2").unwrap(),
+        QuicUdpFragmentOutcome::Pending
+    ));
+    buffer.clear();
+    let snapshot = buffer.snapshot();
+    assert_eq!(snapshot.pending_packets, 0);
+    assert_eq!(snapshot.pending_bytes, 0);
+    assert_eq!(snapshot.quarantined_packets, 0);
 }

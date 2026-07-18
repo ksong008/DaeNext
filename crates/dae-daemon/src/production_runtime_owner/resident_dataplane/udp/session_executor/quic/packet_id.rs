@@ -1,41 +1,45 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::production_runtime_owner::resident_dataplane::RESIDENT_UDP_RESPONSE_TIMEOUT;
+use crate::production_runtime_owner::resident_dataplane::QuicUdpDatagramResourceProfile;
 
 const QUIC_UDP_PACKET_ID_BITMAP_WORD_BITS: usize = u64::BITS as usize;
 const QUIC_UDP_PACKET_ID_BITMAP_WORDS: usize =
     (u16::MAX as usize + 1) / QUIC_UDP_PACKET_ID_BITMAP_WORD_BITS;
-const QUIC_UDP_PACKET_ID_LEASE_TTL: std::time::Duration = RESIDENT_UDP_RESPONSE_TIMEOUT;
-
 struct QuicUdpPacketIdLease {
     packet_id: u16,
     expires_at: Instant,
 }
 
 pub(super) struct QuicUdpPacketIdAllocator {
+    resources: QuicUdpDatagramResourceProfile,
     next: u16,
     bitmap: Option<Box<[u64]>>,
     leases: VecDeque<QuicUdpPacketIdLease>,
 }
 
-impl Default for QuicUdpPacketIdAllocator {
-    fn default() -> Self {
+impl QuicUdpPacketIdAllocator {
+    pub(super) fn new(resources: QuicUdpDatagramResourceProfile) -> Self {
         Self {
+            resources,
             next: 1,
             bitmap: None,
             leases: VecDeque::new(),
         }
     }
-}
 
-impl QuicUdpPacketIdAllocator {
     pub(super) fn allocate(&mut self) -> Result<u16, String> {
         self.allocate_at(Instant::now())
     }
 
     fn allocate_at(&mut self, now: Instant) -> Result<u16, String> {
         self.expire_at(now);
+        if self.leases.len() >= self.resources.packet_id_leases() {
+            return Err(format!(
+                "QUIC UDP packet ID lease budget is full ({})",
+                self.resources.packet_id_leases()
+            ));
+        }
         for _ in 0..usize::from(u16::MAX) {
             let packet_id = self.next;
             self.next = if packet_id == u16::MAX {
@@ -49,7 +53,9 @@ impl QuicUdpPacketIdAllocator {
             self.set_leased(packet_id, true);
             self.leases.push_back(QuicUdpPacketIdLease {
                 packet_id,
-                expires_at: now.checked_add(QUIC_UDP_PACKET_ID_LEASE_TTL).unwrap_or(now),
+                expires_at: now
+                    .checked_add(self.resources.packet_id_lease_ttl())
+                    .unwrap_or(now),
             });
             return Ok(packet_id);
         }
@@ -66,6 +72,14 @@ impl QuicUdpPacketIdAllocator {
                 self.set_leased(lease.packet_id, false);
             }
         }
+    }
+
+    pub(super) fn next_expiration(&self) -> Option<Instant> {
+        self.leases.front().map(|lease| lease.expires_at)
+    }
+
+    pub(super) fn expire(&mut self) {
+        self.expire_at(Instant::now());
     }
 
     fn is_leased(&self, packet_id: u16) -> bool {
