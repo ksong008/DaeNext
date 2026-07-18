@@ -198,6 +198,7 @@ impl XhttpXmuxH2Manager {
         let usage = Arc::new(XhttpXmuxUsage {
             open_usage: AtomicI32::new(0),
             left_requests: AtomicI32::new(left_requests),
+            accepting_requests: AtomicBool::new(true),
             unreusable_at,
             state_signal: self.lifecycle.signal(),
         });
@@ -223,6 +224,7 @@ impl XhttpXmuxH2Manager {
             let should_retire = {
                 let client = &self.clients[index];
                 client.connection_task.is_finished()
+                    || !client.usage.accepting_requests.load(Ordering::Acquire)
                     || client.left_usage == 0
                     || client.usage.left_requests.load(Ordering::Acquire) <= 0
                     || client
@@ -256,6 +258,7 @@ impl XhttpXmuxH2Manager {
 
     fn client_reusable(&self, client: &XhttpXmuxH2ClientEntry) -> bool {
         !client.connection_task.is_finished()
+            && client.usage.accepting_requests.load(Ordering::Acquire)
             && client.left_usage != 0
             && client.usage.left_requests.load(Ordering::Acquire) > 0
             && client

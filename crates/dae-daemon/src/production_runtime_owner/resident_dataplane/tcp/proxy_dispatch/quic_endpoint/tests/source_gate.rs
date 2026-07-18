@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 const CENTRAL_CONSTRUCTOR: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/proxy_dispatch/quic_endpoint.rs";
 const PROXIED_DOH3_TEST_SERVER: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/dns/transport/h3/proxied/tests/h3_server.rs";
 const DNS_QUIC_TEST_SUPPORT: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/dns/transport/test_support.rs";
+const XHTTP_H3_OWNER_TEST: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/transport_helpers/xhttp_h2/h3_transport/owner_live_tests.rs";
 const SOURCE_GATE_TEST: &str = "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/proxy_dispatch/quic_endpoint/tests/source_gate.rs";
 const EXPLICIT_NON_PRODUCTION_CONSTRUCTORS: &[&str] = &[
     PROXIED_DOH3_TEST_SERVER,
     DNS_QUIC_TEST_SUPPORT,
+    XHTTP_H3_OWNER_TEST,
     SOURCE_GATE_TEST,
     "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp/proxy_dispatch/quic_helpers_port_hopping_tests.rs",
     "crates/dae-daemon/src/production_runtime_owner/resident_dataplane/runtime/hysteria2_owner_live_tests.rs",

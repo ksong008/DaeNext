@@ -13,7 +13,7 @@ use super::*;
 const SERVER_NAME: &str = "localhost";
 static CLIENT_HELLO_RECORD: LazyLock<Mutex<Vec<u8>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
-fn endpoint_plan() -> ResidentXhttpEndpointPlan {
+pub(in super::super) fn endpoint_plan() -> ResidentXhttpEndpointPlan {
     ResidentXhttpEndpointPlan {
         server_host: SERVER_NAME.to_owned(),
         server_port: 443,

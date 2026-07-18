@@ -7,7 +7,8 @@ use super::super::h2_transport::{
     open_xhttp_h2_proxy_sender,
 };
 use super::super::h3_transport::{
-    open_xhttp_h3_download_stream, open_xhttp_h3_endpoint_client, open_xhttp_h3_proxy_client,
+    note_xhttp_h3_stream_error, open_xhttp_h3_download_stream, open_xhttp_h3_endpoint_client,
+    open_xhttp_h3_proxy_client, open_xhttp_h3_request,
 };
 use super::super::request::{
     new_xhttp_session_id_for, write_xhttp_h1_chunk, write_xhttp_h1_chunked_request_head,
@@ -127,21 +128,28 @@ async fn open_xhttp_stream_one_parts(
             let mut endpoint_client = open_xhttp_h3_proxy_client(proxy, &endpoint, mark).await?;
             note_xhttp_xmux_request(endpoint_client.xmux_lease.as_ref());
             let request = xhttp_h3_request(http::Method::POST, &endpoint, "", true)?;
-            let mut stream = time::timeout(
-                RESIDENT_CONNECT_TIMEOUT,
-                endpoint_client.client.send_request(request),
+            let mut stream = open_xhttp_h3_request(
+                &mut endpoint_client.client,
+                request,
+                endpoint_client.xmux_lease.as_ref(),
+                "xHTTP H3 stream-one request timeout",
+                "send xHTTP H3 stream-one request",
             )
-            .await
-            .map_err(|_| "xHTTP H3 stream-one request timeout".to_owned())?
-            .map_err(|err| format!("send xHTTP H3 stream-one request: {err:?}"))?;
+            .await?;
             time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(initial_payload))
                 .await
                 .map_err(|_| "send xHTTP H3 stream-one body timeout".to_owned())?
-                .map_err(|err| format!("send xHTTP H3 stream-one body: {err:?}"))?;
+                .map_err(|err| {
+                    note_xhttp_h3_stream_error(&err, endpoint_client.xmux_lease.as_ref());
+                    format!("send xHTTP H3 stream-one body: {err:?}")
+                })?;
             let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
                 .await
                 .map_err(|_| "xHTTP H3 stream-one response timeout".to_owned())?
-                .map_err(|err| format!("recv xHTTP H3 stream-one response: {err:?}"))?;
+                .map_err(|err| {
+                    note_xhttp_h3_stream_error(&err, endpoint_client.xmux_lease.as_ref());
+                    format!("recv xHTTP H3 stream-one response: {err:?}")
+                })?;
             if !response.status().is_success() {
                 return Err(format!(
                     "xHTTP H3 stream-one response status {}",
@@ -397,17 +405,21 @@ async fn open_xhttp_stream_upload_client(
                 &xhttp_session_path_suffix(session_id, None),
                 true,
             )?;
-            let mut stream = time::timeout(
-                RESIDENT_CONNECT_TIMEOUT,
-                endpoint_client.client.send_request(request),
+            let mut stream = open_xhttp_h3_request(
+                &mut endpoint_client.client,
+                request,
+                endpoint_client.xmux_lease.as_ref(),
+                "xHTTP H3 stream-up request timeout",
+                "send xHTTP H3 stream-up request",
             )
-            .await
-            .map_err(|_| "xHTTP H3 stream-up request timeout".to_owned())?
-            .map_err(|err| format!("send xHTTP H3 stream-up request: {err:?}"))?;
+            .await?;
             time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(initial_payload))
                 .await
                 .map_err(|_| "send xHTTP H3 stream-up body timeout".to_owned())?
-                .map_err(|err| format!("send xHTTP H3 stream-up body: {err:?}"))?;
+                .map_err(|err| {
+                    note_xhttp_h3_stream_error(&err, endpoint_client.xmux_lease.as_ref());
+                    format!("send xHTTP H3 stream-up body: {err:?}")
+                })?;
             Ok((
                 XhttpStreamUploadClient::H3 {
                     stream,

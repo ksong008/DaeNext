@@ -219,6 +219,7 @@ mod test_support;
 pub(super) struct XhttpXmuxUsage {
     pub(super) open_usage: AtomicI32,
     pub(super) left_requests: AtomicI32,
+    accepting_requests: AtomicBool,
     pub(super) unreusable_at: Option<Instant>,
     state_signal: XhttpXmuxStateSignal,
 }
@@ -259,17 +260,34 @@ impl XhttpXmuxClientLease {
         self.usage.state_signal.notify();
         left
     }
+
+    pub(super) fn retire_physical(&self) {
+        self.usage.retire_physical();
+    }
 }
 
 impl XhttpXmuxRequestHandle {
     pub(super) fn use_for_packet_up_post(&self) -> bool {
         let left = self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1;
         self.usage.state_signal.notify();
-        left > 0
+        self.usage.accepting_requests.load(Ordering::Acquire)
+            && left > 0
             && self
                 .usage
                 .unreusable_at
                 .is_none_or(|deadline| Instant::now() <= deadline)
+    }
+
+    pub(super) fn retire_physical(&self) {
+        self.usage.retire_physical();
+    }
+}
+
+impl XhttpXmuxUsage {
+    fn retire_physical(&self) {
+        if self.accepting_requests.swap(false, Ordering::AcqRel) {
+            self.state_signal.notify();
+        }
     }
 }
 
@@ -354,6 +372,7 @@ mod tests {
         Arc::new(XhttpXmuxUsage {
             open_usage: AtomicI32::new(0),
             left_requests: AtomicI32::new(left_requests),
+            accepting_requests: AtomicBool::new(true),
             unreusable_at,
             state_signal: XhttpXmuxStateSignal::new(),
         })
@@ -418,6 +437,19 @@ mod tests {
         assert!(can_release_retiring_owner(
             usage.open_usage.load(Ordering::Acquire)
         ));
+    }
+
+    #[test]
+    fn xhttp_xmux_retired_physical_is_not_reused_for_packet_up() {
+        let usage = xmux_usage(4, None);
+        let lease = XhttpXmuxClientLease::open(Arc::clone(&usage));
+        let request = lease.request_handle();
+
+        lease.retire_physical();
+
+        assert!(!usage.accepting_requests.load(Ordering::Acquire));
+        assert!(!request.use_for_packet_up_post());
+        assert_eq!(usage.left_requests.load(Ordering::Acquire), 3);
     }
 
     #[test]
