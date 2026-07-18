@@ -115,6 +115,7 @@ fn snapshot_read_failure_forces_location_refresh_and_recovers() {
     assert_eq!(value["locationGeneration"], json!(2));
     assert_eq!(value["path"], json!(new.path.display().to_string()));
     assert_eq!(value["currentBytes"], json!("1234"));
+    assert_eq!(value["peakBytes"], json!("1334"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -137,6 +138,11 @@ fn test_location_for_root(root: &Path, name: &str) -> CgroupMemoryLocation {
 fn write_memory_fixture(path: &Path, current: u64) {
     fs::create_dir_all(path).unwrap();
     fs::write(path.join("memory.current"), current.to_string()).unwrap();
+    fs::write(
+        path.join("memory.peak"),
+        current.saturating_add(100).to_string(),
+    )
+    .unwrap();
     fs::write(path.join("memory.max"), "4096\n").unwrap();
     fs::write(path.join("memory.high"), "max\n").unwrap();
     fs::write(path.join("memory.events"), "oom 0\n").unwrap();
