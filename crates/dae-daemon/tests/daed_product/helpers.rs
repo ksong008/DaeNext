@@ -341,6 +341,9 @@ pub(super) fn hysteria2_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         obfs_password: String::new(),
         max_tx: 0,
         max_rx: 0,
+        max_tx_configured: false,
+        max_rx_configured: false,
+        congestion: Default::default(),
     }
     .export_url()
 }

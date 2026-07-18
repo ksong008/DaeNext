@@ -27,12 +27,14 @@ use dae_datapath::{
 use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
 };
+#[cfg(test)]
+use dae_outbound::hysteria2::build_hysteria2_runtime_client_config_with_udp_overhead;
 use dae_outbound::{
     anytls::{AnyTlsFrame, contract as anytls_contract, link as anytls_link},
     http_proxy::{HttpConnectOptions, request as http_request},
     hysteria2::{
-        HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD,
-        build_hysteria2_runtime_client_config_with_udp_overhead, read_hysteria2_tcp_response,
+        HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD, Hysteria2CongestionRuntime,
+        build_hysteria2_runtime_client_config_with_congestion, read_hysteria2_tcp_response,
         write_hysteria2_tcp_request,
     },
     juicity::{

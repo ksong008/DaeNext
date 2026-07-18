@@ -232,6 +232,72 @@ fn hysteria2_port_hopping_rejects_an_interval_below_the_official_minimum() {
 }
 
 #[test]
+fn hysteria2_bandwidth_uses_independent_node_and_global_directions() {
+    let config = parse_config(
+        r#"
+        global {
+        bandwidth_max_tx: '200 mbps'
+        bandwidth_max_rx: '1 gbps'
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let mut link = Hysteria2Link::parse(&hysteria2_fixture_url(
+        "hy2",
+        &fixture_host(FixtureEndpoint::Primary),
+        fixture_port(1),
+    ))
+    .unwrap();
+    link.max_rx = 30_000_000;
+    link.max_rx_configured = true;
+    link.congestion = Hysteria2CongestionConfig {
+        controller: dae_outbound::hysteria2::Hysteria2CongestionController::Reno,
+        ..Default::default()
+    };
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "hy2_independent_bandwidth".to_owned(),
+        link.export_url(),
+    )
+    .unwrap();
+    assert!(matches!(
+        proxy.handler,
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            max_tx: 25_000_000,
+            max_rx: 30_000_000,
+            congestion: Hysteria2CongestionConfig {
+                controller: dae_outbound::hysteria2::Hysteria2CongestionController::Reno,
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn hysteria2_unavailable_bbr_profile_fails_before_socket_construction() {
+    let config = resident_tcp_handler_config();
+    let mut link = Hysteria2Link::parse(&hysteria2_fixture_url(
+        "hy2",
+        &fixture_host(FixtureEndpoint::Primary),
+        fixture_port(1),
+    ))
+    .unwrap();
+    link.congestion.bbr_profile = dae_outbound::hysteria2::Hysteria2BbrProfile::Aggressive;
+    let error = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "hy2_unavailable_profile".to_owned(),
+        link.export_url(),
+    )
+    .unwrap_err();
+    assert!(error.contains("only the standard BBR profile"));
+}
+
+#[test]
 pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
     let variants = [
         ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] },
@@ -314,7 +380,9 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
                 &fixture_pin_sha256(),
             )
             .unwrap(),
+            max_tx: 0,
             max_rx: 0,
+            congestion: Default::default(),
             obfs: ResidentHysteria2ObfsPlan::none(),
             port_hop_ports: vec![fixture_port(1)],
             port_hop_interval: Duration::from_secs(30),

@@ -302,7 +302,7 @@ fn udp_wrapper_overhead_is_accounted_in_quinn_mtu_discovery() {
     assert_eq!(hysteria2_mtu_discovery_upper_bound(0).unwrap(), 1_452);
     assert_eq!(hysteria2_mtu_discovery_upper_bound(8).unwrap(), 1_444);
     assert!(
-        hysteria2_transport_config(8).is_ok(),
+        hysteria2_transport_config(8, None).is_ok(),
         "a Salamander-sized UDP wrapper overhead must produce a valid Quinn transport config"
     );
     assert!(

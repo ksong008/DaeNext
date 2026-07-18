@@ -8,6 +8,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use crate::error::OutboundError;
 
+use super::Hysteria2CongestionRuntime;
 use super::tls_policy::{
     Hysteria2ApplicationProtocol, Hysteria2CertificateVerification, Hysteria2TlsIdentity,
 };
@@ -38,7 +39,7 @@ pub(super) fn build_hysteria2_server_config(
         QuicServerConfig::try_from(crypto)
             .map_err(|err| bad_tls(format!("Hysteria2 server QUIC TLS: {err}")))?,
     ));
-    config.transport_config(Arc::new(hysteria2_transport_config(0)?));
+    config.transport_config(Arc::new(hysteria2_transport_config(0, None)?));
     Ok((config, cert_der))
 }
 
@@ -52,6 +53,14 @@ pub fn build_hysteria2_runtime_client_config_with_udp_overhead(
     identity: &Hysteria2TlsIdentity,
     udp_packet_overhead: usize,
 ) -> Result<quinn::ClientConfig, OutboundError> {
+    build_hysteria2_runtime_client_config_with_congestion(identity, udp_packet_overhead, None)
+}
+
+pub fn build_hysteria2_runtime_client_config_with_congestion(
+    identity: &Hysteria2TlsIdentity,
+    udp_packet_overhead: usize,
+    congestion: Option<Arc<Hysteria2CongestionRuntime>>,
+) -> Result<quinn::ClientConfig, OutboundError> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let crypto = build_hysteria2_rustls_client_config(identity, roots)?;
@@ -59,7 +68,10 @@ pub fn build_hysteria2_runtime_client_config_with_udp_overhead(
         QuicClientConfig::try_from(crypto)
             .map_err(|err| bad_tls(format!("Hysteria2 client QUIC TLS: {err}")))?,
     ));
-    config.transport_config(Arc::new(hysteria2_transport_config(udp_packet_overhead)?));
+    config.transport_config(Arc::new(hysteria2_transport_config(
+        udp_packet_overhead,
+        congestion,
+    )?));
     Ok(config)
 }
 
@@ -104,6 +116,7 @@ pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {
 
 fn hysteria2_transport_config(
     udp_packet_overhead: usize,
+    congestion: Option<Arc<Hysteria2CongestionRuntime>>,
 ) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
     transport.keep_alive_interval(Some(Duration::from_secs(DEFAULT_HYSTERIA2_KEEPALIVE_SECS)));
@@ -118,6 +131,9 @@ fn hysteria2_transport_config(
     let mut mtu_discovery = quinn::MtuDiscoveryConfig::default();
     mtu_discovery.upper_bound(mtu_upper_bound);
     transport.mtu_discovery_config(Some(mtu_discovery));
+    if let Some(congestion) = congestion {
+        transport.congestion_controller_factory(congestion);
+    }
     Ok(transport)
 }
 

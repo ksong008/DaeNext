@@ -420,7 +420,9 @@ mod tests {
                             "",
                         )
                         .unwrap(),
+                    max_tx: 0,
                     max_rx: 0,
+                    congestion: Default::default(),
                     obfs: ResidentHysteria2ObfsPlan::none(),
                     port_hop_ports: Vec::new(),
                     port_hop_interval: Duration::ZERO,

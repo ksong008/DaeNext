@@ -808,6 +808,7 @@ dependencies = [
  "md-5",
  "percent-encoding",
  "quinn",
+ "quinn-proto",
  "rcgen",
  "regex",
  "rustls",

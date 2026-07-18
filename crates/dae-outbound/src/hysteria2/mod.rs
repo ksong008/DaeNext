@@ -1,4 +1,5 @@
 mod auth;
+mod congestion;
 pub mod contract;
 mod dataplane;
 pub mod link;
@@ -13,6 +14,12 @@ mod wire;
 
 pub use auth::{
     Hysteria2AuthReport, Hysteria2AuthenticatedSession, authenticate_hysteria2_connection,
+};
+pub use congestion::{
+    Hysteria2BbrProfile, Hysteria2CongestionConfig, Hysteria2CongestionController,
+    Hysteria2CongestionNegotiation, Hysteria2CongestionRuntime,
+    Hysteria2EffectiveCongestionController, Hysteria2ServerBandwidthResponse,
+    parse_hysteria2_bandwidth,
 };
 pub use dataplane::{
     DEFAULT_TRUE_QUIC_LINK, DEFAULT_TRUE_QUIC_PORT_HOP_ITERATIONS,
@@ -37,6 +44,7 @@ pub use runtime::{
 };
 pub use tls::{
     DEFAULT_HYSTERIA2_MTU_DISCOVERY_UPPER_BOUND, build_hysteria2_runtime_client_config,
+    build_hysteria2_runtime_client_config_with_congestion,
     build_hysteria2_runtime_client_config_with_udp_overhead,
 };
 pub use tls_policy::{
