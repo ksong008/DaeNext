@@ -20,6 +20,31 @@ pub struct TuicLink {
     pub protocol: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TuicUdpRelayMode {
+    Native,
+}
+
+impl TuicUdpRelayMode {
+    pub fn from_config(value: &str) -> Result<Self, OutboundError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "native" => Ok(Self::Native),
+            "quic" => Err(OutboundError::BadTuic(
+                "QUIC stream UDP relay mode is not supported by this executor".to_owned(),
+            )),
+            _ => Err(OutboundError::BadTuic(
+                "unsupported UDP relay mode".to_owned(),
+            )),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuicUnderlayContract {
     pub input_network: String,
@@ -277,5 +302,38 @@ impl MagicNetwork {
         out.extend_from_slice(&self.mark.to_be_bytes());
         out.push(u8::from(self.mptcp));
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn udp_relay_mode_admits_native_and_normalized_default() {
+        assert_eq!(
+            TuicUdpRelayMode::from_config("").unwrap(),
+            TuicUdpRelayMode::Native
+        );
+        assert_eq!(
+            TuicUdpRelayMode::from_config(" NATIVE ").unwrap(),
+            TuicUdpRelayMode::Native
+        );
+        assert_eq!(TuicUdpRelayMode::Native.as_str(), "native");
+    }
+
+    #[test]
+    fn udp_relay_mode_rejects_unimplemented_stream_mode_and_redacts_unknown_values() {
+        let stream_error = TuicUdpRelayMode::from_config("quic")
+            .unwrap_err()
+            .to_string();
+        assert!(stream_error.contains("not supported"));
+
+        let unknown = "private-relay-token";
+        let unknown_error = TuicUdpRelayMode::from_config(unknown)
+            .unwrap_err()
+            .to_string();
+        assert!(unknown_error.contains("unsupported UDP relay mode"));
+        assert!(!unknown_error.contains(unknown));
     }
 }

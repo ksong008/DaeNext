@@ -17,7 +17,8 @@ use super::tls::{
 };
 pub use super::wire::{
     TUIC_AUTH_TOKEN_LEN, TUIC_AUTHENTICATE_FRAME_LEN, TUIC_AUTHENTICATE_TYPE, TUIC_CONNECT_TYPE,
-    TUIC_PACKET_TYPE, TUIC_VERSION5,
+    TUIC_DISSOCIATE_FRAME_LEN, TUIC_DISSOCIATE_TYPE, TUIC_HEARTBEAT_FRAME_LEN, TUIC_HEARTBEAT_TYPE,
+    TUIC_MAX_UDP_PAYLOAD_LENGTH, TUIC_PACKET_TYPE, TUIC_VERSION5,
 };
 use super::wire::{
     build_authenticate_frame, build_packet_frame, parse_authenticate_frame, parse_packet_frame,
@@ -229,12 +230,12 @@ async fn run_tuic_quic_loopback_smoke_async(
             .map_err(|err| bad_quic_loopback(format!("read TUIC datagram: {err}")))?;
         client_datagram_receive_count += 1;
         let parsed = parse_packet_frame(&response)?;
-        if parsed.assoc_id == DEFAULT_TUIC_ASSOC_ID
-            && parsed.packet_id == packet_id as u16
-            && parsed.frag_total == 1
-            && parsed.frag_id == 0
-            && parsed.target == options.udp_target
-            && parsed.payload == options.udp_response_payload
+        if parsed.association_id() == DEFAULT_TUIC_ASSOC_ID
+            && parsed.packet_id() == packet_id as u16
+            && parsed.fragment_count() == 1
+            && parsed.fragment_id() == 0
+            && parsed.target() == Some(options.udp_target.as_str())
+            && parsed.payload() == options.udp_response_payload
         {
             client_datagram_match_count += 1;
         }
@@ -395,13 +396,12 @@ async fn run_tuic_quic_server(
             .map_err(|err| bad_quic_loopback(format!("server read TUIC datagram: {err}")))?;
         datagram_receive_count += 1;
         let parsed = parse_packet_frame(&request)?;
-        if parsed.version == TUIC_VERSION5
-            && parsed.assoc_id == DEFAULT_TUIC_ASSOC_ID
-            && parsed.packet_id == packet_id as u16
-            && parsed.frag_total == 1
-            && parsed.frag_id == 0
-            && parsed.target == options.udp_target
-            && parsed.payload == options.udp_payload
+        if parsed.association_id() == DEFAULT_TUIC_ASSOC_ID
+            && parsed.packet_id() == packet_id as u16
+            && parsed.fragment_count() == 1
+            && parsed.fragment_id() == 0
+            && parsed.target() == Some(options.udp_target.as_str())
+            && parsed.payload() == options.udp_payload
         {
             datagram_match_count += 1;
         }

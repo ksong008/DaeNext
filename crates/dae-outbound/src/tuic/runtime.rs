@@ -3,7 +3,10 @@ use tokio::io::AsyncWriteExt;
 use crate::error::OutboundError;
 
 use super::quic_loopback::export_tuic_auth_token;
-use super::tls::{build_tuic_client_config, normalize_alpn};
+use super::tls::{
+    TuicCongestionController, build_tuic_client_config, build_tuic_client_config_with_congestion,
+    normalize_alpn,
+};
 use super::wire::{build_authenticate_frame, build_connect_frame, parse_uuid};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,6 +20,14 @@ pub fn build_tuic_runtime_client_config(
     allow_insecure: bool,
 ) -> Result<quinn::ClientConfig, OutboundError> {
     build_tuic_client_config(&normalize_alpn(alpn), allow_insecure)
+}
+
+pub fn build_tuic_runtime_client_config_with_congestion(
+    alpn: &[String],
+    allow_insecure: bool,
+    congestion: TuicCongestionController,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    build_tuic_client_config_with_congestion(&normalize_alpn(alpn), allow_insecure, congestion)
 }
 
 pub async fn authenticate_tuic_connection(
