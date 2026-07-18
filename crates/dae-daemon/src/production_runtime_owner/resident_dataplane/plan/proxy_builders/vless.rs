@@ -180,6 +180,7 @@ pub(crate) fn build_vless_proxy_plan(
     }
     let alpn = resident_vless_alpn(&vless, &net, utls_fingerprint.as_ref());
     validate_resident_h2_carrier_alpn(&alpn, &net, &node_tag)?;
+    validate_resident_meek_carrier_alpn(&alpn, &net, &node_tag)?;
     let stream_host = if let Some(meek_options) = &meek_options {
         meek_options.host.clone()
     } else if matches!(

@@ -15,6 +15,20 @@ fn h2_only_carriers_require_h2_in_the_offered_alpn_set() {
     assert!(validate_resident_h2_carrier_alpn(&h1, "websocket", "node").is_ok());
 }
 
+#[test]
+fn meek_http1_carrier_rejects_h2_capable_alpn_sets() {
+    let h1 = vec![UTLS_ALPN_HTTP_1_1.to_owned()];
+    let h2 = vec![UTLS_ALPN_H2.to_owned()];
+    let mixed = vec![UTLS_ALPN_H2.to_owned(), UTLS_ALPN_HTTP_1_1.to_owned()];
+
+    assert!(validate_resident_meek_carrier_alpn(&h1, "meek", "node").is_ok());
+    for alpn in [&h2, &mixed] {
+        let error = validate_resident_meek_carrier_alpn(alpn, "meek", "node").unwrap_err();
+        assert!(error.contains("HTTP/1.1 TLS ALPN"), "{error}");
+    }
+    assert!(validate_resident_meek_carrier_alpn(&mixed, "grpc", "node").is_ok());
+}
+
 fn fingerprint_config(global_tls_fields: &str, source: String) -> Config {
     fingerprint_config_with_mark(1234, global_tls_fields, source)
 }

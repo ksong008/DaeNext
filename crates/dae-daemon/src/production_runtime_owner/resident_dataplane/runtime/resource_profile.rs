@@ -131,6 +131,12 @@ const ANYTLS_SID_QUARANTINE_TTL_SECONDS: u64 = 10;
 const LOW_MEMORY_H2_CARRIER_OWNER_LIMIT: usize = 8;
 const BALANCED_H2_CARRIER_OWNER_LIMIT: usize = 32;
 const HIGH_PERFORMANCE_H2_CARRIER_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_MEEK_RESPONSE_HEADER_BYTES: usize = 8 * 1024;
+const BALANCED_MEEK_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
+const HIGH_PERFORMANCE_MEEK_RESPONSE_HEADER_BYTES: usize = 32 * 1024;
+const LOW_MEMORY_MEEK_RESPONSE_BODY_BYTES: usize = 256 * 1024;
+const BALANCED_MEEK_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
+const HIGH_PERFORMANCE_MEEK_RESPONSE_BODY_BYTES: usize = 4 * 1024 * 1024;
 const LOW_MEMORY_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 64;
 const BALANCED_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 256;
 const HIGH_PERFORMANCE_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 1_024;
@@ -265,6 +271,52 @@ pub(crate) struct AnyTlsOwnerResourceProfile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct H2CarrierOwnerResourceProfile {
     owner_limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MeekTransportResourceProfile {
+    response_header_bytes: usize,
+    response_body_bytes: usize,
+}
+
+impl MeekTransportResourceProfile {
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        match profile {
+            ResidentRuntimeProfile::LowMemory => Self {
+                response_header_bytes: LOW_MEMORY_MEEK_RESPONSE_HEADER_BYTES,
+                response_body_bytes: LOW_MEMORY_MEEK_RESPONSE_BODY_BYTES,
+            },
+            ResidentRuntimeProfile::Balanced => Self {
+                response_header_bytes: BALANCED_MEEK_RESPONSE_HEADER_BYTES,
+                response_body_bytes: BALANCED_MEEK_RESPONSE_BODY_BYTES,
+            },
+            ResidentRuntimeProfile::HighPerformance => Self {
+                response_header_bytes: HIGH_PERFORMANCE_MEEK_RESPONSE_HEADER_BYTES,
+                response_body_bytes: HIGH_PERFORMANCE_MEEK_RESPONSE_BODY_BYTES,
+            },
+        }
+    }
+
+    pub(crate) fn selected() -> Self {
+        static SELECTED: std::sync::OnceLock<MeekTransportResourceProfile> =
+            std::sync::OnceLock::new();
+        *SELECTED.get_or_init(|| {
+            Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+        })
+    }
+
+    pub(crate) const fn response_header_bytes(self) -> usize {
+        self.response_header_bytes
+    }
+
+    pub(crate) const fn response_body_bytes(self) -> usize {
+        self.response_body_bytes
+    }
+
+    pub(crate) const fn response_wire_bytes(self) -> usize {
+        self.response_header_bytes
+            .saturating_add(self.response_body_bytes)
+    }
 }
 
 impl H2CarrierOwnerResourceProfile {
@@ -1358,5 +1410,27 @@ mod tests {
         assert_eq!(invalid.profile, ResidentRuntimeProfile::Balanced);
         assert_eq!(invalid.source, "invalid-env-fallback");
         assert_eq!(invalid.invalid_value.as_deref(), Some("unknown"));
+    }
+
+    #[test]
+    fn meek_response_limits_scale_with_the_runtime_profile() {
+        let low =
+            MeekTransportResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
+        let balanced =
+            MeekTransportResourceProfile::from_runtime_profile(ResidentRuntimeProfile::Balanced);
+        let high = MeekTransportResourceProfile::from_runtime_profile(
+            ResidentRuntimeProfile::HighPerformance,
+        );
+
+        assert!(low.response_header_bytes() < balanced.response_header_bytes());
+        assert!(balanced.response_header_bytes() < high.response_header_bytes());
+        assert!(low.response_body_bytes() < balanced.response_body_bytes());
+        assert!(balanced.response_body_bytes() < high.response_body_bytes());
+        assert_eq!(
+            balanced.response_wire_bytes(),
+            balanced
+                .response_header_bytes()
+                .saturating_add(balanced.response_body_bytes())
+        );
     }
 }

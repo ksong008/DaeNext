@@ -68,7 +68,7 @@ pub(super) fn resident_raw_tls_alpn(
     if !explicit_alpn.is_empty() {
         return explicit_alpn;
     }
-    if matches!(net, "websocket" | "httpupgrade") {
+    if matches!(net, "websocket" | "httpupgrade" | "meek") {
         return vec![UTLS_ALPN_HTTP_1_1.to_owned()];
     }
     if matches!(net, "grpc" | "h2" | "xhttp") {
@@ -91,6 +91,19 @@ pub(super) fn validate_resident_h2_carrier_alpn(
     {
         return Err(format!(
             "resident dataplane {net} carrier requires TLS ALPN h2 for node {node_tag}"
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_resident_meek_carrier_alpn(
+    alpn: &[String],
+    net: &str,
+    node_tag: &str,
+) -> Result<(), String> {
+    if net == "meek" && (alpn.len() != 1 || !alpn[0].eq_ignore_ascii_case(UTLS_ALPN_HTTP_1_1)) {
+        return Err(format!(
+            "resident dataplane Meek carrier requires the HTTP/1.1 TLS ALPN for node {node_tag}"
         ));
     }
     Ok(())

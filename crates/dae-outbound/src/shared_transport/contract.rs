@@ -67,7 +67,7 @@ pub const HTTPUPGRADE_HTTPS_ALPN: &[&str] = &["http/1.1"];
 pub const HTTPUPGRADE_UDP: &str = "unsupported";
 
 pub const MEEK_URL_SCHEME_REQUIRED: &str = "https";
-pub const MEEK_DEFAULT_ALPN: &[&str] = &["h2", "http/1.1"];
+pub const MEEK_DEFAULT_ALPN: &[&str] = &["http/1.1"];
 pub const MEEK_MAX_WRITE: usize = 65_536;
 pub const MEEK_INITIAL_POLLING_MS: u64 = 100;
 pub const MEEK_MAX_POLLING_MS: u64 = 1000;

@@ -1,20 +1,4 @@
 use super::*;
-pub(crate) fn http_content_length(head: &[u8]) -> Result<usize, String> {
-    let text =
-        std::str::from_utf8(head).map_err(|err| format!("Meek response head utf8: {err}"))?;
-    for line in text.split("\r\n") {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        if name.eq_ignore_ascii_case("content-length") {
-            return value
-                .trim()
-                .parse::<usize>()
-                .map_err(|err| format!("parse Meek response Content-Length: {err}"));
-        }
-    }
-    Ok(0)
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_vless_h2_tcp_connection_async(

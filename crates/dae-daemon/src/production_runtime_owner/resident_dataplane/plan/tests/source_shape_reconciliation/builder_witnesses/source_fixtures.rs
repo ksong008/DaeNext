@@ -36,5 +36,6 @@ pub(super) fn reality_meek_source() -> String {
     source.flow.clear();
     source.host.clear();
     source.path = "https://meek.fixture.invalid/resource".to_owned();
+    source.alpn = dae_outbound::shared_transport::UTLS_ALPN_HTTP_1_1.to_owned();
     source.export_url()
 }
