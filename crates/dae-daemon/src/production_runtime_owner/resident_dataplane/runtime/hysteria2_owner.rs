@@ -959,6 +959,16 @@ impl Hysteria2OwnerRegistryHandle {
     pub(crate) fn metrics_snapshot(&self) -> Value {
         let index = self.index.lock().unwrap();
         let padding = hysteria2_padding_metrics_snapshot();
+        let capabilities = dae_outbound::hysteria2::hysteria2_capability_ledger()
+            .iter()
+            .map(|entry| {
+                json!({
+                    "capability": entry.capability,
+                    "disposition": entry.disposition.as_str(),
+                    "reason": entry.reason,
+                })
+            })
+            .collect::<Vec<_>>();
         json!({
             "schemaVersion": 1,
             "owner": "resident-hysteria2-owner-registry",
@@ -990,6 +1000,10 @@ impl Hysteria2OwnerRegistryHandle {
             "logicalLeaseRejections": self.metrics.logical_lease_rejections.load(Ordering::Relaxed),
             "shutdownTimedOut": self.metrics.shutdown_timed_out.load(Ordering::Relaxed),
             "portHopping": self.metrics.port_hopping.snapshot(),
+            "capabilityLedger": {
+                "bounded": true,
+                "entries": capabilities,
+            },
             "padding": {
                 "scope": "process-wide Hysteria2 auth and TCP request generation",
                 "contentRecorded": false,

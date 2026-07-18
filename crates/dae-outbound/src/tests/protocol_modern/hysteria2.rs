@@ -220,3 +220,42 @@ pub(super) fn hysteria2_unsupported_congestion_shapes_fail_without_echoing_value
         assert!(!error.to_string().contains("must-not-echo"));
     }
 }
+
+#[test]
+pub(super) fn hysteria2_external_capabilities_are_admitted_or_rejected_during_parsing() {
+    for link in [
+        "hysteria2://auth@example.com:443?obfs=gecko&obfs-password=must-not-echo#gecko",
+        "hysteria2://auth@example.com:443?obfs=unknown&obfs-password=must-not-echo#obfs",
+        "hysteria2://auth@example.com:443?unknownField=must-not-echo#unknown",
+        "hysteria2://auth@example.com:443?sni=one&sni=must-not-echo#duplicate",
+        "hysteria2://auth@example.com:443?obfsPassword=one&obfs-password=must-not-echo#alias-duplicate",
+    ] {
+        let error = crate::hysteria2::Hysteria2Link::parse(link).unwrap_err();
+        assert!(!error.to_string().contains("must-not-echo"));
+    }
+
+    let ledger = crate::hysteria2::hysteria2_capability_ledger();
+    for capability in [
+        "obfs-salamander",
+        "periodic-port-hopping",
+        "congestion-brutal",
+        "randomized-protocol-padding",
+    ] {
+        assert!(ledger.iter().any(|entry| {
+            entry.capability == capability
+                && entry.disposition == crate::hysteria2::Hysteria2CapabilityDisposition::Admitted
+        }));
+    }
+    for capability in [
+        "obfs-gecko",
+        "tls-ech",
+        "tls-custom-ca",
+        "tls-mtls",
+        "unknown-query-field",
+    ] {
+        assert!(ledger.iter().any(|entry| {
+            entry.capability == capability
+                && entry.disposition == crate::hysteria2::Hysteria2CapabilityDisposition::Rejected
+        }));
+    }
+}

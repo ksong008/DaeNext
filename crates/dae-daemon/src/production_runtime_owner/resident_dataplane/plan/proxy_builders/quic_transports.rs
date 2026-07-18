@@ -209,7 +209,7 @@ fn resident_hysteria2_obfs_plan(
     }
     if mode != "salamander" {
         return Err(format!(
-            "resident dataplane Hysteria2 obfs admits official salamander only for node {node_tag}; got {mode}"
+            "resident dataplane Hysteria2 obfs admits official salamander only for node {node_tag}"
         ));
     }
     if password.is_empty() {

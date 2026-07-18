@@ -6,6 +6,25 @@ use super::Hysteria2CongestionConfig;
 use super::port_hopping::parse_port_union;
 
 const UNSUPPORTED_TLS_QUERY_FIELDS: [&str; 4] = ["ca", "clientCertificate", "clientKey", "ech"];
+const KNOWN_QUERY_FIELDS: [&str; 17] = [
+    "insecure",
+    "sni",
+    "pinSHA256",
+    "obfs",
+    "obfs-password",
+    "obfsPassword",
+    "obfs_password",
+    "maxTx",
+    "maxRx",
+    "mport",
+    "congestion",
+    "bbrProfile",
+    "disableLossCompensation",
+    "ca",
+    "clientCertificate",
+    "clientKey",
+    "ech",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hysteria2Link {
@@ -50,6 +69,7 @@ impl Hysteria2Link {
         let (userinfo, server) = authority.rsplit_once('@').unwrap_or(("", authority));
         let (user, password) = parse_userinfo(userinfo)?;
         let query = url::form_urlencoded::parse(query_raw.as_bytes()).collect::<Vec<_>>();
+        validate_query_shape(&query)?;
         reject_unsupported_tls_fields(&query)?;
         let insecure = match query_value(&query, "insecure") {
             Some(value) if !value.is_empty() => parse_bool(&value)
@@ -83,6 +103,14 @@ impl Hysteria2Link {
             query_value(&query, "bbrProfile").as_deref().unwrap_or(""),
             disable_loss_compensation,
         )?;
+        let obfs = normalize_obfs(
+            query_value(&query, "obfs").as_deref().unwrap_or(""),
+            query_value(&query, "obfs-password")
+                .or_else(|| query_value(&query, "obfsPassword"))
+                .or_else(|| query_value(&query, "obfs_password"))
+                .as_deref()
+                .unwrap_or(""),
+        )?;
         let server = normalize_server_with_mport(server, query_value(&query, "mport").as_deref())?;
         Ok(Self {
             name: percent_decode(name)?,
@@ -92,7 +120,7 @@ impl Hysteria2Link {
             insecure,
             sni: query_value(&query, "sni").unwrap_or_default(),
             pin_sha256: query_value(&query, "pinSHA256").unwrap_or_default(),
-            obfs: query_value(&query, "obfs").unwrap_or_default(),
+            obfs,
             obfs_password: query_value(&query, "obfs-password")
                 .or_else(|| query_value(&query, "obfsPassword"))
                 .or_else(|| query_value(&query, "obfs_password"))
@@ -170,6 +198,55 @@ impl Hysteria2Link {
 
     pub fn property_address(&self) -> String {
         self.server.clone()
+    }
+}
+
+fn validate_query_shape(
+    query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)],
+) -> Result<(), OutboundError> {
+    for (index, (field, _)) in query.iter().enumerate() {
+        if !KNOWN_QUERY_FIELDS.contains(&field.as_ref()) {
+            return Err(OutboundError::BadHysteria2(
+                "unsupported Hysteria2 query field".to_owned(),
+            ));
+        }
+        let canonical = canonical_query_field(field);
+        if query[..index]
+            .iter()
+            .any(|(candidate, _)| canonical_query_field(candidate) == canonical)
+        {
+            return Err(OutboundError::BadHysteria2(
+                "duplicate Hysteria2 query field".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn canonical_query_field(field: &str) -> &str {
+    match field {
+        "obfsPassword" | "obfs_password" => "obfs-password",
+        _ => field,
+    }
+}
+
+fn normalize_obfs(mode: &str, password: &str) -> Result<String, OutboundError> {
+    let normalized = mode.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" if password.is_empty() => Ok(String::new()),
+        "" => Err(OutboundError::BadHysteria2(
+            "Hysteria2 obfs password requires an admitted obfuscation type".to_owned(),
+        )),
+        "salamander" if password.is_empty() => Err(OutboundError::BadHysteria2(
+            "Hysteria2 Salamander requires an obfs password".to_owned(),
+        )),
+        "salamander" => Ok(normalized),
+        "gecko" => Err(OutboundError::BadHysteria2(
+            "Hysteria2 Gecko obfuscation is not admitted by the Quinn provider".to_owned(),
+        )),
+        _ => Err(OutboundError::BadHysteria2(
+            "unsupported Hysteria2 obfuscation type".to_owned(),
+        )),
     }
 }
 
