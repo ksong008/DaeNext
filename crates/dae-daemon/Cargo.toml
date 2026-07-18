@@ -75,6 +75,7 @@ h3-quinn.workspace = true
 http.workspace = true
 libc.workspace = true
 quinn.workspace = true
+quinn-boring.workspace = true
 udp.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 rustls.workspace = true
