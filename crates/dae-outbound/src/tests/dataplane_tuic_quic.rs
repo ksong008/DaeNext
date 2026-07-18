@@ -23,7 +23,7 @@ fn case_tuic_true_quic_dataplane_smoke_admits_tuic_only() {
     assert!(!outcome.disable_sni);
     assert!(outcome.disable_sni_probe_sni.is_empty());
     assert!(outcome.disable_sni_probe_allow_insecure);
-    assert_eq!(outcome.udp_relay_mode, "quic");
+    assert_eq!(outcome.udp_relay_mode, "native");
     assert!(outcome.underlay.tcp_underlay_uses_udp);
     assert!(outcome.underlay.tcp_underlay_preserves_mark);
     assert!(outcome.underlay.tcp_underlay_drops_mptcp);
@@ -50,7 +50,7 @@ fn case_tuic_true_quic_dataplane_smoke_admits_tuic_only() {
     assert!(outcome.tuic_uuid_password_contract_admitted);
     assert!(outcome.tuic_tls13_datagram_config_contract_admitted);
     assert!(outcome.tuic_disable_sni_contract_admitted);
-    assert!(outcome.tuic_udp_relay_mode_compatibility_caveat_recorded);
+    assert!(outcome.tuic_udp_relay_mode_native_admitted);
     assert!(outcome.tuic_underlay_contract_admitted);
     assert!(outcome.tuic_udp_underlay_socket_admitted);
     assert!(outcome.tuic_so_mark_loopback_observed);
@@ -58,7 +58,6 @@ fn case_tuic_true_quic_dataplane_smoke_admits_tuic_only() {
     assert!(outcome.tuic_auth_stream_admitted);
     assert!(outcome.tuic_datagram_packet_relay_admitted);
     assert!(outcome.tuic_congestion_behavior_admitted);
-    assert!(!outcome.tuic_udp_relay_mode_quic_effective_relay_admitted);
     assert!(outcome.tuic_true_quic_dataplane_admitted);
 
     assert!(!outcome.quic_h3_family_true_dataplane_admitted);

@@ -19,6 +19,34 @@ pub const DEFAULT_TUIC_INITIAL_CONNECTION_RECEIVE_WINDOW: u64 = 32 * 1024 * 1024
 pub const DEFAULT_TUIC_MAX_CONNECTION_RECEIVE_WINDOW: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_TUIC_MAX_UDP_RELAY_PACKET_SIZE: usize = 1400;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TuicCongestionController {
+    Bbr,
+    Cubic,
+    NewReno,
+}
+
+impl TuicCongestionController {
+    pub fn from_config(value: &str) -> Result<Self, OutboundError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "bbr" => Ok(Self::Bbr),
+            "cubic" => Ok(Self::Cubic),
+            "new_reno" | "new-reno" | "reno" => Ok(Self::NewReno),
+            _ => Err(bad_tls(
+                "TUIC congestion controller is not supported by the resident QUIC executor",
+            )),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bbr => "bbr",
+            Self::Cubic => "cubic",
+            Self::NewReno => "new_reno",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct AcceptAnyServerCertVerifier {
     provider: Arc<rustls::crypto::CryptoProvider>,
@@ -98,13 +126,21 @@ pub(super) fn build_tuic_server_config(
         QuicServerConfig::try_from(crypto)
             .map_err(|err| bad_tls(format!("TUIC server QUIC TLS: {err}")))?,
     ));
-    config.transport_config(Arc::new(tuic_transport_config()?));
+    config.transport_config(Arc::new(tuic_transport_config(None)?));
     Ok(config)
 }
 
 pub(super) fn build_tuic_client_config(
     alpn: &[String],
     allow_insecure: bool,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    build_tuic_client_config_with_congestion(alpn, allow_insecure, TuicCongestionController::Bbr)
+}
+
+pub(super) fn build_tuic_client_config_with_congestion(
+    alpn: &[String],
+    allow_insecure: bool,
+    congestion: TuicCongestionController,
 ) -> Result<quinn::ClientConfig, OutboundError> {
     let mut crypto = if allow_insecure {
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -123,7 +159,7 @@ pub(super) fn build_tuic_client_config(
         QuicClientConfig::try_from(crypto)
             .map_err(|err| bad_tls(format!("TUIC client QUIC TLS: {err}")))?,
     ));
-    config.transport_config(Arc::new(tuic_transport_config()?));
+    config.transport_config(Arc::new(tuic_transport_config(Some(congestion))?));
     Ok(config)
 }
 
@@ -151,8 +187,21 @@ fn alpn_protocols(alpn: &[String]) -> Vec<Vec<u8>> {
         .collect()
 }
 
-fn tuic_transport_config() -> Result<quinn::TransportConfig, OutboundError> {
+fn tuic_transport_config(
+    congestion: Option<TuicCongestionController>,
+) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
+    if let Some(congestion) = congestion {
+        match congestion {
+            TuicCongestionController::Bbr => transport
+                .congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default())),
+            TuicCongestionController::Cubic => transport
+                .congestion_controller_factory(Arc::new(quinn::congestion::CubicConfig::default())),
+            TuicCongestionController::NewReno => transport.congestion_controller_factory(Arc::new(
+                quinn::congestion::NewRenoConfig::default(),
+            )),
+        };
+    }
     transport.keep_alive_interval(Some(Duration::from_secs(DEFAULT_TUIC_KEEPALIVE_SECS)));
     transport.max_idle_timeout(Some(
         Duration::from_secs(DEFAULT_TUIC_HANDSHAKE_IDLE_TIMEOUT_SECS)

@@ -3,14 +3,14 @@ use std::time::{Duration, Instant};
 use crate::error::OutboundError;
 use crate::link_parser::{LinkParseResult, parse_link_chain};
 
-use super::link::TuicLink;
+use super::link::{TuicLink, TuicUdpRelayMode};
 use super::quic_loopback::{
     DEFAULT_TUIC_ALPN, DEFAULT_TUIC_PASSWORD, DEFAULT_TUIC_UUID, TuicQuicLoopbackOptions,
     TuicQuicLoopbackReport, run_tuic_quic_loopback_smoke,
 };
 use super::underlay::{TuicUnderlayAdmissionContract, admission_contract};
 
-pub const DEFAULT_TRUE_QUIC_LINK: &str = "tuic://01234567-89ab-cdef-0123-456789abcdef:tuic-loopback-secret@tuic-loopback.fixture.invalid:443?allow_insecure=1&sni=localhost&alpn=h3&congestion_control=bbr&udp_relay_mode=quic#tuic-loopback";
+pub const DEFAULT_TRUE_QUIC_LINK: &str = "tuic://01234567-89ab-cdef-0123-456789abcdef:tuic-loopback-secret@tuic-loopback.fixture.invalid:443?allow_insecure=1&sni=localhost&alpn=h3&congestion_control=bbr&udp_relay_mode=native#tuic-loopback";
 pub const DEFAULT_DISABLE_SNI_PROBE_LINK: &str = "tuic://01234567-89ab-cdef-0123-456789abcdef:tuic-loopback-secret@tuic-loopback.fixture.invalid:443?disable_sni=1#tuic-disable-sni";
 pub const DEFAULT_TRUE_QUIC_SUBSCRIPTION_TAG: &str = "tuic-loopback-subscription";
 pub const DEFAULT_TRUE_QUIC_UNDERLAY_MARK: u32 = 131;
@@ -67,7 +67,7 @@ pub struct TuicTrueQuicDataplaneReport {
     pub tuic_uuid_password_contract_admitted: bool,
     pub tuic_tls13_datagram_config_contract_admitted: bool,
     pub tuic_disable_sni_contract_admitted: bool,
-    pub tuic_udp_relay_mode_compatibility_caveat_recorded: bool,
+    pub tuic_udp_relay_mode_native_admitted: bool,
     pub tuic_underlay_contract_admitted: bool,
     pub tuic_udp_underlay_socket_admitted: bool,
     pub tuic_so_mark_loopback_observed: bool,
@@ -75,7 +75,6 @@ pub struct TuicTrueQuicDataplaneReport {
     pub tuic_auth_stream_admitted: bool,
     pub tuic_datagram_packet_relay_admitted: bool,
     pub tuic_congestion_behavior_admitted: bool,
-    pub tuic_udp_relay_mode_quic_effective_relay_admitted: bool,
     pub tuic_true_quic_dataplane_admitted: bool,
     pub quic_h3_family_true_dataplane_admitted: bool,
     pub outbound_true_dataplane_admitted: bool,
@@ -92,6 +91,7 @@ pub fn run_true_quic_dataplane_smoke(
     let start = Instant::now();
     let link = TuicLink::parse(&options.link)?;
     link.validate_uuid()?;
+    let udp_relay_mode = TuicUdpRelayMode::from_config(&link.udp_relay_mode)?;
     let disable_sni_probe = TuicLink::parse(&options.disable_sni_probe_link)?;
     let chain = parse_tuic_chain(&options.link)?;
     let node = chain
@@ -129,7 +129,7 @@ pub fn run_true_quic_dataplane_smoke(
     let disable_sni_contract_admitted = disable_sni_probe.disable_sni
         && disable_sni_probe.sni.is_empty()
         && disable_sni_probe.allow_insecure;
-    let udp_relay_mode_compatibility_caveat_recorded = link.udp_relay_mode == "quic";
+    let udp_relay_mode_native_admitted = udp_relay_mode == TuicUdpRelayMode::Native;
     let underlay_contract_admitted = underlay.tcp_underlay_uses_udp
         && underlay.tcp_underlay_preserves_mark
         && underlay.tcp_underlay_drops_mptcp
@@ -141,7 +141,7 @@ pub fn run_true_quic_dataplane_smoke(
         && uuid_password_contract_admitted
         && tls13_datagram_config_contract_admitted
         && disable_sni_contract_admitted
-        && udp_relay_mode_compatibility_caveat_recorded
+        && udp_relay_mode_native_admitted
         && underlay_contract_admitted
         && udp_underlay_socket_admitted
         && quic.tuic_full_quic_handshake_admitted
@@ -183,8 +183,7 @@ pub fn run_true_quic_dataplane_smoke(
         tuic_uuid_password_contract_admitted: uuid_password_contract_admitted,
         tuic_tls13_datagram_config_contract_admitted: tls13_datagram_config_contract_admitted,
         tuic_disable_sni_contract_admitted: disable_sni_contract_admitted,
-        tuic_udp_relay_mode_compatibility_caveat_recorded:
-            udp_relay_mode_compatibility_caveat_recorded,
+        tuic_udp_relay_mode_native_admitted: udp_relay_mode_native_admitted,
         tuic_underlay_contract_admitted: underlay_contract_admitted,
         tuic_udp_underlay_socket_admitted: udp_underlay_socket_admitted,
         tuic_so_mark_loopback_observed: so_mark_loopback_observed,
@@ -192,7 +191,6 @@ pub fn run_true_quic_dataplane_smoke(
         tuic_auth_stream_admitted,
         tuic_datagram_packet_relay_admitted,
         tuic_congestion_behavior_admitted,
-        tuic_udp_relay_mode_quic_effective_relay_admitted: false,
         tuic_true_quic_dataplane_admitted: true_quic_dataplane_admitted,
         quic_h3_family_true_dataplane_admitted: false,
         outbound_true_dataplane_admitted: false,
