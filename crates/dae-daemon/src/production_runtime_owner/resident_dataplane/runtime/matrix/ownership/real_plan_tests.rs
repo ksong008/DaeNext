@@ -1,8 +1,9 @@
 use base64::Engine;
 use dae_outbound::{
     CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
-    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP, ShadowsocksLink, Sip003,
-    TrojanLink, VLESSLink, VMessLink,
+    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
+    GENERATION_OWNED_VLESS_MUX_OWNERSHIP, ShadowsocksLink, Sip003, TrojanLink, VLESSLink,
+    VMessLink,
 };
 
 use super::*;
@@ -10,7 +11,7 @@ use super::*;
 const TEST_CLIENT_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 #[test]
-fn admitted_policy_closed_plans_keep_their_tcp_flow_owner() {
+fn admitted_policy_closed_plans_keep_their_explicit_tcp_owner() {
     for link in [
         vless_link("meek", "tls", "", "https://meek.example.test/resource").export_url(),
         vless_reality_link("meek", "", "https://meek.example.test/resource").export_url(),
@@ -25,8 +26,14 @@ fn admitted_policy_closed_plans_keep_their_tcp_flow_owner() {
         );
     }
 
+    let mux = build_proxy(vless_mux_link().export_url()).unwrap();
+    assert!(mux.execution_plan().udp.policy_closed());
+    assert_eq!(
+        materialized_runtime_ownership(mux.execution_plan()),
+        GENERATION_OWNED_VLESS_MUX_OWNERSHIP
+    );
+
     for link in [
-        vless_mux_link().export_url(),
         vmess_link("h2", "tls").export_url(),
         trojan_inner_link().export_url(),
         shadowsocks_plugin_link(),

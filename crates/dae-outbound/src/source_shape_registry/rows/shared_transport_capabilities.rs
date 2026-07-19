@@ -135,7 +135,7 @@ pub(super) const MUX_TRANSPORT_WRAPPER: SourceShapeRegistryRow =
         registry_source("mux-transport-wrapper", "vless", &["vless"])
             .with_transport("tls-stream-variants", "mux", "multiplexed-stream")
             .with_runtime(
-                FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+                GENERATION_OWNED_VLESS_MUX_OWNERSHIP,
                 "registry:mux-transport-wrapper",
             ),
         MUX_TRANSPORT_CAPABILITY,

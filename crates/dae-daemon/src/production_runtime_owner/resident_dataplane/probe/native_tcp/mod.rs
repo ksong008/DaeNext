@@ -99,7 +99,9 @@ async fn open_native_tcp_tunnel(
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     match proxy.execution_plan().protocol.probe_dispatch() {
         ResidentTcpProbeDispatch::Basic => open_basic_native_tcp_tunnel(proxy, target).await,
-        ResidentTcpProbeDispatch::Vless => open_vless_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::Vless => {
+            open_vless_native_tcp_tunnel(proxy, target, owner_deadline).await
+        }
         ResidentTcpProbeDispatch::Vmess => open_vmess_native_tcp_tunnel(proxy, target).await,
         ResidentTcpProbeDispatch::Trojan => open_trojan_native_tcp_tunnel(proxy, target).await,
         ResidentTcpProbeDispatch::AnyTls => {

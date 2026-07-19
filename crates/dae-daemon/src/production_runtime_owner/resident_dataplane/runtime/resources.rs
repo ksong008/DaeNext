@@ -241,6 +241,8 @@ impl ResidentRuntimeResourceConfig {
         let h2_carriers =
             H2CarrierOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         let meek = MeekTransportResourceProfile::from_runtime_profile(self.runtime_profile.profile);
+        let vless_mux =
+            VlessMuxOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         json!({
             "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 1,
@@ -332,6 +334,23 @@ impl ResidentRuntimeResourceConfig {
                 "responseWireBytes": meek.response_wire_bytes(),
                 "runtimeWorkerThreads": self.tcp_runtime_workers.json(),
                 "scope": "one generation and complete TLS HTTP/1.1 Meek transport identity; logical sessions remain independent",
+            },
+            "vlessMuxOwners": {
+                "profileSource": "runtimeProfile",
+                "ownerLimit": vless_mux.owner_limit(),
+                "physicalConnectionLimit": vless_mux.physical_connection_limit(),
+                "physicalConnectionsPerOwner": vless_mux.physical_connections_per_owner(),
+                "logicalStreamsPerPhysical": vless_mux.logical_streams_per_physical(),
+                "cumulativeLogicalStreamsPerPhysical": vless_mux.cumulative_logical_streams_per_physical(),
+                "commandQueueDepth": vless_mux.command_queue_depth(),
+                "logicalEventQueueDepth": vless_mux.logical_event_queue_depth(),
+                "logicalBufferBytesPerDirection": vless_mux.logical_buffer_bytes(),
+                "frameBytes": vless_mux.frame_bytes(),
+                "sidQuarantineLimit": vless_mux.sid_quarantine_limit(),
+                "sidQuarantineTtlMs": vless_mux.sid_quarantine_ttl().as_millis(),
+                "idleTimeoutMs": vless_mux.idle_timeout().as_millis(),
+                "runtimeWorkerThreads": self.tcp_runtime_workers.json(),
+                "scope": "one generation and complete TLS VLESS mux transport identity; one physical actor demultiplexes bounded logical streams",
             },
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),

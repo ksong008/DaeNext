@@ -373,6 +373,35 @@ pub(crate) fn start_resident_dataplane_workers(
             };
         owner.install_meek_transport_generation_owner(meek_transport_owner, meek_transport_thread);
     }
+    let requires_vless_mux_owner = proxy_groups
+        .values()
+        .any(|group| group.requires_vless_mux_owner());
+    if requires_vless_mux_owner {
+        let (vless_mux_owner, vless_mux_thread) = match start_vless_mux_generation_owner(
+            reload_generation,
+            owner.stop_handle(),
+            resource_config.tcp_flow_stack_bytes.value(),
+            resource_config.tcp_runtime_workers.value(),
+        ) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let cleanup = owner.shutdown();
+                return (
+                    json!({
+                        "status": "fail",
+                        "enabled": true,
+                        "error": err,
+                        "cleanup": cleanup,
+                        "event_file": Value::Null,
+                        "event_file_status": "disabled",
+                        "event_log": "product-log-sink",
+                    }),
+                    None,
+                );
+            }
+        };
+        owner.install_vless_mux_generation_owner(vless_mux_owner, vless_mux_thread);
+    }
     let requires_xhttp_xmux_owner = proxy_groups
         .values()
         .any(|group| group.requires_xhttp_xmux_owner());

@@ -6,9 +6,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use dae_outbound::{
-    shared_transport::{HttpUpgradeOptions, MeekRoundTripOptions, MuxFrameOptions, mux_new_frame},
+    shared_transport::{HttpUpgradeOptions, MeekRoundTripOptions},
     vless::packet,
-    vmess::VMessMetadata,
 };
 
 use super::super::super::{ResidentStopSignal, SharedResidentStopSignal};
@@ -23,7 +22,7 @@ use super::super::super::plan::{
     ResidentStreamWrapperPlan, ResidentXhttpMode,
 };
 use super::super::super::{
-    ResidentDataplaneMetrics, VLESS_RESPONSE_VERSION,
+    ResidentDataplaneMetrics, VLESS_RESPONSE_VERSION, acquire_vless_mux_logical_stream,
     tcp::{
         TcpProxySelection, XhttpPacketUpParts, XhttpStreamParts, close_xhttp_download_client,
         close_xhttp_stream_upload_client, close_xhttp_upload_client, meek_round_trip_async,
@@ -32,9 +31,8 @@ use super::super::super::{
         native_write_websocket_binary_frame_over_resident_tls_async, open_grpc_h2_stream,
         open_h2_body_stream_with_deferred_response, open_xhttp_packet_up_parts,
         open_xhttp_stream_parts, relay_tcp_over_deferred_h2_body, relay_tcp_over_grpc_h2,
-        relay_tcp_over_vless_mux_tls_async, relay_tcp_over_vless_tls_async,
-        relay_tcp_over_vless_websocket_tls_async, relay_tcp_over_xhttp_packet_up,
-        relay_tcp_over_xhttp_stream, send_xhttp_packet_up_request,
+        relay_tcp_over_vless_tls_async, relay_tcp_over_vless_websocket_tls_async,
+        relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream, send_xhttp_packet_up_request,
     },
 };
 use super::errors::NativeTcpProbeError;
@@ -44,6 +42,7 @@ use super::tunnel::{NativeTcpTunnel, SpawnedNativeTcpTunnel};
 pub(super) async fn open_vless_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
     target: &str,
+    owner_deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let selection = native_tcp_probe_selection(proxy, target);
     let execution = selection.proxy.execution_plan();
@@ -57,7 +56,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         })?;
 
     if execution.protocol == ResidentProtocolShape::VlessMux {
-        return open_vless_mux_native_tcp_tunnel(selection, key, target).await;
+        return open_vless_mux_native_tcp_tunnel(selection, target, owner_deadline).await;
     }
     if execution.security == ResidentSecurityUnderlayPlan::None {
         let mut stream = open_proxy_tcp_stream_async_with_flow(
@@ -310,50 +309,14 @@ async fn relay_tcp_over_vless_meek_native_async(
 
 async fn open_vless_mux_native_tcp_tunnel(
     selection: TcpProxySelection,
-    key: [u8; 16],
     target: &str,
+    deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    let mut client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+    let logical =
+        acquire_vless_mux_logical_stream(Arc::clone(&selection.proxy), target.to_owned(), deadline)
             .await
             .map_err(NativeTcpProbeError::Open)?;
-    let header =
-        packet::request_header(&key, "", "tcp", "0.0.0.0:0", true, &[]).map_err(|err| {
-            NativeTcpProbeError::Open(format!("build native VLESS mux header: {err}"))
-        })?;
-    let mux_target = VMessMetadata::parse("tcp", target).map_err(|err| {
-        NativeTcpProbeError::Open(format!("build native VLESS mux target: {err}"))
-    })?;
-    let mux_id = mux_target.port().to_be_bytes();
-    let mux_options = MuxFrameOptions::new(mux_id, mux_target.hostname(), mux_target.port(), "tcp");
-    let mux_new = mux_new_frame(&mux_options)
-        .map_err(|err| NativeTcpProbeError::Open(format!("build native VLESS mux frame: {err}")))?;
-    client
-        .write_plain_all(&header, "write native VLESS mux header")
-        .await
-        .map_err(NativeTcpProbeError::Open)?;
-    client
-        .write_plain_all(&mux_new, "write native VLESS mux new frame")
-        .await
-        .map_err(NativeTcpProbeError::Open)?;
-
-    let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-    let stop = ResidentStopSignal::shared();
-    let relay_stop = Arc::clone(&stop);
-    let metrics = ResidentDataplaneMetrics::default();
-    let task = tokio::spawn(async move {
-        let _ = relay_tcp_over_vless_mux_tls_async(
-            &mut relay_side,
-            &mut client,
-            relay_stop,
-            mux_id,
-            &[],
-            &metrics,
-        )
-        .await;
-        stop.store(true, Ordering::Relaxed);
-    });
-    Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+    Ok(Box::new(logical))
 }
 
 async fn open_vless_xhttp_native_tcp_tunnel(

@@ -41,6 +41,9 @@ impl MaterializedSourceShape {
             MaterializedProtocol::VlessStandard if self.wrapper == MaterializedWrapper::Meek => {
                 RuntimeOwnershipModel::GenerationOwnedMeekTransport
             }
+            MaterializedProtocol::VlessMux if self.wrapper == MaterializedWrapper::Mux => {
+                RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport
+            }
             _ if matches!(self.udp, MaterializedUdp::PolicyClosed(_)) => {
                 RuntimeOwnershipModel::FlowStreamWithPacketPolicyClosed
             }

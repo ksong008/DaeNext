@@ -146,6 +146,37 @@ const HIGH_PERFORMANCE_MEEK_IDLE_CONNECTION_LIMIT: usize = 4;
 const LOW_MEMORY_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS: u64 = 15;
 const BALANCED_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS: u64 = 30;
 const HIGH_PERFORMANCE_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS: u64 = 60;
+const LOW_MEMORY_VLESS_MUX_OWNER_LIMIT: usize = 8;
+const BALANCED_VLESS_MUX_OWNER_LIMIT: usize = 32;
+const HIGH_PERFORMANCE_VLESS_MUX_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_VLESS_MUX_PHYSICALS_PER_OWNER: usize = 2;
+const BALANCED_VLESS_MUX_PHYSICALS_PER_OWNER: usize = 4;
+const HIGH_PERFORMANCE_VLESS_MUX_PHYSICALS_PER_OWNER: usize = 8;
+const LOW_MEMORY_VLESS_MUX_LOGICALS_PER_PHYSICAL: usize = 16;
+const BALANCED_VLESS_MUX_LOGICALS_PER_PHYSICAL: usize = 64;
+const HIGH_PERFORMANCE_VLESS_MUX_LOGICALS_PER_PHYSICAL: usize = 128;
+const LOW_MEMORY_VLESS_MUX_CUMULATIVE_LOGICALS_PER_PHYSICAL: usize = 1_024;
+const BALANCED_VLESS_MUX_CUMULATIVE_LOGICALS_PER_PHYSICAL: usize = 4_096;
+const HIGH_PERFORMANCE_VLESS_MUX_CUMULATIVE_LOGICALS_PER_PHYSICAL: usize = 16_384;
+const LOW_MEMORY_VLESS_MUX_COMMAND_QUEUE_DEPTH: usize = 64;
+const BALANCED_VLESS_MUX_COMMAND_QUEUE_DEPTH: usize = 256;
+const HIGH_PERFORMANCE_VLESS_MUX_COMMAND_QUEUE_DEPTH: usize = 1_024;
+const LOW_MEMORY_VLESS_MUX_LOGICAL_EVENT_QUEUE_DEPTH: usize = 8;
+const BALANCED_VLESS_MUX_LOGICAL_EVENT_QUEUE_DEPTH: usize = 32;
+const HIGH_PERFORMANCE_VLESS_MUX_LOGICAL_EVENT_QUEUE_DEPTH: usize = 64;
+const LOW_MEMORY_VLESS_MUX_LOGICAL_BUFFER_BYTES: usize = 64 * 1024;
+const BALANCED_VLESS_MUX_LOGICAL_BUFFER_BYTES: usize = 128 * 1024;
+const HIGH_PERFORMANCE_VLESS_MUX_LOGICAL_BUFFER_BYTES: usize = 256 * 1024;
+const LOW_MEMORY_VLESS_MUX_FRAME_BYTES: usize = 8 * 1024;
+const BALANCED_VLESS_MUX_FRAME_BYTES: usize = 16 * 1024;
+const HIGH_PERFORMANCE_VLESS_MUX_FRAME_BYTES: usize = 32 * 1024;
+const LOW_MEMORY_VLESS_MUX_SID_QUARANTINE_LIMIT: usize = 128;
+const BALANCED_VLESS_MUX_SID_QUARANTINE_LIMIT: usize = 1_024;
+const HIGH_PERFORMANCE_VLESS_MUX_SID_QUARANTINE_LIMIT: usize = 4_096;
+const VLESS_MUX_SID_QUARANTINE_TTL_SECONDS: u64 = 10;
+const LOW_MEMORY_VLESS_MUX_IDLE_TIMEOUT_SECONDS: u64 = 15;
+const BALANCED_VLESS_MUX_IDLE_TIMEOUT_SECONDS: u64 = 30;
+const HIGH_PERFORMANCE_VLESS_MUX_IDLE_TIMEOUT_SECONDS: u64 = 60;
 const LOW_MEMORY_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 64;
 const BALANCED_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 256;
 const HIGH_PERFORMANCE_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 1_024;
@@ -290,6 +321,148 @@ pub(crate) struct MeekTransportResourceProfile {
     physical_connection_limit: usize,
     idle_connection_limit: usize,
     idle_connection_timeout: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct VlessMuxOwnerResourceProfile {
+    owner_limit: usize,
+    physical_connections_per_owner: usize,
+    logical_streams_per_physical: usize,
+    cumulative_logical_streams_per_physical: usize,
+    command_queue_depth: usize,
+    logical_event_queue_depth: usize,
+    logical_buffer_bytes: usize,
+    frame_bytes: usize,
+    sid_quarantine_limit: usize,
+    sid_quarantine_ttl: Duration,
+    idle_timeout: Duration,
+}
+
+impl VlessMuxOwnerResourceProfile {
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        match profile {
+            ResidentRuntimeProfile::LowMemory => Self {
+                owner_limit: LOW_MEMORY_VLESS_MUX_OWNER_LIMIT,
+                physical_connections_per_owner: LOW_MEMORY_VLESS_MUX_PHYSICALS_PER_OWNER,
+                logical_streams_per_physical: LOW_MEMORY_VLESS_MUX_LOGICALS_PER_PHYSICAL,
+                cumulative_logical_streams_per_physical:
+                    LOW_MEMORY_VLESS_MUX_CUMULATIVE_LOGICALS_PER_PHYSICAL,
+                command_queue_depth: LOW_MEMORY_VLESS_MUX_COMMAND_QUEUE_DEPTH,
+                logical_event_queue_depth: LOW_MEMORY_VLESS_MUX_LOGICAL_EVENT_QUEUE_DEPTH,
+                logical_buffer_bytes: LOW_MEMORY_VLESS_MUX_LOGICAL_BUFFER_BYTES,
+                frame_bytes: LOW_MEMORY_VLESS_MUX_FRAME_BYTES,
+                sid_quarantine_limit: LOW_MEMORY_VLESS_MUX_SID_QUARANTINE_LIMIT,
+                sid_quarantine_ttl: Duration::from_secs(VLESS_MUX_SID_QUARANTINE_TTL_SECONDS),
+                idle_timeout: Duration::from_secs(LOW_MEMORY_VLESS_MUX_IDLE_TIMEOUT_SECONDS),
+            },
+            ResidentRuntimeProfile::Balanced => Self {
+                owner_limit: BALANCED_VLESS_MUX_OWNER_LIMIT,
+                physical_connections_per_owner: BALANCED_VLESS_MUX_PHYSICALS_PER_OWNER,
+                logical_streams_per_physical: BALANCED_VLESS_MUX_LOGICALS_PER_PHYSICAL,
+                cumulative_logical_streams_per_physical:
+                    BALANCED_VLESS_MUX_CUMULATIVE_LOGICALS_PER_PHYSICAL,
+                command_queue_depth: BALANCED_VLESS_MUX_COMMAND_QUEUE_DEPTH,
+                logical_event_queue_depth: BALANCED_VLESS_MUX_LOGICAL_EVENT_QUEUE_DEPTH,
+                logical_buffer_bytes: BALANCED_VLESS_MUX_LOGICAL_BUFFER_BYTES,
+                frame_bytes: BALANCED_VLESS_MUX_FRAME_BYTES,
+                sid_quarantine_limit: BALANCED_VLESS_MUX_SID_QUARANTINE_LIMIT,
+                sid_quarantine_ttl: Duration::from_secs(VLESS_MUX_SID_QUARANTINE_TTL_SECONDS),
+                idle_timeout: Duration::from_secs(BALANCED_VLESS_MUX_IDLE_TIMEOUT_SECONDS),
+            },
+            ResidentRuntimeProfile::HighPerformance => Self {
+                owner_limit: HIGH_PERFORMANCE_VLESS_MUX_OWNER_LIMIT,
+                physical_connections_per_owner: HIGH_PERFORMANCE_VLESS_MUX_PHYSICALS_PER_OWNER,
+                logical_streams_per_physical: HIGH_PERFORMANCE_VLESS_MUX_LOGICALS_PER_PHYSICAL,
+                cumulative_logical_streams_per_physical:
+                    HIGH_PERFORMANCE_VLESS_MUX_CUMULATIVE_LOGICALS_PER_PHYSICAL,
+                command_queue_depth: HIGH_PERFORMANCE_VLESS_MUX_COMMAND_QUEUE_DEPTH,
+                logical_event_queue_depth: HIGH_PERFORMANCE_VLESS_MUX_LOGICAL_EVENT_QUEUE_DEPTH,
+                logical_buffer_bytes: HIGH_PERFORMANCE_VLESS_MUX_LOGICAL_BUFFER_BYTES,
+                frame_bytes: HIGH_PERFORMANCE_VLESS_MUX_FRAME_BYTES,
+                sid_quarantine_limit: HIGH_PERFORMANCE_VLESS_MUX_SID_QUARANTINE_LIMIT,
+                sid_quarantine_ttl: Duration::from_secs(VLESS_MUX_SID_QUARANTINE_TTL_SECONDS),
+                idle_timeout: Duration::from_secs(HIGH_PERFORMANCE_VLESS_MUX_IDLE_TIMEOUT_SECONDS),
+            },
+        }
+    }
+
+    pub(crate) fn selected() -> Self {
+        static SELECTED: std::sync::OnceLock<VlessMuxOwnerResourceProfile> =
+            std::sync::OnceLock::new();
+        *SELECTED.get_or_init(|| {
+            Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+        })
+    }
+
+    pub(crate) const fn owner_limit(self) -> usize {
+        self.owner_limit
+    }
+
+    pub(crate) const fn physical_connection_limit(self) -> usize {
+        self.owner_limit
+            .saturating_mul(self.physical_connections_per_owner)
+    }
+
+    pub(crate) const fn physical_connections_per_owner(self) -> usize {
+        self.physical_connections_per_owner
+    }
+
+    pub(crate) const fn logical_streams_per_physical(self) -> usize {
+        self.logical_streams_per_physical
+    }
+
+    pub(crate) const fn cumulative_logical_streams_per_physical(self) -> usize {
+        self.cumulative_logical_streams_per_physical
+    }
+
+    pub(crate) const fn command_queue_depth(self) -> usize {
+        self.command_queue_depth
+    }
+
+    pub(crate) const fn logical_event_queue_depth(self) -> usize {
+        self.logical_event_queue_depth
+    }
+
+    pub(crate) const fn logical_buffer_bytes(self) -> usize {
+        self.logical_buffer_bytes
+    }
+
+    pub(crate) const fn frame_bytes(self) -> usize {
+        self.frame_bytes
+    }
+
+    pub(crate) const fn sid_quarantine_limit(self) -> usize {
+        self.sid_quarantine_limit
+    }
+
+    pub(crate) const fn sid_quarantine_ttl(self) -> Duration {
+        self.sid_quarantine_ttl
+    }
+
+    pub(crate) const fn idle_timeout(self) -> Duration {
+        self.idle_timeout
+    }
+
+    pub(crate) fn idle_janitor_interval(self) -> Duration {
+        self.idle_timeout / 2
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn with_limits_for_test(
+        mut self,
+        owner_limit: usize,
+        physical_connections_per_owner: usize,
+        logical_streams_per_physical: usize,
+        cumulative_logical_streams_per_physical: usize,
+        idle_timeout: Duration,
+    ) -> Self {
+        self.owner_limit = owner_limit;
+        self.physical_connections_per_owner = physical_connections_per_owner;
+        self.logical_streams_per_physical = logical_streams_per_physical;
+        self.cumulative_logical_streams_per_physical = cumulative_logical_streams_per_physical;
+        self.idle_timeout = idle_timeout;
+        self
+    }
 }
 
 impl MeekTransportResourceProfile {
@@ -1511,5 +1684,30 @@ mod tests {
                 .response_header_bytes()
                 .saturating_add(balanced.response_body_bytes())
         );
+    }
+
+    #[test]
+    fn vless_mux_owner_limits_scale_with_the_runtime_profile() {
+        let low =
+            VlessMuxOwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
+        let balanced =
+            VlessMuxOwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::Balanced);
+        let high = VlessMuxOwnerResourceProfile::from_runtime_profile(
+            ResidentRuntimeProfile::HighPerformance,
+        );
+
+        assert!(low.owner_limit() < balanced.owner_limit());
+        assert!(balanced.owner_limit() < high.owner_limit());
+        assert!(low.physical_connection_limit() < balanced.physical_connection_limit());
+        assert!(balanced.physical_connection_limit() < high.physical_connection_limit());
+        assert!(low.logical_streams_per_physical() < balanced.logical_streams_per_physical());
+        assert!(balanced.logical_streams_per_physical() < high.logical_streams_per_physical());
+        assert!(low.logical_buffer_bytes() < balanced.logical_buffer_bytes());
+        assert!(balanced.logical_buffer_bytes() < high.logical_buffer_bytes());
+        assert!(low.frame_bytes() <= usize::from(u16::MAX));
+        assert!(balanced.frame_bytes() <= usize::from(u16::MAX));
+        assert!(high.frame_bytes() <= usize::from(u16::MAX));
+        assert!(low.idle_timeout() < balanced.idle_timeout());
+        assert!(balanced.idle_timeout() < high.idle_timeout());
     }
 }

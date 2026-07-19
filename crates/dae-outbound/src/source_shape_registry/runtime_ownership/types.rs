@@ -9,6 +9,7 @@ pub enum RuntimeOwnershipModel {
     GenerationOwnedTuicTransport,
     GenerationOwnedJuicityTransport,
     GenerationOwnedMeekTransport,
+    GenerationOwnedVlessMuxTransport,
     GenerationConnectUdpTransport,
     ConfiguredHttpTransport,
     MaterializedProtocolTransport,
@@ -27,6 +28,7 @@ impl RuntimeOwnershipModel {
             Self::GenerationOwnedTuicTransport => "generation-owned-tuic-transport",
             Self::GenerationOwnedJuicityTransport => "generation-owned-juicity-transport",
             Self::GenerationOwnedMeekTransport => "generation-owned-meek-transport",
+            Self::GenerationOwnedVlessMuxTransport => "generation-owned-vless-mux-transport",
             Self::GenerationConnectUdpTransport => "generation-connect-udp-transport",
             Self::ConfiguredHttpTransport => "configured-http-transport",
             Self::MaterializedProtocolTransport => "materialized-protocol-transport",
@@ -107,6 +109,7 @@ pub enum PhysicalCarrierKind {
     QuicEndpointAndConnection,
     ConnectUdpHttpConnection,
     ConfiguredHttpConnection,
+    MultiplexedStreamConnection,
     MaterializedTransport,
     None,
     External,
@@ -121,6 +124,7 @@ impl PhysicalCarrierKind {
             Self::QuicEndpointAndConnection => "quic-endpoint-and-connection",
             Self::ConnectUdpHttpConnection => "connect-udp-http-connection",
             Self::ConfiguredHttpConnection => "configured-http-connection",
+            Self::MultiplexedStreamConnection => "multiplexed-stream-connection",
             Self::MaterializedTransport => "materialized-transport",
             Self::None => "none",
             Self::External => "external",
@@ -140,6 +144,7 @@ pub enum LogicalLeaseKind {
     MaterializedQuicLease,
     ConnectUdpContext,
     HttpStreamOrExchange,
+    MultiplexedByteStream,
     MaterializedLease,
     None,
 }
@@ -157,6 +162,7 @@ impl LogicalLeaseKind {
             Self::MaterializedQuicLease => "materialized-quic-lease",
             Self::ConnectUdpContext => "connect-udp-context",
             Self::HttpStreamOrExchange => "http-stream-or-exchange",
+            Self::MultiplexedByteStream => "multiplexed-byte-stream",
             Self::MaterializedLease => "materialized-lease",
             Self::None => "none",
         }
@@ -228,6 +234,7 @@ pub enum RuntimeBudgetContract {
     PhysicalOwnerCountAndChargedBytesMissing,
     PoolCountAndChargedBytes,
     PhysicalConnectionCountAndBoundedExchangeBytes,
+    PhysicalConnectionLogicalStreamAndBufferBytes,
     ConfiguredConnectionCountWithChargedBytesMissing,
     ResolvedAtMaterialization,
     NotApplicable,
@@ -248,6 +255,9 @@ impl RuntimeBudgetContract {
             Self::PoolCountAndChargedBytes => "pool-count-and-charged-bytes",
             Self::PhysicalConnectionCountAndBoundedExchangeBytes => {
                 "physical-connection-count-and-bounded-exchange-bytes"
+            }
+            Self::PhysicalConnectionLogicalStreamAndBufferBytes => {
+                "physical-connection-logical-stream-and-buffer-bytes"
             }
             Self::ConfiguredConnectionCountWithChargedBytesMissing => {
                 "configured-connection-count-with-charged-bytes-missing"
