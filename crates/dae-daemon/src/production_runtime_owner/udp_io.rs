@@ -3,7 +3,10 @@ use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::ops::Deref;
 use std::os::fd::AsRawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -62,9 +65,23 @@ pub(super) struct UdpOriginalDstPacket {
 
 #[derive(Clone)]
 pub(super) struct UdpPayloadPool {
-    inner: Arc<Mutex<UdpPayloadPoolState>>,
+    inner: Arc<UdpPayloadPoolInner>,
+}
+
+struct UdpPayloadPoolInner {
+    shards: Box<[UdpPayloadPoolShard]>,
+    next_take_shard: AtomicUsize,
+}
+
+struct UdpPayloadPoolShard {
+    state: Mutex<UdpPayloadPoolState>,
     max_idle: usize,
     max_idle_bytes: usize,
+}
+
+struct UdpPayloadPoolLease {
+    pool: UdpPayloadPool,
+    shard_index: usize,
 }
 
 #[derive(Default)]
@@ -74,17 +91,38 @@ struct UdpPayloadPoolState {
 }
 
 impl UdpPayloadPool {
-    pub(super) fn new(max_idle: usize) -> Self {
+    pub(super) fn new(max_idle: usize, requested_shards: usize) -> Self {
+        let shard_count = requested_shards.max(1).min(max_idle.max(1));
+        let base_idle = max_idle / shard_count;
+        let extra_idle = max_idle % shard_count;
+        let shards = (0..shard_count)
+            .map(|shard_index| {
+                let max_idle = base_idle + usize::from(shard_index < extra_idle);
+                UdpPayloadPoolShard {
+                    state: Mutex::new(UdpPayloadPoolState::default()),
+                    max_idle,
+                    max_idle_bytes: max_idle.saturating_mul(UDP_RECV_DEFAULT_CAPACITY),
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
-            inner: Arc::new(Mutex::new(UdpPayloadPoolState::default())),
-            max_idle,
-            max_idle_bytes: max_idle.saturating_mul(UDP_RECV_DEFAULT_CAPACITY),
+            inner: Arc::new(UdpPayloadPoolInner {
+                shards,
+                next_take_shard: AtomicUsize::new(0),
+            }),
         }
     }
 
-    fn take(&self, min_capacity: usize) -> Vec<u8> {
-        let mut state = self
-            .inner
+    fn take(&self, min_capacity: usize) -> (Vec<u8>, UdpPayloadPoolLease) {
+        let shard_index = if self.inner.shards.len() == 1 {
+            0
+        } else {
+            self.inner.next_take_shard.fetch_add(1, Ordering::Relaxed) % self.inner.shards.len()
+        };
+        let shard = &self.inner.shards[shard_index];
+        let mut state = shard
+            .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut buffer = state
@@ -97,20 +135,56 @@ impl UdpPayloadPool {
         if buffer.capacity() < min_capacity {
             buffer.reserve(min_capacity - buffer.capacity());
         }
-        buffer
+        (
+            buffer,
+            UdpPayloadPoolLease {
+                pool: self.clone(),
+                shard_index,
+            },
+        )
     }
 
-    fn recycle(&self, mut buffer: Vec<u8>) {
+    #[cfg(test)]
+    fn retained_snapshot(&self) -> (usize, usize) {
+        self.inner
+            .shards
+            .iter()
+            .fold((0_usize, 0_usize), |(buffers, bytes), shard| {
+                let state = shard
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                (
+                    buffers.saturating_add(state.buffers.len()),
+                    bytes.saturating_add(state.retained_bytes),
+                )
+            })
+    }
+
+    #[cfg(test)]
+    fn retained_shard_snapshot(&self, shard_index: usize) -> (usize, usize) {
+        let shard = &self.inner.shards[shard_index];
+        let state = shard
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (state.buffers.len(), state.retained_bytes)
+    }
+}
+
+impl UdpPayloadPoolLease {
+    fn recycle(self, mut buffer: Vec<u8>) {
         if buffer.capacity() == 0 || buffer.capacity() > UDP_RECV_MAX_RETAINED_CAPACITY {
             return;
         }
         buffer.clear();
-        let mut state = self
-            .inner
+        let shard = &self.pool.inner.shards[self.shard_index];
+        let mut state = shard
+            .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let retained_bytes = state.retained_bytes.saturating_add(buffer.capacity());
-        if state.buffers.len() < self.max_idle && retained_bytes <= self.max_idle_bytes {
+        if state.buffers.len() < shard.max_idle && retained_bytes <= shard.max_idle_bytes {
             state.retained_bytes = retained_bytes;
             state.buffers.push(buffer);
         }
@@ -119,7 +193,7 @@ impl UdpPayloadPool {
 
 pub(super) struct UdpPayload {
     bytes: Vec<u8>,
-    pool: Option<UdpPayloadPool>,
+    pool: Option<UdpPayloadPoolLease>,
     admission: Option<ResidentUdpPayloadPermit>,
 }
 
@@ -132,10 +206,10 @@ impl UdpPayload {
         }
     }
 
-    fn from_pool(bytes: Vec<u8>, pool: &UdpPayloadPool) -> Self {
+    fn from_pool(bytes: Vec<u8>, pool: UdpPayloadPoolLease) -> Self {
         Self {
             bytes,
-            pool: Some(pool.clone()),
+            pool: Some(pool),
             admission: None,
         }
     }
@@ -252,9 +326,12 @@ fn recvmsg_udp_original_dst_with_capacity(
     const IP_ORIGDSTADDR: libc::c_int = 20;
     const IPV6_ORIGDSTADDR: libc::c_int = 74;
     let fd = socket.as_raw_fd();
-    let mut data = match payload_pool {
-        Some(pool) => pool.take(recv_capacity),
-        None => Vec::with_capacity(recv_capacity),
+    let (mut data, mut pool_lease) = match payload_pool {
+        Some(pool) => {
+            let (data, lease) = pool.take(recv_capacity);
+            (data, Some(lease))
+        }
+        None => (Vec::with_capacity(recv_capacity), None),
     };
     let mut control = [0_u8; 256];
     let mut peer: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
@@ -272,22 +349,22 @@ fn recvmsg_udp_original_dst_with_capacity(
     msg.msg_controllen = control.len();
     let read = unsafe { libc::recvmsg(fd, &mut msg, 0) };
     if read < 0 {
-        if let Some(pool) = payload_pool {
-            pool.recycle(data);
+        if let Some(lease) = pool_lease.take() {
+            lease.recycle(data);
         }
         return Err(UdpOriginalDstRecvError::Io(io::Error::last_os_error()));
     }
     if msg.msg_flags & libc::MSG_TRUNC != 0 {
-        if let Some(pool) = payload_pool {
-            pool.recycle(data);
+        if let Some(lease) = pool_lease.take() {
+            lease.recycle(data);
         }
         return Err(UdpOriginalDstRecvError::Truncated {
             capacity: recv_capacity,
         });
     }
     if msg.msg_flags & libc::MSG_CTRUNC != 0 {
-        if let Some(pool) = payload_pool {
-            pool.recycle(data);
+        if let Some(lease) = pool_lease.take() {
+            lease.recycle(data);
         }
         return Err(UdpOriginalDstRecvError::ControlTruncated);
     }
@@ -296,8 +373,12 @@ fn recvmsg_udp_original_dst_with_capacity(
     unsafe {
         data.set_len(read as usize);
     }
-    let peer =
-        sockaddr_storage_to_addr(&peer).ok_or(UdpOriginalDstRecvError::UnsupportedAddressFamily)?;
+    let Some(peer) = sockaddr_storage_to_addr(&peer) else {
+        if let Some(lease) = pool_lease.take() {
+            lease.recycle(data);
+        }
+        return Err(UdpOriginalDstRecvError::UnsupportedAddressFamily);
+    };
     let mut original_dst = None;
     unsafe {
         let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
@@ -315,8 +396,8 @@ fn recvmsg_udp_original_dst_with_capacity(
             cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
         }
     }
-    let payload = match payload_pool {
-        Some(pool) => UdpPayload::from_pool(data, pool),
+    let payload = match pool_lease {
+        Some(lease) => UdpPayload::from_pool(data, lease),
         None => UdpPayload::from_vec(data),
     };
     Ok(UdpOriginalDstPacket {
@@ -383,6 +464,10 @@ pub(super) fn udp_direct_report_json(report: &UdpDirectSocketReport, target: Soc
 
 #[cfg(test)]
 mod tests {
+    use std::hint::black_box;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     #[test]
@@ -415,16 +500,115 @@ mod tests {
 
     #[test]
     fn udp_payload_pool_bounds_idle_capacity_by_configured_pool_size() {
-        let pool = UdpPayloadPool::new(2);
-        pool.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
-        pool.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
-        pool.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
-        let state = pool.inner.lock().unwrap();
-        assert_eq!(state.buffers.len(), 2);
+        let pool = UdpPayloadPool::new(2, 1);
+        let (_, first) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+        let (_, second) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+        let (_, third) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+        first.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
+        second.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
+        third.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
+        let (buffers, retained_bytes) = pool.retained_snapshot();
+        assert_eq!(buffers, 2);
         assert_eq!(
-            state.retained_bytes,
+            retained_bytes,
             2_usize.saturating_mul(UDP_RECV_DEFAULT_CAPACITY)
         );
+    }
+
+    #[test]
+    fn udp_payload_pool_preserves_global_budget_across_shards() {
+        let pool = UdpPayloadPool::new(5, 3);
+        let leases = (0..9)
+            .map(|_| pool.take(UDP_RECV_DEFAULT_CAPACITY).1)
+            .collect::<Vec<_>>();
+        for lease in leases {
+            lease.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
+        }
+
+        assert_eq!(
+            pool.retained_snapshot(),
+            (5, 5_usize.saturating_mul(UDP_RECV_DEFAULT_CAPACITY))
+        );
+        assert_eq!(
+            pool.retained_shard_snapshot(0),
+            (2, 2_usize.saturating_mul(UDP_RECV_DEFAULT_CAPACITY))
+        );
+        assert_eq!(
+            pool.retained_shard_snapshot(1),
+            (2, 2_usize.saturating_mul(UDP_RECV_DEFAULT_CAPACITY))
+        );
+        assert_eq!(
+            pool.retained_shard_snapshot(2),
+            (1, UDP_RECV_DEFAULT_CAPACITY)
+        );
+    }
+
+    #[test]
+    fn udp_payload_pool_recycles_into_originating_shard() {
+        let pool = UdpPayloadPool::new(4, 2);
+        let (_, first_lease) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+        let (_, second_lease) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+
+        assert_eq!(first_lease.shard_index, 0);
+        assert_eq!(second_lease.shard_index, 1);
+        second_lease.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
+        assert_eq!(pool.retained_shard_snapshot(0), (0, 0));
+        assert_eq!(
+            pool.retained_shard_snapshot(1),
+            (1, UDP_RECV_DEFAULT_CAPACITY)
+        );
+        first_lease.recycle(Vec::with_capacity(UDP_RECV_DEFAULT_CAPACITY));
+        assert_eq!(
+            pool.retained_shard_snapshot(0),
+            (1, UDP_RECV_DEFAULT_CAPACITY)
+        );
+    }
+
+    #[test]
+    fn udp_payload_pool_clone_shares_retained_buffers() {
+        let pool = UdpPayloadPool::new(2, 2);
+        let clone = pool.clone();
+        let (buffer, lease) = clone.take(UDP_RECV_DEFAULT_CAPACITY);
+        lease.recycle(buffer);
+
+        assert_eq!(pool.retained_snapshot(), (1, UDP_RECV_DEFAULT_CAPACITY));
+    }
+
+    #[test]
+    fn udp_payload_pool_recycles_buffers_after_receive_errors() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let pool = UdpPayloadPool::new(2, 1);
+
+        let err = match recvmsg_udp_original_dst_with_capacity(
+            &receiver,
+            UDP_RECV_DEFAULT_CAPACITY,
+            Some(&pool),
+        ) {
+            Ok(_) => panic!("empty nonblocking socket unexpectedly returned a datagram"),
+            Err(err) => err,
+        };
+
+        assert!(err.is_would_block());
+        assert_eq!(pool.retained_snapshot(), (1, UDP_RECV_DEFAULT_CAPACITY));
+    }
+
+    #[test]
+    fn udp_payload_pool_recycles_truncated_datagram_buffer() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender
+            .send_to(&[1_u8, 2, 3], receiver.local_addr().unwrap())
+            .unwrap();
+        let pool = UdpPayloadPool::new(2, 1);
+
+        let err = match recvmsg_udp_original_dst_with_capacity(&receiver, 2, Some(&pool)) {
+            Ok(_) => panic!("undersized receive buffer unexpectedly accepted a datagram"),
+            Err(err) => err,
+        };
+
+        assert!(err.is_truncated());
+        assert_eq!(pool.retained_snapshot(), (1, 2));
     }
 
     #[test]
@@ -435,5 +619,79 @@ mod tests {
         assert_eq!(admission.current(), 768);
         drop(payload);
         assert_eq!(admission.current(), 0);
+    }
+
+    #[test]
+    #[ignore = "explicit high-concurrency buffer ownership microbenchmark"]
+    fn udp_payload_pool_high_concurrency_microbenchmark() {
+        const TOTAL_OPERATIONS: usize = 1_048_576;
+        const CONCURRENCY_LEVELS: [usize; 5] = [1, 4, 16, 64, 256];
+        let runtime_shards = thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(1)
+            .min(
+                crate::production_runtime_owner::resident_dataplane::RESIDENT_UDP_RUNTIME_SHARDS_MAX,
+            );
+        for concurrency in CONCURRENCY_LEVELS {
+            let shared_pool = UdpPayloadPool::new(1_024, 1);
+            let shared = benchmark_payload_buffers(concurrency, TOTAL_OPERATIONS, move |_| {
+                shared_pool.clone()
+            });
+            let sharded_pool = UdpPayloadPool::new(1_024, runtime_shards);
+            let sharded = benchmark_payload_buffers(concurrency, TOTAL_OPERATIONS, move |_| {
+                sharded_pool.clone()
+            });
+            let allocated = benchmark_payload_allocations(concurrency, TOTAL_OPERATIONS);
+            eprintln!(
+                "udp_payload_pool_concurrency_benchmark {}",
+                serde_json::json!({
+                    "concurrency": concurrency,
+                    "operations": TOTAL_OPERATIONS,
+                    "runtimeShards": runtime_shards,
+                    "sharedPoolNsPerOperation": shared.as_nanos() / TOTAL_OPERATIONS as u128,
+                    "shardedPoolNsPerOperation": sharded.as_nanos() / TOTAL_OPERATIONS as u128,
+                    "allocateNsPerOperation": allocated.as_nanos() / TOTAL_OPERATIONS as u128,
+                })
+            );
+        }
+    }
+
+    fn benchmark_payload_buffers(
+        concurrency: usize,
+        total_operations: usize,
+        pool_for_worker: impl Fn(usize) -> UdpPayloadPool,
+    ) -> Duration {
+        let operations_per_worker = total_operations.div_ceil(concurrency);
+        let started = Instant::now();
+        thread::scope(|scope| {
+            for worker in 0..concurrency {
+                let pool = pool_for_worker(worker);
+                scope.spawn(move || {
+                    for _ in 0..operations_per_worker {
+                        let (mut buffer, lease) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+                        buffer.resize(UDP_RECV_DEFAULT_CAPACITY, 0);
+                        black_box(buffer.as_mut_slice());
+                        lease.recycle(buffer);
+                    }
+                });
+            }
+        });
+        started.elapsed()
+    }
+
+    fn benchmark_payload_allocations(concurrency: usize, total_operations: usize) -> Duration {
+        let operations_per_worker = total_operations.div_ceil(concurrency);
+        let started = Instant::now();
+        thread::scope(|scope| {
+            for _ in 0..concurrency {
+                scope.spawn(move || {
+                    for _ in 0..operations_per_worker {
+                        let mut buffer = vec![0_u8; UDP_RECV_DEFAULT_CAPACITY];
+                        black_box(buffer.as_mut_slice());
+                    }
+                });
+            }
+        });
+        started.elapsed()
     }
 }

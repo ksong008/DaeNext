@@ -77,7 +77,7 @@ mod tests {
             sender.send_to(&[value], target).unwrap();
         }
         let socket = AsyncFd::new(receiver).unwrap();
-        let pool = UdpPayloadPool::new(4);
+        let pool = UdpPayloadPool::new(4, 1);
 
         let first = recv_udp_batch_with_original_dst_async(&socket, &pool, 2)
             .await
