@@ -5,6 +5,7 @@ const MATERIALIZED_STREAM_SECURITY_MODELS: &[RuntimeOwnershipModel] = &[
     RuntimeOwnershipModel::FlowStreamAndPacketSession,
     RuntimeOwnershipModel::FlowStreamWithPacketPolicyClosed,
     RuntimeOwnershipModel::ConfiguredHttpTransport,
+    RuntimeOwnershipModel::GenerationOwnedMeekTransport,
 ];
 
 const MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_MODELS: &[RuntimeOwnershipModel] = &[

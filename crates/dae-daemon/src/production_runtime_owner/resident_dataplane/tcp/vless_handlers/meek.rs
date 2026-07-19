@@ -13,6 +13,12 @@ enum MeekResponseFraming {
 #[derive(Debug)]
 struct MeekResponseHead {
     framing: MeekResponseFraming,
+    reusable: bool,
+}
+
+struct MeekHttpResponse {
+    body: Vec<u8>,
+    reusable: bool,
 }
 
 struct MeekBodyReader<'a, R> {
@@ -62,37 +68,34 @@ pub(crate) async fn meek_round_trip_async(
 
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
-    let remaining = meek_deadline_remaining(deadline, "open Meek TLS carrier")?;
-    let mut client = time::timeout(remaining, open_async_resident_tls_client(proxy))
-        .await
-        .map_err(|_| "open Meek TLS carrier deadline elapsed".to_owned())??;
-    let negotiated_alpn = client.negotiated_alpn().map(<[u8]>::to_vec);
-    match negotiated_alpn.as_deref() {
-        None | Some(b"http/1.1") => {}
-        Some(protocol) => {
-            client.shutdown().await;
-            return Err(format!(
-                "Meek HTTP/1.1 carrier negotiated unsupported ALPN {}",
-                String::from_utf8_lossy(protocol)
-            ));
-        }
-    }
+    let mut lease = acquire_meek_transport(Arc::new(proxy.clone()), deadline).await?;
 
     let result = async {
         let remaining = meek_deadline_remaining(deadline, "write Meek polling request")?;
         time::timeout(
             remaining,
-            client.write_plain_all(&request, "write Meek polling request"),
+            lease
+                .client_mut()
+                .write_plain_all(&request, "write Meek polling request"),
         )
         .await
         .map_err(|_| "write Meek polling request deadline elapsed".to_owned())??;
-        read_meek_http_response_body_async(&mut client, deadline, resources).await
+        read_meek_http_response_async(lease.client_mut(), deadline, resources).await
     }
     .await;
-    if let Some(remaining) = deadline.remaining_at(Instant::now()) {
-        let _ = time::timeout(remaining, client.shutdown()).await;
+    match result {
+        Ok(response) if response.reusable => {
+            lease.recycle();
+            Ok(response.body)
+        }
+        Ok(response) => {
+            if let Some(remaining) = deadline.remaining_at(Instant::now()) {
+                let _ = time::timeout(remaining, lease.client_mut().shutdown()).await;
+            }
+            Ok(response.body)
+        }
+        Err(error) => Err(error),
     }
-    result
 }
 
 fn meek_deadline_remaining(
@@ -104,11 +107,25 @@ fn meek_deadline_remaining(
         .ok_or_else(|| format!("{operation} deadline elapsed"))
 }
 
-pub(crate) async fn read_meek_http_response_body_async<R>(
+#[cfg(test)]
+async fn read_meek_http_response_body_async<R>(
     client: &mut R,
     deadline: dae_runtime_control::AbsoluteDeadline,
     resources: MeekTransportResourceProfile,
 ) -> Result<Vec<u8>, String>
+where
+    R: AsyncRead + Unpin,
+{
+    read_meek_http_response_async(client, deadline, resources)
+        .await
+        .map(|response| response.body)
+}
+
+async fn read_meek_http_response_async<R>(
+    client: &mut R,
+    deadline: dae_runtime_control::AbsoluteDeadline,
+    resources: MeekTransportResourceProfile,
+) -> Result<MeekHttpResponse, String>
 where
     R: AsyncRead + Unpin,
 {
@@ -147,7 +164,7 @@ where
         wire_bytes,
         wire_limit: resources.response_wire_bytes(),
     };
-    match head.framing {
+    let body = match head.framing {
         MeekResponseFraming::ContentLength(length) => reader.read_content_length(length).await,
         MeekResponseFraming::Chunked => reader.read_chunked(resources.response_body_bytes()).await,
         MeekResponseFraming::CloseDelimited => {
@@ -155,7 +172,11 @@ where
                 .read_close_delimited(resources.response_body_bytes())
                 .await
         }
-    }
+    }?;
+    Ok(MeekHttpResponse {
+        body,
+        reusable: head.reusable && !matches!(head.framing, MeekResponseFraming::CloseDelimited),
+    })
 }
 
 async fn read_meek_bytes<R>(
@@ -180,8 +201,13 @@ impl MeekResponseHead {
             .map_err(|error| format!("validate Meek response: {error}"))?;
         let text = std::str::from_utf8(head)
             .map_err(|error| format!("Meek response head utf8: {error}"))?;
+        let http11 = text
+            .split("\r\n")
+            .next()
+            .is_some_and(|status| status.starts_with("HTTP/1.1 "));
         let mut content_length = None;
         let mut transfer_encodings = Vec::new();
+        let mut connection_close = false;
         for line in text.split("\r\n").skip(1) {
             let Some((name, value)) = line.split_once(':') else {
                 continue;
@@ -208,6 +234,11 @@ impl MeekResponseHead {
                         .filter(|encoding| !encoding.is_empty())
                         .map(str::to_ascii_lowercase),
                 );
+            } else if name.eq_ignore_ascii_case("connection") {
+                connection_close |= value
+                    .split(',')
+                    .map(str::trim)
+                    .any(|token| token.eq_ignore_ascii_case("close"));
             }
         }
         if !transfer_encodings.is_empty() {
@@ -221,6 +252,7 @@ impl MeekResponseHead {
             }
             return Ok(Self {
                 framing: MeekResponseFraming::Chunked,
+                reusable: http11 && !connection_close,
             });
         }
         Ok(Self {
@@ -228,6 +260,7 @@ impl MeekResponseHead {
                 MeekResponseFraming::CloseDelimited,
                 MeekResponseFraming::ContentLength,
             ),
+            reusable: http11 && !connection_close && content_length.is_some(),
         })
     }
 }
@@ -298,6 +331,11 @@ where
             if size == 0 {
                 loop {
                     if self.read_line("read Meek chunk trailer").await?.is_empty() {
+                        if !self.buffered.is_empty() {
+                            return Err(
+                                "Meek response contains bytes beyond chunked framing".to_owned()
+                            );
+                        }
                         return Ok(body);
                     }
                 }
@@ -372,12 +410,13 @@ mod tests {
 
     #[test]
     fn meek_response_head_selects_strict_bounded_framing() {
+        let content_length =
+            MeekResponseHead::parse(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n", 8).unwrap();
         assert_eq!(
-            MeekResponseHead::parse(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n", 8)
-                .unwrap()
-                .framing,
+            content_length.framing,
             MeekResponseFraming::ContentLength(7)
         );
+        assert!(content_length.reusable);
         assert_eq!(
             MeekResponseHead::parse(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", 8,)
                 .unwrap()
@@ -389,6 +428,19 @@ mod tests {
                 .unwrap()
                 .framing,
             MeekResponseFraming::CloseDelimited
+        );
+        assert!(
+            !MeekResponseHead::parse(
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                8,
+            )
+            .unwrap()
+            .reusable
+        );
+        assert!(
+            !MeekResponseHead::parse(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n", 8)
+                .unwrap()
+                .reusable
         );
     }
 
@@ -438,5 +490,15 @@ mod tests {
             .await
             .unwrap_err();
         assert!(trailing.contains("beyond Content-Length"), "{trailing}");
+
+        let trailing_chunked = read_test_response(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n0\r\n\r\nx",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            trailing_chunked.contains("beyond chunked"),
+            "{trailing_chunked}"
+        );
     }
 }

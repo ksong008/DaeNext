@@ -29,6 +29,10 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
         .pointer("/residentDataplane/metrics/h2CarrierOwners")
         .cloned()
         .unwrap_or(Value::Null);
+    let meek = runtime
+        .pointer("/residentDataplane/metrics/meekTransportOwners")
+        .cloned()
+        .unwrap_or(Value::Null);
     let runtime_profile = runtime
         .pointer("/residentDataplane/metrics/resources/runtimeProfile")
         .cloned()
@@ -147,6 +151,23 @@ pub(in crate::daed_product) fn total_resource_ledger_json(
             "admissionEnforced": h2_carriers["admissionEnforced"].clone(),
             "shutdownTimedOut": h2_carriers["shutdownTimedOut"].clone(),
             "budget": h2_carriers["budget"].clone(),
+        },
+        "meekTransportOwners": {
+            "registeredKeys": meek["registeredKeys"].clone(),
+            "registeredBuildTasks": meek["registeredBuildTasks"].clone(),
+            "reservedPhysicalConnections": meek["reservedPhysicalConnections"].clone(),
+            "highWaterReservedPhysicalConnections": meek["highWaterReservedPhysicalConnections"].clone(),
+            "activePhysicalConnections": meek["activePhysicalConnections"].clone(),
+            "highWaterPhysicalConnections": meek["highWaterPhysicalConnections"].clone(),
+            "activeLeases": meek["activeLeases"].clone(),
+            "highWaterLeases": meek["highWaterLeases"].clone(),
+            "idlePhysicalConnections": meek["idlePhysicalConnections"].clone(),
+            "highWaterIdlePhysicalConnections": meek["highWaterIdlePhysicalConnections"].clone(),
+            "activeBuilds": meek["activeBuilds"].clone(),
+            "ownerStateBytesLowerBound": meek["ownerStateBytesLowerBound"].clone(),
+            "admissionEnforced": meek["admissionEnforced"].clone(),
+            "shutdownTimedOut": meek["shutdownTimedOut"].clone(),
+            "budget": meek["budget"].clone(),
         },
         "dnsTransportOwners": {
             "current": resident_metric("dnsTransportOwnersCurrent"),

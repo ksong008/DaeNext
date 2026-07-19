@@ -5,6 +5,8 @@ const CONNECT_UDP_MODELS: &[RuntimeOwnershipModel] =
     &[RuntimeOwnershipModel::GenerationConnectUdpTransport];
 const CONFIGURED_HTTP_MODELS: &[RuntimeOwnershipModel] =
     &[RuntimeOwnershipModel::ConfiguredHttpTransport];
+const GENERATION_MEEK_MODELS: &[RuntimeOwnershipModel] =
+    &[RuntimeOwnershipModel::GenerationOwnedMeekTransport];
 
 pub const GENERATION_CONNECT_UDP_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
     model: RuntimeOwnershipModel::GenerationConnectUdpTransport,
@@ -60,6 +62,19 @@ pub const CONFIGURED_HTTP_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipP
     ),
 };
 
+pub const GENERATION_OWNED_MEEK_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
+    model: RuntimeOwnershipModel::GenerationOwnedMeekTransport,
+    allowed_materialized_models: GENERATION_MEEK_MODELS,
+    disposition: RuntimeOwnershipDisposition::Implemented,
+    data_tcp: generation_meek_route(RuntimeCallerClass::DataTcp),
+    data_udp: closed_route(RuntimeCallerClass::DataUdp),
+    health_tcp: generation_meek_route(RuntimeCallerClass::HealthTcp),
+    health_dns: closed_route(RuntimeCallerClass::HealthDns),
+    manual: generation_meek_route(RuntimeCallerClass::ManualProbe),
+    configured_dns: closed_route(RuntimeCallerClass::ConfiguredDns),
+    forced_managed_dns: closed_route(RuntimeCallerClass::ForcedManagedDns),
+};
+
 const fn connect_udp_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
     admitted_route(
         caller,
@@ -83,5 +98,16 @@ const fn configured_http_route(
         lifecycle_owner,
         key_contract,
         RuntimeBudgetContract::ConfiguredConnectionCountWithChargedBytesMissing,
+    )
+}
+
+const fn generation_meek_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
+    admitted_route(
+        caller,
+        PhysicalCarrierKind::ConfiguredHttpConnection,
+        LogicalLeaseKind::HttpStreamOrExchange,
+        RuntimeLifecycleOwner::GenerationRuntime,
+        PhysicalOwnerKeyContract::GenerationGraphAndTransport,
+        RuntimeBudgetContract::PhysicalConnectionCountAndBoundedExchangeBytes,
     )
 }

@@ -137,6 +137,15 @@ const HIGH_PERFORMANCE_MEEK_RESPONSE_HEADER_BYTES: usize = 32 * 1024;
 const LOW_MEMORY_MEEK_RESPONSE_BODY_BYTES: usize = 256 * 1024;
 const BALANCED_MEEK_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 const HIGH_PERFORMANCE_MEEK_RESPONSE_BODY_BYTES: usize = 4 * 1024 * 1024;
+const LOW_MEMORY_MEEK_OWNER_LIMIT: usize = 8;
+const BALANCED_MEEK_OWNER_LIMIT: usize = 32;
+const HIGH_PERFORMANCE_MEEK_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_MEEK_IDLE_CONNECTION_LIMIT: usize = 1;
+const BALANCED_MEEK_IDLE_CONNECTION_LIMIT: usize = 2;
+const HIGH_PERFORMANCE_MEEK_IDLE_CONNECTION_LIMIT: usize = 4;
+const LOW_MEMORY_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS: u64 = 15;
+const BALANCED_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS: u64 = 30;
+const HIGH_PERFORMANCE_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS: u64 = 60;
 const LOW_MEMORY_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 64;
 const BALANCED_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 256;
 const HIGH_PERFORMANCE_TUIC_OWNER_COMMAND_QUEUE_DEPTH: usize = 1_024;
@@ -277,6 +286,10 @@ pub(crate) struct H2CarrierOwnerResourceProfile {
 pub(crate) struct MeekTransportResourceProfile {
     response_header_bytes: usize,
     response_body_bytes: usize,
+    owner_limit: usize,
+    physical_connection_limit: usize,
+    idle_connection_limit: usize,
+    idle_connection_timeout: Duration,
 }
 
 impl MeekTransportResourceProfile {
@@ -285,14 +298,32 @@ impl MeekTransportResourceProfile {
             ResidentRuntimeProfile::LowMemory => Self {
                 response_header_bytes: LOW_MEMORY_MEEK_RESPONSE_HEADER_BYTES,
                 response_body_bytes: LOW_MEMORY_MEEK_RESPONSE_BODY_BYTES,
+                owner_limit: LOW_MEMORY_MEEK_OWNER_LIMIT,
+                physical_connection_limit: LOW_MEMORY_TCP_CONNECTION_LIMIT,
+                idle_connection_limit: LOW_MEMORY_MEEK_IDLE_CONNECTION_LIMIT,
+                idle_connection_timeout: Duration::from_secs(
+                    LOW_MEMORY_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS,
+                ),
             },
             ResidentRuntimeProfile::Balanced => Self {
                 response_header_bytes: BALANCED_MEEK_RESPONSE_HEADER_BYTES,
                 response_body_bytes: BALANCED_MEEK_RESPONSE_BODY_BYTES,
+                owner_limit: BALANCED_MEEK_OWNER_LIMIT,
+                physical_connection_limit: BALANCED_TCP_CONNECTION_LIMIT,
+                idle_connection_limit: BALANCED_MEEK_IDLE_CONNECTION_LIMIT,
+                idle_connection_timeout: Duration::from_secs(
+                    BALANCED_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS,
+                ),
             },
             ResidentRuntimeProfile::HighPerformance => Self {
                 response_header_bytes: HIGH_PERFORMANCE_MEEK_RESPONSE_HEADER_BYTES,
                 response_body_bytes: HIGH_PERFORMANCE_MEEK_RESPONSE_BODY_BYTES,
+                owner_limit: HIGH_PERFORMANCE_MEEK_OWNER_LIMIT,
+                physical_connection_limit: HIGH_PERFORMANCE_TCP_CONNECTION_LIMIT,
+                idle_connection_limit: HIGH_PERFORMANCE_MEEK_IDLE_CONNECTION_LIMIT,
+                idle_connection_timeout: Duration::from_secs(
+                    HIGH_PERFORMANCE_MEEK_IDLE_CONNECTION_TIMEOUT_SECONDS,
+                ),
             },
         }
     }
@@ -316,6 +347,45 @@ impl MeekTransportResourceProfile {
     pub(crate) const fn response_wire_bytes(self) -> usize {
         self.response_header_bytes
             .saturating_add(self.response_body_bytes)
+    }
+
+    pub(crate) const fn owner_limit(self) -> usize {
+        self.owner_limit
+    }
+
+    pub(crate) const fn physical_connection_limit(self) -> usize {
+        self.physical_connection_limit
+    }
+
+    pub(crate) const fn physical_connections_per_owner(self) -> usize {
+        self.physical_connection_limit / self.owner_limit
+    }
+
+    pub(crate) const fn idle_connection_limit(self) -> usize {
+        self.idle_connection_limit
+    }
+
+    pub(crate) const fn idle_connection_timeout(self) -> Duration {
+        self.idle_connection_timeout
+    }
+
+    pub(crate) fn idle_janitor_interval(self) -> Duration {
+        self.idle_connection_timeout / 2
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_transport_limits_for_test(
+        mut self,
+        owner_limit: usize,
+        physical_connection_limit: usize,
+        idle_connection_limit: usize,
+        idle_connection_timeout: Duration,
+    ) -> Self {
+        self.owner_limit = owner_limit.max(1);
+        self.physical_connection_limit = physical_connection_limit.max(self.owner_limit);
+        self.idle_connection_limit = idle_connection_limit;
+        self.idle_connection_timeout = idle_connection_timeout;
+        self
     }
 }
 
@@ -1426,6 +1496,15 @@ mod tests {
         assert!(balanced.response_header_bytes() < high.response_header_bytes());
         assert!(low.response_body_bytes() < balanced.response_body_bytes());
         assert!(balanced.response_body_bytes() < high.response_body_bytes());
+        assert!(low.owner_limit() < balanced.owner_limit());
+        assert!(balanced.owner_limit() < high.owner_limit());
+        assert!(low.physical_connection_limit() < balanced.physical_connection_limit());
+        assert!(balanced.physical_connection_limit() < high.physical_connection_limit());
+        assert!(low.idle_connection_limit() < balanced.idle_connection_limit());
+        assert!(balanced.idle_connection_limit() < high.idle_connection_limit());
+        assert!(low.idle_connection_timeout() < balanced.idle_connection_timeout());
+        assert!(balanced.idle_connection_timeout() < high.idle_connection_timeout());
+        assert!(low.physical_connections_per_owner() > 0);
         assert_eq!(
             balanced.response_wire_bytes(),
             balanced

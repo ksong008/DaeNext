@@ -131,6 +131,8 @@ pub(crate) use self::anytls_owner::{
 };
 #[path = "runtime/h2_carrier_owner.rs"]
 mod h2_carrier_owner;
+#[path = "runtime/transport_identity.rs"]
+mod transport_identity;
 pub(crate) use self::h2_carrier_owner::{
     H2CarrierGenerationOwnerHandle, H2CarrierLease, acquire_h2_carrier,
     start_h2_carrier_generation_owner,
@@ -138,6 +140,17 @@ pub(crate) use self::h2_carrier_owner::{
 #[cfg(test)]
 #[path = "runtime/h2_carrier_owner_live_tests.rs"]
 mod h2_carrier_owner_live_tests;
+#[path = "runtime/meek_transport_owner.rs"]
+mod meek_transport_owner;
+#[cfg(test)]
+pub(crate) use self::meek_transport_owner::start_meek_transport_generation_owner_for_test;
+pub(crate) use self::meek_transport_owner::{
+    MeekTransportGenerationOwnerHandle, acquire_meek_transport,
+    start_meek_transport_generation_owner,
+};
+#[cfg(test)]
+#[path = "runtime/meek_transport_owner_live_tests.rs"]
+mod meek_transport_owner_live_tests;
 
 #[derive(Clone, Default)]
 pub(crate) struct ResidentTransportOwnerRegistries {

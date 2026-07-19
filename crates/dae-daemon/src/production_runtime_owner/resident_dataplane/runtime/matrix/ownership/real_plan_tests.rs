@@ -1,7 +1,8 @@
 use base64::Engine;
 use dae_outbound::{
     CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
-    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, ShadowsocksLink, Sip003, TrojanLink, VLESSLink, VMessLink,
+    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP, ShadowsocksLink, Sip003,
+    TrojanLink, VLESSLink, VMessLink,
 };
 
 use super::*;
@@ -13,6 +14,18 @@ fn admitted_policy_closed_plans_keep_their_tcp_flow_owner() {
     for link in [
         vless_link("meek", "tls", "", "https://meek.example.test/resource").export_url(),
         vless_reality_link("meek", "", "https://meek.example.test/resource").export_url(),
+    ] {
+        let proxy = build_proxy(link).unwrap();
+        assert!(proxy.execution_plan().udp.policy_closed());
+        assert_eq!(
+            materialized_runtime_ownership(proxy.execution_plan()),
+            GENERATION_OWNED_MEEK_OWNERSHIP,
+            "{}",
+            proxy.protocol
+        );
+    }
+
+    for link in [
         vless_mux_link().export_url(),
         vmess_link("h2", "tls").export_url(),
         trojan_inner_link().export_url(),

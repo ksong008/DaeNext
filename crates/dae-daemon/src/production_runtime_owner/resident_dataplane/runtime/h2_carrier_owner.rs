@@ -8,7 +8,6 @@ use std::time::Instant;
 use bytes::Bytes;
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
 use tokio::time;
 
@@ -17,6 +16,7 @@ use crate::production_runtime_owner::resident_dataplane::client::{
     async_resident_tls_underlay_name, open_async_resident_tls_client_with_flow,
 };
 use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyPlan;
+use crate::production_runtime_owner::resident_dataplane::transport_identity::resident_transport_identity_digest;
 
 const H2_CARRIER_IDENTITY_DOMAIN: &[u8] = b"dae/h2-carrier-owner/v1";
 
@@ -31,12 +31,9 @@ struct H2CarrierKey {
 
 impl H2CarrierKey {
     fn for_proxy(proxy: &ResidentProxyPlan) -> Self {
-        let mut digest = Sha256::new();
-        digest.update(H2_CARRIER_IDENTITY_DOMAIN);
-        update_h2_proxy_identity(&mut digest, proxy);
         Self {
             generation: proxy.execution_plan().runtime_generation(),
-            digest: digest.finalize().into(),
+            digest: resident_transport_identity_digest(H2_CARRIER_IDENTITY_DOMAIN, proxy),
         }
     }
 }
@@ -49,110 +46,6 @@ impl std::fmt::Debug for H2CarrierKey {
             .field("digest", &"<redacted>")
             .finish()
     }
-}
-
-fn update_h2_identity_part(digest: &mut Sha256, field: &[u8], value: &[u8]) {
-    digest.update((field.len() as u64).to_be_bytes());
-    digest.update(field);
-    digest.update((value.len() as u64).to_be_bytes());
-    digest.update(value);
-}
-
-fn update_h2_proxy_identity(digest: &mut Sha256, proxy: &ResidentProxyPlan) {
-    update_h2_identity_part(digest, b"proxy", b"begin");
-    update_h2_identity_part(digest, b"graph-link-hash", proxy.graph_link_hash.as_bytes());
-    update_h2_identity_part(digest, b"server-host", proxy.server_host.as_bytes());
-    update_h2_identity_part(digest, b"server-port", &proxy.server_port.to_be_bytes());
-    update_h2_identity_part(digest, b"server-name", proxy.server_name.as_bytes());
-    update_h2_identity_part(digest, b"tls", proxy.tls.as_bytes());
-    update_h2_identity_part(digest, b"mark", &proxy.mark.to_be_bytes());
-    update_h2_identity_part(digest, b"mptcp", &[u8::from(proxy.mptcp)]);
-    update_h2_identity_part(digest, b"allow-insecure", &[u8::from(proxy.allow_insecure)]);
-    update_h2_identity_part(
-        digest,
-        b"alpn-count",
-        &(proxy.alpn.len() as u64).to_be_bytes(),
-    );
-    for alpn in &proxy.alpn {
-        update_h2_identity_part(digest, b"alpn", alpn.as_bytes());
-    }
-    update_h2_identity_part(
-        digest,
-        b"tls-fragment-present",
-        &[u8::from(proxy.tls_fragment.is_some())],
-    );
-    if let Some(fragment) = proxy.tls_fragment.as_ref() {
-        update_h2_identity_part(
-            digest,
-            b"fragment-min-length",
-            &fragment.min_length.to_be_bytes(),
-        );
-        update_h2_identity_part(
-            digest,
-            b"fragment-max-length",
-            &fragment.max_length.to_be_bytes(),
-        );
-        update_h2_identity_part(
-            digest,
-            b"fragment-min-interval",
-            &fragment.min_interval_ms.to_be_bytes(),
-        );
-        update_h2_identity_part(
-            digest,
-            b"fragment-max-interval",
-            &fragment.max_interval_ms.to_be_bytes(),
-        );
-    }
-    update_h2_identity_part(
-        digest,
-        b"fingerprint-present",
-        &[u8::from(proxy.utls_fingerprint.is_some())],
-    );
-    if let Some(fingerprint) = proxy.utls_fingerprint.as_ref() {
-        update_h2_identity_part(digest, b"fp-source", fingerprint.source.as_bytes());
-        update_h2_identity_part(digest, b"fp-requested", fingerprint.requested.as_bytes());
-        update_h2_identity_part(digest, b"fp-name", fingerprint.name.as_bytes());
-        update_h2_identity_part(digest, b"fp-canonical", fingerprint.canonical.as_bytes());
-        update_h2_identity_part(digest, b"fp-family", fingerprint.family.as_bytes());
-        update_h2_identity_part(digest, b"fp-client", fingerprint.client.as_bytes());
-        update_h2_identity_part(
-            digest,
-            b"fp-randomized",
-            &[u8::from(fingerprint.randomized)],
-        );
-        update_h2_identity_part(
-            digest,
-            b"fp-alpn-policy",
-            fingerprint.alpn_policy.as_bytes(),
-        );
-        update_h2_identity_part(
-            digest,
-            b"fp-default-alpn-count",
-            &(fingerprint.default_alpn.len() as u64).to_be_bytes(),
-        );
-        for alpn in &fingerprint.default_alpn {
-            update_h2_identity_part(digest, b"fp-default-alpn", alpn.as_bytes());
-        }
-    }
-    update_h2_identity_part(
-        digest,
-        b"reality-present",
-        &[u8::from(proxy.reality.is_some())],
-    );
-    if let Some(reality) = proxy.reality.as_ref() {
-        update_h2_identity_part(digest, b"reality-public-key", &reality.public_key);
-        update_h2_identity_part(digest, b"reality-short-id", &reality.short_id);
-        update_h2_identity_part(digest, b"reality-spider-x", reality.spider_x.as_bytes());
-    }
-    update_h2_identity_part(
-        digest,
-        b"parent-present",
-        &[u8::from(proxy.chain_parent.is_some())],
-    );
-    if let Some(parent) = proxy.chain_parent.as_deref() {
-        update_h2_proxy_identity(digest, parent);
-    }
-    update_h2_identity_part(digest, b"proxy", b"end");
 }
 
 #[derive(Default)]

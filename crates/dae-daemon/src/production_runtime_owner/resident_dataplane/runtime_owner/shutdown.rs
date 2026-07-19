@@ -96,6 +96,21 @@ pub(super) fn shutdown_resident_runtime_owner(
             && h2_carrier_owners["activeBuilds"].as_u64() == Some(0)
             && h2_carrier_owners["ownerStateBytesLowerBound"].as_u64() == Some(0)
             && h2_carrier_owners["shutdownTimedOut"].as_bool() == Some(false));
+    let meek_transport_owners = owner
+        .meek_transport_generation_owner
+        .as_ref()
+        .map(MeekTransportGenerationOwnerHandle::metrics_snapshot)
+        .unwrap_or(Value::Null);
+    let meek_transport_owners_released = meek_transport_owners.is_null()
+        || (meek_transport_owners["registeredKeys"].as_u64() == Some(0)
+            && meek_transport_owners["registeredBuildTasks"].as_u64() == Some(0)
+            && meek_transport_owners["reservedPhysicalConnections"].as_u64() == Some(0)
+            && meek_transport_owners["activePhysicalConnections"].as_u64() == Some(0)
+            && meek_transport_owners["activeLeases"].as_u64() == Some(0)
+            && meek_transport_owners["idlePhysicalConnections"].as_u64() == Some(0)
+            && meek_transport_owners["activeBuilds"].as_u64() == Some(0)
+            && meek_transport_owners["ownerStateBytesLowerBound"].as_u64() == Some(0)
+            && meek_transport_owners["shutdownTimedOut"].as_bool() == Some(false));
     let shutdown_elapsed_ns = elapsed_nanos(started);
     let shutdown_passed = task_shutdown.panicked == 0
         && task_shutdown.timed_out == 0
@@ -105,6 +120,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         && juicity_owners_released
         && anytls_owners_released
         && h2_carrier_owners_released
+        && meek_transport_owners_released
         && owned_cleanup["status"].as_str() == Some("pass")
         && event_writer["status"].as_str() == Some("pass");
 
@@ -133,6 +149,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         "juicity_owners": juicity_owners,
         "anytls_owners": anytls_owners,
         "h2_carrier_owners": h2_carrier_owners,
+        "meek_transport_owners": meek_transport_owners,
         "owned_cleanup": owned_cleanup,
         "runtime_handle_owner": "resident-runtime-owner",
         "manual_probe_runtime_available": true,

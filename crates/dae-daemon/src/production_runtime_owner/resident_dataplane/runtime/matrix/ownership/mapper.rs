@@ -1,8 +1,9 @@
 use dae_outbound::{
     CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
     FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
-    GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_TUIC_OWNERSHIP,
-    MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, RuntimeOwnershipProfile,
+    GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
+    GENERATION_OWNED_TUIC_OWNERSHIP, MATERIALIZED_SHAPE_REJECTED_OWNERSHIP,
+    RuntimeOwnershipProfile,
 };
 
 use super::*;
@@ -221,7 +222,7 @@ fn vless_standard_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnership
         (security, Wrapper::Meek, UdpDimension::PolicyClosed(PolicyClosedDimension::VlessMeek))
             if is_standard_or_reality_security(security) =>
         {
-            Some(FLOW_STREAM_POLICY_CLOSED_OWNERSHIP)
+            Some(GENERATION_OWNED_MEEK_OWNERSHIP)
         }
         _ => None,
     }

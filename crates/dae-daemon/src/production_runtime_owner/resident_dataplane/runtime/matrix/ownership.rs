@@ -62,9 +62,9 @@ mod tests {
     use super::*;
     use dae_outbound::{
         CONFIGURED_HTTP_OWNERSHIP, GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
-        GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_TUIC_OWNERSHIP, LogicalLeaseKind,
-        MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, PhysicalCarrierKind, RuntimeLifecycleOwner,
-        RuntimeOwnershipModel, RuntimeRouteAdmission,
+        GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
+        GENERATION_OWNED_TUIC_OWNERSHIP, LogicalLeaseKind, MATERIALIZED_SHAPE_REJECTED_OWNERSHIP,
+        PhysicalCarrierKind, RuntimeLifecycleOwner, RuntimeOwnershipModel, RuntimeRouteAdmission,
     };
     use plan::{
         ResidentExecutionPlan, ResidentProtocolShape as Protocol,
@@ -105,6 +105,30 @@ mod tests {
         assert_eq!(
             ownership.data_tcp.lifecycle_owner,
             RuntimeLifecycleOwner::GenerationRuntime
+        );
+    }
+
+    #[test]
+    fn meek_execution_exposes_generation_owned_http1_transport() {
+        let ownership = materialized_runtime_ownership(execution(
+            Protocol::VlessStandard,
+            Security::StandardTls,
+            Wrapper::Meek,
+            Udp::PolicyClosed(Closed::VlessMeek),
+        ));
+
+        assert_eq!(ownership, GENERATION_OWNED_MEEK_OWNERSHIP);
+        assert_eq!(
+            ownership.model,
+            RuntimeOwnershipModel::GenerationOwnedMeekTransport
+        );
+        assert_eq!(
+            ownership.data_tcp.lifecycle_owner,
+            RuntimeLifecycleOwner::GenerationRuntime
+        );
+        assert_eq!(
+            ownership.data_udp.admission,
+            RuntimeRouteAdmission::FailClosed
         );
     }
 
