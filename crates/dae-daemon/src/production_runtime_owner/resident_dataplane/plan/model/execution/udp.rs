@@ -4,7 +4,7 @@ use super::UdpPacketSemantics;
 mod agreement;
 pub(in crate::production_runtime_owner::resident_dataplane) use agreement::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentUdpExecutionAgreement,
-    ResidentUdpExecutionDisposition,
+    ResidentUdpExecutionDisposition, ResidentUdpSourceContract, ResidentUdpWireIdentityContract,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,6 +116,33 @@ impl ResidentUdpExecutorFactory {
         self,
     ) -> ResidentUdpExecutionAgreement {
         ResidentUdpExecutionAgreement::new(self)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) const fn source_contract(
+        self,
+    ) -> ResidentUdpSourceContract {
+        use ResidentUdpWireIdentityContract as Wire;
+        match self {
+            Self::Socks5Associate
+            | Self::ShadowsocksAead
+            | Self::Trojan(_)
+            | Self::JuicityStreamPacket => {
+                ResidentUdpSourceContract::fixed_target(Wire::DecodedSource)
+            }
+            Self::Shadowsocks2022 => {
+                ResidentUdpSourceContract::fixed_target(Wire::DecodedSourceAndProtocolSession)
+            }
+            Self::VlessStandard(_)
+            | Self::VlessVisionXudp
+            | Self::Vmess(_)
+            | Self::AnyTlsPacketStream => {
+                ResidentUdpSourceContract::fixed_target(Wire::SessionBoundTarget)
+            }
+            Self::Hysteria2Datagram | Self::TuicPacket => {
+                ResidentUdpSourceContract::fixed_target(Wire::ProtocolSessionAndDecodedSource)
+            }
+            Self::PolicyClosed(_) => ResidentUdpSourceContract::policy_closed(),
+        }
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn uses_request_scoped_exchange(

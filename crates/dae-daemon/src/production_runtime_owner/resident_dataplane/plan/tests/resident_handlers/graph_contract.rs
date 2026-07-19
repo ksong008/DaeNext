@@ -105,6 +105,32 @@ pub(super) fn assert_common_resident_graph_contracts(proxies: &[ResidentProxyPla
                 "admitted"
             }
         );
+        let source_contract =
+            &graph["runtimeComponents"]["udpExecutionAgreement"]["sourceContract"];
+        assert_eq!(source_contract["schemaVersion"], 1);
+        assert_eq!(
+            &graph["runtimeComponents"]["packetSessionManager"]["sourceContract"],
+            source_contract
+        );
+        assert_eq!(
+            &graph["runtimeComponents"]["probeExecutor"]["udp"]["sourceContract"],
+            source_contract
+        );
+        if execution.udp.policy_closed() {
+            assert_eq!(source_contract["compatibilityMode"], "fail-closed");
+            assert_eq!(source_contract["multiTargetMode"], "rejected-policy-closed");
+        } else {
+            assert_eq!(source_contract["compatibilityMode"], "strict-fixed-target");
+            assert_eq!(source_contract["multiTargetMode"], "rejected-not-admitted");
+            assert_eq!(
+                source_contract["fixedTargetValidation"],
+                "required-before-payload-consumption-or-forwarding"
+            );
+            assert_eq!(
+                source_contract["replySource"],
+                "validated-original-destination"
+            );
+        }
         assert!(
             graph["linkIdentity"]["linkHash"]
                 .as_str()
