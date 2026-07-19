@@ -1,6 +1,6 @@
 use super::super::{
     ResidentUdpChainAdmission, ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition,
-    UdpPacketSemantics,
+    ResidentUdpSourceContract, UdpPacketSemantics,
 };
 
 const CHAIN_POLICY_CLOSED_EXECUTOR: &str = "parent-connect-udp-policy-closed";
@@ -65,11 +65,19 @@ impl EffectiveUdpExecutionAgreement {
         self.raw.negative_path_ready() || self.policy_closed_by_chain()
     }
 
+    pub(super) const fn source_contract(self) -> ResidentUdpSourceContract {
+        if self.policy_closed_by_chain() {
+            ResidentUdpSourceContract::policy_closed()
+        } else {
+            self.raw.source_contract()
+        }
+    }
+
     pub(super) fn transient_exchange_compatible(self) -> bool {
         !self.policy_closed()
     }
 
-    fn policy_closed_by_chain(self) -> bool {
+    const fn policy_closed_by_chain(self) -> bool {
         matches!(self.chain, ResidentUdpChainAdmission::Unsupported(_))
     }
 }

@@ -26,6 +26,18 @@ fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
 
     assert_eq!(value["packetSemantics"], UdpPacketSemantics::Dns.as_str());
     assert_eq!(value["originalDestination"], dns_dst.to_string());
+    assert_eq!(
+        value["sourceContract"]["wireIdentity"],
+        "session-bound-fixed-target"
+    );
+    assert_eq!(
+        value["sourceContract"]["multiTargetMode"],
+        "rejected-not-admitted"
+    );
+    assert_eq!(
+        value["sourceContract"]["compatibilityMode"],
+        "strict-fixed-target"
+    );
     assert_eq!(key.idle_timeout(), RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT);
 }
 
@@ -91,6 +103,10 @@ fn udp_session_key_emits_display_and_redacted_identity() {
     assert_eq!(value["sourceDisplay"], peer_display);
     assert_eq!(value["destinationDisplay"], original_dst_display);
     assert_eq!(value["packetSemantics"], "udp-over-stream");
+    assert_eq!(
+        value["sourceContract"]["fixedTargetValidation"],
+        "required-before-payload-consumption-or-forwarding"
+    );
     assert!(
         value["graphIdentityHash"]
             .as_str()

@@ -410,6 +410,7 @@ impl ResidentExecutableGraphDescriptor {
             "generationOwned": true,
             "cleanupOwner": RESIDENT_UDP_CLEANUP_OWNER,
             "cleanupPolicy": RESIDENT_UDP_CLEANUP_POLICY,
+            "sourceContract": agreement.source_contract().json(),
         })
     }
 
@@ -445,6 +446,7 @@ impl ResidentExecutableGraphDescriptor {
             ],
             "limitSource": "resident-udp-session-limit",
             "transientExchangeCompatible": agreement.transient_exchange_compatible(),
+            "sourceContract": agreement.source_contract().json(),
         })
     }
 
@@ -473,6 +475,7 @@ impl ResidentExecutableGraphDescriptor {
                 "generationOwned": true,
                 "cleanupOwner": RESIDENT_UDP_CLEANUP_OWNER,
                 "cleanupPolicy": RESIDENT_UDP_CLEANUP_POLICY,
+                "sourceContract": agreement.source_contract().json(),
             },
             "unsupportedReason": Value::Null,
         })

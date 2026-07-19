@@ -49,6 +49,7 @@ pub(super) struct UdpSessionKey {
     peer: SocketAddr,
     original_destination: SocketAddr,
     packet_semantics: UdpPacketSemantics,
+    wire_identity: ResidentUdpWireIdentityContract,
     dispatch_lane: Option<u16>,
 }
 
@@ -76,6 +77,8 @@ impl UdpSessionKey {
         original_dst: SocketAddr,
         dispatch_lane: Option<u16>,
     ) -> Self {
+        let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
+        let source_contract = udp_source_contract(proxy, packet_semantics);
         Self {
             graph_id: proxy.graph_id.clone(),
             graph_identity_hash: graph_identity_hash(proxy),
@@ -84,7 +87,8 @@ impl UdpSessionKey {
             outbound: proxy.group_name.clone(),
             peer,
             original_destination: original_dst,
-            packet_semantics: udp_packet_semantics_for_destination(proxy, original_dst),
+            packet_semantics,
+            wire_identity: source_contract.wire_identity(),
             dispatch_lane,
         }
     }
@@ -102,6 +106,7 @@ impl UdpSessionKey {
                 peer: Some(self.peer),
                 original_destination: self.original_destination,
                 packet_semantics: self.packet_semantics,
+                wire_identity: self.wire_identity,
                 session_hash: session_hash(
                     &self.graph_identity_hash,
                     &self.outbound,
@@ -126,6 +131,8 @@ impl UdpSessionKey {
             value["sessionIdentity"]["dispatchLane"] = json!(dispatch_lane);
             value["sessionIdentity"]["sessionHash"] = json!(lane_hash);
         }
+        value["sourceContract"] =
+            source_contract_from_identity(self.packet_semantics, self.wire_identity).json();
         value
     }
 
@@ -193,6 +200,7 @@ pub(super) struct UdpPacketSessionIdentity {
     peer: Option<SocketAddr>,
     original_destination: SocketAddr,
     packet_semantics: UdpPacketSemantics,
+    wire_identity: ResidentUdpWireIdentityContract,
     session_hash: String,
 }
 
@@ -216,6 +224,7 @@ impl UdpPacketSessionIdentity {
             peer: Some(peer),
             original_destination: original_dst,
             packet_semantics,
+            wire_identity: udp_source_contract(proxy, packet_semantics).wire_identity(),
             session_hash: session_hash(
                 &graph_identity_hash,
                 &outbound,
@@ -245,6 +254,7 @@ impl UdpPacketSessionIdentity {
             peer: None,
             original_destination: original_dst,
             packet_semantics,
+            wire_identity: udp_source_contract(proxy, packet_semantics).wire_identity(),
             session_hash: probe_session_hash(
                 &graph_identity_hash,
                 &outbound,
@@ -279,6 +289,10 @@ pub(super) fn packet_session_value(
         "packetSemantics": packet_semantics,
         "sessionHash": &identity.session_hash,
         "limitSource": "resident-udp-session-limit",
+        "sourceContract": source_contract_from_identity(
+            identity.packet_semantics,
+            identity.wire_identity,
+        ).json(),
         "sessionIdentity": {
             "schemaVersion": 1,
             "graphIdentityHash": &identity.graph_identity_hash,
@@ -293,6 +307,30 @@ pub(super) fn packet_session_value(
         value["handler"] = json!(handler);
     }
     value
+}
+
+fn udp_source_contract(
+    proxy: &ResidentProxyPlan,
+    packet_semantics: UdpPacketSemantics,
+) -> ResidentUdpSourceContract {
+    if packet_semantics == UdpPacketSemantics::Dns {
+        ResidentUdpSourceContract::managed_dns()
+    } else {
+        proxy.execution_plan().udp.source_contract()
+    }
+}
+
+fn source_contract_from_identity(
+    packet_semantics: UdpPacketSemantics,
+    wire_identity: ResidentUdpWireIdentityContract,
+) -> ResidentUdpSourceContract {
+    if wire_identity == ResidentUdpWireIdentityContract::PolicyClosed {
+        ResidentUdpSourceContract::policy_closed()
+    } else if packet_semantics == UdpPacketSemantics::Dns {
+        ResidentUdpSourceContract::managed_dns()
+    } else {
+        ResidentUdpSourceContract::fixed_target(wire_identity)
+    }
 }
 
 fn graph_identity_hash(proxy: &ResidentProxyPlan) -> String {

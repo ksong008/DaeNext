@@ -70,6 +70,7 @@ impl UdpDirectSessionKey {
             "sessionHash": session_hash,
             "limitSource": "resident-udp-session-limit",
             "directMark": self.mark,
+            "sourceContract": ResidentUdpSourceContract::direct().json(),
             "sessionIdentity": {
                 "schemaVersion": 1,
                 "outbound": UDP_DIRECT_OUTBOUND,
@@ -309,10 +310,26 @@ async fn drain_direct_udp_session_responses(
         let Some((upstream_peer, response)) = session.try_recv_response()? else {
             return Ok(());
         };
-        let response_len = response.len();
+        let fixed_target =
+            validate_direct_udp_response(key.original_destination(), upstream_peer, response);
+        let response_len = fixed_target.payload_len();
+        let validation = fixed_target.validation();
+        match validation {
+            UdpFixedTargetValidation::Validated => context.metrics.udp_response_validated(),
+            UdpFixedTargetValidation::CompatibilityUnverified => {
+                context.metrics.udp_response_compatibility_unverified()
+            }
+            UdpFixedTargetValidation::Dropped(_) => {
+                context.metrics.udp_response_dropped(response_len);
+                continue;
+            }
+        }
+        let Some(response) = fixed_target.into_payload().ok() else {
+            continue;
+        };
         match context
             .udp_reply
-            .send(upstream_peer, key.peer(), response)
+            .send(key.original_destination(), key.peer(), response)
             .await
         {
             Ok(()) => {
@@ -338,6 +355,16 @@ async fn drain_direct_udp_session_responses(
         }
     }
     Ok(())
+}
+
+fn validate_direct_udp_response(
+    expected_target: SocketAddr,
+    upstream_peer: SocketAddr,
+    payload: Vec<u8>,
+) -> UdpFixedTargetPayload {
+    let mut response = UdpExchangeResult::new(payload, "direct-udp")
+        .with_decoded_response_identity(Some(upstream_peer), None);
+    response.take_fixed_target_payload(UdpFixedTargetExpectation::decoded_source(expected_target))
 }
 
 struct DirectUdpSession {
@@ -617,5 +644,26 @@ mod tests {
         assert_ne!(key, other_mark);
         assert_eq!(key.to_value()["packetSemantics"], "direct");
         assert_eq!(key.to_value()["directMark"], 0x1234);
+        assert_eq!(
+            key.to_value()["sourceContract"]["compatibilityMode"],
+            "strict-fixed-target"
+        );
+    }
+
+    #[test]
+    fn direct_udp_drops_datagrams_from_a_different_wire_source() {
+        let expected: SocketAddr = "192.0.2.10:3478".parse().unwrap();
+        let unexpected: SocketAddr = "192.0.2.11:3478".parse().unwrap();
+        let accepted = validate_direct_udp_response(expected, expected, b"accepted".to_vec());
+        assert_eq!(accepted.validation(), UdpFixedTargetValidation::Validated);
+        assert_eq!(accepted.into_payload().unwrap(), b"accepted");
+
+        let rejected = validate_direct_udp_response(expected, unexpected, b"rejected".to_vec());
+        assert_eq!(
+            rejected.validation(),
+            UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+        );
+        assert_eq!(rejected.payload_len(), b"rejected".len());
+        assert!(rejected.into_payload().is_err());
     }
 }
