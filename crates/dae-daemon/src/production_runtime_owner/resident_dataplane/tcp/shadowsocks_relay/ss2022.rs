@@ -8,7 +8,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
     cipher: &str,
     password: &str,
     salt_len: usize,
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut client_salt = vec![0_u8; salt_len];
@@ -18,7 +18,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
         password,
         &client_salt,
         target,
-        initial_payload,
+        &initial_payload,
         ss2022_tcp_unix_timestamp_now(),
     )
     .map_err(|err| format!("encode Shadowsocks 2022 initial TCP frame: {err}"))?;
@@ -31,6 +31,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_async(
         stats.client_to_direct += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop((initial, initial_payload));
 
     let (mut inbound_reader, mut inbound_writer) = tokio::io::split(inbound);
     let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy);
@@ -255,7 +256,7 @@ mod tests {
                 cipher,
                 password,
                 16,
-                &[],
+                Vec::new(),
                 &metrics,
             )
             .await
@@ -317,7 +318,7 @@ mod tests {
                 cipher,
                 password,
                 16,
-                &[],
+                Vec::new(),
                 &metrics,
             )
             .await
@@ -392,7 +393,7 @@ mod tests {
                 cipher,
                 password,
                 16,
-                &[],
+                Vec::new(),
                 &metrics,
             )
             .await

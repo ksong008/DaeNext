@@ -124,18 +124,19 @@ pub(super) async fn relay_tcp_direct_async(
     inbound: &mut TokioTcpStream,
     direct: &mut TokioTcpStream,
     stop: SharedResidentStopSignal,
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut stats = DirectTcpRelayStats::default();
     if !initial_payload.is_empty() {
         direct
-            .write_all(initial_payload)
+            .write_all(&initial_payload)
             .await
             .map_err(|err| format!("write sniffed client payload to direct TCP: {err}"))?;
         stats.client_to_direct += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop(initial_payload);
 
     let mut inbound_closed = false;
     let mut direct_closed = false;
@@ -331,7 +332,7 @@ mod tests {
             &mut inbound,
             &mut direct,
             Arc::clone(&stop),
-            b"HELLO",
+            b"HELLO".to_vec(),
             &metrics,
         )
         .await
@@ -382,7 +383,7 @@ mod tests {
             &mut inbound,
             &mut direct,
             ResidentStopSignal::shared(),
-            &[],
+            Vec::new(),
             &metrics,
         )
         .await
@@ -413,8 +414,13 @@ mod tests {
         let mut direct = TokioTcpStream::from_std(direct).unwrap();
         let stop = ResidentStopSignal::shared();
         let metrics = ResidentDataplaneMetrics::default();
-        let relay =
-            relay_tcp_direct_async(&mut inbound, &mut direct, Arc::clone(&stop), &[], &metrics);
+        let relay = relay_tcp_direct_async(
+            &mut inbound,
+            &mut direct,
+            Arc::clone(&stop),
+            Vec::new(),
+            &metrics,
+        );
         tokio::pin!(relay);
 
         tokio::time::sleep(Duration::from_millis(20)).await;

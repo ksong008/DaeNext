@@ -7,7 +7,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection_asy
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
     password: &str,
@@ -16,6 +16,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection_asy
     path: &str,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
+    let initial_payload = sniff.take_payload();
     let stats = relay_tcp_over_shadowsocks_simple_obfs_http_async(
         inbound,
         &mut proxy,
@@ -24,7 +25,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection_asy
         cipher,
         password,
         salt_len,
-        &sniff.payload,
+        initial_payload,
         metrics,
         host,
         path,
@@ -80,7 +81,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection_asyn
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
     password: &str,
@@ -88,6 +89,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection_asyn
     host: &str,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
+    let initial_payload = sniff.take_payload();
     let stats = relay_tcp_over_shadowsocks_simple_obfs_tls_async(
         inbound,
         &mut proxy,
@@ -96,7 +98,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection_asyn
         cipher,
         password,
         salt_len,
-        &sniff.payload,
+        initial_payload,
         metrics,
         host,
     )
@@ -151,7 +153,7 @@ pub(crate) async fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connectio
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
     password: &str,
@@ -160,6 +162,7 @@ pub(crate) async fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connectio
     path: &str,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
+    let initial_payload = sniff.take_payload();
     let stats = relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
         inbound,
         &mut proxy,
@@ -168,7 +171,7 @@ pub(crate) async fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connectio
         cipher,
         password,
         salt_len,
-        &sniff.payload,
+        initial_payload,
         metrics,
         host,
         path,

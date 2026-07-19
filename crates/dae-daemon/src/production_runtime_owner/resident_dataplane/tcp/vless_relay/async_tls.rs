@@ -5,7 +5,7 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
     stop: SharedResidentStopSignal,
     flow: &str,
     user_uuid: [u8; 16],
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
     let mut stats = RelayStats::default();
@@ -33,7 +33,7 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
 
     if !initial_payload.is_empty() {
         if vision_enabled {
-            pending_vision_uplink.extend_from_slice(initial_payload);
+            pending_vision_uplink.extend_from_slice(&initial_payload);
             drain_vision_uplink_async(
                 &mut pending_vision_uplink,
                 client,
@@ -48,13 +48,17 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
             .map_err(|err| RelayError::new(err, &stats))?;
         } else {
             client
-                .write_plain_all(initial_payload, "write sniffed client payload to proxy TLS")
+                .write_plain_all(
+                    &initial_payload,
+                    "write sniffed client payload to proxy TLS",
+                )
                 .await
                 .map_err(|err| RelayError::new(err, &stats))?;
         }
         stats.client_to_proxy += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop(initial_payload);
 
     loop {
         tokio::select! {

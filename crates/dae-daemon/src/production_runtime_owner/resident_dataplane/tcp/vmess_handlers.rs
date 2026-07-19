@@ -1,5 +1,23 @@
 use super::*;
 
+fn take_vmess_tcp_session(
+    id: &str,
+    target: &str,
+    sniff: &mut TcpSniffReport,
+    build_context: &str,
+) -> Result<(VMessAeadTcpClientSessionStart, usize), String> {
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    let session = aead_tcp_client_session_start(id, target, &initial_payload)
+        .map_err(|err| format!("{build_context}: {err}"))?;
+    drop(initial_payload);
+    Ok((session, initial_payload_len))
+}
+
+fn discard_vmess_first_write(session: &mut VMessAeadTcpClientSessionStart) {
+    drop(std::mem::take(&mut session.first_write));
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_vmess_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
@@ -7,21 +25,26 @@ pub(super) async fn handle_vmess_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
-    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
-        .map_err(|err| format!("build VMess AEAD TCP session: {err}"))?;
+    let (mut session, initial_payload_len) = take_vmess_tcp_session(
+        id,
+        &selection.route.dial_target,
+        sniff,
+        "build VMess AEAD TCP session",
+    )?;
     proxy
         .write_all(&session.first_write)
         .await
         .map_err(|err| format!("write VMess AEAD TCP initial request: {err}"))?;
+    discard_vmess_first_write(&mut session);
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     relay_tcp_over_vmess_aead_async(inbound, &mut proxy, stop, session, initial_stats, metrics)
@@ -57,7 +80,7 @@ pub(super) async fn handle_vmess_tls_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
@@ -65,18 +88,23 @@ pub(super) async fn handle_vmess_tls_proxy_tcp_connection_async(
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
             .await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
-    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
-        .map_err(|err| format!("build VMess TLS AEAD TCP session: {err}"))?;
+    let (mut session, initial_payload_len) = take_vmess_tcp_session(
+        id,
+        &selection.route.dial_target,
+        sniff,
+        "build VMess TLS AEAD TCP session",
+    )?;
     client
         .write_plain_all(
             &session.first_write,
             "write VMess TLS AEAD TCP initial request",
         )
         .await?;
+    discard_vmess_first_write(&mut session);
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     relay_tcp_over_vmess_tls_aead_async(inbound, &mut client, stop, session, initial_stats, metrics)
@@ -130,7 +158,7 @@ pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
@@ -138,18 +166,23 @@ pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     websocket_handshake_over_async_stream(&mut proxy, &options).await?;
-    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
-        .map_err(|err| format!("build VMess WebSocket AEAD TCP session: {err}"))?;
+    let (mut session, initial_payload_len) = take_vmess_tcp_session(
+        id,
+        &selection.route.dial_target,
+        sniff,
+        "build VMess WebSocket AEAD TCP session",
+    )?;
     write_websocket_binary_frame_to_async_stream(
         &mut proxy,
         &session.first_write,
         "write VMess websocket request",
     )
     .await?;
+    discard_vmess_first_write(&mut session);
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     relay_tcp_over_vmess_websocket_aead_async(
@@ -196,7 +229,7 @@ pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
@@ -204,16 +237,21 @@ pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     httpupgrade_handshake_over_async_stream(&mut proxy, &options).await?;
-    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
-        .map_err(|err| format!("build VMess HTTP Upgrade AEAD TCP session: {err}"))?;
+    let (mut session, initial_payload_len) = take_vmess_tcp_session(
+        id,
+        &selection.route.dial_target,
+        sniff,
+        "build VMess HTTP Upgrade AEAD TCP session",
+    )?;
     proxy
         .write_all(&session.first_write)
         .await
         .map_err(|err| format!("write VMess HTTP Upgrade request: {err}"))?;
+    discard_vmess_first_write(&mut session);
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     relay_tcp_over_vmess_aead_async(inbound, &mut proxy, stop, session, initial_stats, metrics)
@@ -253,7 +291,7 @@ pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
@@ -264,18 +302,23 @@ pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
-    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
-        .map_err(|err| format!("build VMess TLS WebSocket AEAD TCP session: {err}"))?;
+    let (mut session, initial_payload_len) = take_vmess_tcp_session(
+        id,
+        &selection.route.dial_target,
+        sniff,
+        "build VMess TLS WebSocket AEAD TCP session",
+    )?;
     write_websocket_binary_frame_over_resident_tls_async(
         &mut client,
         &session.first_write,
         "write VMess TLS websocket request",
     )
     .await?;
+    discard_vmess_first_write(&mut session);
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     relay_tcp_over_vmess_websocket_tls_aead_async(
@@ -338,7 +381,7 @@ pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
@@ -349,15 +392,20 @@ pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
-    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
-        .map_err(|err| format!("build VMess TLS HTTP Upgrade AEAD TCP session: {err}"))?;
+    let (mut session, initial_payload_len) = take_vmess_tcp_session(
+        id,
+        &selection.route.dial_target,
+        sniff,
+        "build VMess TLS HTTP Upgrade AEAD TCP session",
+    )?;
     client
         .write_plain_all(&session.first_write, "write VMess TLS HTTP Upgrade request")
         .await?;
+    discard_vmess_first_write(&mut session);
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     relay_tcp_over_vmess_tls_aead_async(inbound, &mut client, stop, session, initial_stats, metrics)
@@ -413,19 +461,24 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
-    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
-        .map_err(|err| format!("build VMess gRPC AEAD TCP session: {err}"))?;
+    let (mut session, initial_payload_len) = take_vmess_tcp_session(
+        id,
+        &selection.route.dial_target,
+        sniff,
+        "build VMess gRPC AEAD TCP session",
+    )?;
     let (mut h2_send, mut h2_recv, carrier_lease) =
         open_grpc_h2_stream(&selection.proxy, &session.first_write).await?;
+    discard_vmess_first_write(&mut session);
     let tls_underlay = carrier_lease.tls_underlay();
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     let result = relay_tcp_over_vmess_grpc_h2(
@@ -490,19 +543,24 @@ pub(super) async fn handle_vmess_h2_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
 ) -> Result<Value, String> {
-    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
-        .map_err(|err| format!("build VMess H2 AEAD TCP session: {err}"))?;
+    let (mut session, initial_payload_len) = take_vmess_tcp_session(
+        id,
+        &selection.route.dial_target,
+        sniff,
+        "build VMess H2 AEAD TCP session",
+    )?;
     let (mut h2_send, mut h2_recv, carrier_lease) =
         open_h2_body_stream(&selection.proxy, &session.first_write, "VMess H2").await?;
+    discard_vmess_first_write(&mut session);
     let tls_underlay = carrier_lease.tls_underlay();
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     let result = relay_tcp_over_vmess_h2_body(

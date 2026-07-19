@@ -6,7 +6,7 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     owner_registry: Option<&AnyTlsOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
@@ -28,17 +28,20 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     let sid = logical.sid();
     let physical_instance = logical.physical_instance_id();
     let physical_reused = logical.reused();
-    if !sniff.payload.is_empty() {
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    if initial_payload_len != 0 {
         logical
-            .write_all(&sniff.payload)
+            .write_all(&initial_payload)
             .await
             .map_err(|error| format!("write AnyTLS initial logical payload: {error}"))?;
-        metrics.add_upload(sniff.payload.len());
+        metrics.add_upload(initial_payload_len);
     }
+    drop(initial_payload);
 
     match relay_tcp_over_anytls_async(inbound, &mut logical, stop, metrics).await {
         Ok(mut stats) => {
-            stats.client_to_direct += sniff.payload.len();
+            stats.client_to_direct += initial_payload_len;
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,

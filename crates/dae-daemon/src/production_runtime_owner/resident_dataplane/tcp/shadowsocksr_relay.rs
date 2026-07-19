@@ -7,7 +7,7 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
     password: &str,
@@ -17,11 +17,13 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let mut client_iv = [0_u8; 16];
     fastrand::fill(&mut client_iv);
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
     let (request, mut encoder) = shadowsocksr_http_simple_origin_request(
         cipher,
         password,
         &selection.route.dial_target,
-        &sniff.payload,
+        &initial_payload,
         obfs_host,
         obfs_port,
         client_iv,
@@ -35,7 +37,8 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
         .flush()
         .await
         .map_err(|err| format!("flush ShadowsocksR stream request: {err}"))?;
-    metrics.add_upload(sniff.payload.len());
+    metrics.add_upload(initial_payload_len);
+    drop((request, initial_payload));
 
     let (response_head, leftover) = read_http_head_and_leftover_from_async_stream(&mut proxy)
         .await
@@ -56,6 +59,7 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
             metrics.add_download(decoded.len());
         }
     }
+    drop((response_head, leftover));
 
     relay_tcp_shadowsocksr_stream_async(
         inbound,
@@ -67,7 +71,7 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
     )
     .await
     .map(|mut stats| {
-        stats.client_to_direct += sniff.payload.len();
+        stats.client_to_direct += initial_payload_len;
         generic_proxy_tcp_finished_event(
             peer,
             original_dst,

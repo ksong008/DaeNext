@@ -8,7 +8,7 @@ pub(super) async fn handle_direct_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpDirectSelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    mut sniff: TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let direct = open_direct_tcp_connection_async(
@@ -24,13 +24,14 @@ pub(super) async fn handle_direct_tcp_connection_async(
     } = direct;
     let mut direct_stream = TokioTcpStream::from_std(stream)
         .map_err(|err| format!("adopt async direct TCP stream: {err}"))?;
+    let initial_payload = sniff.take_payload();
     let stats =
-        relay_tcp_direct_async(inbound, &mut direct_stream, stop, &sniff.payload, metrics).await?;
+        relay_tcp_direct_async(inbound, &mut direct_stream, stop, initial_payload, metrics).await?;
     Ok(direct_tcp_finished_event(
         peer,
         original_dst,
         &selection,
-        sniff,
+        &sniff,
         target,
         &report,
         &stats,

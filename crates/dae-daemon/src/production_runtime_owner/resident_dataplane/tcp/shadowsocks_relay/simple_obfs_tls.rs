@@ -8,7 +8,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_tls_async(
     cipher: &str,
     password: &str,
     salt_len: usize,
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
     host: &str,
 ) -> Result<DirectTcpRelayStats, String> {
@@ -17,7 +17,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_tls_async(
     let mut first_plain = target_metadata
         .encode()
         .map_err(|err| format!("encode Shadowsocks simple-obfs TLS target metadata: {err}"))?;
-    first_plain.extend_from_slice(initial_payload);
+    first_plain.extend_from_slice(&initial_payload);
     let mut client_salt = vec![0_u8; salt_len];
     fastrand::fill(&mut client_salt);
     let mut encoder = AeadStreamCodec::new(cipher, password, &client_salt)
@@ -44,6 +44,12 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_tls_async(
         stats.client_to_direct += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop((
+        first_plain,
+        encrypted_initial,
+        obfs_request,
+        initial_payload,
+    ));
 
     let mut proxy_reader = AsyncSimpleObfsTlsAppDataReader::new(response_payload, proxy);
     let mut server_salt = vec![0_u8; salt_len];
