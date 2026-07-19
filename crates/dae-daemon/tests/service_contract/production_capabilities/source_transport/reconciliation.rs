@@ -89,7 +89,7 @@ fn assert_public_reconciliation_shapes(report: &Value) {
         deferred["runtimeOwnershipModels"],
         json!([
             "flow-stream-and-packet-session",
-            "flow-stream-with-packet-policy-closed"
+            "generation-owned-h2-transport"
         ])
     );
     assert_eq!(
@@ -115,7 +115,7 @@ fn assert_kind_aware_status_counts(report: &Value) {
     assert_eq!(status_counts["aggregate-report-only"], 4);
     assert_eq!(status_counts["blocked-aggregate-report-only"], 1);
     assert_eq!(status_counts["blocked-deferred"], 3);
-    assert_eq!(status_counts["not-source-supported"], 3);
+    assert_eq!(status_counts["not-source-supported"], 5);
     assert_eq!(status_counts["blocked"].as_u64().unwrap_or(0), 0);
     assert!(status_counts["admitted"].as_u64().unwrap() > 0);
     assert_eq!(
@@ -134,7 +134,7 @@ fn assert_kind_aware_status_counts(report: &Value) {
     );
     assert_eq!(
         report["expanded_source_matrix_policy_rejected_row_count"],
-        3
+        5
     );
 
     let typed_counts = &report["expanded_source_matrix_typed_report"]["status_counts"];
@@ -142,7 +142,7 @@ fn assert_kind_aware_status_counts(report: &Value) {
     assert_eq!(typed_counts["aggregate-report-only"], 4);
     assert_eq!(typed_counts["blocked-aggregate-report-only"], 1);
     assert_eq!(typed_counts["blocked-deferred"], 3);
-    assert_eq!(typed_counts["not-source-supported"], 3);
+    assert_eq!(typed_counts["not-source-supported"], 5);
     assert_eq!(
         report["expanded_source_matrix_runtime_blocked_row_count"]
             .as_u64()

@@ -261,7 +261,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["excluded_stream_wrapper_source_matrix_typed_report"]["policy_rejected_row_count"]
             .as_u64()
             .unwrap(),
-        3
+        5
     );
     assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]
