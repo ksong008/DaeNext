@@ -97,7 +97,7 @@ async fn run_udp_session_actor(
                     .reset(time::Instant::now() + idle_timeout);
                 packets += 1;
                 if executor.is_none() {
-                    executor = Some(if managed.force_proxy_packet {
+                    let mut selected_executor = if managed.force_proxy_packet {
                         UdpSessionExecutor::new_proxy_packet_with_transport_owner(
                             Arc::clone(&managed.proxy),
                             context.hysteria2_owner_registry.clone(),
@@ -114,7 +114,9 @@ async fn run_udp_session_actor(
                             context.juicity_owner_registry.clone(),
                             context.anytls_owner_registry.clone(),
                         )
-                    });
+                    };
+                    selected_executor.set_runtime_metrics(Arc::clone(&context.metrics));
+                    executor = Some(selected_executor);
                     session_proxy = Some(Arc::clone(&managed.proxy));
                 }
                 let (exchange, execute_timed_out) = match executor.as_mut() {

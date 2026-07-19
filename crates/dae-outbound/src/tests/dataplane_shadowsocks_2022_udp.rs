@@ -171,3 +171,116 @@ fn case_ss2022_udp_rejects_future_timestamp() {
     .unwrap_err();
     assert!(err.to_string().contains("timestamp"));
 }
+
+#[test]
+fn case_ss2022_udp_codec_bounds_server_session_churn_and_recovers_after_retention() {
+    let client_session = *b"client91";
+    let policy = shadowsocks::Ss2022UdpReplayPolicy::new(64, 2, 3, 64 * 1024, 10).unwrap();
+    let mut codec = shadowsocks::Ss2022UdpCodec::new_with_replay_policy(
+        AES_CIPHER,
+        AES_PASSWORD,
+        client_session,
+        policy,
+    )
+    .unwrap();
+
+    for (session_id, packet_id) in [
+        (*b"server01", 0),
+        (*b"server02", 0),
+        (*b"server01", 1),
+        (*b"server03", 0),
+    ] {
+        let response = shadowsocks::encode_ss2022_udp_server_packet(
+            AES_CIPHER,
+            AES_PASSWORD,
+            session_id,
+            packet_id,
+            client_session,
+            RESPONSE_TARGET,
+            b"response",
+            TIMESTAMP,
+            None,
+        )
+        .unwrap();
+        codec
+            .decode_server_packet(&response.wire, TIMESTAMP)
+            .unwrap();
+    }
+
+    let quarantined = shadowsocks::encode_ss2022_udp_server_packet(
+        AES_CIPHER,
+        AES_PASSWORD,
+        *b"server02",
+        1,
+        client_session,
+        RESPONSE_TARGET,
+        b"quarantined",
+        TIMESTAMP,
+        None,
+    )
+    .unwrap();
+    assert!(
+        codec
+            .decode_server_packet(&quarantined.wire, TIMESTAMP)
+            .unwrap_err()
+            .to_string()
+            .contains("replay")
+    );
+
+    let saturated = shadowsocks::encode_ss2022_udp_server_packet(
+        AES_CIPHER,
+        AES_PASSWORD,
+        *b"server04",
+        0,
+        client_session,
+        RESPONSE_TARGET,
+        b"saturated",
+        TIMESTAMP,
+        None,
+    )
+    .unwrap();
+    assert!(
+        codec
+            .decode_server_packet(&saturated.wire, TIMESTAMP)
+            .unwrap_err()
+            .to_string()
+            .contains("saturated")
+    );
+    let saturated_snapshot = codec.replay_metrics_snapshot();
+    assert_eq!(saturated_snapshot.active_windows, 2);
+    assert_eq!(saturated_snapshot.quarantined_sessions, 1);
+    assert_eq!(saturated_snapshot.retained_sessions, 3);
+    assert_eq!(saturated_snapshot.lru_evictions, 1);
+    assert_eq!(saturated_snapshot.replay_rejections, 1);
+    assert_eq!(saturated_snapshot.saturation_rejections, 1);
+    assert!(saturated_snapshot.estimated_bytes <= policy.estimated_byte_limit());
+
+    codec.prune_expired_replay_sessions(TIMESTAMP + policy.retention_secs());
+    let expired_snapshot = codec.replay_metrics_snapshot();
+    assert_eq!(expired_snapshot.active_windows, 0);
+    assert_eq!(expired_snapshot.quarantined_sessions, 0);
+    assert_eq!(expired_snapshot.retained_sessions, 0);
+    assert_eq!(expired_snapshot.estimated_bytes, 0);
+    assert_eq!(expired_snapshot.ttl_expirations, 3);
+    codec
+        .decode_server_packet(&saturated.wire, TIMESTAMP + policy.retention_secs())
+        .unwrap();
+}
+
+#[test]
+fn case_ss2022_udp_public_replay_tracker_uses_the_same_bounded_policy() {
+    let policy = shadowsocks::Ss2022UdpReplayPolicy::new(64, 1, 2, 64 * 1024, 10).unwrap();
+    let mut tracker = shadowsocks::Ss2022UdpReplayTracker::with_policy(policy).unwrap();
+    tracker.check_at(*b"server01", 0, 1).unwrap();
+    tracker.check_at(*b"server02", 0, 2).unwrap();
+    assert!(tracker.check_at(*b"server01", 1, 3).is_err());
+    assert!(tracker.check_at(*b"server03", 0, 3).is_err());
+    let snapshot = tracker.replay_metrics_snapshot();
+    assert_eq!(snapshot.active_windows, 1);
+    assert_eq!(snapshot.quarantined_sessions, 1);
+    assert_eq!(snapshot.retained_sessions, 2);
+    assert_eq!(snapshot.lru_evictions, 1);
+    assert_eq!(snapshot.saturation_rejections, 1);
+    tracker.prune_expired(12);
+    assert_eq!(tracker.replay_metrics_snapshot().retained_sessions, 0);
+}

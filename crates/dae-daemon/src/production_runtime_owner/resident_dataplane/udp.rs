@@ -33,7 +33,8 @@ use dae_outbound::{
         decode_stream_packet_frame_prefix, seal_stream_packet_frame,
     },
     shadowsocks::{
-        Ss2022UdpCodec, decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
+        Ss2022UdpCodec, Ss2022UdpReplayMetricsSnapshot,
+        decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
         ss2022_udp_unix_timestamp_now,
     },
     shared_transport::{

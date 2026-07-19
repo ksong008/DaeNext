@@ -19,6 +19,15 @@ pub(super) enum UdpSessionExecutor {
 }
 
 impl UdpSessionExecutor {
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn set_runtime_metrics(
+        &mut self,
+        metrics: Arc<ResidentDataplaneMetrics>,
+    ) {
+        if let Self::Shadowsocks2022(session) = self {
+            session.set_runtime_metrics(metrics);
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn set_owner_acquisition_deadline(
         &mut self,
         deadline: dae_runtime_control::AbsoluteDeadline,

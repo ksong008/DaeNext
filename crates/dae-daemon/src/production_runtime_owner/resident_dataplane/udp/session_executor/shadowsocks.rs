@@ -78,6 +78,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Shadowso
     packet_nonce_len: usize,
     codec: Option<Ss2022UdpCodec>,
     relay: DatagramRelay,
+    runtime_metrics: Option<Arc<ResidentDataplaneMetrics>>,
+    replay_metrics: Ss2022UdpReplayMetricsSnapshot,
 }
 
 impl Shadowsocks2022DatagramSession {
@@ -88,7 +90,20 @@ impl Shadowsocks2022DatagramSession {
             packet_nonce_len,
             codec: None,
             relay: DatagramRelay::default(),
+            runtime_metrics: None,
+            replay_metrics: Ss2022UdpReplayMetricsSnapshot::default(),
         }
+    }
+
+    pub(super) fn set_runtime_metrics(&mut self, metrics: Arc<ResidentDataplaneMetrics>) {
+        if self.runtime_metrics.is_some() {
+            return;
+        }
+        metrics.observe_ss2022_replay(
+            Ss2022UdpReplayMetricsSnapshot::default(),
+            self.replay_metrics,
+        );
+        self.runtime_metrics = Some(metrics);
     }
 
     pub(super) async fn exchange(
@@ -147,13 +162,17 @@ impl Shadowsocks2022DatagramSession {
     }
 
     fn decode_response(&mut self, response: &[u8]) -> Result<UdpExchangeResult, String> {
-        let codec = self
-            .codec
-            .as_mut()
-            .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
-        let decoded = codec
-            .decode_server_packet(response, ss2022_udp_unix_timestamp_now())
-            .map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
+        let (decoded, replay_metrics) = {
+            let codec = self
+                .codec
+                .as_mut()
+                .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
+            let decoded = codec.decode_server_packet(response, ss2022_udp_unix_timestamp_now());
+            (decoded, codec.replay_metrics_snapshot())
+        };
+        self.observe_replay_metrics(replay_metrics);
+        let decoded =
+            decoded.map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
         let observed_identity = decoded.client_session_id.and_then(|session_id| {
             UdpResponseIdentityToken::from_protocol_identity(
                 SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN,
@@ -174,6 +193,25 @@ impl Shadowsocks2022DatagramSession {
         UdpExchangeResult::pending_response("udp-datagram-aead-2022")
             .with_session_executor("tokio-datagram-relay")
             .with_underlay_reuse("udp-socket-and-codec-session-reused")
+    }
+
+    fn observe_replay_metrics(&mut self, current: Ss2022UdpReplayMetricsSnapshot) {
+        if let Some(metrics) = self.runtime_metrics.as_ref() {
+            metrics.observe_ss2022_replay(self.replay_metrics, current);
+        }
+        self.replay_metrics = current;
+    }
+}
+
+impl Drop for Shadowsocks2022DatagramSession {
+    fn drop(&mut self) {
+        if let Some(metrics) = self.runtime_metrics.as_ref() {
+            metrics.observe_ss2022_replay(
+                self.replay_metrics,
+                Ss2022UdpReplayMetricsSnapshot::default(),
+            );
+        }
+        self.replay_metrics = Ss2022UdpReplayMetricsSnapshot::default();
     }
 }
 
@@ -252,5 +290,53 @@ mod tests {
             response.take_fixed_target_payload(expectation).validation(),
             UdpFixedTargetValidation::Validated
         );
+    }
+
+    #[test]
+    fn ss2022_replay_metrics_release_current_state_with_the_udp_session() {
+        let client_session = *b"client92";
+        let server_session = *b"server92";
+        let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
+        let now = ss2022_udp_unix_timestamp_now();
+        let packet = dae_outbound::shadowsocks::encode_ss2022_udp_server_packet(
+            SS2022_CIPHER,
+            SS2022_PASSWORD,
+            server_session,
+            0,
+            client_session,
+            &target.to_string(),
+            b"response",
+            now,
+            None,
+        )
+        .unwrap();
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        {
+            let mut session = Shadowsocks2022DatagramSession::new(
+                SS2022_CIPHER.to_owned(),
+                SS2022_PASSWORD.to_owned(),
+                0,
+            );
+            session.codec =
+                Some(Ss2022UdpCodec::new(SS2022_CIPHER, SS2022_PASSWORD, client_session).unwrap());
+            session.set_runtime_metrics(Arc::clone(&metrics));
+            session.decode_response(&packet.wire).unwrap();
+            assert!(session.decode_response(&packet.wire).is_err());
+            let live = metrics.snapshot();
+            assert_eq!(live["ss2022Replay"]["activeWindowsCurrent"], 1);
+            assert_eq!(live["ss2022Replay"]["retainedSessionsCurrent"], 1);
+            assert!(
+                live["ss2022Replay"]["estimatedBytesCurrent"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+            assert_eq!(live["ss2022Replay"]["replayRejections"], 1);
+        }
+        let closed = metrics.snapshot();
+        assert_eq!(closed["ss2022Replay"]["activeWindowsCurrent"], 0);
+        assert_eq!(closed["ss2022Replay"]["retainedSessionsCurrent"], 0);
+        assert_eq!(closed["ss2022Replay"]["estimatedBytesCurrent"], 0);
+        assert_eq!(closed["ss2022Replay"]["replayRejections"], 1);
     }
 }
