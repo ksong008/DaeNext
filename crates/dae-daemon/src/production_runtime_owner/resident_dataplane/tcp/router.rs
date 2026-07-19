@@ -464,3 +464,32 @@ pub(crate) struct TcpSniffReport {
     pub(in crate::production_runtime_owner::resident_dataplane) domain: String,
     pub(in crate::production_runtime_owner::resident_dataplane) error: Option<String>,
 }
+
+impl TcpSniffReport {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn take_payload(
+        &mut self,
+    ) -> Vec<u8> {
+        std::mem::take(&mut self.payload)
+    }
+}
+
+#[cfg(test)]
+mod sniff_report_tests {
+    use super::TcpSniffReport;
+
+    #[test]
+    fn taking_initial_payload_releases_report_capacity_and_preserves_metadata() {
+        let mut report = TcpSniffReport {
+            payload: vec![7_u8; 64 * 1024],
+            domain: "example.com".to_owned(),
+            error: Some("evidence".to_owned()),
+        };
+
+        let payload = report.take_payload();
+
+        assert_eq!(payload.len(), 64 * 1024);
+        assert_eq!(report.payload.capacity(), 0);
+        assert_eq!(report.domain, "example.com");
+        assert_eq!(report.error.as_deref(), Some("evidence"));
+    }
+}

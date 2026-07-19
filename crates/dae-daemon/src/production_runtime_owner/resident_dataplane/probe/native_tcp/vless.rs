@@ -217,7 +217,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                 relay_stop,
                 &flow,
                 key,
-                &[],
+                Vec::new(),
                 &metrics,
             )
             .await;

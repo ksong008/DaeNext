@@ -6,7 +6,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    mut sniff: TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let execution = selection.proxy.execution_plan();
@@ -17,7 +17,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             original_dst,
             selection,
             stop,
-            sniff,
+            &mut sniff,
             metrics,
         )
         .await;
@@ -29,7 +29,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             original_dst,
             selection,
             stop,
-            sniff,
+            &mut sniff,
             metrics,
         )
         .await;
@@ -41,7 +41,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             original_dst,
             selection,
             stop,
-            sniff,
+            &mut sniff,
             metrics,
         )
         .await;
@@ -53,7 +53,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             original_dst,
             selection,
             stop,
-            sniff,
+            &mut sniff,
             metrics,
         )
         .await;
@@ -65,7 +65,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             original_dst,
             selection,
             stop,
-            sniff,
+            &mut sniff,
             metrics,
         )
         .await;
@@ -77,7 +77,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             original_dst,
             selection,
             stop,
-            sniff,
+            &mut sniff,
             metrics,
         )
         .await;
@@ -89,7 +89,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             original_dst,
             selection,
             stop,
-            sniff,
+            &mut sniff,
             metrics,
         )
         .await;
@@ -103,7 +103,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             original_dst,
             selection,
             stop,
-            sniff,
+            &mut sniff,
             metrics,
         )
         .await;
@@ -128,13 +128,15 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
     client
         .write_plain_all(&request, "write VLESS TCP request")
         .await?;
+    drop(request);
+    let initial_payload = sniff.take_payload();
     relay_tcp_over_vless_tls_async(
         inbound,
         &mut client,
         stop,
         &selection.proxy.flow,
         key,
-        &sniff.payload,
+        initial_payload,
         metrics,
     )
     .await
@@ -143,7 +145,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             peer,
             original_dst,
             &selection,
-            sniff,
+            &sniff,
             tls_underlay,
             &stats,
             "async-proxy-tls",
@@ -154,7 +156,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             peer,
             original_dst,
             &selection,
-            sniff,
+            &sniff,
             tls_underlay,
             &err,
             "async-proxy-tls",
@@ -170,7 +172,7 @@ pub(crate) async fn handle_vless_plain_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let mut client =
@@ -190,7 +192,9 @@ pub(crate) async fn handle_vless_plain_tcp_connection_async(
         .write_all(&request)
         .await
         .map_err(|err| format!("write VLESS plain TCP request: {err}"))?;
-    relay_tcp_over_vless_plain_async(inbound, &mut client, stop, &sniff.payload, metrics)
+    drop(request);
+    let initial_payload = sniff.take_payload();
+    relay_tcp_over_vless_plain_async(inbound, &mut client, stop, initial_payload, metrics)
         .await
         .map(|stats| {
             proxy_tcp_finished_event(
@@ -221,7 +225,7 @@ pub(crate) async fn relay_tcp_over_vless_plain_async(
     inbound: &mut TokioTcpStream,
     proxy: &mut TokioTcpStream,
     stop: SharedResidentStopSignal,
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
     let mut stats = RelayStats::default();
@@ -238,7 +242,7 @@ pub(crate) async fn relay_tcp_over_vless_plain_async(
     let mut close_drain_active = false;
 
     if !initial_payload.is_empty() {
-        proxy.write_all(initial_payload).await.map_err(|err| {
+        proxy.write_all(&initial_payload).await.map_err(|err| {
             RelayError::new(
                 format!("write sniffed client payload to VLESS plain TCP: {err}"),
                 &stats,
@@ -247,6 +251,7 @@ pub(crate) async fn relay_tcp_over_vless_plain_async(
         stats.client_to_proxy += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop(initial_payload);
 
     loop {
         tokio::select! {
@@ -332,7 +337,7 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let deadline =
@@ -346,7 +351,8 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
     let tls_underlay = logical.tls_underlay();
     let mux_sid = logical.sid();
     let physical_instance_id = logical.physical_instance_id();
-    relay_tcp_over_vless_mux_stream_async(inbound, &mut logical, stop, &sniff.payload, metrics)
+    let initial_payload = sniff.take_payload();
+    relay_tcp_over_vless_mux_stream_async(inbound, &mut logical, stop, initial_payload, metrics)
         .await
         .map(|stats| {
             let mut event = proxy_tcp_finished_event(
@@ -386,7 +392,7 @@ pub(crate) async fn relay_tcp_over_vless_mux_stream_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
     logical: &mut (impl AsyncRead + AsyncWrite + Unpin),
     stop: SharedResidentStopSignal,
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
     let mut stats = RelayStats {
@@ -405,12 +411,13 @@ pub(crate) async fn relay_tcp_over_vless_mux_stream_async(
     let mut close_drain_active = false;
 
     if !initial_payload.is_empty() {
-        logical.write_all(initial_payload).await.map_err(|err| {
+        logical.write_all(&initial_payload).await.map_err(|err| {
             RelayError::new(format!("write VLESS mux initial payload: {err}"), &stats)
         })?;
         stats.client_to_proxy += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop(initial_payload);
 
     loop {
         tokio::select! {
@@ -494,7 +501,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let mut client =
@@ -505,13 +512,15 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
     let request = packet::first_write_bytes(
         &key,
         &selection.proxy.flow,
         "tcp",
         &selection.route.dial_target,
         false,
-        &sniff.payload,
+        &initial_payload,
     )
     .map_err(|err| format!("build VLESS WebSocket TCP request: {err}"))?;
     write_websocket_binary_frame_over_resident_tls_async(
@@ -520,14 +529,15 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
         "write VLESS websocket request",
     )
     .await?;
-    if !sniff.payload.is_empty() {
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        metrics.add_upload(initial_payload_len);
     }
+    drop((request, initial_payload));
     relay_tcp_over_vless_websocket_tls_async(
         inbound,
         &mut client,
         stop,
-        sniff.payload.len(),
+        initial_payload_len,
         metrics,
     )
     .await
@@ -566,7 +576,7 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let mut client =
@@ -589,13 +599,15 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
     client
         .write_plain_all(&request, "write VLESS HTTP Upgrade TCP request")
         .await?;
+    drop(request);
+    let initial_payload = sniff.take_payload();
     relay_tcp_over_vless_tls_async(
         inbound,
         &mut client,
         stop,
         &selection.proxy.flow,
         key,
-        &sniff.payload,
+        initial_payload,
         metrics,
     )
     .await
@@ -634,7 +646,7 @@ pub(crate) async fn handle_vless_meek_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let tls_underlay = if selection.proxy.utls_fingerprint.is_some() {
@@ -644,20 +656,23 @@ pub(crate) async fn handle_vless_meek_tcp_connection_async(
     };
     let key = selection.proxy.vless_key()?;
     let options = meek_options_from_proxy(&selection, peer, original_dst);
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
     let first_payload = packet::first_write_bytes(
         &key,
         "",
         "tcp",
         &selection.route.dial_target,
         false,
-        &sniff.payload,
+        &initial_payload,
     )
     .map_err(|err| format!("build VLESS Meek TCP request: {err}"))?;
     let mut stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
+    drop(initial_payload);
     let mut stripper = VlessResponseStripper::default();
     let mut next_body = Some(first_payload);
     let mut inbound_closed = false;

@@ -8,7 +8,7 @@ pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
@@ -19,11 +19,13 @@ pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
     let request = trojan_packet::tcp_request_header(
         password,
         "tcp",
         &selection.route.dial_target,
-        &sniff.payload,
+        &initial_payload,
     )
     .map_err(|err| format!("build Trojan WebSocket TCP request: {err}"))?;
     write_websocket_binary_frame_over_resident_tls_async(
@@ -33,10 +35,11 @@ pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     )
     .await?;
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
+    drop((request, initial_payload));
 
     match relay_tcp_over_trojan_websocket_tls_async(inbound, &mut client, stop, metrics).await {
         Ok(mut stats) => {
@@ -90,7 +93,7 @@ pub(crate) async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     password: &str,
     inner_cipher: &str,
@@ -103,6 +106,7 @@ pub(crate) async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let initial_payload = sniff.take_payload();
     let stats = relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
         inbound,
         &mut client,
@@ -111,7 +115,7 @@ pub(crate) async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection
         password,
         inner_cipher,
         inner_password,
-        &sniff.payload,
+        initial_payload,
         metrics,
     )
     .await;
@@ -169,7 +173,7 @@ pub(crate) async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
@@ -180,21 +184,24 @@ pub(crate) async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
     let request = trojan_packet::tcp_request_header(
         password,
         "tcp",
         &selection.route.dial_target,
-        &sniff.payload,
+        &initial_payload,
     )
     .map_err(|err| format!("build Trojan HTTP Upgrade TCP request: {err}"))?;
     client
         .write_plain_all(&request, "write Trojan HTTP Upgrade TCP request")
         .await?;
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
+    drop((request, initial_payload));
 
     match relay_tcp_over_resident_tls_plain_async(inbound, &mut client, stop, metrics).await {
         Ok(mut stats) => {
@@ -250,24 +257,27 @@ pub(crate) async fn handle_trojan_grpc_tls_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
     let request = trojan_packet::tcp_request_header(
         password,
         "tcp",
         &selection.route.dial_target,
-        &sniff.payload,
+        &initial_payload,
     )
     .map_err(|err| format!("build Trojan gRPC TCP request: {err}"))?;
     let (mut h2_send, mut h2_recv, carrier_lease) =
         open_grpc_h2_stream(&selection.proxy, &request).await?;
+    drop((request, initial_payload));
     let tls_underlay = carrier_lease.tls_underlay();
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
 
     let result = relay_tcp_over_grpc_h2(
@@ -333,7 +343,7 @@ pub(crate) async fn handle_trojan_tls_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
@@ -341,21 +351,24 @@ pub(crate) async fn handle_trojan_tls_tcp_connection_async(
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
             .await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
     let request = trojan_packet::tcp_request_header(
         password,
         "tcp",
         &selection.route.dial_target,
-        &sniff.payload,
+        &initial_payload,
     )
     .map_err(|err| format!("build Trojan TCP request: {err}"))?;
     client
         .write_plain_all(&request, "write Trojan TCP request")
         .await?;
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
+    drop((request, initial_payload));
     match relay_tcp_over_resident_tls_plain_async(inbound, &mut client, stop, metrics).await {
         Ok(mut stats) => {
             stats.client_to_direct += initial_stats.client_to_direct;

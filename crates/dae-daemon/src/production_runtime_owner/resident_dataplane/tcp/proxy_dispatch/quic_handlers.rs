@@ -6,7 +6,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    mut sniff: TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     hysteria2_owner_registry: Option<&Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<&TuicOwnerRegistryHandle>,
@@ -25,7 +25,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 original_dst,
                 selection,
                 stop,
-                sniff,
+                &mut sniff,
                 metrics,
                 hysteria2_owner_registry,
                 owner_deadline,
@@ -43,7 +43,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 original_dst,
                 selection,
                 stop,
-                sniff,
+                &mut sniff,
                 metrics,
                 tuic_owner_registry,
                 owner_deadline,
@@ -60,7 +60,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
                 original_dst,
                 selection,
                 stop,
-                sniff,
+                &mut sniff,
                 metrics,
                 juicity_owner_registry,
                 owner_deadline,
@@ -78,7 +78,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     hysteria2_owner_registry: &Hysteria2OwnerRegistryHandle,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
@@ -138,16 +138,19 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
         return Ok(event);
     }
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        send.write_all(&sniff.payload)
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    if initial_payload_len != 0 {
+        send.write_all(&initial_payload)
             .await
             .map_err(|err| format!("write Hysteria2 initial payload: {err}"))?;
         send.flush()
             .await
             .map_err(|err| format!("flush Hysteria2 initial payload: {err}"))?;
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
+    drop(initial_payload);
 
     match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
         Ok(mut stats) => {
@@ -207,7 +210,7 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     tuic_owner_registry: &TuicOwnerRegistryHandle,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
@@ -234,16 +237,19 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
         .await
         .map_err(|err| format!("write TUIC TCP connect: {err}"))?;
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        send.write_all(&sniff.payload)
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    if initial_payload_len != 0 {
+        send.write_all(&initial_payload)
             .await
             .map_err(|err| format!("write TUIC initial payload: {err}"))?;
         send.flush()
             .await
             .map_err(|err| format!("flush TUIC initial payload: {err}"))?;
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
+    drop(initial_payload);
 
     match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
         Ok(mut stats) => {
@@ -303,7 +309,7 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     owner_registry: &JuicityOwnerRegistryHandle,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
@@ -329,14 +335,17 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
         _ => return Err("Juicity owner received a non-Juicity TCP selection".to_owned()),
     };
     let (mut send, mut recv) = transport.open_stream(deadline).await?;
-    write_juicity_tcp_request(&mut send, &selection.route.dial_target, &sniff.payload)
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    write_juicity_tcp_request(&mut send, &selection.route.dial_target, &initial_payload)
         .await
         .map_err(|err| format!("write Juicity TCP request: {err}"))?;
     let mut initial_stats = DirectTcpRelayStats::default();
-    if !sniff.payload.is_empty() {
-        initial_stats.client_to_direct += sniff.payload.len();
-        metrics.add_upload(sniff.payload.len());
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
     }
+    drop(initial_payload);
 
     match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
         Ok(mut stats) => {

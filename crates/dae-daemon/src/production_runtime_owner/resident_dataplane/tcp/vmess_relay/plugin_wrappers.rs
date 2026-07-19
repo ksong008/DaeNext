@@ -8,7 +8,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
     cipher: &str,
     password: &str,
     salt_len: usize,
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let target_metadata = ShadowsocksMetadata::parse(target)
@@ -16,7 +16,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
     let mut first_plain = target_metadata
         .encode()
         .map_err(|err| format!("encode Shadowsocks v2ray-plugin target metadata: {err}"))?;
-    first_plain.extend_from_slice(initial_payload);
+    first_plain.extend_from_slice(&initial_payload);
     let mut client_salt = vec![0_u8; salt_len];
     fastrand::fill(&mut client_salt);
     let mut upload_encoder = AeadStreamCodec::new(cipher, password, &client_salt)
@@ -47,6 +47,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
         stats.client_to_direct += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop((first_plain, encrypted_initial, mux_payload, initial_payload));
 
     let mut mux_state = AsyncV2rayPluginMuxPayloadState::default();
     let mut download_decoder = None;
@@ -156,13 +157,13 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
     trojan_password: &str,
     inner_cipher: &str,
     inner_password: &str,
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let spec = cipher_spec(inner_cipher)
         .map_err(|err| format!("resolve Trojan inner Shadowsocks cipher: {err}"))?;
     let request =
-        trojan_packet::tcp_request_header(trojan_password, "tcp", target, initial_payload)
+        trojan_packet::tcp_request_header(trojan_password, "tcp", target, &initial_payload)
             .map_err(|err| format!("build Trojan inner Shadowsocks TCP request: {err}"))?;
     let mut client_salt = vec![0_u8; spec.salt_len];
     fastrand::fill(&mut client_salt);
@@ -186,6 +187,7 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
         stats.client_to_direct += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop((request, encrypted_initial, initial_payload));
 
     let mut ws_state = AsyncWebSocketPayloadState::default();
     let mut download_decoder = None;

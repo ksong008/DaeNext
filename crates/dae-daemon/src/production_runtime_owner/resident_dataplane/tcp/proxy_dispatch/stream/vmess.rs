@@ -6,7 +6,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: TcpSniffReport,
+    mut sniff: TcpSniffReport,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<Value, String> {
     let execution = selection.proxy.execution_plan();
@@ -27,7 +27,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 original_dst,
                 selection,
                 stop,
-                &sniff,
+                &mut sniff,
                 &metrics,
                 &id,
             )
@@ -40,7 +40,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 original_dst,
                 selection,
                 stop,
-                &sniff,
+                &mut sniff,
                 &metrics,
                 &id,
             )
@@ -53,7 +53,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 original_dst,
                 selection,
                 stop,
-                &sniff,
+                &mut sniff,
                 &metrics,
                 &id,
             )
@@ -66,7 +66,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 original_dst,
                 selection,
                 stop,
-                &sniff,
+                &mut sniff,
                 &metrics,
                 &id,
             )
@@ -79,7 +79,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 original_dst,
                 selection,
                 stop,
-                &sniff,
+                &mut sniff,
                 &metrics,
                 &id,
             )
@@ -92,7 +92,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 original_dst,
                 selection,
                 stop,
-                &sniff,
+                &mut sniff,
                 &metrics,
                 &id,
             )
@@ -105,7 +105,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 original_dst,
                 selection,
                 stop,
-                &sniff,
+                &mut sniff,
                 &metrics,
                 &id,
             )
@@ -118,7 +118,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 original_dst,
                 selection,
                 stop,
-                &sniff,
+                &mut sniff,
                 &metrics,
                 &id,
             )

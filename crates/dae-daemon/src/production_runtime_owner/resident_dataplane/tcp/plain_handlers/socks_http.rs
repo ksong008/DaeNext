@@ -7,14 +7,15 @@ pub(crate) async fn handle_socks5_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     username: &str,
     password: &str,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     socks5_connect_async(&mut proxy, &selection.route.dial_target, username, password).await?;
-    relay_tcp_direct_async(inbound, &mut proxy, stop, &sniff.payload, metrics)
+    let initial_payload = sniff.take_payload();
+    relay_tcp_direct_async(inbound, &mut proxy, stop, initial_payload, metrics)
         .await
         .map(|stats| {
             generic_proxy_tcp_finished_event(
@@ -47,7 +48,7 @@ pub(crate) async fn handle_http_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     username: &str,
     password: &str,
@@ -66,7 +67,8 @@ pub(crate) async fn handle_http_proxy_tcp_connection_async(
         transport_path,
     )
     .await?;
-    relay_tcp_direct_async(inbound, &mut proxy, stop, &sniff.payload, metrics)
+    let initial_payload = sniff.take_payload();
+    relay_tcp_direct_async(inbound, &mut proxy, stop, initial_payload, metrics)
         .await
         .map(|stats| {
             generic_proxy_tcp_finished_event(
@@ -100,7 +102,7 @@ pub(crate) async fn handle_https_proxy_tcp_connection_async(
     original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: SharedResidentStopSignal,
-    sniff: &TcpSniffReport,
+    sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     username: &str,
     password: &str,
@@ -132,17 +134,22 @@ pub(crate) async fn handle_https_proxy_tcp_connection_async(
             .map_err(|err| format!("write HTTPS proxy early tunnel payload to client: {err}"))?;
         metrics.add_download(response_leftover.len());
     }
-    if !sniff.payload.is_empty() {
+    let response_leftover_len = response_leftover.len();
+    drop(response_leftover);
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    if initial_payload_len != 0 {
         proxy
-            .write_plain_all(&sniff.payload, "write HTTPS proxy initial payload")
+            .write_plain_all(&initial_payload, "write HTTPS proxy initial payload")
             .await?;
-        metrics.add_upload(sniff.payload.len());
+        metrics.add_upload(initial_payload_len);
     }
+    drop(initial_payload);
     relay_tcp_over_resident_tls_plain_async(inbound, &mut proxy, stop, metrics)
         .await
         .map(|mut stats| {
-            stats.client_to_direct += sniff.payload.len();
-            stats.direct_to_client += response_leftover.len();
+            stats.client_to_direct += initial_payload_len;
+            stats.direct_to_client += response_leftover_len;
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,

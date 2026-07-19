@@ -75,7 +75,7 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                     &cipher,
                     &password,
                     salt_len,
-                    &[],
+                    Vec::new(),
                     &metrics,
                 )
                 .await;
@@ -102,7 +102,7 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                     &cipher,
                     &password,
                     salt_len,
-                    &[],
+                    Vec::new(),
                     &metrics,
                 )
                 .await;
@@ -130,7 +130,7 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                     &cipher,
                     &password,
                     salt_len,
-                    &[],
+                    Vec::new(),
                     &metrics,
                     &host,
                     &path,
@@ -159,7 +159,7 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                     &cipher,
                     &password,
                     salt_len,
-                    &[],
+                    Vec::new(),
                     &metrics,
                     &host,
                 )
@@ -188,7 +188,7 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                     &cipher,
                     &password,
                     salt_len,
-                    &[],
+                    Vec::new(),
                     &metrics,
                     &host,
                     &path,
@@ -316,7 +316,7 @@ async fn open_shadowsocks_v2ray_plugin_native_tcp_tunnel(
             &cipher,
             &password,
             salt_len,
-            &[],
+            Vec::new(),
             &metrics,
         )
         .await;

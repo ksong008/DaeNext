@@ -241,7 +241,7 @@ fn start_resident_proxy_tcp_handler(
                 original_dst,
                 selection,
                 handler_stop,
-                &sniff,
+                sniff,
                 &handler_metrics,
             )
             .await
@@ -252,7 +252,7 @@ fn start_resident_proxy_tcp_handler(
                 original_dst,
                 selection,
                 handler_stop,
-                &sniff,
+                sniff,
                 &handler_metrics,
                 anytls_owner_registry.as_ref(),
                 owner_deadline,
@@ -265,7 +265,7 @@ fn start_resident_proxy_tcp_handler(
                 original_dst,
                 selection,
                 handler_stop,
-                &sniff,
+                sniff,
                 &handler_metrics,
                 hysteria2_owner_registry.as_ref(),
                 tuic_owner_registry.as_ref(),

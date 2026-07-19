@@ -8,7 +8,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
     cipher: &str,
     password: &str,
     salt_len: usize,
-    initial_payload: &[u8],
+    initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
     host: &str,
     path: &str,
@@ -20,7 +20,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
         password,
         &client_salt,
         target,
-        initial_payload,
+        &initial_payload,
         ss2022_tcp_unix_timestamp_now(),
     )
     .map_err(|err| format!("encode Shadowsocks 2022 simple-obfs initial TCP frame: {err}"))?;
@@ -41,6 +41,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
         stats.client_to_direct += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
+    drop((initial, obfs_request, response_head, initial_payload));
 
     let mut proxy_reader = AsyncPrefixTcpReader::new(response_leftover, proxy);
     let (mut decoder, start) =

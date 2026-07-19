@@ -212,7 +212,7 @@ async fn open_trojan_inner_shadowsocks_native_tcp_tunnel(
             &password,
             &inner_cipher,
             &inner_password,
-            &[],
+            Vec::new(),
             &metrics,
         )
         .await;

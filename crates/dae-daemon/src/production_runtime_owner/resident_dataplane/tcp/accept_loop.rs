@@ -223,7 +223,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                 original_dst,
                 selection,
                 Arc::clone(&stop),
-                &sniff,
+                sniff,
                 &metrics,
             )
             .await;
@@ -265,7 +265,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     original_dst,
                     selection,
                     Arc::clone(&stop),
-                    &sniff,
+                    sniff,
                     &metrics,
                 )
                 .await
@@ -276,7 +276,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     original_dst,
                     selection,
                     Arc::clone(&stop),
-                    &sniff,
+                    sniff,
                     &metrics,
                     router.anytls_owner_registry.as_ref(),
                     None,
@@ -289,7 +289,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     original_dst,
                     selection,
                     Arc::clone(&stop),
-                    &sniff,
+                    sniff,
                     &metrics,
                     router.hysteria2_owner_registry.as_ref(),
                     router.tuic_owner_registry.as_ref(),
