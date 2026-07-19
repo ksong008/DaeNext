@@ -25,8 +25,7 @@ pub(super) struct UdpSessionEntry {
     pub(super) handle: JoinHandle<()>,
 }
 
-#[derive(Clone)]
-pub(super) struct UdpSessionActorContext {
+pub(super) struct UdpSessionSharedContext {
     pub(super) dns: Arc<ResidentDnsPlan>,
     pub(super) proxy_groups: SharedResidentProxyGroupMap,
     pub(super) event_file: PathBuf,
@@ -38,7 +37,10 @@ pub(super) struct UdpSessionActorContext {
     pub(super) tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     pub(super) juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     pub(super) anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+    pub(super) response_buffer_idle_timeout: Duration,
 }
+
+pub(super) type UdpSessionActorContext = Arc<UdpSessionSharedContext>;
 
 pub(super) fn spawn_udp_session_actor(
     key: UdpSessionKey,

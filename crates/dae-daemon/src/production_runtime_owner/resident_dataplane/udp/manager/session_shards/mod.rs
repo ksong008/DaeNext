@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::ops::Deref;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -34,21 +35,18 @@ enum ResidentUdpShardPacket {
 
 #[derive(Clone)]
 struct ResidentUdpSessionShardContext {
-    dns: Arc<ResidentDnsPlan>,
-    proxy_groups: SharedResidentProxyGroupMap,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    udp_reply: UdpReplyHandle,
-    active_sessions: Arc<AtomicUsize>,
+    shared: Arc<UdpSessionSharedContext>,
     admission: Arc<Semaphore>,
     session_queue_depth: usize,
     cleanup_queue_depth: usize,
-    direct_response_buffer_idle_timeout: Duration,
-    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
-    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+}
+
+impl Deref for ResidentUdpSessionShardContext {
+    type Target = UdpSessionSharedContext;
+
+    fn deref(&self) -> &Self::Target {
+        &self.shared
+    }
 }
 
 #[derive(Clone)]
@@ -84,7 +82,7 @@ impl ResidentUdpSessionShardPool {
         let shard_count = runtime_config.runtime_shards.max(1);
         let queue_depth = runtime_config.per_shard_dispatch_queue_depth();
         let admission = Arc::new(Semaphore::new(runtime_config.session_limit));
-        let context = ResidentUdpSessionShardContext {
+        let shared = Arc::new(UdpSessionSharedContext {
             dns,
             proxy_groups,
             event_file: event_file.clone(),
@@ -92,14 +90,17 @@ impl ResidentUdpSessionShardPool {
             metrics: Arc::clone(&metrics),
             udp_reply,
             active_sessions,
-            admission,
-            session_queue_depth: runtime_config.session_queue_depth,
-            cleanup_queue_depth: runtime_config.per_shard_cleanup_queue_depth(),
-            direct_response_buffer_idle_timeout: runtime_config.direct_response_buffer_idle_timeout,
             hysteria2_owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
             anytls_owner_registry,
+            response_buffer_idle_timeout: runtime_config.direct_response_buffer_idle_timeout,
+        });
+        let context = ResidentUdpSessionShardContext {
+            shared,
+            admission,
+            session_queue_depth: runtime_config.session_queue_depth,
+            cleanup_queue_depth: runtime_config.per_shard_cleanup_queue_depth(),
         };
         let mut senders = Vec::with_capacity(shard_count);
         let mut stops = Vec::with_capacity(shard_count);

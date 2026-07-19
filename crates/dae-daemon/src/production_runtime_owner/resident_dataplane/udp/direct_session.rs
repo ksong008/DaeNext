@@ -112,15 +112,7 @@ pub(super) struct UdpDirectSessionEntry {
     pub(super) handle: JoinHandle<()>,
 }
 
-#[derive(Clone)]
-pub(super) struct UdpDirectSessionActorContext {
-    pub(super) event_file: PathBuf,
-    pub(super) event_lock: Arc<Mutex<()>>,
-    pub(super) metrics: Arc<ResidentDataplaneMetrics>,
-    pub(super) udp_reply: UdpReplyHandle,
-    pub(super) active_sessions: Arc<AtomicUsize>,
-    pub(super) response_buffer_idle_timeout: Duration,
-}
+pub(super) type UdpDirectSessionActorContext = Arc<UdpSessionSharedContext>;
 
 pub(super) fn spawn_udp_direct_session_actor(
     key: UdpDirectSessionKey,
