@@ -3,7 +3,10 @@ use super::*;
 pub(super) const XHTTP_H3_WRAPPER: SourceShapeRegistryRow = scoped_evidence_admitted_row(
     registry_source("xhttp-h3-wrapper", "vless", &["vless"])
         .with_transport("quic-tls", "xhttp", "udp-over-stream")
-        .with_runtime(CONFIGURED_HTTP_OWNERSHIP, "registry:xhttp-h3-wrapper"),
+        .with_runtime(
+            GENERATION_OWNED_XHTTP_OWNERSHIP,
+            "registry:xhttp-h3-wrapper",
+        ),
 );
 
 // Aggregate report row: extended settings are admitted by individual xHTTP
@@ -12,7 +15,7 @@ pub(super) const XHTTP_EXTENDED_SETTINGS_WRAPPER: SourceShapeRegistryRow = block
     registry_source("xhttp-extended-settings-wrapper", "vless", &["vless"])
         .with_transport("plain-or-native-underlay", "xhttp", "extended-xhttp")
         .with_runtime(
-            CONFIGURED_HTTP_OWNERSHIP,
+            GENERATION_OWNED_XHTTP_OWNERSHIP,
             "registry:xhttp-extended-settings-wrapper",
         ),
     "extended-xhttp-shape-not-exactly-classified",

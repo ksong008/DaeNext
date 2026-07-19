@@ -33,7 +33,10 @@ pub(super) const STREAM_WRAPPER_GRPC: SourceShapeRegistryRow = admitted_row(
         &["vless", "vmess", "trojan", "trojan-go"],
     )
     .with_transport("tls-stream-variants-or-reality", "grpc", "udp-over-stream")
-    .with_runtime(FLOW_STREAM_PACKET_OWNERSHIP, "registry:stream-wrapper-grpc"),
+    .with_runtime(
+        GENERATION_OWNED_H2_PACKET_OWNERSHIP,
+        "registry:stream-wrapper-grpc",
+    ),
 );
 
 pub(super) const STREAM_WRAPPER_HTTPUPGRADE: SourceShapeRegistryRow = admitted_row(
@@ -93,7 +96,7 @@ pub(super) const VLESS_H2_STREAM_WRAPPER: SourceShapeRegistryRow = admitted_row(
     registry_source("vless-h2-stream-wrapper", "vless", &["vless"])
         .with_transport("tls-stream-variants", "h2", "udp-over-stream")
         .with_runtime(
-            FLOW_STREAM_PACKET_OWNERSHIP,
+            GENERATION_OWNED_H2_PACKET_OWNERSHIP,
             "registry:vless-h2-stream-wrapper",
         ),
 );
@@ -102,7 +105,7 @@ pub(super) const VMESS_H2_STREAM_WRAPPER: SourceShapeRegistryRow = admitted_row(
     registry_source("vmess-h2-stream-wrapper", "vmess", &["vmess"])
         .with_transport("tls-stream-variants", "h2", "protocol-closed")
         .with_runtime(
-            FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+            GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP,
             "registry:vmess-h2-stream-wrapper",
         ),
 );
@@ -110,13 +113,19 @@ pub(super) const VMESS_H2_STREAM_WRAPPER: SourceShapeRegistryRow = admitted_row(
 pub(super) const XHTTP_H1_WRAPPER: SourceShapeRegistryRow = admitted_row(
     registry_source("xhttp-h1-wrapper", "vless", &["vless"])
         .with_transport("tls-stream-variants", "xhttp", "udp-over-stream")
-        .with_runtime(CONFIGURED_HTTP_OWNERSHIP, "registry:xhttp-h1-wrapper"),
+        .with_runtime(
+            GENERATION_OWNED_XHTTP_OWNERSHIP,
+            "registry:xhttp-h1-wrapper",
+        ),
 );
 
 pub(super) const STREAM_WRAPPER_XHTTP: SourceShapeRegistryRow = scoped_evidence_admitted_row(
     registry_source("stream-wrapper-xhttp", "vless", &["vless"])
         .with_transport("tls-stream-variants-or-reality", "xhttp", "udp-over-stream")
-        .with_runtime(CONFIGURED_HTTP_OWNERSHIP, "registry:stream-wrapper-xhttp"),
+        .with_runtime(
+            GENERATION_OWNED_XHTTP_OWNERSHIP,
+            "registry:stream-wrapper-xhttp",
+        ),
 );
 
 pub(super) const NESTED_CHAIN_SHAPE: SourceShapeRegistryRow = scoped_evidence_chain_admitted_row(

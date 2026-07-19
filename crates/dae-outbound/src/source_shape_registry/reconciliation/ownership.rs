@@ -25,8 +25,16 @@ impl MaterializedSourceShape {
             }
             MaterializedProtocol::Tuic => RuntimeOwnershipModel::GenerationOwnedTuicTransport,
             MaterializedProtocol::Juicity => RuntimeOwnershipModel::GenerationOwnedJuicityTransport,
+            MaterializedProtocol::AnyTls => RuntimeOwnershipModel::GenerationOwnedAnyTlsTransport,
             MaterializedProtocol::ConnectUdpH2 | MaterializedProtocol::ConnectUdpH3 => {
                 RuntimeOwnershipModel::GenerationConnectUdpTransport
+            }
+            _ if matches!(
+                self.wrapper,
+                MaterializedWrapper::Grpc | MaterializedWrapper::H2
+            ) =>
+            {
+                RuntimeOwnershipModel::GenerationOwnedH2Transport
             }
             MaterializedProtocol::VlessStandard
                 if matches!(
@@ -36,7 +44,7 @@ impl MaterializedSourceShape {
                         | MaterializedWrapper::XhttpH3
                 ) =>
             {
-                RuntimeOwnershipModel::ConfiguredHttpTransport
+                RuntimeOwnershipModel::GenerationOwnedXhttpTransport
             }
             MaterializedProtocol::VlessStandard if self.wrapper == MaterializedWrapper::Meek => {
                 RuntimeOwnershipModel::GenerationOwnedMeekTransport

@@ -27,37 +27,39 @@ fn raw_tls_security_variants_follow_builder_reachability() {
         Security::InsecureTls,
         Security::FragmentedTls,
     ] {
-        for (shape, expected) in [
-            (
-                shape(
-                    Protocol::Trojan,
-                    security,
-                    Wrapper::WebSocket,
-                    Udp::Trojan(Stream::WebSocketTls),
-                ),
-                FLOW_STREAM_PACKET_OWNERSHIP,
-            ),
-            (
-                shape(
-                    Protocol::TrojanInnerShadowsocks,
-                    security,
-                    Wrapper::WebSocket,
-                    Udp::PolicyClosed(Closed::TrojanInnerShadowsocks),
-                ),
-                FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
-            ),
-            (
-                shape(
-                    Protocol::AnyTls,
-                    security,
-                    Wrapper::FrameStream,
-                    Udp::AnyTls,
-                ),
-                FLOW_STREAM_PACKET_OWNERSHIP,
-            ),
-        ] {
-            assert_eq!(profile_for_shape(shape), Some(expected), "{shape:?}");
-        }
+        let trojan = shape(
+            Protocol::Trojan,
+            security,
+            Wrapper::WebSocket,
+            Udp::Trojan(Stream::WebSocketTls),
+        );
+        assert_eq!(
+            profile_for_shape(trojan),
+            Some(FLOW_STREAM_PACKET_OWNERSHIP),
+            "{trojan:?}"
+        );
+        let inner = shape(
+            Protocol::TrojanInnerShadowsocks,
+            security,
+            Wrapper::WebSocket,
+            Udp::PolicyClosed(Closed::TrojanInnerShadowsocks),
+        );
+        assert_eq!(
+            profile_for_shape(inner),
+            Some(FLOW_STREAM_POLICY_CLOSED_OWNERSHIP),
+            "{inner:?}"
+        );
+        let anytls = shape(
+            Protocol::AnyTls,
+            security,
+            Wrapper::FrameStream,
+            Udp::AnyTls,
+        );
+        assert_eq!(
+            profile_for_shape(anytls),
+            Some(GENERATION_OWNED_ANYTLS_OWNERSHIP),
+            "{anytls:?}"
+        );
     }
 
     let fingerprinted_plain_trojan = shape(

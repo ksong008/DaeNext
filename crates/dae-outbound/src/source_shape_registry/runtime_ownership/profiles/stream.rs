@@ -9,6 +9,10 @@ const FLOW_STREAM_ASSOCIATION_MODELS: &[RuntimeOwnershipModel] =
     &[RuntimeOwnershipModel::FlowStreamAndAssociation];
 const GENERATION_VLESS_MUX_MODELS: &[RuntimeOwnershipModel] =
     &[RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport];
+const GENERATION_ANYTLS_MODELS: &[RuntimeOwnershipModel] =
+    &[RuntimeOwnershipModel::GenerationOwnedAnyTlsTransport];
+const GENERATION_H2_MODELS: &[RuntimeOwnershipModel] =
+    &[RuntimeOwnershipModel::GenerationOwnedH2Transport];
 
 pub const FLOW_STREAM_PACKET_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
     model: RuntimeOwnershipModel::FlowStreamAndPacketSession,
@@ -82,11 +86,95 @@ pub const GENERATION_OWNED_VLESS_MUX_OWNERSHIP: RuntimeOwnershipProfile = Runtim
     forced_managed_dns: closed_route(RuntimeCallerClass::ForcedManagedDns),
 };
 
+pub const GENERATION_OWNED_ANYTLS_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
+    model: RuntimeOwnershipModel::GenerationOwnedAnyTlsTransport,
+    allowed_materialized_models: GENERATION_ANYTLS_MODELS,
+    disposition: RuntimeOwnershipDisposition::Implemented,
+    data_tcp: generation_anytls_stream_route(RuntimeCallerClass::DataTcp),
+    data_udp: generation_anytls_packet_route(RuntimeCallerClass::DataUdp),
+    health_tcp: generation_anytls_stream_route(RuntimeCallerClass::HealthTcp),
+    health_dns: generation_anytls_packet_route(RuntimeCallerClass::HealthDns),
+    manual: generation_anytls_stream_route(RuntimeCallerClass::ManualProbe),
+    configured_dns: generation_anytls_packet_route(RuntimeCallerClass::ConfiguredDns),
+    forced_managed_dns: generation_anytls_packet_route(RuntimeCallerClass::ForcedManagedDns),
+};
+
+pub const GENERATION_OWNED_H2_PACKET_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
+    model: RuntimeOwnershipModel::GenerationOwnedH2Transport,
+    allowed_materialized_models: GENERATION_H2_MODELS,
+    disposition: RuntimeOwnershipDisposition::Implemented,
+    data_tcp: generation_h2_stream_route(RuntimeCallerClass::DataTcp),
+    data_udp: generation_h2_packet_route(RuntimeCallerClass::DataUdp),
+    health_tcp: generation_h2_stream_route(RuntimeCallerClass::HealthTcp),
+    health_dns: generation_h2_packet_route(RuntimeCallerClass::HealthDns),
+    manual: generation_h2_stream_route(RuntimeCallerClass::ManualProbe),
+    configured_dns: generation_h2_packet_route(RuntimeCallerClass::ConfiguredDns),
+    forced_managed_dns: generation_h2_packet_route(RuntimeCallerClass::ForcedManagedDns),
+};
+
+pub const GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP: RuntimeOwnershipProfile =
+    RuntimeOwnershipProfile {
+        model: RuntimeOwnershipModel::GenerationOwnedH2Transport,
+        allowed_materialized_models: GENERATION_H2_MODELS,
+        disposition: RuntimeOwnershipDisposition::Implemented,
+        data_tcp: generation_h2_stream_route(RuntimeCallerClass::DataTcp),
+        data_udp: closed_route(RuntimeCallerClass::DataUdp),
+        health_tcp: generation_h2_stream_route(RuntimeCallerClass::HealthTcp),
+        health_dns: closed_route(RuntimeCallerClass::HealthDns),
+        manual: generation_h2_stream_route(RuntimeCallerClass::ManualProbe),
+        configured_dns: closed_route(RuntimeCallerClass::ConfiguredDns),
+        forced_managed_dns: closed_route(RuntimeCallerClass::ForcedManagedDns),
+    };
+
 const fn generation_vless_mux_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
     admitted_route(
         caller,
         PhysicalCarrierKind::MultiplexedStreamConnection,
         LogicalLeaseKind::MultiplexedByteStream,
+        RuntimeLifecycleOwner::GenerationRuntime,
+        PhysicalOwnerKeyContract::GenerationGraphAndTransport,
+        RuntimeBudgetContract::PhysicalConnectionLogicalStreamAndBufferBytes,
+    )
+}
+
+const fn generation_anytls_stream_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
+    admitted_route(
+        caller,
+        PhysicalCarrierKind::ReusableFrameStreamConnection,
+        LogicalLeaseKind::FramedByteStream,
+        RuntimeLifecycleOwner::GenerationRuntime,
+        PhysicalOwnerKeyContract::GenerationGraphAndTransport,
+        RuntimeBudgetContract::PhysicalConnectionLogicalStreamAndBufferBytes,
+    )
+}
+
+const fn generation_anytls_packet_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
+    admitted_route(
+        caller,
+        PhysicalCarrierKind::ReusableFrameStreamConnection,
+        LogicalLeaseKind::PacketSession,
+        RuntimeLifecycleOwner::GenerationRuntime,
+        PhysicalOwnerKeyContract::GenerationGraphAndTransport,
+        RuntimeBudgetContract::PhysicalConnectionLogicalStreamAndBufferBytes,
+    )
+}
+
+const fn generation_h2_stream_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
+    admitted_route(
+        caller,
+        PhysicalCarrierKind::MultiplexedStreamConnection,
+        LogicalLeaseKind::Http2Stream,
+        RuntimeLifecycleOwner::GenerationRuntime,
+        PhysicalOwnerKeyContract::GenerationGraphAndTransport,
+        RuntimeBudgetContract::PhysicalConnectionLogicalStreamAndBufferBytes,
+    )
+}
+
+const fn generation_h2_packet_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
+    admitted_route(
+        caller,
+        PhysicalCarrierKind::MultiplexedStreamConnection,
+        LogicalLeaseKind::PacketSession,
         RuntimeLifecycleOwner::GenerationRuntime,
         PhysicalOwnerKeyContract::GenerationGraphAndTransport,
         RuntimeBudgetContract::PhysicalConnectionLogicalStreamAndBufferBytes,

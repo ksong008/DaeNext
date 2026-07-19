@@ -79,6 +79,21 @@ pub(super) fn assert_common_resident_graph_contracts(proxies: &[ResidentProxyPla
             "resident-executable-graph"
         );
         let execution = proxy.execution_plan();
+        let tcp_carrier = &graph["tcpCarrierContract"];
+        assert_eq!(tcp_carrier["schemaVersion"], 1);
+        assert_eq!(
+            tcp_carrier["ownership"],
+            execution.tcp_carrier_ownership().as_str()
+        );
+        assert_eq!(tcp_carrier["unframedLiveStreamSharing"], false);
+        assert_eq!(
+            tcp_carrier["crossFlowCarrierReuse"],
+            execution.tcp_carrier_ownership().cross_flow_reuse()
+        );
+        assert_eq!(
+            &proxy.runtime_component_evidence_value()["tcpCarrierContract"],
+            tcp_carrier
+        );
         assert_eq!(
             graph["transportUnderlay"],
             execution.security.transport_label()

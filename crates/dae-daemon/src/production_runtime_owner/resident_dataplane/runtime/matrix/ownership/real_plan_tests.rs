@@ -1,9 +1,10 @@
 use base64::Engine;
 use dae_outbound::{
-    CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
-    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
-    GENERATION_OWNED_VLESS_MUX_OWNERSHIP, ShadowsocksLink, Sip003, TrojanLink, VLESSLink,
-    VMessLink,
+    FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
+    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_H2_PACKET_OWNERSHIP,
+    GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
+    GENERATION_OWNED_VLESS_MUX_OWNERSHIP, GENERATION_OWNED_XHTTP_OWNERSHIP, ShadowsocksLink,
+    Sip003, TrojanLink, VLESSLink, VMessLink,
 };
 
 use super::*;
@@ -33,8 +34,14 @@ fn admitted_policy_closed_plans_keep_their_explicit_tcp_owner() {
         GENERATION_OWNED_VLESS_MUX_OWNERSHIP
     );
 
+    let vmess_h2 = build_proxy(vmess_link("h2", "tls").export_url()).unwrap();
+    assert!(vmess_h2.execution_plan().udp.policy_closed());
+    assert_eq!(
+        materialized_runtime_ownership(vmess_h2.execution_plan()),
+        GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP
+    );
+
     for link in [
-        vmess_link("h2", "tls").export_url(),
         trojan_inner_link().export_url(),
         shadowsocks_plugin_link(),
         shadowsocksr_link(),
@@ -61,7 +68,7 @@ fn admitted_vless_h2_and_xhttp_versions_map_to_their_real_profiles() {
     let h2 = build_proxy(vless_link("h2", "tls", "h2", "/h2").export_url()).unwrap();
     assert_eq!(
         materialized_runtime_ownership(h2.execution_plan()),
-        FLOW_STREAM_PACKET_OWNERSHIP
+        GENERATION_OWNED_H2_PACKET_OWNERSHIP
     );
 
     for alpn in ["http/1.1", "h2", "h3"] {
@@ -69,7 +76,7 @@ fn admitted_vless_h2_and_xhttp_versions_map_to_their_real_profiles() {
             .unwrap_or_else(|error| panic!("admit xHTTP {alpn}: {error}"));
         assert_eq!(
             materialized_runtime_ownership(proxy.execution_plan()),
-            CONFIGURED_HTTP_OWNERSHIP,
+            GENERATION_OWNED_XHTTP_OWNERSHIP,
             "{alpn}"
         );
     }
@@ -77,7 +84,7 @@ fn admitted_vless_h2_and_xhttp_versions_map_to_their_real_profiles() {
     let reality_h2 = build_proxy(vless_xhttp_reality_h2_link().export_url()).unwrap();
     assert_eq!(
         materialized_runtime_ownership(reality_h2.execution_plan()),
-        CONFIGURED_HTTP_OWNERSHIP
+        GENERATION_OWNED_XHTTP_OWNERSHIP
     );
 }
 

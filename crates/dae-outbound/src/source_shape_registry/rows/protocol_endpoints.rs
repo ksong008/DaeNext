@@ -109,7 +109,7 @@ pub(super) const BASELINE_FRAME_STREAM_ENDPOINT: SourceShapeRegistryRow = admitt
             "udp-over-stream",
         )
         .with_runtime(
-            FLOW_STREAM_PACKET_OWNERSHIP,
+            GENERATION_OWNED_ANYTLS_OWNERSHIP,
             "registry:baseline-frame-stream-endpoint",
         ),
 );

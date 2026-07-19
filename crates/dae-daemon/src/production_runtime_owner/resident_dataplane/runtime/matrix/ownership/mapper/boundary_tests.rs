@@ -54,20 +54,22 @@ fn legal_tcp_with_policy_closed_udp_keeps_its_explicit_ownership() {
         Some(GENERATION_OWNED_VLESS_MUX_OWNERSHIP)
     );
 
-    let cases = [
-        shape(
+    assert_eq!(
+        profile_for_shape(shape(
             Protocol::VmessAead,
             Security::StandardTls,
             Wrapper::H2,
             Udp::PolicyClosed(Closed::VmessH2),
-        ),
-        shape(
-            Protocol::TrojanInnerShadowsocks,
-            Security::StandardTls,
-            Wrapper::WebSocket,
-            Udp::PolicyClosed(Closed::TrojanInnerShadowsocks),
-        ),
-    ];
+        )),
+        Some(GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP)
+    );
+
+    let cases = [shape(
+        Protocol::TrojanInnerShadowsocks,
+        Security::StandardTls,
+        Wrapper::WebSocket,
+        Udp::PolicyClosed(Closed::TrojanInnerShadowsocks),
+    )];
 
     for shape in cases {
         assert_eq!(
@@ -166,7 +168,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
                 Wrapper::H2,
                 Udp::Vless(Stream::H2Tls),
             ),
-            Some(FLOW_STREAM_PACKET_OWNERSHIP),
+            Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP),
         ),
         (
             shape(
@@ -184,7 +186,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
                 Wrapper::XhttpH1,
                 Udp::Vless(Stream::XhttpH1),
             ),
-            Some(CONFIGURED_HTTP_OWNERSHIP),
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP),
         ),
         (
             shape(
@@ -193,7 +195,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
                 Wrapper::XhttpH2,
                 Udp::Vless(Stream::XhttpH2),
             ),
-            Some(CONFIGURED_HTTP_OWNERSHIP),
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP),
         ),
         (
             shape(
@@ -202,7 +204,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
                 Wrapper::XhttpH2,
                 Udp::Vless(Stream::XhttpH2),
             ),
-            Some(CONFIGURED_HTTP_OWNERSHIP),
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP),
         ),
         (
             shape(
@@ -211,7 +213,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
                 Wrapper::XhttpH3,
                 Udp::Vless(Stream::XhttpH3),
             ),
-            Some(CONFIGURED_HTTP_OWNERSHIP),
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP),
         ),
         (
             shape(
@@ -247,7 +249,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
                 Wrapper::H2,
                 Udp::PolicyClosed(Closed::VmessH2),
             ),
-            Some(FLOW_STREAM_POLICY_CLOSED_OWNERSHIP),
+            Some(GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP),
         ),
         (
             shape(
