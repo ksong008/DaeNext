@@ -37,7 +37,7 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
                 }),
             ),
         };
-    let arena = match mallctl::read_u32(b"thread.arena\0") {
+    let narenas = match mallctl::read_u32(b"arenas.narenas\0") {
         Ok(value) => value,
         Err(err) => {
             return (
@@ -46,16 +46,45 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
                     "operation": "jemalloc_arena_purge",
                     "threadCacheFlush": thread_cache_flush,
                     "threadCacheScope": "calling-thread",
-                    "arenaPurgeScope": "calling-thread-arena",
+                    "arenaPurgeScope": "all-initialized-arenas",
                     "error": err,
                 }),
             );
         }
     };
-    let key = format!("arena.{arena}.purge\0");
-    let purge = mallctl::command(key.as_bytes());
+    let mut failures = Vec::new();
+    let mut skipped = 0_u64;
+    let mut attempted = 0_u64;
+    for arena in 0..narenas {
+        let initialized_key = format!("arena.{arena}.initialized\0");
+        match mallctl::read_bool(initialized_key.as_bytes()) {
+            Ok(true) => {}
+            Ok(false) => {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            Err(error) => {
+                failures.push(json!({
+                    "arena": arena,
+                    "step": "read_initialized",
+                    "error": error,
+                }));
+                continue;
+            }
+        }
+
+        attempted = attempted.saturating_add(1);
+        let key = format!("arena.{arena}.purge\0");
+        if let Err(error) = mallctl::command(key.as_bytes()) {
+            failures.push(json!({
+                "arena": arena,
+                "step": "purge",
+                "error": error,
+            }));
+        }
+    }
     let epoch_after = epoch::advance().ok();
-    let status = if purge.is_ok() && thread_cache_flush_ok {
+    let status = if failures.is_empty() && thread_cache_flush_ok {
         "pass"
     } else {
         "partial"
@@ -66,13 +95,31 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
             "operation": "jemalloc_thread_tcache_flush_and_arena_purge",
             "threadCacheFlush": thread_cache_flush,
             "threadCacheScope": "calling-thread",
-            "arenaPurgeScope": "calling-thread-arena",
-            "arena": arena,
-            "purge": purge.map(|_| json!({"status": "pass"})).unwrap_or_else(|error| json!({"status": "fail", "error": error})),
+            "arenaPurgeScope": "all-initialized-arenas",
+            "arenasObserved": narenas,
+            "arenasAttempted": attempted,
+            "arenasSkipped": skipped,
+            "failures": failures,
             "epochBefore": epoch_before,
             "epochAfter": epoch_after,
         }),
     )
+}
+
+#[cfg(all(test, feature = "allocator-jemalloc"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_reclaim_purges_every_initialized_arena() {
+        let (status, report) = allocator_reclaim_impl();
+
+        assert_eq!(status, "pass");
+        assert_eq!(report["arenaPurgeScope"], json!("all-initialized-arenas"));
+        assert!(report["arenasObserved"].as_u64().unwrap_or(0) > 0);
+        assert!(report["arenasAttempted"].as_u64().unwrap_or(0) > 0);
+        assert_eq!(report["failures"], json!([]));
+    }
 }
 
 #[cfg(not(feature = "allocator-jemalloc"))]

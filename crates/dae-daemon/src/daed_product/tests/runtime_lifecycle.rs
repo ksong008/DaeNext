@@ -585,10 +585,15 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
             "{reclaim}"
         );
         assert_eq!(
-            reclaim["detail"]["purge"]["status"],
-            json!("pass"),
+            reclaim["detail"]["arenaPurgeScope"],
+            json!("all-initialized-arenas"),
             "{reclaim}"
         );
+        assert!(
+            reclaim["detail"]["arenasAttempted"].as_u64().unwrap_or(0) > 0,
+            "{reclaim}"
+        );
+        assert_eq!(reclaim["detail"]["failures"], json!([]), "{reclaim}");
     }
     assert!(after["total"].as_u64().unwrap_or(0) > before_total);
     assert!(after["reasons"]["reload_completed"].as_u64().unwrap_or(0) > before_reload_completed);
