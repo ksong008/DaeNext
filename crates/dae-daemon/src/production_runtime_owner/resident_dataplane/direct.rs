@@ -205,7 +205,7 @@ mod tests {
     use std::net::{IpAddr, TcpListener};
     use std::sync::{Arc, atomic::Ordering};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[tokio::test(flavor = "current_thread")]
     async fn resident_direct_async_dial_completes_magic_connect_report() {
@@ -436,5 +436,145 @@ mod tests {
             .unwrap();
         assert_eq!(stats, DirectTcpRelayStats::default());
         drop((inbound_client, upstream_peer));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "explicit high-concurrency direct TCP relay benchmark"]
+    async fn direct_tcp_relay_high_concurrency_benchmark() {
+        const PAYLOAD_BYTES: usize = 64 * 1024;
+        const CONCURRENCY_LEVELS: [usize; 3] = [64, 256, 1_024];
+
+        for concurrency in CONCURRENCY_LEVELS {
+            let result = time::timeout(
+                Duration::from_secs(30),
+                benchmark_direct_tcp_relays(concurrency, PAYLOAD_BYTES),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                panic!("{concurrency} direct TCP relays exceeded benchmark timeout")
+            });
+            let (mut flow_durations, batch_elapsed) = result.unwrap();
+            flow_durations.sort_unstable();
+            let elapsed = flow_durations.iter().copied().max().unwrap_or_default();
+            let p99_index = flow_durations.len().saturating_sub(1).saturating_mul(99) / 100;
+            let p99 = flow_durations[p99_index];
+            let transferred_bytes = concurrency.saturating_mul(PAYLOAD_BYTES).saturating_mul(2);
+            eprintln!(
+                "direct_tcp_relay_concurrency_benchmark {}",
+                serde_json::json!({
+                    "concurrency": concurrency,
+                    "payloadBytesPerDirection": PAYLOAD_BYTES,
+                    "transferredBytes": transferred_bytes,
+                    "batchElapsedNs": batch_elapsed.as_nanos(),
+                    "bytesPerSecond": transferred_bytes as f64 / batch_elapsed.as_secs_f64(),
+                    "maximumFlowNs": elapsed.as_nanos(),
+                    "p99FlowNs": p99.as_nanos(),
+                })
+            );
+        }
+    }
+
+    async fn benchmark_direct_tcp_relays(
+        concurrency: usize,
+        payload_bytes: usize,
+    ) -> Result<(Vec<Duration>, Duration), String> {
+        let stop = ResidentStopSignal::shared();
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let start_barrier = Arc::new(tokio::sync::Barrier::new(concurrency.saturating_add(1)));
+        let mut flows = tokio::task::JoinSet::new();
+        for _ in 0..concurrency {
+            let (mut inbound, mut client) = tokio_tcp_pair()?;
+            let (mut direct, mut upstream) = tokio_tcp_pair()?;
+            let stop = Arc::clone(&stop);
+            let metrics = Arc::clone(&metrics);
+            let start_barrier = Arc::clone(&start_barrier);
+            flows.spawn(async move {
+                start_barrier.wait().await;
+                let started = Instant::now();
+                let initial_payload = vec![7_u8; payload_bytes];
+                let relay = relay_tcp_direct_async(
+                    &mut inbound,
+                    &mut direct,
+                    stop,
+                    initial_payload,
+                    metrics.as_ref(),
+                );
+                let client_exchange = async {
+                    let mut response = vec![0_u8; payload_bytes];
+                    client
+                        .read_exact(&mut response)
+                        .await
+                        .map_err(|err| format!("read relayed response: {err}"))?;
+                    if response.iter().any(|byte| *byte != 9) {
+                        return Err("direct TCP relay response payload mismatch".to_owned());
+                    }
+                    client
+                        .shutdown()
+                        .await
+                        .map_err(|err| format!("shutdown relay client: {err}"))?;
+                    Ok::<(), String>(())
+                };
+                let upstream_exchange = async {
+                    let mut request = vec![0_u8; payload_bytes];
+                    upstream
+                        .read_exact(&mut request)
+                        .await
+                        .map_err(|err| format!("read relayed request: {err}"))?;
+                    if request.iter().any(|byte| *byte != 7) {
+                        return Err("direct TCP relay request payload mismatch".to_owned());
+                    }
+                    let response = vec![9_u8; payload_bytes];
+                    upstream
+                        .write_all(&response)
+                        .await
+                        .map_err(|err| format!("write relay response: {err}"))?;
+                    upstream
+                        .shutdown()
+                        .await
+                        .map_err(|err| format!("shutdown relay upstream: {err}"))?;
+                    Ok::<(), String>(())
+                };
+                let (stats, (), ()) = tokio::try_join!(relay, client_exchange, upstream_exchange)?;
+                if stats.client_to_direct != payload_bytes
+                    || stats.direct_to_client != payload_bytes
+                {
+                    return Err(format!("unexpected direct TCP relay stats: {stats:?}"));
+                }
+                Ok::<Duration, String>(started.elapsed())
+            });
+        }
+
+        let mut durations = Vec::with_capacity(concurrency);
+        let batch_started = Instant::now();
+        start_barrier.wait().await;
+        while let Some(result) = flows.join_next().await {
+            durations.push(result.map_err(|err| format!("join direct TCP relay: {err}"))??);
+        }
+        Ok((durations, batch_started.elapsed()))
+    }
+
+    fn tokio_tcp_pair() -> Result<(TokioTcpStream, TokioTcpStream), String> {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .map_err(|err| format!("bind TCP relay benchmark listener: {err}"))?;
+        let peer = TcpStream::connect(
+            listener
+                .local_addr()
+                .map_err(|err| format!("read TCP relay benchmark listener address: {err}"))?,
+        )
+        .map_err(|err| format!("connect TCP relay benchmark peer: {err}"))?;
+        let (relay, _) = listener
+            .accept()
+            .map_err(|err| format!("accept TCP relay benchmark peer: {err}"))?;
+        peer.set_nonblocking(true)
+            .map_err(|err| format!("set TCP relay benchmark peer nonblocking: {err}"))?;
+        relay
+            .set_nonblocking(true)
+            .map_err(|err| format!("set TCP relay benchmark stream nonblocking: {err}"))?;
+        Ok((
+            TokioTcpStream::from_std(relay)
+                .map_err(|err| format!("adopt TCP relay benchmark stream: {err}"))?,
+            TokioTcpStream::from_std(peer)
+                .map_err(|err| format!("adopt TCP relay benchmark peer: {err}"))?,
+        ))
     }
 }
