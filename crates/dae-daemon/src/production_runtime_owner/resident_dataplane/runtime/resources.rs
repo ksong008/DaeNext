@@ -240,6 +240,7 @@ impl ResidentRuntimeResourceConfig {
         let anytls = AnyTlsOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         let h2_carriers =
             H2CarrierOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
+        let meek = MeekTransportResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         json!({
             "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 1,
@@ -317,6 +318,20 @@ impl ResidentRuntimeResourceConfig {
                 "drainingConnectionsCountTowardPhysicalBudget": true,
                 "runtimeWorkerThreads": self.tcp_runtime_workers.json(),
                 "scope": "one generation and complete TLS HTTP/2 carrier identity; server SETTINGS controls logical stream concurrency",
+            },
+            "meekTransportOwners": {
+                "profileSource": "runtimeProfile",
+                "ownerLimit": meek.owner_limit(),
+                "physicalConnectionLimit": meek.physical_connection_limit(),
+                "physicalConnectionsPerOwner": meek.physical_connections_per_owner(),
+                "idleConnectionsPerOwner": meek.idle_connection_limit(),
+                "idleConnectionTimeoutMs": meek.idle_connection_timeout().as_millis(),
+                "requestBodyBytes": dae_outbound::shared_transport::contract::MEEK_MAX_WRITE,
+                "responseHeaderBytes": meek.response_header_bytes(),
+                "responseBodyBytes": meek.response_body_bytes(),
+                "responseWireBytes": meek.response_wire_bytes(),
+                "runtimeWorkerThreads": self.tcp_runtime_workers.json(),
+                "scope": "one generation and complete TLS HTTP/1.1 Meek transport identity; logical sessions remain independent",
             },
             "dnsFastPath": {
                 "concurrency": self.dns_fast_path_concurrency.json(),

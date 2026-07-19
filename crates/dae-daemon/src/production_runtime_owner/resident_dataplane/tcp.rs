@@ -17,8 +17,8 @@ use super::{
     AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
     Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle,
     ResidentStopSignal, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    TuicOwnerRegistryHandle, acquire_h2_carrier, reset_resident_relay_idle_deadline,
-    resident_relay_idle_deadline,
+    TuicOwnerRegistryHandle, acquire_h2_carrier, acquire_meek_transport,
+    reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
 };
 
 use bytes::Bytes;
@@ -79,10 +79,10 @@ use serde_json::{Value, json};
 
 use super::client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, async_resident_tls_underlay_name,
-    async_tls_underlay_name, open_async_resident_tls_client,
-    open_async_resident_tls_client_with_flow, open_async_vless_tls_client_with_flow,
-    open_async_vless_tls_client_with_flow_at_candidates, open_async_xhttp_endpoint_tls_client,
-    open_async_xhttp_endpoint_tls_client_at_candidates, open_proxy_tcp_stream_async_with_flow,
+    async_tls_underlay_name, open_async_resident_tls_client_with_flow,
+    open_async_vless_tls_client_with_flow, open_async_vless_tls_client_with_flow_at_candidates,
+    open_async_xhttp_endpoint_tls_client, open_async_xhttp_endpoint_tls_client_at_candidates,
+    open_proxy_tcp_stream_async_with_flow,
 };
 use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,

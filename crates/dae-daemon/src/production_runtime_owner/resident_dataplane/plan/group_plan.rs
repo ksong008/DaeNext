@@ -93,6 +93,12 @@ impl ResidentProxyProbePlan {
     ) -> bool {
         self.proxy.requires_h2_carrier_owner()
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_meek_transport_owner(
+        &self,
+    ) -> bool {
+        self.proxy.requires_meek_transport_owner()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -500,6 +506,14 @@ impl ResidentProxyGroupPlan {
         self.candidates
             .iter()
             .any(|candidate| candidate.proxy.requires_h2_carrier_owner())
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_meek_transport_owner(
+        &self,
+    ) -> bool {
+        self.candidates
+            .iter()
+            .any(|candidate| candidate.proxy.requires_meek_transport_owner())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn requires_xhttp_xmux_owner(

@@ -32,13 +32,18 @@ fn legal_tcp_with_policy_closed_udp_keeps_its_flow_ownership() {
     use UdpDimension as Udp;
     use WrapperDimension as Wrapper;
 
+    let meek = shape(
+        Protocol::VlessStandard,
+        Security::StandardTls,
+        Wrapper::Meek,
+        Udp::PolicyClosed(Closed::VlessMeek),
+    );
+    assert_eq!(
+        profile_for_shape(meek),
+        Some(GENERATION_OWNED_MEEK_OWNERSHIP)
+    );
+
     let cases = [
-        shape(
-            Protocol::VlessStandard,
-            Security::StandardTls,
-            Wrapper::Meek,
-            Udp::PolicyClosed(Closed::VlessMeek),
-        ),
         shape(
             Protocol::VlessMux,
             Security::StandardTls,

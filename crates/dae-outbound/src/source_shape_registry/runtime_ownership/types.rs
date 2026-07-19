@@ -8,6 +8,7 @@ pub enum RuntimeOwnershipModel {
     GenerationOwnedHysteria2Transport,
     GenerationOwnedTuicTransport,
     GenerationOwnedJuicityTransport,
+    GenerationOwnedMeekTransport,
     GenerationConnectUdpTransport,
     ConfiguredHttpTransport,
     MaterializedProtocolTransport,
@@ -25,6 +26,7 @@ impl RuntimeOwnershipModel {
             Self::GenerationOwnedHysteria2Transport => "generation-owned-hysteria2-transport",
             Self::GenerationOwnedTuicTransport => "generation-owned-tuic-transport",
             Self::GenerationOwnedJuicityTransport => "generation-owned-juicity-transport",
+            Self::GenerationOwnedMeekTransport => "generation-owned-meek-transport",
             Self::GenerationConnectUdpTransport => "generation-connect-udp-transport",
             Self::ConfiguredHttpTransport => "configured-http-transport",
             Self::MaterializedProtocolTransport => "materialized-protocol-transport",
@@ -225,6 +227,7 @@ pub enum RuntimeBudgetContract {
     PhysicalOwnerCountAndChargedBytes,
     PhysicalOwnerCountAndChargedBytesMissing,
     PoolCountAndChargedBytes,
+    PhysicalConnectionCountAndBoundedExchangeBytes,
     ConfiguredConnectionCountWithChargedBytesMissing,
     ResolvedAtMaterialization,
     NotApplicable,
@@ -243,6 +246,9 @@ impl RuntimeBudgetContract {
                 "physical-owner-count-and-charged-bytes-missing"
             }
             Self::PoolCountAndChargedBytes => "pool-count-and-charged-bytes",
+            Self::PhysicalConnectionCountAndBoundedExchangeBytes => {
+                "physical-connection-count-and-bounded-exchange-bytes"
+            }
             Self::ConfiguredConnectionCountWithChargedBytesMissing => {
                 "configured-connection-count-with-charged-bytes-missing"
             }

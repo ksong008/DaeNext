@@ -66,7 +66,7 @@ pub(super) const STREAM_WRAPPER_MEEK: SourceShapeRegistryRow = scoped_evidence_a
     registry_source("stream-wrapper-meek", "multi-protocol", &["vless"])
         .with_transport("tls-stream-variants-or-reality", "meek", "protocol-closed")
         .with_runtime(
-            FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+            GENERATION_OWNED_MEEK_OWNERSHIP,
             "registry:stream-wrapper-meek",
         ),
 );
@@ -75,7 +75,7 @@ pub(super) const VLESS_MEEK_TLS_STREAM_WRAPPER: SourceShapeRegistryRow = admitte
     registry_source("vless-meek-tls-stream-wrapper", "vless", &["vless"])
         .with_transport("tls-stream-variants", "meek", "protocol-closed")
         .with_runtime(
-            FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+            GENERATION_OWNED_MEEK_OWNERSHIP,
             "registry:vless-meek-tls-stream-wrapper",
         ),
 );
@@ -84,7 +84,7 @@ pub(super) const VLESS_MEEK_REALITY_STREAM_WRAPPER: SourceShapeRegistryRow = adm
     registry_source("vless-meek-reality-stream-wrapper", "vless", &["vless"])
         .with_transport("reality", "meek", "protocol-closed")
         .with_runtime(
-            FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+            GENERATION_OWNED_MEEK_OWNERSHIP,
             "registry:vless-meek-reality-stream-wrapper",
         ),
 );

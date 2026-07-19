@@ -166,6 +166,13 @@ impl ResidentProxyPlan {
             )
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_meek_transport_owner(
+        &self,
+    ) -> bool {
+        let execution = self.execution_plan();
+        execution.security.is_tls_stream() && execution.wrapper == ResidentStreamWrapperPlan::Meek
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn compact_allocations(&mut self) {
         compact_string(&mut self.graph_id);
         compact_string(&mut self.graph_link_hash);

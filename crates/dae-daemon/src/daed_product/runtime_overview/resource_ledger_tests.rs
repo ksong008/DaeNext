@@ -72,6 +72,23 @@ fn total_resource_ledger_reconciles_bounded_surfaces_without_double_counting() {
                 "currentUdpQueuedBytes": 512,
                 "budget": { "owners": 32 }
             },
+            "meekTransportOwners": {
+                "registeredKeys": 1,
+                "registeredBuildTasks": 0,
+                "reservedPhysicalConnections": 2,
+                "highWaterReservedPhysicalConnections": 3,
+                "activePhysicalConnections": 2,
+                "highWaterPhysicalConnections": 3,
+                "activeLeases": 1,
+                "highWaterLeases": 2,
+                "idlePhysicalConnections": 1,
+                "highWaterIdlePhysicalConnections": 2,
+                "activeBuilds": 0,
+                "ownerStateBytesLowerBound": 256,
+                "admissionEnforced": true,
+                "shutdownTimedOut": false,
+                "budget": { "owners": 32, "physicalConnections": 1024 }
+            },
             "dnsTransportOwnersCurrent": 3,
             "dnsTransportOwnersMaximum": 5,
             "dnsTransportOwnersEvictedCurrent": 1,
@@ -111,6 +128,12 @@ fn total_resource_ledger_reconciles_bounded_surfaces_without_double_counting() {
     assert_eq!(ledger["ebpfMaps"]["capacitySnapshot"][0]["entries"], 4643);
     assert_eq!(ledger["ebpfMaps"]["currentEvidenceComplete"], true);
     assert_eq!(ledger["quicEndpoints"]["otherLiveGenerationCount"], 1);
+    assert_eq!(
+        ledger["meekTransportOwners"]["activePhysicalConnections"],
+        2
+    );
+    assert_eq!(ledger["meekTransportOwners"]["idlePhysicalConnections"], 1);
+    assert_eq!(ledger["meekTransportOwners"]["admissionEnforced"], true);
     assert_eq!(ledger["dnsTransportOwners"]["current"], 3);
     assert_eq!(
         ledger["dnsTransportOwners"]["ownerStateBytesCurrent"],
