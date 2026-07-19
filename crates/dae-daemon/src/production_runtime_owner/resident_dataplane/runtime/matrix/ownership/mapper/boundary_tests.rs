@@ -26,7 +26,7 @@ fn factory_only_vless_plain_wrappers_are_not_materialized_shapes() {
 }
 
 #[test]
-fn legal_tcp_with_policy_closed_udp_keeps_its_flow_ownership() {
+fn legal_tcp_with_policy_closed_udp_keeps_its_explicit_ownership() {
     use PolicyClosedDimension as Closed;
     use SecurityDimension as Security;
     use UdpDimension as Udp;
@@ -43,13 +43,18 @@ fn legal_tcp_with_policy_closed_udp_keeps_its_flow_ownership() {
         Some(GENERATION_OWNED_MEEK_OWNERSHIP)
     );
 
+    let mux = shape(
+        Protocol::VlessMux,
+        Security::StandardTls,
+        Wrapper::Mux,
+        Udp::PolicyClosed(Closed::VlessMux),
+    );
+    assert_eq!(
+        profile_for_shape(mux),
+        Some(GENERATION_OWNED_VLESS_MUX_OWNERSHIP)
+    );
+
     let cases = [
-        shape(
-            Protocol::VlessMux,
-            Security::StandardTls,
-            Wrapper::Mux,
-            Udp::PolicyClosed(Closed::VlessMux),
-        ),
         shape(
             Protocol::VmessAead,
             Security::StandardTls,

@@ -7,6 +7,8 @@ const FLOW_STREAM_CLOSED_MODELS: &[RuntimeOwnershipModel] =
     &[RuntimeOwnershipModel::FlowStreamWithPacketPolicyClosed];
 const FLOW_STREAM_ASSOCIATION_MODELS: &[RuntimeOwnershipModel] =
     &[RuntimeOwnershipModel::FlowStreamAndAssociation];
+const GENERATION_VLESS_MUX_MODELS: &[RuntimeOwnershipModel] =
+    &[RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport];
 
 pub const FLOW_STREAM_PACKET_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
     model: RuntimeOwnershipModel::FlowStreamAndPacketSession,
@@ -66,6 +68,30 @@ pub const FLOW_STREAM_ASSOCIATION_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOw
         RuntimeBudgetContract::UdpSessionCountAndPayloadBytes,
     ),
 };
+
+pub const GENERATION_OWNED_VLESS_MUX_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
+    model: RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport,
+    allowed_materialized_models: GENERATION_VLESS_MUX_MODELS,
+    disposition: RuntimeOwnershipDisposition::Implemented,
+    data_tcp: generation_vless_mux_route(RuntimeCallerClass::DataTcp),
+    data_udp: closed_route(RuntimeCallerClass::DataUdp),
+    health_tcp: generation_vless_mux_route(RuntimeCallerClass::HealthTcp),
+    health_dns: closed_route(RuntimeCallerClass::HealthDns),
+    manual: generation_vless_mux_route(RuntimeCallerClass::ManualProbe),
+    configured_dns: closed_route(RuntimeCallerClass::ConfiguredDns),
+    forced_managed_dns: closed_route(RuntimeCallerClass::ForcedManagedDns),
+};
+
+const fn generation_vless_mux_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
+    admitted_route(
+        caller,
+        PhysicalCarrierKind::MultiplexedStreamConnection,
+        LogicalLeaseKind::MultiplexedByteStream,
+        RuntimeLifecycleOwner::GenerationRuntime,
+        PhysicalOwnerKeyContract::GenerationGraphAndTransport,
+        RuntimeBudgetContract::PhysicalConnectionLogicalStreamAndBufferBytes,
+    )
+}
 
 const fn association_route(
     caller: RuntimeCallerClass,

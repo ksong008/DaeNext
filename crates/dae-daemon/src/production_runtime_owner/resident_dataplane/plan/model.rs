@@ -173,6 +173,15 @@ impl ResidentProxyPlan {
         execution.security.is_tls_stream() && execution.wrapper == ResidentStreamWrapperPlan::Meek
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_vless_mux_owner(
+        &self,
+    ) -> bool {
+        let execution = self.execution_plan();
+        execution.protocol == ResidentProtocolShape::VlessMux
+            && execution.security.is_tls_stream()
+            && execution.wrapper == ResidentStreamWrapperPlan::Mux
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn compact_allocations(&mut self) {
         compact_string(&mut self.graph_id);
         compact_string(&mut self.graph_link_hash);

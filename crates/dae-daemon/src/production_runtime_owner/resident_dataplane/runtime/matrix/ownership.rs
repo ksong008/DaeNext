@@ -63,8 +63,9 @@ mod tests {
     use dae_outbound::{
         CONFIGURED_HTTP_OWNERSHIP, GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
         GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
-        GENERATION_OWNED_TUIC_OWNERSHIP, LogicalLeaseKind, MATERIALIZED_SHAPE_REJECTED_OWNERSHIP,
-        PhysicalCarrierKind, RuntimeLifecycleOwner, RuntimeOwnershipModel, RuntimeRouteAdmission,
+        GENERATION_OWNED_TUIC_OWNERSHIP, GENERATION_OWNED_VLESS_MUX_OWNERSHIP, LogicalLeaseKind,
+        MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, PhysicalCarrierKind, RuntimeLifecycleOwner,
+        RuntimeOwnershipModel, RuntimeRouteAdmission,
     };
     use plan::{
         ResidentExecutionPlan, ResidentProtocolShape as Protocol,
@@ -125,6 +126,34 @@ mod tests {
         assert_eq!(
             ownership.data_tcp.lifecycle_owner,
             RuntimeLifecycleOwner::GenerationRuntime
+        );
+        assert_eq!(
+            ownership.data_udp.admission,
+            RuntimeRouteAdmission::FailClosed
+        );
+    }
+
+    #[test]
+    fn vless_mux_execution_exposes_generation_owned_multiplexed_transport() {
+        let ownership = materialized_runtime_ownership(execution(
+            Protocol::VlessMux,
+            Security::StandardTls,
+            Wrapper::Mux,
+            Udp::PolicyClosed(Closed::VlessMux),
+        ));
+
+        assert_eq!(ownership, GENERATION_OWNED_VLESS_MUX_OWNERSHIP);
+        assert_eq!(
+            ownership.model,
+            RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport
+        );
+        assert_eq!(
+            ownership.data_tcp.physical_carrier,
+            PhysicalCarrierKind::MultiplexedStreamConnection
+        );
+        assert_eq!(
+            ownership.data_tcp.logical_lease,
+            LogicalLeaseKind::MultiplexedByteStream
         );
         assert_eq!(
             ownership.data_udp.admission,

@@ -151,6 +151,17 @@ pub(crate) use self::meek_transport_owner::{
 #[cfg(test)]
 #[path = "runtime/meek_transport_owner_live_tests.rs"]
 mod meek_transport_owner_live_tests;
+#[path = "runtime/vless_mux_owner.rs"]
+mod vless_mux_owner;
+#[cfg(test)]
+pub(crate) use self::vless_mux_owner::start_vless_mux_generation_owner_for_test;
+pub(crate) use self::vless_mux_owner::{
+    VlessMuxGenerationOwnerHandle, acquire_vless_mux_logical_stream,
+    start_vless_mux_generation_owner,
+};
+#[cfg(test)]
+#[path = "runtime/vless_mux_owner_live_tests.rs"]
+mod vless_mux_owner_live_tests;
 
 #[derive(Clone, Default)]
 pub(crate) struct ResidentTransportOwnerRegistries {

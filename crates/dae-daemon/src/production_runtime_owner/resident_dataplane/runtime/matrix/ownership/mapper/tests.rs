@@ -43,7 +43,7 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
                 Wrapper::Mux,
                 Udp::PolicyClosed(Closed::VlessMux),
             ),
-            FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+            GENERATION_OWNED_VLESS_MUX_OWNERSHIP,
         ),
         (
             shape(

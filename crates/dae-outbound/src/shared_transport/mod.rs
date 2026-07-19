@@ -49,8 +49,9 @@ pub use meek::{
     MeekRoundTripOptions, MeekRoundTripReport, meek_http_request, meek_polling_exchange,
 };
 pub use mux::{
-    MuxFrameOptions, MuxLifecycleReport, mux_data_frame, mux_end_frame, mux_frame_exchange,
-    mux_new_frame,
+    MUX_MAX_FRAME_BYTES, MUX_MAX_METADATA_BYTES, MUX_MAX_PAYLOAD_BYTES, MuxFrame, MuxFrameDecoder,
+    MuxFrameOptions, MuxLifecycleReport, mux_data_frame, mux_end_frame, mux_error_frame,
+    mux_frame_exchange, mux_new_frame,
 };
 pub use quic_h3::{
     QuicH3HarnessOptions, QuicH3HarnessReport, parse_quic_h3_datagram, quic_h3_datagram_exchange,

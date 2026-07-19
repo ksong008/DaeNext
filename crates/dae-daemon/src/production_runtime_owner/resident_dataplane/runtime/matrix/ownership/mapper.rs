@@ -2,8 +2,8 @@ use dae_outbound::{
     CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
     FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
     GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
-    GENERATION_OWNED_TUIC_OWNERSHIP, MATERIALIZED_SHAPE_REJECTED_OWNERSHIP,
-    RuntimeOwnershipProfile,
+    GENERATION_OWNED_TUIC_OWNERSHIP, GENERATION_OWNED_VLESS_MUX_OWNERSHIP,
+    MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, RuntimeOwnershipProfile,
 };
 
 use super::*;
@@ -85,7 +85,7 @@ fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
             STANDARD_TLS_SECURITY,
             WrapperDimension::Mux,
             UdpDimension::PolicyClosed(PolicyClosedDimension::VlessMux),
-            FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+            GENERATION_OWNED_VLESS_MUX_OWNERSHIP,
         ),
         Protocol::Socks5 => exact_profile(
             shape,

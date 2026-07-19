@@ -49,10 +49,7 @@ use dae_outbound::{
         simple_obfs_tls_client_hello_with_body, ss2022_tcp_client_stream_encoder,
         ss2022_tcp_server_stream_decoder_async, ss2022_tcp_unix_timestamp_now,
     },
-    shared_transport::mux::{
-        MuxFrameOptions, OPTION_DATA, SESSION_STATUS_END, SESSION_STATUS_KEEP,
-        SESSION_STATUS_KEEPALIVE,
-    },
+    shared_transport::mux::MuxFrameOptions,
     shared_transport::{
         GRPC_ACCEPT_ENCODING_HEADER, GRPC_CONTENT_TYPE_APPLICATION, GRPC_ENCODING_HEADER,
         GRPC_IDENTITY_ENCODING, GRPC_TE_HEADER, GRPC_TE_TRAILERS, HttpUpgradeOptions,
@@ -68,7 +65,7 @@ use dae_outbound::{
     vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,
     vmess::{
-        VMessAeadTcpClientSessionStart, VMessMetadata, aead_tcp_client_session_start,
+        VMessAeadTcpClientSessionStart, aead_tcp_client_session_start,
         aead_tcp_response_reader_from_async_stream,
     },
 };
@@ -228,9 +225,7 @@ use self::event_builders::*;
 mod direct_sniffing;
 use self::direct_sniffing::*;
 mod vless_relay;
-pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_handlers::{
-    meek_round_trip_async, relay_tcp_over_vless_mux_tls_async,
-};
+pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_handlers::meek_round_trip_async;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::relay_tcp_over_trojan_websocket_tls_async;
 use self::vless_relay::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::{

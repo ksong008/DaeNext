@@ -1,4 +1,5 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::acquire_vless_mux_logical_stream;
 pub(crate) async fn handle_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
@@ -334,26 +335,18 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let mut client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
-    let tls_underlay = async_tls_underlay_name(&client);
-    let key = selection.proxy.vless_key()?;
-    let header = packet::request_header(&key, "", "tcp", "0.0.0.0:0", true, &[])
-        .map_err(|err| format!("build VLESS mux request header: {err}"))?;
-    let mux_target = VMessMetadata::parse("tcp", &selection.route.dial_target)
-        .map_err(|err| format!("build VLESS mux target metadata: {err}"))?;
-    let mux_id = resident_mux_stream_id(original_dst);
-    let mux_options = MuxFrameOptions::new(mux_id, mux_target.hostname(), mux_target.port(), "tcp");
-    let mux_new =
-        mux_new_frame(&mux_options).map_err(|err| format!("build VLESS mux new frame: {err}"))?;
-    client
-        .write_plain_all(&header, "write VLESS mux request header")
-        .await?;
-    client
-        .write_plain_all(&mux_new, "write VLESS mux new frame")
-        .await?;
-    relay_tcp_over_vless_mux_tls_async(inbound, &mut client, stop, mux_id, &sniff.payload, metrics)
+    let deadline =
+        dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
+    let mut logical = acquire_vless_mux_logical_stream(
+        Arc::clone(&selection.proxy),
+        selection.route.dial_target.clone(),
+        deadline,
+    )
+    .await?;
+    let tls_underlay = logical.tls_underlay();
+    let mux_sid = logical.sid();
+    let physical_instance_id = logical.physical_instance_id();
+    relay_tcp_over_vless_mux_stream_async(inbound, &mut logical, stop, &sniff.payload, metrics)
         .await
         .map(|stats| {
             let mut event = proxy_tcp_finished_event(
@@ -367,6 +360,8 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
             );
             event["stream_wrapper"] = json!("mux");
             event["packet_semantics"] = json!("multiplexed-stream");
+            event["mux_sid"] = json!(mux_sid);
+            event["mux_physical_instance_id"] = json!(physical_instance_id);
             event
         })
         .or_else(|err| {
@@ -381,29 +376,26 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
             );
             event["stream_wrapper"] = json!("mux");
             event["packet_semantics"] = json!("multiplexed-stream");
+            event["mux_sid"] = json!(mux_sid);
+            event["mux_physical_instance_id"] = json!(physical_instance_id);
             Ok::<Value, String>(event)
         })
 }
 
-fn resident_mux_stream_id(original_dst: SocketAddr) -> [u8; 2] {
-    original_dst.port().to_be_bytes()
-}
-
-pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
+pub(crate) async fn relay_tcp_over_vless_mux_stream_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
-    client: &mut AsyncVlessTlsClient,
+    logical: &mut (impl AsyncRead + AsyncWrite + Unpin),
     stop: SharedResidentStopSignal,
-    mux_id: [u8; 2],
     initial_payload: &[u8],
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
-    let mut stats = RelayStats::default();
-    let mut response_stripper = VlessResponseStripper::default();
-    let mut mux_buffer = AsyncMuxFrameBuffer::default();
+    let mut stats = RelayStats {
+        response_header_stripped: true,
+        ..RelayStats::default()
+    };
     let mut inbound_closed = false;
-    let mut mux_ended = false;
     let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut proxy_buf = [0_u8; 16 * 1024];
+    let mut logical_buf = [0_u8; 16 * 1024];
     let mut stop_listener = stop.listener();
     let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
     let close_drain_deadline =
@@ -413,13 +405,9 @@ pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
     let mut close_drain_active = false;
 
     if !initial_payload.is_empty() {
-        let frame = mux_data_frame(mux_id, initial_payload).map_err(|err| {
-            RelayError::new(format!("build VLESS mux initial data frame: {err}"), &stats)
+        logical.write_all(initial_payload).await.map_err(|err| {
+            RelayError::new(format!("write VLESS mux initial payload: {err}"), &stats)
         })?;
-        client
-            .write_plain_all(&frame, "write VLESS mux initial data frame")
-            .await
-            .map_err(|err| RelayError::new(err, &stats))?;
         stats.client_to_proxy += initial_payload.len();
         metrics.add_upload(initial_payload.len());
     }
@@ -427,14 +415,13 @@ pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
     loop {
         tokio::select! {
             _ = stop_listener.cancelled() => break,
-            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed && !mux_ended => {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
                 match inbound_read {
                     Ok(0) => {
                         inbound_closed = true;
-                        client
-                            .write_plain_all(&mux_end_frame(mux_id), "write VLESS mux end frame")
-                            .await
-                            .map_err(|err| RelayError::new(err, &stats))?;
+                        logical.shutdown().await.map_err(|err| {
+                            RelayError::new(format!("shutdown VLESS mux logical upload: {err}"), &stats)
+                        })?;
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         reset_resident_relay_idle_deadline(
                             close_drain_deadline.as_mut(),
@@ -443,22 +430,19 @@ pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
                         close_drain_active = true;
                     }
                     Ok(read) => {
-                        let frame = mux_data_frame(mux_id, &inbound_buf[..read])
-                            .map_err(|err| RelayError::new(format!("build VLESS mux upload data frame: {err}"), &stats))?;
-                        client
-                            .write_plain_all(&frame, "write VLESS mux upload data frame")
+                        logical
+                            .write_all(&inbound_buf[..read])
                             .await
-                            .map_err(|err| RelayError::new(err, &stats))?;
+                            .map_err(|err| RelayError::new(format!("write VLESS mux logical payload: {err}"), &stats))?;
                         stats.client_to_proxy += read;
                         metrics.add_upload(read);
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
-                        client
-                            .write_plain_all(&mux_end_frame(mux_id), "write VLESS mux end frame")
-                            .await
-                            .map_err(|err| RelayError::new(err, &stats))?;
+                        logical.shutdown().await.map_err(|err| {
+                            RelayError::new(format!("shutdown VLESS mux logical upload: {err}"), &stats)
+                        })?;
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         reset_resident_relay_idle_deadline(
                             close_drain_deadline.as_mut(),
@@ -471,52 +455,16 @@ pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
                     }
                 }
             }
-            proxy_read = client.read_plain(&mut proxy_buf), if !mux_ended => {
-                match proxy_read {
+            logical_read = logical.read(&mut logical_buf) => {
+                match logical_read {
                     Ok(0) => break,
                     Ok(read) => {
-                        let proxy_payload = if response_stripper.done {
-                            proxy_buf[..read].to_vec()
-                        } else {
-                            let payload = response_stripper
-                                .consume(&proxy_buf[..read])
-                                .map_err(|err| RelayError::new(err, &stats))?;
-                            stats.response_header_stripped = response_stripper.done;
-                            payload
-                        };
-                        if proxy_payload.is_empty() {
-                            reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                            if close_drain_active {
-                                reset_resident_relay_idle_deadline(
-                                    close_drain_deadline.as_mut(),
-                                    RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                                );
-                            }
-                            continue;
-                        }
-                        let event = mux_buffer
-                            .push(&proxy_payload, mux_id)
-                            .map_err(|err| RelayError::new(err, &stats))?;
-                        for payload in event.payloads {
-                            if payload.is_empty() {
-                                continue;
-                            }
-                            inbound
-                                .write_all(&payload)
-                                .await
-                                .map_err(|err| RelayError::new(format!("write VLESS mux payload to client: {err}"), &stats))?;
-                            stats.proxy_to_client += payload.len();
-                            metrics.add_download(payload.len());
-                        }
-                        if event.ended {
-                            mux_ended = true;
-                            let _ = inbound.shutdown().await;
-                            reset_resident_relay_idle_deadline(
-                                close_drain_deadline.as_mut(),
-                                RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                            );
-                            close_drain_active = true;
-                        }
+                        inbound
+                            .write_all(&logical_buf[..read])
+                            .await
+                            .map_err(|err| RelayError::new(format!("write VLESS mux payload to client: {err}"), &stats))?;
+                        stats.proxy_to_client += read;
+                        metrics.add_download(read);
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         if close_drain_active {
                             reset_resident_relay_idle_deadline(
@@ -526,7 +474,7 @@ pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
                         }
                     }
                     Err(err) => {
-                        return Err(RelayError::new(format!("read VLESS mux TLS plaintext: {err}"), &stats));
+                        return Err(RelayError::new(format!("read VLESS mux logical stream: {err}"), &stats));
                     }
                 }
             }
@@ -537,79 +485,6 @@ pub(crate) async fn relay_tcp_over_vless_mux_tls_async(
         }
     }
     Ok(stats)
-}
-
-#[derive(Default)]
-struct AsyncMuxFrameBuffer {
-    pending: VecDeque<u8>,
-}
-
-#[derive(Default)]
-struct AsyncMuxFrameEvent {
-    payloads: Vec<Vec<u8>>,
-    ended: bool,
-}
-
-impl AsyncMuxFrameBuffer {
-    // The parser exits early on incomplete frames and resumes when more bytes arrive.
-    #[allow(clippy::while_let_loop)]
-    fn push(&mut self, bytes: &[u8], expected_id: [u8; 2]) -> Result<AsyncMuxFrameEvent, String> {
-        self.pending.extend(bytes.iter().copied());
-        let mut event = AsyncMuxFrameEvent::default();
-        loop {
-            let Some((frame_end, status, option, payload)) = ({
-                let pending = self.pending.make_contiguous();
-                if pending.len() < 2 {
-                    break;
-                };
-                let metadata_len = u16::from_be_bytes([pending[0], pending[1]]) as usize;
-                if !(4..=512).contains(&metadata_len) {
-                    return Err("invalid VLESS mux metadata length".to_owned());
-                }
-                let metadata_end = 2 + metadata_len;
-                if pending.len() < metadata_end {
-                    break;
-                }
-                let metadata = &pending[2..metadata_end];
-                let frame_id = [metadata[0], metadata[1]];
-                if frame_id != expected_id {
-                    return Err("VLESS mux frame id mismatch".to_owned());
-                }
-                let status = metadata[2];
-                let option = metadata[3];
-                if status == SESSION_STATUS_KEEPALIVE {
-                    Some((metadata_end, status, option, Vec::new()))
-                } else {
-                    let mut frame_end = metadata_end;
-                    let payload = if option == OPTION_DATA {
-                        if pending.len() < metadata_end + 2 {
-                            break;
-                        }
-                        let payload_len =
-                            u16::from_be_bytes([pending[metadata_end], pending[metadata_end + 1]])
-                                as usize;
-                        frame_end += 2 + payload_len;
-                        if pending.len() < frame_end {
-                            break;
-                        }
-                        pending[metadata_end + 2..frame_end].to_vec()
-                    } else {
-                        Vec::new()
-                    };
-                    Some((frame_end, status, option, payload))
-                }
-            }) else {
-                break;
-            };
-            self.pending.drain(..frame_end);
-            if status == SESSION_STATUS_END {
-                event.ended = true;
-            } else if status == SESSION_STATUS_KEEP && option == OPTION_DATA {
-                event.payloads.push(payload);
-            }
-        }
-        Ok(event)
-    }
 }
 
 #[allow(clippy::too_many_arguments)]

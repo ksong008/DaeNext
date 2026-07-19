@@ -111,6 +111,23 @@ pub(super) fn shutdown_resident_runtime_owner(
             && meek_transport_owners["activeBuilds"].as_u64() == Some(0)
             && meek_transport_owners["ownerStateBytesLowerBound"].as_u64() == Some(0)
             && meek_transport_owners["shutdownTimedOut"].as_bool() == Some(false));
+    let vless_mux_owners = owner
+        .vless_mux_generation_owner
+        .as_ref()
+        .map(VlessMuxGenerationOwnerHandle::metrics_snapshot)
+        .unwrap_or(Value::Null);
+    let vless_mux_owners_released = vless_mux_owners.is_null()
+        || (vless_mux_owners["registeredKeys"].as_u64() == Some(0)
+            && vless_mux_owners["registeredPhysicalConnections"].as_u64() == Some(0)
+            && vless_mux_owners["registeredBuildTasks"].as_u64() == Some(0)
+            && vless_mux_owners["reservedPhysicalConnections"].as_u64() == Some(0)
+            && vless_mux_owners["activePhysicalConnections"].as_u64() == Some(0)
+            && vless_mux_owners["activeLogicalStreams"].as_u64() == Some(0)
+            && vless_mux_owners["currentLogicalBufferBytes"].as_u64() == Some(0)
+            && vless_mux_owners["activeBuilds"].as_u64() == Some(0)
+            && vless_mux_owners["idlePhysicalConnections"].as_u64() == Some(0)
+            && vless_mux_owners["ownerStateBytesLowerBound"].as_u64() == Some(0)
+            && vless_mux_owners["shutdownTimedOut"].as_bool() == Some(false));
     let shutdown_elapsed_ns = elapsed_nanos(started);
     let shutdown_passed = task_shutdown.panicked == 0
         && task_shutdown.timed_out == 0
@@ -121,6 +138,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         && anytls_owners_released
         && h2_carrier_owners_released
         && meek_transport_owners_released
+        && vless_mux_owners_released
         && owned_cleanup["status"].as_str() == Some("pass")
         && event_writer["status"].as_str() == Some("pass");
 
@@ -150,6 +168,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         "anytls_owners": anytls_owners,
         "h2_carrier_owners": h2_carrier_owners,
         "meek_transport_owners": meek_transport_owners,
+        "vless_mux_owners": vless_mux_owners,
         "owned_cleanup": owned_cleanup,
         "runtime_handle_owner": "resident-runtime-owner",
         "manual_probe_runtime_available": true,

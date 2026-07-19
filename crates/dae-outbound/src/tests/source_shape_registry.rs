@@ -718,6 +718,46 @@ fn meek_owner_records_generation_http1_exchange_and_closed_packet_routes() {
 }
 
 #[test]
+fn vless_mux_owner_records_generation_carrier_and_lightweight_stream_leases() {
+    let row = source_shape_registry_rows()
+        .iter()
+        .find(|row| row.shape_id == "mux-transport-wrapper")
+        .unwrap();
+    let ledger = row.runtime_ownership_ledger();
+    assert_eq!(ledger["model"], "generation-owned-vless-mux-transport");
+    assert_eq!(ledger["disposition"], "implemented");
+    for caller in ["dataTcp", "healthTcp", "manual"] {
+        assert_eq!(
+            ledger["callers"][caller]["admission"], "admitted",
+            "{caller}"
+        );
+        assert_eq!(
+            ledger["callers"][caller]["physicalCarrier"], "multiplexed-stream-connection",
+            "{caller}"
+        );
+        assert_eq!(
+            ledger["callers"][caller]["logicalLease"], "multiplexed-byte-stream",
+            "{caller}"
+        );
+        assert_eq!(
+            ledger["callers"][caller]["lifecycleOwner"], "generation-runtime-owner",
+            "{caller}"
+        );
+        assert_eq!(
+            ledger["callers"][caller]["budgetContract"],
+            "physical-connection-logical-stream-and-buffer-bytes",
+            "{caller}"
+        );
+    }
+    for caller in ["dataUdp", "healthDns", "configuredDns", "forcedManagedDns"] {
+        assert_eq!(
+            ledger["callers"][caller]["admission"], "fail-closed",
+            "{caller}"
+        );
+    }
+}
+
+#[test]
 fn materialized_owner_models_require_explicit_source_allow_lists() {
     assert!(
         MATERIALIZED_STREAM_SECURITY_OWNERSHIP
@@ -730,6 +770,10 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
     assert!(
         MATERIALIZED_STREAM_SECURITY_OWNERSHIP
             .accepts_materialized(RuntimeOwnershipModel::GenerationOwnedMeekTransport)
+    );
+    assert!(
+        MATERIALIZED_STREAM_SECURITY_OWNERSHIP
+            .accepts_materialized(RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport)
     );
     assert!(
         !MATERIALIZED_STREAM_SECURITY_OWNERSHIP
@@ -753,6 +797,7 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
         RuntimeOwnershipModel::GenerationOwnedTuicTransport,
         RuntimeOwnershipModel::GenerationOwnedJuicityTransport,
         RuntimeOwnershipModel::GenerationOwnedMeekTransport,
+        RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport,
         RuntimeOwnershipModel::GenerationConnectUdpTransport,
         RuntimeOwnershipModel::ConfiguredHttpTransport,
     ] {
