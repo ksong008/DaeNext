@@ -258,7 +258,10 @@ async fn run_resident_udp_session_manager_async(
         anytls_owner_registry,
     );
     let session_shard_handle = session_shards.handle();
-    let payload_pool = UdpPayloadPool::new(runtime_config.payload_pool_capacity());
+    let payload_pool = UdpPayloadPool::new(
+        runtime_config.payload_pool_capacity(),
+        runtime_config.runtime_shards,
+    );
 
     let mut stop_listener = stop.listener();
     while !stop.load(Ordering::Relaxed) {
