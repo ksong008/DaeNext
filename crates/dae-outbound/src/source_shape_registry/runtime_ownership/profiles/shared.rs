@@ -4,12 +4,19 @@ use super::*;
 const MATERIALIZED_STREAM_SECURITY_MODELS: &[RuntimeOwnershipModel] = &[
     RuntimeOwnershipModel::FlowStreamAndPacketSession,
     RuntimeOwnershipModel::FlowStreamWithPacketPolicyClosed,
-    RuntimeOwnershipModel::ConfiguredHttpTransport,
+    RuntimeOwnershipModel::GenerationOwnedAnyTlsTransport,
+    RuntimeOwnershipModel::GenerationOwnedH2Transport,
     RuntimeOwnershipModel::GenerationOwnedMeekTransport,
     RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport,
+    RuntimeOwnershipModel::GenerationOwnedXhttpTransport,
 ];
 
 const MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_MODELS: &[RuntimeOwnershipModel] = &[
+    RuntimeOwnershipModel::FlowStreamAndPacketSession,
+    RuntimeOwnershipModel::FlowStreamWithPacketPolicyClosed,
+    RuntimeOwnershipModel::GenerationOwnedH2Transport,
+];
+const MATERIALIZED_CHAIN_MODELS: &[RuntimeOwnershipModel] = &[
     RuntimeOwnershipModel::FlowStreamAndPacketSession,
     RuntimeOwnershipModel::FlowStreamWithPacketPolicyClosed,
 ];
@@ -26,7 +33,7 @@ pub const MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_OWNERSHIP: RuntimeOwnershi
     materialized_profile(MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_MODELS);
 
 pub const MATERIALIZED_CHAIN_OWNERSHIP: RuntimeOwnershipProfile =
-    MATERIALIZED_STREAM_PACKET_OR_POLICY_CLOSED_OWNERSHIP;
+    materialized_profile(MATERIALIZED_CHAIN_MODELS);
 
 pub const MATERIALIZED_SHAPE_REJECTED_OWNERSHIP: RuntimeOwnershipProfile =
     RuntimeOwnershipProfile {

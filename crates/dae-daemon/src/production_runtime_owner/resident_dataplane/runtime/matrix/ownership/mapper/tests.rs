@@ -34,7 +34,7 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
                 Wrapper::XhttpH3,
                 Udp::Vless(Stream::XhttpH3),
             ),
-            CONFIGURED_HTTP_OWNERSHIP,
+            GENERATION_OWNED_XHTTP_OWNERSHIP,
         ),
         (
             shape(
@@ -151,7 +151,7 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
                 Wrapper::FrameStream,
                 Udp::AnyTls,
             ),
-            FLOW_STREAM_PACKET_OWNERSHIP,
+            GENERATION_OWNED_ANYTLS_OWNERSHIP,
         ),
         (
             shape(

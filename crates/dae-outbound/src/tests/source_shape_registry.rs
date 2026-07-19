@@ -478,9 +478,24 @@ fn source_shape_registry_rows_have_explicit_runtime_ownership_ledgers() {
 fn runtime_ownership_ledger_keeps_raw_streams_intentionally_per_flow() {
     for shape_id in [
         "baseline-aead-cipher-endpoint",
+        "baseline-aead-2022-cipher-endpoint",
         "baseline-tls-auth-endpoint",
         "baseline-aead-framed-endpoint",
+        "vless-native-tcp-endpoint",
         "baseline-tls-vision-endpoint",
+        "baseline-connect-endpoint",
+        "baseline-socks-endpoint",
+        "stream-wrapper-websocket",
+        "plain-websocket-framed-endpoint",
+        "stream-wrapper-httpupgrade",
+        "plain-httpupgrade-framed-endpoint",
+        "secure-websocket-framed-endpoint",
+        "secure-httpupgrade-framed-endpoint",
+        "reality-security-underlay",
+        "inner-encryption-stream-wrapper",
+        "tls-websocket-plugin-wrapper",
+        "obfs-tls-plugin-wrapper",
+        "aead-2022-plugin-wrapper",
     ] {
         let row = source_shape_registry_rows()
             .iter()
@@ -497,6 +512,14 @@ fn runtime_ownership_ledger_keeps_raw_streams_intentionally_per_flow() {
         );
         assert_eq!(
             ledger["callers"]["dataTcp"]["lifecycleOwner"], "flow",
+            "{shape_id}"
+        );
+        assert_eq!(
+            ledger["callers"]["dataTcp"]["logicalLease"], "byte-stream",
+            "{shape_id}"
+        );
+        assert_eq!(
+            ledger["callers"]["dataTcp"]["budgetContract"], "flow-concurrency",
             "{shape_id}"
         );
     }
@@ -656,7 +679,7 @@ fn shared_quic_dns_callers_use_generation_owner_contract() {
 }
 
 #[test]
-fn configured_http_owner_remains_blocked_until_byte_charging_is_present() {
+fn xhttp_owner_records_generation_carriers_and_byte_charging() {
     for shape_id in [
         "stream-wrapper-xhttp",
         "xhttp-h3-wrapper",
@@ -667,11 +690,79 @@ fn configured_http_owner_remains_blocked_until_byte_charging_is_present() {
             .find(|row| row.shape_id == shape_id)
             .unwrap();
         let ledger = row.runtime_ownership_ledger();
-        assert_eq!(ledger["model"], "configured-http-transport", "{shape_id}");
-        assert_eq!(ledger["disposition"], "blocked", "{shape_id}");
+        assert_eq!(
+            ledger["model"], "generation-owned-xhttp-transport",
+            "{shape_id}"
+        );
+        assert_eq!(ledger["disposition"], "implemented", "{shape_id}");
         assert_eq!(
             ledger["callers"]["dataTcp"]["budgetContract"],
-            "configured-connection-count-with-charged-bytes-missing",
+            "physical-connection-logical-stream-and-buffer-bytes",
+            "{shape_id}"
+        );
+        assert_eq!(
+            ledger["callers"]["dataTcp"]["lifecycleOwner"], "generation-runtime-owner",
+            "{shape_id}"
+        );
+    }
+}
+
+#[test]
+fn anytls_and_h2_ledgers_match_generation_transport_owners() {
+    for (shape_id, model, carrier, lease) in [
+        (
+            "baseline-frame-stream-endpoint",
+            "generation-owned-anytls-transport",
+            "reusable-frame-stream-connection",
+            "framed-byte-stream",
+        ),
+        (
+            "insecure-frame-stream-underlay",
+            "generation-owned-anytls-transport",
+            "reusable-frame-stream-connection",
+            "framed-byte-stream",
+        ),
+        (
+            "stream-wrapper-grpc",
+            "generation-owned-h2-transport",
+            "multiplexed-stream-connection",
+            "http2-stream",
+        ),
+        (
+            "vless-h2-stream-wrapper",
+            "generation-owned-h2-transport",
+            "multiplexed-stream-connection",
+            "http2-stream",
+        ),
+        (
+            "vmess-h2-stream-wrapper",
+            "generation-owned-h2-transport",
+            "multiplexed-stream-connection",
+            "http2-stream",
+        ),
+    ] {
+        let row = source_shape_registry_rows()
+            .iter()
+            .find(|row| row.shape_id == shape_id)
+            .unwrap();
+        let ledger = row.runtime_ownership_ledger();
+        assert_eq!(ledger["model"], model, "{shape_id}");
+        assert_eq!(ledger["disposition"], "implemented", "{shape_id}");
+        assert_eq!(
+            ledger["callers"]["dataTcp"]["physicalCarrier"], carrier,
+            "{shape_id}"
+        );
+        assert_eq!(
+            ledger["callers"]["dataTcp"]["logicalLease"], lease,
+            "{shape_id}"
+        );
+        assert_eq!(
+            ledger["callers"]["dataTcp"]["lifecycleOwner"], "generation-runtime-owner",
+            "{shape_id}"
+        );
+        assert_eq!(
+            ledger["callers"]["dataTcp"]["budgetContract"],
+            "physical-connection-logical-stream-and-buffer-bytes",
             "{shape_id}"
         );
     }
@@ -764,8 +855,16 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
             .accepts_materialized(RuntimeOwnershipModel::FlowStreamAndPacketSession)
     );
     assert!(
-        MATERIALIZED_STREAM_SECURITY_OWNERSHIP
+        !MATERIALIZED_STREAM_SECURITY_OWNERSHIP
             .accepts_materialized(RuntimeOwnershipModel::ConfiguredHttpTransport)
+    );
+    assert!(
+        MATERIALIZED_STREAM_SECURITY_OWNERSHIP
+            .accepts_materialized(RuntimeOwnershipModel::GenerationOwnedAnyTlsTransport)
+    );
+    assert!(
+        MATERIALIZED_STREAM_SECURITY_OWNERSHIP
+            .accepts_materialized(RuntimeOwnershipModel::GenerationOwnedH2Transport)
     );
     assert!(
         MATERIALIZED_STREAM_SECURITY_OWNERSHIP
@@ -774,6 +873,10 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
     assert!(
         MATERIALIZED_STREAM_SECURITY_OWNERSHIP
             .accepts_materialized(RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport)
+    );
+    assert!(
+        MATERIALIZED_STREAM_SECURITY_OWNERSHIP
+            .accepts_materialized(RuntimeOwnershipModel::GenerationOwnedXhttpTransport)
     );
     assert!(
         !MATERIALIZED_STREAM_SECURITY_OWNERSHIP
@@ -796,8 +899,11 @@ fn materialized_owner_models_require_explicit_source_allow_lists() {
         RuntimeOwnershipModel::GenerationOwnedHysteria2Transport,
         RuntimeOwnershipModel::GenerationOwnedTuicTransport,
         RuntimeOwnershipModel::GenerationOwnedJuicityTransport,
+        RuntimeOwnershipModel::GenerationOwnedAnyTlsTransport,
+        RuntimeOwnershipModel::GenerationOwnedH2Transport,
         RuntimeOwnershipModel::GenerationOwnedMeekTransport,
         RuntimeOwnershipModel::GenerationOwnedVlessMuxTransport,
+        RuntimeOwnershipModel::GenerationOwnedXhttpTransport,
         RuntimeOwnershipModel::GenerationConnectUdpTransport,
         RuntimeOwnershipModel::ConfiguredHttpTransport,
     ] {

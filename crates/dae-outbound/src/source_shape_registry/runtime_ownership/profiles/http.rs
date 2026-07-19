@@ -7,6 +7,8 @@ const CONFIGURED_HTTP_MODELS: &[RuntimeOwnershipModel] =
     &[RuntimeOwnershipModel::ConfiguredHttpTransport];
 const GENERATION_MEEK_MODELS: &[RuntimeOwnershipModel] =
     &[RuntimeOwnershipModel::GenerationOwnedMeekTransport];
+const GENERATION_XHTTP_MODELS: &[RuntimeOwnershipModel] =
+    &[RuntimeOwnershipModel::GenerationOwnedXhttpTransport];
 
 pub const GENERATION_CONNECT_UDP_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
     model: RuntimeOwnershipModel::GenerationConnectUdpTransport,
@@ -75,6 +77,19 @@ pub const GENERATION_OWNED_MEEK_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwne
     forced_managed_dns: closed_route(RuntimeCallerClass::ForcedManagedDns),
 };
 
+pub const GENERATION_OWNED_XHTTP_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {
+    model: RuntimeOwnershipModel::GenerationOwnedXhttpTransport,
+    allowed_materialized_models: GENERATION_XHTTP_MODELS,
+    disposition: RuntimeOwnershipDisposition::Implemented,
+    data_tcp: generation_xhttp_stream_route(RuntimeCallerClass::DataTcp),
+    data_udp: generation_xhttp_packet_route(RuntimeCallerClass::DataUdp),
+    health_tcp: generation_xhttp_stream_route(RuntimeCallerClass::HealthTcp),
+    health_dns: generation_xhttp_packet_route(RuntimeCallerClass::HealthDns),
+    manual: generation_xhttp_stream_route(RuntimeCallerClass::ManualProbe),
+    configured_dns: generation_xhttp_packet_route(RuntimeCallerClass::ConfiguredDns),
+    forced_managed_dns: generation_xhttp_packet_route(RuntimeCallerClass::ForcedManagedDns),
+};
+
 const fn connect_udp_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
     admitted_route(
         caller,
@@ -109,5 +124,27 @@ const fn generation_meek_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute 
         RuntimeLifecycleOwner::GenerationRuntime,
         PhysicalOwnerKeyContract::GenerationGraphAndTransport,
         RuntimeBudgetContract::PhysicalConnectionCountAndBoundedExchangeBytes,
+    )
+}
+
+const fn generation_xhttp_stream_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
+    admitted_route(
+        caller,
+        PhysicalCarrierKind::ConfiguredHttpConnection,
+        LogicalLeaseKind::HttpStreamOrExchange,
+        RuntimeLifecycleOwner::GenerationRuntime,
+        PhysicalOwnerKeyContract::GenerationGraphAndTransport,
+        RuntimeBudgetContract::PhysicalConnectionLogicalStreamAndBufferBytes,
+    )
+}
+
+const fn generation_xhttp_packet_route(caller: RuntimeCallerClass) -> RuntimeOwnerRoute {
+    admitted_route(
+        caller,
+        PhysicalCarrierKind::ConfiguredHttpConnection,
+        LogicalLeaseKind::PacketSession,
+        RuntimeLifecycleOwner::GenerationRuntime,
+        PhysicalOwnerKeyContract::GenerationGraphAndTransport,
+        RuntimeBudgetContract::PhysicalConnectionLogicalStreamAndBufferBytes,
     )
 }

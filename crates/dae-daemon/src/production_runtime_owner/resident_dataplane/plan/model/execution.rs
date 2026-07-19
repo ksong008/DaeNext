@@ -5,12 +5,14 @@ const UNMATERIALIZED_RESIDENT_PLAN_GENERATION: OwnerGeneration = OwnerGeneration
 
 mod protocol;
 mod semantics;
+mod tcp;
 mod udp;
 
 pub(in crate::production_runtime_owner::resident_dataplane) use protocol::{
     ResidentProtocolShape, ResidentTcpProbeDispatch, ResidentTcpRuntimeDispatch,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use semantics::UdpPacketSemantics;
+pub(in crate::production_runtime_owner::resident_dataplane) use tcp::ResidentTcpCarrierOwnership;
 pub(in crate::production_runtime_owner::resident_dataplane) use udp::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentStreamPacketTransport,
     ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory,
@@ -67,6 +69,12 @@ impl ResidentExecutionPlan {
             packet_semantics: self.udp.packet_semantics().as_str(),
             udp_policy_closed: self.udp.policy_closed(),
         }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) const fn tcp_carrier_ownership(
+        self,
+    ) -> ResidentTcpCarrierOwnership {
+        ResidentTcpCarrierOwnership::from_execution(self.protocol, self.wrapper)
     }
 }
 

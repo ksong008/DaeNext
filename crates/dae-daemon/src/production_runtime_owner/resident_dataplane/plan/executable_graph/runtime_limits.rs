@@ -48,9 +48,9 @@ pub(super) fn stream_wrapper_runtime_limits_value(
         }),
         "mux" => json!({
             "wireMultiplexing": true,
-            "carrierScope": "per-flow-tls-carrier",
-            "logicalStreamsPerCarrier": 1,
-            "crossFlowCarrierReuse": false,
+            "carrierScope": "generation-owned-multiplexed-stream-connection",
+            "logicalStreamsPerCarrier": "bounded-by-runtime-profile",
+            "crossFlowCarrierReuse": true,
         }),
         "quic-stream" if quic_scope == QuicLifecycleScope::GenerationOwned => json!({
             "carrierScope": "generation-graph-transport-owner",

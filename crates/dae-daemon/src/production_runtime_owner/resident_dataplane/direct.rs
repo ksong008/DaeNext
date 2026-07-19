@@ -249,6 +249,61 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn direct_tcp_flows_own_independent_streams() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let (mut second, _) = listener.accept().unwrap();
+            first
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            second
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+
+            let mut first_label = [0_u8; 1];
+            let mut second_label = [0_u8; 1];
+            first.read_exact(&mut first_label).unwrap();
+            second.read_exact(&mut second_label).unwrap();
+            assert_eq!(first_label, *b"A");
+            assert_eq!(second_label, *b"B");
+
+            let mut eof = [0_u8; 1];
+            assert_eq!(first.read(&mut eof).unwrap(), 0);
+            second.write_all(b"still-open").unwrap();
+            let mut acknowledgement = [0_u8; 5];
+            second.read_exact(&mut acknowledgement).unwrap();
+            assert_eq!(&acknowledgement, b"alive");
+        });
+
+        let mut first = open_direct_tcp_connection_async(address.to_string(), 0, false)
+            .await
+            .unwrap()
+            .stream;
+        let mut second = open_direct_tcp_connection_async(address.to_string(), 0, false)
+            .await
+            .unwrap()
+            .stream;
+        first.set_nonblocking(false).unwrap();
+        second.set_nonblocking(false).unwrap();
+        first.write_all(b"A").unwrap();
+        second.write_all(b"B").unwrap();
+        assert_ne!(first.local_addr().unwrap(), second.local_addr().unwrap());
+        drop(first);
+
+        second
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut still_open = [0_u8; 10];
+        second.read_exact(&mut still_open).unwrap();
+        assert_eq!(&still_open, b"still-open");
+        second.write_all(b"alive").unwrap();
+        drop(second);
+        server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn resident_direct_async_relay_preserves_sniffed_initial_payload() {
         let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
@@ -292,6 +347,55 @@ mod tests {
         client.read_exact(&mut response).unwrap();
         assert_eq!(&response, b"WORLD");
         stop.store(true, Ordering::Relaxed);
+        upstream_done.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn direct_tcp_relay_preserves_download_after_client_half_close() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let upstream_done = thread::spawn(move || {
+            let (mut stream, _) = upstream.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut request = Vec::new();
+            stream.read_to_end(&mut request).unwrap();
+            assert_eq!(request, b"request");
+            stream.write_all(b"response-after-eof").unwrap();
+        });
+
+        let inbound_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let inbound_addr = inbound_listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(inbound_addr).unwrap();
+        let (inbound, _) = inbound_listener.accept().unwrap();
+        let direct = TcpStream::connect(upstream_addr).unwrap();
+        inbound.set_nonblocking(true).unwrap();
+        direct.set_nonblocking(true).unwrap();
+        client.write_all(b"request").unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+
+        let mut inbound = TokioTcpStream::from_std(inbound).unwrap();
+        let mut direct = TokioTcpStream::from_std(direct).unwrap();
+        let metrics = ResidentDataplaneMetrics::default();
+        let stats = relay_tcp_direct_async(
+            &mut inbound,
+            &mut direct,
+            ResidentStopSignal::shared(),
+            &[],
+            &metrics,
+        )
+        .await
+        .unwrap();
+        assert_eq!(stats.client_to_direct, b"request".len());
+        assert_eq!(stats.direct_to_client, b"response-after-eof".len());
+
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        assert_eq!(response, b"response-after-eof");
         upstream_done.join().unwrap();
     }
 

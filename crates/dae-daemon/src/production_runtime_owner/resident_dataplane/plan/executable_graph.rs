@@ -3,9 +3,10 @@ use serde_json::{Value, json};
 use super::super::{link_hash, redacted_link_source};
 use super::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentUdpChainAdmission,
-    ResidentUdpExecutionAgreement, ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion,
-    ResidentXhttpMode, ResidentXhttpSettingsPlan, resident_udp_chain_admission,
+    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentTcpCarrierOwnership,
+    ResidentUdpChainAdmission, ResidentUdpExecutionAgreement, ResidentUtlsFingerprintPlan,
+    ResidentXhttpHttpVersion, ResidentXhttpMode, ResidentXhttpSettingsPlan,
+    resident_udp_chain_admission,
 };
 
 mod runtime_limits;
@@ -46,6 +47,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     chain_parent_count: usize,
     udp_chain_admission: ResidentUdpChainAdmission,
     quic_lifecycle_scope: QuicLifecycleScope,
+    tcp_carrier_ownership: ResidentTcpCarrierOwnership,
     mark: u32,
     mptcp: bool,
 }
@@ -92,6 +94,7 @@ impl ResidentExecutableGraphDescriptor {
             chain_parent_count: chain_parent_count(proxy),
             udp_chain_admission: resident_udp_chain_admission(proxy),
             quic_lifecycle_scope: quic_lifecycle_scope(&proxy.handler),
+            tcp_carrier_ownership: execution.tcp_carrier_ownership(),
             mark: proxy.mark,
             mptcp: proxy.mptcp,
         }
@@ -145,6 +148,7 @@ impl ResidentExecutableGraphDescriptor {
             },
             "protocolFraming": self.protocol_framing,
             "tcpExecutor": self.tcp_executor,
+            "tcpCarrierContract": self.tcp_carrier_ownership.json(),
             "packetSemantics": effective_udp.packet_semantics().as_str(),
             "rawChildPacketSemantics": self.udp_agreement.packet_semantics().as_str(),
             "chain": {
@@ -199,6 +203,7 @@ impl ResidentExecutableGraphDescriptor {
             "udpExecutionAgreement": self.udp_execution_agreement_value(),
             "packetSessionManager": self.packet_session_manager_value(),
             "probeExecutor": self.probe_executor_value(reload_generation),
+            "tcpCarrierContract": self.tcp_carrier_ownership.json(),
         })
     }
 

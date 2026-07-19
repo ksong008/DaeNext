@@ -1,8 +1,10 @@
 use dae_outbound::{
-    CONFIGURED_HTTP_OWNERSHIP, FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
-    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
-    GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
-    GENERATION_OWNED_TUIC_OWNERSHIP, GENERATION_OWNED_VLESS_MUX_OWNERSHIP,
+    FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
+    FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_ANYTLS_OWNERSHIP,
+    GENERATION_OWNED_H2_PACKET_OWNERSHIP, GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP,
+    GENERATION_OWNED_HYSTERIA2_OWNERSHIP, GENERATION_OWNED_JUICITY_OWNERSHIP,
+    GENERATION_OWNED_MEEK_OWNERSHIP, GENERATION_OWNED_TUIC_OWNERSHIP,
+    GENERATION_OWNED_VLESS_MUX_OWNERSHIP, GENERATION_OWNED_XHTTP_OWNERSHIP,
     MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, RuntimeOwnershipProfile,
 };
 
@@ -160,7 +162,7 @@ fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
             TLS_WITHOUT_FINGERPRINT,
             WrapperDimension::FrameStream,
             UdpDimension::AnyTls,
-            FLOW_STREAM_PACKET_OWNERSHIP,
+            GENERATION_OWNED_ANYTLS_OWNERSHIP,
         ),
         Protocol::VmessAead => vmess_profile(shape),
         Protocol::Hysteria2 => exact_profile(
@@ -198,26 +200,30 @@ fn vless_standard_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnership
         (security, Wrapper::None, Vless(Stream::TlsTcp))
         | (security, Wrapper::WebSocket, Vless(Stream::WebSocketTls))
         | (security, Wrapper::HttpUpgrade, Vless(Stream::HttpUpgradeTls))
-        | (security, Wrapper::Grpc, Vless(Stream::GrpcTls))
             if is_standard_or_reality_security(security) =>
         {
             Some(FLOW_STREAM_PACKET_OWNERSHIP)
         }
+        (security, Wrapper::Grpc, Vless(Stream::GrpcTls))
+            if is_standard_or_reality_security(security) =>
+        {
+            Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP)
+        }
         (security, Wrapper::H2, Vless(Stream::H2Tls)) if is_standard_tls_security(security) => {
-            Some(FLOW_STREAM_PACKET_OWNERSHIP)
+            Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP)
         }
         (security, Wrapper::XhttpH1, Vless(Stream::XhttpH1))
             if is_standard_tls_security(security) =>
         {
-            Some(CONFIGURED_HTTP_OWNERSHIP)
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
         (SecurityDimension::QuicTls, Wrapper::XhttpH3, Vless(Stream::XhttpH3)) => {
-            Some(CONFIGURED_HTTP_OWNERSHIP)
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
         (security, Wrapper::XhttpH2, Vless(Stream::XhttpH2))
             if is_standard_or_reality_security(security) =>
         {
-            Some(CONFIGURED_HTTP_OWNERSHIP)
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
         (security, Wrapper::Meek, UdpDimension::PolicyClosed(PolicyClosedDimension::VlessMeek))
             if is_standard_or_reality_security(security) =>
@@ -252,10 +258,14 @@ fn trojan_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfile>
         }
         (security, Wrapper::WebSocket, Trojan(Stream::WebSocketTls))
         | (security, Wrapper::HttpUpgrade, Trojan(Stream::HttpUpgradeTls))
-        | (security, Wrapper::Grpc, Trojan(Stream::GrpcTls))
             if TLS_WITHOUT_FINGERPRINT.contains(&security) =>
         {
             Some(FLOW_STREAM_PACKET_OWNERSHIP)
+        }
+        (security, Wrapper::Grpc, Trojan(Stream::GrpcTls))
+            if TLS_WITHOUT_FINGERPRINT.contains(&security) =>
+        {
+            Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP)
         }
         _ => None,
     }
@@ -276,15 +286,17 @@ fn vmess_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfile> 
         (security, Wrapper::None, Vmess(Stream::TlsTcp))
         | (security, Wrapper::WebSocket, Vmess(Stream::WebSocketTls))
         | (security, Wrapper::HttpUpgrade, Vmess(Stream::HttpUpgradeTls))
-        | (security, Wrapper::Grpc, Vmess(Stream::GrpcTls))
             if is_standard_tls_security(security) =>
         {
             Some(FLOW_STREAM_PACKET_OWNERSHIP)
         }
+        (security, Wrapper::Grpc, Vmess(Stream::GrpcTls)) if is_standard_tls_security(security) => {
+            Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP)
+        }
         (security, Wrapper::H2, UdpDimension::PolicyClosed(PolicyClosedDimension::VmessH2))
             if is_standard_tls_security(security) =>
         {
-            Some(FLOW_STREAM_POLICY_CLOSED_OWNERSHIP)
+            Some(GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP)
         }
         _ => None,
     }

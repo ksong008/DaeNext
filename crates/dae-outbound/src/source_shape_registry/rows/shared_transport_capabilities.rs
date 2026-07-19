@@ -56,7 +56,7 @@ pub(super) const INSECURE_FRAME_STREAM_UNDERLAY: SourceShapeRegistryRow =
         registry_source("insecure-frame-stream-underlay", "anytls", &["anytls"])
             .with_transport("insecure-tls-variants", "frame-stream", "udp-over-stream")
             .with_runtime(
-                FLOW_STREAM_PACKET_OWNERSHIP,
+                GENERATION_OWNED_ANYTLS_OWNERSHIP,
                 "registry:insecure-frame-stream-underlay",
             ),
         INSECURE_SECURITY_UNDERLAY_CAPABILITY,

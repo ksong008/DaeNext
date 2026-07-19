@@ -61,9 +61,9 @@ mod real_plan_tests;
 mod tests {
     use super::*;
     use dae_outbound::{
-        CONFIGURED_HTTP_OWNERSHIP, GENERATION_OWNED_HYSTERIA2_OWNERSHIP,
-        GENERATION_OWNED_JUICITY_OWNERSHIP, GENERATION_OWNED_MEEK_OWNERSHIP,
-        GENERATION_OWNED_TUIC_OWNERSHIP, GENERATION_OWNED_VLESS_MUX_OWNERSHIP, LogicalLeaseKind,
+        GENERATION_OWNED_HYSTERIA2_OWNERSHIP, GENERATION_OWNED_JUICITY_OWNERSHIP,
+        GENERATION_OWNED_MEEK_OWNERSHIP, GENERATION_OWNED_TUIC_OWNERSHIP,
+        GENERATION_OWNED_VLESS_MUX_OWNERSHIP, GENERATION_OWNED_XHTTP_OWNERSHIP, LogicalLeaseKind,
         MATERIALIZED_SHAPE_REJECTED_OWNERSHIP, PhysicalCarrierKind, RuntimeLifecycleOwner,
         RuntimeOwnershipModel, RuntimeRouteAdmission,
     };
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn xhttp_wrapper_selects_its_configured_http_transport_contract() {
+    fn xhttp_wrapper_selects_its_generation_transport_contract() {
         let ownership = materialized_runtime_ownership(execution(
             Protocol::VlessStandard,
             Security::StandardTls,
@@ -197,7 +197,7 @@ mod tests {
             Udp::VlessStandard(plan::ResidentStreamPacketTransport::XhttpH2),
         ));
 
-        assert_eq!(ownership, CONFIGURED_HTTP_OWNERSHIP);
+        assert_eq!(ownership, GENERATION_OWNED_XHTTP_OWNERSHIP);
     }
 
     #[test]

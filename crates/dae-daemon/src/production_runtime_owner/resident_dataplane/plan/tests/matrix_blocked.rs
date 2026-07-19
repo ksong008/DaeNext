@@ -336,15 +336,15 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     );
     assert_eq!(
         mux_graph["runtimeComponents"]["streamWrapperFactory"]["runtimeLimits"]["carrierScope"],
-        "per-flow-tls-carrier"
+        "generation-owned-multiplexed-stream-connection"
     );
     assert_eq!(
         mux_graph["runtimeComponents"]["streamWrapperFactory"]["runtimeLimits"]["logicalStreamsPerCarrier"],
-        1
+        "bounded-by-runtime-profile"
     );
     assert_eq!(
         mux_graph["runtimeComponents"]["streamWrapperFactory"]["runtimeLimits"]["crossFlowCarrierReuse"],
-        false
+        true
     );
 
     let tls_fragment_config = parse_config(
