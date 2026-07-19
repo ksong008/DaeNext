@@ -46,6 +46,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
     let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
+    let tunnel_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let stats = DirectTcpRelayStats::default();
     let execution = selection.proxy.execution_plan();
@@ -75,7 +76,11 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentStreamWrapperPlan::None if execution.security.is_tls_stream() => {
             let mut client = open_async_resident_tls_client_with_flow(
@@ -101,7 +106,11 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentStreamWrapperPlan::WebSocket
             if execution.security == ResidentSecurityUnderlayPlan::None =>
@@ -131,7 +140,11 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentStreamWrapperPlan::WebSocket if execution.security.is_tls_stream() => {
             let mut client = open_async_resident_tls_client_with_flow(
@@ -163,7 +176,11 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentStreamWrapperPlan::HttpUpgrade
             if execution.security == ResidentSecurityUnderlayPlan::None =>
@@ -194,7 +211,11 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentStreamWrapperPlan::HttpUpgrade if execution.security.is_tls_stream() => {
             let mut client = open_async_resident_tls_client_with_flow(
@@ -226,7 +247,11 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentStreamWrapperPlan::Grpc if execution.security.is_tls_stream() => {
             let (mut h2_send, mut h2_recv, carrier_lease) =
@@ -247,7 +272,11 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 drop(carrier_lease);
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentStreamWrapperPlan::H2 if execution.security.is_tls_stream() => {
             let (mut h2_send, mut h2_recv, carrier_lease) =
@@ -268,7 +297,11 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 drop(carrier_lease);
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }

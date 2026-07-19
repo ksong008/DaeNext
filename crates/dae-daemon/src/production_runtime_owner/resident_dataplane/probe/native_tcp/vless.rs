@@ -37,7 +37,7 @@ use super::super::super::{
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
-use super::tunnel::{NativeTcpTunnel, SpawnedNativeTcpTunnel};
+use super::tunnel::{NativeTcpTunnel, SpawnedNativeTcpTunnel, boxed_native_tcp_tunnel};
 
 pub(super) async fn open_vless_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
@@ -71,7 +71,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             .map_err(|err| {
                 NativeTcpProbeError::Open(format!("write native VLESS request: {err}"))
             })?;
-        return Ok(Box::new(VlessNativeTunnel::new(stream)));
+        return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(stream)));
     }
 
     if execution.wrapper == ResidentStreamWrapperPlan::Meek {
@@ -94,6 +94,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
             let stop = ResidentStopSignal::shared();
             let relay_stop = Arc::clone(&stop);
+            let tunnel_stop = Arc::clone(&stop);
             let metrics = ResidentDataplaneMetrics::default();
             let task = tokio::spawn(async move {
                 let _ = relay_tcp_over_grpc_h2(
@@ -109,7 +110,11 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                 drop(carrier_lease);
                 stop.store(true, Ordering::Relaxed);
             });
-            return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
+            return Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )));
         }
         ResidentStreamWrapperPlan::H2 => {
             let (mut h2_send, response_task, carrier_lease) =
@@ -123,6 +128,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
             let stop = ResidentStopSignal::shared();
             let relay_stop = Arc::clone(&stop);
+            let tunnel_stop = Arc::clone(&stop);
             let metrics = ResidentDataplaneMetrics::default();
             let task = tokio::spawn(async move {
                 let _ = relay_tcp_over_deferred_h2_body(
@@ -139,7 +145,11 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                 drop(carrier_lease);
                 stop.store(true, Ordering::Relaxed);
             });
-            return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
+            return Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )));
         }
         _ => {}
     }
@@ -163,6 +173,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
         let stop = ResidentStopSignal::shared();
         let relay_stop = Arc::clone(&stop);
+        let tunnel_stop = Arc::clone(&stop);
         let metrics = ResidentDataplaneMetrics::default();
         let task = tokio::spawn(async move {
             let _ = relay_tcp_over_vless_websocket_tls_async(
@@ -175,7 +186,11 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             .await;
             stop.store(true, Ordering::Relaxed);
         });
-        return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
+        return Ok(Box::new(SpawnedNativeTcpTunnel::new(
+            probe,
+            task,
+            tunnel_stop,
+        )));
     }
     if execution.wrapper == ResidentStreamWrapperPlan::HttpUpgrade {
         let options =
@@ -192,6 +207,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
         let stop = ResidentStopSignal::shared();
         let relay_stop = Arc::clone(&stop);
+        let tunnel_stop = Arc::clone(&stop);
         let flow = selection.proxy.flow.clone();
         let metrics = ResidentDataplaneMetrics::default();
         let task = tokio::spawn(async move {
@@ -207,9 +223,13 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             .await;
             stop.store(true, Ordering::Relaxed);
         });
-        return Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)));
+        return Ok(Box::new(SpawnedNativeTcpTunnel::new(
+            probe,
+            task,
+            tunnel_stop,
+        )));
     }
-    Ok(Box::new(VlessNativeTunnel::new(client)))
+    Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(client)))
 }
 
 async fn open_vless_meek_native_tcp_tunnel(
@@ -230,6 +250,7 @@ async fn open_vless_meek_native_tcp_tunnel(
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
     let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
+    let tunnel_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let task = tokio::spawn(async move {
         let _ = relay_tcp_over_vless_meek_native_async(
@@ -243,7 +264,11 @@ async fn open_vless_meek_native_tcp_tunnel(
         .await;
         stop.store(true, Ordering::Relaxed);
     });
-    Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+    Ok(Box::new(SpawnedNativeTcpTunnel::new(
+        probe,
+        task,
+        tunnel_stop,
+    )))
 }
 
 async fn relay_tcp_over_vless_meek_native_async(
@@ -316,7 +341,7 @@ async fn open_vless_mux_native_tcp_tunnel(
         acquire_vless_mux_logical_stream(Arc::clone(&selection.proxy), target.to_owned(), deadline)
             .await
             .map_err(NativeTcpProbeError::Open)?;
-    Ok(Box::new(logical))
+    Ok(boxed_native_tcp_tunnel(logical))
 }
 
 async fn open_vless_xhttp_native_tcp_tunnel(
@@ -326,6 +351,7 @@ async fn open_vless_xhttp_native_tcp_tunnel(
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
     let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
+    let tunnel_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let task = match selection.proxy.xhttp_mode {
         ResidentXhttpMode::PacketUp => {
@@ -386,7 +412,11 @@ async fn open_vless_xhttp_native_tcp_tunnel(
             })
         }
     };
-    Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+    Ok(Box::new(SpawnedNativeTcpTunnel::new(
+        probe,
+        task,
+        tunnel_stop,
+    )))
 }
 
 struct VlessNativeTunnel<S> {

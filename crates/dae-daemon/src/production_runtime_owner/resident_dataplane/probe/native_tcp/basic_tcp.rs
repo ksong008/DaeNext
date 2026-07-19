@@ -10,7 +10,7 @@ use super::super::super::tcp::{
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
-use super::tunnel::{NativeTcpTunnel, PrefixedNativeTcpTunnel};
+use super::tunnel::{NativeTcpTunnel, PrefixedNativeTcpTunnel, boxed_native_tcp_tunnel};
 
 pub(super) async fn open_basic_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
@@ -25,7 +25,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             socks5_connect_async(&mut stream, target, username, password)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
-            Ok(Box::new(stream))
+            Ok(boxed_native_tcp_tunnel(stream))
         }
         ResidentProxyProtocolPlan::HttpProxyTcp {
             username,
@@ -48,7 +48,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
-            Ok(Box::new(stream))
+            Ok(boxed_native_tcp_tunnel(stream))
         }
         ResidentProxyProtocolPlan::HttpProxyTcp {
             username,
@@ -75,7 +75,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
-            Ok(Box::new(PrefixedNativeTcpTunnel::new(
+            Ok(boxed_native_tcp_tunnel(PrefixedNativeTcpTunnel::new(
                 response_leftover,
                 stream,
             )))
