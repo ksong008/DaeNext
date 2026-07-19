@@ -1,6 +1,20 @@
 use super::*;
 impl Ss2022UdpCodec {
     pub fn new(cipher: &str, password: &str, session_id: [u8; 8]) -> Result<Self, OutboundError> {
+        Self::new_with_replay_policy(
+            cipher,
+            password,
+            session_id,
+            Ss2022UdpReplayPolicy::default(),
+        )
+    }
+
+    pub fn new_with_replay_policy(
+        cipher: &str,
+        password: &str,
+        session_id: [u8; 8],
+        replay_policy: Ss2022UdpReplayPolicy,
+    ) -> Result<Self, OutboundError> {
         let conf = require_cipher_conf(cipher)?;
         let psk_list = parse_psk_list(password, conf.key_len)?;
         let upsk = psk_list
@@ -14,7 +28,7 @@ impl Ss2022UdpCodec {
             upsk,
             session_id,
             next_packet_id: 0,
-            server_windows: HashMap::new(),
+            server_replay: Ss2022UdpReplayTable::new(replay_policy)?,
         })
     }
 
@@ -88,30 +102,45 @@ impl Ss2022UdpCodec {
                 "SS2022 UDP server packet client session mismatch".to_owned(),
             ));
         }
-        let window = self
-            .server_windows
-            .entry(decoded.session_id)
-            .or_insert_with(|| SlidingWindowFilter::new(UDP_REPLAY_WINDOW_SIZE));
-        if !window.check_and_update(decoded.packet_id) {
-            return Err(OutboundError::BadShadowsocks(
-                "SS2022 UDP replay attack detected".to_owned(),
-            ));
-        }
+        self.server_replay
+            .check(decoded.session_id, decoded.packet_id, now)?;
         Ok(decoded)
+    }
+
+    pub fn replay_metrics_snapshot(&self) -> Ss2022UdpReplayMetricsSnapshot {
+        self.server_replay.metrics_snapshot()
+    }
+
+    pub fn prune_expired_replay_sessions(&mut self, now: u64) {
+        self.server_replay.expire(now);
     }
 }
 
 impl Ss2022UdpReplayTracker {
+    pub fn with_policy(policy: Ss2022UdpReplayPolicy) -> Result<Self, OutboundError> {
+        Ok(Self {
+            replay: Ss2022UdpReplayTable::new(policy)?,
+        })
+    }
+
     pub fn check(&mut self, session_id: [u8; 8], packet_id: u64) -> Result<(), OutboundError> {
-        let window = self
-            .windows
-            .entry(session_id)
-            .or_insert_with(|| SlidingWindowFilter::new(UDP_REPLAY_WINDOW_SIZE));
-        if !window.check_and_update(packet_id) {
-            return Err(OutboundError::BadShadowsocks(
-                "SS2022 UDP replay attack detected".to_owned(),
-            ));
-        }
-        Ok(())
+        self.check_at(session_id, packet_id, unix_timestamp_now())
+    }
+
+    pub fn check_at(
+        &mut self,
+        session_id: [u8; 8],
+        packet_id: u64,
+        now: u64,
+    ) -> Result<(), OutboundError> {
+        self.replay.check(session_id, packet_id, now)
+    }
+
+    pub fn replay_metrics_snapshot(&self) -> Ss2022UdpReplayMetricsSnapshot {
+        self.replay.metrics_snapshot()
+    }
+
+    pub fn prune_expired(&mut self, now: u64) {
+        self.replay.expire(now);
     }
 }

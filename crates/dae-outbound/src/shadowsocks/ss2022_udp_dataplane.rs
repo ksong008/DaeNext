@@ -12,7 +12,8 @@ use crate::socks5::Socks5Address;
 
 use super::ss2022::{
     CipherConf2022, HEADER_TYPE_CLIENT_PACKET, HEADER_TYPE_SERVER_PACKET, MAX_PADDING_LENGTH,
-    SlidingWindowFilter, UDP_REPLAY_WINDOW_SIZE, cipher_conf, validate_base64_psk,
+    SERVER_SESSION_RETENTION_SECS, SlidingWindowFilter, UDP_REPLAY_WINDOW_SIZE, cipher_conf,
+    validate_base64_psk,
 };
 
 const SESSION_SUBKEY_CONTEXT: &str = "shadowsocks 2022 session subkey";
@@ -21,6 +22,9 @@ const AES_BLOCK_LEN: usize = 16;
 
 mod types;
 pub use self::types::*;
+mod replay;
+use self::replay::Ss2022UdpReplayTable;
+pub use self::replay::{Ss2022UdpReplayMetricsSnapshot, Ss2022UdpReplayPolicy};
 mod codec;
 mod public_api;
 pub use self::public_api::*;

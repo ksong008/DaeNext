@@ -1,4 +1,5 @@
 use super::*;
+use dae_outbound::shadowsocks::Ss2022UdpReplayMetricsSnapshot;
 
 #[path = "metrics/proxied_doh3.rs"]
 mod proxied_doh3;
@@ -82,6 +83,16 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_response_compatibility_unverified: AtomicU64,
     udp_response_dropped: AtomicU64,
     udp_response_dropped_bytes: AtomicU64,
+    ss2022_replay_active_windows_current: AtomicU64,
+    ss2022_replay_quarantined_sessions_current: AtomicU64,
+    ss2022_replay_retained_sessions_current: AtomicU64,
+    ss2022_replay_retained_sessions_maximum: AtomicU64,
+    ss2022_replay_estimated_bytes_current: AtomicU64,
+    ss2022_replay_estimated_bytes_maximum: AtomicU64,
+    ss2022_replay_rejections: AtomicU64,
+    ss2022_replay_lru_evictions: AtomicU64,
+    ss2022_replay_ttl_expirations: AtomicU64,
+    ss2022_replay_saturation_rejections: AtomicU64,
     udp_reply_queued: AtomicU64,
     udp_reply_queue_full: AtomicU64,
     udp_reply_sent: AtomicU64,
@@ -99,6 +110,59 @@ fn subtract_metric(metric: &AtomicU64, value: u64) {
 }
 
 impl ResidentDataplaneMetrics {
+    pub(super) fn observe_ss2022_replay(
+        &self,
+        previous: Ss2022UdpReplayMetricsSnapshot,
+        current: Ss2022UdpReplayMetricsSnapshot,
+    ) {
+        adjust_current_metric(
+            &self.ss2022_replay_active_windows_current,
+            previous.active_windows,
+            current.active_windows,
+        );
+        adjust_current_metric(
+            &self.ss2022_replay_quarantined_sessions_current,
+            previous.quarantined_sessions,
+            current.quarantined_sessions,
+        );
+        let retained = adjust_current_metric(
+            &self.ss2022_replay_retained_sessions_current,
+            previous.retained_sessions,
+            current.retained_sessions,
+        );
+        self.ss2022_replay_retained_sessions_maximum
+            .fetch_max(retained, Ordering::Relaxed);
+        let bytes = adjust_current_metric(
+            &self.ss2022_replay_estimated_bytes_current,
+            previous.estimated_bytes,
+            current.estimated_bytes,
+        );
+        self.ss2022_replay_estimated_bytes_maximum
+            .fetch_max(bytes, Ordering::Relaxed);
+        self.ss2022_replay_rejections.fetch_add(
+            current
+                .replay_rejections
+                .saturating_sub(previous.replay_rejections),
+            Ordering::Relaxed,
+        );
+        self.ss2022_replay_lru_evictions.fetch_add(
+            current.lru_evictions.saturating_sub(previous.lru_evictions),
+            Ordering::Relaxed,
+        );
+        self.ss2022_replay_ttl_expirations.fetch_add(
+            current
+                .ttl_expirations
+                .saturating_sub(previous.ttl_expirations),
+            Ordering::Relaxed,
+        );
+        self.ss2022_replay_saturation_rejections.fetch_add(
+            current
+                .saturation_rejections
+                .saturating_sub(previous.saturation_rejections),
+            Ordering::Relaxed,
+        );
+    }
+
     pub(super) fn dns_transport_owner_opened(&self, charged_bytes: usize) {
         let current = self
             .dns_transport_owners_current
@@ -524,7 +588,7 @@ impl ResidentDataplaneMetrics {
     }
 
     pub(super) fn snapshot(&self) -> Value {
-        json!({
+        let mut snapshot = json!({
             "uploadTotal": self.upload_total.load(Ordering::Relaxed),
             "downloadTotal": self.download_total.load(Ordering::Relaxed),
             "activeTcpConnections": self.active_tcp_connections.load(Ordering::Relaxed),
@@ -606,7 +670,37 @@ impl ResidentDataplaneMetrics {
             "udpReplySocketRecreated": self.udp_reply_socket_recreated.load(Ordering::Relaxed),
             "udpReplySocketIdleEvicted": self.udp_reply_socket_idle_evicted.load(Ordering::Relaxed),
             "udpReplyFailed": self.udp_reply_failed.load(Ordering::Relaxed),
-        })
+        });
+        snapshot["ss2022Replay"] = json!({
+            "activeWindowsCurrent": self.ss2022_replay_active_windows_current.load(Ordering::Relaxed),
+            "quarantinedSessionsCurrent": self.ss2022_replay_quarantined_sessions_current.load(Ordering::Relaxed),
+            "retainedSessionsCurrent": self.ss2022_replay_retained_sessions_current.load(Ordering::Relaxed),
+            "retainedSessionsMaximum": self.ss2022_replay_retained_sessions_maximum.load(Ordering::Relaxed),
+            "estimatedBytesCurrent": self.ss2022_replay_estimated_bytes_current.load(Ordering::Relaxed),
+            "estimatedBytesMaximum": self.ss2022_replay_estimated_bytes_maximum.load(Ordering::Relaxed),
+            "replayRejections": self.ss2022_replay_rejections.load(Ordering::Relaxed),
+            "lruEvictions": self.ss2022_replay_lru_evictions.load(Ordering::Relaxed),
+            "ttlExpirations": self.ss2022_replay_ttl_expirations.load(Ordering::Relaxed),
+            "saturationRejections": self.ss2022_replay_saturation_rejections.load(Ordering::Relaxed),
+        });
+        snapshot
+    }
+}
+
+fn adjust_current_metric(metric: &AtomicU64, previous: usize, current: usize) -> u64 {
+    if current >= previous {
+        let increase = current.saturating_sub(previous) as u64;
+        metric
+            .fetch_add(increase, Ordering::Relaxed)
+            .saturating_add(increase)
+    } else {
+        let decrease = previous.saturating_sub(current) as u64;
+        let prior = metric
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |aggregate| {
+                aggregate.checked_sub(decrease)
+            })
+            .expect("SS2022 replay current metric cannot underflow");
+        prior - decrease
     }
 }
 
@@ -652,5 +746,50 @@ mod tests {
         assert_eq!(snapshot["udpResponseCompatibilityUnverified"], 1);
         assert_eq!(snapshot["udpResponseDropped"], 1);
         assert_eq!(snapshot["udpResponseDroppedBytes"], 512);
+    }
+
+    #[test]
+    fn ss2022_replay_metrics_aggregate_sessions_and_release_current_state() {
+        let metrics = ResidentDataplaneMetrics::default();
+        let first = Ss2022UdpReplayMetricsSnapshot {
+            active_windows: 2,
+            retained_sessions: 2,
+            estimated_bytes: 1200,
+            high_water_retained_sessions: 2,
+            high_water_estimated_bytes: 1200,
+            replay_rejections: 1,
+            ..Ss2022UdpReplayMetricsSnapshot::default()
+        };
+        let second = Ss2022UdpReplayMetricsSnapshot {
+            active_windows: 1,
+            quarantined_sessions: 1,
+            retained_sessions: 2,
+            estimated_bytes: 800,
+            high_water_retained_sessions: 2,
+            high_water_estimated_bytes: 1200,
+            replay_rejections: 2,
+            lru_evictions: 1,
+            ..Ss2022UdpReplayMetricsSnapshot::default()
+        };
+        metrics.observe_ss2022_replay(Ss2022UdpReplayMetricsSnapshot::default(), first);
+        metrics.observe_ss2022_replay(first, second);
+        let live = metrics.snapshot();
+        assert_eq!(live["ss2022Replay"]["activeWindowsCurrent"], 1);
+        assert_eq!(live["ss2022Replay"]["quarantinedSessionsCurrent"], 1);
+        assert_eq!(live["ss2022Replay"]["retainedSessionsCurrent"], 2);
+        assert_eq!(live["ss2022Replay"]["retainedSessionsMaximum"], 2);
+        assert_eq!(live["ss2022Replay"]["estimatedBytesCurrent"], 800);
+        assert_eq!(live["ss2022Replay"]["estimatedBytesMaximum"], 1200);
+        assert_eq!(live["ss2022Replay"]["replayRejections"], 2);
+        assert_eq!(live["ss2022Replay"]["lruEvictions"], 1);
+
+        metrics.observe_ss2022_replay(second, Ss2022UdpReplayMetricsSnapshot::default());
+        let closed = metrics.snapshot();
+        assert_eq!(closed["ss2022Replay"]["activeWindowsCurrent"], 0);
+        assert_eq!(closed["ss2022Replay"]["quarantinedSessionsCurrent"], 0);
+        assert_eq!(closed["ss2022Replay"]["retainedSessionsCurrent"], 0);
+        assert_eq!(closed["ss2022Replay"]["estimatedBytesCurrent"], 0);
+        assert_eq!(closed["ss2022Replay"]["retainedSessionsMaximum"], 2);
+        assert_eq!(closed["ss2022Replay"]["replayRejections"], 2);
     }
 }

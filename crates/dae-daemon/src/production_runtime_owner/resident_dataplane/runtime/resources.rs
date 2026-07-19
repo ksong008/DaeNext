@@ -243,6 +243,7 @@ impl ResidentRuntimeResourceConfig {
         let meek = MeekTransportResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         let vless_mux =
             VlessMuxOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
+        let ss2022_replay = dae_outbound::shadowsocks::Ss2022UdpReplayPolicy::default();
         json!({
             "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 1,
@@ -262,6 +263,15 @@ impl ResidentRuntimeResourceConfig {
                 "runtimeShards": self.udp_runtime_shards.json(),
                 "dispatchQueueDepth": self.udp_dispatch_queue_depth.json(),
                 "socketBufferBytes": self.udp_socket_buffer_bytes.json(),
+            },
+            "ss2022Replay": {
+                "windowPackets": ss2022_replay.window_size(),
+                "activeWindowLimitPerSession": ss2022_replay.active_window_limit(),
+                "retainedSessionLimitPerSession": ss2022_replay.retained_session_limit(),
+                "estimatedByteLimitPerSession": ss2022_replay.estimated_byte_limit(),
+                "estimatedActiveWindowBytes": ss2022_replay.estimated_active_window_bytes(),
+                "retentionSeconds": ss2022_replay.retention_secs(),
+                "scope": "one Shadowsocks 2022 UDP codec session; evicted server session IDs remain quarantined until retention expiry",
             },
             "quicEndpoints": {
                 "profileSource": "runtimeProfile",

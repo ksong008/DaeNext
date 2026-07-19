@@ -42,10 +42,10 @@ pub struct Ss2022UdpCodec {
     pub(super) upsk: Vec<u8>,
     pub(super) session_id: [u8; 8],
     pub(super) next_packet_id: u64,
-    pub(super) server_windows: HashMap<[u8; 8], SlidingWindowFilter>,
+    pub(super) server_replay: Ss2022UdpReplayTable,
 }
 
 #[derive(Debug, Default)]
 pub struct Ss2022UdpReplayTracker {
-    pub(super) windows: HashMap<[u8; 8], SlidingWindowFilter>,
+    pub(super) replay: Ss2022UdpReplayTable,
 }

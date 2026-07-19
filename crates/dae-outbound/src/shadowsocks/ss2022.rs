@@ -21,6 +21,7 @@ pub const HEADER_TYPE_SERVER_PACKET: u8 = 1;
 pub const TCP_CHUNK_MAX_LEN: usize = (1 << 16) - 1;
 pub const MAX_PADDING_LENGTH: usize = 900;
 pub const UDP_REPLAY_WINDOW_SIZE: usize = 4096;
+pub const SERVER_SESSION_RETENTION_SECS: u64 = 60;
 pub const SERVER_SESSION_RETENTION: &str = "1m0s";
 
 pub const CIPHER_CONFS: &[CipherConf2022] = &[
@@ -90,9 +91,9 @@ pub struct UdpPacketIdContract {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SlidingWindowFilter {
-    window_size: u64,
+    window_size: usize,
     latest: u64,
-    seen: Vec<u64>,
+    seen: Box<[u64]>,
     init: bool,
 }
 
@@ -217,11 +218,16 @@ impl UdpPacketIdGenerator {
 
 impl SlidingWindowFilter {
     pub fn new(window_size: usize) -> Self {
-        let window_size = if window_size == 0 { 4096 } else { window_size } as u64;
+        let window_size = if window_size == 0 {
+            UDP_REPLAY_WINDOW_SIZE
+        } else {
+            window_size
+        };
+        let words = window_size.div_ceil(u64::BITS as usize);
         Self {
             window_size,
             latest: 0,
-            seen: Vec::with_capacity(window_size as usize),
+            seen: vec![0; words].into_boxed_slice(),
             init: false,
         }
     }
@@ -229,23 +235,70 @@ impl SlidingWindowFilter {
     pub fn check_and_update(&mut self, packet_id: u64) -> bool {
         if !self.init {
             self.latest = packet_id;
-            self.seen.push(packet_id);
             self.init = true;
+            self.set_seen(0);
             return true;
         }
-        if packet_id + self.window_size <= self.latest {
-            return false;
-        }
-        if self.seen.contains(&packet_id) {
-            return false;
-        }
+
         if packet_id > self.latest {
+            let shift = packet_id - self.latest;
+            if shift >= self.window_size as u64 {
+                self.seen.fill(0);
+            } else {
+                self.shift_seen(shift as usize);
+            }
             self.latest = packet_id;
-            let cutoff = self.latest.saturating_sub(self.window_size);
-            self.seen.retain(|seen_id| *seen_id > cutoff);
+            self.set_seen(0);
+            return true;
         }
-        self.seen.push(packet_id);
+
+        let offset = self.latest - packet_id;
+        if offset >= self.window_size as u64 || self.is_seen(offset as usize) {
+            return false;
+        }
+        self.set_seen(offset as usize);
         true
+    }
+
+    fn is_seen(&self, offset: usize) -> bool {
+        let word = offset / u64::BITS as usize;
+        let bit = offset % u64::BITS as usize;
+        self.seen[word] & (1_u64 << bit) != 0
+    }
+
+    fn set_seen(&mut self, offset: usize) {
+        let word = offset / u64::BITS as usize;
+        let bit = offset % u64::BITS as usize;
+        self.seen[word] |= 1_u64 << bit;
+    }
+
+    fn shift_seen(&mut self, shift: usize) {
+        let word_shift = shift / u64::BITS as usize;
+        let bit_shift = shift % u64::BITS as usize;
+        for destination in (0..self.seen.len()).rev() {
+            let value = destination
+                .checked_sub(word_shift)
+                .map(|source| {
+                    let mut shifted = self.seen[source] << bit_shift;
+                    if bit_shift > 0 && source > 0 {
+                        shifted |= self.seen[source - 1] >> (u64::BITS as usize - bit_shift);
+                    }
+                    shifted
+                })
+                .unwrap_or(0);
+            self.seen[destination] = value;
+        }
+        self.clear_unused_bits();
+    }
+
+    fn clear_unused_bits(&mut self) {
+        let used_bits = self.window_size % u64::BITS as usize;
+        if used_bits == 0 {
+            return;
+        }
+        if let Some(last) = self.seen.last_mut() {
+            *last &= (1_u64 << used_bits) - 1;
+        }
     }
 }
 
