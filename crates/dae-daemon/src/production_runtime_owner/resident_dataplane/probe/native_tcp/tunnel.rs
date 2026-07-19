@@ -251,7 +251,10 @@ impl AsyncWrite for SpawnedNativeTcpTunnel {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use crate::production_runtime_owner::resident_dataplane::ResidentStopSignal;
 
@@ -300,5 +303,63 @@ mod tests {
 
         assert!(tunnel.task.is_none());
         assert!(tunnel.abort_requested);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cleanup_awaits_cancellation_for_many_stalled_relays() {
+        const STALLED_RELAY_COUNT: usize = 1_024;
+
+        struct ActiveRelayGuard(Arc<AtomicUsize>);
+
+        impl Drop for ActiveRelayGuard {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::AcqRel);
+            }
+        }
+
+        let active_relays = Arc::new(AtomicUsize::new(0));
+        let mut tunnels = Vec::with_capacity(STALLED_RELAY_COUNT);
+        for _ in 0..STALLED_RELAY_COUNT {
+            let (probe, _relay) = tokio::io::duplex(64);
+            let stop = ResidentStopSignal::shared();
+            let task_active_relays = Arc::clone(&active_relays);
+            let task = tokio::spawn(async move {
+                task_active_relays.fetch_add(1, Ordering::AcqRel);
+                let _active = ActiveRelayGuard(task_active_relays);
+                std::future::pending::<()>().await;
+            });
+            tunnels.push(SpawnedNativeTcpTunnel::with_cleanup_grace(
+                probe,
+                task,
+                stop,
+                Duration::ZERO,
+            ));
+        }
+
+        time::timeout(Duration::from_secs(5), async {
+            while active_relays.load(Ordering::Acquire) != STALLED_RELAY_COUNT {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stalled relay startup timeout");
+
+        let mut cleanups = tokio::task::JoinSet::new();
+        for mut tunnel in tunnels {
+            cleanups.spawn(async move {
+                cleanup_native_tcp_tunnel(&mut tunnel).await.unwrap();
+                assert!(tunnel.task.is_none());
+                assert!(tunnel.abort_requested);
+            });
+        }
+        time::timeout(Duration::from_secs(5), async {
+            while let Some(result) = cleanups.join_next().await {
+                result.unwrap();
+            }
+        })
+        .await
+        .expect("stalled relay cleanup timeout");
+
+        assert_eq!(active_relays.load(Ordering::Acquire), 0);
     }
 }
