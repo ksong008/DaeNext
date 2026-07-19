@@ -17,7 +17,7 @@ use super::super::super::{
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
-use super::tunnel::NativeTcpTunnel;
+use super::tunnel::{NativeTcpTunnel, boxed_native_tcp_tunnel};
 
 pub(super) async fn open_quic_stream_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
@@ -62,9 +62,9 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                     response.message
                 )));
             }
-            Ok(Box::new(QuicStreamNativeTcpTunnel::shared_hysteria2(
-                send, recv, transport,
-            )))
+            Ok(boxed_native_tcp_tunnel(
+                QuicStreamNativeTcpTunnel::shared_hysteria2(send, recv, transport),
+            ))
         }
         ResidentProxyProtocolPlan::TuicQuicTcp { .. } => {
             let owner_registry = tuic_owner_registry.ok_or_else(|| {
@@ -85,9 +85,9 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 .map_err(|err| {
                     NativeTcpProbeError::Open(format!("write native TUIC TCP connect: {err}"))
                 })?;
-            Ok(Box::new(QuicStreamNativeTcpTunnel::shared_tuic(
-                send, recv, transport,
-            )))
+            Ok(boxed_native_tcp_tunnel(
+                QuicStreamNativeTcpTunnel::shared_tuic(send, recv, transport),
+            ))
         }
         ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
             let owner_registry = juicity_owner_registry.ok_or_else(|| {
@@ -109,9 +109,9 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 .map_err(|err| {
                     NativeTcpProbeError::Open(format!("write native Juicity TCP request: {err}"))
                 })?;
-            Ok(Box::new(QuicStreamNativeTcpTunnel::shared_juicity(
-                send, recv, transport,
-            )))
+            Ok(boxed_native_tcp_tunnel(
+                QuicStreamNativeTcpTunnel::shared_juicity(send, recv, transport),
+            ))
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }

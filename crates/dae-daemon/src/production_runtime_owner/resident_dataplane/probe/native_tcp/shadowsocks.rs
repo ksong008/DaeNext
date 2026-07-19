@@ -56,6 +56,7 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
     let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
+    let tunnel_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let target = target.to_owned();
 
@@ -80,7 +81,11 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
             cipher,
@@ -103,7 +108,11 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
             cipher,
@@ -129,7 +138,11 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp {
             cipher,
@@ -153,7 +166,11 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp {
             cipher,
@@ -179,7 +196,11 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp {
             cipher,
@@ -252,7 +273,11 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                 .await;
                 stop.store(true, Ordering::Relaxed);
             });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
         }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }
@@ -280,6 +305,7 @@ async fn open_shadowsocks_v2ray_plugin_native_tcp_tunnel(
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
     let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
+    let tunnel_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let task = tokio::spawn(async move {
         let _ = relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
@@ -296,5 +322,9 @@ async fn open_shadowsocks_v2ray_plugin_native_tcp_tunnel(
         .await;
         stop.store(true, Ordering::Relaxed);
     });
-    Ok(Box::new(SpawnedNativeTcpTunnel::new(probe, task)))
+    Ok(Box::new(SpawnedNativeTcpTunnel::new(
+        probe,
+        task,
+        tunnel_stop,
+    )))
 }

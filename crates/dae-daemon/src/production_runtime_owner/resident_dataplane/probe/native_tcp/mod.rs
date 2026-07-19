@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +20,7 @@ use self::frame_tls::open_frame_tls_native_tcp_tunnel;
 use self::quic_stream::open_quic_stream_native_tcp_tunnel;
 use self::shadowsocks::open_shadowsocks_native_tcp_tunnel;
 use self::trojan::open_trojan_native_tcp_tunnel;
-use self::tunnel::NativeTcpTunnel;
+use self::tunnel::{NativeTcpTunnel, cleanup_native_tcp_tunnel};
 use self::vless::open_vless_native_tcp_tunnel;
 use self::vmess::open_vmess_native_tcp_tunnel;
 use super::super::plan::{ResidentProxyPlan, ResidentTcpProbeDispatch};
@@ -48,8 +47,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
 ) -> Result<(), String> {
     let owner_deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(std::time::Instant::now(), timeout);
-    let probe = async {
-        match open_native_tcp_tunnel(
+    let opened = await_native_tcp_probe_with_timeout(
+        owner_deadline,
+        open_native_tcp_tunnel(
             Arc::clone(&proxy),
             target,
             hysteria2_owner_registry,
@@ -58,32 +58,46 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
             anytls_owner_registry,
             caller,
             owner_deadline,
-        )
-        .await
-        {
-            Ok(mut tunnel) => {
-                probe_native_tcp_tunnel(&mut *tunnel, scheme, host, path, method, timeout).await
-            }
-            Err(NativeTcpProbeError::NotAdmitted) => Err(format!(
+        ),
+    )
+    .await?;
+    let mut tunnel = match opened {
+        Ok(tunnel) => tunnel,
+        Err(NativeTcpProbeError::NotAdmitted) => {
+            return Err(format!(
                 "native outbound probe not admitted for protocol {} net {} tls {}",
                 proxy.protocol, proxy.net, proxy.tls
-            )),
-            Err(NativeTcpProbeError::Open(err)) => Err(err),
+            ));
         }
+        Err(NativeTcpProbeError::Open(err)) => return Err(err),
     };
-    await_native_tcp_probe_with_timeout(timeout, probe).await
+    let probe_result = await_native_tcp_probe_with_timeout(
+        owner_deadline,
+        probe_native_tcp_tunnel(&mut *tunnel, scheme, host, path, method, timeout),
+    )
+    .await;
+    let cleanup_result = cleanup_native_tcp_tunnel(&mut *tunnel).await;
+    match (probe_result, cleanup_result) {
+        (Err(err), _) => Err(err),
+        (Ok(result), Ok(())) => result,
+        (Ok(Ok(())), Err(err)) => Err(format!("clean up native outbound probe tunnel: {err}")),
+        (Ok(Err(err)), Err(_)) => Err(err),
+    }
 }
 
-async fn await_native_tcp_probe_with_timeout<F>(timeout: Duration, probe: F) -> Result<(), String>
+async fn await_native_tcp_probe_with_timeout<F>(
+    deadline: dae_runtime_control::AbsoluteDeadline,
+    operation: F,
+) -> Result<F::Output, String>
 where
-    F: Future<Output = Result<(), String>>,
+    F: std::future::Future,
 {
-    tokio::time::timeout(timeout, probe).await.map_err(|_| {
-        format!(
-            "native outbound probe timed out after {} ms",
-            timeout.as_millis()
-        )
-    })?
+    let remaining = deadline
+        .remaining_at(std::time::Instant::now())
+        .unwrap_or(Duration::ZERO);
+    tokio::time::timeout(remaining, operation)
+        .await
+        .map_err(|_| "native outbound probe deadline elapsed".to_owned())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -133,14 +147,16 @@ mod tests {
     #[tokio::test]
     async fn timeout_bounds_the_complete_native_probe_future() {
         let timeout = Duration::from_millis(1);
+        let deadline =
+            dae_runtime_control::AbsoluteDeadline::from_now(std::time::Instant::now(), timeout);
         let result = await_native_tcp_probe_with_timeout(
-            timeout,
+            deadline,
             std::future::pending::<Result<(), String>>(),
         )
         .await;
         assert_eq!(
             result.unwrap_err(),
-            "native outbound probe timed out after 1 ms"
+            "native outbound probe deadline elapsed"
         );
     }
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::super::super::AnyTlsOwnerRegistryHandle;
 use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::errors::NativeTcpProbeError;
-use super::tunnel::NativeTcpTunnel;
+use super::tunnel::{NativeTcpTunnel, boxed_native_tcp_tunnel};
 
 pub(super) async fn open_frame_tls_native_tcp_tunnel(
     proxy: Arc<ResidentProxyPlan>,
@@ -26,5 +26,5 @@ pub(super) async fn open_frame_tls_native_tcp_tunnel(
         .acquire(proxy, target.to_owned(), owner_deadline)
         .await
         .map_err(NativeTcpProbeError::Open)?;
-    Ok(Box::new(logical))
+    Ok(boxed_native_tcp_tunnel(logical))
 }
