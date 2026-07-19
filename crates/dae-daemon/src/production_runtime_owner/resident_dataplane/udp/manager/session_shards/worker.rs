@@ -296,19 +296,7 @@ fn create_proxy_session(
     };
     let (sender, receiver) = mpsc::channel(context.session_queue_depth);
     let actor_id = allocate_actor_id(next_actor_id);
-    let actor_context = UdpSessionActorContext {
-        dns: Arc::clone(&context.dns),
-        proxy_groups: Arc::clone(&context.proxy_groups),
-        event_file: context.event_file.clone(),
-        event_lock: Arc::clone(&context.event_lock),
-        metrics: Arc::clone(&context.metrics),
-        udp_reply: context.udp_reply.clone(),
-        active_sessions: Arc::clone(&context.active_sessions),
-        hysteria2_owner_registry: context.hysteria2_owner_registry.clone(),
-        tuic_owner_registry: context.tuic_owner_registry.clone(),
-        juicity_owner_registry: context.juicity_owner_registry.clone(),
-        anytls_owner_registry: context.anytls_owner_registry.clone(),
-    };
+    let actor_context = Arc::clone(&context.shared);
     let handle = spawn_udp_session_actor(
         key.clone(),
         actor_id,
@@ -341,14 +329,7 @@ fn create_direct_session(
     };
     let (sender, receiver) = mpsc::channel(context.session_queue_depth);
     let actor_id = allocate_actor_id(next_actor_id);
-    let actor_context = UdpDirectSessionActorContext {
-        event_file: context.event_file.clone(),
-        event_lock: Arc::clone(&context.event_lock),
-        metrics: Arc::clone(&context.metrics),
-        udp_reply: context.udp_reply.clone(),
-        active_sessions: Arc::clone(&context.active_sessions),
-        response_buffer_idle_timeout: context.direct_response_buffer_idle_timeout,
-    };
+    let actor_context = Arc::clone(&context.shared);
     let handle = spawn_udp_direct_session_actor(
         key.clone(),
         actor_id,
