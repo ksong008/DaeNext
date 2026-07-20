@@ -1,8 +1,9 @@
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use super::{
     AbsoluteDeadline, OwnerCancellation, OwnerCancellationSignal, OwnerCloseReason,
@@ -88,6 +89,14 @@ struct OwnerAdmissionCounters {
     rejected_by_count: u64,
     rejected_by_charged_bytes: u64,
     rejected_while_draining: u64,
+    next_waiter_ticket: u64,
+    waiters: VecDeque<OwnerAdmissionWaiter>,
+}
+
+#[derive(Debug)]
+struct OwnerAdmissionWaiter {
+    ticket: u64,
+    wake: Arc<Notify>,
 }
 
 #[derive(Debug)]
@@ -95,6 +104,7 @@ struct OwnerAdmissionInner {
     budget: OwnerResourceBudget,
     counters: Mutex<OwnerAdmissionCounters>,
     state_changed: watch::Sender<u64>,
+    admission_state_changed: watch::Sender<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +115,7 @@ pub struct PhysicalOwnerAdmission {
 impl PhysicalOwnerAdmission {
     pub fn new(budget: OwnerResourceBudget) -> Self {
         let (state_changed, _) = watch::channel(0);
+        let (admission_state_changed, _) = watch::channel(0);
         Self {
             inner: Arc::new(OwnerAdmissionInner {
                 budget,
@@ -118,8 +129,11 @@ impl PhysicalOwnerAdmission {
                     rejected_by_count: 0,
                     rejected_by_charged_bytes: 0,
                     rejected_while_draining: 0,
+                    next_waiter_ticket: 0,
+                    waiters: VecDeque::new(),
                 }),
                 state_changed,
+                admission_state_changed,
             }),
         }
     }
@@ -196,7 +210,43 @@ impl PhysicalOwnerAdmission {
         deadline: AbsoluteDeadline,
         cancellation: &OwnerCancellationSignal,
     ) -> Result<OwnerReservation, OwnerAdmissionRejection> {
-        let mut state_changed = self.inner.state_changed.subscribe();
+        deadline
+            .check_at(Instant::now())
+            .map_err(OwnerAdmissionRejection::Cancelled)?;
+        cancellation
+            .check()
+            .map_err(OwnerAdmissionRejection::Cancelled)?;
+
+        let mut registration = {
+            let mut counters = self.inner.counters.lock().unwrap();
+            match counters.state {
+                OwnerAdmissionState::Open => {}
+                OwnerAdmissionState::Draining(reason) => {
+                    counters.rejected_while_draining =
+                        counters.rejected_while_draining.saturating_add(1);
+                    return Err(OwnerAdmissionRejection::Draining(reason));
+                }
+                OwnerAdmissionState::Closed(reason) => {
+                    return Err(OwnerAdmissionRejection::Closed(reason));
+                }
+            }
+            if charged_bytes.get() > self.inner.budget.max_charged_bytes.get() {
+                counters.rejected_by_charged_bytes =
+                    counters.rejected_by_charged_bytes.saturating_add(1);
+                return Err(OwnerAdmissionRejection::LimitsExceeded {
+                    count: false,
+                    charged_bytes: true,
+                });
+            }
+            let ticket = next_waiter_ticket(&mut counters);
+            let wake = Arc::new(Notify::new());
+            counters.waiters.push_back(OwnerAdmissionWaiter {
+                ticket,
+                wake: Arc::clone(&wake),
+            });
+            OwnerAdmissionWaitRegistration::new(Arc::clone(&self.inner), ticket, wake)
+        };
+        let mut admission_state_changed = self.inner.admission_state_changed.subscribe();
         let mut cancellation_changed = cancellation.subscribe();
 
         loop {
@@ -207,6 +257,8 @@ impl PhysicalOwnerAdmission {
                 .check()
                 .map_err(OwnerAdmissionRejection::Cancelled)?;
 
+            let mut admitted = false;
+            let mut rejection = None;
             {
                 let mut counters = self.inner.counters.lock().unwrap();
                 match counters.state {
@@ -214,48 +266,56 @@ impl PhysicalOwnerAdmission {
                     OwnerAdmissionState::Draining(reason) => {
                         counters.rejected_while_draining =
                             counters.rejected_while_draining.saturating_add(1);
-                        return Err(OwnerAdmissionRejection::Draining(reason));
+                        rejection = Some(OwnerAdmissionRejection::Draining(reason));
                     }
                     OwnerAdmissionState::Closed(reason) => {
-                        return Err(OwnerAdmissionRejection::Closed(reason));
+                        rejection = Some(OwnerAdmissionRejection::Closed(reason));
                     }
                 }
-
-                if charged_bytes.get() > self.inner.budget.max_charged_bytes.get() {
-                    counters.rejected_by_charged_bytes =
-                        counters.rejected_by_charged_bytes.saturating_add(1);
-                    return Err(OwnerAdmissionRejection::LimitsExceeded {
-                        count: false,
-                        charged_bytes: true,
-                    });
-                }
-
-                let count_available =
-                    counters.active_owners < self.inner.budget.max_active_owners.get();
-                let next_charged_bytes = counters
-                    .active_charged_bytes
-                    .checked_add(charged_bytes.get());
-                let charged_bytes_available = next_charged_bytes
-                    .is_some_and(|value| value <= self.inner.budget.max_charged_bytes.get());
-                if count_available && charged_bytes_available {
-                    counters.active_owners += 1;
-                    counters.active_charged_bytes = next_charged_bytes.unwrap();
-                    counters.high_water_owners =
-                        counters.high_water_owners.max(counters.active_owners);
-                    counters.high_water_charged_bytes = counters
-                        .high_water_charged_bytes
-                        .max(counters.active_charged_bytes);
-                    counters.cumulative_admitted = counters.cumulative_admitted.saturating_add(1);
-                    drop(counters);
-                    return Ok(OwnerReservation {
-                        inner: Some(Arc::clone(&self.inner)),
-                        charged_bytes,
-                    });
+                if rejection.is_none()
+                    && counters
+                        .waiters
+                        .front()
+                        .is_some_and(|waiter| waiter.ticket == registration.ticket)
+                {
+                    let count_available =
+                        counters.active_owners < self.inner.budget.max_active_owners.get();
+                    let next_charged_bytes = counters
+                        .active_charged_bytes
+                        .checked_add(charged_bytes.get());
+                    let charged_bytes_available = next_charged_bytes
+                        .is_some_and(|value| value <= self.inner.budget.max_charged_bytes.get());
+                    if count_available && charged_bytes_available {
+                        counters.waiters.pop_front();
+                        counters.active_owners += 1;
+                        counters.active_charged_bytes = next_charged_bytes.unwrap();
+                        counters.high_water_owners =
+                            counters.high_water_owners.max(counters.active_owners);
+                        counters.high_water_charged_bytes = counters
+                            .high_water_charged_bytes
+                            .max(counters.active_charged_bytes);
+                        counters.cumulative_admitted =
+                            counters.cumulative_admitted.saturating_add(1);
+                        admitted = true;
+                    }
                 }
             }
 
+            if let Some(rejection) = rejection {
+                return Err(rejection);
+            }
+            if admitted {
+                registration.complete();
+                wake_next_waiter(&self.inner);
+                return Ok(OwnerReservation {
+                    inner: Some(Arc::clone(&self.inner)),
+                    charged_bytes,
+                });
+            }
+
             tokio::select! {
-                changed = state_changed.changed() => {
+                _ = registration.wake.notified() => {}
+                changed = admission_state_changed.changed() => {
                     if changed.is_err() {
                         return Err(OwnerAdmissionRejection::Cancelled(
                             OwnerCancellation::DependencyFailed,
@@ -290,6 +350,7 @@ impl PhysicalOwnerAdmission {
         drop(counters);
         if transitioned {
             notify_state_changed(&self.inner.state_changed);
+            notify_state_changed(&self.inner.admission_state_changed);
         }
         metrics
     }
@@ -343,7 +404,77 @@ impl PhysicalOwnerAdmission {
         let metrics = metrics_from_counters(self.inner.budget, &counters);
         drop(counters);
         notify_state_changed(&self.inner.state_changed);
+        notify_state_changed(&self.inner.admission_state_changed);
         Ok(metrics)
+    }
+}
+
+struct OwnerAdmissionWaitRegistration {
+    inner: Arc<OwnerAdmissionInner>,
+    ticket: u64,
+    wake: Arc<Notify>,
+    registered: bool,
+}
+
+impl OwnerAdmissionWaitRegistration {
+    fn new(inner: Arc<OwnerAdmissionInner>, ticket: u64, wake: Arc<Notify>) -> Self {
+        Self {
+            inner,
+            ticket,
+            wake,
+            registered: true,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.registered = false;
+    }
+}
+
+impl Drop for OwnerAdmissionWaitRegistration {
+    fn drop(&mut self) {
+        if !self.registered {
+            return;
+        }
+        {
+            let mut counters = self.inner.counters.lock().unwrap();
+            let Some(position) = counters
+                .waiters
+                .iter()
+                .position(|waiter| waiter.ticket == self.ticket)
+            else {
+                return;
+            };
+            counters.waiters.remove(position);
+        }
+        wake_next_waiter(&self.inner);
+    }
+}
+
+fn next_waiter_ticket(counters: &mut OwnerAdmissionCounters) -> u64 {
+    loop {
+        let ticket = counters.next_waiter_ticket;
+        counters.next_waiter_ticket = counters.next_waiter_ticket.wrapping_add(1);
+        if !counters
+            .waiters
+            .iter()
+            .any(|waiter| waiter.ticket == ticket)
+        {
+            return ticket;
+        }
+    }
+}
+
+fn wake_next_waiter(inner: &OwnerAdmissionInner) {
+    let wake = inner
+        .counters
+        .lock()
+        .unwrap()
+        .waiters
+        .front()
+        .map(|waiter| Arc::clone(&waiter.wake));
+    if let Some(wake) = wake {
+        wake.notify_one();
     }
 }
 

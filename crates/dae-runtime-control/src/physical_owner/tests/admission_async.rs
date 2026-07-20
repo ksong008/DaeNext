@@ -184,3 +184,118 @@ async fn cancellation_signal_waits_without_polling_or_blocking() {
         OwnerCancellation::GenerationDraining
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn reservation_waiters_advance_in_registration_order_without_serializing_capacity() {
+    let admission = PhysicalOwnerAdmission::new(budget(3, 100));
+    let blocking = admission
+        .try_reserve(charge(100), deadline(), &OwnerCancellationSignal::new())
+        .unwrap();
+    let (admitted_sender, mut admitted_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut waiters = Vec::new();
+    for sequence in 0..3_u8 {
+        let waiting_admission = admission.clone();
+        let admitted_sender = admitted_sender.clone();
+        waiters.push(tokio::spawn(async move {
+            let reservation = waiting_admission
+                .reserve_until(charge(30), deadline(), &OwnerCancellationSignal::new())
+                .await
+                .unwrap();
+            admitted_sender.send((sequence, reservation)).unwrap();
+        }));
+        tokio::task::yield_now().await;
+    }
+    drop(admitted_sender);
+    drop(blocking);
+
+    let mut reservations = Vec::new();
+    for expected_sequence in 0..3_u8 {
+        let (sequence, reservation) =
+            tokio::time::timeout(Duration::from_millis(100), admitted_receiver.recv())
+                .await
+                .expect("an admitted waiter did not advance the queue")
+                .expect("admission result channel closed early");
+        assert_eq!(sequence, expected_sequence);
+        reservations.push(reservation);
+    }
+    for waiter in waiters {
+        waiter.await.unwrap();
+    }
+    assert_eq!(admission.metrics().active_owners, 3);
+    assert_eq!(admission.metrics().active_charged_bytes, 90);
+    drop(reservations);
+    assert_eq!(admission.metrics().active_owners, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_front_waiter_does_not_block_the_next_registration() {
+    let admission = PhysicalOwnerAdmission::new(budget(1, 100));
+    let blocking = admission
+        .try_reserve(charge(100), deadline(), &OwnerCancellationSignal::new())
+        .unwrap();
+    let cancellation = OwnerCancellationSignal::new();
+    let first_admission = admission.clone();
+    let first_cancellation = cancellation.clone();
+    let first = tokio::spawn(async move {
+        first_admission
+            .reserve_until(charge(40), deadline(), &first_cancellation)
+            .await
+    });
+    tokio::task::yield_now().await;
+    let second_admission = admission.clone();
+    let second = tokio::spawn(async move {
+        second_admission
+            .reserve_until(charge(40), deadline(), &OwnerCancellationSignal::new())
+            .await
+    });
+    tokio::task::yield_now().await;
+
+    cancellation.cancel(OwnerCancellation::CallerCancelled);
+    assert!(matches!(
+        first.await.unwrap(),
+        Err(OwnerAdmissionRejection::Cancelled(
+            OwnerCancellation::CallerCancelled
+        ))
+    ));
+    drop(blocking);
+    let reservation = tokio::time::timeout(Duration::from_millis(100), second)
+        .await
+        .expect("the next waiter remained blocked behind a cancelled registration")
+        .unwrap()
+        .unwrap();
+    drop(reservation);
+    assert_eq!(admission.metrics().active_owners, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dropped_front_waiter_removes_its_registration() {
+    let admission = PhysicalOwnerAdmission::new(budget(1, 100));
+    let blocking = admission
+        .try_reserve(charge(100), deadline(), &OwnerCancellationSignal::new())
+        .unwrap();
+    let first_admission = admission.clone();
+    let first = tokio::spawn(async move {
+        first_admission
+            .reserve_until(charge(40), deadline(), &OwnerCancellationSignal::new())
+            .await
+    });
+    tokio::task::yield_now().await;
+    let second_admission = admission.clone();
+    let second = tokio::spawn(async move {
+        second_admission
+            .reserve_until(charge(40), deadline(), &OwnerCancellationSignal::new())
+            .await
+    });
+    tokio::task::yield_now().await;
+
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    drop(blocking);
+    let reservation = tokio::time::timeout(Duration::from_millis(100), second)
+        .await
+        .expect("the next waiter remained blocked behind a dropped registration")
+        .unwrap()
+        .unwrap();
+    drop(reservation);
+    assert_eq!(admission.metrics().active_owners, 0);
+}
