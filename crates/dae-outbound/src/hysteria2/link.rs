@@ -192,7 +192,7 @@ impl Hysteria2Link {
         }
         if !self.name.is_empty() {
             out.push('#');
-            out.push_str(&self.name);
+            out.push_str(&percent_encode_uri_component(&self.name));
         }
         out
     }
@@ -398,5 +398,21 @@ fn hex_nibble(byte: u8) -> Result<u8, OutboundError> {
 }
 
 fn escape_userinfo(input: &str) -> String {
-    input.to_owned()
+    percent_encode_uri_component(input)
+}
+
+fn percent_encode_uri_component(input: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut encoded = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
 }

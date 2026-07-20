@@ -278,3 +278,19 @@ pub(super) fn hysteria2_salamander_requires_the_protocol_minimum_password_length
     assert_eq!(admitted.obfs, "salamander");
     assert_eq!(admitted.obfs_password, "abcd");
 }
+
+#[test]
+pub(super) fn hysteria2_export_round_trips_reserved_userinfo_and_fragment_bytes() {
+    let input = "hysteria2://user%40name%3Arole:p%40ss%3Aword%2F%25@fixture.invalid:443?sni=server.example#node%23name%3F%2F%25%20%E8%8A%82%E7%82%B9";
+    let parsed = crate::hysteria2::Hysteria2Link::parse(input).unwrap();
+    assert_eq!(parsed.user, "user@name:role");
+    assert_eq!(parsed.password, "p@ss:word/%");
+    assert_eq!(parsed.name, "node#name?/% 节点");
+
+    let exported = parsed.export_url();
+    assert_eq!(exported, input);
+    assert_eq!(
+        crate::hysteria2::Hysteria2Link::parse(&exported).unwrap(),
+        parsed
+    );
+}
