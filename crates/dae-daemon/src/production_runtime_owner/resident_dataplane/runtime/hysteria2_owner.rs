@@ -37,7 +37,7 @@ use crate::production_runtime_owner::resident_dataplane::tcp::{
     open_hysteria2_quic_connection_candidates_async, wait_quic_endpoint_idle_after_close,
 };
 
-const HYSTERIA2_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/hysteria2-owner/v1";
+const HYSTERIA2_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/hysteria2-owner/v2";
 const HYSTERIA2_OWNER_IDENTITY_NAMESPACE: &str = "hysteria2-transport";
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -61,7 +61,41 @@ impl Hysteria2OwnerKey {
         let generation = proxy.execution_plan().runtime_generation();
         let mut digest = Sha256::new();
         digest.update(HYSTERIA2_OWNER_IDENTITY_DOMAIN);
-        update_identity_part(&mut digest, proxy.graph_link_hash.as_bytes());
+        update_identity_part(&mut digest, proxy.server_host.as_bytes());
+        update_identity_part(&mut digest, &proxy.server_port.to_be_bytes());
+        let ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            auth,
+            tls_identity,
+            max_tx,
+            max_rx,
+            congestion,
+            obfs,
+            port_hop_ports,
+            port_hop_interval,
+        } = &proxy.handler
+        else {
+            update_identity_part(&mut digest, proxy.graph_link_hash.as_bytes());
+            return Self {
+                generation,
+                digest: digest.finalize().into(),
+            };
+        };
+        update_identity_part(&mut digest, auth.as_bytes());
+        update_identity_part(&mut digest, &tls_identity.effective_identity_sha256());
+        update_identity_part(&mut digest, &max_tx.to_be_bytes());
+        update_identity_part(&mut digest, &max_rx.to_be_bytes());
+        update_identity_part(&mut digest, congestion.controller.as_str().as_bytes());
+        update_identity_part(&mut digest, congestion.bbr_profile.as_str().as_bytes());
+        update_identity_part(
+            &mut digest,
+            &[u8::from(congestion.disable_loss_compensation)],
+        );
+        update_identity_part(&mut digest, obfs.mode.as_bytes());
+        update_identity_part(&mut digest, obfs.password.as_bytes());
+        for port in port_hop_ports {
+            update_identity_part(&mut digest, &port.to_be_bytes());
+        }
+        update_identity_part(&mut digest, &port_hop_interval.as_nanos().to_be_bytes());
         update_identity_part(&mut digest, &proxy.mark.to_be_bytes());
         Self {
             generation,
@@ -1708,6 +1742,54 @@ mod tests {
             .prepare_retry()
             .expect("failed cell must become quiescent after cooldown");
         (cell, snapshot.revision)
+    }
+
+    fn owner_key_for_link(link: String) -> Hysteria2OwnerKey {
+        let sections = dae_config::parser::parse_config(
+            r#"
+            global {
+            allow_insecure: false
+            }
+            routing {
+            fallback: direct
+            }
+            "#,
+        )
+        .unwrap();
+        let config = dae_config::schema::build_config(&sections).unwrap();
+        let mut proxy = crate::production_runtime_owner::resident_dataplane::plan::build_resident_proxy_plan_for_node(
+            &config,
+            "owner-identity".to_owned(),
+            "owner-identity-node".to_owned(),
+            link,
+        )
+        .unwrap();
+        proxy.apply_runtime_generation(41);
+        Hysteria2OwnerKey::for_proxy(&proxy)
+    }
+
+    #[test]
+    fn owner_identity_uses_effective_tls_policy_instead_of_insecure_text_shape() {
+        let pin = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let absent =
+            owner_key_for_link("hysteria2://auth@example.com:443#owner-identity".to_owned());
+        let explicit_false = owner_key_for_link(
+            "hysteria2://auth@example.com:443?insecure=false#owner-identity".to_owned(),
+        );
+        let explicit_true = owner_key_for_link(
+            "hysteria2://auth@example.com:443?insecure=true#owner-identity".to_owned(),
+        );
+        let absent_pin = owner_key_for_link(format!(
+            "hysteria2://auth@example.com:443?pinSHA256={pin}#owner-identity"
+        ));
+        let explicit_false_pin = owner_key_for_link(format!(
+            "hysteria2://auth@example.com:443?insecure=false&pinSHA256={pin}#owner-identity"
+        ));
+
+        assert_eq!(absent, explicit_false);
+        assert_ne!(absent, explicit_true);
+        assert_eq!(absent_pin, explicit_false_pin);
+        assert_ne!(absent, absent_pin);
     }
 
     #[test]
