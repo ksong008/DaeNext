@@ -213,6 +213,11 @@ pub fn encode_hysteria2_udp_message(
         &message.target,
         &message.payload,
     )?;
+    validate_outbound_udp_message_identity(
+        message.packet_id,
+        message.fragment_id,
+        message.fragment_count,
+    )?;
     let mut out = Vec::with_capacity(message.encoded_len());
     out.extend_from_slice(&message.session_id.to_be_bytes());
     out.extend_from_slice(&message.packet_id.to_be_bytes());
@@ -313,7 +318,7 @@ pub fn fragment_hysteria2_udp_message(
 }
 
 fn validate_udp_message_fields(
-    packet_id: u16,
+    _packet_id: u16,
     fragment_id: u8,
     fragment_count: u8,
     target: &str,
@@ -325,10 +330,23 @@ fn validate_udp_message_fields(
     if payload.is_empty() || payload.len() > HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH {
         return Err(bad_wire("invalid Hysteria2 UDP payload length"));
     }
-    if fragment_count == 0 || fragment_id >= fragment_count {
+    if fragment_count > 1 && fragment_id >= fragment_count {
         return Err(bad_wire(format!(
             "invalid Hysteria2 UDP fragment fields: fragment_id={fragment_id} fragment_count={fragment_count}"
         )));
+    }
+    Ok(())
+}
+
+fn validate_outbound_udp_message_identity(
+    packet_id: u16,
+    fragment_id: u8,
+    fragment_count: u8,
+) -> Result<(), OutboundError> {
+    if fragment_count == 0 {
+        return Err(bad_wire(
+            "outbound Hysteria2 UDP message requires a fragment count",
+        ));
     }
     if fragment_count == 1 && (fragment_id != 0 || packet_id != 0) {
         return Err(bad_wire(
@@ -492,21 +510,51 @@ mod tests {
     }
 
     #[test]
-    fn udp_decoder_rejects_malformed_fragment_and_address_fields() {
+    fn udp_decoder_tolerates_irrelevant_complete_packet_identity() {
         let message = Hysteria2UdpMessage::new(7, "dns.example:53", vec![1]).unwrap();
         let encoded = encode_hysteria2_udp_message(&message).unwrap();
 
         let mut zero_fragments = encoded.clone();
         zero_fragments[7] = 0;
-        assert!(decode_hysteria2_udp_message(&zero_fragments).is_err());
+        let zero_fragments = decode_hysteria2_udp_message(&zero_fragments).unwrap();
+        assert_eq!(zero_fragments.fragment_count(), 0);
+        assert!(encode_hysteria2_udp_message(&zero_fragments).is_err());
 
         let mut wrong_fragment_id = encoded.clone();
         wrong_fragment_id[6] = 1;
-        assert!(decode_hysteria2_udp_message(&wrong_fragment_id).is_err());
+        let wrong_fragment_id = decode_hysteria2_udp_message(&wrong_fragment_id).unwrap();
+        assert_eq!(wrong_fragment_id.fragment_id(), 1);
+        assert!(encode_hysteria2_udp_message(&wrong_fragment_id).is_err());
 
         let mut nonzero_complete_packet = encoded.clone();
         nonzero_complete_packet[5] = 1;
-        assert!(decode_hysteria2_udp_message(&nonzero_complete_packet).is_err());
+        let nonzero_complete_packet =
+            decode_hysteria2_udp_message(&nonzero_complete_packet).unwrap();
+        assert_eq!(nonzero_complete_packet.packet_id(), 1);
+        assert!(encode_hysteria2_udp_message(&nonzero_complete_packet).is_err());
+    }
+
+    #[test]
+    fn udp_decoder_accepts_zero_packet_id_for_fragmented_input() {
+        let message = Hysteria2UdpMessage::new(7, "dns.example:53", vec![1]).unwrap();
+        let mut encoded = encode_hysteria2_udp_message(&message).unwrap();
+        encoded[7] = 2;
+        let decoded = decode_hysteria2_udp_message(&encoded).unwrap();
+        assert_eq!(decoded.packet_id(), 0);
+        assert_eq!(decoded.fragment_id(), 0);
+        assert_eq!(decoded.fragment_count(), 2);
+        assert!(encode_hysteria2_udp_message(&decoded).is_err());
+    }
+
+    #[test]
+    fn udp_decoder_keeps_fragment_index_and_address_bounds() {
+        let message = Hysteria2UdpMessage::new(7, "dns.example:53", vec![1]).unwrap();
+        let encoded = encode_hysteria2_udp_message(&message).unwrap();
+
+        let mut invalid_fragment_id = encoded.clone();
+        invalid_fragment_id[6] = 2;
+        invalid_fragment_id[7] = 2;
+        assert!(decode_hysteria2_udp_message(&invalid_fragment_id).is_err());
 
         let mut invalid_utf8 = encoded;
         invalid_utf8[9] = 0xff;
