@@ -40,6 +40,7 @@ struct XhttpXmuxGenerationOwner {
     closing: AtomicBool,
     runtime: tokio::runtime::Handle,
     runtime_worker_threads: usize,
+    uses_shared_data_plane_executor: bool,
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     h2: XhttpH2GenerationManagers,
     h3: XhttpH3GenerationManagers,
@@ -52,7 +53,9 @@ pub(crate) struct XhttpXmuxGenerationOwnerHandle {
 
 impl XhttpXmuxGenerationOwnerHandle {
     pub(crate) fn metrics_snapshot(&self) -> Value {
-        let executor = if self.owner.runtime_worker_threads == 1 {
+        let executor = if self.owner.uses_shared_data_plane_executor {
+            "generation-owned-shared-multi-thread"
+        } else if self.owner.runtime_worker_threads == 1 {
             "current-thread"
         } else {
             "multi-thread"
@@ -62,8 +65,13 @@ impl XhttpXmuxGenerationOwnerHandle {
             "owner": "generation-owned-xhttp-xmux",
             "reloadGeneration": self.owner.runtime_generation,
             "closing": self.owner.closing.load(Ordering::Acquire),
-            "persistentRuntime": format!("dedicated-{executor}"),
+            "persistentRuntime": if self.owner.uses_shared_data_plane_executor {
+                "generation-owned-shared-multi-thread".to_owned()
+            } else {
+                format!("dedicated-{executor}")
+            },
             "executor": executor,
+            "sharedDataPlaneExecutor": self.owner.uses_shared_data_plane_executor,
             "runtimeWorkerThreads": self.owner.runtime_worker_threads,
             "h2": self.owner.h2.metrics_snapshot(),
             "h3": self.owner.h3.metrics_snapshot(),
@@ -98,6 +106,7 @@ pub(crate) fn start_xhttp_xmux_generation_owner(
         closing: AtomicBool::new(false),
         runtime: runtime_handle,
         runtime_worker_threads,
+        uses_shared_data_plane_executor: false,
         shutdown: Mutex::new(Some(shutdown)),
         h2: XhttpH2GenerationManagers::new(),
         h3: XhttpH3GenerationManagers::new(),
@@ -150,6 +159,7 @@ pub(crate) fn start_xhttp_xmux_generation_owner_on(
         closing: AtomicBool::new(false),
         runtime: runtime.clone(),
         runtime_worker_threads: runtime_worker_threads.max(1),
+        uses_shared_data_plane_executor: true,
         shutdown: Mutex::new(Some(shutdown)),
         h2: XhttpH2GenerationManagers::new(),
         h3: XhttpH3GenerationManagers::new(),
