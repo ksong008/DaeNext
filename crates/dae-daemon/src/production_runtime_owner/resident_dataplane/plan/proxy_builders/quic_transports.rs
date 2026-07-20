@@ -126,11 +126,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
         })?;
         (server_port, Vec::new())
     };
-    let server_name = if parsed.sni.is_empty() {
-        server.host.clone()
-    } else {
-        parsed.sni.clone()
-    };
+    let server_name = hysteria2_tls_server_name(&parsed.sni, &server.host);
     let tls_identity = dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
         server_name.clone(),
         parsed.insecure,
@@ -198,6 +194,18 @@ pub(crate) fn build_hysteria2_proxy_plan(
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
+}
+
+fn hysteria2_tls_server_name(explicit_sni: &str, authority_host: &str) -> String {
+    if !explicit_sni.is_empty() {
+        return explicit_sni.to_owned();
+    }
+    authority_host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .filter(|host| host.parse::<std::net::Ipv6Addr>().is_ok())
+        .unwrap_or(authority_host)
+        .to_owned()
 }
 
 fn resident_hysteria2_obfs_plan(

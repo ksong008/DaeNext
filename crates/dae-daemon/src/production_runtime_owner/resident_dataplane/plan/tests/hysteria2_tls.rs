@@ -60,3 +60,45 @@ fn malformed_certificate_pin_is_rejected_during_plan_construction() {
     assert!(err.contains("invalid Hysteria2 pinSHA256"));
     assert!(!err.contains("invalid-pin-value"));
 }
+
+#[test]
+fn ipv6_authority_keeps_socket_host_but_uses_unbracketed_tls_identity() {
+    let proxy = build_resident_proxy_plan_for_node(
+        &config_with_global_insecure(false),
+        "proxy".to_owned(),
+        "hysteria2_ipv6_identity".to_owned(),
+        "hysteria2://auth@[2001:db8::1]:443#ipv6".to_owned(),
+    )
+    .unwrap();
+
+    assert_eq!(proxy.server_host, "[2001:db8::1]");
+    assert_eq!(proxy.server_name, "2001:db8::1");
+    assert!(matches!(
+        proxy.handler,
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            ref tls_identity,
+            ..
+        } if tls_identity.server_name() == "2001:db8::1"
+    ));
+}
+
+#[test]
+fn explicit_hysteria2_sni_overrides_ipv6_authority_identity() {
+    let proxy = build_resident_proxy_plan_for_node(
+        &config_with_global_insecure(false),
+        "proxy".to_owned(),
+        "hysteria2_ipv6_sni".to_owned(),
+        "hysteria2://auth@[2001:db8::1]:443?sni=server.example#ipv6-sni".to_owned(),
+    )
+    .unwrap();
+
+    assert_eq!(proxy.server_host, "[2001:db8::1]");
+    assert_eq!(proxy.server_name, "server.example");
+    assert!(matches!(
+        proxy.handler,
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            ref tls_identity,
+            ..
+        } if tls_identity.server_name() == "server.example"
+    ));
+}
