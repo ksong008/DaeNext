@@ -302,7 +302,7 @@ impl ResidentRuntimeResourceConfig {
                 "udpSessionQuarantineLimit": hysteria2.udp_session_quarantine_limit(),
                 "udpSessionQuarantineTtlMs": hysteria2.udp_session_quarantine_ttl().as_millis(),
                 "retryCooldownMs": hysteria2.retry_cooldown().as_millis(),
-                "portHopResolvedCandidateLimit": hysteria2.port_hop_resolved_candidate_limit(),
+                "initialConnectAttemptLimit": hysteria2.initial_connect_attempt_limit(),
                 "portHopTransitionSocketLimit": hysteria2.port_hop_transition_socket_limit(),
                 "scope": "one generation and normalized node identity per shared Hysteria2 QUIC and H3 owner",
             },

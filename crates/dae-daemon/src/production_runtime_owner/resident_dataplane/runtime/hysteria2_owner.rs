@@ -1075,7 +1075,7 @@ impl Hysteria2OwnerRegistryHandle {
                 "udpSessionQuarantineLimit": self.resources.udp_session_quarantine_limit(),
                 "udpSessionQuarantineTtlMs": self.resources.udp_session_quarantine_ttl().as_millis(),
                 "retryCooldownMs": self.resources.retry_cooldown().as_millis(),
-                "portHopResolvedCandidateLimit": self.resources.port_hop_resolved_candidate_limit(),
+                "initialConnectAttemptLimit": self.resources.initial_connect_attempt_limit(),
                 "portHopTransitionSocketLimit": self.resources.port_hop_transition_socket_limit(),
             },
         })

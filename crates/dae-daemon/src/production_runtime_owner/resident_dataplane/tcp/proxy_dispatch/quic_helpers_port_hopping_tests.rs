@@ -49,7 +49,8 @@ async fn port_hopping_preserves_the_live_quic_connection_across_streams() {
     let resources =
         Hysteria2OwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
     let port_hopping = Hysteria2PortHoppingRuntimeConfig::new(
-        vec![server_addr],
+        vec![server_addr.ip()],
+        Arc::new(vec![server_addr.port()]),
         Duration::from_millis(25),
         0,
         resources.port_hop_transition_socket_limit(),

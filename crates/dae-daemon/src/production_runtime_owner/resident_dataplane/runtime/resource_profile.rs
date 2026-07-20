@@ -85,9 +85,9 @@ const HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS: u64 = 10;
 const LOW_MEMORY_HYSTERIA2_RETRY_COOLDOWN_SECONDS: u64 = 5;
 const BALANCED_HYSTERIA2_RETRY_COOLDOWN_SECONDS: u64 = 3;
 const HIGH_PERFORMANCE_HYSTERIA2_RETRY_COOLDOWN_SECONDS: u64 = 1;
-const LOW_MEMORY_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT: usize = 8_192;
-const BALANCED_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT: usize = 32_768;
-const HIGH_PERFORMANCE_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT: usize = 131_072;
+const LOW_MEMORY_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT: usize = 2;
+const BALANCED_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT: usize = 4;
+const HIGH_PERFORMANCE_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT: usize = 8;
 const HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT: usize = 3;
 const LOW_MEMORY_TUIC_OWNER_LIMIT: usize = 8;
 const BALANCED_TUIC_OWNER_LIMIT: usize = 32;
@@ -265,7 +265,7 @@ pub(crate) struct Hysteria2OwnerResourceProfile {
     udp_session_quarantine_limit: usize,
     udp_session_quarantine_ttl: Duration,
     retry_cooldown: Duration,
-    port_hop_resolved_candidate_limit: usize,
+    initial_connect_attempt_limit: usize,
     port_hop_transition_socket_limit: usize,
 }
 
@@ -906,8 +906,7 @@ impl Hysteria2OwnerResourceProfile {
                     HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
                 ),
                 retry_cooldown: Duration::from_secs(LOW_MEMORY_HYSTERIA2_RETRY_COOLDOWN_SECONDS),
-                port_hop_resolved_candidate_limit:
-                    LOW_MEMORY_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT,
+                initial_connect_attempt_limit: LOW_MEMORY_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT,
                 port_hop_transition_socket_limit: HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT,
             },
             ResidentRuntimeProfile::Balanced => Self {
@@ -923,8 +922,7 @@ impl Hysteria2OwnerResourceProfile {
                     HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
                 ),
                 retry_cooldown: Duration::from_secs(BALANCED_HYSTERIA2_RETRY_COOLDOWN_SECONDS),
-                port_hop_resolved_candidate_limit:
-                    BALANCED_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT,
+                initial_connect_attempt_limit: BALANCED_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT,
                 port_hop_transition_socket_limit: HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT,
             },
             ResidentRuntimeProfile::HighPerformance => Self {
@@ -943,8 +941,8 @@ impl Hysteria2OwnerResourceProfile {
                 retry_cooldown: Duration::from_secs(
                     HIGH_PERFORMANCE_HYSTERIA2_RETRY_COOLDOWN_SECONDS,
                 ),
-                port_hop_resolved_candidate_limit:
-                    HIGH_PERFORMANCE_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT,
+                initial_connect_attempt_limit:
+                    HIGH_PERFORMANCE_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT,
                 port_hop_transition_socket_limit: HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT,
             },
         }
@@ -998,8 +996,8 @@ impl Hysteria2OwnerResourceProfile {
         self.retry_cooldown
     }
 
-    pub(crate) const fn port_hop_resolved_candidate_limit(self) -> usize {
-        self.port_hop_resolved_candidate_limit
+    pub(crate) const fn initial_connect_attempt_limit(self) -> usize {
+        self.initial_connect_attempt_limit
     }
 
     pub(crate) const fn port_hop_transition_socket_limit(self) -> usize {
@@ -1354,7 +1352,7 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "hysteria2UdpSessionQuarantineLimit": LOW_MEMORY_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
                 "hysteria2UdpSessionQuarantineTtlSeconds": HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
                 "hysteria2RetryCooldownSeconds": LOW_MEMORY_HYSTERIA2_RETRY_COOLDOWN_SECONDS,
-                "hysteria2PortHopResolvedCandidateLimit": LOW_MEMORY_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT,
+                "hysteria2InitialConnectAttemptLimit": LOW_MEMORY_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT,
                 "hysteria2PortHopTransitionSocketLimit": HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT,
                 "dnsFastPathConcurrencyDefault": LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": LOW_MEMORY_DNS_FAST_PATH_QUEUE_DEPTH,
@@ -1388,7 +1386,7 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "hysteria2UdpSessionQuarantineLimit": BALANCED_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
                 "hysteria2UdpSessionQuarantineTtlSeconds": HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
                 "hysteria2RetryCooldownSeconds": BALANCED_HYSTERIA2_RETRY_COOLDOWN_SECONDS,
-                "hysteria2PortHopResolvedCandidateLimit": BALANCED_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT,
+                "hysteria2InitialConnectAttemptLimit": BALANCED_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT,
                 "hysteria2PortHopTransitionSocketLimit": HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT,
                 "dnsFastPathConcurrencyDefault": BALANCED_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": BALANCED_DNS_FAST_PATH_QUEUE_DEPTH,
@@ -1422,7 +1420,7 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "hysteria2UdpSessionQuarantineLimit": HIGH_PERFORMANCE_HYSTERIA2_UDP_SESSION_QUARANTINE_LIMIT,
                 "hysteria2UdpSessionQuarantineTtlSeconds": HYSTERIA2_UDP_SESSION_QUARANTINE_TTL_SECONDS,
                 "hysteria2RetryCooldownSeconds": HIGH_PERFORMANCE_HYSTERIA2_RETRY_COOLDOWN_SECONDS,
-                "hysteria2PortHopResolvedCandidateLimit": HIGH_PERFORMANCE_HYSTERIA2_PORT_HOP_RESOLVED_CANDIDATE_LIMIT,
+                "hysteria2InitialConnectAttemptLimit": HIGH_PERFORMANCE_HYSTERIA2_INITIAL_CONNECT_ATTEMPT_LIMIT,
                 "hysteria2PortHopTransitionSocketLimit": HYSTERIA2_PORT_HOP_TRANSITION_SOCKET_LIMIT,
                 "dnsFastPathConcurrencyDefault": HIGH_PERFORMANCE_DNS_FAST_PATH_CONCURRENCY,
                 "dnsFastPathQueueDepthDefault": HIGH_PERFORMANCE_DNS_FAST_PATH_QUEUE_DEPTH,
@@ -1609,12 +1607,12 @@ mod tests {
         assert!(low_hysteria2.retry_cooldown() > balanced_hysteria2.retry_cooldown());
         assert!(balanced_hysteria2.retry_cooldown() > high_hysteria2.retry_cooldown());
         assert!(
-            low_hysteria2.port_hop_resolved_candidate_limit()
-                < balanced_hysteria2.port_hop_resolved_candidate_limit()
+            low_hysteria2.initial_connect_attempt_limit()
+                < balanced_hysteria2.initial_connect_attempt_limit()
         );
         assert!(
-            balanced_hysteria2.port_hop_resolved_candidate_limit()
-                < high_hysteria2.port_hop_resolved_candidate_limit()
+            balanced_hysteria2.initial_connect_attempt_limit()
+                < high_hysteria2.initial_connect_attempt_limit()
         );
         assert_eq!(low_hysteria2.port_hop_transition_socket_limit(), 3);
         assert_eq!(

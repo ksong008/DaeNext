@@ -3,7 +3,7 @@ use super::*;
 use std::fmt;
 use std::future::{Future, poll_fn};
 use std::io::{self, IoSliceMut};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::sync::{
@@ -95,7 +95,8 @@ fn update_hysteria2_port_hopping_high_water(high_water: &AtomicUsize, value: usi
 
 #[derive(Clone)]
 pub(crate) struct Hysteria2PortHoppingRuntimeConfig {
-    pub(crate) remotes: Arc<Vec<SocketAddr>>,
+    pub(crate) addresses: Arc<Vec<IpAddr>>,
+    pub(crate) ports: Arc<Vec<u16>>,
     pub(crate) interval: Duration,
     pub(crate) mark: u32,
     pub(crate) transition_socket_limit: usize,
@@ -104,14 +105,18 @@ pub(crate) struct Hysteria2PortHoppingRuntimeConfig {
 
 impl Hysteria2PortHoppingRuntimeConfig {
     pub(crate) fn new(
-        remotes: Vec<SocketAddr>,
+        addresses: Vec<IpAddr>,
+        ports: Arc<Vec<u16>>,
         interval: Duration,
         mark: u32,
         transition_socket_limit: usize,
         metrics: Arc<Hysteria2PortHoppingMetrics>,
     ) -> Result<Self, String> {
-        if remotes.is_empty() {
-            return Err("Hysteria2 port hopping needs a resolved remote".to_owned());
+        if addresses.is_empty() {
+            return Err("Hysteria2 port hopping needs a resolved address".to_owned());
+        }
+        if ports.is_empty() {
+            return Err("Hysteria2 port hopping needs a normalized port".to_owned());
         }
         if interval.is_zero() {
             return Err("Hysteria2 port hopping interval must be nonzero".to_owned());
@@ -123,7 +128,8 @@ impl Hysteria2PortHoppingRuntimeConfig {
             );
         }
         Ok(Self {
-            remotes: Arc::new(remotes),
+            addresses: Arc::new(addresses),
+            ports,
             interval,
             mark,
             transition_socket_limit,
@@ -157,7 +163,8 @@ impl fmt::Debug for Hysteria2PortHoppingRuntime {
         formatter
             .debug_struct("Hysteria2PortHoppingRuntime")
             .field("inner", &self.inner)
-            .field("remoteCount", &self.config.remotes.len())
+            .field("addressCount", &self.config.addresses.len())
+            .field("portCount", &self.config.ports.len())
             .field("interval", &self.config.interval)
             .field("logicalRemote", &self.logical_remote)
             .finish_non_exhaustive()
@@ -180,16 +187,11 @@ impl quinn::Runtime for Hysteria2PortHoppingRuntime {
         let logical_local = socket.local_addr()?;
         let bind = SocketAddr::new(logical_local.ip(), 0);
         let initial = self.inner.wrap_udp_socket(socket)?;
-        let initial_index = self
-            .config
-            .remotes
-            .iter()
-            .position(|remote| *remote == self.logical_remote)
-            .unwrap_or(0);
         self.config.metrics.socket_opened();
         let state = Arc::new(Hysteria2PortHoppingState {
             runtime: Arc::clone(&self.inner),
-            remotes: Arc::clone(&self.config.remotes),
+            addresses: Arc::clone(&self.config.addresses),
+            ports: Arc::clone(&self.config.ports),
             interval: self.config.interval,
             mark: self.config.mark,
             transition_socket_limit: self.config.transition_socket_limit,
@@ -199,7 +201,7 @@ impl quinn::Runtime for Hysteria2PortHoppingRuntime {
             paths: std::sync::RwLock::new(Hysteria2PortHoppingPaths {
                 current: initial,
                 previous: None,
-                remote_index: initial_index,
+                destination: self.logical_remote,
                 generation: 1,
             }),
         });
@@ -219,13 +221,14 @@ impl quinn::Runtime for Hysteria2PortHoppingRuntime {
 struct Hysteria2PortHoppingPaths {
     current: Arc<dyn quinn::AsyncUdpSocket>,
     previous: Option<Arc<dyn quinn::AsyncUdpSocket>>,
-    remote_index: usize,
+    destination: SocketAddr,
     generation: u64,
 }
 
 struct Hysteria2PortHoppingState {
     runtime: Arc<dyn quinn::Runtime>,
-    remotes: Arc<Vec<SocketAddr>>,
+    addresses: Arc<Vec<IpAddr>>,
+    ports: Arc<Vec<u16>>,
     interval: Duration,
     mark: u32,
     transition_socket_limit: usize,
@@ -268,7 +271,8 @@ impl Hysteria2PortHoppingState {
         self.metrics.socket_opened();
         let dropped_previous = {
             let mut paths = self.paths.write().unwrap();
-            paths.remote_index = fastrand::usize(..self.remotes.len());
+            paths.destination =
+                select_hysteria2_hop_remote(&self.addresses, &self.ports, paths.destination);
             let old_current = std::mem::replace(&mut paths.current, next);
             let dropped_previous = paths.previous.replace(old_current).is_some();
             paths.generation = paths.generation.wrapping_add(1).max(1);
@@ -285,6 +289,30 @@ impl Hysteria2PortHoppingState {
             received.addr = self.logical_remote;
         }
     }
+}
+
+fn select_hysteria2_hop_remote(
+    addresses: &[IpAddr],
+    ports: &[u16],
+    current: SocketAddr,
+) -> SocketAddr {
+    let address_index = fastrand::usize(..addresses.len());
+    let port_index = fastrand::usize(..ports.len());
+    let mut selected = SocketAddr::new(addresses[address_index], ports[port_index]);
+    if selected == current && addresses.len().saturating_mul(ports.len()) > 1 {
+        selected = if ports.len() > 1 {
+            SocketAddr::new(
+                addresses[address_index],
+                ports[(port_index + 1) % ports.len()],
+            )
+        } else {
+            SocketAddr::new(
+                addresses[(address_index + 1) % addresses.len()],
+                ports[port_index],
+            )
+        };
+    }
+    selected
 }
 
 impl Drop for Hysteria2PortHoppingState {
@@ -330,7 +358,8 @@ impl fmt::Debug for Hysteria2PortHoppingUdpSocket {
             .debug_struct("Hysteria2PortHoppingUdpSocket")
             .field("bind", &self.state.bind)
             .field("remote", &self.state.logical_remote)
-            .field("remoteCount", &self.state.remotes.len())
+            .field("addressCount", &self.state.addresses.len())
+            .field("portCount", &self.state.ports.len())
             .finish_non_exhaustive()
     }
 }
@@ -353,10 +382,7 @@ impl quinn::AsyncUdpSocket for Hysteria2PortHoppingUdpSocket {
     fn try_send(&self, transmit: &udp::Transmit<'_>) -> io::Result<()> {
         let (socket, destination) = {
             let paths = self.state.paths.read().unwrap();
-            (
-                Arc::clone(&paths.current),
-                self.state.remotes[paths.remote_index],
-            )
+            (Arc::clone(&paths.current), paths.destination)
         };
         let transmit = udp::Transmit {
             destination,
@@ -509,7 +535,11 @@ mod tests {
         let first_remote_addr = first_remote.local_addr().unwrap();
         let metrics = Arc::new(Hysteria2PortHoppingMetrics::default());
         let config = Hysteria2PortHoppingRuntimeConfig::new(
-            vec![first_remote_addr, second_remote.local_addr().unwrap()],
+            vec![first_remote_addr.ip()],
+            Arc::new(vec![
+                first_remote_addr.port(),
+                second_remote.local_addr().unwrap().port(),
+            ]),
             Duration::from_millis(20),
             0,
             3,
@@ -574,7 +604,8 @@ mod tests {
         metrics.socket_opened();
         let state = Hysteria2PortHoppingState {
             runtime,
-            remotes: Arc::new(vec!["127.0.0.1:443".parse().unwrap()]),
+            addresses: Arc::new(vec!["127.0.0.1".parse().unwrap()]),
+            ports: Arc::new(vec![443]),
             interval: Duration::from_secs(30),
             mark: 0,
             transition_socket_limit: 3,
@@ -584,7 +615,7 @@ mod tests {
             paths: std::sync::RwLock::new(Hysteria2PortHoppingPaths {
                 current,
                 previous: None,
-                remote_index: 0,
+                destination: "127.0.0.1:443".parse().unwrap(),
                 generation: 1,
             }),
         };
