@@ -137,6 +137,20 @@ fn resident_runtime_shutdown_closes_shared_transport_owners() {
         tcp::start_xhttp_xmux_generation_owner_on(&runtime, 6_001, 2).unwrap();
     owner.install_xhttp_xmux_generation_owner_task(xhttp, xhttp_task);
 
+    let registry = owner.task_registry_value();
+    for owner_name in [
+        "h2CarrierOwners",
+        "meekTransportOwners",
+        "vlessMuxOwners",
+        "xhttpXmuxOwner",
+    ] {
+        assert_eq!(
+            registry[owner_name]["executor"],
+            "generation-owned-shared-multi-thread"
+        );
+        assert_eq!(registry[owner_name]["sharedDataPlaneExecutor"], true);
+    }
+
     let evidence = owner.shutdown();
 
     assert_eq!(evidence["status"], "pass");

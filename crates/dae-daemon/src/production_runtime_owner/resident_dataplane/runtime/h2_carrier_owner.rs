@@ -144,6 +144,7 @@ struct H2CarrierGenerationOwner {
     closing: AtomicBool,
     runtime: tokio::runtime::Handle,
     runtime_worker_threads: usize,
+    uses_shared_data_plane_executor: bool,
     managers: Mutex<HashMap<H2CarrierKey, Arc<H2CarrierManager>>>,
     builds: Mutex<HashMap<u64, tokio::task::AbortHandle>>,
     drivers: Mutex<HashMap<u64, tokio::task::AbortHandle>>,
@@ -186,7 +187,14 @@ impl H2CarrierGenerationOwnerHandle {
             "owner": "generation-h2-carrier-owner",
             "generation": self.owner.generation.get(),
             "closing": self.owner.closing.load(Ordering::Acquire),
-            "executor": if self.owner.runtime_worker_threads == 1 { "current-thread" } else { "multi-thread" },
+            "executor": if self.owner.uses_shared_data_plane_executor {
+                "generation-owned-shared-multi-thread"
+            } else if self.owner.runtime_worker_threads == 1 {
+                "current-thread"
+            } else {
+                "multi-thread"
+            },
+            "sharedDataPlaneExecutor": self.owner.uses_shared_data_plane_executor,
             "runtimeWorkerThreads": self.owner.runtime_worker_threads,
             "registeredKeys": registered_keys,
             "registeredBuildTasks": registered_build_tasks,
@@ -409,6 +417,7 @@ pub(crate) fn start_h2_carrier_generation_owner(
         closing: AtomicBool::new(false),
         runtime: runtime.handle().clone(),
         runtime_worker_threads,
+        uses_shared_data_plane_executor: false,
         managers: Mutex::new(HashMap::new()),
         builds: Mutex::new(HashMap::new()),
         drivers: Mutex::new(HashMap::new()),
@@ -448,6 +457,7 @@ pub(crate) fn start_h2_carrier_generation_owner_on(
         closing: AtomicBool::new(false),
         runtime: runtime.clone(),
         runtime_worker_threads: runtime_worker_threads.max(1),
+        uses_shared_data_plane_executor: true,
         managers: Mutex::new(HashMap::new()),
         builds: Mutex::new(HashMap::new()),
         drivers: Mutex::new(HashMap::new()),

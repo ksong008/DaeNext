@@ -132,6 +132,7 @@ struct MeekTransportGenerationOwner {
     closing: AtomicBool,
     runtime: tokio::runtime::Handle,
     runtime_worker_threads: usize,
+    uses_shared_data_plane_executor: bool,
     pools: Mutex<HashMap<MeekTransportKey, Arc<MeekTransportPool>>>,
     builds: Mutex<HashMap<u64, tokio::task::AbortHandle>>,
     resources: MeekTransportResourceProfile,
@@ -166,7 +167,14 @@ impl MeekTransportGenerationOwnerHandle {
             "owner": "generation-meek-http1-transport-owner",
             "generation": self.owner.generation.get(),
             "closing": self.owner.closing.load(Ordering::Acquire),
-            "executor": if self.owner.runtime_worker_threads == 1 { "current-thread" } else { "multi-thread" },
+            "executor": if self.owner.uses_shared_data_plane_executor {
+                "generation-owned-shared-multi-thread"
+            } else if self.owner.runtime_worker_threads == 1 {
+                "current-thread"
+            } else {
+                "multi-thread"
+            },
+            "sharedDataPlaneExecutor": self.owner.uses_shared_data_plane_executor,
             "runtimeWorkerThreads": self.owner.runtime_worker_threads,
             "registeredKeys": registered_keys,
             "registeredBuildTasks": registered_build_tasks,
@@ -400,6 +408,7 @@ fn start_meek_transport_generation_owner_with_resources(
         closing: AtomicBool::new(false),
         runtime: runtime.handle().clone(),
         runtime_worker_threads,
+        uses_shared_data_plane_executor: false,
         pools: Mutex::new(HashMap::new()),
         builds: Mutex::new(HashMap::new()),
         resources,
@@ -453,6 +462,7 @@ pub(crate) fn start_meek_transport_generation_owner_on(
         closing: AtomicBool::new(false),
         runtime: runtime.clone(),
         runtime_worker_threads: runtime_worker_threads.max(1),
+        uses_shared_data_plane_executor: true,
         pools: Mutex::new(HashMap::new()),
         builds: Mutex::new(HashMap::new()),
         resources: MeekTransportResourceProfile::selected(),
