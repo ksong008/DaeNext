@@ -75,7 +75,7 @@ impl Hysteria2Failure {
     }
 
     pub(crate) const fn owner_failure_class(self) -> OwnerFailureClass {
-        match self.class {
+        match self.class() {
             Hysteria2FailureClass::NetworkAddress | Hysteria2FailureClass::NetworkPort => {
                 OwnerFailureClass::Connect
             }
