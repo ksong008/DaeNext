@@ -73,6 +73,7 @@ async fn port_hopping_preserves_the_live_quic_connection_across_streams() {
         AbsoluteDeadline::from_now(Instant::now(), Duration::from_secs(2)),
         &cancellation,
     )
+    .await
     .unwrap();
     endpoint.set_default_client_config(
         build_hysteria2_runtime_client_config_with_udp_overhead(&tls_identity, 0).unwrap(),

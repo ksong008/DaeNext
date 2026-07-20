@@ -1176,9 +1176,16 @@ async fn run_hysteria2_owner_registry(
             command = receiver.recv() => match command {
                 Some(Hysteria2OwnerCommand::Build(command)) => {
                     let metrics = Arc::clone(&metrics);
+                    let cancellation = cancellation.clone();
                     tasks.spawn(async move {
                         Hysteria2RegistryTaskCompletion::Build(
-                            run_hysteria2_owner_build(command, resources, metrics).await,
+                            run_hysteria2_owner_build(
+                                command,
+                                resources,
+                                metrics,
+                                cancellation,
+                            )
+                            .await,
                         )
                     });
                 }
@@ -1314,6 +1321,7 @@ async fn run_hysteria2_owner_build(
     command: Hysteria2BuildCommand,
     resources: Hysteria2OwnerResourceProfile,
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
+    cancellation: OwnerCancellationSignal,
 ) -> Hysteria2BuildCompletion {
     metrics.cumulative_builds.fetch_add(1, Ordering::Relaxed);
     let result = build_hysteria2_transport(
@@ -1323,6 +1331,7 @@ async fn run_hysteria2_owner_build(
         command.deadline,
         Arc::clone(&metrics),
         resources,
+        cancellation,
     )
     .await;
     match result {
@@ -1380,6 +1389,7 @@ async fn build_hysteria2_transport(
     deadline: AbsoluteDeadline,
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     resources: Hysteria2OwnerResourceProfile,
+    cancellation: OwnerCancellationSignal,
 ) -> Result<(Hysteria2SharedTransport, Hysteria2AuthenticatedSession), Hysteria2OwnerBuildError> {
     let ResidentProxyProtocolPlan::Hysteria2QuicTcp {
         auth,
@@ -1419,6 +1429,7 @@ async fn build_hysteria2_transport(
             resources,
             port_hopping_metrics: Arc::clone(&metrics.port_hopping),
             caller,
+            cancellation: &cancellation,
         },
         deadline,
     )
