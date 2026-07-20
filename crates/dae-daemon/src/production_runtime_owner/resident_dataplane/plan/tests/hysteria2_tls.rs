@@ -102,3 +102,47 @@ fn explicit_hysteria2_sni_overrides_ipv6_authority_identity() {
         } if tls_identity.server_name() == "server.example"
     ));
 }
+
+#[test]
+fn absent_and_false_insecure_inputs_build_the_same_secure_pinned_policy() {
+    let pin = fixture_pin_sha256();
+    let absent = build_resident_proxy_plan_for_node(
+        &config_with_global_insecure(false),
+        "proxy".to_owned(),
+        "hysteria2_absent_insecure".to_owned(),
+        format!(
+            "hysteria2://auth@{}?pinSHA256={pin}#secure",
+            fixture_endpoint()
+        ),
+    )
+    .unwrap();
+    let explicit_false = build_resident_proxy_plan_for_node(
+        &config_with_global_insecure(false),
+        "proxy".to_owned(),
+        "hysteria2_false_insecure".to_owned(),
+        format!(
+            "hysteria2://auth@{}?insecure=false&pinSHA256={pin}#secure",
+            fixture_endpoint()
+        ),
+    )
+    .unwrap();
+    let ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+        tls_identity: absent_identity,
+        ..
+    } = absent.handler
+    else {
+        panic!("absent insecure fixture did not build Hysteria2");
+    };
+    let ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+        tls_identity: false_identity,
+        ..
+    } = explicit_false.handler
+    else {
+        panic!("explicit false fixture did not build Hysteria2");
+    };
+
+    assert_eq!(absent_identity, false_identity);
+    assert!(absent_identity.policy().requires_webpki());
+    assert!(absent_identity.policy().has_leaf_certificate_pin());
+    assert!(!absent_identity.policy().allow_insecure());
+}

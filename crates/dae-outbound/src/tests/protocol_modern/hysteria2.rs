@@ -294,3 +294,48 @@ pub(super) fn hysteria2_export_round_trips_reserved_userinfo_and_fragment_bytes(
         parsed
     );
 }
+
+#[test]
+pub(super) fn hysteria2_insecure_inputs_map_to_the_secure_default_boolean() {
+    let absent =
+        crate::hysteria2::Hysteria2Link::parse("hysteria2://auth@example.com:443#tls-policy")
+            .unwrap();
+    let explicit_false = crate::hysteria2::Hysteria2Link::parse(
+        "hysteria2://auth@example.com:443?insecure=false#tls-policy",
+    )
+    .unwrap();
+    let explicit_zero = crate::hysteria2::Hysteria2Link::parse(
+        "hysteria2://auth@example.com:443?insecure=0#tls-policy",
+    )
+    .unwrap();
+    let explicit_true = crate::hysteria2::Hysteria2Link::parse(
+        "hysteria2://auth@example.com:443?insecure=true#tls-policy",
+    )
+    .unwrap();
+
+    assert!(!absent.insecure);
+    assert!(!explicit_false.insecure);
+    assert!(!explicit_zero.insecure);
+    assert!(explicit_true.insecure);
+    assert_eq!(absent.export_url(), explicit_false.export_url());
+    assert_eq!(absent.export_url(), explicit_zero.export_url());
+    assert!(!explicit_false.export_url().contains("insecure"));
+    assert!(explicit_true.export_url().contains("insecure=1"));
+}
+
+#[test]
+pub(super) fn hysteria2_certificate_pin_does_not_enable_insecure_parsing() {
+    let pin = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let absent = crate::hysteria2::Hysteria2Link::parse(&format!(
+        "hysteria2://auth@example.com:443?pinSHA256={pin}#tls-pin"
+    ))
+    .unwrap();
+    let explicit_false = crate::hysteria2::Hysteria2Link::parse(&format!(
+        "hysteria2://auth@example.com:443?insecure=false&pinSHA256={pin}#tls-pin"
+    ))
+    .unwrap();
+
+    assert!(!absent.insecure);
+    assert!(!explicit_false.insecure);
+    assert_eq!(absent.export_url(), explicit_false.export_url());
+}

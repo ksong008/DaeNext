@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use super::link::normalize_pin_sha256;
 
 const SHA256_HEX_LEN: usize = 64;
+const HYSTERIA2_TLS_IDENTITY_DOMAIN: &[u8] = b"dae/hysteria2-tls-identity/v1";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Hysteria2CertificateVerification {
@@ -235,6 +236,37 @@ impl Hysteria2TlsIdentity {
     pub fn verification_label(&self) -> &'static str {
         self.policy.verification_label()
     }
+
+    pub fn effective_identity_sha256(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        update_identity_part(&mut digest, HYSTERIA2_TLS_IDENTITY_DOMAIN);
+        update_identity_part(&mut digest, self.server_name.as_bytes());
+        update_identity_part(
+            &mut digest,
+            self.application_protocol.wire_value().as_bytes(),
+        );
+        update_identity_part(
+            &mut digest,
+            match self.trust_anchor {
+                Hysteria2TrustAnchorIdentity::BundledWebPki => b"bundled-webpki",
+                Hysteria2TrustAnchorIdentity::None => b"none",
+            },
+        );
+        update_identity_part(&mut digest, b"client-certificate-none");
+        update_identity_part(&mut digest, b"encrypted-client-hello-disabled");
+        update_identity_part(&mut digest, self.policy.verification_label().as_bytes());
+        if let Some(pin) = &self.policy.leaf_certificate_sha256 {
+            update_identity_part(&mut digest, &pin.0);
+        } else {
+            update_identity_part(&mut digest, &[]);
+        }
+        digest.finalize().into()
+    }
+}
+
+fn update_identity_part(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
 }
 
 impl fmt::Debug for Hysteria2TlsIdentity {
@@ -297,6 +329,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(canonical, alternate);
+        assert_eq!(
+            canonical.effective_identity_sha256(),
+            alternate.effective_identity_sha256()
+        );
+    }
+
+    #[test]
+    fn effective_identity_tracks_policy_and_pin_without_source_provenance() {
+        let secure =
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", false, false, "")
+                .unwrap();
+        let same_secure =
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", false, false, "")
+                .unwrap();
+        let secure_pin =
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", false, false, PIN)
+                .unwrap();
+        let insecure =
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", true, false, "").unwrap();
+
+        assert_eq!(
+            secure.effective_identity_sha256(),
+            same_secure.effective_identity_sha256()
+        );
+        assert_ne!(
+            secure.effective_identity_sha256(),
+            secure_pin.effective_identity_sha256()
+        );
+        assert_ne!(
+            secure.effective_identity_sha256(),
+            insecure.effective_identity_sha256()
+        );
     }
 
     #[test]
