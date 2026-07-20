@@ -32,9 +32,10 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
     ResidentProxyPlan, ResidentProxyProtocolPlan,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::{
-    Hysteria2PortHoppingMetrics, Hysteria2QuicConnectionRequest, ObservedQuicEndpoint,
-    QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
-    open_hysteria2_quic_connection_candidates_async, wait_quic_endpoint_idle_after_close,
+    Hysteria2Failure, Hysteria2FailureClass, Hysteria2PortHoppingMetrics,
+    Hysteria2QuicConnectionRequest, ObservedQuicEndpoint, QuicEndpointCallerClass,
+    ResidentConnectedQuicEndpoint, open_hysteria2_quic_connection_candidates_async,
+    wait_quic_endpoint_idle_after_close,
 };
 
 const HYSTERIA2_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/hysteria2-owner/v2";
@@ -1541,6 +1542,26 @@ impl Hysteria2OwnerBuildError {
             cleanup_endpoint: Some(cleanup_endpoint),
         }
     }
+
+    fn from_failure(failure: Hysteria2Failure) -> Self {
+        Self::new(
+            failure.owner_failure_class(),
+            failure.operation(),
+            failure.to_string(),
+        )
+    }
+
+    fn from_failure_with_cleanup(
+        failure: Hysteria2Failure,
+        cleanup_endpoint: ObservedQuicEndpoint,
+    ) -> Self {
+        Self::with_cleanup_endpoint(
+            failure.owner_failure_class(),
+            failure.operation(),
+            failure.to_string(),
+            cleanup_endpoint,
+        )
+    }
 }
 
 async fn build_hysteria2_transport(
@@ -1563,19 +1584,21 @@ async fn build_hysteria2_transport(
         port_hop_interval,
     } = &proxy.handler
     else {
-        return Err(Hysteria2OwnerBuildError::new(
-            OwnerFailureClass::Transport,
-            "hysteria2-owner-shape",
-            "Hysteria2 owner received a non-Hysteria2 proxy shape",
+        return Err(Hysteria2OwnerBuildError::from_failure(
+            Hysteria2Failure::new(
+                Hysteria2FailureClass::Configuration,
+                "hysteria2-owner-shape",
+                "Hysteria2 owner received a non-Hysteria2 proxy shape",
+            ),
         ));
     };
     let congestion_runtime = Arc::new(
         Hysteria2CongestionRuntime::new(*congestion, *max_tx, *max_rx).map_err(|_| {
-            Hysteria2OwnerBuildError::new(
-                OwnerFailureClass::Transport,
+            Hysteria2OwnerBuildError::from_failure(Hysteria2Failure::new(
+                Hysteria2FailureClass::Configuration,
                 "hysteria2-owner-congestion",
                 "Hysteria2 congestion configuration is invalid",
-            )
+            ))
         })?,
     );
     let connected = open_hysteria2_quic_connection_candidates_async(
@@ -1597,11 +1620,10 @@ async fn build_hysteria2_transport(
     .await
     .map_err(|connection_failure| {
         let (failure, cleanup_endpoint) = connection_failure.into_parts();
-        Hysteria2OwnerBuildError {
-            class: failure.owner_failure_class(),
-            operation: failure.operation(),
-            detail: failure.to_string(),
-            cleanup_endpoint,
+        if let Some(endpoint) = cleanup_endpoint {
+            Hysteria2OwnerBuildError::from_failure_with_cleanup(failure, endpoint)
+        } else {
+            Hysteria2OwnerBuildError::from_failure(failure)
         }
     })?;
     let ResidentConnectedQuicEndpoint {
@@ -1614,10 +1636,12 @@ async fn build_hysteria2_transport(
         None => {
             endpoint.mark_failed();
             endpoint.close(0_u32.into(), b"hysteria2 owner auth deadline elapsed");
-            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
-                OwnerFailureClass::Cancelled,
-                "hysteria2-owner-auth-deadline",
-                "Hysteria2 owner authentication deadline elapsed",
+            return Err(Hysteria2OwnerBuildError::from_failure_with_cleanup(
+                Hysteria2Failure::new(
+                    Hysteria2FailureClass::Deadline,
+                    "hysteria2-owner-auth-deadline",
+                    "Hysteria2 owner authentication deadline elapsed",
+                ),
                 endpoint,
             ));
         }
@@ -1634,21 +1658,20 @@ async fn build_hysteria2_transport(
         reason = cancellation.cancelled() => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth cancelled");
-            let (operation, detail) = match reason {
-                dae_runtime_control::OwnerCancellation::GenerationDraining => (
+            let failure = match reason {
+                dae_runtime_control::OwnerCancellation::GenerationDraining => Hysteria2Failure::new(
+                    Hysteria2FailureClass::Draining,
                     "hysteria2-owner-auth-draining",
                     "Hysteria2 owner generation drained during authentication",
                 ),
-                _ => (
+                _ => Hysteria2Failure::new(
+                    Hysteria2FailureClass::Cancelled,
                     "hysteria2-owner-auth-cancelled",
                     "Hysteria2 owner authentication was cancelled",
                 ),
             };
-            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
-                OwnerFailureClass::Cancelled,
-                operation,
-                detail,
-                endpoint,
+            return Err(Hysteria2OwnerBuildError::from_failure_with_cleanup(
+                failure, endpoint,
             ));
         }
     };
@@ -1657,30 +1680,36 @@ async fn build_hysteria2_transport(
         Ok(Ok(_session)) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth rejected");
-            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
-                OwnerFailureClass::Authentication,
-                "hysteria2-owner-auth-status",
-                "Hysteria2 owner authentication rejected",
+            return Err(Hysteria2OwnerBuildError::from_failure_with_cleanup(
+                Hysteria2Failure::new(
+                    Hysteria2FailureClass::Http3Authentication,
+                    "hysteria2-owner-auth-status",
+                    "Hysteria2 owner authentication rejected",
+                ),
                 endpoint,
             ));
         }
         Ok(Err(_err)) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth failed");
-            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
-                OwnerFailureClass::Authentication,
-                "hysteria2-owner-auth",
-                "Hysteria2 owner authentication exchange failed",
+            return Err(Hysteria2OwnerBuildError::from_failure_with_cleanup(
+                Hysteria2Failure::new(
+                    Hysteria2FailureClass::Http3Authentication,
+                    "hysteria2-owner-auth",
+                    "Hysteria2 owner authentication exchange failed",
+                ),
                 endpoint,
             ));
         }
         Err(_) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth timeout");
-            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
-                OwnerFailureClass::Cancelled,
-                "hysteria2-owner-auth-timeout",
-                "Hysteria2 owner authentication timeout",
+            return Err(Hysteria2OwnerBuildError::from_failure_with_cleanup(
+                Hysteria2Failure::new(
+                    Hysteria2FailureClass::Deadline,
+                    "hysteria2-owner-auth-timeout",
+                    "Hysteria2 owner authentication timeout",
+                ),
                 endpoint,
             ));
         }
