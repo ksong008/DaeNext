@@ -4,6 +4,13 @@ use std::io::{self, Write};
 mod allocator;
 
 fn main() {
+    if let Err(err) = dae_daemon::ensure_allocator_startup_configuration() {
+        let _ = writeln!(
+            io::stderr(),
+            "daed-contract-runner: failed to apply allocator startup configuration: {err}"
+        );
+        std::process::exit(1);
+    }
     let version = dae_daemon::version_from_env();
     let output = dae_daemon::run_with_args_and_version(std::env::args().skip(1), &version);
     if !output.stdout.is_empty() {
