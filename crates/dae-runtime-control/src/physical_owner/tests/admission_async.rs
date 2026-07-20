@@ -169,3 +169,18 @@ async fn impossible_byte_charge_is_rejected_without_waiting() {
         })
     ));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancellation_signal_waits_without_polling_or_blocking() {
+    let cancellation = OwnerCancellationSignal::new();
+    let waiting = cancellation.clone();
+    let waiter = tokio::spawn(async move { waiting.cancelled().await });
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished());
+    cancellation.cancel(OwnerCancellation::GenerationDraining);
+    assert_eq!(waiter.await.unwrap(), OwnerCancellation::GenerationDraining);
+    assert_eq!(
+        cancellation.cancelled().await,
+        OwnerCancellation::GenerationDraining
+    );
+}

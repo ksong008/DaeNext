@@ -76,6 +76,21 @@ impl OwnerCancellationSignal {
         self.reason().map_or(Ok(()), Err)
     }
 
+    pub async fn cancelled(&self) -> OwnerCancellation {
+        if let Some(reason) = self.reason() {
+            return reason;
+        }
+        let mut receiver = self.subscribe();
+        loop {
+            if receiver.changed().await.is_err() {
+                return OwnerCancellation::DependencyFailed;
+            }
+            if let Some(reason) = *receiver.borrow() {
+                return reason;
+            }
+        }
+    }
+
     pub(crate) fn subscribe(&self) -> watch::Receiver<Option<OwnerCancellation>> {
         self.sender.subscribe()
     }
