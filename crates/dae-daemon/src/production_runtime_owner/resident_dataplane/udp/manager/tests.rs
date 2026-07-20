@@ -10,10 +10,10 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
 use super::*;
 
 #[test]
-fn udp_session_worker_thread_name_stays_functional() {
-    assert_eq!(UDP_SESSION_WORKER_THREAD_NAME, "udp-session");
-    assert!(!UDP_SESSION_WORKER_THREAD_NAME.contains("daed"));
-    assert!(!UDP_SESSION_WORKER_THREAD_NAME.contains("shard"));
+fn udp_session_manager_uses_the_generation_data_plane_executor() {
+    let source = include_str!("../manager.rs");
+    assert!(source.contains("generation-owned-shared-multi-thread"));
+    assert!(!source.contains("thread_name(\"udp-session\")"));
 }
 
 #[test]

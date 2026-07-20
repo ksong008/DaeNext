@@ -5,9 +5,11 @@ use std::sync::{
     Arc, Mutex, OnceLock, Weak,
     atomic::{AtomicBool, AtomicI32, Ordering},
 };
+#[cfg(test)]
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 
 mod h2_manager;
@@ -69,6 +71,7 @@ impl XhttpXmuxGenerationOwnerHandle {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn start_xhttp_xmux_generation_owner(
     runtime_generation: u64,
     thread_stack_bytes: usize,
@@ -134,6 +137,43 @@ pub(crate) fn start_xhttp_xmux_generation_owner(
         }
     };
     Ok((XhttpXmuxGenerationOwnerHandle { owner }, thread))
+}
+
+pub(crate) fn start_xhttp_xmux_generation_owner_on(
+    runtime: &tokio::runtime::Handle,
+    runtime_generation: u64,
+    runtime_worker_threads: usize,
+) -> Result<(XhttpXmuxGenerationOwnerHandle, tokio::task::JoinHandle<()>), String> {
+    let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+    let owner = Arc::new(XhttpXmuxGenerationOwner {
+        runtime_generation,
+        closing: AtomicBool::new(false),
+        runtime: runtime.clone(),
+        runtime_worker_threads: runtime_worker_threads.max(1),
+        shutdown: Mutex::new(Some(shutdown)),
+        h2: XhttpH2GenerationManagers::new(),
+        h3: XhttpH3GenerationManagers::new(),
+    });
+    let mut owners = XHTTP_XMUX_GENERATION_OWNERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "resident xHTTP xmux generation owner registry lock poisoned".to_owned())?;
+    owners.retain(|_, owner| owner.strong_count() > 0);
+    if owners
+        .get(&runtime_generation)
+        .and_then(Weak::upgrade)
+        .is_some_and(|owner| !owner.closing.load(Ordering::Acquire))
+    {
+        return Err(format!(
+            "resident xHTTP xmux generation owner {runtime_generation} is already active"
+        ));
+    }
+    owners.insert(runtime_generation, Arc::downgrade(&owner));
+    drop(owners);
+    let task = runtime.spawn(async move {
+        let _ = shutdown_rx.await;
+    });
+    Ok((XhttpXmuxGenerationOwnerHandle { owner }, task))
 }
 
 fn xhttp_xmux_generation_owner(
@@ -305,15 +345,25 @@ pub(super) fn note_xhttp_xmux_request(xmux_lease: Option<&XhttpXmuxClientLease>)
     }
 }
 
+#[cfg(test)]
 pub(crate) fn shutdown_xhttp_xmux_generation_owner(
     owner: &XhttpXmuxGenerationOwnerHandle,
     thread: JoinHandle<()>,
     grace: Duration,
 ) -> XhttpXmuxClearReport {
+    let mut report = stop_xhttp_xmux_generation_owner(owner, grace);
+    report.owner_thread_joined = thread.join().is_ok();
+    report
+}
+
+pub(crate) fn stop_xhttp_xmux_generation_owner(
+    owner: &XhttpXmuxGenerationOwnerHandle,
+    grace: Duration,
+) -> XhttpXmuxClearReport {
     let already_closing = owner.owner.closing.swap(true, Ordering::AcqRel);
     unregister_xhttp_xmux_generation_owner(&owner.owner);
 
-    let mut report = if already_closing {
+    let report = if already_closing {
         XhttpXmuxClearReport::default()
     } else {
         let deadline = tokio::time::Instant::now() + grace;
@@ -344,7 +394,6 @@ pub(crate) fn shutdown_xhttp_xmux_generation_owner(
     {
         let _ = shutdown.send(());
     }
-    report.owner_thread_joined = thread.join().is_ok();
     report
 }
 

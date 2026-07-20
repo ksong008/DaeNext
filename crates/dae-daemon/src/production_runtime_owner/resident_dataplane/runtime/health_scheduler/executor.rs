@@ -118,6 +118,7 @@ impl ResidentHealthRuntimeConfig {
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_resident_health_runtime(
     config: ResidentHealthRuntimeConfig,
 ) -> Result<tokio::runtime::Runtime, String> {

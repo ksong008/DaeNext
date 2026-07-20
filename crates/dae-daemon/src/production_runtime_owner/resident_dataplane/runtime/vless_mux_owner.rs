@@ -677,6 +677,44 @@ fn start_vless_mux_generation_owner_with_resources(
     Ok((VlessMuxGenerationOwnerHandle { owner }, thread))
 }
 
+pub(crate) fn start_vless_mux_generation_owner_on(
+    runtime: &tokio::runtime::Handle,
+    generation: u64,
+    stop: SharedResidentStopSignal,
+    runtime_worker_threads: usize,
+) -> Result<(VlessMuxGenerationOwnerHandle, tokio::task::JoinHandle<()>), String> {
+    let owner = Arc::new(VlessMuxGenerationOwner {
+        generation: OwnerGeneration::new(generation),
+        closing: AtomicBool::new(false),
+        runtime: runtime.clone(),
+        runtime_worker_threads: runtime_worker_threads.max(1),
+        pools: Mutex::new(HashMap::new()),
+        builds: Mutex::new(HashMap::new()),
+        resources: VlessMuxOwnerResourceProfile::selected(),
+        metrics: Arc::new(VlessMuxOwnerMetrics::default()),
+        changed: tokio::sync::Notify::new(),
+        next_build_id: AtomicU64::new(1),
+        next_physical_id: AtomicU64::new(1),
+    });
+    register_vless_mux_generation(&owner)?;
+    let task_owner = Arc::clone(&owner);
+    let task = runtime.spawn(async move {
+        let mut janitor = time::interval(task_owner.resources.idle_janitor_interval());
+        janitor.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        let mut stop_listener = stop.listener();
+        loop {
+            tokio::select! {
+                _ = stop_listener.cancelled() => break,
+                _ = janitor.tick() => prune_vless_mux_owner(&task_owner),
+            }
+        }
+        task_owner.closing.store(true, Ordering::Release);
+        unregister_vless_mux_generation(&task_owner);
+        cleanup_vless_mux_owner(&task_owner).await;
+    });
+    Ok((VlessMuxGenerationOwnerHandle { owner }, task))
+}
+
 fn register_vless_mux_generation(owner: &Arc<VlessMuxGenerationOwner>) -> Result<(), String> {
     let mut generations = VLESS_MUX_TRANSPORT_GENERATIONS
         .get_or_init(|| Mutex::new(HashMap::new()))

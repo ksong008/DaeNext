@@ -1261,6 +1261,37 @@ pub(crate) fn start_hysteria2_owner_registry(
     Ok((handle, thread))
 }
 
+pub(crate) fn start_hysteria2_owner_registry_on(
+    runtime: &tokio::runtime::Handle,
+    generation: u64,
+    stop: SharedResidentStopSignal,
+) -> (Hysteria2OwnerRegistryHandle, tokio::task::JoinHandle<()>) {
+    let generation = OwnerGeneration::new(generation);
+    let resources = Hysteria2OwnerResourceProfile::selected();
+    let (sender, receiver) = mpsc::channel(resources.command_queue_depth().max(1));
+    let index = Arc::new(Mutex::new(Hysteria2OwnerIndex::new()));
+    let cancellation = OwnerCancellationSignal::new();
+    let metrics = Arc::new(Hysteria2OwnerRegistryMetrics::default());
+    let handle = Hysteria2OwnerRegistryHandle {
+        generation,
+        sender,
+        index: Arc::clone(&index),
+        cancellation: cancellation.clone(),
+        resources,
+        metrics: Arc::clone(&metrics),
+    };
+    let task = runtime.spawn(run_hysteria2_owner_registry(
+        generation,
+        receiver,
+        index,
+        cancellation,
+        resources,
+        metrics,
+        stop,
+    ));
+    (handle, task)
+}
+
 async fn run_hysteria2_owner_registry(
     _generation: OwnerGeneration,
     mut receiver: mpsc::Receiver<Hysteria2OwnerCommand>,

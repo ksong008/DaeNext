@@ -123,35 +123,7 @@ pub(super) fn prepare_resident_dns_bind_listener(
     }))
 }
 
-pub(super) fn resident_dns_bind_listener_loop(
-    listener: ResidentDnsBindListener,
-    dns: Arc<ResidentDnsPlan>,
-    stop: SharedResidentStopSignal,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-) {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            append_event(
-                &event_file,
-                &event_lock,
-                json!({"event": "dns_bind_listener_start_failed", "error": err.to_string()}),
-            );
-            return;
-        }
-    };
-    runtime.block_on(run_resident_dns_bind_listener_async(
-        listener, dns, stop, event_file, event_lock, metrics,
-    ));
-}
-
-async fn run_resident_dns_bind_listener_async(
+pub(super) async fn run_resident_dns_bind_listener_async(
     mut listener: ResidentDnsBindListener,
     dns: Arc<ResidentDnsPlan>,
     stop: SharedResidentStopSignal,

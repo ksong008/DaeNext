@@ -8,11 +8,18 @@ mod task;
 use self::cleanup_inventory::*;
 pub(crate) use self::manual_probe_index::ResidentManualProbeIndex;
 use self::shutdown::shutdown_resident_runtime_owner;
-use self::task::*;
+#[cfg(test)]
+use self::task::spawn_resident_runtime_task;
+pub(super) use self::task::{
+    ResidentAsyncRuntimeShutdown, ResidentAsyncRuntimeTask, registered_resident_async_runtime_task,
+};
+use self::task::{ResidentRuntimeTask, ResidentRuntimeTaskExit, registered_resident_runtime_task};
 
 pub(crate) struct ResidentRuntimeOwner {
     stop: SharedResidentStopSignal,
     tasks: Vec<ResidentRuntimeTask>,
+    async_tasks: Vec<ResidentAsyncRuntimeTask>,
+    data_plane_executor: ResidentDataPlaneExecutor,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     reload_generation: u64,
@@ -30,7 +37,7 @@ pub(crate) struct ResidentRuntimeOwner {
     meek_transport_generation_owner: Option<MeekTransportGenerationOwnerHandle>,
     vless_mux_generation_owner: Option<VlessMuxGenerationOwnerHandle>,
     xhttp_xmux_generation_owner: Option<tcp::XhttpXmuxGenerationOwnerHandle>,
-    xhttp_xmux_owner_thread: Option<JoinHandle<()>>,
+    xhttp_xmux_owner_task: Option<ResidentAsyncRuntimeTask>,
 }
 
 #[derive(Clone)]
@@ -48,7 +55,10 @@ pub(crate) struct ResidentManualProbeHandle {
 impl std::fmt::Debug for ResidentRuntimeOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResidentRuntimeOwner")
-            .field("task_count", &self.tasks.len())
+            .field(
+                "task_count",
+                &self.tasks.len().saturating_add(self.async_tasks.len()),
+            )
             .field("event_file_status", &"disabled")
             .field("reload_generation", &self.reload_generation)
             .field("resource_config", &self.resource_config.json())
@@ -67,15 +77,18 @@ impl ResidentRuntimeOwner {
         udp_sessions_active: Arc<AtomicUsize>,
         resource_config: ResidentRuntimeResourceConfig,
         udp_payload_admission: ResidentUdpPayloadAdmission,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        let data_plane_executor = ResidentDataPlaneExecutor::new(&resource_config)?;
         let event_writer = ResidentEventWriterRuntime::start(
             event_file.clone(),
             Arc::clone(&event_lock),
             resource_config.event_queue_depth.value(),
         );
-        Self {
+        Ok(Self {
             stop: ResidentStopSignal::shared(),
             tasks: Vec::new(),
+            async_tasks: Vec::new(),
+            data_plane_executor,
             event_file,
             event_lock,
             reload_generation,
@@ -93,112 +106,117 @@ impl ResidentRuntimeOwner {
             meek_transport_generation_owner: None,
             vless_mux_generation_owner: None,
             xhttp_xmux_generation_owner: None,
-            xhttp_xmux_owner_thread: None,
-        }
+            xhttp_xmux_owner_task: None,
+        })
     }
 
-    pub(crate) fn install_hysteria2_owner_registry(
+    pub(crate) fn install_hysteria2_owner_registry_task(
         &mut self,
         handle: Hysteria2OwnerRegistryHandle,
-        thread: JoinHandle<()>,
+        task: tokio::task::JoinHandle<()>,
     ) {
         self.hysteria2_owner_registry = Some(handle);
-        self.register_thread(
-            "hysteria2-owner-registry",
-            "protocol-transport-owner",
-            thread,
-        );
+        self.register_async_task("hysteria2-owner-registry", "protocol-transport-owner", task);
     }
 
     pub(crate) fn hysteria2_owner_registry(&self) -> Option<Hysteria2OwnerRegistryHandle> {
         self.hysteria2_owner_registry.clone()
     }
 
-    pub(crate) fn install_tuic_owner_registry(
+    pub(crate) fn install_tuic_owner_registry_task(
         &mut self,
         handle: TuicOwnerRegistryHandle,
-        thread: JoinHandle<()>,
+        task: tokio::task::JoinHandle<()>,
     ) {
         self.tuic_owner_registry = Some(handle);
-        self.register_thread("tuic-owner-registry", "protocol-transport-owner", thread);
+        self.register_async_task("tuic-owner-registry", "protocol-transport-owner", task);
     }
 
     pub(crate) fn tuic_owner_registry(&self) -> Option<TuicOwnerRegistryHandle> {
         self.tuic_owner_registry.clone()
     }
 
-    pub(crate) fn install_juicity_owner_registry(
+    pub(crate) fn install_juicity_owner_registry_task(
         &mut self,
         handle: JuicityOwnerRegistryHandle,
-        thread: JoinHandle<()>,
+        task: tokio::task::JoinHandle<()>,
     ) {
         self.juicity_owner_registry = Some(handle);
-        self.register_thread("juicity-owner-registry", "protocol-transport-owner", thread);
+        self.register_async_task("juicity-owner-registry", "protocol-transport-owner", task);
     }
 
     pub(crate) fn juicity_owner_registry(&self) -> Option<JuicityOwnerRegistryHandle> {
         self.juicity_owner_registry.clone()
     }
 
-    pub(crate) fn install_anytls_owner_registry(
+    pub(crate) fn install_anytls_owner_registry_task(
         &mut self,
         handle: AnyTlsOwnerRegistryHandle,
-        thread: JoinHandle<()>,
+        task: tokio::task::JoinHandle<()>,
     ) {
         self.anytls_owner_registry = Some(handle);
-        self.register_thread("anytls-owner-registry", "protocol-transport-owner", thread);
+        self.register_async_task("anytls-owner-registry", "protocol-transport-owner", task);
     }
 
     pub(crate) fn anytls_owner_registry(&self) -> Option<AnyTlsOwnerRegistryHandle> {
         self.anytls_owner_registry.clone()
     }
 
-    pub(crate) fn install_h2_carrier_generation_owner(
+    pub(crate) fn install_h2_carrier_generation_owner_task(
         &mut self,
         handle: H2CarrierGenerationOwnerHandle,
-        thread: JoinHandle<()>,
+        task: tokio::task::JoinHandle<()>,
     ) {
         self.h2_carrier_generation_owner = Some(handle);
-        self.register_thread("h2-carrier-owner", "protocol-transport-owner", thread);
+        self.register_async_task("h2-carrier-owner", "protocol-transport-owner", task);
     }
 
-    pub(crate) fn install_meek_transport_generation_owner(
+    pub(crate) fn install_meek_transport_generation_owner_task(
         &mut self,
         handle: MeekTransportGenerationOwnerHandle,
-        thread: JoinHandle<()>,
+        task: tokio::task::JoinHandle<()>,
     ) {
         self.meek_transport_generation_owner = Some(handle);
-        self.register_thread("meek-transport-owner", "protocol-transport-owner", thread);
+        self.register_async_task("meek-transport-owner", "protocol-transport-owner", task);
     }
 
-    pub(crate) fn install_vless_mux_generation_owner(
+    pub(crate) fn install_vless_mux_generation_owner_task(
         &mut self,
         handle: VlessMuxGenerationOwnerHandle,
-        thread: JoinHandle<()>,
+        task: tokio::task::JoinHandle<()>,
     ) {
         self.vless_mux_generation_owner = Some(handle);
-        self.register_thread("vless-mux-owner", "protocol-transport-owner", thread);
+        self.register_async_task("vless-mux-owner", "protocol-transport-owner", task);
     }
 
-    pub(crate) fn install_xhttp_xmux_generation_owner(
+    pub(crate) fn install_xhttp_xmux_generation_owner_task(
         &mut self,
         handle: tcp::XhttpXmuxGenerationOwnerHandle,
-        thread: JoinHandle<()>,
+        task: tokio::task::JoinHandle<()>,
     ) {
         self.xhttp_xmux_generation_owner = Some(handle);
-        self.xhttp_xmux_owner_thread = Some(thread);
+        self.xhttp_xmux_owner_task = Some(registered_resident_async_runtime_task(
+            "xhttp-xmux-owner",
+            "protocol-transport-owner",
+            task,
+        ));
     }
 
     pub(crate) fn shutdown_xhttp_xmux_generation_owner(
         &mut self,
     ) -> Option<tcp::XhttpXmuxClearReport> {
         let handle = self.xhttp_xmux_generation_owner.take()?;
-        let thread = self.xhttp_xmux_owner_thread.take()?;
-        Some(tcp::shutdown_xhttp_xmux_generation_owner(
-            &handle,
-            thread,
-            RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
-        ))
+        let mut report =
+            tcp::stop_xhttp_xmux_generation_owner(&handle, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
+        if let Some(task) = self.xhttp_xmux_owner_task.take() {
+            let deadline = Instant::now()
+                .checked_add(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+                .unwrap_or_else(Instant::now);
+            let shutdown = self.data_plane_executor.join_tasks(vec![task], deadline);
+            report.owner_thread_joined =
+                shutdown.joined == 1 && shutdown.panicked == 0 && shutdown.timed_out == 0;
+        }
+        Some(report)
     }
 
     pub(crate) fn stop_handle(&self) -> SharedResidentStopSignal {
@@ -256,6 +274,33 @@ impl ResidentRuntimeOwner {
             .push(registered_resident_runtime_task(name, kind, handle));
     }
 
+    pub(crate) fn data_plane_handle(&self) -> tokio::runtime::Handle {
+        self.data_plane_executor.handle()
+    }
+
+    pub(crate) fn data_plane_worker_threads(&self) -> usize {
+        self.data_plane_executor.worker_threads()
+    }
+
+    pub(crate) fn register_async_task(
+        &mut self,
+        name: &'static str,
+        kind: &'static str,
+        handle: tokio::task::JoinHandle<()>,
+    ) {
+        self.async_tasks
+            .push(registered_resident_async_runtime_task(name, kind, handle));
+    }
+
+    pub(crate) fn spawn_async_task<F>(&mut self, name: &'static str, kind: &'static str, task: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handle = self.data_plane_executor.handle().spawn(task);
+        self.register_async_task(name, kind, handle);
+    }
+
+    #[cfg(test)]
     pub(crate) fn spawn_thread<F>(&mut self, name: &'static str, kind: &'static str, run: F)
     where
         F: FnOnce() + Send + 'static,
@@ -264,29 +309,15 @@ impl ResidentRuntimeOwner {
             .push(spawn_resident_runtime_task(name, kind, None, run));
     }
 
-    pub(crate) fn spawn_thread_with_stack<F>(
-        &mut self,
-        name: &'static str,
-        kind: &'static str,
-        stack_bytes: usize,
-        run: F,
-    ) where
-        F: FnOnce() + Send + 'static,
-    {
-        self.tasks.push(spawn_resident_runtime_task(
-            name,
-            kind,
-            Some(stack_bytes),
-            run,
-        ));
-    }
-
     pub(crate) fn task_registry_value(&self) -> Value {
         json!({
             "schemaVersion": 1,
             "owner": "resident-runtime-owner",
             "reloadGeneration": self.reload_generation,
-            "taskCount": self.tasks.len(),
+            "taskCount": self.tasks.len().saturating_add(self.async_tasks.len()),
+            "threadTaskCount": self.tasks.len(),
+            "asyncTaskCount": self.async_tasks.len(),
+            "dataPlaneExecutor": self.data_plane_executor.json(),
             "runtimeHandle": self.manual_probe_runtime_value(),
             "resources": self.resource_config.json(),
             "eventLog": "product-log-sink",
@@ -306,7 +337,14 @@ impl ResidentRuntimeOwner {
                     "kind": task.kind,
                     "joinPolicy": "bounded-join-on-owner-shutdown",
                 })
-            }).collect::<Vec<_>>(),
+            }).chain(self.async_tasks.iter().map(|task| {
+                json!({
+                    "name": task.name,
+                    "kind": task.kind,
+                    "executor": "generation-owned-shared-multi-thread",
+                    "joinPolicy": "bounded-join-on-owner-shutdown",
+                })
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -419,7 +457,10 @@ impl ResidentRuntimeOwner {
             "schemaVersion": 1,
             "owner": "resident-runtime-owner",
             "reloadGeneration": self.reload_generation,
-            "taskCount": self.tasks.len(),
+            "taskCount": self.tasks.len().saturating_add(self.async_tasks.len()),
+            "threadTaskCount": self.tasks.len(),
+            "asyncTaskCount": self.async_tasks.len(),
+            "dataPlaneExecutor": self.data_plane_executor.json(),
             "runtimeHandle": self.manual_probe_runtime_value(),
             "eventLog": "product-log-sink",
             "eventFileStatus": "disabled",
@@ -1213,7 +1254,8 @@ mod tests {
             Arc::clone(&udp_sessions_active),
             ResidentRuntimeResourceConfig::from_config(&config),
             ResidentUdpPayloadAdmission::new(9, 1024),
-        );
+        )
+        .unwrap();
         owner.spawn_thread("test-worker", "runtime-lifecycle-test", || {});
         let registry = owner.task_registry_value();
         assert_eq!(registry["owner"], "resident-runtime-owner");

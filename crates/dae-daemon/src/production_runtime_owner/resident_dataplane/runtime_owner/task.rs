@@ -1,6 +1,9 @@
 use super::*;
+#[cfg(test)]
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::mpsc::{self, Receiver};
+#[cfg(test)]
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
 
 #[derive(Debug)]
 pub(super) struct ResidentRuntimeTask {
@@ -10,8 +13,33 @@ pub(super) struct ResidentRuntimeTask {
     pub(super) completion: Option<Receiver<ResidentRuntimeTaskExit>>,
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentAsyncRuntimeTask {
+    pub(in crate::production_runtime_owner::resident_dataplane) name: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) kind: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) handle: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Default)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentAsyncRuntimeShutdown {
+    pub(in crate::production_runtime_owner::resident_dataplane) joined: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) panicked: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) timed_out: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) results: Vec<Value>,
+    pub(in crate::production_runtime_owner::resident_dataplane) pending:
+        Vec<ResidentAsyncRuntimeTask>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) fn registered_resident_async_runtime_task(
+    name: &'static str,
+    kind: &'static str,
+    handle: tokio::task::JoinHandle<()>,
+) -> ResidentAsyncRuntimeTask {
+    ResidentAsyncRuntimeTask { name, kind, handle }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ResidentRuntimeTaskExit {
+    #[cfg(test)]
     Completed,
     Panicked,
 }
@@ -29,6 +57,7 @@ pub(super) fn registered_resident_runtime_task(
     }
 }
 
+#[cfg(test)]
 pub(super) fn spawn_resident_runtime_task<F>(
     name: &'static str,
     kind: &'static str,

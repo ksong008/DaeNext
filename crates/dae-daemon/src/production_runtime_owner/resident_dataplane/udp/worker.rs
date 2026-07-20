@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use super::*;
 
-pub(crate) fn resident_udp_loop(
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn resident_udp_loop_async(
     socket: std::net::UdpSocket,
     proxy_groups: SharedResidentProxyGroupMap,
     default_outbound: u8,
@@ -26,7 +27,7 @@ pub(crate) fn resident_udp_loop(
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> Value {
-    run_resident_udp_session_manager(
+    run_resident_udp_session_manager_async(
         socket,
         proxy_groups,
         default_outbound,
@@ -47,4 +48,5 @@ pub(crate) fn resident_udp_loop(
         juicity_owner_registry,
         anytls_owner_registry,
     )
+    .await
 }

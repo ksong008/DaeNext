@@ -436,6 +436,49 @@ fn start_meek_transport_generation_owner_with_resources(
     Ok((MeekTransportGenerationOwnerHandle { owner }, thread))
 }
 
+pub(crate) fn start_meek_transport_generation_owner_on(
+    runtime: &tokio::runtime::Handle,
+    generation: u64,
+    stop: SharedResidentStopSignal,
+    runtime_worker_threads: usize,
+) -> Result<
+    (
+        MeekTransportGenerationOwnerHandle,
+        tokio::task::JoinHandle<()>,
+    ),
+    String,
+> {
+    let owner = Arc::new(MeekTransportGenerationOwner {
+        generation: OwnerGeneration::new(generation),
+        closing: AtomicBool::new(false),
+        runtime: runtime.clone(),
+        runtime_worker_threads: runtime_worker_threads.max(1),
+        pools: Mutex::new(HashMap::new()),
+        builds: Mutex::new(HashMap::new()),
+        resources: MeekTransportResourceProfile::selected(),
+        metrics: Arc::new(MeekTransportMetrics::default()),
+        changed: Notify::new(),
+        next_build_id: AtomicU64::new(1),
+    });
+    register_meek_transport_generation(&owner)?;
+    let task_owner = Arc::clone(&owner);
+    let task = runtime.spawn(async move {
+        let mut janitor = time::interval(task_owner.resources.idle_janitor_interval());
+        janitor.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        let mut stop_listener = stop.listener();
+        loop {
+            tokio::select! {
+                _ = stop_listener.cancelled() => break,
+                _ = janitor.tick() => prune_expired_meek_idle(&task_owner),
+            }
+        }
+        task_owner.closing.store(true, Ordering::Release);
+        unregister_meek_transport_generation(&task_owner);
+        cleanup_meek_transport_owner(&task_owner).await;
+    });
+    Ok((MeekTransportGenerationOwnerHandle { owner }, task))
+}
+
 fn register_meek_transport_generation(
     owner: &Arc<MeekTransportGenerationOwner>,
 ) -> Result<(), String> {

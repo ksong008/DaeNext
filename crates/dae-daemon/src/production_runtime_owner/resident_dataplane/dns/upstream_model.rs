@@ -187,16 +187,19 @@ impl ResidentDnsForwarderCache {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn new_with_transport_owner(
         udp_runtime: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
-        hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
-        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-        juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
-        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+        runtime: tokio::runtime::Handle,
+        transport_owners: ResidentTransportOwnerRegistries,
     ) -> Self {
-        let mut cache = Self::new(udp_runtime, metrics);
-        cache.hysteria2_owner_registry = Some(hysteria2_owner_registry);
-        cache.tuic_owner_registry = tuic_owner_registry;
-        cache.juicity_owner_registry = juicity_owner_registry;
-        cache.anytls_owner_registry = anytls_owner_registry;
+        let mut cache = Self::new(udp_runtime.clone(), Arc::clone(&metrics));
+        cache.udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new_on(
+            udp_runtime,
+            metrics,
+            runtime,
+        ));
+        cache.hysteria2_owner_registry = transport_owners.hysteria2();
+        cache.tuic_owner_registry = transport_owners.tuic();
+        cache.juicity_owner_registry = transport_owners.juicity();
+        cache.anytls_owner_registry = transport_owners.anytls();
         cache
     }
 

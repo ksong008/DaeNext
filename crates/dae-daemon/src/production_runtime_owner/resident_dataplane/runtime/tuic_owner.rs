@@ -1001,6 +1001,36 @@ pub(super) fn start_tuic_owner_registry_with_resources(
     Ok((handle, thread))
 }
 
+pub(crate) fn start_tuic_owner_registry_on(
+    runtime: &tokio::runtime::Handle,
+    generation: u64,
+    stop: SharedResidentStopSignal,
+) -> (TuicOwnerRegistryHandle, tokio::task::JoinHandle<()>) {
+    let generation = OwnerGeneration::new(generation);
+    let resources = TuicOwnerResourceProfile::selected();
+    let (sender, receiver) = mpsc::channel(resources.command_queue_depth().max(1));
+    let index = Arc::new(Mutex::new(TuicOwnerIndex::new()));
+    let cancellation = OwnerCancellationSignal::new();
+    let metrics = Arc::new(TuicOwnerRegistryMetrics::default());
+    let handle = TuicOwnerRegistryHandle {
+        generation,
+        sender,
+        index: Arc::clone(&index),
+        cancellation: cancellation.clone(),
+        resources,
+        metrics: Arc::clone(&metrics),
+    };
+    let task = runtime.spawn(run_tuic_owner_registry(
+        receiver,
+        index,
+        cancellation,
+        resources,
+        metrics,
+        stop,
+    ));
+    (handle, task)
+}
+
 async fn run_tuic_owner_registry(
     mut receiver: mpsc::Receiver<TuicOwnerCommand>,
     index: Arc<Mutex<TuicOwnerIndex>>,

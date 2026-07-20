@@ -425,6 +425,27 @@ pub(super) fn start_juicity_owner_registry_with_resources(
     Ok((handle, thread))
 }
 
+pub(crate) fn start_juicity_owner_registry_on(
+    runtime: &tokio::runtime::Handle,
+    generation: u64,
+    stop: SharedResidentStopSignal,
+) -> (JuicityOwnerRegistryHandle, tokio::task::JoinHandle<()>) {
+    let generation = OwnerGeneration::new(generation);
+    let resources = JuicityOwnerResourceProfile::selected();
+    let (sender, receiver) = mpsc::channel(resources.command_queue_depth().max(1));
+    let metrics = Arc::new(JuicityOwnerMetrics::default());
+    let handle = JuicityOwnerRegistryHandle {
+        generation,
+        sender,
+        resources,
+        metrics: Arc::clone(&metrics),
+    };
+    let task = runtime.spawn(run_juicity_owner_registry(
+        receiver, resources, metrics, stop,
+    ));
+    (handle, task)
+}
+
 async fn run_juicity_owner_registry(
     mut receiver: mpsc::Receiver<JuicityOwnerCommand>,
     resources: JuicityOwnerResourceProfile,

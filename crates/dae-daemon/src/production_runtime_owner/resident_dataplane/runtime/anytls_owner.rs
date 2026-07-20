@@ -888,6 +888,29 @@ pub(super) fn start_anytls_owner_registry_with_resources(
     Ok((handle, thread))
 }
 
+pub(crate) fn start_anytls_owner_registry_on(
+    runtime: &tokio::runtime::Handle,
+    generation: u64,
+    stop: SharedResidentStopSignal,
+) -> (AnyTlsOwnerRegistryHandle, tokio::task::JoinHandle<()>) {
+    let generation = OwnerGeneration::new(generation);
+    let resources = AnyTlsOwnerResourceProfile::selected();
+    let (sender, receiver) = mpsc::channel(resources.command_queue_depth().max(1));
+    let index = Arc::new(Mutex::new(AnyTlsOwnerIndex::new()));
+    let metrics = Arc::new(AnyTlsOwnerMetrics::default());
+    let handle = AnyTlsOwnerRegistryHandle {
+        generation,
+        sender,
+        index: Arc::clone(&index),
+        resources,
+        metrics: Arc::clone(&metrics),
+    };
+    let task = runtime.spawn(run_anytls_owner_registry(
+        receiver, index, resources, metrics, stop,
+    ));
+    (handle, task)
+}
+
 async fn run_anytls_owner_registry(
     mut receiver: mpsc::Receiver<AnyTlsOwnerCommand>,
     index: Arc<Mutex<AnyTlsOwnerIndex>>,
