@@ -259,3 +259,22 @@ pub(super) fn hysteria2_external_capabilities_are_admitted_or_rejected_during_pa
         }));
     }
 }
+
+#[test]
+pub(super) fn hysteria2_salamander_requires_the_protocol_minimum_password_length() {
+    for password in ["7", "77", "777"] {
+        let link = format!(
+            "hysteria2://auth@example.com:443?obfs=salamander&obfs-password={password}#short"
+        );
+        let error = crate::hysteria2::Hysteria2Link::parse(&link).unwrap_err();
+        assert!(error.to_string().contains("protocol minimum"));
+        assert!(!error.to_string().contains(password));
+    }
+
+    let admitted = crate::hysteria2::Hysteria2Link::parse(
+        "hysteria2://auth@example.com:443?obfs=salamander&obfs-password=abcd#minimum",
+    )
+    .unwrap();
+    assert_eq!(admitted.obfs, "salamander");
+    assert_eq!(admitted.obfs_password, "abcd");
+}

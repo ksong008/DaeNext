@@ -6,6 +6,7 @@ use super::Hysteria2CongestionConfig;
 use super::port_hopping::parse_port_union;
 
 const UNSUPPORTED_TLS_QUERY_FIELDS: [&str; 4] = ["ca", "clientCertificate", "clientKey", "ech"];
+const HYSTERIA2_SALAMANDER_MIN_PASSWORD_BYTES: usize = 4;
 const KNOWN_QUERY_FIELDS: [&str; 17] = [
     "insecure",
     "sni",
@@ -237,9 +238,12 @@ fn normalize_obfs(mode: &str, password: &str) -> Result<String, OutboundError> {
         "" => Err(OutboundError::BadHysteria2(
             "Hysteria2 obfs password requires an admitted obfuscation type".to_owned(),
         )),
-        "salamander" if password.is_empty() => Err(OutboundError::BadHysteria2(
-            "Hysteria2 Salamander requires an obfs password".to_owned(),
-        )),
+        "salamander" if password.len() < HYSTERIA2_SALAMANDER_MIN_PASSWORD_BYTES => {
+            Err(OutboundError::BadHysteria2(
+                "Hysteria2 Salamander obfs password is shorter than the protocol minimum"
+                    .to_owned(),
+            ))
+        }
         "salamander" => Ok(normalized),
         "gecko" => Err(OutboundError::BadHysteria2(
             "Hysteria2 Gecko obfuscation is not admitted by the Quinn provider".to_owned(),
