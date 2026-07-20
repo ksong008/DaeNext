@@ -39,6 +39,11 @@ use crate::allocator::{
     allocator_purge_control_plane_arena, allocator_reclaim, allocator_reclaim_snapshot_json,
     allocator_request_reclaim, allocator_stats_json_from, allocator_stats_snapshot,
 };
+use crate::allocator_bootstrap::{
+    JEMALLOC_AUTOMATIC_ARENA_MAX, JEMALLOC_BUILD_CONF_ENV, JEMALLOC_BUILD_CONF_SOURCE,
+    JEMALLOC_BUILD_FALLBACK, JEMALLOC_RUNTIME_CONF_ENV, JEMALLOC_RUNTIME_DEFAULT_SOURCE,
+    jemalloc_automatic_arena_count, jemalloc_process_default_configuration,
+};
 use crate::config_validate::{load_config_file, validate_config_file};
 use crate::production_runtime_owner::{
     ResidentDnsReloadSnapshot, ResidentEventLogDecision, ResidentManualProbeHandle,
@@ -156,11 +161,6 @@ const PRODUCT_HTTP_WORKER_RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const PRODUCT_HTTP_SSE_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const PRODUCT_MALLOC_ARENA_MAX_ENV: &str = "MALLOC_ARENA_MAX";
 const PRODUCT_MALLOC_ARENA_MAX_DEFAULT: &str = "2";
-const PRODUCT_JEMALLOC_CONF_ENV: &str = "MALLOC_CONF";
-const PRODUCT_JEMALLOC_BUILD_CONF_ENV: &str = "JEMALLOC_SYS_WITH_MALLOC_CONF";
-const PRODUCT_JEMALLOC_BUILD_CONF_SOURCE: &str = ".cargo/config.toml";
-const PRODUCT_JEMALLOC_CONF_DEFAULT: &str =
-    "background_thread:true,dirty_decay_ms:30000,muzzy_decay_ms:30000,percpu_arena:percpu";
 const ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV: &str = "ALLOCATOR_IDLE_RECLAIM_ENABLED";
 const ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT: bool = true;
 const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV: &str =
@@ -635,6 +635,17 @@ fn effective_product_usize_with_legacy(
 }
 
 fn product_runtime_defaults() -> Value {
+    let available_parallelism = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .max(1);
+    let jemalloc_default = jemalloc_process_default_configuration();
+    let jemalloc_process_configuration = if cfg!(feature = "allocator-jemalloc") {
+        std::env::var_os(JEMALLOC_RUNTIME_CONF_ENV)
+            .map(|configuration| configuration.to_string_lossy().into_owned())
+    } else {
+        None
+    };
     json!({
         "allocator": {
             "profile": allocator_profile(),
@@ -644,13 +655,23 @@ fn product_runtime_defaults() -> Value {
                 "scope": "glibc/system allocator compatibility; ignored by jemalloc builds",
             },
             "jemallocPolicy": {
-                "env": PRODUCT_JEMALLOC_CONF_ENV,
-                "buildEnv": PRODUCT_JEMALLOC_BUILD_CONF_ENV,
-                "defaultSource": PRODUCT_JEMALLOC_BUILD_CONF_SOURCE,
-                "default": PRODUCT_JEMALLOC_CONF_DEFAULT,
-                "runtimeOverride": true,
+                "env": JEMALLOC_RUNTIME_CONF_ENV,
+                "buildEnv": JEMALLOC_BUILD_CONF_ENV,
+                "buildFallbackSource": JEMALLOC_BUILD_CONF_SOURCE,
+                "buildFallback": JEMALLOC_BUILD_FALLBACK,
+                "defaultSource": JEMALLOC_RUNTIME_DEFAULT_SOURCE,
+                "default": jemalloc_default,
+                "defaultAutomaticArenas": jemalloc_automatic_arena_count(available_parallelism),
+                "automaticArenaPolicy": format!(
+                    "available_parallelism clamped to 1..{JEMALLOC_AUTOMATIC_ARENA_MAX}"
+                ),
+                "effectiveParallelism": available_parallelism,
+                "effectiveParallelismSource": "std::thread::available_parallelism (affinity/cgroup aware)",
+                "processConfiguration": jemalloc_process_configuration,
+                "startupApplication": "one-time same-PID process replacement before normal product startup",
+                "runtimeOverride": cfg!(feature = "allocator-jemalloc"),
                 "serviceUnitSetsEnv": false,
-                "scope": "jemalloc builds; built in by default from the workspace Cargo config as a fallback; operators may set MALLOC_CONF in the service environment to override runtime allocator behavior",
+                "scope": "prefixed jemalloc builds; the bounded workspace build policy protects the first image, then the startup bootstrap applies the effective operator override or affinity-aware default",
             },
             "reclaim": {
                 "startupControlBuilt": true,

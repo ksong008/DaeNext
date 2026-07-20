@@ -692,25 +692,40 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         defaults["allocator"]["jemallocPolicy"]["default"]
             .as_str()
             .unwrap()
-            .contains("percpu_arena:percpu")
+            .contains("percpu_arena:disabled")
     );
     assert!(
         defaults["allocator"]["jemallocPolicy"]["default"]
             .as_str()
             .unwrap()
-            .contains("dirty_decay_ms:30000")
+            .contains("dirty_decay_ms:5000")
     );
     assert!(
         defaults["allocator"]["jemallocPolicy"]["default"]
             .as_str()
             .unwrap()
-            .contains("muzzy_decay_ms:30000")
+            .contains("muzzy_decay_ms:5000")
     );
+    assert!(
+        defaults["allocator"]["jemallocPolicy"]["default"]
+            .as_str()
+            .unwrap()
+            .contains("max_background_threads:1")
+    );
+    let automatic_arenas = defaults["allocator"]["jemallocPolicy"]["defaultAutomaticArenas"]
+        .as_u64()
+        .unwrap();
+    assert!((1..=JEMALLOC_AUTOMATIC_ARENA_MAX as u64).contains(&automatic_arenas));
     assert_eq!(
         defaults["allocator"]["jemallocPolicy"]["env"]
             .as_str()
             .unwrap(),
-        PRODUCT_JEMALLOC_CONF_ENV
+        JEMALLOC_RUNTIME_CONF_ENV
+    );
+    assert!(
+        defaults["allocator"]["jemallocPolicy"]
+            .get("compatibilityEnv")
+            .is_none()
     );
     assert_eq!(
         defaults["allocator"]["jemallocPolicy"]["runtimeOverride"],
@@ -724,19 +739,25 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         defaults["allocator"]["jemallocPolicy"]["buildEnv"]
             .as_str()
             .unwrap(),
-        PRODUCT_JEMALLOC_BUILD_CONF_ENV
+        JEMALLOC_BUILD_CONF_ENV
+    );
+    assert_eq!(
+        defaults["allocator"]["jemallocPolicy"]["buildFallbackSource"]
+            .as_str()
+            .unwrap(),
+        JEMALLOC_BUILD_CONF_SOURCE
     );
     assert_eq!(
         defaults["allocator"]["jemallocPolicy"]["defaultSource"]
             .as_str()
             .unwrap(),
-        PRODUCT_JEMALLOC_BUILD_CONF_SOURCE
+        JEMALLOC_RUNTIME_DEFAULT_SOURCE
     );
     let cargo_config =
         fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cargo/config.toml"))
             .unwrap();
-    assert!(cargo_config.contains(PRODUCT_JEMALLOC_BUILD_CONF_ENV));
-    assert!(cargo_config.contains(PRODUCT_JEMALLOC_CONF_DEFAULT));
+    assert!(cargo_config.contains(JEMALLOC_BUILD_CONF_ENV));
+    assert!(cargo_config.contains(JEMALLOC_BUILD_FALLBACK));
     assert!(cargo_config.contains("force = false"));
     assert_eq!(
         defaults["allocator"]["reclaim"]["reloadCompleted"],
