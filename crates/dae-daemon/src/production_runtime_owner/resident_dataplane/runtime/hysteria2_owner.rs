@@ -14,8 +14,8 @@ use dae_outbound::hysteria2::{
 };
 use dae_runtime_control::{
     AbsoluteDeadline, OwnerCancellationSignal, OwnerDrainReason, OwnerFailureClass,
-    OwnerGeneration, PhysicalOwnerFailure, RedactedOwnerIdentity, SingleFlightBuilder,
-    SingleFlightDecision, SingleFlightError, SingleFlightPhysicalOwner,
+    OwnerGeneration, PhysicalOwnerFailure, PhysicalOwnerState, RedactedOwnerIdentity,
+    SingleFlightBuilder, SingleFlightDecision, SingleFlightError, SingleFlightPhysicalOwner,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -117,6 +117,8 @@ struct Hysteria2OwnerRegistryMetrics {
     cumulative_builds: AtomicU64,
     cumulative_build_failures: AtomicU64,
     failure_cleanup_timeouts: AtomicU64,
+    failed_cell_evictions: AtomicU64,
+    failed_cell_removal_misses: AtomicU64,
     cumulative_reuses: AtomicU64,
     owner_limit_rejections: AtomicU64,
     command_queue_rejections: AtomicU64,
@@ -836,6 +838,12 @@ enum Hysteria2OwnerCommand {
 struct Hysteria2BuildCompletion {
     key: Hysteria2OwnerKey,
     owner: Option<Hysteria2OwnedTransport>,
+    quiescent_cell: Option<Hysteria2QuiescentOwnerCell>,
+}
+
+struct Hysteria2QuiescentOwnerCell {
+    cell: Arc<Hysteria2OwnerCell>,
+    revision: u64,
 }
 
 enum Hysteria2TransportEvent {
@@ -880,12 +888,12 @@ impl Hysteria2OwnerRegistryHandle {
                 self.generation.get()
             ));
         }
-        let cell = {
+        let (cell, decision) = {
             let mut index = self.index.lock().unwrap();
             if index.draining {
                 return Err("Hysteria2 owner registry is draining".to_owned());
             }
-            if let Some(cell) = index.cells.get(&key) {
+            let cell = if let Some(cell) = index.cells.get(&key) {
                 Arc::clone(cell)
             } else {
                 if index.cells.len() >= self.resources.owner_limit() {
@@ -900,13 +908,14 @@ impl Hysteria2OwnerRegistryHandle {
                 let cell = Arc::new(Hysteria2OwnerCell::new());
                 index.cells.insert(key, Arc::clone(&cell));
                 cell
-            }
+            };
+            let decision = cell
+                .begin_or_observe(deadline, &self.cancellation)
+                .map_err(single_flight_error)?;
+            (cell, decision)
         };
 
-        match cell
-            .begin_or_observe(deadline, &self.cancellation)
-            .map_err(single_flight_error)?
-        {
+        match decision {
             SingleFlightDecision::Ready(owner) => {
                 self.metrics
                     .cumulative_reuses
@@ -940,7 +949,15 @@ impl Hysteria2OwnerRegistryHandle {
                         OwnerFailureClass::Resource,
                         "hysteria2-owner-command-queue",
                     ));
-                    let _ = cell.prepare_retry();
+                    if let Ok(snapshot) = cell.prepare_retry() {
+                        record_quiescent_owner_cell_removal(
+                            &self.index,
+                            &self.metrics,
+                            key,
+                            &cell,
+                            snapshot.revision,
+                        );
+                    }
                     return Err("Hysteria2 owner command queue is unavailable".to_owned());
                 }
                 let owner = receiver.await.map_err(|_| {
@@ -953,6 +970,17 @@ impl Hysteria2OwnerRegistryHandle {
 
     pub(crate) fn metrics_snapshot(&self) -> Value {
         let index = self.index.lock().unwrap();
+        let mut cell_states = [0_usize; 5];
+        for cell in index.cells.values() {
+            let state_index = match cell.snapshot().state {
+                PhysicalOwnerState::Connecting => 0,
+                PhysicalOwnerState::Ready => 1,
+                PhysicalOwnerState::Failed => 2,
+                PhysicalOwnerState::Draining => 3,
+                PhysicalOwnerState::Closed => 4,
+            };
+            cell_states[state_index] += 1;
+        }
         let padding = hysteria2_padding_metrics_snapshot();
         let capabilities = dae_outbound::hysteria2::hysteria2_capability_ledger()
             .iter()
@@ -965,11 +993,18 @@ impl Hysteria2OwnerRegistryHandle {
             })
             .collect::<Vec<_>>();
         json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "owner": "resident-hysteria2-owner-registry",
             "generation": self.generation.get(),
             "draining": index.draining,
             "registeredKeys": index.cells.len(),
+            "registeredKeyStates": {
+                "connecting": cell_states[0],
+                "ready": cell_states[1],
+                "failedCooldown": cell_states[2],
+                "draining": cell_states[3],
+                "closed": cell_states[4],
+            },
             "activeOwners": self.metrics.active_owners.load(Ordering::Relaxed),
             "highWaterOwners": self.metrics.high_water_owners.load(Ordering::Relaxed),
             "activeLogicalLeases": self.metrics.active_leases.load(Ordering::Relaxed),
@@ -979,6 +1014,8 @@ impl Hysteria2OwnerRegistryHandle {
             "cumulativeBuilds": self.metrics.cumulative_builds.load(Ordering::Relaxed),
             "cumulativeBuildFailures": self.metrics.cumulative_build_failures.load(Ordering::Relaxed),
             "failureCleanupTimeouts": self.metrics.failure_cleanup_timeouts.load(Ordering::Relaxed),
+            "failedCellEvictions": self.metrics.failed_cell_evictions.load(Ordering::Relaxed),
+            "failedCellRemovalMisses": self.metrics.failed_cell_removal_misses.load(Ordering::Relaxed),
             "cumulativeReuses": self.metrics.cumulative_reuses.load(Ordering::Relaxed),
             "cumulativeUdpDatagrams": self.metrics.cumulative_udp_datagrams.load(Ordering::Relaxed),
             "malformedUdpDatagrams": self.metrics.malformed_udp_datagrams.load(Ordering::Relaxed),
@@ -1098,6 +1135,41 @@ fn single_flight_error(error: SingleFlightError) -> String {
     }
 }
 
+fn remove_quiescent_owner_cell(
+    index: &Arc<Mutex<Hysteria2OwnerIndex>>,
+    key: Hysteria2OwnerKey,
+    expected_cell: &Arc<Hysteria2OwnerCell>,
+    expected_revision: u64,
+) -> bool {
+    let mut index = index.lock().unwrap();
+    let removable = index.cells.get(&key).is_some_and(|cell| {
+        if !Arc::ptr_eq(cell, expected_cell) {
+            return false;
+        }
+        let snapshot = cell.snapshot();
+        snapshot.state == PhysicalOwnerState::Closed && snapshot.revision == expected_revision
+    });
+    if removable {
+        index.cells.remove(&key);
+    }
+    removable
+}
+
+fn record_quiescent_owner_cell_removal(
+    index: &Arc<Mutex<Hysteria2OwnerIndex>>,
+    metrics: &Hysteria2OwnerRegistryMetrics,
+    key: Hysteria2OwnerKey,
+    expected_cell: &Arc<Hysteria2OwnerCell>,
+    expected_revision: u64,
+) {
+    let counter = if remove_quiescent_owner_cell(index, key, expected_cell, expected_revision) {
+        &metrics.failed_cell_evictions
+    } else {
+        &metrics.failed_cell_removal_misses
+    };
+    counter.fetch_add(1, Ordering::Relaxed);
+}
+
 pub(crate) fn start_hysteria2_owner_registry(
     generation: u64,
     stop: SharedResidentStopSignal,
@@ -1210,6 +1282,15 @@ async fn run_hysteria2_owner_registry(
                                     .await,
                                 )
                             });
+                        }
+                        if let Some(quiescent_cell) = completion.quiescent_cell {
+                            record_quiescent_owner_cell_removal(
+                                &index,
+                                &metrics,
+                                completion.key,
+                                &quiescent_cell.cell,
+                                quiescent_cell.revision,
+                            );
                         }
                     }
                     Some(Ok(Hysteria2RegistryTaskCompletion::Transport(
@@ -1343,6 +1424,7 @@ async fn run_hysteria2_owner_build(
                             cell: Arc::clone(&command.cell),
                             _auth_session: auth_session,
                         }),
+                        quiescent_cell: None,
                     }
                 }
                 Err(err) => {
@@ -1350,6 +1432,7 @@ async fn run_hysteria2_owner_build(
                     Hysteria2BuildCompletion {
                         key: command.key,
                         owner: None,
+                        quiescent_cell: None,
                     }
                 }
             }
@@ -1367,10 +1450,19 @@ async fn run_hysteria2_owner_build(
                     .fetch_add(1, Ordering::Relaxed);
             }
             time::sleep(resources.retry_cooldown()).await;
-            let _ = command.cell.prepare_retry();
+            let quiescent_cell =
+                command
+                    .cell
+                    .prepare_retry()
+                    .ok()
+                    .map(|snapshot| Hysteria2QuiescentOwnerCell {
+                        cell: Arc::clone(&command.cell),
+                        revision: snapshot.revision,
+                    });
             Hysteria2BuildCompletion {
                 key: command.key,
                 owner: None,
+                quiescent_cell,
             }
         }
     }
@@ -1595,6 +1687,124 @@ mod tests {
         queue_depth: usize,
     ) -> Hysteria2OwnerResourceProfile {
         Hysteria2OwnerResourceProfile::with_udp_session_limits_for_test(session_limit, queue_depth)
+    }
+
+    fn quiescent_failed_cell() -> (Arc<Hysteria2OwnerCell>, u64) {
+        let cell = Arc::new(Hysteria2OwnerCell::new());
+        let cancellation = OwnerCancellationSignal::new();
+        let deadline =
+            AbsoluteDeadline::from_now(Instant::now(), std::time::Duration::from_secs(1));
+        let SingleFlightDecision::Build(builder) = cell
+            .begin_or_observe(deadline, &cancellation)
+            .expect("fresh cell must elect one builder")
+        else {
+            panic!("fresh cell did not elect a builder");
+        };
+        builder.publish_failed(PhysicalOwnerFailure::new(
+            OwnerFailureClass::Connect,
+            "hysteria2-test-connect",
+        ));
+        let snapshot = cell
+            .prepare_retry()
+            .expect("failed cell must become quiescent after cooldown");
+        (cell, snapshot.revision)
+    }
+
+    #[test]
+    fn quiescent_failed_cells_release_registered_key_capacity() {
+        let index = Arc::new(Mutex::new(Hysteria2OwnerIndex::new()));
+        let metrics = Hysteria2OwnerRegistryMetrics::default();
+        let churn =
+            Hysteria2OwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory)
+                .owner_limit()
+                .saturating_mul(3);
+
+        for sequence in 0..churn {
+            let key = Hysteria2OwnerKey::fixture(31, &sequence.to_be_bytes());
+            let (cell, revision) = quiescent_failed_cell();
+            {
+                let mut guard = index.lock().unwrap();
+                assert!(guard.cells.len() < 2);
+                guard.cells.insert(key, Arc::clone(&cell));
+            }
+            record_quiescent_owner_cell_removal(&index, &metrics, key, &cell, revision);
+        }
+
+        assert!(index.lock().unwrap().cells.is_empty());
+        assert_eq!(
+            metrics.failed_cell_evictions.load(Ordering::Relaxed),
+            churn as u64
+        );
+        assert_eq!(
+            metrics.failed_cell_removal_misses.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn quiescent_cell_removal_cannot_delete_a_concurrent_rebuild() {
+        let index = Arc::new(Mutex::new(Hysteria2OwnerIndex::new()));
+        let metrics = Hysteria2OwnerRegistryMetrics::default();
+        let key = Hysteria2OwnerKey::fixture(32, b"same-key");
+        let (cell, old_revision) = quiescent_failed_cell();
+        index.lock().unwrap().cells.insert(key, Arc::clone(&cell));
+        let cancellation = OwnerCancellationSignal::new();
+        let deadline =
+            AbsoluteDeadline::from_now(Instant::now(), std::time::Duration::from_secs(1));
+        let SingleFlightDecision::Build(builder) = cell
+            .begin_or_observe(deadline, &cancellation)
+            .expect("quiescent cell must allow a rebuild")
+        else {
+            panic!("quiescent cell did not elect a rebuild");
+        };
+
+        record_quiescent_owner_cell_removal(&index, &metrics, key, &cell, old_revision);
+
+        assert!(
+            index
+                .lock()
+                .unwrap()
+                .cells
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &cell))
+        );
+        assert_eq!(
+            metrics.failed_cell_removal_misses.load(Ordering::Relaxed),
+            1
+        );
+        builder.publish_failed(PhysicalOwnerFailure::new(
+            OwnerFailureClass::Connect,
+            "hysteria2-test-rebuild",
+        ));
+    }
+
+    #[test]
+    fn quiescent_cell_removal_cannot_delete_a_replacement_cell() {
+        let index = Arc::new(Mutex::new(Hysteria2OwnerIndex::new()));
+        let metrics = Hysteria2OwnerRegistryMetrics::default();
+        let key = Hysteria2OwnerKey::fixture(33, b"replacement-key");
+        let (old_cell, old_revision) = quiescent_failed_cell();
+        let replacement = Arc::new(Hysteria2OwnerCell::new());
+        index
+            .lock()
+            .unwrap()
+            .cells
+            .insert(key, Arc::clone(&replacement));
+
+        record_quiescent_owner_cell_removal(&index, &metrics, key, &old_cell, old_revision);
+
+        assert!(
+            index
+                .lock()
+                .unwrap()
+                .cells
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &replacement))
+        );
+        assert_eq!(
+            metrics.failed_cell_removal_misses.load(Ordering::Relaxed),
+            1
+        );
     }
 
     #[test]
