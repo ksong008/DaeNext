@@ -116,6 +116,7 @@ struct Hysteria2OwnerRegistryMetrics {
     high_water_leases: AtomicUsize,
     cumulative_builds: AtomicU64,
     cumulative_build_failures: AtomicU64,
+    failure_cleanup_timeouts: AtomicU64,
     cumulative_reuses: AtomicU64,
     owner_limit_rejections: AtomicU64,
     command_queue_rejections: AtomicU64,
@@ -942,15 +943,9 @@ impl Hysteria2OwnerRegistryHandle {
                     let _ = cell.prepare_retry();
                     return Err("Hysteria2 owner command queue is unavailable".to_owned());
                 }
-                let remaining = deadline
-                    .remaining_at(Instant::now())
-                    .ok_or_else(|| "Hysteria2 owner acquisition deadline elapsed".to_owned())?;
-                let owner = time::timeout(remaining, receiver)
-                    .await
-                    .map_err(|_| "Hysteria2 owner acquisition timeout".to_owned())?
-                    .map_err(|_| {
-                        "Hysteria2 owner runtime stopped during acquisition".to_owned()
-                    })??;
+                let owner = receiver.await.map_err(|_| {
+                    "Hysteria2 owner runtime stopped during acquisition".to_owned()
+                })??;
                 owner.try_lease()
             }
         }
@@ -983,6 +978,7 @@ impl Hysteria2OwnerRegistryHandle {
             "highWaterUdpSessions": self.metrics.high_water_udp_sessions.load(Ordering::Relaxed),
             "cumulativeBuilds": self.metrics.cumulative_builds.load(Ordering::Relaxed),
             "cumulativeBuildFailures": self.metrics.cumulative_build_failures.load(Ordering::Relaxed),
+            "failureCleanupTimeouts": self.metrics.failure_cleanup_timeouts.load(Ordering::Relaxed),
             "cumulativeReuses": self.metrics.cumulative_reuses.load(Ordering::Relaxed),
             "cumulativeUdpDatagrams": self.metrics.cumulative_udp_datagrams.load(Ordering::Relaxed),
             "malformedUdpDatagrams": self.metrics.malformed_udp_datagrams.load(Ordering::Relaxed),
@@ -1358,14 +1354,18 @@ async fn run_hysteria2_owner_build(
                 }
             }
         }
-        Err(error) => {
+        Err(mut error) => {
             metrics
                 .cumulative_build_failures
                 .fetch_add(1, Ordering::Relaxed);
-            command
-                .builder
-                .publish_failed(PhysicalOwnerFailure::new(error.class, error.operation));
-            let _ = command.response.send(Err(error.detail));
+            publish_hysteria2_owner_build_failure(command.builder, command.response, &error);
+            if let Some(endpoint) = error.cleanup_endpoint.take()
+                && !wait_quic_endpoint_idle_after_close(&endpoint).await
+            {
+                metrics
+                    .failure_cleanup_timeouts
+                    .fetch_add(1, Ordering::Relaxed);
+            }
             time::sleep(resources.retry_cooldown()).await;
             let _ = command.cell.prepare_retry();
             Hysteria2BuildCompletion {
@@ -1376,10 +1376,45 @@ async fn run_hysteria2_owner_build(
     }
 }
 
+fn publish_hysteria2_owner_build_failure(
+    builder: SingleFlightBuilder<Hysteria2SharedTransport>,
+    response: oneshot::Sender<Result<Arc<Hysteria2SharedTransport>, String>>,
+    error: &Hysteria2OwnerBuildError,
+) {
+    builder.publish_failed(PhysicalOwnerFailure::new(error.class, error.operation));
+    let _ = response.send(Err(error.detail.clone()));
+}
+
 struct Hysteria2OwnerBuildError {
     class: OwnerFailureClass,
     operation: &'static str,
     detail: String,
+    cleanup_endpoint: Option<ObservedQuicEndpoint>,
+}
+
+impl Hysteria2OwnerBuildError {
+    fn new(class: OwnerFailureClass, operation: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            class,
+            operation,
+            detail: detail.into(),
+            cleanup_endpoint: None,
+        }
+    }
+
+    fn with_cleanup_endpoint(
+        class: OwnerFailureClass,
+        operation: &'static str,
+        detail: impl Into<String>,
+        cleanup_endpoint: ObservedQuicEndpoint,
+    ) -> Self {
+        Self {
+            class,
+            operation,
+            detail: detail.into(),
+            cleanup_endpoint: Some(cleanup_endpoint),
+        }
+    }
 }
 
 async fn build_hysteria2_transport(
@@ -1402,19 +1437,19 @@ async fn build_hysteria2_transport(
         port_hop_interval,
     } = &proxy.handler
     else {
-        return Err(Hysteria2OwnerBuildError {
-            class: OwnerFailureClass::Transport,
-            operation: "hysteria2-owner-shape",
-            detail: "Hysteria2 owner received a non-Hysteria2 proxy shape".to_owned(),
-        });
+        return Err(Hysteria2OwnerBuildError::new(
+            OwnerFailureClass::Transport,
+            "hysteria2-owner-shape",
+            "Hysteria2 owner received a non-Hysteria2 proxy shape",
+        ));
     };
     let congestion_runtime = Arc::new(
-        Hysteria2CongestionRuntime::new(*congestion, *max_tx, *max_rx).map_err(|err| {
-            Hysteria2OwnerBuildError {
-                class: OwnerFailureClass::Transport,
-                operation: "hysteria2-owner-congestion",
-                detail: err.to_string(),
-            }
+        Hysteria2CongestionRuntime::new(*congestion, *max_tx, *max_rx).map_err(|_| {
+            Hysteria2OwnerBuildError::new(
+                OwnerFailureClass::Transport,
+                "hysteria2-owner-congestion",
+                "Hysteria2 congestion configuration is invalid",
+            )
         })?,
     );
     let connected = open_hysteria2_quic_connection_candidates_async(
@@ -1434,10 +1469,14 @@ async fn build_hysteria2_transport(
         deadline,
     )
     .await
-    .map_err(|failure| Hysteria2OwnerBuildError {
-        class: failure.owner_failure_class(),
-        operation: failure.operation(),
-        detail: failure.to_string(),
+    .map_err(|connection_failure| {
+        let (failure, cleanup_endpoint) = connection_failure.into_parts();
+        Hysteria2OwnerBuildError {
+            class: failure.owner_failure_class(),
+            operation: failure.operation(),
+            detail: failure.to_string(),
+            cleanup_endpoint,
+        }
     })?;
     let ResidentConnectedQuicEndpoint {
         remote,
@@ -1449,57 +1488,75 @@ async fn build_hysteria2_transport(
         None => {
             endpoint.mark_failed();
             endpoint.close(0_u32.into(), b"hysteria2 owner auth deadline elapsed");
-            wait_quic_endpoint_idle_after_close(&endpoint).await;
-            return Err(Hysteria2OwnerBuildError {
-                class: OwnerFailureClass::Cancelled,
-                operation: "hysteria2-owner-auth-deadline",
-                detail: "Hysteria2 owner authentication deadline elapsed".to_owned(),
-            });
+            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
+                OwnerFailureClass::Cancelled,
+                "hysteria2-owner-auth-deadline",
+                "Hysteria2 owner authentication deadline elapsed",
+                endpoint,
+            ));
         }
     };
-    let auth_session = match time::timeout(
-        remaining,
-        authenticate_hysteria2_connection(
-            connection.clone(),
-            auth,
-            congestion_runtime.requested_rx(),
-        ),
-    )
-    .await
-    {
+    let auth_result = tokio::select! {
+        result = time::timeout(
+            remaining,
+            authenticate_hysteria2_connection(
+                connection.clone(),
+                auth,
+                congestion_runtime.requested_rx(),
+            ),
+        ) => result,
+        reason = cancellation.cancelled() => {
+            endpoint.mark_failed();
+            connection.close(0x101_u32.into(), b"hysteria2 owner auth cancelled");
+            let (operation, detail) = match reason {
+                dae_runtime_control::OwnerCancellation::GenerationDraining => (
+                    "hysteria2-owner-auth-draining",
+                    "Hysteria2 owner generation drained during authentication",
+                ),
+                _ => (
+                    "hysteria2-owner-auth-cancelled",
+                    "Hysteria2 owner authentication was cancelled",
+                ),
+            };
+            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
+                OwnerFailureClass::Cancelled,
+                operation,
+                detail,
+                endpoint,
+            ));
+        }
+    };
+    let auth_session = match auth_result {
         Ok(Ok(session)) if session.report().auth_ok => session,
-        Ok(Ok(session)) => {
+        Ok(Ok(_session)) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth rejected");
-            wait_quic_endpoint_idle_after_close(&endpoint).await;
-            return Err(Hysteria2OwnerBuildError {
-                class: OwnerFailureClass::Authentication,
-                operation: "hysteria2-owner-auth-status",
-                detail: format!(
-                    "Hysteria2 owner authentication rejected with status {}",
-                    session.report().status
-                ),
-            });
+            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
+                OwnerFailureClass::Authentication,
+                "hysteria2-owner-auth-status",
+                "Hysteria2 owner authentication rejected",
+                endpoint,
+            ));
         }
-        Ok(Err(err)) => {
+        Ok(Err(_err)) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth failed");
-            wait_quic_endpoint_idle_after_close(&endpoint).await;
-            return Err(Hysteria2OwnerBuildError {
-                class: OwnerFailureClass::Authentication,
-                operation: "hysteria2-owner-auth",
-                detail: format!("authenticate Hysteria2 owner: {err}"),
-            });
+            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
+                OwnerFailureClass::Authentication,
+                "hysteria2-owner-auth",
+                "Hysteria2 owner authentication exchange failed",
+                endpoint,
+            ));
         }
         Err(_) => {
             endpoint.mark_failed();
             connection.close(0x101_u32.into(), b"hysteria2 owner auth timeout");
-            wait_quic_endpoint_idle_after_close(&endpoint).await;
-            return Err(Hysteria2OwnerBuildError {
-                class: OwnerFailureClass::Cancelled,
-                operation: "hysteria2-owner-auth-timeout",
-                detail: "Hysteria2 owner authentication timeout".to_owned(),
-            });
+            return Err(Hysteria2OwnerBuildError::with_cleanup_endpoint(
+                OwnerFailureClass::Cancelled,
+                "hysteria2-owner-auth-timeout",
+                "Hysteria2 owner authentication timeout",
+                endpoint,
+            ));
         }
     };
     congestion_runtime
@@ -1538,6 +1595,43 @@ mod tests {
         queue_depth: usize,
     ) -> Hysteria2OwnerResourceProfile {
         Hysteria2OwnerResourceProfile::with_udp_session_limits_for_test(session_limit, queue_depth)
+    }
+
+    #[test]
+    fn owner_build_failure_is_published_synchronously_before_cleanup() {
+        let cell = Hysteria2OwnerCell::new();
+        let cancellation = OwnerCancellationSignal::new();
+        let deadline =
+            AbsoluteDeadline::from_now(Instant::now(), std::time::Duration::from_secs(1));
+        let SingleFlightDecision::Build(builder) = cell
+            .begin_or_observe(deadline, &cancellation)
+            .expect("fresh cell must elect one builder")
+        else {
+            panic!("fresh cell did not elect a builder");
+        };
+        let (response, mut receiver) = oneshot::channel();
+        let error = Hysteria2OwnerBuildError::new(
+            OwnerFailureClass::Authentication,
+            "hysteria2-owner-auth",
+            "Hysteria2 owner authentication exchange failed",
+        );
+
+        publish_hysteria2_owner_build_failure(builder, response, &error);
+
+        let visible_result = receiver
+            .try_recv()
+            .expect("elected caller must be notified synchronously");
+        let visible_error = match visible_result {
+            Ok(_) => panic!("build failure unexpectedly published a ready owner"),
+            Err(error) => error,
+        };
+        assert_eq!(visible_error, error.detail);
+        let snapshot = cell.snapshot();
+        assert_eq!(
+            snapshot.state,
+            dae_runtime_control::PhysicalOwnerState::Failed
+        );
+        assert_eq!(snapshot.failure.unwrap().operation, "hysteria2-owner-auth");
     }
 
     #[test]
