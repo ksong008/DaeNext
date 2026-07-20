@@ -33,6 +33,7 @@ impl Drop for OwnerReservation {
             .saturating_sub(self.charged_bytes.get());
         drop(counters);
         notify_state_changed(&inner.state_changed);
+        wake_next_waiter(&inner);
     }
 }
 
