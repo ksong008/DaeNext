@@ -262,18 +262,14 @@ impl ResidentDnsPlan {
         mut self,
         runtime: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
-        hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
-        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-        juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
-        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+        executor: tokio::runtime::Handle,
+        transport_owners: ResidentTransportOwnerRegistries,
     ) -> Self {
         self.forwarders = Arc::new(ResidentDnsForwarderCache::new_with_transport_owner(
             runtime,
             metrics,
-            hysteria2_owner_registry,
-            tuic_owner_registry,
-            juicity_owner_registry,
-            anytls_owner_registry,
+            executor,
+            transport_owners,
         ));
         self
     }

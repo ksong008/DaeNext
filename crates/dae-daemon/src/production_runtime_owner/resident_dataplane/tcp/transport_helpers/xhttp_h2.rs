@@ -37,9 +37,11 @@ pub(crate) use self::parts::{open_xhttp_packet_up_parts, open_xhttp_stream_parts
 pub(crate) use self::request::{
     xhttp_h1_request_bytes, xhttp_h2_request, xhttp_session_path_suffix, xhttp_uri,
 };
+#[cfg(test)]
+pub(crate) use self::xmux::shutdown_xhttp_xmux_generation_owner;
 pub(crate) use self::xmux::{
-    XhttpXmuxClearReport, XhttpXmuxGenerationOwnerHandle, shutdown_xhttp_xmux_generation_owner,
-    start_xhttp_xmux_generation_owner,
+    XhttpXmuxClearReport, XhttpXmuxGenerationOwnerHandle, start_xhttp_xmux_generation_owner_on,
+    stop_xhttp_xmux_generation_owner,
 };
 use self::xmux::{XhttpXmuxClientLease, XhttpXmuxRequestHandle};
 

@@ -31,9 +31,9 @@ use self::events::{append_event, path_string};
 pub(crate) use self::plan::{ResidentNodeSourceAdmission, resident_node_source_admissions};
 use self::plan::{build_resident_dataplane_plan, build_resident_dataplane_plan_with_geodata};
 use self::probe::*;
-use self::tcp::{ResidentTcpRouter, ResidentTcpRuntimeConfig, resident_tcp_accept_loop};
+use self::tcp::{ResidentTcpRouter, ResidentTcpRuntimeConfig, resident_tcp_accept_loop_async};
 use self::udp::{
-    probe_resident_proxy_udp_async, resident_udp_loop, resident_udp_proxy_handler_name,
+    probe_resident_proxy_udp_async, resident_udp_loop_async, resident_udp_proxy_handler_name,
 };
 use super::resident_routing::{
     ResidentGeodataStore, build_resident_userspace_routing_matcher_with_geodata,
@@ -73,6 +73,9 @@ pub(crate) use self::defaults::*;
 #[path = "runtime/runtime.rs"]
 mod runtime;
 pub(super) use self::runtime::*;
+#[path = "runtime/executor.rs"]
+mod executor;
+use self::executor::*;
 #[path = "runtime/stop_signal.rs"]
 mod stop_signal;
 pub(crate) use self::stop_signal::*;
@@ -112,22 +115,25 @@ pub(super) use self::resource_profile::{
 mod hysteria2_owner;
 pub(crate) use self::hysteria2_owner::{
     Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, Hysteria2UdpSessionLease,
-    start_hysteria2_owner_registry,
+    start_hysteria2_owner_registry, start_hysteria2_owner_registry_on,
 };
 #[path = "runtime/tuic_owner.rs"]
 mod tuic_owner;
 pub(crate) use self::tuic_owner::{
-    TuicOwnerRegistryHandle, TuicTransportLease, TuicUdpAssociationLease, start_tuic_owner_registry,
+    TuicOwnerRegistryHandle, TuicTransportLease, TuicUdpAssociationLease,
+    start_tuic_owner_registry, start_tuic_owner_registry_on,
 };
 #[path = "runtime/juicity_owner.rs"]
 mod juicity_owner;
 pub(crate) use self::juicity_owner::{
     JuicityOwnerRegistryHandle, JuicityTransportLease, start_juicity_owner_registry,
+    start_juicity_owner_registry_on,
 };
 #[path = "runtime/anytls_owner.rs"]
 mod anytls_owner;
 pub(crate) use self::anytls_owner::{
     AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, start_anytls_owner_registry,
+    start_anytls_owner_registry_on,
 };
 #[path = "runtime/h2_carrier_owner.rs"]
 mod h2_carrier_owner;
@@ -135,7 +141,7 @@ mod h2_carrier_owner;
 mod transport_identity;
 pub(crate) use self::h2_carrier_owner::{
     H2CarrierGenerationOwnerHandle, H2CarrierLease, acquire_h2_carrier,
-    start_h2_carrier_generation_owner,
+    start_h2_carrier_generation_owner, start_h2_carrier_generation_owner_on,
 };
 #[cfg(test)]
 #[path = "runtime/h2_carrier_owner_live_tests.rs"]
@@ -146,7 +152,7 @@ mod meek_transport_owner;
 pub(crate) use self::meek_transport_owner::start_meek_transport_generation_owner_for_test;
 pub(crate) use self::meek_transport_owner::{
     MeekTransportGenerationOwnerHandle, acquire_meek_transport,
-    start_meek_transport_generation_owner,
+    start_meek_transport_generation_owner, start_meek_transport_generation_owner_on,
 };
 #[cfg(test)]
 #[path = "runtime/meek_transport_owner_live_tests.rs"]
@@ -157,7 +163,7 @@ mod vless_mux_owner;
 pub(crate) use self::vless_mux_owner::start_vless_mux_generation_owner_for_test;
 pub(crate) use self::vless_mux_owner::{
     VlessMuxGenerationOwnerHandle, acquire_vless_mux_logical_stream,
-    start_vless_mux_generation_owner,
+    start_vless_mux_generation_owner, start_vless_mux_generation_owner_on,
 };
 #[cfg(test)]
 #[path = "runtime/vless_mux_owner_live_tests.rs"]

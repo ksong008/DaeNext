@@ -17,10 +17,29 @@ pub(super) fn shutdown_resident_runtime_owner(
     let started = Instant::now();
     let deadline = started.checked_add(grace).unwrap_or(started);
     owner.stop.store(true, Ordering::Relaxed);
-    let task_count_started = owner.tasks.len();
+    let task_count_started = owner.tasks.len().saturating_add(owner.async_tasks.len());
+    let async_shutdown = owner
+        .data_plane_executor
+        .join_tasks(std::mem::take(&mut owner.async_tasks), deadline);
+    owner.data_plane_executor.shutdown(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .min(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE),
+    );
     let mut task_shutdown =
         wait_for_runtime_tasks(std::mem::take(&mut owner.tasks), started, deadline, grace);
     owner.tasks.append(&mut task_shutdown.pending);
+    let joined_worker_threads = task_shutdown.joined;
+    let panicked_worker_threads = task_shutdown.panicked;
+    let detached_worker_threads = task_shutdown.timed_out;
+    task_shutdown.joined = task_shutdown.joined.saturating_add(async_shutdown.joined);
+    task_shutdown.panicked = task_shutdown
+        .panicked
+        .saturating_add(async_shutdown.panicked);
+    task_shutdown.timed_out = task_shutdown
+        .timed_out
+        .saturating_add(async_shutdown.timed_out);
+    task_shutdown.results.extend(async_shutdown.results);
 
     let metrics = owner.metrics.snapshot();
     let active_tcp = metrics["activeTcpConnections"].as_u64().unwrap_or(0);
@@ -151,13 +170,16 @@ pub(super) fn shutdown_resident_runtime_owner(
         "task_count_started": task_count_started,
         "task_count_joined": task_shutdown.joined,
         "task_count_timed_out": task_shutdown.timed_out,
-        "task_count_aborted": 0,
-        "task_count_detached": task_shutdown.timed_out,
+        "task_count_aborted": async_shutdown.timed_out,
+        "task_count_detached": detached_worker_threads,
         "task_count_panicked": task_shutdown.panicked,
         "task_count_join_exceeded_grace": 0,
         "join_grace_ms": duration_millis(grace),
-        "joined_worker_threads": task_shutdown.joined,
-        "panicked_worker_threads": task_shutdown.panicked,
+        "joined_worker_threads": joined_worker_threads,
+        "panicked_worker_threads": panicked_worker_threads,
+        "joined_async_tasks": async_shutdown.joined,
+        "panicked_async_tasks": async_shutdown.panicked,
+        "aborted_async_tasks": async_shutdown.timed_out,
         "active_tcp_connections_at_shutdown": active_tcp,
         "active_udp_sessions_at_shutdown": active_udp,
         "udp_sessions_active_at_shutdown": legacy_udp_active,

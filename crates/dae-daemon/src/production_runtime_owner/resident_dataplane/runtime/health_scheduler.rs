@@ -10,7 +10,9 @@ use tokio::task::JoinSet;
 #[path = "health_scheduler/executor.rs"]
 mod executor;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::executor::ResidentHealthRuntimeConfig;
-use self::executor::{build_resident_health_runtime, resident_health_runtime_contract};
+#[cfg(test)]
+use self::executor::build_resident_health_runtime;
+use self::executor::resident_health_runtime_contract;
 #[path = "health_scheduler/schedule.rs"]
 mod schedule;
 use self::schedule::*;
@@ -110,6 +112,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_scheduler_loop(
     groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     proxy_groups: SharedResidentProxyGroupMap,
@@ -127,12 +130,6 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) {
-    let per_group_candidate_concurrency = per_group_candidate_concurrency.max(1);
-    let bootstrap_candidate_concurrency = bootstrap_candidate_concurrency.max(1);
-    let needs_resuscitation_runtime = groups.iter().any(|group| group.needs_background_checks());
-    let global_candidate_admission = Arc::new(Semaphore::new(
-        bootstrap_candidate_concurrency.max(per_group_candidate_concurrency),
-    ));
     let runtime = match build_resident_health_runtime(runtime_config) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -144,74 +141,121 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
             return;
         }
     };
+    runtime.block_on(resident_health_scheduler_async(
+        groups,
+        proxy_groups,
+        resuscitation_rx,
+        stop,
+        event_file,
+        event_lock,
+        metrics,
+        dns,
+        per_group_candidate_concurrency,
+        bootstrap_candidate_concurrency,
+        runtime_config,
+        None,
+        hysteria2_owner_registry,
+        tuic_owner_registry,
+        juicity_owner_registry,
+        anytls_owner_registry,
+    ));
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::production_runtime_owner::resident_dataplane) async fn resident_health_scheduler_async(
+    groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
+    proxy_groups: SharedResidentProxyGroupMap,
+    resuscitation_rx: Receiver<ResidentHealthResuscitationRequest>,
+    stop: SharedResidentStopSignal,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    dns: Arc<dns::ResidentDnsPlan>,
+    per_group_candidate_concurrency: usize,
+    bootstrap_candidate_concurrency: usize,
+    runtime_config: ResidentHealthRuntimeConfig,
+    shared_worker_threads: Option<usize>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+) {
+    let per_group_candidate_concurrency = per_group_candidate_concurrency.max(1);
+    let bootstrap_candidate_concurrency = bootstrap_candidate_concurrency.max(1);
+    let needs_resuscitation_runtime = groups.iter().any(|group| group.needs_background_checks());
+    let global_candidate_admission = Arc::new(Semaphore::new(
+        bootstrap_candidate_concurrency.max(per_group_candidate_concurrency),
+    ));
+    let mut runtime_report = resident_health_scheduler_value(
+        groups.len(),
+        per_group_candidate_concurrency,
+        bootstrap_candidate_concurrency,
+        runtime_config,
+    );
+    if let Some(worker_threads) = shared_worker_threads {
+        runtime_report["osThreadCount"] = json!(0);
+        runtime_report["maximumOsThreadCount"] = json!(0);
+        runtime_report["sharedDataPlaneWorkerThreads"] = json!(worker_threads);
+        runtime_report["runtime"]["executor"] = json!("generation-owned-shared-multi-thread");
+    }
     append_event(
         &event_file,
         &event_lock,
         json!({
             "event": "resident_health_scheduler_started",
-            "runtime": resident_health_scheduler_value(
-                groups.len(),
-                per_group_candidate_concurrency,
-                bootstrap_candidate_concurrency,
-                runtime_config,
-            ),
+            "runtime": runtime_report,
         }),
     );
-    runtime.block_on(async {
-        let mut tasks = JoinSet::new();
-        let (stop_tx, stop_rx) = watch::channel(stop.load(Ordering::Relaxed));
-        if needs_resuscitation_runtime {
-            tasks.spawn(run_resident_health_stop_monitor(
-                Arc::clone(&stop),
-                stop_tx,
-            ));
+    let mut tasks = JoinSet::new();
+    let (stop_tx, stop_rx) = watch::channel(stop.load(Ordering::Relaxed));
+    if needs_resuscitation_runtime {
+        tasks.spawn(run_resident_health_stop_monitor(Arc::clone(&stop), stop_tx));
+    }
+    for group in groups {
+        tasks.spawn(run_resident_health_group_schedule(
+            group,
+            stop_rx.clone(),
+            ResidentHealthScheduleContext {
+                stop: Arc::clone(&stop),
+                event_file: event_file.clone(),
+                event_lock: Arc::clone(&event_lock),
+                metrics: Arc::clone(&metrics),
+                dns: Arc::clone(&dns),
+                periodic_candidate_concurrency: per_group_candidate_concurrency,
+                bootstrap_candidate_concurrency,
+                candidate_admission: Arc::clone(&global_candidate_admission),
+                hysteria2_owner_registry: hysteria2_owner_registry.clone(),
+                tuic_owner_registry: tuic_owner_registry.clone(),
+                juicity_owner_registry: juicity_owner_registry.clone(),
+                anytls_owner_registry: anytls_owner_registry.clone(),
+            },
+        ));
+    }
+    if needs_resuscitation_runtime {
+        tasks.spawn(run_resident_health_resuscitation_dispatcher(
+            proxy_groups,
+            resuscitation_rx,
+            Arc::clone(&stop),
+            stop_rx,
+            Arc::clone(&metrics),
+            Arc::clone(&dns),
+            per_group_candidate_concurrency,
+            Arc::clone(&global_candidate_admission),
+            hysteria2_owner_registry.clone(),
+            tuic_owner_registry.clone(),
+            juicity_owner_registry.clone(),
+            anytls_owner_registry.clone(),
+        ));
+    }
+    while let Some(result) = tasks.join_next().await {
+        if let Err(err) = result {
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({"event": "resident_health_scheduler_task_failed", "error": err.to_string()}),
+            );
         }
-        for group in groups {
-            tasks.spawn(run_resident_health_group_schedule(
-                group,
-                stop_rx.clone(),
-                ResidentHealthScheduleContext {
-                    stop: Arc::clone(&stop),
-                    event_file: event_file.clone(),
-                    event_lock: Arc::clone(&event_lock),
-                    metrics: Arc::clone(&metrics),
-                    dns: Arc::clone(&dns),
-                    periodic_candidate_concurrency: per_group_candidate_concurrency,
-                    bootstrap_candidate_concurrency,
-                    candidate_admission: Arc::clone(&global_candidate_admission),
-                    hysteria2_owner_registry: hysteria2_owner_registry.clone(),
-                    tuic_owner_registry: tuic_owner_registry.clone(),
-                    juicity_owner_registry: juicity_owner_registry.clone(),
-                    anytls_owner_registry: anytls_owner_registry.clone(),
-                },
-            ));
-        }
-        if needs_resuscitation_runtime {
-            tasks.spawn(run_resident_health_resuscitation_dispatcher(
-                proxy_groups,
-                resuscitation_rx,
-                Arc::clone(&stop),
-                stop_rx,
-                Arc::clone(&metrics),
-                Arc::clone(&dns),
-                per_group_candidate_concurrency,
-                Arc::clone(&global_candidate_admission),
-                hysteria2_owner_registry.clone(),
-                tuic_owner_registry.clone(),
-                juicity_owner_registry.clone(),
-                anytls_owner_registry.clone(),
-            ));
-        }
-        while let Some(result) = tasks.join_next().await {
-            if let Err(err) = result {
-                append_event(
-                    &event_file,
-                    &event_lock,
-                    json!({"event": "resident_health_scheduler_task_failed", "error": err.to_string()}),
-                );
-            }
-        }
-    });
+    }
     append_event(
         &event_file,
         &event_lock,

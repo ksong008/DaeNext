@@ -114,7 +114,6 @@ use super::{
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
-use tokio::runtime;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time;
 
@@ -177,6 +176,8 @@ use self::plain_handlers::*;
 mod vmess_handlers;
 use self::vmess_handlers::*;
 mod transport_helpers;
+#[cfg(test)]
+pub(crate) use self::transport_helpers::shutdown_xhttp_xmux_generation_owner;
 use self::transport_helpers::*;
 pub(crate) use self::transport_helpers::{
     GrpcH2Response, GrpcHunkReadBuffer, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
@@ -190,8 +191,7 @@ pub(crate) use self::transport_helpers::{
     relay_tcp_over_resident_tls_plain_async, relay_tcp_over_vmess_grpc_h2,
     relay_tcp_over_vmess_h2_body, relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream,
     send_grpc_hunk, send_h2_data, send_h2_data_with_context, send_xhttp_packet_up_request,
-    send_xhttp_stream_data, shutdown_xhttp_xmux_generation_owner,
-    start_xhttp_xmux_generation_owner,
+    send_xhttp_stream_data, start_xhttp_xmux_generation_owner_on, stop_xhttp_xmux_generation_owner,
 };
 mod stream_helpers;
 use self::stream_helpers::*;

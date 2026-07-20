@@ -49,75 +49,7 @@ const UDP_ROUTE_REASON_DISPATCH_QUEUE_FULL: &str = "session dispatch queue full"
 const UDP_ROUTE_REASON_SESSION_UNAVAILABLE: &str = "session actor closed during recreation";
 const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
 const UDP_ROUTE_REASON_DNS_FAST_PATH: &str = "handled resident DNS packet without UDP session";
-const UDP_SESSION_WORKER_THREAD_NAME: &str = "udp-session";
-
-pub(super) fn run_resident_udp_session_manager(
-    socket: UdpSocket,
-    proxy_groups: SharedResidentProxyGroupMap,
-    default_outbound: u8,
-    routing_tuple_map_id: Option<u32>,
-    routing_matcher: RoutingMatcher,
-    dial_mode: TcpDialMode,
-    so_mark_from_dae: u32,
-    dns: Arc<ResidentDnsPlan>,
-    stop: SharedResidentStopSignal,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    active_sessions: Arc<AtomicUsize>,
-    runtime_config: ResidentUdpRuntimeConfig,
-    health_resuscitation: ResidentHealthResuscitationHandle,
-    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
-    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
-) -> Value {
-    let mut runtime_builder = if runtime_config.runtime_worker_threads > 0 {
-        let mut builder = tokio::runtime::Builder::new_multi_thread();
-        builder
-            .worker_threads(runtime_config.runtime_worker_threads)
-            .thread_name(UDP_SESSION_WORKER_THREAD_NAME)
-            .thread_stack_size(runtime_config.worker_stack_bytes);
-        builder
-    } else {
-        tokio::runtime::Builder::new_current_thread()
-    };
-    let runtime = match runtime_builder.enable_io().enable_time().build() {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            let report = udp_session_manager_start_failure("runtime-build", err.to_string());
-            append_event(
-                &event_file,
-                &event_lock,
-                udp_session_manager_event("udp_session_manager_start_failed", &report),
-            );
-            return report;
-        }
-    };
-    runtime.block_on(run_resident_udp_session_manager_async(
-        socket,
-        proxy_groups,
-        default_outbound,
-        routing_tuple_map_id,
-        routing_matcher,
-        dial_mode,
-        so_mark_from_dae,
-        dns,
-        stop,
-        event_file,
-        event_lock,
-        metrics,
-        active_sessions,
-        runtime_config,
-        health_resuscitation,
-        hysteria2_owner_registry,
-        tuic_owner_registry,
-        juicity_owner_registry,
-        anytls_owner_registry,
-    ))
-}
-
-async fn run_resident_udp_session_manager_async(
+pub(super) async fn run_resident_udp_session_manager_async(
     socket: UdpSocket,
     proxy_groups: SharedResidentProxyGroupMap,
     default_outbound: u8,
@@ -204,13 +136,9 @@ async fn run_resident_udp_session_manager_async(
             "packetSessionManager": {
                 "schemaVersion": 1,
                 "manager": "resident-udp-session-manager",
-                "runtime": if runtime_config.runtime_worker_threads > 0 {
-                    "tokio-owned-session-shards"
-                } else {
-                    "tokio-current-thread-single-shard"
-                },
+                "runtime": "generation-owned-shared-multi-thread",
                 "sessionShardCount": runtime_config.runtime_shards,
-                "sessionWorkerThreads": runtime_config.runtime_worker_threads,
+                "sharedDataPlaneWorkerThreads": runtime_config.runtime_worker_threads,
                 "sessionLimit": session_limit,
                 "perSessionQueueDepth": session_queue_depth,
                 "replyQueueDepth": runtime_config.reply_queue_depth,

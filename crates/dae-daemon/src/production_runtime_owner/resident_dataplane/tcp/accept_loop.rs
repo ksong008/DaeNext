@@ -1,6 +1,6 @@
 use super::*;
 use std::path::Path;
-pub(crate) fn resident_tcp_accept_loop(
+pub(crate) async fn resident_tcp_accept_loop_async(
     listener: TcpListener,
     router: Arc<ResidentTcpRouter>,
     stop: SharedResidentStopSignal,
@@ -17,37 +17,6 @@ pub(crate) fn resident_tcp_accept_loop(
         );
         return;
     }
-    let runtime = match build_resident_tcp_runtime(runtime_config) {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            append_event(
-                &event_file,
-                &event_lock,
-                json!({"event": "tcp_async_runtime_build_failed", "error": err.to_string()}),
-            );
-            return;
-        }
-    };
-    runtime.block_on(resident_tcp_accept_loop_async(
-        listener,
-        router,
-        stop,
-        event_file,
-        event_lock,
-        metrics,
-        runtime_config,
-    ));
-}
-
-pub(crate) async fn resident_tcp_accept_loop_async(
-    listener: TcpListener,
-    router: Arc<ResidentTcpRouter>,
-    stop: SharedResidentStopSignal,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    runtime_config: ResidentTcpRuntimeConfig,
-) {
     let listener = match TokioTcpListener::from_std(listener) {
         Ok(listener) => listener,
         Err(err) => {
@@ -66,7 +35,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             "proxy_count": router.proxy_count(),
             "dial_mode": router.dial_mode_name(),
             "flowStackBytes": runtime_config.worker_stack_bytes,
-            "flowStackScope": "resident TCP runtime OS threads; not Tokio task stacks",
+            "flowStackScope": "resident shared data-plane runtime OS threads; not Tokio task stacks",
             "runtime": runtime_config.json(),
     });
     append_tcp_execution_fields(&mut event, "async-accept-direct");

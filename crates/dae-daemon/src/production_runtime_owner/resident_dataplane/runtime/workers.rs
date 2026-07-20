@@ -190,7 +190,7 @@ pub(crate) fn start_resident_dataplane_workers(
             .profile
             .udp_queued_payload_bytes_default(),
     );
-    let udp_runtime_config = ResidentUdpRuntimeConfig::from_resources(
+    let mut udp_runtime_config = ResidentUdpRuntimeConfig::from_resources(
         reload_generation,
         &resource_config,
         udp_payload_admission.clone(),
@@ -198,7 +198,7 @@ pub(crate) fn start_resident_dataplane_workers(
     apply_resident_udp_socket_buffer_tuning(&udp_socket);
     let udp_sessions_active = Arc::new(AtomicUsize::new(0));
     let event_lock = Arc::new(Mutex::new(()));
-    let mut owner = ResidentRuntimeOwner::new(
+    let mut owner = match ResidentRuntimeOwner::new(
         event_file.clone(),
         Arc::clone(&event_lock),
         reload_generation,
@@ -206,21 +206,14 @@ pub(crate) fn start_resident_dataplane_workers(
         Arc::clone(&udp_sessions_active),
         resource_config.clone(),
         udp_payload_admission,
-    );
-    let (hysteria2_owner_registry, hysteria2_owner_thread) = match start_hysteria2_owner_registry(
-        reload_generation,
-        owner.stop_handle(),
-        resource_config.tcp_flow_stack_bytes.value(),
     ) {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            let cleanup = owner.shutdown();
+        Ok(owner) => owner,
+        Err(error) => {
             return (
                 json!({
                     "status": "fail",
                     "enabled": true,
-                    "error": err,
-                    "cleanup": cleanup,
+                    "error": error,
                     "event_file": Value::Null,
                     "event_file_status": "disabled",
                     "event_log": "product-log-sink",
@@ -229,100 +222,55 @@ pub(crate) fn start_resident_dataplane_workers(
             );
         }
     };
-    owner.install_hysteria2_owner_registry(hysteria2_owner_registry, hysteria2_owner_thread);
+    udp_runtime_config.runtime_worker_threads = owner.data_plane_worker_threads();
+    let (hysteria2_owner_registry, hysteria2_owner_task) = start_hysteria2_owner_registry_on(
+        &owner.data_plane_handle(),
+        reload_generation,
+        owner.stop_handle(),
+    );
+    owner.install_hysteria2_owner_registry_task(hysteria2_owner_registry, hysteria2_owner_task);
     let requires_tuic_owner = proxy_groups
         .values()
         .any(|group| group.requires_tuic_transport_owner());
     if requires_tuic_owner {
-        let (tuic_owner_registry, tuic_owner_thread) = match start_tuic_owner_registry(
+        let (tuic_owner_registry, tuic_owner_task) = start_tuic_owner_registry_on(
+            &owner.data_plane_handle(),
             reload_generation,
             owner.stop_handle(),
-            resource_config.tcp_flow_stack_bytes.value(),
-        ) {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                let cleanup = owner.shutdown();
-                return (
-                    json!({
-                        "status": "fail",
-                        "enabled": true,
-                        "error": err,
-                        "cleanup": cleanup,
-                        "event_file": Value::Null,
-                        "event_file_status": "disabled",
-                        "event_log": "product-log-sink",
-                    }),
-                    None,
-                );
-            }
-        };
-        owner.install_tuic_owner_registry(tuic_owner_registry, tuic_owner_thread);
+        );
+        owner.install_tuic_owner_registry_task(tuic_owner_registry, tuic_owner_task);
     }
     let requires_juicity_owner = proxy_groups
         .values()
         .any(|group| group.requires_juicity_transport_owner());
     if requires_juicity_owner {
-        let (juicity_owner_registry, juicity_owner_thread) = match start_juicity_owner_registry(
+        let (juicity_owner_registry, juicity_owner_task) = start_juicity_owner_registry_on(
+            &owner.data_plane_handle(),
             reload_generation,
             owner.stop_handle(),
-            resource_config.tcp_flow_stack_bytes.value(),
-        ) {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                let cleanup = owner.shutdown();
-                return (
-                    json!({
-                        "status": "fail",
-                        "enabled": true,
-                        "error": err,
-                        "cleanup": cleanup,
-                        "event_file": Value::Null,
-                        "event_file_status": "disabled",
-                        "event_log": "product-log-sink",
-                    }),
-                    None,
-                );
-            }
-        };
-        owner.install_juicity_owner_registry(juicity_owner_registry, juicity_owner_thread);
+        );
+        owner.install_juicity_owner_registry_task(juicity_owner_registry, juicity_owner_task);
     }
     let requires_anytls_owner = proxy_groups
         .values()
         .any(|group| group.requires_anytls_transport_owner());
     if requires_anytls_owner {
-        let (anytls_owner_registry, anytls_owner_thread) = match start_anytls_owner_registry(
+        let (anytls_owner_registry, anytls_owner_task) = start_anytls_owner_registry_on(
+            &owner.data_plane_handle(),
             reload_generation,
             owner.stop_handle(),
-            resource_config.tcp_flow_stack_bytes.value(),
-        ) {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                let cleanup = owner.shutdown();
-                return (
-                    json!({
-                        "status": "fail",
-                        "enabled": true,
-                        "error": err,
-                        "cleanup": cleanup,
-                        "event_file": Value::Null,
-                        "event_file_status": "disabled",
-                        "event_log": "product-log-sink",
-                    }),
-                    None,
-                );
-            }
-        };
-        owner.install_anytls_owner_registry(anytls_owner_registry, anytls_owner_thread);
+        );
+        owner.install_anytls_owner_registry_task(anytls_owner_registry, anytls_owner_task);
     }
     let requires_h2_carrier_owner = proxy_groups
         .values()
         .any(|group| group.requires_h2_carrier_owner());
     if requires_h2_carrier_owner {
-        let (h2_carrier_owner, h2_carrier_thread) = match start_h2_carrier_generation_owner(
+        let (h2_carrier_owner, h2_carrier_task) = match start_h2_carrier_generation_owner_on(
+            &owner.data_plane_handle(),
             reload_generation,
             owner.stop_handle(),
-            resource_config.tcp_flow_stack_bytes.value(),
-            resource_config.tcp_runtime_workers.value(),
+            owner.data_plane_worker_threads(),
         ) {
             Ok(runtime) => runtime,
             Err(err) => {
@@ -341,18 +289,18 @@ pub(crate) fn start_resident_dataplane_workers(
                 );
             }
         };
-        owner.install_h2_carrier_generation_owner(h2_carrier_owner, h2_carrier_thread);
+        owner.install_h2_carrier_generation_owner_task(h2_carrier_owner, h2_carrier_task);
     }
     let requires_meek_transport_owner = proxy_groups
         .values()
         .any(|group| group.requires_meek_transport_owner());
     if requires_meek_transport_owner {
         let (meek_transport_owner, meek_transport_thread) =
-            match start_meek_transport_generation_owner(
+            match start_meek_transport_generation_owner_on(
+                &owner.data_plane_handle(),
                 reload_generation,
                 owner.stop_handle(),
-                resource_config.tcp_flow_stack_bytes.value(),
-                resource_config.tcp_runtime_workers.value(),
+                owner.data_plane_worker_threads(),
             ) {
                 Ok(runtime) => runtime,
                 Err(err) => {
@@ -371,17 +319,20 @@ pub(crate) fn start_resident_dataplane_workers(
                     );
                 }
             };
-        owner.install_meek_transport_generation_owner(meek_transport_owner, meek_transport_thread);
+        owner.install_meek_transport_generation_owner_task(
+            meek_transport_owner,
+            meek_transport_thread,
+        );
     }
     let requires_vless_mux_owner = proxy_groups
         .values()
         .any(|group| group.requires_vless_mux_owner());
     if requires_vless_mux_owner {
-        let (vless_mux_owner, vless_mux_thread) = match start_vless_mux_generation_owner(
+        let (vless_mux_owner, vless_mux_task) = match start_vless_mux_generation_owner_on(
+            &owner.data_plane_handle(),
             reload_generation,
             owner.stop_handle(),
-            resource_config.tcp_flow_stack_bytes.value(),
-            resource_config.tcp_runtime_workers.value(),
+            owner.data_plane_worker_threads(),
         ) {
             Ok(runtime) => runtime,
             Err(err) => {
@@ -400,17 +351,17 @@ pub(crate) fn start_resident_dataplane_workers(
                 );
             }
         };
-        owner.install_vless_mux_generation_owner(vless_mux_owner, vless_mux_thread);
+        owner.install_vless_mux_generation_owner_task(vless_mux_owner, vless_mux_task);
     }
     let requires_xhttp_xmux_owner = proxy_groups
         .values()
         .any(|group| group.requires_xhttp_xmux_owner());
     if requires_xhttp_xmux_owner {
         let (xhttp_xmux_owner, xhttp_xmux_owner_thread) =
-            match tcp::start_xhttp_xmux_generation_owner(
+            match tcp::start_xhttp_xmux_generation_owner_on(
+                &owner.data_plane_handle(),
                 reload_generation,
-                resource_config.tcp_flow_stack_bytes.value(),
-                resource_config.tcp_runtime_workers.value(),
+                owner.data_plane_worker_threads(),
             ) {
                 Ok(runtime) => runtime,
                 Err(err) => {
@@ -429,7 +380,7 @@ pub(crate) fn start_resident_dataplane_workers(
                     );
                 }
             };
-        owner.install_xhttp_xmux_generation_owner(xhttp_xmux_owner, xhttp_xmux_owner_thread);
+        owner.install_xhttp_xmux_generation_owner_task(xhttp_xmux_owner, xhttp_xmux_owner_thread);
     }
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::clone(&default_group);
@@ -463,12 +414,17 @@ pub(crate) fn start_resident_dataplane_workers(
     );
     let health_bootstrap_concurrency = health_runtime_config
         .bootstrap_concurrency(health_candidate_count, health_check_concurrency);
-    let health_scheduler_report = resident_health_scheduler_value(
+    let mut health_scheduler_report = resident_health_scheduler_value(
         health_group_count,
         health_check_concurrency,
         health_bootstrap_concurrency,
         health_runtime_config,
     );
+    health_scheduler_report["osThreadCount"] = json!(0);
+    health_scheduler_report["maximumOsThreadCount"] = json!(0);
+    health_scheduler_report["sharedDataPlaneWorkerThreads"] =
+        json!(owner.data_plane_worker_threads());
+    health_scheduler_report["runtime"]["executor"] = json!("generation-owned-shared-multi-thread");
     let (health_resuscitation, health_resuscitation_rx) =
         resident_health_resuscitation_channel(Arc::clone(&metrics));
     let udp_proxy_groups = Arc::clone(&proxy_groups);
@@ -489,12 +445,15 @@ pub(crate) fn start_resident_dataplane_workers(
             .with_udp_runtime_resources_and_transport_owner(
                 udp_runtime_config.dns_udp_runtime_config(),
                 Arc::clone(&metrics),
-                owner.hysteria2_owner_registry().expect(
-                    "Hysteria2 owner registry is installed before DNS runtime construction",
-                ),
-                owner.tuic_owner_registry(),
-                owner.juicity_owner_registry(),
-                owner.anytls_owner_registry(),
+                owner.data_plane_handle(),
+                ResidentTransportOwnerRegistries::new(
+                    Some(owner.hysteria2_owner_registry().expect(
+                        "Hysteria2 owner registry is installed before DNS runtime construction",
+                    )),
+                    owner.tuic_owner_registry(),
+                    owner.juicity_owner_registry(),
+                )
+                .with_anytls(owner.anytls_owner_registry()),
             )
             .with_domain_routing(dns_domain_routing.clone())
             .with_upstream_routing(Some(dns_upstream_router)),
@@ -600,21 +559,18 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
-        owner.spawn_thread_with_stack(
+        owner.spawn_async_task(
             "tcp-accept-loop",
             "tcp-accept",
-            tcp_flow_stack_bytes,
-            move || {
-                resident_tcp_accept_loop(
-                    tcp_listener,
-                    tcp_router,
-                    stop,
-                    event_file,
-                    event_lock,
-                    metrics,
-                    tcp_runtime_config,
-                )
-            },
+            resident_tcp_accept_loop_async(
+                tcp_listener,
+                tcp_router,
+                stop,
+                event_file,
+                event_lock,
+                metrics,
+                tcp_runtime_config,
+            ),
         );
     }
     if !health_groups.is_empty() {
@@ -630,28 +586,27 @@ pub(crate) fn start_resident_dataplane_workers(
         let tuic_owner_registry = owner.tuic_owner_registry();
         let juicity_owner_registry = owner.juicity_owner_registry();
         let anytls_owner_registry = owner.anytls_owner_registry();
-        owner.spawn_thread(
+        owner.spawn_async_task(
             "health-check-scheduler",
             "health-check-scheduler",
-            move || {
-                resident_health_scheduler_loop(
-                    health_groups,
-                    health_proxy_groups,
-                    health_resuscitation_rx,
-                    stop,
-                    event_file,
-                    event_lock,
-                    metrics,
-                    health_dns,
-                    health_check_concurrency,
-                    health_bootstrap_concurrency,
-                    health_runtime_config,
-                    Some(hysteria2_owner_registry),
-                    tuic_owner_registry,
-                    juicity_owner_registry,
-                    anytls_owner_registry,
-                )
-            },
+            resident_health_scheduler_async(
+                health_groups,
+                health_proxy_groups,
+                health_resuscitation_rx,
+                stop,
+                event_file,
+                event_lock,
+                metrics,
+                health_dns,
+                health_check_concurrency,
+                health_bootstrap_concurrency,
+                health_runtime_config,
+                Some(owner.data_plane_worker_threads()),
+                Some(hysteria2_owner_registry),
+                tuic_owner_registry,
+                juicity_owner_registry,
+                anytls_owner_registry,
+            ),
         );
     } else {
         drop(health_resuscitation_rx);
@@ -673,8 +628,8 @@ pub(crate) fn start_resident_dataplane_workers(
         let juicity_owner_registry = owner.juicity_owner_registry();
         let anytls_owner_registry = owner.anytls_owner_registry();
         let cleanup_reporter = owner.cleanup_reporter("udp-session-manager");
-        owner.spawn_thread("udp-session-manager", "udp-session-manager", move || {
-            let report = resident_udp_loop(
+        owner.spawn_async_task("udp-session-manager", "udp-session-manager", async move {
+            let report = resident_udp_loop_async(
                 udp_socket,
                 udp_proxy_groups,
                 default_outbound,
@@ -694,7 +649,8 @@ pub(crate) fn start_resident_dataplane_workers(
                 tuic_owner_registry,
                 juicity_owner_registry,
                 anytls_owner_registry,
-            );
+            )
+            .await;
             cleanup_reporter.finish(report);
         });
     }
@@ -704,8 +660,8 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let metrics = owner.metrics();
-        owner.spawn_thread("dns-bind-listener", "dns-bind-listener", move || {
-            resident_dns_bind_listener_loop(
+        owner.spawn_async_task("dns-bind-listener", "dns-bind-listener", async move {
+            run_resident_dns_bind_listener_async(
                 dns_bind_listener,
                 dns,
                 stop,
@@ -713,6 +669,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 event_lock,
                 metrics,
             )
+            .await
         });
     }
     let default_proxy_utls = proxy.utls_fingerprint.as_ref().map(|fingerprint| {

@@ -437,6 +437,36 @@ pub(crate) fn start_h2_carrier_generation_owner(
     Ok((H2CarrierGenerationOwnerHandle { owner }, thread))
 }
 
+pub(crate) fn start_h2_carrier_generation_owner_on(
+    runtime: &tokio::runtime::Handle,
+    generation: u64,
+    stop: SharedResidentStopSignal,
+    runtime_worker_threads: usize,
+) -> Result<(H2CarrierGenerationOwnerHandle, tokio::task::JoinHandle<()>), String> {
+    let owner = Arc::new(H2CarrierGenerationOwner {
+        generation: OwnerGeneration::new(generation),
+        closing: AtomicBool::new(false),
+        runtime: runtime.clone(),
+        runtime_worker_threads: runtime_worker_threads.max(1),
+        managers: Mutex::new(HashMap::new()),
+        builds: Mutex::new(HashMap::new()),
+        drivers: Mutex::new(HashMap::new()),
+        resources: H2CarrierOwnerResourceProfile::selected(),
+        metrics: Arc::new(H2CarrierMetrics::default()),
+        next_build_id: AtomicU64::new(1),
+        next_instance_id: AtomicU64::new(1),
+    });
+    register_h2_carrier_generation(&owner)?;
+    let task_owner = Arc::clone(&owner);
+    let task = runtime.spawn(async move {
+        stop.listener().cancelled().await;
+        task_owner.closing.store(true, Ordering::Release);
+        unregister_h2_carrier_generation(&task_owner);
+        cleanup_h2_carrier_owner(&task_owner).await;
+    });
+    Ok((H2CarrierGenerationOwnerHandle { owner }, task))
+}
+
 fn register_h2_carrier_generation(owner: &Arc<H2CarrierGenerationOwner>) -> Result<(), String> {
     let mut generations = H2_CARRIER_GENERATIONS
         .get_or_init(|| Mutex::new(HashMap::new()))

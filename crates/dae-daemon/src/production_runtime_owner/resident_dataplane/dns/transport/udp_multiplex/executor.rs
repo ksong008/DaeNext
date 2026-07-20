@@ -22,6 +22,7 @@ use self::pool::ResidentDnsUdpActorPool;
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUdpActorExecutor {
     runtime_config: ResidentDnsUdpRuntimeConfig,
     metrics: Arc<ResidentDataplaneMetrics>,
+    shared_runtime: Option<tokio::runtime::Handle>,
     pool: tokio::sync::Mutex<Option<Arc<ResidentDnsUdpActorPool>>>,
     actors: std::sync::Mutex<Vec<ResidentDnsUdpActorTask>>,
     closing: std::sync::atomic::AtomicBool,
@@ -62,6 +63,22 @@ impl ResidentDnsUdpActorExecutor {
         Self {
             runtime_config,
             metrics,
+            shared_runtime: None,
+            pool: tokio::sync::Mutex::new(None),
+            actors: std::sync::Mutex::new(Vec::new()),
+            closing: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new_on(
+        runtime_config: ResidentDnsUdpRuntimeConfig,
+        metrics: Arc<ResidentDataplaneMetrics>,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
+        Self {
+            runtime_config,
+            metrics,
+            shared_runtime: Some(runtime),
             pool: tokio::sync::Mutex::new(None),
             actors: std::sync::Mutex::new(Vec::new()),
             closing: std::sync::atomic::AtomicBool::new(false),
@@ -115,7 +132,7 @@ impl ResidentDnsUdpActorExecutor {
         if self.closing.load(std::sync::atomic::Ordering::Acquire) {
             return Err("shared DNS UDP actor executor is closing".to_owned());
         }
-        let runtime_handle = self.pool().await?.runtime_handle()?;
+        let runtime_handle = self.runtime_handle().await?;
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         runtime_handle.spawn(run_dns_udp_actor_build(ready_tx, build));
         let opened = ready_rx
@@ -138,7 +155,7 @@ impl ResidentDnsUdpActorExecutor {
         if self.closing.load(std::sync::atomic::Ordering::Acquire) {
             return Err("shared DNS transport task executor is closing".to_owned());
         }
-        let runtime_handle = self.pool().await?.runtime_handle()?;
+        let runtime_handle = self.runtime_handle().await?;
         if self.closing.load(std::sync::atomic::Ordering::Acquire) {
             return Err("shared DNS transport task executor is closing".to_owned());
         }
@@ -163,6 +180,13 @@ impl ResidentDnsUdpActorExecutor {
         )?);
         *pool = Some(Arc::clone(&opened));
         Ok(opened)
+    }
+
+    async fn runtime_handle(&self) -> Result<tokio::runtime::Handle, String> {
+        if let Some(runtime) = &self.shared_runtime {
+            return Ok(runtime.clone());
+        }
+        self.pool().await?.runtime_handle()
     }
 
     async fn register_actor<T>(
