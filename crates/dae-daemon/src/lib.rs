@@ -2,6 +2,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod allocator;
+mod allocator_bootstrap;
 mod bpf_loader;
 mod config_validate;
 mod control_plane;
@@ -28,6 +29,7 @@ mod version;
 #[cfg(test)]
 mod tests;
 
+pub use allocator_bootstrap::ensure_allocator_startup_configuration;
 pub use control_plane::{
     ControlPlaneOwnerPaths, control_plane_owner_preflight_report,
     default_control_plane_owner_preflight_root, run_control_plane_owner_preflight,
