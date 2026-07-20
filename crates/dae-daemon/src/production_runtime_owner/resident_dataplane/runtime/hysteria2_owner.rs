@@ -1423,10 +1423,10 @@ async fn build_hysteria2_transport(
         deadline,
     )
     .await
-    .map_err(|detail| Hysteria2OwnerBuildError {
-        class: OwnerFailureClass::Connect,
-        operation: "hysteria2-owner-connect",
-        detail,
+    .map_err(|failure| Hysteria2OwnerBuildError {
+        class: failure.owner_failure_class(),
+        operation: failure.operation(),
+        detail: failure.to_string(),
     })?;
     let ResidentConnectedQuicEndpoint {
         remote,
