@@ -50,6 +50,7 @@ fn receive_slab_charge_uses_quinn_runtime_dimensions() {
     assert!(ordinary.http3_bytes > 0);
     assert!(ordinary.tls_bytes > 0);
     assert!(ordinary.queue_bytes > 0);
+    assert!(ordinary.underlay_socket_bytes > 0);
     assert_eq!(
         ordinary.total_bytes,
         ordinary.receive_slab_bytes
@@ -57,6 +58,7 @@ fn receive_slab_charge_uses_quinn_runtime_dimensions() {
             + ordinary.http3_bytes
             + ordinary.tls_bytes
             + ordinary.queue_bytes
+            + ordinary.underlay_socket_bytes
     );
 }
 

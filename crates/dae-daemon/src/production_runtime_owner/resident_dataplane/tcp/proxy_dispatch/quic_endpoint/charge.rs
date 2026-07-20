@@ -3,9 +3,10 @@ use std::num::NonZeroU64;
 use super::model::QuicEndpointUnderlay;
 
 pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA: &str = "quinn-endpoint-charge";
-pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA_VERSION: u64 = 2;
-pub(super) const QUIC_ENDPOINT_CHARGE_MODEL: &str = "quinn-0.11-receive-slab-safety-reserve";
-pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 3;
+pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA_VERSION: u64 = 3;
+pub(super) const QUIC_ENDPOINT_CHARGE_MODEL: &str =
+    "quinn-0.11-endpoint-and-underlay-safety-reserve";
+pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 4;
 
 const QUINN_RECEIVE_DATAGRAM_LIMIT_BYTES: u64 = 64 * 1024;
 const QUINN_GRO_RECEIVE_SEGMENTS: usize = 64;
@@ -17,6 +18,7 @@ pub(super) struct QuicEndpointSafetyChargeProfile {
     pub http3_bytes: NonZeroU64,
     pub tls_bytes: NonZeroU64,
     pub queue_bytes: NonZeroU64,
+    pub underlay_socket_bytes: NonZeroU64,
 }
 
 impl QuicEndpointSafetyChargeProfile {
@@ -27,6 +29,7 @@ impl QuicEndpointSafetyChargeProfile {
         http3_bytes: NonZeroU64::new(256 * 1024).unwrap(),
         tls_bytes: NonZeroU64::new(128 * 1024).unwrap(),
         queue_bytes: NonZeroU64::new(128 * 1024).unwrap(),
+        underlay_socket_bytes: NonZeroU64::new(64 * 1024).unwrap(),
     };
 }
 
@@ -37,6 +40,7 @@ pub(super) struct QuicEndpointCharge {
     pub http3_bytes: u64,
     pub tls_bytes: u64,
     pub queue_bytes: u64,
+    pub underlay_socket_bytes: u64,
     pub total_bytes: u64,
     pub max_udp_payload_bytes: u64,
     pub receive_segments: u64,
@@ -104,7 +108,6 @@ impl QuicEndpointCharge {
         let receive_slab_bytes = max_udp_payload_bytes
             .checked_mul(receive_segments)
             .and_then(|value| value.checked_mul(batch_size))
-            .and_then(|value| value.checked_mul(udp_socket_count))
             .ok_or_else(|| "QUIC receive-slab charge overflow".to_owned())?;
         let profile = QuicEndpointSafetyChargeProfile::OBSERVABILITY_BASELINE;
         let quic_transport_bytes = profile.quic_transport_bytes.get();
@@ -115,11 +118,17 @@ impl QuicEndpointCharge {
         };
         let tls_bytes = profile.tls_bytes.get();
         let queue_bytes = profile.queue_bytes.get();
+        let underlay_socket_bytes = profile
+            .underlay_socket_bytes
+            .get()
+            .checked_mul(udp_socket_count)
+            .ok_or_else(|| "QUIC underlay-socket charge overflow".to_owned())?;
         let total_bytes = receive_slab_bytes
             .checked_add(quic_transport_bytes)
             .and_then(|value| value.checked_add(http3_bytes))
             .and_then(|value| value.checked_add(tls_bytes))
             .and_then(|value| value.checked_add(queue_bytes))
+            .and_then(|value| value.checked_add(underlay_socket_bytes))
             .ok_or_else(|| "QUIC endpoint total charge overflow".to_owned())?;
         Ok(Self {
             receive_slab_bytes,
@@ -127,6 +136,7 @@ impl QuicEndpointCharge {
             http3_bytes,
             tls_bytes,
             queue_bytes,
+            underlay_socket_bytes,
             total_bytes,
             max_udp_payload_bytes,
             receive_segments,
@@ -162,12 +172,14 @@ pub(super) fn charge_model_json() -> serde_json::Value {
         "preSocketOrdinaryReceiveSegments": conservative_platform_receive_segments(),
         "preSocketSalamanderReceiveSegments": QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS,
         "portHoppingSocketCountSource": "runtimeProfile",
-        "portHoppingChargeScope": "receive slabs and UDP sockets only; QUIC, HTTP/3, TLS and queue reserves remain one physical owner",
+        "receiveSlabScope": "one Quinn Endpoint-wide receive slab, independent of wrapped underlay socket count",
+        "portHoppingChargeScope": "underlay socket reserve only; QUIC, HTTP/3, TLS, queue and receive-slab reserves remain one physical owner",
         "safetyReserve": {
             "quicTransportBytes": profile.quic_transport_bytes.get(),
             "http3Bytes": profile.http3_bytes.get(),
             "tlsBytes": profile.tls_bytes.get(),
             "queueBytes": profile.queue_bytes.get(),
+            "underlaySocketBytesEach": profile.underlay_socket_bytes.get(),
         },
         "admissionEnforced": true,
         "rssClaim": false,
@@ -195,5 +207,45 @@ mod tests {
             QuicEndpointCharge::before_socket(&config, QuicEndpointUnderlay::Salamander, true)
                 .unwrap();
         assert_eq!(salamander.receive_segments, 1);
+    }
+
+    #[test]
+    fn port_hopping_charges_one_receive_slab_and_independent_underlay_sockets() {
+        let config = quinn::EndpointConfig::default();
+        for (receive_segments, ordinary, hopping) in [
+            (
+                conservative_platform_receive_segments(),
+                QuicEndpointUnderlay::Ordinary,
+                QuicEndpointUnderlay::PortHopping {
+                    transition_socket_limit: 3,
+                },
+            ),
+            (
+                QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS,
+                QuicEndpointUnderlay::Salamander,
+                QuicEndpointUnderlay::SalamanderPortHopping {
+                    transition_socket_limit: 3,
+                },
+            ),
+        ] {
+            let ordinary =
+                QuicEndpointCharge::for_wrapped_underlay(&config, receive_segments, ordinary, true)
+                    .unwrap();
+            let hopping =
+                QuicEndpointCharge::for_wrapped_underlay(&config, receive_segments, hopping, true)
+                    .unwrap();
+
+            assert_eq!(ordinary.receive_slab_bytes, hopping.receive_slab_bytes);
+            assert_eq!(ordinary.udp_socket_count, 1);
+            assert_eq!(hopping.udp_socket_count, 3);
+            assert_eq!(
+                hopping.underlay_socket_bytes,
+                ordinary.underlay_socket_bytes * 3
+            );
+            assert_eq!(
+                hopping.total_bytes - ordinary.total_bytes,
+                hopping.underlay_socket_bytes - ordinary.underlay_socket_bytes
+            );
+        }
     }
 }
