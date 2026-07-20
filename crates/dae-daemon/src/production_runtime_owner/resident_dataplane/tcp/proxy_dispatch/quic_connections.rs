@@ -30,7 +30,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct Hysteria2Quic
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hysteria2_quic_connection_candidates_async(
     request: Hysteria2QuicConnectionRequest<'_>,
     deadline: dae_runtime_control::AbsoluteDeadline,
-) -> Result<ResidentConnectedQuicEndpoint, Hysteria2Failure> {
+) -> Result<ResidentConnectedQuicEndpoint, Hysteria2ConnectionFailure> {
     let Hysteria2QuicConnectionRequest {
         proxy,
         mark,
@@ -47,22 +47,22 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
     let remote_plan = resolve_hysteria2_quic_remote_plan_async(proxy, port_hop_ports, deadline)
         .await
         .map_err(|_| {
-            Hysteria2Failure::new(
+            Hysteria2ConnectionFailure::without_endpoint(Hysteria2Failure::new(
                 Hysteria2FailureClass::NetworkAddress,
                 "hysteria2-resolve",
                 "resolve Hysteria2 server address failed",
-            )
+            ))
         })?;
     let candidates = hysteria2_initial_remote_candidates(
         &remote_plan,
         resources.initial_connect_attempt_limit(),
     )
     .map_err(|_| {
-        Hysteria2Failure::new(
+        Hysteria2ConnectionFailure::without_endpoint(Hysteria2Failure::new(
             Hysteria2FailureClass::Configuration,
             "hysteria2-initial-remote-plan",
             "select Hysteria2 initial remote failed",
-        )
+        ))
     })?;
     let client_config = build_hysteria2_runtime_client_config_with_congestion(
         tls_identity,
@@ -70,11 +70,11 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         Some(congestion),
     )
     .map_err(|_| {
-        Hysteria2Failure::new(
+        Hysteria2ConnectionFailure::without_endpoint(Hysteria2Failure::new(
             Hysteria2FailureClass::Configuration,
             "hysteria2-client-configuration",
             "build Hysteria2 QUIC client configuration failed",
-        )
+        ))
     })?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Hysteria2,

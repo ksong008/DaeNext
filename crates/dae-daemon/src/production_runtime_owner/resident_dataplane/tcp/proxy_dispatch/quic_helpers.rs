@@ -530,6 +530,31 @@ where
     Ok((remote, endpoint, connection))
 }
 
+pub(crate) struct Hysteria2ConnectionFailure {
+    failure: Hysteria2Failure,
+    endpoint: Option<ObservedQuicEndpoint>,
+}
+
+impl Hysteria2ConnectionFailure {
+    pub(crate) fn without_endpoint(failure: Hysteria2Failure) -> Self {
+        Self {
+            failure,
+            endpoint: None,
+        }
+    }
+
+    fn with_endpoint(failure: Hysteria2Failure, endpoint: ObservedQuicEndpoint) -> Self {
+        Self {
+            failure,
+            endpoint: Some(endpoint),
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (Hysteria2Failure, Option<ObservedQuicEndpoint>) {
+        (self.failure, self.endpoint)
+    }
+}
+
 pub(crate) async fn connect_hysteria2_quic_endpoint_candidates_async<F, Fut>(
     candidates: &[SocketAddr],
     server_name: &str,
@@ -538,21 +563,25 @@ pub(crate) async fn connect_hysteria2_quic_endpoint_candidates_async<F, Fut>(
     deadline: AbsoluteDeadline,
     cancellation: &OwnerCancellationSignal,
     mut endpoint_for_remote: F,
-) -> Result<(SocketAddr, ObservedQuicEndpoint, quinn::Connection), Hysteria2Failure>
+) -> Result<(SocketAddr, ObservedQuicEndpoint, quinn::Connection), Hysteria2ConnectionFailure>
 where
     F: FnMut(SocketAddr, AbsoluteDeadline, OwnerCancellationSignal) -> Fut,
     Fut: Future<Output = Result<ObservedQuicEndpoint, Hysteria2Failure>>,
 {
     if candidates.is_empty() {
-        return Err(Hysteria2Failure::new(
-            Hysteria2FailureClass::NetworkAddress,
-            "hysteria2-resolve",
-            "Hysteria2 server resolved to no usable address",
+        return Err(Hysteria2ConnectionFailure::without_endpoint(
+            Hysteria2Failure::new(
+                Hysteria2FailureClass::NetworkAddress,
+                "hysteria2-resolve",
+                "Hysteria2 server resolved to no usable address",
+            ),
         ));
     }
 
     if let Err(reason) = cancellation.check() {
-        return Err(hysteria2_cancellation_failure(reason));
+        return Err(Hysteria2ConnectionFailure::without_endpoint(
+            hysteria2_cancellation_failure(reason),
+        ));
     }
     let mut first_retryable_failure = None;
     for (candidate_index, &remote) in candidates.iter().enumerate() {
@@ -563,7 +592,7 @@ where
                     first_retryable_failure.get_or_insert(failure);
                     continue;
                 }
-                return Err(failure);
+                return Err(Hysteria2ConnectionFailure::without_endpoint(failure));
             }
         };
         let connecting = match endpoint.connect(remote, server_name) {
@@ -572,22 +601,24 @@ where
                 let failure = classify_hysteria2_connect_start_error(&error);
                 endpoint.mark_failed();
                 endpoint.close(0_u32.into(), b"Hysteria2 candidate connect failed");
-                wait_quic_endpoint_idle_after_close(&endpoint).await;
                 if failure.allows_candidate_retry() {
+                    wait_quic_endpoint_idle_after_close(&endpoint).await;
                     first_retryable_failure.get_or_insert(failure);
                     continue;
                 }
-                return Err(failure);
+                return Err(Hysteria2ConnectionFailure::with_endpoint(failure, endpoint));
             }
         };
         let Some(remaining) = deadline.remaining_at(Instant::now()) else {
             endpoint.mark_failed();
             endpoint.close(0_u32.into(), b"Hysteria2 connect deadline elapsed");
-            wait_quic_endpoint_idle_after_close(&endpoint).await;
-            return Err(Hysteria2Failure::new(
-                Hysteria2FailureClass::Deadline,
-                "hysteria2-connect-deadline",
-                "Hysteria2 QUIC connect deadline elapsed",
+            return Err(Hysteria2ConnectionFailure::with_endpoint(
+                Hysteria2Failure::new(
+                    Hysteria2FailureClass::Deadline,
+                    "hysteria2-connect-deadline",
+                    "Hysteria2 QUIC connect deadline elapsed",
+                ),
+                endpoint,
             ));
         };
         let remaining_attempts = candidates.len() - candidate_index;
@@ -598,8 +629,10 @@ where
             reason = cancellation.cancelled() => {
                 endpoint.mark_failed();
                 endpoint.close(0_u32.into(), b"Hysteria2 connect cancelled");
-                wait_quic_endpoint_idle_after_close(&endpoint).await;
-                return Err(hysteria2_cancellation_failure(reason));
+                return Err(Hysteria2ConnectionFailure::with_endpoint(
+                    hysteria2_cancellation_failure(reason),
+                    endpoint,
+                ));
             }
         };
         match connect_result {
@@ -612,17 +645,16 @@ where
                 );
                 endpoint.mark_failed();
                 endpoint.close(0_u32.into(), b"Hysteria2 candidate handshake failed");
-                wait_quic_endpoint_idle_after_close(&endpoint).await;
                 if failure.allows_candidate_retry() {
+                    wait_quic_endpoint_idle_after_close(&endpoint).await;
                     first_retryable_failure.get_or_insert(failure);
                     continue;
                 }
-                return Err(failure);
+                return Err(Hysteria2ConnectionFailure::with_endpoint(failure, endpoint));
             }
             Err(_) => {
                 endpoint.mark_failed();
                 endpoint.close(0_u32.into(), b"Hysteria2 candidate connect timeout");
-                wait_quic_endpoint_idle_after_close(&endpoint).await;
                 let failure = Hysteria2Failure::new(
                     Hysteria2FailureClass::NetworkPort,
                     "hysteria2-connect-port-timeout",
@@ -631,21 +663,33 @@ where
                 if candidate_index + 1 < candidates.len()
                     && deadline.check_at(Instant::now()).is_ok()
                 {
+                    wait_quic_endpoint_idle_after_close(&endpoint).await;
                     first_retryable_failure.get_or_insert(failure);
                     continue;
                 }
-                return Err(failure);
+                let failure = if deadline.check_at(Instant::now()).is_err() {
+                    Hysteria2Failure::new(
+                        Hysteria2FailureClass::Deadline,
+                        "hysteria2-connect-deadline",
+                        "Hysteria2 QUIC connect deadline elapsed",
+                    )
+                } else {
+                    failure
+                };
+                return Err(Hysteria2ConnectionFailure::with_endpoint(failure, endpoint));
             }
         }
     }
 
-    Err(first_retryable_failure.unwrap_or_else(|| {
-        Hysteria2Failure::new(
-            Hysteria2FailureClass::NetworkAddress,
-            "hysteria2-connect-candidates",
-            "Hysteria2 has no usable network address candidate",
-        )
-    }))
+    Err(Hysteria2ConnectionFailure::without_endpoint(
+        first_retryable_failure.unwrap_or_else(|| {
+            Hysteria2Failure::new(
+                Hysteria2FailureClass::NetworkAddress,
+                "hysteria2-connect-candidates",
+                "Hysteria2 has no usable network address candidate",
+            )
+        }),
+    ))
 }
 
 fn hysteria2_cancellation_failure(
