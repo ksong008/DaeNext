@@ -61,6 +61,30 @@ pub(super) fn reserve_quic_endpoint(
         .map_err(admission_rejection_message)
 }
 
+pub(super) async fn reserve_quic_endpoint_until(
+    charge: QuicEndpointCharge,
+    context: QuicEndpointAdmissionContext<'_>,
+) -> Result<OwnerReservation, OwnerAdmissionRejection> {
+    let charged_bytes = usize::try_from(charge.total_bytes).map_err(|_| {
+        OwnerAdmissionRejection::LimitsExceeded {
+            count: false,
+            charged_bytes: true,
+        }
+    })?;
+    let charged_bytes =
+        NonZeroUsize::new(charged_bytes).ok_or(OwnerAdmissionRejection::LimitsExceeded {
+            count: false,
+            charged_bytes: true,
+        })?;
+    admission()
+        .reserve_until(
+            ChargedOwnerBytes::new(charged_bytes),
+            context.deadline,
+            context.cancellation,
+        )
+        .await
+}
+
 fn admission_rejection_message(rejection: OwnerAdmissionRejection) -> String {
     match rejection {
         OwnerAdmissionRejection::Cancelled(reason) => {

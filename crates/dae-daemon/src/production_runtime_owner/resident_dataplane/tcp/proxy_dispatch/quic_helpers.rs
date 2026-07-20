@@ -116,7 +116,7 @@ pub(crate) fn open_marked_quic_endpoint_for_remote(
     )
 }
 
-pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
+pub(crate) async fn open_marked_hysteria2_quic_endpoint_for_remote(
     mark: u32,
     obfs: &ResidentHysteria2ObfsPlan,
     port_hopping: Option<Hysteria2PortHoppingRuntimeConfig>,
@@ -124,14 +124,14 @@ pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
     context: QuicEndpointOpenContext,
     deadline: AbsoluteDeadline,
     cancellation: &OwnerCancellationSignal,
-) -> Result<ObservedQuicEndpoint, String> {
+) -> Result<ObservedQuicEndpoint, QuicEndpointOpenError> {
     let bind = quic_bind_addr_for_remote(remote);
     let transition_socket_limit = port_hopping
         .as_ref()
         .map(|config| config.transition_socket_limit);
     let runtime = quinn::default_runtime();
     let mut runtime = if obfs.is_salamander() {
-        let runtime = runtime.ok_or_else(|| "no quinn runtime available".to_owned())?;
+        let runtime = runtime.ok_or(QuicEndpointOpenError::Construction)?;
         Some(Arc::new(Hysteria2SalamanderRuntime {
             inner: runtime,
             key: Arc::new(obfs.password.clone().into_bytes()),
@@ -140,7 +140,7 @@ pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
         runtime
     };
     if let Some(config) = port_hopping {
-        let inner = runtime.ok_or_else(|| "no quinn runtime available".to_owned())?;
+        let inner = runtime.ok_or(QuicEndpointOpenError::Construction)?;
         runtime = Some(Arc::new(Hysteria2PortHoppingRuntime::new(
             inner, config, remote,
         )));
@@ -155,7 +155,7 @@ pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
             transition_socket_limit,
         },
     };
-    open_marked_quic_endpoint_with_runtime(
+    open_observed_quic_endpoint_waiting(
         mark,
         runtime,
         remote,
@@ -164,6 +164,7 @@ pub(crate) fn open_marked_hysteria2_quic_endpoint_for_remote(
         context,
         QuicEndpointAdmissionContext::new(deadline, cancellation),
     )
+    .await
 }
 
 fn quic_bind_addr_for_remote(remote: SocketAddr) -> SocketAddr {
@@ -529,20 +530,18 @@ where
     Ok((remote, endpoint, connection))
 }
 
-pub(crate) async fn connect_hysteria2_quic_endpoint_candidates_async<F>(
+pub(crate) async fn connect_hysteria2_quic_endpoint_candidates_async<F, Fut>(
     candidates: &[SocketAddr],
     server_name: &str,
     has_certificate_pin: bool,
     requires_webpki: bool,
     deadline: AbsoluteDeadline,
+    cancellation: &OwnerCancellationSignal,
     mut endpoint_for_remote: F,
 ) -> Result<(SocketAddr, ObservedQuicEndpoint, quinn::Connection), Hysteria2Failure>
 where
-    F: FnMut(
-        SocketAddr,
-        AbsoluteDeadline,
-        &OwnerCancellationSignal,
-    ) -> Result<ObservedQuicEndpoint, Hysteria2Failure>,
+    F: FnMut(SocketAddr, AbsoluteDeadline, OwnerCancellationSignal) -> Fut,
+    Fut: Future<Output = Result<ObservedQuicEndpoint, Hysteria2Failure>>,
 {
     if candidates.is_empty() {
         return Err(Hysteria2Failure::new(
@@ -552,10 +551,12 @@ where
         ));
     }
 
-    let cancellation = OwnerCancellationSignal::new();
+    if let Err(reason) = cancellation.check() {
+        return Err(hysteria2_cancellation_failure(reason));
+    }
     let mut first_retryable_failure = None;
     for (candidate_index, &remote) in candidates.iter().enumerate() {
-        let endpoint = match endpoint_for_remote(remote, deadline, &cancellation) {
+        let endpoint = match endpoint_for_remote(remote, deadline, cancellation.clone()).await {
             Ok(endpoint) => endpoint,
             Err(failure) => {
                 if failure.allows_candidate_retry() {
@@ -592,7 +593,16 @@ where
         let remaining_attempts = candidates.len() - candidate_index;
         let attempt_divisor = u32::try_from(remaining_attempts).unwrap_or(u32::MAX);
         let attempt_timeout = remaining.checked_div(attempt_divisor).unwrap_or(remaining);
-        match time::timeout(attempt_timeout, connecting).await {
+        let connect_result = tokio::select! {
+            result = time::timeout(attempt_timeout, connecting) => result,
+            reason = cancellation.cancelled() => {
+                endpoint.mark_failed();
+                endpoint.close(0_u32.into(), b"Hysteria2 connect cancelled");
+                wait_quic_endpoint_idle_after_close(&endpoint).await;
+                return Err(hysteria2_cancellation_failure(reason));
+            }
+        };
+        match connect_result {
             Ok(Ok(connection)) => return Ok((remote, endpoint, connection)),
             Ok(Err(error)) => {
                 let failure = classify_hysteria2_connection_error(
@@ -636,6 +646,30 @@ where
             "Hysteria2 has no usable network address candidate",
         )
     }))
+}
+
+fn hysteria2_cancellation_failure(
+    reason: dae_runtime_control::OwnerCancellation,
+) -> Hysteria2Failure {
+    match reason {
+        dae_runtime_control::OwnerCancellation::DeadlineElapsed => Hysteria2Failure::new(
+            Hysteria2FailureClass::Deadline,
+            "hysteria2-connect-deadline",
+            "Hysteria2 QUIC connect deadline elapsed",
+        ),
+        dae_runtime_control::OwnerCancellation::GenerationDraining => Hysteria2Failure::new(
+            Hysteria2FailureClass::Draining,
+            "hysteria2-generation-draining",
+            "Hysteria2 owner generation is draining",
+        ),
+        dae_runtime_control::OwnerCancellation::CallerCancelled
+        | dae_runtime_control::OwnerCancellation::OwnerFault
+        | dae_runtime_control::OwnerCancellation::DependencyFailed => Hysteria2Failure::new(
+            Hysteria2FailureClass::Cancelled,
+            "hysteria2-connect-cancelled",
+            "Hysteria2 QUIC connect was cancelled",
+        ),
+    }
 }
 
 fn classify_hysteria2_connect_start_error(error: &quinn::ConnectError) -> Hysteria2Failure {
@@ -902,6 +936,7 @@ mod tests {
             AbsoluteDeadline::from_now(Instant::now(), Duration::from_secs(1)),
             &cancellation,
         )
+        .await
         .unwrap();
         endpoint.mark_ready();
         let snapshot = quic_endpoint_metrics_snapshot(generation.get());
@@ -951,6 +986,7 @@ mod tests {
             AbsoluteDeadline::from_now(Instant::now(), Duration::from_secs(1)),
             &cancellation,
         )
+        .await
         .unwrap();
         endpoint.mark_ready();
         let snapshot = quic_endpoint_metrics_snapshot(generation.get());

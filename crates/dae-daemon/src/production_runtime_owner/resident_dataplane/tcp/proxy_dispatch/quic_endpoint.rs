@@ -9,6 +9,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
+use dae_runtime_control::OwnerAdmissionRejection;
 #[cfg(test)]
 use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
 
@@ -101,6 +102,12 @@ impl ObservedQuicEndpoint {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QuicEndpointOpenError {
+    Admission(OwnerAdmissionRejection),
+    Construction,
+}
+
 pub(super) fn open_observed_quic_endpoint(
     mark: u32,
     runtime: Option<Arc<dyn quinn::Runtime>>,
@@ -117,6 +124,64 @@ pub(super) fn open_observed_quic_endpoint(
         context.protocol().uses_http3(),
     )?;
     let reservation = admission::reserve_quic_endpoint(admission_charge, admission_context)?;
+    finish_open_observed_quic_endpoint(
+        mark,
+        runtime,
+        remote,
+        bind,
+        underlay,
+        context,
+        endpoint_config,
+        admission_charge,
+        reservation,
+    )
+}
+
+pub(super) async fn open_observed_quic_endpoint_waiting(
+    mark: u32,
+    runtime: Option<Arc<dyn quinn::Runtime>>,
+    remote: SocketAddr,
+    bind: SocketAddr,
+    underlay: QuicEndpointUnderlay,
+    context: QuicEndpointOpenContext,
+    admission_context: QuicEndpointAdmissionContext<'_>,
+) -> Result<ObservedQuicEndpoint, QuicEndpointOpenError> {
+    let endpoint_config = quinn::EndpointConfig::default();
+    let admission_charge = QuicEndpointCharge::before_socket(
+        &endpoint_config,
+        underlay,
+        context.protocol().uses_http3(),
+    )
+    .map_err(|_| QuicEndpointOpenError::Construction)?;
+    let reservation = admission::reserve_quic_endpoint_until(admission_charge, admission_context)
+        .await
+        .map_err(QuicEndpointOpenError::Admission)?;
+    finish_open_observed_quic_endpoint(
+        mark,
+        runtime,
+        remote,
+        bind,
+        underlay,
+        context,
+        endpoint_config,
+        admission_charge,
+        reservation,
+    )
+    .map_err(|_| QuicEndpointOpenError::Construction)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_open_observed_quic_endpoint(
+    mark: u32,
+    runtime: Option<Arc<dyn quinn::Runtime>>,
+    remote: SocketAddr,
+    bind: SocketAddr,
+    underlay: QuicEndpointUnderlay,
+    context: QuicEndpointOpenContext,
+    endpoint_config: quinn::EndpointConfig,
+    admission_charge: QuicEndpointCharge,
+    reservation: dae_runtime_control::OwnerReservation,
+) -> Result<ObservedQuicEndpoint, String> {
     let socket = UdpSocket::bind(bind).map_err(|error| format!("bind QUIC UDP socket: {error}"))?;
     if mark != 0 {
         set_socket_mark(socket.as_raw_fd(), mark)

@@ -23,6 +23,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct Hysteria2Quic
     pub(in crate::production_runtime_owner::resident_dataplane) port_hopping_metrics:
         Arc<Hysteria2PortHoppingMetrics>,
     pub(in crate::production_runtime_owner::resident_dataplane) caller: QuicEndpointCallerClass,
+    pub(in crate::production_runtime_owner::resident_dataplane) cancellation:
+        &'a dae_runtime_control::OwnerCancellationSignal,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hysteria2_quic_connection_candidates_async(
@@ -40,6 +42,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         resources,
         port_hopping_metrics,
         caller,
+        cancellation,
     } = request;
     let remote_plan = resolve_hysteria2_quic_remote_plan_async(proxy, port_hop_ports, deadline)
         .await
@@ -86,52 +89,55 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         tls_identity.policy().has_leaf_certificate_pin(),
         tls_identity.policy().requires_webpki(),
         deadline,
+        cancellation,
         |remote, deadline, cancellation| {
-            let port_hopping = if !remote_plan.port_hopping {
-                None
-            } else {
-                let addresses = remote_plan
-                    .addresses
-                    .iter()
-                    .copied()
-                    .filter(|address| address.is_ipv4() == remote.is_ipv4())
-                    .collect::<Vec<_>>();
-                Some(
-                    Hysteria2PortHoppingRuntimeConfig::new(
-                        addresses,
-                        Arc::clone(&remote_plan.ports),
-                        port_hop_interval,
-                        mark,
-                        resources.port_hop_transition_socket_limit(),
-                        Arc::clone(&port_hopping_metrics),
-                    )
-                    .map_err(|_| {
-                        Hysteria2Failure::new(
-                            Hysteria2FailureClass::Configuration,
-                            "hysteria2-port-hopping-configuration",
-                            "build Hysteria2 port-hopping configuration failed",
+            let addresses = remote_plan
+                .addresses
+                .iter()
+                .copied()
+                .filter(|address| address.is_ipv4() == remote.is_ipv4())
+                .collect::<Vec<_>>();
+            let ports = Arc::clone(&remote_plan.ports);
+            let port_hopping = remote_plan.port_hopping;
+            let port_hopping_metrics = Arc::clone(&port_hopping_metrics);
+            let endpoint_context = endpoint_context.clone();
+            let client_config = client_config.clone();
+            async move {
+                let port_hopping = if !port_hopping {
+                    None
+                } else {
+                    Some(
+                        Hysteria2PortHoppingRuntimeConfig::new(
+                            addresses,
+                            ports,
+                            port_hop_interval,
+                            mark,
+                            resources.port_hop_transition_socket_limit(),
+                            port_hopping_metrics,
                         )
-                    })?,
+                        .map_err(|_| {
+                            Hysteria2Failure::new(
+                                Hysteria2FailureClass::Configuration,
+                                "hysteria2-port-hopping-configuration",
+                                "build Hysteria2 port-hopping configuration failed",
+                            )
+                        })?,
+                    )
+                };
+                let mut endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
+                    mark,
+                    obfs,
+                    port_hopping,
+                    remote,
+                    endpoint_context,
+                    deadline,
+                    &cancellation,
                 )
-            };
-            let mut endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
-                mark,
-                obfs,
-                port_hopping,
-                remote,
-                endpoint_context.clone(),
-                deadline,
-                cancellation,
-            )
-            .map_err(|_| {
-                Hysteria2Failure::new(
-                    Hysteria2FailureClass::Resource,
-                    "hysteria2-endpoint-open",
-                    "Hysteria2 QUIC Endpoint resources are unavailable",
-                )
-            })?;
-            endpoint.set_default_client_config(client_config.clone());
-            Ok(endpoint)
+                .await
+                .map_err(hysteria2_endpoint_open_failure)?;
+                endpoint.set_default_client_config(client_config);
+                Ok(endpoint)
+            }
         },
     )
     .await?;
@@ -140,6 +146,43 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         endpoint,
         connection,
     })
+}
+
+fn hysteria2_endpoint_open_failure(error: QuicEndpointOpenError) -> Hysteria2Failure {
+    match error {
+        QuicEndpointOpenError::Admission(
+            dae_runtime_control::OwnerAdmissionRejection::Cancelled(
+                dae_runtime_control::OwnerCancellation::DeadlineElapsed,
+            ),
+        ) => Hysteria2Failure::new(
+            Hysteria2FailureClass::Deadline,
+            "hysteria2-endpoint-admission-deadline",
+            "Hysteria2 QUIC Endpoint admission deadline elapsed",
+        ),
+        QuicEndpointOpenError::Admission(
+            dae_runtime_control::OwnerAdmissionRejection::Cancelled(_),
+        ) => Hysteria2Failure::new(
+            Hysteria2FailureClass::Cancelled,
+            "hysteria2-endpoint-admission-cancelled",
+            "Hysteria2 QUIC Endpoint admission was cancelled",
+        ),
+        QuicEndpointOpenError::Admission(
+            dae_runtime_control::OwnerAdmissionRejection::Draining(_)
+            | dae_runtime_control::OwnerAdmissionRejection::Closed(_),
+        ) => Hysteria2Failure::new(
+            Hysteria2FailureClass::Draining,
+            "hysteria2-endpoint-admission-draining",
+            "Hysteria2 QUIC Endpoint admission is draining",
+        ),
+        QuicEndpointOpenError::Admission(
+            dae_runtime_control::OwnerAdmissionRejection::LimitsExceeded { .. },
+        )
+        | QuicEndpointOpenError::Construction => Hysteria2Failure::new(
+            Hysteria2FailureClass::Resource,
+            "hysteria2-endpoint-open",
+            "Hysteria2 QUIC Endpoint resources are unavailable",
+        ),
+    }
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_quic_connection_candidates_async(
@@ -229,4 +272,37 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
         endpoint,
         connection,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hysteria2_endpoint_admission_preserves_terminal_failure_class() {
+        let deadline = hysteria2_endpoint_open_failure(QuicEndpointOpenError::Admission(
+            dae_runtime_control::OwnerAdmissionRejection::Cancelled(
+                dae_runtime_control::OwnerCancellation::DeadlineElapsed,
+            ),
+        ));
+        assert_eq!(deadline.class(), Hysteria2FailureClass::Deadline);
+
+        let draining = hysteria2_endpoint_open_failure(QuicEndpointOpenError::Admission(
+            dae_runtime_control::OwnerAdmissionRejection::Draining(
+                dae_runtime_control::OwnerDrainReason::Reload,
+            ),
+        ));
+        assert_eq!(draining.class(), Hysteria2FailureClass::Draining);
+
+        let resource = hysteria2_endpoint_open_failure(QuicEndpointOpenError::Admission(
+            dae_runtime_control::OwnerAdmissionRejection::LimitsExceeded {
+                count: true,
+                charged_bytes: false,
+            },
+        ));
+        assert_eq!(resource.class(), Hysteria2FailureClass::Resource);
+        assert!(!deadline.allows_candidate_retry());
+        assert!(!draining.allows_candidate_retry());
+        assert!(!resource.allows_candidate_retry());
+    }
 }
