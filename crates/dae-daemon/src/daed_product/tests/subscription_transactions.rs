@@ -133,6 +133,41 @@ fn subscription_field_save_is_atomic() {
 }
 
 #[test]
+fn subscription_tag_update_conflict_is_typed_and_atomic() {
+    let fixture = FreshProductState::new("subscription-tag-update-conflict");
+    seed_subscription(&fixture);
+    fixture
+        .connection()
+        .execute(
+            "INSERT INTO subscriptions(
+                id, updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy
+             ) VALUES(8, 'other-time', 'https://example.invalid/other', ?1, 1, 'other-status', '', 'other-tag', 0)",
+            params![DEFAULT_SUBSCRIPTION_CRON_EXP],
+        )
+        .unwrap();
+    let request = HttpRequest {
+        method: "PATCH".to_owned(),
+        path: "/api/subscriptions/7".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"link":"https://example.invalid/changed","tag":"other-tag","useProxy":true}"#
+            .to_vec(),
+    };
+
+    let response = update_subscription(fixture.state(), &request, 7);
+
+    assert_eq!(response.status, 409);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["errorCode"], "subscription_tag_conflict");
+    assert_eq!(body["retryable"], false);
+    assert!(!body["error"].as_str().unwrap().contains("UNIQUE"));
+    let subscription = get_subscription_value(fixture.state(), 7).unwrap().unwrap();
+    assert_eq!(subscription["link"], json!("https://example.invalid/old"));
+    assert_eq!(subscription["tag"], json!("old-tag"));
+    assert_eq!(subscription["useProxy"], json!(false));
+}
+
+#[test]
 fn empty_refresh_preserves_nodes_until_the_subscription_is_explicitly_deleted() {
     let fixture = FreshProductState::new("subscription-live-group-binding");
     seed_subscription(&fixture);
