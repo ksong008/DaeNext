@@ -190,6 +190,94 @@ impl PhysicalOwnerAdmission {
         })
     }
 
+    pub async fn reserve_until(
+        &self,
+        charged_bytes: ChargedOwnerBytes,
+        deadline: AbsoluteDeadline,
+        cancellation: &OwnerCancellationSignal,
+    ) -> Result<OwnerReservation, OwnerAdmissionRejection> {
+        let mut state_changed = self.inner.state_changed.subscribe();
+        let mut cancellation_changed = cancellation.subscribe();
+
+        loop {
+            deadline
+                .check_at(Instant::now())
+                .map_err(OwnerAdmissionRejection::Cancelled)?;
+            cancellation
+                .check()
+                .map_err(OwnerAdmissionRejection::Cancelled)?;
+
+            {
+                let mut counters = self.inner.counters.lock().unwrap();
+                match counters.state {
+                    OwnerAdmissionState::Open => {}
+                    OwnerAdmissionState::Draining(reason) => {
+                        counters.rejected_while_draining =
+                            counters.rejected_while_draining.saturating_add(1);
+                        return Err(OwnerAdmissionRejection::Draining(reason));
+                    }
+                    OwnerAdmissionState::Closed(reason) => {
+                        return Err(OwnerAdmissionRejection::Closed(reason));
+                    }
+                }
+
+                if charged_bytes.get() > self.inner.budget.max_charged_bytes.get() {
+                    counters.rejected_by_charged_bytes =
+                        counters.rejected_by_charged_bytes.saturating_add(1);
+                    return Err(OwnerAdmissionRejection::LimitsExceeded {
+                        count: false,
+                        charged_bytes: true,
+                    });
+                }
+
+                let count_available =
+                    counters.active_owners < self.inner.budget.max_active_owners.get();
+                let next_charged_bytes = counters
+                    .active_charged_bytes
+                    .checked_add(charged_bytes.get());
+                let charged_bytes_available = next_charged_bytes
+                    .is_some_and(|value| value <= self.inner.budget.max_charged_bytes.get());
+                if count_available && charged_bytes_available {
+                    counters.active_owners += 1;
+                    counters.active_charged_bytes = next_charged_bytes.unwrap();
+                    counters.high_water_owners =
+                        counters.high_water_owners.max(counters.active_owners);
+                    counters.high_water_charged_bytes = counters
+                        .high_water_charged_bytes
+                        .max(counters.active_charged_bytes);
+                    counters.cumulative_admitted = counters.cumulative_admitted.saturating_add(1);
+                    drop(counters);
+                    return Ok(OwnerReservation {
+                        inner: Some(Arc::clone(&self.inner)),
+                        charged_bytes,
+                    });
+                }
+            }
+
+            tokio::select! {
+                changed = state_changed.changed() => {
+                    if changed.is_err() {
+                        return Err(OwnerAdmissionRejection::Cancelled(
+                            OwnerCancellation::DependencyFailed,
+                        ));
+                    }
+                }
+                changed = cancellation_changed.changed() => {
+                    if changed.is_err() {
+                        return Err(OwnerAdmissionRejection::Cancelled(
+                            OwnerCancellation::DependencyFailed,
+                        ));
+                    }
+                }
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline.instant())) => {
+                    return Err(OwnerAdmissionRejection::Cancelled(
+                        OwnerCancellation::DeadlineElapsed,
+                    ));
+                }
+            }
+        }
+    }
+
     pub fn begin_drain(&self, reason: OwnerDrainReason) -> OwnerAdmissionMetrics {
         let mut counters = self.inner.counters.lock().unwrap();
         let transitioned = if matches!(counters.state, OwnerAdmissionState::Open) {

@@ -66,3 +66,106 @@ async fn drain_wait_reports_the_balanced_snapshot_at_deadline() {
 
     drop(reservation);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn reservation_waits_without_holding_runtime_or_admission_state() {
+    let admission = PhysicalOwnerAdmission::new(budget(1, 100));
+    let first = admission
+        .try_reserve(charge(60), deadline(), &OwnerCancellationSignal::new())
+        .unwrap();
+    let waiting_admission = admission.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_admission
+            .reserve_until(charge(40), deadline(), &OwnerCancellationSignal::new())
+            .await
+    });
+
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished());
+    assert_eq!(admission.metrics().active_owners, 1);
+    drop(first);
+
+    let second = tokio::time::timeout(Duration::from_millis(100), waiter)
+        .await
+        .expect("admission waiter blocked the current-thread runtime")
+        .unwrap()
+        .unwrap();
+    assert_eq!(admission.metrics().active_owners, 1);
+    drop(second);
+    assert_eq!(admission.metrics().active_owners, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reservation_wait_observes_cancellation_and_deadline() {
+    let admission = PhysicalOwnerAdmission::new(budget(1, 100));
+    let first = admission
+        .try_reserve(charge(60), deadline(), &OwnerCancellationSignal::new())
+        .unwrap();
+    let cancellation = OwnerCancellationSignal::new();
+    let waiting_admission = admission.clone();
+    let waiting_cancellation = cancellation.clone();
+    let cancelled = tokio::spawn(async move {
+        waiting_admission
+            .reserve_until(charge(40), deadline(), &waiting_cancellation)
+            .await
+    });
+    tokio::task::yield_now().await;
+    cancellation.cancel(OwnerCancellation::CallerCancelled);
+    assert!(matches!(
+        cancelled.await.unwrap(),
+        Err(OwnerAdmissionRejection::Cancelled(
+            OwnerCancellation::CallerCancelled
+        ))
+    ));
+
+    let elapsed = admission
+        .reserve_until(
+            charge(40),
+            AbsoluteDeadline::at(std::time::Instant::now()),
+            &OwnerCancellationSignal::new(),
+        )
+        .await;
+    assert!(matches!(
+        elapsed,
+        Err(OwnerAdmissionRejection::Cancelled(
+            OwnerCancellation::DeadlineElapsed
+        ))
+    ));
+    drop(first);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reservation_wait_stops_when_admission_drains() {
+    let admission = PhysicalOwnerAdmission::new(budget(1, 100));
+    let first = admission
+        .try_reserve(charge(60), deadline(), &OwnerCancellationSignal::new())
+        .unwrap();
+    let waiting_admission = admission.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_admission
+            .reserve_until(charge(40), deadline(), &OwnerCancellationSignal::new())
+            .await
+    });
+    tokio::task::yield_now().await;
+    admission.begin_drain(OwnerDrainReason::Reload);
+    assert!(matches!(
+        waiter.await.unwrap(),
+        Err(OwnerAdmissionRejection::Draining(OwnerDrainReason::Reload))
+    ));
+    drop(first);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn impossible_byte_charge_is_rejected_without_waiting() {
+    let admission = PhysicalOwnerAdmission::new(budget(1, 100));
+    let result = admission
+        .reserve_until(charge(101), deadline(), &OwnerCancellationSignal::new())
+        .await;
+    assert!(matches!(
+        result,
+        Err(OwnerAdmissionRejection::LimitsExceeded {
+            count: false,
+            charged_bytes: true,
+        })
+    ));
+}
