@@ -11,7 +11,7 @@ use super::model::{
 };
 
 const QUIC_ENDPOINT_METRICS_SCHEMA: &str = "quinn-endpoint-resources";
-const QUIC_ENDPOINT_METRICS_SCHEMA_VERSION: u64 = 2;
+const QUIC_ENDPOINT_METRICS_SCHEMA_VERSION: u64 = 3;
 const QUIC_ENDPOINT_OBSERVABILITY_MODEL: &str = "bounded-generation-quinn-inventory";
 const QUIC_ENDPOINT_OBSERVABILITY_MODEL_VERSION: u64 = 2;
 
@@ -382,6 +382,7 @@ impl QuicEndpointMetricsRegistry {
         let mut http3_bytes = 0_u64;
         let mut tls_bytes = 0_u64;
         let mut queue_bytes = 0_u64;
+        let mut underlay_socket_bytes = 0_u64;
         let mut total_bytes = 0_u64;
         let mut udp_socket_charge_count = 0_u64;
         for record in &records {
@@ -408,6 +409,7 @@ impl QuicEndpointMetricsRegistry {
                 http3_bytes += charge.http3_bytes;
                 tls_bytes += charge.tls_bytes;
                 queue_bytes += charge.queue_bytes;
+                underlay_socket_bytes += charge.underlay_socket_bytes;
                 total_bytes += charge.total_bytes;
                 udp_socket_charge_count += charge.udp_socket_count;
             }
@@ -465,6 +467,7 @@ impl QuicEndpointMetricsRegistry {
                         "http3": charge.http3_bytes,
                         "tls": charge.tls_bytes,
                         "queue": charge.queue_bytes,
+                        "underlaySockets": charge.underlay_socket_bytes,
                         "total": charge.total_bytes,
                         "maxUdpPayload": charge.max_udp_payload_bytes,
                         "receiveSegments": charge.receive_segments,
@@ -532,6 +535,7 @@ impl QuicEndpointMetricsRegistry {
                 "http3": http3_bytes,
                 "tls": tls_bytes,
                 "queue": queue_bytes,
+                "underlaySockets": underlay_socket_bytes,
                 "total": total_bytes,
                 "udpSocketCount": udp_socket_charge_count,
             },
