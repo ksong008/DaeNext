@@ -380,45 +380,97 @@ pub(crate) async fn resolve_proxy_udp_addr_candidates_async(
     resolve_socket_addr_candidates(&target, timeout, "resolve QUIC endpoint").await
 }
 
-pub(crate) async fn resolve_hysteria2_quic_remote_candidates_async(
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Hysteria2ResolvedRemotePlan {
+    pub(crate) addresses: Vec<IpAddr>,
+    pub(crate) ports: Arc<Vec<u16>>,
+    pub(crate) port_hopping: bool,
+}
+
+pub(crate) async fn resolve_hysteria2_quic_remote_plan_async(
     proxy: &ResidentProxyPlan,
     port_hop_ports: &[u16],
-    resolved_candidate_limit: usize,
     deadline: AbsoluteDeadline,
-) -> Result<Vec<SocketAddr>, String> {
+) -> Result<Hysteria2ResolvedRemotePlan, String> {
     let target = authority_from_host_port(&proxy.server_host, proxy.server_port);
     let timeout = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "resolve Hysteria2 QUIC endpoint: connect deadline elapsed".to_owned())?;
     let resolved =
         resolve_socket_addr_candidates(&target, timeout, "resolve Hysteria2 QUIC endpoint").await?;
-    if port_hop_ports.is_empty() {
-        return Ok(resolved);
-    }
-    expand_hysteria2_port_hop_candidates(&resolved, port_hop_ports, resolved_candidate_limit)
-}
-
-fn expand_hysteria2_port_hop_candidates(
-    resolved: &[SocketAddr],
-    port_hop_ports: &[u16],
-    resolved_candidate_limit: usize,
-) -> Result<Vec<SocketAddr>, String> {
-    let candidate_count = resolved
-        .len()
-        .checked_mul(port_hop_ports.len())
-        .ok_or_else(|| "Hysteria2 resolved port-hopping candidate count overflow".to_owned())?;
-    if candidate_count > resolved_candidate_limit {
-        return Err(format!(
-            "Hysteria2 resolved port-hopping candidate count {candidate_count} exceeds budget {resolved_candidate_limit}"
-        ));
-    }
-    let mut candidates = Vec::with_capacity(candidate_count);
-    for resolved_addr in resolved {
-        for &port in port_hop_ports {
-            candidates.push(SocketAddr::new(resolved_addr.ip(), port));
+    let mut addresses = Vec::with_capacity(resolved.len());
+    for candidate in resolved {
+        if !addresses.contains(&candidate.ip()) {
+            addresses.push(candidate.ip());
         }
     }
-    fastrand::shuffle(&mut candidates);
+    if addresses.is_empty() {
+        return Err("resolve Hysteria2 QUIC endpoint: no usable IP address".to_owned());
+    }
+    let port_hopping = !port_hop_ports.is_empty();
+    let ports = if port_hopping {
+        Arc::new(port_hop_ports.to_vec())
+    } else {
+        Arc::new(vec![proxy.server_port])
+    };
+    Ok(Hysteria2ResolvedRemotePlan {
+        addresses,
+        ports,
+        port_hopping,
+    })
+}
+
+pub(crate) fn hysteria2_initial_remote_candidates(
+    plan: &Hysteria2ResolvedRemotePlan,
+    attempt_limit: usize,
+) -> Result<Vec<SocketAddr>, String> {
+    hysteria2_initial_remote_candidates_with(plan, attempt_limit, fastrand::usize)
+}
+
+fn hysteria2_initial_remote_candidates_with<F>(
+    plan: &Hysteria2ResolvedRemotePlan,
+    attempt_limit: usize,
+    mut random_index: F,
+) -> Result<Vec<SocketAddr>, String>
+where
+    F: FnMut(std::ops::Range<usize>) -> usize,
+{
+    if plan.addresses.is_empty() {
+        return Err("Hysteria2 initial remote plan has no address".to_owned());
+    }
+    if plan.ports.is_empty() {
+        return Err("Hysteria2 initial remote plan has no port".to_owned());
+    }
+    if !plan.port_hopping {
+        return Ok(plan
+            .addresses
+            .iter()
+            .map(|address| SocketAddr::new(*address, plan.ports[0]))
+            .collect());
+    }
+    if attempt_limit == 0 {
+        return Err("Hysteria2 initial connect attempt limit must be nonzero".to_owned());
+    }
+
+    let unique_candidate_count = plan.addresses.len().saturating_mul(plan.ports.len());
+    let candidate_count = attempt_limit.min(unique_candidate_count);
+    let port_starts = plan
+        .addresses
+        .iter()
+        .map(|_| random_index(0..plan.ports.len()))
+        .collect::<Vec<_>>();
+    let mut address_visits = vec![0_usize; plan.addresses.len()];
+    let mut candidates = Vec::with_capacity(candidate_count);
+    for attempt in 0..candidate_count {
+        let address_index = attempt % plan.addresses.len();
+        let port_index = port_starts[address_index].wrapping_add(address_visits[address_index])
+            % plan.ports.len();
+        address_visits[address_index] += 1;
+        candidates.push(SocketAddr::new(
+            plan.addresses[address_index],
+            plan.ports[port_index],
+        ));
+    }
     Ok(candidates)
 }
 
@@ -502,7 +554,7 @@ where
 
     let cancellation = OwnerCancellationSignal::new();
     let mut first_retryable_failure = None;
-    for &remote in candidates {
+    for (candidate_index, &remote) in candidates.iter().enumerate() {
         let endpoint = match endpoint_for_remote(remote, deadline, &cancellation) {
             Ok(endpoint) => endpoint,
             Err(failure) => {
@@ -537,7 +589,10 @@ where
                 "Hysteria2 QUIC connect deadline elapsed",
             ));
         };
-        match time::timeout(remaining, connecting).await {
+        let remaining_attempts = candidates.len() - candidate_index;
+        let attempt_divisor = u32::try_from(remaining_attempts).unwrap_or(u32::MAX);
+        let attempt_timeout = remaining.checked_div(attempt_divisor).unwrap_or(remaining);
+        match time::timeout(attempt_timeout, connecting).await {
             Ok(Ok(connection)) => return Ok((remote, endpoint, connection)),
             Ok(Err(error)) => {
                 let failure = classify_hysteria2_connection_error(
@@ -556,13 +611,20 @@ where
             }
             Err(_) => {
                 endpoint.mark_failed();
-                endpoint.close(0_u32.into(), b"Hysteria2 connect deadline elapsed");
+                endpoint.close(0_u32.into(), b"Hysteria2 candidate connect timeout");
                 wait_quic_endpoint_idle_after_close(&endpoint).await;
-                return Err(Hysteria2Failure::new(
-                    Hysteria2FailureClass::Deadline,
-                    "hysteria2-connect-deadline",
-                    "Hysteria2 QUIC connect deadline elapsed",
-                ));
+                let failure = Hysteria2Failure::new(
+                    Hysteria2FailureClass::NetworkPort,
+                    "hysteria2-connect-port-timeout",
+                    "Hysteria2 QUIC handshake did not reach the selected server port",
+                );
+                if candidate_index + 1 < candidates.len()
+                    && deadline.check_at(Instant::now()).is_ok()
+                {
+                    first_retryable_failure.get_or_insert(failure);
+                    continue;
+                }
+                return Err(failure);
             }
         }
     }
@@ -701,25 +763,45 @@ mod tests {
     }
 
     #[test]
-    fn hysteria2_port_hop_candidates_expand_both_address_families_with_a_hard_budget() {
-        let resolved = [
-            "192.0.2.1:443".parse().unwrap(),
-            "[2001:db8::1]:443".parse().unwrap(),
-        ];
-        let mut candidates =
-            expand_hysteria2_port_hop_candidates(&resolved, &[443, 8443], 4).unwrap();
-        candidates.sort_unstable();
-        let mut expected = vec![
-            "192.0.2.1:443".parse().unwrap(),
-            "192.0.2.1:8443".parse().unwrap(),
-            "[2001:db8::1]:443".parse().unwrap(),
-            "[2001:db8::1]:8443".parse().unwrap(),
-        ];
-        expected.sort_unstable();
-        assert_eq!(candidates, expected);
+    fn hysteria2_initial_port_selection_is_bounded_independently_of_port_set_size() {
+        let addresses = vec!["192.0.2.1".parse().unwrap(), "2001:db8::1".parse().unwrap()];
+        for port_count in [2, 3_001, 4_001] {
+            let plan = Hysteria2ResolvedRemotePlan {
+                addresses: addresses.clone(),
+                ports: Arc::new(
+                    (0..port_count)
+                        .map(|offset| 10_000 + offset as u16)
+                        .collect(),
+                ),
+                port_hopping: true,
+            };
+            let candidates = hysteria2_initial_remote_candidates_with(&plan, 4, |_| 0).unwrap();
+            assert_eq!(candidates.len(), 4);
+            assert_eq!(candidates[0], "192.0.2.1:10000".parse().unwrap());
+            assert_eq!(candidates[1], "[2001:db8::1]:10000".parse().unwrap());
+            assert_eq!(candidates[2], "192.0.2.1:10001".parse().unwrap());
+            assert_eq!(candidates[3], "[2001:db8::1]:10001".parse().unwrap());
+        }
+    }
 
-        let error = expand_hysteria2_port_hop_candidates(&resolved, &[443, 8443], 3).unwrap_err();
-        assert!(error.contains("candidate count 4 exceeds budget 3"));
+    #[test]
+    fn hysteria2_fixed_port_keeps_every_resolved_address() {
+        let plan = Hysteria2ResolvedRemotePlan {
+            addresses: vec!["192.0.2.1".parse().unwrap(), "2001:db8::1".parse().unwrap()],
+            ports: Arc::new(vec![443]),
+            port_hopping: false,
+        };
+        let candidates = hysteria2_initial_remote_candidates_with(&plan, 1, |_| {
+            panic!("fixed-port selection must not request randomness")
+        })
+        .unwrap();
+        assert_eq!(
+            candidates,
+            vec![
+                "192.0.2.1:443".parse().unwrap(),
+                "[2001:db8::1]:443".parse().unwrap(),
+            ]
+        );
     }
 
     #[test]
@@ -852,10 +934,8 @@ mod tests {
         let resources =
             Hysteria2OwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
         let port_hopping = Hysteria2PortHoppingRuntimeConfig::new(
-            vec![
-                "127.0.0.1:443".parse().unwrap(),
-                "127.0.0.1:8443".parse().unwrap(),
-            ],
+            vec!["127.0.0.1".parse().unwrap()],
+            Arc::new(vec![443, 8443]),
             Duration::from_secs(30),
             0,
             resources.port_hop_transition_socket_limit(),

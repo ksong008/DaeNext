@@ -41,18 +41,24 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         port_hopping_metrics,
         caller,
     } = request;
-    let candidates = resolve_hysteria2_quic_remote_candidates_async(
-        proxy,
-        port_hop_ports,
-        resources.port_hop_resolved_candidate_limit(),
-        deadline,
+    let remote_plan = resolve_hysteria2_quic_remote_plan_async(proxy, port_hop_ports, deadline)
+        .await
+        .map_err(|_| {
+            Hysteria2Failure::new(
+                Hysteria2FailureClass::NetworkAddress,
+                "hysteria2-resolve",
+                "resolve Hysteria2 server address failed",
+            )
+        })?;
+    let candidates = hysteria2_initial_remote_candidates(
+        &remote_plan,
+        resources.initial_connect_attempt_limit(),
     )
-    .await
     .map_err(|_| {
         Hysteria2Failure::new(
-            Hysteria2FailureClass::NetworkAddress,
-            "hysteria2-resolve",
-            "resolve Hysteria2 server address failed",
+            Hysteria2FailureClass::Configuration,
+            "hysteria2-initial-remote-plan",
+            "select Hysteria2 initial remote failed",
         )
     })?;
     let client_config = build_hysteria2_runtime_client_config_with_congestion(
@@ -81,17 +87,19 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         tls_identity.policy().requires_webpki(),
         deadline,
         |remote, deadline, cancellation| {
-            let port_hopping = if port_hop_ports.is_empty() {
+            let port_hopping = if !remote_plan.port_hopping {
                 None
             } else {
-                let remotes = candidates
+                let addresses = remote_plan
+                    .addresses
                     .iter()
                     .copied()
-                    .filter(|candidate| candidate.is_ipv4() == remote.is_ipv4())
+                    .filter(|address| address.is_ipv4() == remote.is_ipv4())
                     .collect::<Vec<_>>();
                 Some(
                     Hysteria2PortHoppingRuntimeConfig::new(
-                        remotes,
+                        addresses,
+                        Arc::clone(&remote_plan.ports),
                         port_hop_interval,
                         mark,
                         resources.port_hop_transition_socket_limit(),
