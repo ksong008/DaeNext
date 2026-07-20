@@ -477,6 +477,192 @@ where
     Ok((remote, endpoint, connection))
 }
 
+pub(crate) async fn connect_hysteria2_quic_endpoint_candidates_async<F>(
+    candidates: &[SocketAddr],
+    server_name: &str,
+    has_certificate_pin: bool,
+    requires_webpki: bool,
+    deadline: AbsoluteDeadline,
+    mut endpoint_for_remote: F,
+) -> Result<(SocketAddr, ObservedQuicEndpoint, quinn::Connection), Hysteria2Failure>
+where
+    F: FnMut(
+        SocketAddr,
+        AbsoluteDeadline,
+        &OwnerCancellationSignal,
+    ) -> Result<ObservedQuicEndpoint, Hysteria2Failure>,
+{
+    if candidates.is_empty() {
+        return Err(Hysteria2Failure::new(
+            Hysteria2FailureClass::NetworkAddress,
+            "hysteria2-resolve",
+            "Hysteria2 server resolved to no usable address",
+        ));
+    }
+
+    let cancellation = OwnerCancellationSignal::new();
+    let mut first_retryable_failure = None;
+    for &remote in candidates {
+        let endpoint = match endpoint_for_remote(remote, deadline, &cancellation) {
+            Ok(endpoint) => endpoint,
+            Err(failure) => {
+                if failure.allows_candidate_retry() {
+                    first_retryable_failure.get_or_insert(failure);
+                    continue;
+                }
+                return Err(failure);
+            }
+        };
+        let connecting = match endpoint.connect(remote, server_name) {
+            Ok(connecting) => connecting,
+            Err(error) => {
+                let failure = classify_hysteria2_connect_start_error(&error);
+                endpoint.mark_failed();
+                endpoint.close(0_u32.into(), b"Hysteria2 candidate connect failed");
+                wait_quic_endpoint_idle_after_close(&endpoint).await;
+                if failure.allows_candidate_retry() {
+                    first_retryable_failure.get_or_insert(failure);
+                    continue;
+                }
+                return Err(failure);
+            }
+        };
+        let Some(remaining) = deadline.remaining_at(Instant::now()) else {
+            endpoint.mark_failed();
+            endpoint.close(0_u32.into(), b"Hysteria2 connect deadline elapsed");
+            wait_quic_endpoint_idle_after_close(&endpoint).await;
+            return Err(Hysteria2Failure::new(
+                Hysteria2FailureClass::Deadline,
+                "hysteria2-connect-deadline",
+                "Hysteria2 QUIC connect deadline elapsed",
+            ));
+        };
+        match time::timeout(remaining, connecting).await {
+            Ok(Ok(connection)) => return Ok((remote, endpoint, connection)),
+            Ok(Err(error)) => {
+                let failure = classify_hysteria2_connection_error(
+                    &error,
+                    has_certificate_pin,
+                    requires_webpki,
+                );
+                endpoint.mark_failed();
+                endpoint.close(0_u32.into(), b"Hysteria2 candidate handshake failed");
+                wait_quic_endpoint_idle_after_close(&endpoint).await;
+                if failure.allows_candidate_retry() {
+                    first_retryable_failure.get_or_insert(failure);
+                    continue;
+                }
+                return Err(failure);
+            }
+            Err(_) => {
+                endpoint.mark_failed();
+                endpoint.close(0_u32.into(), b"Hysteria2 connect deadline elapsed");
+                wait_quic_endpoint_idle_after_close(&endpoint).await;
+                return Err(Hysteria2Failure::new(
+                    Hysteria2FailureClass::Deadline,
+                    "hysteria2-connect-deadline",
+                    "Hysteria2 QUIC connect deadline elapsed",
+                ));
+            }
+        }
+    }
+
+    Err(first_retryable_failure.unwrap_or_else(|| {
+        Hysteria2Failure::new(
+            Hysteria2FailureClass::NetworkAddress,
+            "hysteria2-connect-candidates",
+            "Hysteria2 has no usable network address candidate",
+        )
+    }))
+}
+
+fn classify_hysteria2_connect_start_error(error: &quinn::ConnectError) -> Hysteria2Failure {
+    let (class, operation, detail) = match error {
+        quinn::ConnectError::InvalidRemoteAddress(_) => (
+            Hysteria2FailureClass::NetworkAddress,
+            "hysteria2-connect-address",
+            "Hysteria2 QUIC remote address is unusable",
+        ),
+        quinn::ConnectError::EndpointStopping => (
+            Hysteria2FailureClass::Draining,
+            "hysteria2-endpoint-draining",
+            "Hysteria2 QUIC Endpoint is draining",
+        ),
+        quinn::ConnectError::CidsExhausted => (
+            Hysteria2FailureClass::Resource,
+            "hysteria2-connection-id-capacity",
+            "Hysteria2 QUIC connection-ID capacity is exhausted",
+        ),
+        quinn::ConnectError::InvalidServerName(_)
+        | quinn::ConnectError::NoDefaultClientConfig
+        | quinn::ConnectError::UnsupportedVersion => (
+            Hysteria2FailureClass::Configuration,
+            "hysteria2-connect-configuration",
+            "Hysteria2 QUIC client configuration is invalid",
+        ),
+    };
+    Hysteria2Failure::new(class, operation, detail)
+}
+
+fn classify_hysteria2_connection_error(
+    error: &quinn::ConnectionError,
+    has_certificate_pin: bool,
+    requires_webpki: bool,
+) -> Hysteria2Failure {
+    if let Some(code) = hysteria2_crypto_error_code(error) {
+        let pin_alert =
+            quinn::TransportErrorCode::crypto(u8::from(rustls::AlertDescription::AccessDenied));
+        if has_certificate_pin && (!requires_webpki || code == pin_alert) {
+            return Hysteria2Failure::new(
+                Hysteria2FailureClass::TlsPin,
+                "hysteria2-tls-pin",
+                "Hysteria2 certificate pin verification failed",
+            );
+        }
+        return Hysteria2Failure::new(
+            Hysteria2FailureClass::TlsCertificate,
+            "hysteria2-tls-certificate",
+            "Hysteria2 TLS certificate verification failed",
+        );
+    }
+
+    let (class, operation, detail) = match error {
+        quinn::ConnectionError::LocallyClosed => (
+            Hysteria2FailureClass::Cancelled,
+            "hysteria2-connect-cancelled",
+            "Hysteria2 QUIC connect was cancelled locally",
+        ),
+        quinn::ConnectionError::CidsExhausted => (
+            Hysteria2FailureClass::Resource,
+            "hysteria2-connection-id-capacity",
+            "Hysteria2 QUIC connection-ID capacity is exhausted",
+        ),
+        quinn::ConnectionError::VersionMismatch
+        | quinn::ConnectionError::TransportError(_)
+        | quinn::ConnectionError::ConnectionClosed(_)
+        | quinn::ConnectionError::ApplicationClosed(_)
+        | quinn::ConnectionError::Reset
+        | quinn::ConnectionError::TimedOut => (
+            Hysteria2FailureClass::NetworkPort,
+            "hysteria2-connect-port",
+            "Hysteria2 QUIC handshake did not reach a usable server port",
+        ),
+    };
+    Hysteria2Failure::new(class, operation, detail)
+}
+
+fn hysteria2_crypto_error_code(
+    error: &quinn::ConnectionError,
+) -> Option<quinn::TransportErrorCode> {
+    let code = match error {
+        quinn::ConnectionError::TransportError(error) => error.code,
+        quinn::ConnectionError::ConnectionClosed(error) => error.error_code,
+        _ => return None,
+    };
+    let raw = u64::from(code);
+    (0x100..0x200).contains(&raw).then_some(code)
+}
+
 pub(crate) async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
     time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, endpoint.wait_idle())
         .await
@@ -534,6 +720,53 @@ mod tests {
 
         let error = expand_hysteria2_port_hop_candidates(&resolved, &[443, 8443], 3).unwrap_err();
         assert!(error.contains("candidate count 4 exceeds budget 3"));
+    }
+
+    #[test]
+    fn hysteria2_tls_failures_are_terminal_and_redacted() {
+        let certificate = quinn::ConnectionError::ConnectionClosed(quinn::ConnectionClose {
+            error_code: quinn::TransportErrorCode::crypto(u8::from(
+                rustls::AlertDescription::UnknownCA,
+            )),
+            frame_type: None,
+            reason: Bytes::from_static(b"private.example certificate canary"),
+        });
+        let certificate = classify_hysteria2_connection_error(&certificate, true, true);
+        assert_eq!(certificate.class(), Hysteria2FailureClass::TlsCertificate);
+        assert_eq!(
+            certificate.retry_disposition(),
+            Hysteria2RetryDisposition::Terminal
+        );
+        assert!(!certificate.to_string().contains("private.example"));
+
+        let pin = quinn::ConnectionError::ConnectionClosed(quinn::ConnectionClose {
+            error_code: quinn::TransportErrorCode::crypto(u8::from(
+                rustls::AlertDescription::AccessDenied,
+            )),
+            frame_type: None,
+            reason: Bytes::from_static(b"0123456789abcdef pin canary"),
+        });
+        let pin = classify_hysteria2_connection_error(&pin, true, true);
+        assert_eq!(pin.class(), Hysteria2FailureClass::TlsPin);
+        assert_eq!(pin.retry_disposition(), Hysteria2RetryDisposition::Terminal);
+        assert!(!pin.to_string().contains("0123456789abcdef"));
+    }
+
+    #[test]
+    fn hysteria2_network_port_failure_is_the_only_handshake_retry_class() {
+        let failure =
+            classify_hysteria2_connection_error(&quinn::ConnectionError::TimedOut, false, true);
+        assert_eq!(failure.class(), Hysteria2FailureClass::NetworkPort);
+        assert_eq!(failure.retry_disposition(), Hysteria2RetryDisposition::Port);
+        assert!(failure.allows_candidate_retry());
+
+        let cancelled = classify_hysteria2_connection_error(
+            &quinn::ConnectionError::LocallyClosed,
+            false,
+            true,
+        );
+        assert_eq!(cancelled.class(), Hysteria2FailureClass::Cancelled);
+        assert!(!cancelled.allows_candidate_retry());
     }
 
     #[test]

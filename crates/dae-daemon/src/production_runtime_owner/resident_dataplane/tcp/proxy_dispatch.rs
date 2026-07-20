@@ -17,3 +17,5 @@ mod quic_helpers;
 pub(crate) use self::quic_helpers::*;
 mod hysteria2_port_hopping;
 pub(crate) use self::hysteria2_port_hopping::*;
+mod hysteria2_failure;
+pub(crate) use self::hysteria2_failure::*;

@@ -28,7 +28,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct Hysteria2Quic
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hysteria2_quic_connection_candidates_async(
     request: Hysteria2QuicConnectionRequest<'_>,
     deadline: dae_runtime_control::AbsoluteDeadline,
-) -> Result<ResidentConnectedQuicEndpoint, String> {
+) -> Result<ResidentConnectedQuicEndpoint, Hysteria2Failure> {
     let Hysteria2QuicConnectionRequest {
         proxy,
         mark,
@@ -47,13 +47,26 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         resources.port_hop_resolved_candidate_limit(),
         deadline,
     )
-    .await?;
+    .await
+    .map_err(|_| {
+        Hysteria2Failure::new(
+            Hysteria2FailureClass::NetworkAddress,
+            "hysteria2-resolve",
+            "resolve Hysteria2 server address failed",
+        )
+    })?;
     let client_config = build_hysteria2_runtime_client_config_with_congestion(
         tls_identity,
         obfs.udp_packet_overhead(),
         Some(congestion),
     )
-    .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?;
+    .map_err(|_| {
+        Hysteria2Failure::new(
+            Hysteria2FailureClass::Configuration,
+            "hysteria2-client-configuration",
+            "build Hysteria2 QUIC client configuration failed",
+        )
+    })?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Hysteria2,
         caller,
@@ -61,11 +74,12 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         QuicEndpointIdentityRole::ProtocolCarrier,
         &[],
     );
-    let (remote, endpoint, connection) = connect_quic_endpoint_candidates_async(
+    let (remote, endpoint, connection) = connect_hysteria2_quic_endpoint_candidates_async(
         &candidates,
         tls_identity.server_name(),
+        tls_identity.policy().has_leaf_certificate_pin(),
+        tls_identity.policy().requires_webpki(),
         deadline,
-        "connect Hysteria2 QUIC endpoint",
         |remote, deadline, cancellation| {
             let port_hopping = if port_hop_ports.is_empty() {
                 None
@@ -75,13 +89,22 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
                     .copied()
                     .filter(|candidate| candidate.is_ipv4() == remote.is_ipv4())
                     .collect::<Vec<_>>();
-                Some(Hysteria2PortHoppingRuntimeConfig::new(
-                    remotes,
-                    port_hop_interval,
-                    mark,
-                    resources.port_hop_transition_socket_limit(),
-                    Arc::clone(&port_hopping_metrics),
-                )?)
+                Some(
+                    Hysteria2PortHoppingRuntimeConfig::new(
+                        remotes,
+                        port_hop_interval,
+                        mark,
+                        resources.port_hop_transition_socket_limit(),
+                        Arc::clone(&port_hopping_metrics),
+                    )
+                    .map_err(|_| {
+                        Hysteria2Failure::new(
+                            Hysteria2FailureClass::Configuration,
+                            "hysteria2-port-hopping-configuration",
+                            "build Hysteria2 port-hopping configuration failed",
+                        )
+                    })?,
+                )
             };
             let mut endpoint = open_marked_hysteria2_quic_endpoint_for_remote(
                 mark,
@@ -91,7 +114,14 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
                 endpoint_context.clone(),
                 deadline,
                 cancellation,
-            )?;
+            )
+            .map_err(|_| {
+                Hysteria2Failure::new(
+                    Hysteria2FailureClass::Resource,
+                    "hysteria2-endpoint-open",
+                    "Hysteria2 QUIC Endpoint resources are unavailable",
+                )
+            })?;
             endpoint.set_default_client_config(client_config.clone());
             Ok(endpoint)
         },
