@@ -438,6 +438,126 @@ pub(crate) fn subscription_create_delete_operations_are_serialized() {
 }
 
 #[test]
+pub(crate) fn concurrent_subscription_creates_report_one_typed_tag_conflict() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let subscription_dir = dir.join("sub");
+    fs::create_dir_all(&subscription_dir).unwrap();
+    let file_path = subscription_dir.join("test.sub");
+    fs::write(&file_path, b"socks://127.0.0.1:1080#conflict\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let state = state.clone();
+        let dir = dir.clone();
+        let barrier = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || {
+            let request = HttpRequest {
+                method: "POST".to_owned(),
+                path: "/api/subscriptions".to_owned(),
+                query: HashMap::new(),
+                headers: HashMap::new(),
+                body: br#"{"link":"file://sub/test.sub","tag":"same-tag","cronEnable":false}"#
+                    .to_vec(),
+            };
+            let runtime = ProductRuntimeManager::new();
+            barrier.wait();
+            create_subscription(&state, &dir, &runtime, &request)
+        }));
+    }
+
+    let mut responses = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    responses.sort_by_key(|response| response.status);
+    assert_eq!(
+        responses
+            .iter()
+            .map(|response| response.status)
+            .collect::<Vec<_>>(),
+        vec![201, 409]
+    );
+    let conflict: Value = serde_json::from_slice(&responses[1].body).unwrap();
+    assert_eq!(conflict["errorCode"], "subscription_tag_conflict");
+    assert_eq!(conflict["retryable"], false);
+    assert!(!conflict["error"].as_str().unwrap().contains("UNIQUE"));
+    assert!(
+        !conflict["error"]
+            .as_str()
+            .unwrap()
+            .contains("subscriptions")
+    );
+
+    let conn = open_state_connection(&state).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM subscriptions", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(conn);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn subscriptions_without_tags_remain_independent() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let subscription_dir = dir.join("sub");
+    fs::create_dir_all(&subscription_dir).unwrap();
+    let file_path = subscription_dir.join("test.sub");
+    fs::write(&file_path, b"socks://127.0.0.1:1080#untagged\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/subscriptions".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"link":"file://sub/test.sub","cronEnable":false}"#.to_vec(),
+    };
+    let runtime = ProductRuntimeManager::new();
+
+    assert_eq!(
+        create_subscription(&state, &dir, &runtime, &request).status,
+        201
+    );
+    assert_eq!(
+        create_subscription(&state, &dir, &runtime, &request).status,
+        201
+    );
+    assert_eq!(
+        open_state_connection(&state)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM subscriptions WHERE tag IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        2
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn delete_subscription_removes_dependent_node_state() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

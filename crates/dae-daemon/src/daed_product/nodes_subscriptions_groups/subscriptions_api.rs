@@ -85,6 +85,9 @@ pub(crate) fn create_subscription(
             use_proxy as i64
         ],
     ) {
+        if SubscriptionTagConflict::matches(&err) {
+            return SubscriptionTagConflict::response();
+        }
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
     let id = conn.last_insert_rowid();
@@ -199,6 +202,9 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
         ],
     ) {
         Ok(updated) => updated,
+        Err(err) if SubscriptionTagConflict::matches(&err) => {
+            return SubscriptionTagConflict::response();
+        }
         Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
     };
     if updated == 0 {
