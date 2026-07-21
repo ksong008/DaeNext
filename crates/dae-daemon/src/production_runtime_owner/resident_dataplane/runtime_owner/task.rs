@@ -16,12 +16,31 @@ pub(super) struct ResidentRuntimeTask {
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentAsyncRuntimeTask {
     pub(in crate::production_runtime_owner::resident_dataplane) name: &'static str,
     pub(in crate::production_runtime_owner::resident_dataplane) kind: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) role: ResidentRuntimeTaskRole,
     pub(in crate::production_runtime_owner::resident_dataplane) handle: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentRuntimeTaskRole {
+    Workload,
+    Transport,
+}
+
+impl ResidentRuntimeTaskRole {
+    pub(in crate::production_runtime_owner::resident_dataplane) const fn name(
+        self,
+    ) -> &'static str {
+        match self {
+            Self::Workload => "workload",
+            Self::Transport => "transport",
+        }
+    }
 }
 
 #[derive(Default)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentAsyncRuntimeShutdown {
     pub(in crate::production_runtime_owner::resident_dataplane) joined: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) cancelled: usize,
     pub(in crate::production_runtime_owner::resident_dataplane) panicked: usize,
     pub(in crate::production_runtime_owner::resident_dataplane) timed_out: usize,
     pub(in crate::production_runtime_owner::resident_dataplane) results: Vec<Value>,
@@ -32,9 +51,15 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentAsync
 pub(in crate::production_runtime_owner::resident_dataplane) fn registered_resident_async_runtime_task(
     name: &'static str,
     kind: &'static str,
+    role: ResidentRuntimeTaskRole,
     handle: tokio::task::JoinHandle<()>,
 ) -> ResidentAsyncRuntimeTask {
-    ResidentAsyncRuntimeTask { name, kind, handle }
+    ResidentAsyncRuntimeTask {
+        name,
+        kind,
+        role,
+        handle,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -247,19 +247,44 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn resident_he
             anytls_owner_registry.clone(),
         ));
     }
-    while let Some(result) = tasks.join_next().await {
-        if let Err(err) = result {
-            append_event(
-                &event_file,
-                &event_lock,
-                json!({"event": "resident_health_scheduler_task_failed", "error": err.to_string()}),
-            );
+    let mut stop_listener = stop.listener();
+    let mut task_shutdown = ResidentTaskSetShutdown::default();
+    while !tasks.is_empty() && !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            _ = stop_listener.cancelled() => break,
+            result = tasks.join_next() => {
+                if let Some(result) = result {
+                    if let Err(err) = &result
+                        && !err.is_cancelled()
+                    {
+                        append_event(
+                            &event_file,
+                            &event_lock,
+                            json!({"event": "resident_health_scheduler_task_failed", "error": err.to_string()}),
+                        );
+                    }
+                    record_resident_task_completion(&mut task_shutdown, result);
+                }
+            }
         }
     }
+    let drained =
+        shutdown_resident_task_set(&mut tasks, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE).await;
+    task_shutdown.joined = task_shutdown.joined.saturating_add(drained.joined);
+    task_shutdown.cancelled = task_shutdown.cancelled.saturating_add(drained.cancelled);
+    task_shutdown.panicked = task_shutdown.panicked.saturating_add(drained.panicked);
+    task_shutdown.forced = task_shutdown.forced.saturating_add(drained.forced);
     append_event(
         &event_file,
         &event_lock,
-        json!({"event": "resident_health_scheduler_stopped"}),
+        json!({
+            "event": "resident_health_scheduler_stopped",
+            "tasksJoined": task_shutdown.joined,
+            "tasksCancelled": task_shutdown.cancelled,
+            "tasksPanicked": task_shutdown.panicked,
+            "tasksForced": task_shutdown.forced,
+            "tasksPending": tasks.len(),
+        }),
     );
 }
 

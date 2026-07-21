@@ -132,8 +132,22 @@ pub(super) fn cleanup_report_error(report: Option<&Value>) -> Option<String> {
         .take(8)
         .collect::<Vec<_>>()
         .join(",");
+    let failed_step_details = report
+        .get("cleanup_steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|step| {
+            matches!(
+                step["status"].as_str(),
+                Some("fail" | "partial" | "timed_out")
+            )
+        })
+        .take(8)
+        .map(cleanup_step_failure_detail)
+        .collect::<Vec<_>>();
     Some(format!(
-        "runtime cleanup failed: cleanup_step_failed={}, failed_steps={}, loaded_map_cleaned={}, cleanup_command_timed_out={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
+        "runtime cleanup failed: cleanup_step_failed={}, failed_steps={}, failed_step_details={}, loaded_map_cleaned={}, cleanup_command_timed_out={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
         report
             .get("cleanup_step_failed")
             .map(Value::to_string)
@@ -143,6 +157,7 @@ pub(super) fn cleanup_report_error(report: Option<&Value>) -> Option<String> {
         } else {
             &failed_steps
         },
+        Value::Array(failed_step_details),
         report
             .get("loaded_map_cleaned")
             .map(Value::to_string)
@@ -160,4 +175,29 @@ pub(super) fn cleanup_report_error(report: Option<&Value>) -> Option<String> {
             .map(Value::to_string)
             .unwrap_or_else(|| "null".to_owned())
     ))
+}
+
+fn cleanup_step_failure_detail(step: &Value) -> Value {
+    let mut detail = serde_json::Map::new();
+    for key in [
+        "name",
+        "status",
+        "safetyStatus",
+        "graceful",
+        "completionMode",
+        "task_count_timed_out",
+        "task_count_aborted",
+        "task_count_pending",
+        "task_count_detached",
+        "task_count_panicked",
+        "active_tcp_connections_at_shutdown",
+        "active_udp_sessions_at_shutdown",
+        "udp_sessions_active_at_shutdown",
+        "resource_release",
+    ] {
+        if let Some(value) = step.get(key) {
+            detail.insert(key.to_owned(), value.clone());
+        }
+    }
+    Value::Object(detail)
 }

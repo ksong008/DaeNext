@@ -278,7 +278,43 @@ pub(crate) fn stuck_runtime_thread_cleanup_prevents_replacement_publication() {
     let error = manager.ensure_cleanup_allows_start().unwrap_err();
     assert!(error.contains("previous product runtime cleanup failed"));
     assert!(error.contains("stop-resident-dataplane-runtime"));
+    assert!(error.contains("task_count_timed_out"));
+    assert!(error.contains("task_count_detached"));
     assert!(!manager.is_running());
+}
+
+#[test]
+pub(crate) fn forced_bounded_cleanup_without_residuals_does_not_latch_interlock() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.cleanup.begin(9, "reload-replace");
+        inner.cleanup.finish(Some(json!({
+            "status": "pass",
+            "cleanup_step_failed": false,
+            "cleanup_steps": [{
+                "name": "stop-resident-dataplane-runtime",
+                "status": "pass",
+                "safetyStatus": "pass",
+                "graceful": false,
+                "completionMode": "forced-bounded",
+                "task_count_timed_out": 1,
+                "task_count_aborted": 1,
+                "task_count_pending": 0,
+                "active_tcp_connections_at_shutdown": 0,
+                "active_udp_sessions_at_shutdown": 0
+            }],
+            "loaded_map_cleaned": true,
+            "cleanup_command_timed_out": false,
+            "leftovers_after_cleanup": [],
+            "sys_fs_bpf_dae_mutated": false,
+        })));
+    }
+
+    manager.ensure_cleanup_allows_start().unwrap();
+    let summary = manager.summary();
+    assert_eq!(summary["cleanup"]["state"], json!("done"));
+    assert_eq!(summary["cleanup"]["lastError"], Value::Null);
 }
 
 #[test]

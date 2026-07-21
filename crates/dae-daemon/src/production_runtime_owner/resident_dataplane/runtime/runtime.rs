@@ -55,6 +55,9 @@ impl ResidentDataplaneRuntime {
         if let Some(maintenance) = self.domain_routing_maintenance.take() {
             maintenance.stop();
         }
+        let workload = self
+            .owner
+            .shutdown_workloads(RESIDENT_RUNTIME_TASK_JOIN_GRACE);
         let xmux = self.owner.shutdown_xhttp_xmux_generation_owner();
         steps.push(json!({
             "name": "clear-resident-xhttp-xmux-managers",
@@ -83,7 +86,6 @@ impl ResidentDataplaneRuntime {
             "cleanupTimedOut": xmux.as_ref().is_some_and(|report| report.cleanup_timed_out),
             "ownerThreadJoined": xmux.as_ref().is_none_or(|report| report.owner_thread_joined),
         }));
-        steps.push(self.owner.shutdown());
         let connect_udp_h2 = udp::clear_connect_udp_h2_pools(reload_generation);
         steps.push(json!({
             "name": "clear-resident-connect-udp-h2-pools",
@@ -112,6 +114,10 @@ impl ResidentDataplaneRuntime {
             "lockedPools": connect_udp_h3.locked_pools,
             "registryLocked": connect_udp_h3.registry_locked,
         }));
+        steps.push(
+            self.owner
+                .shutdown_after_workloads(workload, RESIDENT_RUNTIME_TASK_JOIN_GRACE),
+        );
         steps.push(json!({
             "name": "clear-resident-udp-reply-socket-cache",
             "status": "pass",

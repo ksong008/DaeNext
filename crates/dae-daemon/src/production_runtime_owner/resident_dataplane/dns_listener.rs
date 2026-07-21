@@ -132,12 +132,12 @@ pub(super) async fn run_resident_dns_bind_listener_async(
     metrics: Arc<ResidentDataplaneMetrics>,
 ) {
     let configured = listener.configured.clone();
-    let mut tasks = Vec::new();
+    let mut tasks = tokio::task::JoinSet::new();
     if let Some(socket) = listener.udp_socket.take() {
         let local_addr = listener.udp_local_addr.expect("udp local addr was read");
         match TokioUdpSocket::from_std(socket) {
             Ok(socket) => {
-                tasks.push(tokio::spawn(run_resident_dns_udp_bind_listener_async(
+                tasks.spawn(run_resident_dns_udp_bind_listener_async(
                     socket,
                     configured.clone(),
                     local_addr,
@@ -146,7 +146,7 @@ pub(super) async fn run_resident_dns_bind_listener_async(
                     event_file.clone(),
                     Arc::clone(&event_lock),
                     Arc::clone(&metrics),
-                )));
+                ));
             }
             Err(err) => append_event(
                 &event_file,
@@ -165,16 +165,16 @@ pub(super) async fn run_resident_dns_bind_listener_async(
         let local_addr = listener.tcp_local_addr.expect("tcp local addr was read");
         match TokioTcpListener::from_std(tcp_listener) {
             Ok(tcp_listener) => {
-                tasks.push(tokio::spawn(run_resident_dns_tcp_bind_listener_async(
+                tasks.spawn(run_resident_dns_tcp_bind_listener_async(
                     tcp_listener,
                     configured.clone(),
                     local_addr,
                     dns,
-                    stop,
+                    Arc::clone(&stop),
                     event_file.clone(),
                     Arc::clone(&event_lock),
                     metrics,
-                )));
+                ));
             }
             Err(err) => append_event(
                 &event_file,
@@ -201,9 +201,27 @@ pub(super) async fn run_resident_dns_bind_listener_async(
         );
         return;
     }
-    for task in tasks {
-        let _ = task.await;
+    let mut stop_listener = stop.listener();
+    while !tasks.is_empty() && !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            _ = stop_listener.cancelled() => break,
+            _ = tasks.join_next() => {}
+        }
     }
+    let shutdown =
+        shutdown_resident_task_set(&mut tasks, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE).await;
+    append_event(
+        &event_file,
+        &event_lock,
+        json!({
+            "event": "dns_bind_runtime_stopped",
+            "tasksJoined": shutdown.joined,
+            "tasksCancelled": shutdown.cancelled,
+            "tasksPanicked": shutdown.panicked,
+            "tasksForced": shutdown.forced,
+            "tasksPending": tasks.len(),
+        }),
+    );
 }
 
 async fn run_resident_dns_udp_bind_listener_async(
@@ -296,15 +314,8 @@ async fn run_resident_dns_udp_bind_listener_async(
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {}
         }
     }
-    if time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
-        while tasks.join_next().await.is_some() {}
-    })
-    .await
-    .is_err()
-    {
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
+    let shutdown =
+        shutdown_resident_task_set(&mut tasks, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE).await;
     append_event(
         &event_file,
         &event_lock,
@@ -312,6 +323,10 @@ async fn run_resident_dns_udp_bind_listener_async(
             "event": "dns_bind_listener_stopped",
             "local_addr": local_addr.to_string(),
             "network": "udp",
+            "tasksJoined": shutdown.joined,
+            "tasksCancelled": shutdown.cancelled,
+            "tasksPanicked": shutdown.panicked,
+            "tasksForced": shutdown.forced,
         }),
     );
 }
@@ -465,8 +480,12 @@ async fn run_resident_dns_tcp_bind_listener_async(
         }),
     );
     let semaphore = Arc::new(Semaphore::new(DNS_BIND_TCP_MAX_INFLIGHT));
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut stop_listener = stop.listener();
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
+            _ = stop_listener.cancelled() => break,
+            _ = tasks.join_next(), if !tasks.is_empty() => {}
             accepted = listener.accept() => {
                 let (stream, peer) = match accepted {
                     Ok(accepted) => accepted,
@@ -506,7 +525,7 @@ async fn run_resident_dns_tcp_bind_listener_async(
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => break,
                 };
-                tokio::spawn(handle_resident_dns_tcp_bind_connection_async(
+                tasks.spawn(handle_resident_dns_tcp_bind_connection_async(
                     stream,
                     peer,
                     local_addr,
@@ -518,9 +537,10 @@ async fn run_resident_dns_tcp_bind_listener_async(
                     permit,
                 ));
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {}
         }
     }
+    let shutdown =
+        shutdown_resident_task_set(&mut tasks, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE).await;
     append_event(
         &event_file,
         &event_lock,
@@ -528,6 +548,10 @@ async fn run_resident_dns_tcp_bind_listener_async(
             "event": "dns_bind_listener_stopped",
             "local_addr": local_addr.to_string(),
             "network": "tcp",
+            "tasksJoined": shutdown.joined,
+            "tasksCancelled": shutdown.cancelled,
+            "tasksPanicked": shutdown.panicked,
+            "tasksForced": shutdown.forced,
         }),
     );
 }
