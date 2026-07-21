@@ -124,7 +124,8 @@ pub use vless::{
     VlessUdpOverTcpExchangeReport, VlessUdpRequest,
 };
 pub use vmess::{
-    VMessLink, VMessMetadata, VMessMetadataType, VMessNetwork, VMessSourceFormat,
+    VMessBodySecurity, VMessLink, VMessMetadata, VMessMetadataType, VMessNetwork,
+    VMessSourceFormat,
     dataplane::{
         VMESS_AEAD_SECURITY_AES_128_GCM, VMessAeadTcpExchangeReport, VMessAeadTcpRequest,
         VMessAeadUdpOverTcpExchangeReport, VMessAeadUdpOverTcpRequest,

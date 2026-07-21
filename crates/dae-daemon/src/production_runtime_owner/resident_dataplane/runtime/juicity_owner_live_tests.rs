@@ -322,6 +322,12 @@ fn assert_juicity_owner_resources_released(registry: &JuicityOwnerRegistryHandle
     assert_eq!(owner["activeBuilds"], 0);
     assert_eq!(owner["activeLogicalLeases"], 0);
     assert_eq!(owner["activeWaiters"], 0);
+    assert_eq!(owner["registryOwnershipReleased"], true);
+    assert_eq!(
+        owner["endpointDrain"]["completed"],
+        owner["endpointDrain"]["requested"]
+    );
+    assert_eq!(owner["endpointDrain"]["timedOut"], 0);
     assert_eq!(owner["shutdownTimedOut"], false);
     let endpoint = quic_endpoint_metrics_snapshot(generation);
     assert_eq!(endpoint["liveStates"]["total"], 0);

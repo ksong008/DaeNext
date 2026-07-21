@@ -199,5 +199,87 @@ fn cleanup_step_failure_detail(step: &Value) -> Value {
             detail.insert(key.to_owned(), value.clone());
         }
     }
+    let owner_release_details = compact_owner_release_failure_details(step);
+    if !owner_release_details.is_empty() {
+        detail.insert(
+            "ownerReleaseDetails".to_owned(),
+            Value::Object(owner_release_details),
+        );
+    }
     Value::Object(detail)
+}
+
+fn compact_owner_release_failure_details(step: &Value) -> serde_json::Map<String, Value> {
+    let mut details = serde_json::Map::new();
+    let specifications = [
+        (
+            "hysteria2Owners",
+            "hysteria2",
+            "hysteria2_owners",
+            &[
+                "registeredKeys",
+                "activeOwners",
+                "activeLogicalLeases",
+                "activeUdpSessions",
+                "currentUdpQueuedBytes",
+                "activeUdpSessionQuarantine",
+                "registryOwnershipReleased",
+                "endpointDrain",
+                "shutdownTimedOut",
+            ][..],
+        ),
+        (
+            "tuicOwners",
+            "tuic",
+            "tuic_owners",
+            &[
+                "registeredKeys",
+                "activeOwners",
+                "activeLogicalLeases",
+                "activeUdpAssociations",
+                "currentUdpQueuedBytes",
+                "activeAssociationQuarantine",
+                "registryOwnershipReleased",
+                "endpointDrain",
+                "shutdownTimedOut",
+            ][..],
+        ),
+        (
+            "juicityOwners",
+            "juicity",
+            "juicity_owners",
+            &[
+                "activePools",
+                "activePhysicalOwners",
+                "activeBuilds",
+                "activeLogicalLeases",
+                "activeWaiters",
+                "registryOwnershipReleased",
+                "endpointDrain",
+                "shutdownTimedOut",
+            ][..],
+        ),
+    ];
+    for (release_key, detail_key, snapshot_key, fields) in specifications {
+        if step
+            .pointer(&format!("/resource_release/{release_key}"))
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            continue;
+        }
+        let mut selected = serde_json::Map::new();
+        if let Some(snapshot) = step.get(snapshot_key) {
+            for field in fields {
+                if let Some(value) = snapshot.get(*field) {
+                    selected.insert((*field).to_owned(), value.clone());
+                }
+            }
+        }
+        if selected.is_empty() {
+            selected.insert("snapshotMissing".to_owned(), json!(true));
+        }
+        details.insert(detail_key.to_owned(), Value::Object(selected));
+    }
+    details
 }
