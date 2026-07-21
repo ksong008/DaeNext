@@ -29,7 +29,8 @@ pub(super) fn build_aead_request_chunks(
     let normalized_uuid = normalize_vmess_uuid(uuid);
     let cmd_key = vmess_cmd_key_from_uuid(&normalized_uuid)?;
     let eauth_id = put_eauth_id(&cmd_key, unix_timestamp_now()?, material.eauth_random)?;
-    let instruction = request_instruction(&material, target, network)?;
+    let instruction =
+        request_instruction(&material, target, network, VMessBodySecurity::Aes128Gcm)?;
     let header = encrypt_request_header(
         &cmd_key,
         &eauth_id,
@@ -93,6 +94,7 @@ pub(super) fn request_instruction(
     material: &VMessAeadMaterial,
     target: &str,
     network: VMessNetwork,
+    security: VMessBodySecurity,
 ) -> Result<Vec<u8>, OutboundError> {
     let metadata = VMessMetadata::parse(network.as_str(), target)?;
     let addr_len = metadata.addr_len();
@@ -103,7 +105,7 @@ pub(super) fn request_instruction(
     out[17..33].copy_from_slice(&material.request_body_key);
     out[33] = material.response_auth;
     out[34] = REQUEST_OPTIONS;
-    out[35] = ((header_padding_len as u8) << 4) | VMESS_AEAD_SECURITY_AES_128_GCM;
+    out[35] = ((header_padding_len as u8) << 4) | security.wire_value();
     out[36] = 0;
     out[37] = network.byte();
     out[38..40].copy_from_slice(&metadata.port().to_be_bytes());

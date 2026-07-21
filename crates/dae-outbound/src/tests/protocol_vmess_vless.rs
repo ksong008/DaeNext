@@ -1,5 +1,76 @@
 use super::*;
 
+fn vmess_json_url_with_security(field: Option<(&str, &str)>) -> String {
+    let mut json = serde_json::json!({
+        "v": "2",
+        "ps": "security-fixture",
+        "add": "vmess-security.fixture.invalid",
+        "port": "443",
+        "id": "7c12c745-63a5-433d-9e60-022e469b5bd4",
+        "aid": "0",
+        "net": "tcp",
+        "type": "none",
+        "host": "",
+        "path": "",
+        "tls": ""
+    });
+    if let Some((name, value)) = field {
+        json.as_object_mut()
+            .expect("VMess fixture must be a JSON object")
+            .insert(name.to_owned(), Value::String(value.to_owned()));
+    }
+    format!("vmess://{}", STANDARD.encode(json.to_string()))
+}
+
+#[test]
+fn vmess_body_security_defaults_and_aliases_are_explicit() {
+    for field in [
+        None,
+        Some(("scy", "")),
+        Some(("scy", "auto")),
+        Some(("scy", "aes-128-gcm")),
+        Some(("security", "AES-128-GCM")),
+    ] {
+        let parsed = crate::vmess::VMessLink::parse(&vmess_json_url_with_security(field)).unwrap();
+        assert_eq!(
+            parsed.body_security().unwrap(),
+            crate::vmess::VMessBodySecurity::Aes128Gcm
+        );
+    }
+}
+
+#[test]
+fn vmess_unsupported_explicit_body_security_fails_closed() {
+    for value in ["chacha20-poly1305", "none", "zero"] {
+        let parsed =
+            crate::vmess::VMessLink::parse(&vmess_json_url_with_security(Some(("scy", value))))
+                .unwrap();
+        let err = parsed.body_security().unwrap_err().to_string();
+        assert!(err.contains("unsupported VMess body security"));
+        assert!(err.contains(value));
+    }
+}
+
+#[test]
+fn vmess_body_security_export_retains_only_explicit_source_value() {
+    let implicit = crate::vmess::VMessLink::parse(&vmess_json_url_with_security(None)).unwrap();
+    let implicit_export = implicit.export_url();
+    let implicit_roundtrip = crate::vmess::VMessLink::parse(&implicit_export).unwrap();
+    assert!(implicit_roundtrip.security.is_empty());
+
+    let explicit = crate::vmess::VMessLink::parse(&vmess_json_url_with_security(Some((
+        "security",
+        "aes-128-gcm",
+    ))))
+    .unwrap();
+    let explicit_roundtrip = crate::vmess::VMessLink::parse(&explicit.export_url()).unwrap();
+    assert_eq!(explicit_roundtrip.security, "aes-128-gcm");
+    assert_eq!(
+        explicit_roundtrip.body_security().unwrap(),
+        crate::vmess::VMessBodySecurity::Aes128Gcm
+    );
+}
+
 #[test]
 fn vmess_rust_native_matches_nativelden_fixture() {
     let fixture = fixture("outbound/protocol/vmess_rust_native.json");

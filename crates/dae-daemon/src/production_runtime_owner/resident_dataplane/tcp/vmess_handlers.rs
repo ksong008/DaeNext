@@ -2,14 +2,20 @@ use super::*;
 
 fn take_vmess_tcp_session(
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
     target: &str,
     sniff: &mut TcpSniffReport,
     build_context: &str,
 ) -> Result<(VMessAeadTcpClientSessionStart, usize), String> {
     let initial_payload = sniff.take_payload();
     let initial_payload_len = initial_payload.len();
-    let session = aead_tcp_client_session_start(id, target, &initial_payload)
-        .map_err(|err| format!("{build_context}: {err}"))?;
+    let session = dae_outbound::vmess::aead_tcp_client_session_start_with_security(
+        id,
+        target,
+        &initial_payload,
+        body_security,
+    )
+    .map_err(|err| format!("{build_context}: {err}"))?;
     drop(initial_payload);
     Ok((session, initial_payload_len))
 }
@@ -28,10 +34,12 @@ pub(super) async fn handle_vmess_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
+        body_security,
         &selection.route.dial_target,
         sniff,
         "build VMess AEAD TCP session",
@@ -83,6 +91,7 @@ pub(super) async fn handle_vmess_tls_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
@@ -90,6 +99,7 @@ pub(super) async fn handle_vmess_tls_proxy_tcp_connection_async(
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
+        body_security,
         &selection.route.dial_target,
         sniff,
         "build VMess TLS AEAD TCP session",
@@ -161,6 +171,7 @@ pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let options =
@@ -168,6 +179,7 @@ pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
     websocket_handshake_over_async_stream(&mut proxy, &options).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
+        body_security,
         &selection.route.dial_target,
         sniff,
         "build VMess WebSocket AEAD TCP session",
@@ -232,6 +244,7 @@ pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let options =
@@ -239,6 +252,7 @@ pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
     httpupgrade_handshake_over_async_stream(&mut proxy, &options).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
+        body_security,
         &selection.route.dial_target,
         sniff,
         "build VMess HTTP Upgrade AEAD TCP session",
@@ -294,6 +308,7 @@ pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
@@ -304,6 +319,7 @@ pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
     websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
+        body_security,
         &selection.route.dial_target,
         sniff,
         "build VMess TLS WebSocket AEAD TCP session",
@@ -384,6 +400,7 @@ pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
         open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
@@ -394,6 +411,7 @@ pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
     httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
+        body_security,
         &selection.route.dial_target,
         sniff,
         "build VMess TLS HTTP Upgrade AEAD TCP session",
@@ -464,9 +482,11 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
+        body_security,
         &selection.route.dial_target,
         sniff,
         "build VMess gRPC AEAD TCP session",
@@ -546,9 +566,11 @@ pub(super) async fn handle_vmess_h2_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
+    body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
+        body_security,
         &selection.route.dial_target,
         sniff,
         "build VMess H2 AEAD TCP session",

@@ -1,6 +1,8 @@
 use std::sync::{Arc, atomic::Ordering};
 
-use dae_outbound::{shared_transport::HttpUpgradeOptions, vmess::aead_tcp_client_session_start};
+use dae_outbound::{
+    shared_transport::HttpUpgradeOptions, vmess::aead_tcp_client_session_start_with_security,
+};
 use tokio::io::AsyncWriteExt;
 
 use super::super::super::ResidentStopSignal;
@@ -35,12 +37,14 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let selection = native_tcp_probe_selection(proxy, target);
-    let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler else {
+    let ResidentProxyProtocolPlan::VmessAeadTcp { id, body_security } = &selection.proxy.handler
+    else {
         return Err(NativeTcpProbeError::NotAdmitted);
     };
-    let session = aead_tcp_client_session_start(id, target, &[]).map_err(|err| {
-        NativeTcpProbeError::Open(format!("build native VMess AEAD session: {err}"))
-    })?;
+    let session = aead_tcp_client_session_start_with_security(id, target, &[], *body_security)
+        .map_err(|err| {
+            NativeTcpProbeError::Open(format!("build native VMess AEAD session: {err}"))
+        })?;
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);

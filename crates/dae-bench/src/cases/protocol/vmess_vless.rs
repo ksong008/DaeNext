@@ -89,6 +89,7 @@ pub(super) fn bench_vmess_parse_link(iters: u64, warmup: u64) -> Result<Measurem
         sni: String::new(),
         path: "/ws".to_owned(),
         tls: "tls".to_owned(),
+        security: String::new(),
         allow_insecure: false,
         fingerprint: String::new(),
         v: "2".to_owned(),

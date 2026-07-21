@@ -215,6 +215,7 @@ pub(super) fn vmess_fixture_url(_ps: &str, add: &str, port: u16, net: &str) -> S
         sni: String::new(),
         path: String::new(),
         tls: String::new(),
+        security: String::new(),
         allow_insecure: false,
         fingerprint: String::new(),
         v: "2".to_owned(),

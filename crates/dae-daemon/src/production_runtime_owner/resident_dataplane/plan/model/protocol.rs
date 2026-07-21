@@ -76,6 +76,7 @@ pub(crate) enum ResidentProxyProtocolPlan {
     },
     VmessAeadTcp {
         id: String,
+        body_security: dae_outbound::vmess::VMessBodySecurity,
     },
     Hysteria2QuicTcp {
         auth: String,
@@ -362,7 +363,10 @@ impl ResidentProxyProtocolPlan {
             }
             Self::TrojanTcpTls { password }
             | Self::AnyTlsTcpTls { auth: password }
-            | Self::VmessAeadTcp { id: password } => compact_string(password),
+            | Self::VmessAeadTcp {
+                id: password,
+                body_security: _,
+            } => compact_string(password),
             Self::TrojanInnerShadowsocksTcpTls {
                 password,
                 inner_cipher,

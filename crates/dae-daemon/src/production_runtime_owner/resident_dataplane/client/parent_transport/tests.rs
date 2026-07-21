@@ -49,6 +49,7 @@ fn chained_proxy(child: SocketAddr, parent: SocketAddr) -> ResidentProxyPlan {
         child,
         ResidentProxyProtocolPlan::VmessAeadTcp {
             id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
         },
     );
     child.chain_parent = Some(Arc::new(proxy_plan(

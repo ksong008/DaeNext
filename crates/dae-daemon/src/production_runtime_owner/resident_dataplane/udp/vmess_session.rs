@@ -20,6 +20,7 @@ pub(super) enum VmessAeadUdpWrapperKind {
 
 pub(super) struct VmessAeadUdpOverTcpSession {
     id: String,
+    body_security: vmess::VMessBodySecurity,
     wrapper: VmessAeadUdpWrapperKind,
     underlay: Option<VmessAeadUdpUnderlay>,
     upload: Option<vmess::VMessAeadTcpUploadCodec>,
@@ -30,37 +31,42 @@ pub(super) struct VmessAeadUdpOverTcpSession {
 }
 
 impl VmessAeadUdpOverTcpSession {
-    pub(super) fn plain(id: String) -> Self {
-        Self::new(id, VmessAeadUdpWrapperKind::PlainTcp)
+    pub(super) fn plain(id: String, body_security: vmess::VMessBodySecurity) -> Self {
+        Self::new(id, body_security, VmessAeadUdpWrapperKind::PlainTcp)
     }
 
-    pub(super) fn tls(id: String) -> Self {
-        Self::new(id, VmessAeadUdpWrapperKind::TlsTcp)
+    pub(super) fn tls(id: String, body_security: vmess::VMessBodySecurity) -> Self {
+        Self::new(id, body_security, VmessAeadUdpWrapperKind::TlsTcp)
     }
 
-    pub(super) fn websocket_plain(id: String) -> Self {
-        Self::new(id, VmessAeadUdpWrapperKind::WebSocketPlain)
+    pub(super) fn websocket_plain(id: String, body_security: vmess::VMessBodySecurity) -> Self {
+        Self::new(id, body_security, VmessAeadUdpWrapperKind::WebSocketPlain)
     }
 
-    pub(super) fn websocket_tls(id: String) -> Self {
-        Self::new(id, VmessAeadUdpWrapperKind::WebSocketTls)
+    pub(super) fn websocket_tls(id: String, body_security: vmess::VMessBodySecurity) -> Self {
+        Self::new(id, body_security, VmessAeadUdpWrapperKind::WebSocketTls)
     }
 
-    pub(super) fn httpupgrade_plain(id: String) -> Self {
-        Self::new(id, VmessAeadUdpWrapperKind::HttpUpgradePlain)
+    pub(super) fn httpupgrade_plain(id: String, body_security: vmess::VMessBodySecurity) -> Self {
+        Self::new(id, body_security, VmessAeadUdpWrapperKind::HttpUpgradePlain)
     }
 
-    pub(super) fn httpupgrade_tls(id: String) -> Self {
-        Self::new(id, VmessAeadUdpWrapperKind::HttpUpgradeTls)
+    pub(super) fn httpupgrade_tls(id: String, body_security: vmess::VMessBodySecurity) -> Self {
+        Self::new(id, body_security, VmessAeadUdpWrapperKind::HttpUpgradeTls)
     }
 
-    pub(super) fn grpc_tls(id: String) -> Self {
-        Self::new(id, VmessAeadUdpWrapperKind::GrpcTls)
+    pub(super) fn grpc_tls(id: String, body_security: vmess::VMessBodySecurity) -> Self {
+        Self::new(id, body_security, VmessAeadUdpWrapperKind::GrpcTls)
     }
 
-    fn new(id: String, wrapper: VmessAeadUdpWrapperKind) -> Self {
+    fn new(
+        id: String,
+        body_security: vmess::VMessBodySecurity,
+        wrapper: VmessAeadUdpWrapperKind,
+    ) -> Self {
         Self {
             id,
+            body_security,
             wrapper,
             underlay: None,
             upload: None,
@@ -96,10 +102,11 @@ impl VmessAeadUdpOverTcpSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        let start = vmess::aead_udp_over_tcp_client_session_start(
+        let start = vmess::aead_udp_over_tcp_client_session_start_with_security(
             &self.id,
             &original_dst.to_string(),
             payload,
+            self.body_security,
         )
         .map_err(|err| format!("start VMess AEAD UDP-over-TCP session: {err}"))?;
         let mut underlay = open_vmess_underlay(self.wrapper, proxy, &start.first_write).await?;
@@ -806,7 +813,10 @@ mod fixed_target_tests {
     #[test]
     fn vmess_udp_response_uses_its_bound_target() {
         let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
-        let mut session = VmessAeadUdpOverTcpSession::plain("fixture-id".to_owned());
+        let mut session = VmessAeadUdpOverTcpSession::plain(
+            "fixture-id".to_owned(),
+            vmess::VMessBodySecurity::Aes128Gcm,
+        );
         session
             .fixed_target
             .bind(target, "VMess AEAD UDP-over-TCP session")

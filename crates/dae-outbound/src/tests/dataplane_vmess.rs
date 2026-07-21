@@ -51,6 +51,23 @@ fn vmess_aead_tcp_session_empty_initial_payload_writes_header_only() {
 }
 
 #[test]
+fn vmess_explicit_aes_body_security_emits_official_wire_value() {
+    let session = vmess::aead_tcp_client_session_start_with_security(
+        "7c12c745-63a5-433d-9e60-022e469b5bd4",
+        "fixture-vmess-security.fixture.invalid:443",
+        b"fixture-vmess-security-payload",
+        vmess::VMessBodySecurity::Aes128Gcm,
+    )
+    .unwrap();
+
+    assert_eq!(
+        session.request.security,
+        vmess::VMESS_AEAD_SECURITY_AES_128_GCM
+    );
+    assert_eq!(vmess::VMESS_AEAD_SECURITY_AES_128_GCM, 3);
+}
+
+#[test]
 fn vmess_aead_udp_over_tcp_session_start_uses_udp_command() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "vmess-udp-target.fixture.invalid:53";
