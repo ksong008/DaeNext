@@ -226,7 +226,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let (hysteria2_owner_registry, hysteria2_owner_task) = start_hysteria2_owner_registry_on(
         &owner.data_plane_handle(),
         reload_generation,
-        owner.stop_handle(),
+        owner.transport_stop_handle(),
     );
     owner.install_hysteria2_owner_registry_task(hysteria2_owner_registry, hysteria2_owner_task);
     let requires_tuic_owner = proxy_groups
@@ -236,7 +236,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let (tuic_owner_registry, tuic_owner_task) = start_tuic_owner_registry_on(
             &owner.data_plane_handle(),
             reload_generation,
-            owner.stop_handle(),
+            owner.transport_stop_handle(),
         );
         owner.install_tuic_owner_registry_task(tuic_owner_registry, tuic_owner_task);
     }
@@ -247,7 +247,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let (juicity_owner_registry, juicity_owner_task) = start_juicity_owner_registry_on(
             &owner.data_plane_handle(),
             reload_generation,
-            owner.stop_handle(),
+            owner.transport_stop_handle(),
         );
         owner.install_juicity_owner_registry_task(juicity_owner_registry, juicity_owner_task);
     }
@@ -258,7 +258,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let (anytls_owner_registry, anytls_owner_task) = start_anytls_owner_registry_on(
             &owner.data_plane_handle(),
             reload_generation,
-            owner.stop_handle(),
+            owner.transport_stop_handle(),
         );
         owner.install_anytls_owner_registry_task(anytls_owner_registry, anytls_owner_task);
     }
@@ -269,7 +269,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let (h2_carrier_owner, h2_carrier_task) = match start_h2_carrier_generation_owner_on(
             &owner.data_plane_handle(),
             reload_generation,
-            owner.stop_handle(),
+            owner.transport_stop_handle(),
             owner.data_plane_worker_threads(),
         ) {
             Ok(runtime) => runtime,
@@ -299,7 +299,7 @@ pub(crate) fn start_resident_dataplane_workers(
             match start_meek_transport_generation_owner_on(
                 &owner.data_plane_handle(),
                 reload_generation,
-                owner.stop_handle(),
+                owner.transport_stop_handle(),
                 owner.data_plane_worker_threads(),
             ) {
                 Ok(runtime) => runtime,
@@ -331,7 +331,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let (vless_mux_owner, vless_mux_task) = match start_vless_mux_generation_owner_on(
             &owner.data_plane_handle(),
             reload_generation,
-            owner.stop_handle(),
+            owner.transport_stop_handle(),
             owner.data_plane_worker_threads(),
         ) {
             Ok(runtime) => runtime,

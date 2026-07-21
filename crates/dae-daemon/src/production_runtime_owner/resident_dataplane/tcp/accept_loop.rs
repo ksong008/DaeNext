@@ -1,5 +1,7 @@
+use super::super::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use super::*;
 use std::path::Path;
+
 pub(crate) async fn resident_tcp_accept_loop_async(
     listener: TcpListener,
     router: Arc<ResidentTcpRouter>,
@@ -42,18 +44,27 @@ pub(crate) async fn resident_tcp_accept_loop_async(
     event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
     append_event(&event_file, &event_lock, event);
     let mut stop_listener = stop.listener();
-    while !stop.load(Ordering::Relaxed) {
-        let permit = tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            permit = admission.acquire() => match permit {
-                Ok(permit) => permit,
-                Err(err) => {
-                append_event(
-                    &event_file,
-                    &event_lock,
-                    json!({"event": "tcp_admission_failed", "error": err}),
-                );
-                break;
+    let mut flows = tokio::task::JoinSet::new();
+    let mut flow_shutdown = ResidentTaskSetShutdown::default();
+    'accept: while !stop.load(Ordering::Relaxed) {
+        let permit = loop {
+            tokio::select! {
+                _ = stop_listener.cancelled() => break 'accept,
+                completed = flows.join_next(), if !flows.is_empty() => {
+                    if let Some(completed) = completed {
+                        record_resident_task_completion(&mut flow_shutdown, completed);
+                    }
+                }
+                permit = admission.acquire() => match permit {
+                    Ok(permit) => break permit,
+                    Err(err) => {
+                        append_event(
+                            &event_file,
+                            &event_lock,
+                            json!({"event": "tcp_admission_failed", "error": err}),
+                        );
+                        break 'accept;
+                    }
                 }
             }
         };
@@ -61,16 +72,24 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             drop(permit);
             break;
         }
-        let accepted = tokio::select! {
-            _ = stop_listener.cancelled() => {
-                drop(permit);
-                break;
+        let accepted = loop {
+            tokio::select! {
+                _ = stop_listener.cancelled() => {
+                    drop(permit);
+                    break 'accept;
+                }
+                completed = flows.join_next(), if !flows.is_empty() => {
+                    if let Some(completed) = completed {
+                        record_resident_task_completion(&mut flow_shutdown, completed);
+                    }
+                }
+                accepted = listener.accept() => break accepted,
             }
-            accepted = listener.accept() => accepted,
         };
         match accepted {
             Ok((stream, peer)) => {
                 spawn_async_tcp_flow(
+                    &mut flows,
                     stream,
                     peer,
                     Arc::clone(&router),
@@ -95,15 +114,29 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             }
         }
     }
+    let drained =
+        shutdown_resident_task_set(&mut flows, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE).await;
+    flow_shutdown.joined = flow_shutdown.joined.saturating_add(drained.joined);
+    flow_shutdown.cancelled = flow_shutdown.cancelled.saturating_add(drained.cancelled);
+    flow_shutdown.panicked = flow_shutdown.panicked.saturating_add(drained.panicked);
+    flow_shutdown.forced = flow_shutdown.forced.saturating_add(drained.forced);
     append_event(
         &event_file,
         &event_lock,
-        json!({"event": "tcp_worker_stopped"}),
+        json!({
+            "event": "tcp_worker_stopped",
+            "flowTasksJoined": flow_shutdown.joined,
+            "flowTasksCancelled": flow_shutdown.cancelled,
+            "flowTasksPanicked": flow_shutdown.panicked,
+            "flowTasksForced": flow_shutdown.forced,
+            "flowTasksPending": flows.len(),
+        }),
     );
 }
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_async_tcp_flow(
+    flows: &mut tokio::task::JoinSet<()>,
     stream: TokioTcpStream,
     peer: SocketAddr,
     router: Arc<ResidentTcpRouter>,
@@ -114,7 +147,7 @@ fn spawn_async_tcp_flow(
     admission: ResidentTcpAdmissionGuard,
 ) {
     let peer = resident_tcp_accepted_endpoint(peer);
-    tokio::spawn(async move {
+    flows.spawn(async move {
         let _admission = admission;
         match handle_tcp_connection_async_or_handoff(
             stream,

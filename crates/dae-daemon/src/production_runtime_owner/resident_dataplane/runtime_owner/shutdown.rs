@@ -10,42 +10,106 @@ struct ResidentRuntimeShutdownTasks {
     pending: Vec<ResidentRuntimeTask>,
 }
 
-pub(super) fn shutdown_resident_runtime_owner(
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentRuntimeWorkloadShutdown {
+    started: Instant,
+    grace: Duration,
+    elapsed_ns: u64,
+    task_count_started: usize,
+    async_shutdown: ResidentAsyncRuntimeShutdown,
+    thread_shutdown: ResidentRuntimeShutdownTasks,
+}
+
+pub(super) fn shutdown_resident_runtime_workloads(
     owner: &mut ResidentRuntimeOwner,
     grace: Duration,
-) -> Value {
+) -> ResidentRuntimeWorkloadShutdown {
     let started = Instant::now();
     let deadline = started.checked_add(grace).unwrap_or(started);
-    owner.stop.store(true, Ordering::Relaxed);
-    let task_count_started = owner.tasks.len().saturating_add(owner.async_tasks.len());
+    owner.workload_stop.store(true, Ordering::Release);
+    let workload_tasks = take_async_tasks(owner, ResidentRuntimeTaskRole::Workload);
+    let task_count_started = owner.tasks.len().saturating_add(workload_tasks.len());
     let async_shutdown = owner
         .data_plane_executor
-        .join_tasks(std::mem::take(&mut owner.async_tasks), deadline);
-    owner.data_plane_executor.shutdown(
-        deadline
-            .saturating_duration_since(Instant::now())
-            .min(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE),
-    );
-    let mut task_shutdown =
+        .join_tasks(workload_tasks, deadline);
+    let mut thread_shutdown =
         wait_for_runtime_tasks(std::mem::take(&mut owner.tasks), started, deadline, grace);
-    owner.tasks.append(&mut task_shutdown.pending);
-    let joined_worker_threads = task_shutdown.joined;
-    let panicked_worker_threads = task_shutdown.panicked;
-    let detached_worker_threads = task_shutdown.timed_out;
-    task_shutdown.joined = task_shutdown.joined.saturating_add(async_shutdown.joined);
-    task_shutdown.panicked = task_shutdown
+    owner.tasks.append(&mut thread_shutdown.pending);
+    ResidentRuntimeWorkloadShutdown {
+        started,
+        grace,
+        elapsed_ns: elapsed_nanos(started),
+        task_count_started,
+        async_shutdown,
+        thread_shutdown,
+    }
+}
+
+pub(super) fn shutdown_resident_runtime_owner(
+    owner: &mut ResidentRuntimeOwner,
+    workload: ResidentRuntimeWorkloadShutdown,
+    grace: Duration,
+) -> Value {
+    let ResidentRuntimeWorkloadShutdown {
+        started,
+        grace: workload_grace,
+        elapsed_ns: workload_shutdown_elapsed_ns,
+        task_count_started: workload_task_count_started,
+        async_shutdown: workload_async_shutdown,
+        thread_shutdown,
+    } = workload;
+    let transport_started = Instant::now();
+    let transport_deadline = transport_started
+        .checked_add(grace)
+        .unwrap_or(transport_started);
+    owner.transport_stop.store(true, Ordering::Release);
+    let transport_tasks = take_async_tasks(owner, ResidentRuntimeTaskRole::Transport);
+    let transport_task_count_started = transport_tasks.len();
+    let transport_async_shutdown = owner
+        .data_plane_executor
+        .join_tasks(transport_tasks, transport_deadline);
+    let transport_shutdown_elapsed_ns = elapsed_nanos(transport_started);
+    owner
+        .data_plane_executor
+        .shutdown(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
+
+    let task_count_started =
+        workload_task_count_started.saturating_add(transport_task_count_started);
+    let joined_worker_threads = thread_shutdown.joined;
+    let panicked_worker_threads = thread_shutdown.panicked;
+    let detached_worker_threads = thread_shutdown.timed_out;
+    let joined_async_tasks = workload_async_shutdown
+        .joined
+        .saturating_add(transport_async_shutdown.joined);
+    let cancelled_async_tasks = workload_async_shutdown
+        .cancelled
+        .saturating_add(transport_async_shutdown.cancelled);
+    let panicked_async_tasks = workload_async_shutdown
         .panicked
-        .saturating_add(async_shutdown.panicked);
-    task_shutdown.timed_out = task_shutdown
+        .saturating_add(transport_async_shutdown.panicked);
+    let aborted_async_tasks = workload_async_shutdown
         .timed_out
-        .saturating_add(async_shutdown.timed_out);
-    task_shutdown.results.extend(async_shutdown.results);
+        .saturating_add(transport_async_shutdown.timed_out);
+    let pending_async_tasks = workload_async_shutdown
+        .pending
+        .len()
+        .saturating_add(transport_async_shutdown.pending.len());
+    let mut task_results = thread_shutdown.results;
+    task_results.extend(workload_async_shutdown.results);
+    task_results.extend(transport_async_shutdown.results);
+    let task_count_joined = joined_worker_threads.saturating_add(joined_async_tasks);
+    let task_count_cancelled = cancelled_async_tasks;
+    let task_count_panicked = panicked_worker_threads.saturating_add(panicked_async_tasks);
+    let task_count_timed_out = detached_worker_threads.saturating_add(aborted_async_tasks);
 
     let metrics = owner.metrics.snapshot();
     let active_tcp = metrics["activeTcpConnections"].as_u64().unwrap_or(0);
     let active_udp = metrics["activeUdpSessions"].as_u64().unwrap_or(0);
     let legacy_udp_active = owner.udp_sessions_active.load(Ordering::Relaxed);
-    let event_writer = owner.event_writer.shutdown_until(deadline);
+    let event_writer_started = Instant::now();
+    let event_writer_deadline = event_writer_started
+        .checked_add(grace)
+        .unwrap_or(event_writer_started);
+    let event_writer = owner.event_writer.shutdown_until(event_writer_deadline);
     let owned_cleanup = owner.cleanup_inventory.snapshot();
     let udp_payload_admission = owner.udp_payload_admission.snapshot();
     let udp_payload_released = udp_payload_admission["currentBytes"].as_u64() == Some(0);
@@ -148,8 +212,11 @@ pub(super) fn shutdown_resident_runtime_owner(
             && vless_mux_owners["ownerStateBytesLowerBound"].as_u64() == Some(0)
             && vless_mux_owners["shutdownTimedOut"].as_bool() == Some(false));
     let shutdown_elapsed_ns = elapsed_nanos(started);
-    let shutdown_passed = task_shutdown.panicked == 0
-        && task_shutdown.timed_out == 0
+    let shutdown_safe = detached_worker_threads == 0
+        && pending_async_tasks == 0
+        && active_tcp == 0
+        && active_udp == 0
+        && legacy_udp_active == 0
         && udp_payload_released
         && hysteria2_owners_released
         && tuic_owners_released
@@ -160,26 +227,80 @@ pub(super) fn shutdown_resident_runtime_owner(
         && vless_mux_owners_released
         && owned_cleanup["status"].as_str() == Some("pass")
         && event_writer["status"].as_str() == Some("pass");
+    let graceful = shutdown_safe
+        && task_count_panicked == 0
+        && task_count_cancelled == 0
+        && task_count_timed_out == 0;
+    let completion_mode = if !shutdown_safe {
+        "incomplete"
+    } else if aborted_async_tasks > 0 {
+        "forced-bounded"
+    } else if graceful {
+        "graceful"
+    } else {
+        "completed-degraded"
+    };
 
     json!({
         "name": "stop-resident-dataplane-runtime",
-        "status": if shutdown_passed { "pass" } else { "fail" },
+        "status": if shutdown_safe { "pass" } else { "fail" },
+        "safetyStatus": if shutdown_safe { "pass" } else { "fail" },
+        "graceful": graceful,
+        "completionMode": completion_mode,
         "owner": "resident-runtime-owner",
         "reload_generation": owner.reload_generation,
         "reloadGeneration": owner.reload_generation,
         "task_count_started": task_count_started,
-        "task_count_joined": task_shutdown.joined,
-        "task_count_timed_out": task_shutdown.timed_out,
-        "task_count_aborted": async_shutdown.timed_out,
+        "task_count_joined": task_count_joined,
+        "task_count_cancelled": task_count_cancelled,
+        "task_count_timed_out": task_count_timed_out,
+        "task_count_aborted": aborted_async_tasks,
+        "task_count_pending": detached_worker_threads.saturating_add(pending_async_tasks),
         "task_count_detached": detached_worker_threads,
-        "task_count_panicked": task_shutdown.panicked,
+        "task_count_panicked": task_count_panicked,
         "task_count_join_exceeded_grace": 0,
         "join_grace_ms": duration_millis(grace),
         "joined_worker_threads": joined_worker_threads,
         "panicked_worker_threads": panicked_worker_threads,
-        "joined_async_tasks": async_shutdown.joined,
-        "panicked_async_tasks": async_shutdown.panicked,
-        "aborted_async_tasks": async_shutdown.timed_out,
+        "joined_async_tasks": joined_async_tasks,
+        "cancelled_async_tasks": cancelled_async_tasks,
+        "panicked_async_tasks": panicked_async_tasks,
+        "aborted_async_tasks": aborted_async_tasks,
+        "pending_async_tasks": pending_async_tasks,
+        "resource_release": {
+            "activeTcpConnections": active_tcp == 0,
+            "activeUdpSessions": active_udp == 0 && legacy_udp_active == 0,
+            "udpPayload": udp_payload_released,
+            "hysteria2Owners": hysteria2_owners_released,
+            "tuicOwners": tuic_owners_released,
+            "juicityOwners": juicity_owners_released,
+            "anytlsOwners": anytls_owners_released,
+            "h2CarrierOwners": h2_carrier_owners_released,
+            "meekTransportOwners": meek_transport_owners_released,
+            "vlessMuxOwners": vless_mux_owners_released,
+            "ownedCleanup": owned_cleanup["status"].as_str() == Some("pass"),
+            "eventWriter": event_writer["status"].as_str() == Some("pass"),
+        },
+        "workload_shutdown": {
+            "join_grace_ms": duration_millis(workload_grace),
+            "elapsed_ns": workload_shutdown_elapsed_ns,
+            "elapsed_ms": workload_shutdown_elapsed_ns / 1_000_000,
+            "joined": workload_async_shutdown.joined,
+            "cancelled": workload_async_shutdown.cancelled,
+            "panicked": workload_async_shutdown.panicked,
+            "forced": workload_async_shutdown.timed_out,
+            "pending": workload_async_shutdown.pending.len(),
+        },
+        "transport_shutdown": {
+            "join_grace_ms": duration_millis(grace),
+            "elapsed_ns": transport_shutdown_elapsed_ns,
+            "elapsed_ms": transport_shutdown_elapsed_ns / 1_000_000,
+            "joined": transport_async_shutdown.joined,
+            "cancelled": transport_async_shutdown.cancelled,
+            "panicked": transport_async_shutdown.panicked,
+            "forced": transport_async_shutdown.timed_out,
+            "pending": transport_async_shutdown.pending.len(),
+        },
         "active_tcp_connections_at_shutdown": active_tcp,
         "active_udp_sessions_at_shutdown": active_udp,
         "udp_sessions_active_at_shutdown": legacy_udp_active,
@@ -203,8 +324,25 @@ pub(super) fn shutdown_resident_runtime_owner(
         "event_file": Value::Null,
         "event_file_status": "disabled",
         "event_log": "product-log-sink",
-        "tasks": task_shutdown.results,
+        "tasks": task_results,
     })
+}
+
+fn take_async_tasks(
+    owner: &mut ResidentRuntimeOwner,
+    role: ResidentRuntimeTaskRole,
+) -> Vec<ResidentAsyncRuntimeTask> {
+    let mut selected = Vec::new();
+    let mut remaining = Vec::new();
+    for task in std::mem::take(&mut owner.async_tasks) {
+        if task.role == role {
+            selected.push(task);
+        } else {
+            remaining.push(task);
+        }
+    }
+    owner.async_tasks = remaining;
+    selected
 }
 
 fn wait_for_runtime_tasks(
@@ -249,6 +387,7 @@ fn wait_for_runtime_tasks(
             shutdown.results.push(json!({
                 "name": task.name,
                 "kind": task.kind,
+                "role": "workload",
                 "status": if panicked { "panicked" } else { "joined" },
                 "join_elapsed_ns": join_elapsed_ns,
                 "join_elapsed_ms": join_elapsed_ns / 1_000_000,
@@ -275,6 +414,7 @@ fn wait_for_runtime_tasks(
         shutdown.results.push(json!({
             "name": task.name,
             "kind": task.kind,
+            "role": "workload",
             "status": "timed_out",
             "join_elapsed_ns": Value::Null,
             "join_elapsed_ms": Value::Null,

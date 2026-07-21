@@ -16,9 +16,10 @@ use std::time::{Duration, Instant};
 use super::{
     AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
     Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle,
-    ResidentStopSignal, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    TuicOwnerRegistryHandle, acquire_h2_carrier, acquire_meek_transport,
-    reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
+    ResidentStopSignal, ResidentTaskSetShutdown, ResidentTransportOwnerRegistries,
+    SharedResidentStopSignal, TuicOwnerRegistryHandle, acquire_h2_carrier, acquire_meek_transport,
+    record_resident_task_completion, reset_resident_relay_idle_deadline,
+    resident_relay_idle_deadline, shutdown_resident_task_set,
 };
 
 use bytes::Bytes;

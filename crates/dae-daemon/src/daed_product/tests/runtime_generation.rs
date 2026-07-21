@@ -368,6 +368,58 @@ fn waiting_reload_coalesces_after_the_active_generation_reaches_latest_state() {
 }
 
 #[test]
+fn consecutive_generic_config_changes_do_not_leave_a_cleanup_interlock() {
+    with_product_runtime_fake_start_override(true, || {
+        let product = FreshProductState::new("consecutive-generic-config-reloads");
+        product.seed_selected_resources();
+        let config_dir = product.root().join("config");
+        let runtime = ProductRuntimeManager::new();
+        let initial = coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(&config_dir),
+            RuntimeApplyIntent::ApiReload,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+        assert!(initial.applied);
+
+        for global in [
+            "global { tproxy_port: 23456 log_level: debug }",
+            "global { tproxy_port: 23457 log_level: warn mptcp: true }",
+            "global { tproxy_port: 23458 log_level: info mptcp: false }",
+        ] {
+            product
+                .connection()
+                .execute(
+                    "UPDATE configs SET global = ?1, version = version + 1 WHERE selected = 1",
+                    [global],
+                )
+                .unwrap();
+            let applied = coordinate_runtime_reload(
+                &runtime,
+                product.state(),
+                Some(&config_dir),
+                RuntimeApplyIntent::ApiReload,
+                &[],
+                AllocatorReclaimReason::ReloadCompleted,
+            )
+            .unwrap();
+            assert!(applied.applied);
+            assert!(!applied.coalesced);
+            runtime.ensure_cleanup_allows_start().unwrap();
+            let summary = runtime.summary();
+            assert_eq!(summary["state"], json!("running"));
+            assert_eq!(summary["cleanup"]["state"], json!("done"));
+            assert_eq!(summary["cleanup"]["lastError"], Value::Null);
+        }
+
+        assert_eq!(runtime.summary()["reloadCount"], json!(4));
+    });
+}
+
+#[test]
 fn unchanged_desired_state_repairs_an_inconsistent_activation_identity() {
     with_product_runtime_fake_start_override(true, || {
         let product = FreshProductState::new("repair-inconsistent-activation-identity");

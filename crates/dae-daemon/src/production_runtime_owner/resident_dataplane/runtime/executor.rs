@@ -1,4 +1,5 @@
 use super::*;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 
 const RESIDENT_DATA_PLANE_RUNTIME_THREAD_NAME: &str = "resident-data-runtime";
 
@@ -76,46 +77,36 @@ impl ResidentDataPlaneExecutor {
         };
         runtime.block_on(async {
             let mut shutdown = ResidentAsyncRuntimeShutdown::default();
-            for mut task in tasks.drain(..) {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    task.handle.abort();
-                    shutdown.timed_out = shutdown.timed_out.saturating_add(1);
-                    shutdown.pending.push(task);
-                    continue;
-                }
-                match tokio::time::timeout(remaining, &mut task.handle).await {
-                    Ok(Ok(())) => {
-                        shutdown.joined = shutdown.joined.saturating_add(1);
-                        shutdown.results.push(json!({
-                            "name": task.name,
-                            "kind": task.kind,
-                            "status": "joined",
-                        }));
+            let abort_handles = tasks
+                .iter()
+                .map(|task| task.handle.abort_handle())
+                .collect::<Vec<_>>();
+            let mut pending = tasks
+                .drain(..)
+                .map(|mut task| async move {
+                    let result = (&mut task.handle).await;
+                    (task, result)
+                })
+                .collect::<FuturesUnordered<_>>();
+            let deadline = tokio::time::Instant::from_std(deadline);
+
+            loop {
+                match tokio::time::timeout_at(deadline, pending.next()).await {
+                    Ok(Some((task, result))) => {
+                        record_async_task_completion(&mut shutdown, task, result, false);
                     }
-                    Ok(Err(error)) => {
-                        shutdown.panicked = shutdown.panicked.saturating_add(1);
-                        shutdown.results.push(json!({
-                            "name": task.name,
-                            "kind": task.kind,
-                            "status": if error.is_cancelled() { "cancelled" } else { "panicked" },
-                            "error": error.to_string(),
-                        }));
-                    }
+                    Ok(None) => break,
                     Err(_) => {
-                        task.handle.abort();
-                        shutdown.timed_out = shutdown.timed_out.saturating_add(1);
-                        shutdown.results.push(json!({
-                            "name": task.name,
-                            "kind": task.kind,
-                            "status": "timed-out",
-                        }));
-                        shutdown.pending.push(task);
+                        shutdown.timed_out = shutdown.timed_out.saturating_add(pending.len());
+                        for handle in &abort_handles {
+                            handle.abort();
+                        }
+                        while let Some((task, result)) = pending.next().await {
+                            record_async_task_completion(&mut shutdown, task, result, true);
+                        }
+                        break;
                     }
                 }
-            }
-            for mut task in shutdown.pending.drain(..) {
-                let _ = tokio::time::timeout(Duration::from_millis(1), &mut task.handle).await;
             }
             shutdown
         })
@@ -125,6 +116,97 @@ impl ResidentDataPlaneExecutor {
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown_timeout(timeout);
         }
+    }
+}
+
+fn record_async_task_completion(
+    shutdown: &mut ResidentAsyncRuntimeShutdown,
+    task: ResidentAsyncRuntimeTask,
+    result: Result<(), tokio::task::JoinError>,
+    forced: bool,
+) {
+    let role = task.role.name();
+    match result {
+        Ok(()) => {
+            shutdown.joined = shutdown.joined.saturating_add(1);
+            shutdown.results.push(json!({
+                "name": task.name,
+                "kind": task.kind,
+                "role": role,
+                "status": "joined",
+                "forced": forced,
+            }));
+        }
+        Err(error) if error.is_cancelled() => {
+            shutdown.cancelled = shutdown.cancelled.saturating_add(1);
+            shutdown.results.push(json!({
+                "name": task.name,
+                "kind": task.kind,
+                "role": role,
+                "status": if forced { "aborted" } else { "cancelled" },
+                "forced": forced,
+                "error": error.to_string(),
+            }));
+        }
+        Err(error) => {
+            shutdown.panicked = shutdown.panicked.saturating_add(1);
+            shutdown.results.push(json!({
+                "name": task.name,
+                "kind": task.kind,
+                "role": role,
+                "status": "panicked",
+                "forced": forced,
+                "error": error.to_string(),
+            }));
+        }
+    }
+}
+
+#[derive(Default)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentTaskSetShutdown {
+    pub(in crate::production_runtime_owner::resident_dataplane) joined: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) cancelled: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) panicked: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) forced: usize,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown_resident_task_set<
+    T: 'static,
+>(
+    tasks: &mut tokio::task::JoinSet<T>,
+    grace: Duration,
+) -> ResidentTaskSetShutdown {
+    let mut shutdown = ResidentTaskSetShutdown::default();
+    let deadline = tokio::time::Instant::now() + grace;
+    while !tasks.is_empty() {
+        match tokio::time::timeout_at(deadline, tasks.join_next()).await {
+            Ok(Some(completed)) => record_resident_task_completion(&mut shutdown, completed),
+            Ok(None) => break,
+            Err(_) => {
+                shutdown.forced = shutdown.forced.saturating_add(tasks.len());
+                tasks.abort_all();
+                while let Some(completed) = tasks.join_next().await {
+                    record_resident_task_completion(&mut shutdown, completed);
+                }
+                break;
+            }
+        }
+    }
+    shutdown
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) fn record_resident_task_completion<
+    T,
+>(
+    shutdown: &mut ResidentTaskSetShutdown,
+    completed: Result<T, tokio::task::JoinError>,
+) {
+    match completed {
+        Ok(_) => shutdown.joined = shutdown.joined.saturating_add(1),
+        Err(error) if error.is_cancelled() => {
+            shutdown.cancelled = shutdown.cancelled.saturating_add(1);
+        }
+        Err(_) => shutdown.panicked = shutdown.panicked.saturating_add(1),
     }
 }
 
@@ -155,5 +237,93 @@ mod tests {
                 >= RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN as u64
         );
         executor.shutdown(Duration::from_millis(100));
+    }
+
+    #[test]
+    fn shared_executor_joins_ready_tasks_without_vec_order_head_of_line_blocking() {
+        let config = Config {
+            global: dae_config::Global::default(),
+            subscription: Vec::new(),
+            node: Vec::new(),
+            group: Vec::new(),
+            routing: dae_config::Routing::default(),
+            dns: dae_config::Dns::default(),
+        };
+        let resources = ResidentRuntimeResourceConfig::from_config(&config);
+        let mut executor = ResidentDataPlaneExecutor::new(&resources).unwrap();
+        let runtime = executor.handle();
+        let tasks = vec![
+            registered_resident_async_runtime_task(
+                "blocked",
+                "test",
+                ResidentRuntimeTaskRole::Workload,
+                runtime.spawn(std::future::pending()),
+            ),
+            registered_resident_async_runtime_task(
+                "ready",
+                "test",
+                ResidentRuntimeTaskRole::Workload,
+                runtime.spawn(async {}),
+            ),
+        ];
+
+        let shutdown = executor.join_tasks(tasks, Instant::now() + Duration::from_millis(25));
+
+        assert_eq!(shutdown.joined, 1);
+        assert_eq!(shutdown.cancelled, 1);
+        assert_eq!(shutdown.panicked, 0);
+        assert_eq!(shutdown.timed_out, 1);
+        assert!(shutdown.pending.is_empty());
+        assert!(
+            shutdown
+                .results
+                .iter()
+                .any(|result| { result["name"] == "ready" && result["status"] == "joined" })
+        );
+        executor.shutdown(Duration::from_millis(100));
+    }
+
+    #[test]
+    fn shared_executor_reports_pre_cancelled_task_without_panic() {
+        let config = Config {
+            global: dae_config::Global::default(),
+            subscription: Vec::new(),
+            node: Vec::new(),
+            group: Vec::new(),
+            routing: dae_config::Routing::default(),
+            dns: dae_config::Dns::default(),
+        };
+        let resources = ResidentRuntimeResourceConfig::from_config(&config);
+        let mut executor = ResidentDataPlaneExecutor::new(&resources).unwrap();
+        let handle = executor.handle().spawn(std::future::pending());
+        handle.abort();
+        let task = registered_resident_async_runtime_task(
+            "cancelled",
+            "test",
+            ResidentRuntimeTaskRole::Workload,
+            handle,
+        );
+
+        let shutdown = executor.join_tasks(vec![task], Instant::now() + Duration::from_millis(100));
+
+        assert_eq!(shutdown.cancelled, 1);
+        assert_eq!(shutdown.panicked, 0);
+        assert_eq!(shutdown.timed_out, 0);
+        executor.shutdown(Duration::from_millis(100));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn task_set_shutdown_reaps_ready_and_forces_only_remaining_tasks() {
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(async {});
+        tasks.spawn(std::future::pending());
+
+        let shutdown = shutdown_resident_task_set(&mut tasks, Duration::from_millis(20)).await;
+
+        assert_eq!(shutdown.joined, 1);
+        assert_eq!(shutdown.cancelled, 1);
+        assert_eq!(shutdown.panicked, 0);
+        assert_eq!(shutdown.forced, 1);
+        assert!(tasks.is_empty());
     }
 }
