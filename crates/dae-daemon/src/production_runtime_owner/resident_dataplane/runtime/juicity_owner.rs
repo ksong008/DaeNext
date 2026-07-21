@@ -14,8 +14,9 @@ use tokio::time;
 use super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::resource_profile::JuicityOwnerResourceProfile;
 use super::tcp::{
-    ObservedQuicEndpoint, QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
-    open_juicity_quic_connection_candidates_async, wait_quic_endpoint_idle_after_close,
+    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointDrainReport,
+    ResidentConnectedQuicEndpoint, open_juicity_quic_connection_candidates_async,
+    wait_quic_endpoint_idle_after_close, wait_quic_endpoints_idle_until,
 };
 use super::{RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal};
 
@@ -81,6 +82,9 @@ struct JuicityOwnerMetrics {
     retry_cooldown_rejections: AtomicU64,
     remote_closes: AtomicU64,
     shutdown_timed_out: AtomicBool,
+    endpoint_drain_requested: AtomicUsize,
+    endpoint_drain_completed: AtomicUsize,
+    endpoint_drain_timed_out: AtomicUsize,
 }
 
 impl JuicityOwnerMetrics {
@@ -133,6 +137,95 @@ impl JuicityOwnerMetrics {
 
     fn waiter_removed(&self) {
         self.active_waiters.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn begin_endpoint_drain(&self, requested: usize) {
+        self.endpoint_drain_requested
+            .store(requested, Ordering::Release);
+        self.endpoint_drain_completed.store(0, Ordering::Release);
+        self.endpoint_drain_timed_out.store(0, Ordering::Release);
+    }
+
+    fn finish_endpoint_drain(&self, report: QuicEndpointDrainReport) {
+        self.endpoint_drain_requested
+            .store(report.requested(), Ordering::Release);
+        self.endpoint_drain_completed
+            .store(report.completed(), Ordering::Release);
+        self.endpoint_drain_timed_out
+            .store(report.timed_out(), Ordering::Release);
+        if !report.is_complete() {
+            self.shutdown_timed_out.store(true, Ordering::Release);
+        }
+    }
+}
+
+struct JuicityRegistryOwnershipReconciler {
+    metrics: Arc<JuicityOwnerMetrics>,
+    shutdown_finished: bool,
+}
+
+impl JuicityRegistryOwnershipReconciler {
+    fn new(metrics: Arc<JuicityOwnerMetrics>) -> Self {
+        Self {
+            metrics,
+            shutdown_finished: false,
+        }
+    }
+
+    fn finish_shutdown(&mut self) {
+        self.shutdown_finished = true;
+    }
+}
+
+impl Drop for JuicityRegistryOwnershipReconciler {
+    fn drop(&mut self) {
+        self.metrics.active_pools.store(0, Ordering::Release);
+        self.metrics
+            .active_physical_owners
+            .store(0, Ordering::Release);
+        self.metrics.active_builds.store(0, Ordering::Release);
+        self.metrics.active_waiters.store(0, Ordering::Release);
+        if !self.shutdown_finished {
+            self.metrics
+                .shutdown_timed_out
+                .store(true, Ordering::Release);
+        }
+    }
+}
+
+struct JuicityEndpointDrainGuard {
+    metrics: Arc<JuicityOwnerMetrics>,
+    requested: usize,
+    finished: bool,
+}
+
+impl JuicityEndpointDrainGuard {
+    fn new(metrics: Arc<JuicityOwnerMetrics>, requested: usize) -> Self {
+        metrics.begin_endpoint_drain(requested);
+        Self {
+            metrics,
+            requested,
+            finished: false,
+        }
+    }
+
+    fn finish(mut self, report: QuicEndpointDrainReport) {
+        self.metrics.finish_endpoint_drain(report);
+        self.finished = true;
+    }
+}
+
+impl Drop for JuicityEndpointDrainGuard {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.metrics
+            .endpoint_drain_timed_out
+            .store(self.requested, Ordering::Release);
+        self.metrics
+            .shutdown_timed_out
+            .store(true, Ordering::Release);
     }
 }
 
@@ -225,12 +318,18 @@ struct JuicityOwnedTransport {
 }
 
 impl JuicityOwnedTransport {
-    async fn close(mut self) {
-        let _ = self.auth_stream.finish().await;
+    fn begin_close(mut self) -> ObservedQuicEndpoint {
+        let _ = self.auth_stream.request_finish();
         self.shared
             .connection
             .close(0_u32.into(), b"juicity owner stopped");
-        wait_quic_endpoint_idle_after_close(&self.endpoint).await;
+        self.endpoint.close(0_u32.into(), b"juicity owner stopped");
+        self.endpoint
+    }
+
+    async fn close(self) {
+        let endpoint = self.begin_close();
+        wait_quic_endpoint_idle_after_close(&endpoint).await;
     }
 }
 
@@ -352,6 +451,15 @@ impl JuicityOwnerRegistryHandle {
             "waiterLimitRejections": self.metrics.waiter_limit_rejections.load(Ordering::Relaxed),
             "retryCooldownRejections": self.metrics.retry_cooldown_rejections.load(Ordering::Relaxed),
             "remoteCloses": self.metrics.remote_closes.load(Ordering::Relaxed),
+            "registryOwnershipReleased": self.metrics.active_pools.load(Ordering::Acquire) == 0
+                && self.metrics.active_physical_owners.load(Ordering::Acquire) == 0
+                && self.metrics.active_builds.load(Ordering::Acquire) == 0
+                && self.metrics.active_waiters.load(Ordering::Acquire) == 0,
+            "endpointDrain": {
+                "requested": self.metrics.endpoint_drain_requested.load(Ordering::Acquire),
+                "completed": self.metrics.endpoint_drain_completed.load(Ordering::Acquire),
+                "timedOut": self.metrics.endpoint_drain_timed_out.load(Ordering::Acquire),
+            },
             "shutdownTimedOut": self.metrics.shutdown_timed_out.load(Ordering::Relaxed),
             "budget": {
                 "physicalOwners": self.resources.owner_limit(),
@@ -452,6 +560,7 @@ async fn run_juicity_owner_registry(
     metrics: Arc<JuicityOwnerMetrics>,
     stop: SharedResidentStopSignal,
 ) {
+    let mut ownership_reconciler = JuicityRegistryOwnershipReconciler::new(Arc::clone(&metrics));
     let mut pools = HashMap::<JuicityOwnerKey, JuicityOwnerPool>::new();
     let mut cooldowns = VecDeque::<(JuicityOwnerKey, Instant)>::new();
     let mut tasks = JoinSet::<JuicityOwnerTaskCompletion>::new();
@@ -524,22 +633,20 @@ async fn run_juicity_owner_registry(
                 .send(Err("Juicity owner registry is draining".to_owned()));
         }
     }
-    let close_all = async {
-        for (_, mut pool) in pools.drain() {
-            while let Some(transport) = pool.transports.pop() {
-                metrics.physical_owner_closed();
-                transport.close().await;
-            }
-            metrics.pool_closed();
+    let mut endpoints = Vec::with_capacity(physical_slots);
+    for (_, mut pool) in pools.drain() {
+        while let Some(transport) = pool.transports.pop() {
+            metrics.physical_owner_closed();
+            endpoints.push(transport.begin_close());
         }
-    };
-    if time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, close_all)
-        .await
-        .is_err()
-    {
-        metrics.shutdown_timed_out.store(true, Ordering::Relaxed);
+        metrics.pool_closed();
     }
     metrics.active_builds.store(0, Ordering::Relaxed);
+    let drain_guard = JuicityEndpointDrainGuard::new(Arc::clone(&metrics), endpoints.len());
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    let report = wait_quic_endpoints_idle_until(endpoints, deadline).await;
+    drain_guard.finish(report);
+    ownership_reconciler.finish_shutdown();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -851,4 +958,28 @@ async fn build_juicity_transport(
         endpoint,
         auth_stream,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unfinished_registry_drop_reconciles_accounting_and_marks_shutdown_incomplete() {
+        let metrics = Arc::new(JuicityOwnerMetrics::default());
+        metrics.active_pools.store(1, Ordering::Release);
+        metrics.active_physical_owners.store(2, Ordering::Release);
+        metrics.active_builds.store(1, Ordering::Release);
+        metrics.active_waiters.store(3, Ordering::Release);
+
+        drop(JuicityRegistryOwnershipReconciler::new(Arc::clone(
+            &metrics,
+        )));
+
+        assert_eq!(metrics.active_pools.load(Ordering::Acquire), 0);
+        assert_eq!(metrics.active_physical_owners.load(Ordering::Acquire), 0);
+        assert_eq!(metrics.active_builds.load(Ordering::Acquire), 0);
+        assert_eq!(metrics.active_waiters.load(Ordering::Acquire), 0);
+        assert!(metrics.shutdown_timed_out.load(Ordering::Acquire));
+    }
 }

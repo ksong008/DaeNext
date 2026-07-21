@@ -26,8 +26,9 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
     ResidentProxyPlan, ResidentProxyProtocolPlan,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::{
-    ObservedQuicEndpoint, QuicEndpointCallerClass, ResidentConnectedQuicEndpoint,
-    open_tuic_quic_connection_candidates_async, wait_quic_endpoint_idle_after_close,
+    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointDrainReport,
+    ResidentConnectedQuicEndpoint, open_tuic_quic_connection_candidates_async,
+    wait_quic_endpoint_idle_after_close, wait_quic_endpoints_idle_until,
 };
 
 const TUIC_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/tuic-owner/v1";
@@ -120,6 +121,9 @@ struct TuicOwnerRegistryMetrics {
     heartbeat_commands: AtomicU64,
     heartbeat_failures: AtomicU64,
     shutdown_timed_out: AtomicBool,
+    endpoint_drain_requested: AtomicUsize,
+    endpoint_drain_completed: AtomicUsize,
+    endpoint_drain_timed_out: AtomicUsize,
 }
 
 impl TuicOwnerRegistryMetrics {
@@ -172,6 +176,108 @@ impl TuicOwnerRegistryMetrics {
 
     fn queued_bytes_released(&self, bytes: usize) {
         subtract_count(&self.current_udp_queued_bytes, bytes);
+    }
+
+    fn begin_endpoint_drain(&self, requested: usize) {
+        self.endpoint_drain_requested
+            .store(requested, Ordering::Release);
+        self.endpoint_drain_completed.store(0, Ordering::Release);
+        self.endpoint_drain_timed_out.store(0, Ordering::Release);
+    }
+
+    fn finish_endpoint_drain(&self, report: QuicEndpointDrainReport) {
+        self.endpoint_drain_requested
+            .store(report.requested(), Ordering::Release);
+        self.endpoint_drain_completed
+            .store(report.completed(), Ordering::Release);
+        self.endpoint_drain_timed_out
+            .store(report.timed_out(), Ordering::Release);
+        if !report.is_complete() {
+            self.shutdown_timed_out.store(true, Ordering::Release);
+        }
+    }
+}
+
+struct TuicRegistryOwnershipReconciler {
+    metrics: Arc<TuicOwnerRegistryMetrics>,
+    index: Arc<Mutex<TuicOwnerIndex>>,
+    shutdown_finished: bool,
+}
+
+impl TuicRegistryOwnershipReconciler {
+    fn new(metrics: Arc<TuicOwnerRegistryMetrics>, index: Arc<Mutex<TuicOwnerIndex>>) -> Self {
+        Self {
+            metrics,
+            index,
+            shutdown_finished: false,
+        }
+    }
+
+    fn finish_shutdown(&mut self) {
+        self.shutdown_finished = true;
+    }
+}
+
+impl Drop for TuicRegistryOwnershipReconciler {
+    fn drop(&mut self) {
+        let cells = {
+            let mut index = self
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            index.draining = true;
+            index
+                .cells
+                .drain()
+                .map(|(_, cell)| cell)
+                .collect::<Vec<_>>()
+        };
+        for cell in cells {
+            cell.begin_drain(OwnerDrainReason::Shutdown);
+            cell.close();
+        }
+        self.metrics.active_owners.store(0, Ordering::Release);
+        if !self.shutdown_finished {
+            self.metrics
+                .shutdown_timed_out
+                .store(true, Ordering::Release);
+        }
+    }
+}
+
+struct TuicEndpointDrainGuard {
+    metrics: Arc<TuicOwnerRegistryMetrics>,
+    requested: usize,
+    finished: bool,
+}
+
+impl TuicEndpointDrainGuard {
+    fn new(metrics: Arc<TuicOwnerRegistryMetrics>, requested: usize) -> Self {
+        metrics.begin_endpoint_drain(requested);
+        Self {
+            metrics,
+            requested,
+            finished: false,
+        }
+    }
+
+    fn finish(mut self, report: QuicEndpointDrainReport) {
+        self.metrics.finish_endpoint_drain(report);
+        self.finished = true;
+    }
+}
+
+impl Drop for TuicEndpointDrainGuard {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.metrics
+            .endpoint_drain_timed_out
+            .store(self.requested, Ordering::Release);
+        self.metrics
+            .shutdown_timed_out
+            .store(true, Ordering::Release);
     }
 }
 
@@ -605,13 +711,18 @@ impl TuicSharedTransport {
         self.congestion
     }
 
-    async fn close(&self) {
+    fn begin_close(&self) -> ObservedQuicEndpoint {
         self.udp_associations.close();
         self.connection
             .close(0_u32.into(), b"resident tuic owner draining");
         self.endpoint
             .close(0_u32.into(), b"resident tuic owner draining");
-        wait_quic_endpoint_idle_after_close(&self.endpoint).await;
+        self.endpoint.clone()
+    }
+
+    async fn close(&self) {
+        let endpoint = self.begin_close();
+        wait_quic_endpoint_idle_after_close(&endpoint).await;
     }
 }
 
@@ -897,6 +1008,12 @@ impl TuicOwnerRegistryHandle {
             "dissociateFailures": self.metrics.dissociate_failures.load(Ordering::Relaxed),
             "heartbeatCommands": self.metrics.heartbeat_commands.load(Ordering::Relaxed),
             "heartbeatFailures": self.metrics.heartbeat_failures.load(Ordering::Relaxed),
+            "registryOwnershipReleased": self.metrics.active_owners.load(Ordering::Acquire) == 0,
+            "endpointDrain": {
+                "requested": self.metrics.endpoint_drain_requested.load(Ordering::Acquire),
+                "completed": self.metrics.endpoint_drain_completed.load(Ordering::Acquire),
+                "timedOut": self.metrics.endpoint_drain_timed_out.load(Ordering::Acquire),
+            },
             "shutdownTimedOut": self.metrics.shutdown_timed_out.load(Ordering::Relaxed),
             "budget": {
                 "owners": self.resources.owner_limit(),
@@ -1039,6 +1156,8 @@ async fn run_tuic_owner_registry(
     metrics: Arc<TuicOwnerRegistryMetrics>,
     stop: SharedResidentStopSignal,
 ) {
+    let mut ownership_reconciler =
+        TuicRegistryOwnershipReconciler::new(Arc::clone(&metrics), Arc::clone(&index));
     let mut tasks = JoinSet::new();
     let mut owners = HashMap::<TuicOwnerKey, TuicOwnedTransport>::new();
     let mut stop_listener = stop.listener();
@@ -1069,13 +1188,14 @@ async fn run_tuic_owner_registry(
                             let leases = Arc::clone(&owner.shared.leases);
                             let associations = Arc::clone(&owner.shared.udp_associations);
                             let control_metrics = Arc::clone(&metrics);
-                            if let Some(previous) = owners.insert(completion.key, owner) {
+                            let previous = owners.insert(completion.key, owner);
+                            metrics.owner_opened();
+                            if let Some(previous) = previous {
                                 previous.cell.begin_drain(OwnerDrainReason::Fault);
+                                metrics.owner_closed();
                                 previous.shared.close().await;
                                 previous.cell.close();
-                                metrics.owner_closed();
                             }
-                            metrics.owner_opened();
                             let read_connection = connection.clone();
                             tasks.spawn(async move {
                                 TuicRegistryTaskCompletion::Transport(
@@ -1160,28 +1280,28 @@ async fn run_tuic_owner_registry(
     let cells = {
         let mut index = index.lock().unwrap();
         index.draining = true;
-        index.cells.values().cloned().collect::<Vec<_>>()
+        let cells = index.cells.values().cloned().collect::<Vec<_>>();
+        index.cells.clear();
+        cells
     };
     for cell in &cells {
         cell.begin_drain(OwnerDrainReason::Shutdown);
     }
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
-    let close_all = async {
-        for (_, owner) in owners.drain() {
-            owner.shared.close().await;
-            metrics.owner_closed();
-        }
-    };
-    if time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, close_all)
-        .await
-        .is_err()
-    {
-        metrics.shutdown_timed_out.store(true, Ordering::Relaxed);
+    let mut endpoints = Vec::with_capacity(owners.len());
+    for (_, owner) in owners.drain() {
+        endpoints.push(owner.shared.begin_close());
+        metrics.owner_closed();
     }
     for cell in cells {
         cell.close();
     }
+    let drain_guard = TuicEndpointDrainGuard::new(Arc::clone(&metrics), endpoints.len());
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    let report = wait_quic_endpoints_idle_until(endpoints, deadline).await;
+    drain_guard.finish(report);
+    ownership_reconciler.finish_shutdown();
 }
 
 async fn retire_tuic_owner(
@@ -1211,9 +1331,9 @@ async fn retire_tuic_owner(
         }
     }
     owner.cell.begin_drain(OwnerDrainReason::Fault);
+    metrics.owner_closed();
     owner.shared.close().await;
     owner.cell.close();
-    metrics.owner_closed();
 }
 
 async fn wait_tuic_transport_event(
@@ -1483,6 +1603,36 @@ async fn build_tuic_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unfinished_registry_drop_closes_cells_and_marks_shutdown_incomplete() {
+        let metrics = Arc::new(TuicOwnerRegistryMetrics::default());
+        metrics.owner_opened();
+        let index = Arc::new(Mutex::new(TuicOwnerIndex::new()));
+        let cell = Arc::new(TuicOwnerCell::new());
+        index.lock().unwrap().cells.insert(
+            TuicOwnerKey {
+                generation: OwnerGeneration::new(70),
+                digest: [0_u8; 32],
+            },
+            Arc::clone(&cell),
+        );
+
+        drop(TuicRegistryOwnershipReconciler::new(
+            Arc::clone(&metrics),
+            Arc::clone(&index),
+        ));
+
+        let index = index.lock().unwrap();
+        assert!(index.draining);
+        assert!(index.cells.is_empty());
+        assert_eq!(
+            cell.snapshot().state,
+            dae_runtime_control::PhysicalOwnerState::Closed
+        );
+        assert_eq!(metrics.active_owners.load(Ordering::Acquire), 0);
+        assert!(metrics.shutdown_timed_out.load(Ordering::Acquire));
+    }
 
     #[test]
     fn association_allocator_skips_active_and_quarantined_ids() {

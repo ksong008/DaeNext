@@ -119,11 +119,13 @@ pub(super) fn shutdown_resident_runtime_owner(
         .map(Hysteria2OwnerRegistryHandle::metrics_snapshot)
         .unwrap_or(Value::Null);
     let hysteria2_owners_released = hysteria2_owners.is_null()
-        || (hysteria2_owners["activeOwners"].as_u64() == Some(0)
+        || (hysteria2_owners["registeredKeys"].as_u64() == Some(0)
+            && hysteria2_owners["activeOwners"].as_u64() == Some(0)
             && hysteria2_owners["activeLogicalLeases"].as_u64() == Some(0)
             && hysteria2_owners["activeUdpSessions"].as_u64() == Some(0)
             && hysteria2_owners["currentUdpQueuedBytes"].as_u64() == Some(0)
             && hysteria2_owners["activeUdpSessionQuarantine"].as_u64() == Some(0)
+            && hysteria2_owners["registryOwnershipReleased"].as_bool() == Some(true)
             && hysteria2_owners["shutdownTimedOut"].as_bool() == Some(false));
     let tuic_owners = owner
         .tuic_owner_registry
@@ -131,11 +133,13 @@ pub(super) fn shutdown_resident_runtime_owner(
         .map(TuicOwnerRegistryHandle::metrics_snapshot)
         .unwrap_or(Value::Null);
     let tuic_owners_released = tuic_owners.is_null()
-        || (tuic_owners["activeOwners"].as_u64() == Some(0)
+        || (tuic_owners["registeredKeys"].as_u64() == Some(0)
+            && tuic_owners["activeOwners"].as_u64() == Some(0)
             && tuic_owners["activeLogicalLeases"].as_u64() == Some(0)
             && tuic_owners["activeUdpAssociations"].as_u64() == Some(0)
             && tuic_owners["currentUdpQueuedBytes"].as_u64() == Some(0)
             && tuic_owners["activeAssociationQuarantine"].as_u64() == Some(0)
+            && tuic_owners["registryOwnershipReleased"].as_bool() == Some(true)
             && tuic_owners["shutdownTimedOut"].as_bool() == Some(false));
     let juicity_owners = owner
         .juicity_owner_registry
@@ -147,6 +151,8 @@ pub(super) fn shutdown_resident_runtime_owner(
             && juicity_owners["activePhysicalOwners"].as_u64() == Some(0)
             && juicity_owners["activeBuilds"].as_u64() == Some(0)
             && juicity_owners["activeLogicalLeases"].as_u64() == Some(0)
+            && juicity_owners["activeWaiters"].as_u64() == Some(0)
+            && juicity_owners["registryOwnershipReleased"].as_bool() == Some(true)
             && juicity_owners["shutdownTimedOut"].as_bool() == Some(false));
     let anytls_owners = owner
         .anytls_owner_registry

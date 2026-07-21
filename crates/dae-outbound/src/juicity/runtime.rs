@@ -29,10 +29,14 @@ pub struct JuicityAuthStream {
 }
 
 impl JuicityAuthStream {
-    pub async fn finish(&mut self) -> Result<(), OutboundError> {
+    pub fn request_finish(&mut self) -> Result<(), OutboundError> {
         self.stream
             .finish()
             .map_err(|err| bad_runtime(format!("finish Juicity auth stream: {err}")))
+    }
+
+    pub async fn finish(&mut self) -> Result<(), OutboundError> {
+        self.request_finish()
     }
 }
 

@@ -284,6 +284,52 @@ pub(crate) fn stuck_runtime_thread_cleanup_prevents_replacement_publication() {
 }
 
 #[test]
+pub(crate) fn owner_cleanup_failure_keeps_bounded_protocol_diagnostics() {
+    let manager = ProductRuntimeManager::new();
+    let report = json!({
+        "status": "fail",
+        "cleanup_step_failed": true,
+        "cleanup_steps": [{
+            "name": "stop-resident-dataplane-runtime",
+            "status": "fail",
+            "resource_release": {
+                "hysteria2Owners": false,
+                "tuicOwners": true,
+                "juicityOwners": true
+            },
+            "hysteria2_owners": {
+                "registeredKeys": 0,
+                "activeOwners": 0,
+                "activeLogicalLeases": 0,
+                "activeUdpSessions": 0,
+                "currentUdpQueuedBytes": 0,
+                "activeUdpSessionQuarantine": 0,
+                "registryOwnershipReleased": true,
+                "endpointDrain": {"requested": 14, "completed": 13, "timedOut": 1},
+                "shutdownTimedOut": true,
+                "capabilityLedger": {"entries": ["must-not-be-copied"]}
+            }
+        }],
+        "loaded_map_cleaned": true,
+        "cleanup_command_timed_out": false,
+        "leftovers_after_cleanup": [],
+        "sys_fs_bpf_dae_mutated": false,
+    });
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.cleanup.begin(10, "reload-replace");
+        inner.cleanup.finish(Some(report));
+    }
+
+    let error = manager.ensure_cleanup_allows_start().unwrap_err();
+    assert!(error.contains("ownerReleaseDetails"));
+    assert!(error.contains("registryOwnershipReleased"));
+    assert!(error.contains("endpointDrain"));
+    assert!(error.contains("\"timedOut\":1"));
+    assert!(!error.contains("must-not-be-copied"));
+}
+
+#[test]
 pub(crate) fn forced_bounded_cleanup_without_residuals_does_not_latch_interlock() {
     let manager = ProductRuntimeManager::new();
     {

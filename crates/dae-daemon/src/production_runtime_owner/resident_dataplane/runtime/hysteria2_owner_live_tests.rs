@@ -707,6 +707,7 @@ async fn five_owner_reload_cycles_return_endpoint_resources_to_zero() {
             stop_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE
         );
         let owner_snapshot = registry.metrics_snapshot();
+        assert_eq!(owner_snapshot["registeredKeys"], 0);
         assert_eq!(owner_snapshot["activeOwners"], 0);
         assert_eq!(owner_snapshot["activeLogicalLeases"], 0);
         assert_eq!(owner_snapshot["activeUdpSessions"], 0);
@@ -716,6 +717,86 @@ async fn five_owner_reload_cycles_return_endpoint_resources_to_zero() {
     }
     assert_eq!(server.auth_count.load(Ordering::Relaxed), 5);
     assert_eq!(server.connection_count.load(Ordering::Relaxed), 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_owner_shutdown_drains_endpoints_concurrently_and_reconciles_ownership() {
+    let server = Hysteria2OwnerTestServer::start().await;
+    let generation = 9_914;
+    let stop = ResidentStopSignal::shared();
+    let (registry, owner_thread) = start_hysteria2_owner_registry(
+        generation,
+        Arc::clone(&stop),
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+    )
+    .unwrap();
+    let mut leases = Vec::new();
+    let first_proxy = owner_test_proxy_for_authority(
+        &server.address.to_string(),
+        generation,
+        "owner-test-auth-0",
+    );
+    leases.push(
+        registry
+            .acquire(
+                first_proxy,
+                QuicEndpointCallerClass::BackgroundHealth,
+                owner_deadline(),
+            )
+            .await
+            .unwrap(),
+    );
+    let endpoint = quic_endpoint_metrics_snapshot(generation);
+    let endpoint_admission_charge = endpoint["endpoints"][0]["admissionChargedBytes"]
+        .as_u64()
+        .unwrap() as usize;
+    let admission_owner_limit = endpoint["admission"]["budget"]["maxActiveOwners"]
+        .as_u64()
+        .unwrap() as usize;
+    let admission_byte_limit = endpoint["admission"]["budget"]["maxChargedBytes"]
+        .as_u64()
+        .unwrap() as usize;
+    let endpoint_capacity = registry
+        .resources
+        .owner_limit()
+        .min(admission_owner_limit)
+        .min(admission_byte_limit / endpoint_admission_charge);
+    let owner_count = endpoint_capacity.div_ceil(2);
+    assert!(owner_count > 1);
+    leases.reserve(owner_count.saturating_sub(1));
+    for index in 1..owner_count {
+        let proxy = owner_test_proxy_for_authority(
+            &server.address.to_string(),
+            generation,
+            &format!("owner-test-auth-{index}"),
+        );
+        leases.push(
+            registry
+                .acquire(
+                    proxy,
+                    QuicEndpointCallerClass::BackgroundHealth,
+                    owner_deadline(),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    wait_until(|| registry.metrics_snapshot()["activeOwners"] == owner_count).await;
+    drop(leases);
+
+    assert!(stop_owner_registry(stop, owner_thread).await < Duration::from_secs(2));
+    let owner = registry.metrics_snapshot();
+    assert_eq!(owner["registeredKeys"], 0);
+    assert_eq!(owner["activeOwners"], 0);
+    assert_eq!(owner["activeLogicalLeases"], 0);
+    assert_eq!(owner["registryOwnershipReleased"], true);
+    assert_eq!(owner["endpointDrain"]["requested"], owner_count);
+    assert_eq!(owner["endpointDrain"]["completed"], owner_count);
+    assert_eq!(owner["endpointDrain"]["timedOut"], 0);
+    assert_eq!(owner["shutdownTimedOut"], false);
+    let endpoints = quic_endpoint_metrics_snapshot(generation);
+    assert_eq!(endpoints["liveStates"]["total"], 0);
+    assert_eq!(endpoints["endpointDriverTasks"]["live"], 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

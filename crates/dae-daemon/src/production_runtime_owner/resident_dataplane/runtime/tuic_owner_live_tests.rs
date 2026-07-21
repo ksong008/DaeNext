@@ -301,11 +301,18 @@ async fn stop_tuic_owner_registry(
 
 fn assert_tuic_owner_resources_released(registry: &TuicOwnerRegistryHandle, generation: u64) {
     let owner = registry.metrics_snapshot();
+    assert_eq!(owner["registeredKeys"], 0);
     assert_eq!(owner["activeOwners"], 0);
     assert_eq!(owner["activeLogicalLeases"], 0);
     assert_eq!(owner["activeUdpAssociations"], 0);
     assert_eq!(owner["currentUdpQueuedBytes"], 0);
     assert_eq!(owner["activeAssociationQuarantine"], 0);
+    assert_eq!(owner["registryOwnershipReleased"], true);
+    assert_eq!(
+        owner["endpointDrain"]["completed"],
+        owner["endpointDrain"]["requested"]
+    );
+    assert_eq!(owner["endpointDrain"]["timedOut"], 0);
     assert_eq!(owner["shutdownTimedOut"], false);
     let endpoint = quic_endpoint_metrics_snapshot(generation);
     assert_eq!(endpoint["liveStates"]["total"], 0);

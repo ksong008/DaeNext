@@ -274,10 +274,20 @@ fn handle_local_control_reload(app: &AppState) -> Value {
     }
     let reload_started_at = Instant::now();
     if !app.runtime.is_running() {
+        if app.runtime.runtime_required_for_readiness() {
+            return json!({
+                "ok": false,
+                "applied": false,
+                "skipped": false,
+                "runtimeRequired": true,
+                "error": "runtime is required but not running",
+            });
+        }
         return json!({
             "ok": true,
             "applied": false,
             "skipped": true,
+            "runtimeRequired": false,
             "reason": "runtime is stopped",
         });
     }
@@ -554,9 +564,21 @@ mod tests {
         assert!(serde_json::to_vec(&status).unwrap().len() < 1024);
 
         let response = handle_local_control_reload(&app);
+        assert_eq!(response["ok"], json!(false));
+        assert_eq!(response["applied"], json!(false));
+        assert_eq!(response["skipped"], json!(false));
+        assert_eq!(response["runtimeRequired"], json!(true));
+        assert_eq!(
+            response["error"],
+            json!("runtime is required but not running")
+        );
+
+        app.runtime.set_runtime_required_for_readiness(false);
+        let response = handle_local_control_reload(&app);
         assert_eq!(response["ok"], json!(true));
         assert_eq!(response["applied"], json!(false));
         assert_eq!(response["skipped"], json!(true));
+        assert_eq!(response["runtimeRequired"], json!(false));
         assert_eq!(response["reason"], json!("runtime is stopped"));
 
         fs::remove_dir_all(dir).unwrap();
