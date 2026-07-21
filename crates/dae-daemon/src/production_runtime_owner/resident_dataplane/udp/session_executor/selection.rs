@@ -117,9 +117,9 @@ impl UdpSessionExecutor {
                 ResidentUdpExecutorFactory::Trojan(transport),
             ) => Self::new_trojan(password, transport),
             (
-                ResidentProxyProtocolPlan::VmessAeadTcp { id },
+                ResidentProxyProtocolPlan::VmessAeadTcp { id, body_security },
                 ResidentUdpExecutorFactory::Vmess(transport),
-            ) => Self::new_vmess(id, transport),
+            ) => Self::new_vmess(id, *body_security, transport),
             (
                 ResidentProxyProtocolPlan::AnyTlsTcpTls { .. },
                 ResidentUdpExecutorFactory::AnyTlsPacketStream,
@@ -204,26 +204,32 @@ impl UdpSessionExecutor {
         Self::Trojan(session)
     }
 
-    fn new_vmess(id: &str, transport: ResidentStreamPacketTransport) -> Self {
+    fn new_vmess(
+        id: &str,
+        body_security: dae_outbound::vmess::VMessBodySecurity,
+        transport: ResidentStreamPacketTransport,
+    ) -> Self {
         let session = match transport {
             ResidentStreamPacketTransport::PlainTcp => {
-                VmessAeadUdpOverTcpSession::plain(id.to_owned())
+                VmessAeadUdpOverTcpSession::plain(id.to_owned(), body_security)
             }
-            ResidentStreamPacketTransport::TlsTcp => VmessAeadUdpOverTcpSession::tls(id.to_owned()),
+            ResidentStreamPacketTransport::TlsTcp => {
+                VmessAeadUdpOverTcpSession::tls(id.to_owned(), body_security)
+            }
             ResidentStreamPacketTransport::WebSocketPlain => {
-                VmessAeadUdpOverTcpSession::websocket_plain(id.to_owned())
+                VmessAeadUdpOverTcpSession::websocket_plain(id.to_owned(), body_security)
             }
             ResidentStreamPacketTransport::WebSocketTls => {
-                VmessAeadUdpOverTcpSession::websocket_tls(id.to_owned())
+                VmessAeadUdpOverTcpSession::websocket_tls(id.to_owned(), body_security)
             }
             ResidentStreamPacketTransport::HttpUpgradePlain => {
-                VmessAeadUdpOverTcpSession::httpupgrade_plain(id.to_owned())
+                VmessAeadUdpOverTcpSession::httpupgrade_plain(id.to_owned(), body_security)
             }
             ResidentStreamPacketTransport::HttpUpgradeTls => {
-                VmessAeadUdpOverTcpSession::httpupgrade_tls(id.to_owned())
+                VmessAeadUdpOverTcpSession::httpupgrade_tls(id.to_owned(), body_security)
             }
             ResidentStreamPacketTransport::GrpcTls => {
-                VmessAeadUdpOverTcpSession::grpc_tls(id.to_owned())
+                VmessAeadUdpOverTcpSession::grpc_tls(id.to_owned(), body_security)
             }
             _ => return Self::fail_closed("materialized VMess UDP transport is invalid"),
         };

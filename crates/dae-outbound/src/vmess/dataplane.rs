@@ -25,7 +25,7 @@ use crate::shared_transport::{
 use crate::vmess::uuid::normalize_vmess_uuid;
 
 use super::{
-    VMessMetadata, VMessMetadataType, VMessNetwork, packet_addr_magic_target,
+    VMessBodySecurity, VMessMetadata, VMessMetadataType, VMessNetwork, packet_addr_magic_target,
     parse_packet_addr_payload, put_packet_addr_payload,
 };
 

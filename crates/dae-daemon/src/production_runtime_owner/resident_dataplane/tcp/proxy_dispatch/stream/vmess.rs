@@ -10,8 +10,10 @@ pub(super) async fn handle_vmess_stream_proxy_async(
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<Value, String> {
     let execution = selection.proxy.execution_plan();
-    let id = match &selection.proxy.handler {
-        ResidentProxyProtocolPlan::VmessAeadTcp { id } => id.clone(),
+    let (id, body_security) = match &selection.proxy.handler {
+        ResidentProxyProtocolPlan::VmessAeadTcp { id, body_security } => {
+            (id.clone(), *body_security)
+        }
         handler => {
             return Err(format!(
                 "resident VMess TCP dispatcher received incompatible handler {handler:?}"
@@ -30,6 +32,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 &mut sniff,
                 &metrics,
                 &id,
+                body_security,
             )
             .await
         }
@@ -43,6 +46,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 &mut sniff,
                 &metrics,
                 &id,
+                body_security,
             )
             .await
         }
@@ -56,6 +60,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 &mut sniff,
                 &metrics,
                 &id,
+                body_security,
             )
             .await
         }
@@ -69,6 +74,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 &mut sniff,
                 &metrics,
                 &id,
+                body_security,
             )
             .await
         }
@@ -82,6 +88,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 &mut sniff,
                 &metrics,
                 &id,
+                body_security,
             )
             .await
         }
@@ -95,6 +102,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 &mut sniff,
                 &metrics,
                 &id,
+                body_security,
             )
             .await
         }
@@ -108,6 +116,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 &mut sniff,
                 &metrics,
                 &id,
+                body_security,
             )
             .await
         }
@@ -121,6 +130,7 @@ pub(super) async fn handle_vmess_stream_proxy_async(
                 &mut sniff,
                 &metrics,
                 &id,
+                body_security,
             )
             .await
         }

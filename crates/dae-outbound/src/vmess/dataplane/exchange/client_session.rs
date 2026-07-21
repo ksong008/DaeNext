@@ -4,7 +4,16 @@ pub fn aead_tcp_client_session_start(
     target: &str,
     payload: &[u8],
 ) -> Result<VMessAeadTcpClientSessionStart, OutboundError> {
-    aead_client_session_start(uuid, target, VMessNetwork::Tcp, payload)
+    aead_tcp_client_session_start_with_security(uuid, target, payload, VMessBodySecurity::Aes128Gcm)
+}
+
+pub fn aead_tcp_client_session_start_with_security(
+    uuid: &str,
+    target: &str,
+    payload: &[u8],
+    security: VMessBodySecurity,
+) -> Result<VMessAeadTcpClientSessionStart, OutboundError> {
+    aead_client_session_start(uuid, target, VMessNetwork::Tcp, payload, security)
 }
 
 pub fn aead_udp_over_tcp_client_session_start(
@@ -12,7 +21,21 @@ pub fn aead_udp_over_tcp_client_session_start(
     target: &str,
     payload: &[u8],
 ) -> Result<VMessAeadTcpClientSessionStart, OutboundError> {
-    aead_client_session_start(uuid, target, VMessNetwork::Udp, payload)
+    aead_udp_over_tcp_client_session_start_with_security(
+        uuid,
+        target,
+        payload,
+        VMessBodySecurity::Aes128Gcm,
+    )
+}
+
+pub fn aead_udp_over_tcp_client_session_start_with_security(
+    uuid: &str,
+    target: &str,
+    payload: &[u8],
+    security: VMessBodySecurity,
+) -> Result<VMessAeadTcpClientSessionStart, OutboundError> {
+    aead_client_session_start(uuid, target, VMessNetwork::Udp, payload, security)
 }
 
 fn aead_client_session_start(
@@ -20,12 +43,13 @@ fn aead_client_session_start(
     target: &str,
     network: VMessNetwork,
     payload: &[u8],
+    security: VMessBodySecurity,
 ) -> Result<VMessAeadTcpClientSessionStart, OutboundError> {
     let material = VMessAeadMaterial::random();
     let normalized_uuid = normalize_vmess_uuid(uuid);
     let cmd_key = vmess_cmd_key_from_uuid(&normalized_uuid)?;
     let eauth_id = put_eauth_id(&cmd_key, unix_timestamp_now()?, material.eauth_random)?;
-    let instruction = request_instruction(&material, target, network)?;
+    let instruction = request_instruction(&material, target, network, security)?;
     let header = encrypt_request_header(
         &cmd_key,
         &eauth_id,

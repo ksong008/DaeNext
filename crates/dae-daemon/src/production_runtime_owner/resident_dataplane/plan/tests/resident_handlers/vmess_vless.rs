@@ -34,6 +34,34 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         vmess.handler,
         ResidentProxyProtocolPlan::VmessAeadTcp { .. }
     ));
+    let ResidentProxyProtocolPlan::VmessAeadTcp { body_security, .. } = &vmess.handler else {
+        unreachable!("VMess fixture must materialize a VMess handler");
+    };
+    assert_eq!(
+        *body_security,
+        dae_outbound::vmess::VMessBodySecurity::Aes128Gcm
+    );
+
+    let mut unsupported_security = VMessLink::parse(&vmess_fixture_url(
+        "vmess-unsupported-security",
+        &primary_host,
+        fixture_port(2),
+        "tcp",
+        "",
+        "",
+        "",
+    ))
+    .unwrap();
+    unsupported_security.security = "chacha20-poly1305".to_owned();
+    let err = build_resident_proxy_plan_for_node(
+        config,
+        "proxy".to_owned(),
+        "vmess_unsupported_security".to_owned(),
+        unsupported_security.export_url(),
+    )
+    .unwrap_err();
+    assert!(err.contains("validate VMess body security"));
+    assert!(err.contains("unsupported VMess body security"));
 
     let vmess_tls = build_resident_proxy_plan_for_node(
         config,

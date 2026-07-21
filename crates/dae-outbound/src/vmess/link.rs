@@ -18,10 +18,24 @@ pub struct VMessLink {
     pub sni: String,
     pub path: String,
     pub tls: String,
+    pub security: String,
     pub allow_insecure: bool,
     pub fingerprint: String,
     pub v: String,
     pub protocol: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VMessBodySecurity {
+    Aes128Gcm,
+}
+
+impl VMessBodySecurity {
+    pub const fn wire_value(self) -> u8 {
+        match self {
+            Self::Aes128Gcm => crate::vmess::VMESS_AEAD_SECURITY_AES_128_GCM,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,13 +83,27 @@ impl VMessLink {
         Ok(())
     }
 
+    pub fn body_security(&self) -> Result<VMessBodySecurity, OutboundError> {
+        match self.security.trim().to_ascii_lowercase().as_str() {
+            "" | "auto" | "aes-128-gcm" => Ok(VMessBodySecurity::Aes128Gcm),
+            security => Err(OutboundError::BadVmess(format!(
+                "unsupported VMess body security: {security}"
+            ))),
+        }
+    }
+
     pub fn address(&self) -> String {
         format_authority(&self.add, &self.port)
     }
 
     pub fn export_url(&self) -> String {
+        let security = if self.security.is_empty() {
+            String::new()
+        } else {
+            format!(",\"scy\":{}", json_string(&self.security))
+        };
         let json = format!(
-            "{{\"ps\":{},\"add\":{},\"port\":{},\"id\":{},\"aid\":{},\"net\":{},\"type\":{},\"host\":{},\"sni\":{},\"path\":{},\"tls\":{},\"allowInsecure\":{},\"Fingerprint\":{},\"v\":{},\"protocol\":{}}}",
+            "{{\"ps\":{},\"add\":{},\"port\":{},\"id\":{},\"aid\":{},\"net\":{},\"type\":{},\"host\":{},\"sni\":{},\"path\":{},\"tls\":{},\"allowInsecure\":{},\"Fingerprint\":{},\"v\":{},\"protocol\":{}{}}}",
             json_string(&self.ps),
             json_string(&self.add),
             json_string(&self.port),
@@ -91,6 +119,7 @@ impl VMessLink {
             json_string(&self.fingerprint),
             json_string("2"),
             json_string("vmess"),
+            security,
         );
         let mut encoded = base64::engine::general_purpose::STANDARD.encode(json);
         if encoded.ends_with('=') {
@@ -116,6 +145,7 @@ fn parse_json(raw: &str) -> Result<VMessLink, OutboundError> {
     let fields: VMessJsonFields =
         serde_json::from_str(raw).map_err(|err| OutboundError::BadVmess(err.to_string()))?;
     let fingerprint = fields.fingerprint.or_else_empty(fields.fp);
+    let security = fields.scy.or_else_empty(fields.security);
     Ok(VMessLink {
         ps: fields.ps,
         add: fields.add,
@@ -128,6 +158,7 @@ fn parse_json(raw: &str) -> Result<VMessLink, OutboundError> {
         sni: fields.sni,
         path: fields.path,
         tls: fields.tls,
+        security,
         allow_insecure: fields.allow_insecure,
         fingerprint,
         v: fields.v,
@@ -159,6 +190,10 @@ struct VMessJsonFields {
     path: String,
     #[serde(default)]
     tls: String,
+    #[serde(default)]
+    scy: String,
+    #[serde(default)]
+    security: String,
     #[serde(default, rename = "allowInsecure")]
     allow_insecure: bool,
     #[serde(default, rename = "Fingerprint")]
@@ -216,6 +251,9 @@ fn parse_legacy(raw_url: &str, decoded: &str) -> Result<VMessLink, OutboundError
     } else {
         String::new()
     };
+    let security = query_value(&query, "scy")
+        .or_else(|| query_value(&query, "security"))
+        .unwrap_or_default();
     Ok(VMessLink {
         ps,
         add: add.to_owned(),
@@ -228,6 +266,7 @@ fn parse_legacy(raw_url: &str, decoded: &str) -> Result<VMessLink, OutboundError
         sni: query_value(&query, "peer").unwrap_or_default(),
         path,
         tls,
+        security,
         allow_insecure: false,
         fingerprint: String::new(),
         v: String::new(),

@@ -370,6 +370,7 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
         },
         ResidentProxyProtocolPlan::VmessAeadTcp {
             id: fixture_client_id(),
+            body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
         },
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth: fixture_secret(),

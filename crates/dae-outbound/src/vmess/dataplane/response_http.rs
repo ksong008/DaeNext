@@ -4,13 +4,22 @@ pub fn aead_tcp_response_packet(
     request: &VMessAeadTcpRequest,
     payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
+    aead_tcp_response_packet_chunks(request, &[payload])
+}
+
+pub fn aead_tcp_response_packet_chunks(
+    request: &VMessAeadTcpRequest,
+    payloads: &[&[u8]],
+) -> Result<Vec<u8>, OutboundError> {
     let mut response = encrypt_response_header(request)?;
     let mut codec = BodyCodec::new(
         request.response_body_key,
         request.response_body_iv,
         request.request_options,
     )?;
-    response.extend_from_slice(&codec.seal_chunk(payload)?);
+    for payload in payloads {
+        response.extend_from_slice(&codec.seal_chunk(payload)?);
+    }
     Ok(response)
 }
 

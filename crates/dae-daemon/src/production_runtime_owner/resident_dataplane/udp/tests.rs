@@ -174,14 +174,18 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         vless_unsupported.flow = XTLS_RPRX_VISION.to_owned();
         proxies.push(vless_unsupported);
 
-        let mut vmess_h2 =
-            test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp { id: String::new() });
+        let mut vmess_h2 = test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
+            id: String::new(),
+            body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+        });
         vmess_h2.net = "h2".to_owned();
         vmess_h2.tls = "tls".to_owned();
         proxies.push(vmess_h2);
 
-        let mut vmess_unsupported =
-            test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp { id: String::new() });
+        let mut vmess_unsupported = test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
+            id: String::new(),
+            body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+        });
         vmess_unsupported.net = "grpc".to_owned();
         vmess_unsupported.tls = "none".to_owned();
         proxies.push(vmess_unsupported);
@@ -411,7 +415,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
                 UdpExecutorShape::Trojan,
             ),
             (
-                ResidentProxyProtocolPlan::VmessAeadTcp { id: String::new() },
+                ResidentProxyProtocolPlan::VmessAeadTcp {
+                    id: String::new(),
+                    body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+                },
                 UdpExecutorShape::VmessAead,
             ),
             (
@@ -607,8 +614,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             ("grpc", "tls"),
         ];
         for (net, tls) in vmess_udp_wrappers {
-            let mut proxy =
-                test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp { id: String::new() });
+            let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
+                id: String::new(),
+                body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+            });
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
@@ -617,8 +626,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         }
 
         for (net, tls) in [("grpc", ""), ("grpc", "none"), ("websocket", "reality")] {
-            let mut proxy =
-                test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp { id: String::new() });
+            let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
+                id: String::new(),
+                body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+            });
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
@@ -992,6 +1003,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         let proxy =
             with_plain_socks5_parent(test_udp_proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
                 id: "00000000-0000-0000-0000-000000000001".to_owned(),
+                body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
             }));
 
         assert_eq!(

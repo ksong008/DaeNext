@@ -245,6 +245,7 @@ fn vmess_link(net: &str, tls: &str) -> VMessLink {
         sni: "vmess.example.test".to_owned(),
         path: "/vmess".to_owned(),
         tls: tls.to_owned(),
+        security: String::new(),
         allow_insecure: false,
         fingerprint: String::new(),
         v: "2".to_owned(),

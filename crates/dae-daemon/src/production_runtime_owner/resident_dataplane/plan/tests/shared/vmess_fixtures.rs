@@ -32,6 +32,7 @@ pub(crate) fn vmess_fixture_url_with_sni(
         sni: sni.to_owned(),
         path: path.to_owned(),
         tls: tls.to_owned(),
+        security: String::new(),
         allow_insecure: false,
         fingerprint: String::new(),
         v: "2".to_owned(),

@@ -119,6 +119,7 @@ mod tests {
     fn only_complete_packet_over_stream_child_is_admitted() {
         let vmess = chained(proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
             id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
         }));
         assert_eq!(
             resident_udp_chain_admission(&vmess),

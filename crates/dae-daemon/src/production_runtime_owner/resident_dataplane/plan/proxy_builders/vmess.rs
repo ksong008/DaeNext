@@ -13,6 +13,9 @@ pub(crate) fn build_vmess_proxy_plan(
     parsed
         .validate_transport()
         .map_err(|err| format!("validate VMess transport for {node_tag}: {err}"))?;
+    let body_security = parsed
+        .body_security()
+        .map_err(|err| format!("validate VMess body security for {node_tag}: {err}"))?;
     let net = match parsed.net.as_str() {
         "" | "tcp" => "tcp".to_owned(),
         "ws" | "websocket" => "websocket".to_owned(),
@@ -147,7 +150,10 @@ pub(crate) fn build_vmess_proxy_plan(
         },
         utls_fingerprint,
         reality: None,
-        handler: ResidentProxyProtocolPlan::VmessAeadTcp { id: parsed.id },
+        handler: ResidentProxyProtocolPlan::VmessAeadTcp {
+            id: parsed.id,
+            body_security,
+        },
         execution: None,
         chain_parent: None,
         mark: config.global.so_mark_from_dae,

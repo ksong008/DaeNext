@@ -66,14 +66,17 @@ use dae_outbound::{
     vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,
     vmess::{
-        VMessAeadTcpClientSessionStart, aead_tcp_client_session_start,
-        aead_tcp_response_reader_from_async_stream,
+        VMessAeadTcpClientSessionStart, aead_tcp_response_reader_from_async_stream,
+        aead_tcp_response_reader_from_buffer,
     },
 };
 use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::{SniffingError, sniff_tcp};
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
+
+#[cfg(test)]
+use dae_outbound::vmess::aead_tcp_client_session_start;
 
 use super::client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, async_resident_tls_underlay_name,
