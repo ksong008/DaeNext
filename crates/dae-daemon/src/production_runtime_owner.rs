@@ -72,7 +72,8 @@ pub(crate) use resident_dataplane::{
     run_resident_manual_latency_probe_helper_streaming,
 };
 pub use resident_dataplane::{
-    ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
+    ResidentProxyOwnershipBenchmarkFixture, ResidentTcpSelectionBenchmarkFixture,
+    resident_proxy_ownership_benchmark_fixture, resident_tcp_selection_benchmark_fixture,
 };
 use topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
