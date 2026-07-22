@@ -204,7 +204,7 @@ fn h2_test_proxy(
     address: SocketAddr,
     generation: u64,
     graph_link_hash: &str,
-) -> Arc<plan::ResidentProxyPlan> {
+) -> plan::ResidentProxyBinding {
     let mut proxy = plan::ResidentProxyPlan {
         graph_id: format!("resident-graph:{graph_link_hash}"),
         graph_link_hash: graph_link_hash.to_owned(),
@@ -236,8 +236,12 @@ fn h2_test_proxy(
         mark: 0,
         mptcp: false,
     };
-    proxy.apply_runtime_generation(generation);
-    Arc::new(proxy)
+    proxy.materialize_execution();
+    plan::ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .unwrap()
 }
 
 fn h2_owner_deadline() -> dae_runtime_control::AbsoluteDeadline {
@@ -267,7 +271,7 @@ async fn exchange_h2_request(
 }
 
 async fn acquire_h2_from_fresh_runtime(
-    proxy: Arc<plan::ResidentProxyPlan>,
+    binding: plan::ResidentProxyBinding,
 ) -> (u64, Result<http::StatusCode, String>) {
     tokio::task::spawn_blocking(move || {
         tokio::runtime::Builder::new_current_thread()
@@ -276,7 +280,7 @@ async fn acquire_h2_from_fresh_runtime(
             .build()
             .unwrap()
             .block_on(async move {
-                let lease = acquire_h2_carrier(proxy, h2_owner_deadline()).await?;
+                let lease = acquire_h2_carrier(binding, h2_owner_deadline()).await?;
                 let instance_id = lease.physical_instance_id();
                 let request = http::Request::builder()
                     .method(http::Method::POST)
@@ -337,8 +341,8 @@ fn h2_carrier_reuses_one_physical_connection_across_caller_runtimes() {
             )
             .unwrap();
 
-            let first = acquire_h2_from_fresh_runtime(Arc::clone(&proxy)).await;
-            let second = acquire_h2_from_fresh_runtime(Arc::clone(&proxy)).await;
+            let first = acquire_h2_from_fresh_runtime(proxy.clone()).await;
+            let second = acquire_h2_from_fresh_runtime(proxy.clone()).await;
             assert_eq!(first.0, second.0);
             assert_eq!(first.1.unwrap(), http::StatusCode::OK);
             assert_eq!(second.1.unwrap(), http::StatusCode::OK);
@@ -376,7 +380,7 @@ fn cancelled_h2_acquirer_does_not_cancel_the_generation_build() {
             )
             .unwrap();
 
-            let first_proxy = Arc::clone(&proxy);
+            let first_proxy = proxy.clone();
             let first =
                 tokio::spawn(
                     async move { acquire_h2_carrier(first_proxy, h2_owner_deadline()).await },
@@ -391,7 +395,7 @@ fn cancelled_h2_acquirer_does_not_cancel_the_generation_build() {
             first.abort();
             let _ = first.await;
 
-            let second_proxy = Arc::clone(&proxy);
+            let second_proxy = proxy.clone();
             let second =
                 tokio::spawn(
                     async move { acquire_h2_carrier(second_proxy, h2_owner_deadline()).await },
@@ -421,10 +425,15 @@ fn concurrent_h2_acquirers_receive_one_shared_alpn_failure() {
             let server = H2TestServer::start_with_alpn(b"http/1.1", None, true).await;
             let generation = NEXT_H2_TEST_GENERATION.fetch_add(1, Ordering::Relaxed);
             let mut proxy = h2_test_proxy(server.address, generation, "sha256:h2-shared-failure")
-                .as_ref()
+                .plan()
                 .clone();
             proxy.alpn = vec!["h2".to_owned(), "http/1.1".to_owned()];
-            let proxy = Arc::new(proxy);
+            proxy.materialize_execution();
+            let proxy = plan::ResidentProxyBinding::resident(
+                Arc::new(proxy),
+                dae_runtime_control::OwnerGeneration::new(generation),
+            )
+            .unwrap();
             let stop = ResidentStopSignal::shared();
             let (owner, owner_thread) = start_h2_carrier_generation_owner(
                 generation,
@@ -434,12 +443,12 @@ fn concurrent_h2_acquirers_receive_one_shared_alpn_failure() {
             )
             .unwrap();
 
-            let first_proxy = Arc::clone(&proxy);
+            let first_proxy = proxy.clone();
             let first =
                 tokio::spawn(
                     async move { acquire_h2_carrier(first_proxy, h2_owner_deadline()).await },
                 );
-            let second_proxy = Arc::clone(&proxy);
+            let second_proxy = proxy.clone();
             let second =
                 tokio::spawn(
                     async move { acquire_h2_carrier(second_proxy, h2_owner_deadline()).await },
@@ -576,7 +585,7 @@ fn h2_goaway_drains_the_old_physical_before_the_next_acquisition_rebuilds() {
             )
             .unwrap();
 
-            let first = acquire_h2_carrier(Arc::clone(&proxy), h2_owner_deadline())
+            let first = acquire_h2_carrier(proxy.clone(), h2_owner_deadline())
                 .await
                 .unwrap();
             let first_instance = first.physical_instance_id();
@@ -593,7 +602,7 @@ fn h2_goaway_drains_the_old_physical_before_the_next_acquisition_rebuilds() {
             .await
             .expect("GOAWAY physical did not finish draining");
 
-            let second = acquire_h2_carrier(Arc::clone(&proxy), h2_owner_deadline())
+            let second = acquire_h2_carrier(proxy.clone(), h2_owner_deadline())
                 .await
                 .unwrap();
             assert_ne!(first_instance, second.physical_instance_id());
@@ -627,13 +636,13 @@ fn h2_carrier_bounds_pending_opens_with_peer_stream_capacity() {
                 1,
             )
             .unwrap();
-            let first = acquire_h2_carrier(Arc::clone(&proxy), h2_owner_deadline())
+            let first = acquire_h2_carrier(proxy.clone(), h2_owner_deadline())
                 .await
                 .unwrap();
-            let second = acquire_h2_carrier(Arc::clone(&proxy), h2_owner_deadline())
+            let second = acquire_h2_carrier(proxy.clone(), h2_owner_deadline())
                 .await
                 .unwrap();
-            let third = acquire_h2_carrier(Arc::clone(&proxy), h2_owner_deadline())
+            let third = acquire_h2_carrier(proxy.clone(), h2_owner_deadline())
                 .await
                 .unwrap();
             assert_eq!(first.physical_instance_id(), second.physical_instance_id());

@@ -36,7 +36,6 @@ fn builder_witnesses_xhttp_versions_without_promoting_extended_settings() {
 
     let default = vless_xhttp_parser_fixture_url("packet-up", "h2", "");
     let mut generated = build(&default).unwrap();
-    generated.apply_runtime_generation(73);
     generated
         .xhttp_xmux
         .as_mut()

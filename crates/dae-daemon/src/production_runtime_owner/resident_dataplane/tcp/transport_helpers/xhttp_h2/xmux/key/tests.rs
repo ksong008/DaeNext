@@ -1,5 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use super::*;
 
@@ -102,6 +103,21 @@ fn resolved(addresses: &[&str]) -> XhttpResolvedEndpointIdentity {
     )
 }
 
+fn test_binding(proxy: &ResidentProxyPlan) -> ResidentProxyBinding {
+    let generation = proxy
+        .xhttp_xmux
+        .as_ref()
+        .map(|xmux| xmux.runtime_generation)
+        .unwrap_or(1);
+    let mut proxy = proxy.clone();
+    proxy.materialize_execution();
+    ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .unwrap()
+}
+
 fn primary_key(
     proxy: &ResidentProxyPlan,
     endpoint: &ResidentXhttpEndpointPlan,
@@ -109,8 +125,9 @@ fn primary_key(
     mark: u32,
     mptcp: bool,
 ) -> XhttpXmuxKey {
+    let binding = test_binding(proxy);
     XhttpXmuxKey::primary(
-        proxy,
+        &binding,
         endpoint,
         resolved,
         proxy.xhttp_xmux.as_ref().unwrap(),
@@ -395,7 +412,7 @@ fn declared_endpoint_fragment_xmux_and_role_differences_partition() {
     );
 
     let download = XhttpXmuxKey::download(
-        &proxy,
+        &test_binding(&proxy),
         &endpoint,
         &resolved,
         endpoint.xmux.as_ref().unwrap(),
@@ -413,7 +430,7 @@ fn download_reality_credentials_partition_without_exposing_secret_material() {
     let proxy = test_proxy(&first_endpoint);
     let resolved = resolved(&["192.0.2.3:443"]);
     let first = XhttpXmuxKey::download(
-        &proxy,
+        &test_binding(&proxy),
         &first_endpoint,
         &resolved,
         first_endpoint.xmux.as_ref().unwrap(),
@@ -423,7 +440,7 @@ fn download_reality_credentials_partition_without_exposing_secret_material() {
     .unwrap();
     let second_endpoint = endpoint(Some(reality(4)));
     let second = XhttpXmuxKey::download(
-        &proxy,
+        &test_binding(&proxy),
         &second_endpoint,
         &resolved,
         second_endpoint.xmux.as_ref().unwrap(),

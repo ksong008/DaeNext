@@ -27,7 +27,7 @@ use tokio::time;
 use super::RESIDENT_CONNECT_TIMEOUT;
 use super::direct::{DirectTcpConnection, open_direct_tcp_connection_async};
 use super::plan::{
-    ResidentProtocolShape, ResidentProxyPlan, ResidentRealityUnderlayPlan,
+    ResidentProtocolShape, ResidentProxyBinding, ResidentProxyPlan, ResidentRealityUnderlayPlan,
     ResidentSecurityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
 };
 use super::resolver::{authority_from_host_port, try_socket_addr_candidates};

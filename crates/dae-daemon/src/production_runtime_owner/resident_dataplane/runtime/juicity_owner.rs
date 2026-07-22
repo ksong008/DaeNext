@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
 
-use super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
 use super::resource_profile::JuicityOwnerResourceProfile;
 use super::tcp::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointDrainReport,
@@ -44,11 +44,12 @@ impl Hash for JuicityOwnerKey {
 }
 
 impl JuicityOwnerKey {
-    fn for_proxy(proxy: &ResidentProxyPlan) -> Self {
+    fn for_binding(binding: &ResidentProxyBinding) -> Self {
+        let proxy = binding.plan();
         Self {
-            generation: proxy.execution_plan().runtime_generation(),
+            generation: binding.runtime_generation(),
             graph_link_hash: proxy.graph_link_hash.clone(),
-            mark: proxy.mark,
+            mark: binding.effective_socket_mark(),
         }
     }
 
@@ -335,7 +336,7 @@ impl JuicityOwnedTransport {
 
 struct JuicityAcquireCommand {
     key: JuicityOwnerKey,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     caller: QuicEndpointCallerClass,
     deadline: AbsoluteDeadline,
     response: oneshot::Sender<Result<JuicityTransportLease, String>>,
@@ -393,11 +394,11 @@ pub(crate) struct JuicityOwnerRegistryHandle {
 impl JuicityOwnerRegistryHandle {
     pub(crate) async fn acquire(
         &self,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         caller: QuicEndpointCallerClass,
         deadline: AbsoluteDeadline,
     ) -> Result<JuicityTransportLease, String> {
-        let key = JuicityOwnerKey::for_proxy(&proxy);
+        let key = JuicityOwnerKey::for_binding(&binding);
         if key.generation != self.generation {
             return Err(format!(
                 "Juicity owner generation mismatch: requested={} active={}",
@@ -408,7 +409,7 @@ impl JuicityOwnerRegistryHandle {
         let (response, receiver) = oneshot::channel();
         let command = JuicityOwnerCommand::Acquire(JuicityAcquireCommand {
             key,
-            proxy,
+            binding,
             caller,
             deadline,
             response,
@@ -760,14 +761,14 @@ fn spawn_juicity_transport_build(
         .front()
         .expect("a Juicity build has its elected waiter");
     let key = build.key.clone();
-    let proxy = Arc::clone(&build.proxy);
+    let binding = build.binding.clone();
     let caller = build.caller;
     let deadline = build.deadline;
     tasks.spawn(async move {
         JuicityOwnerTaskCompletion::Build(JuicityBuildCompletion {
             key,
             result: build_juicity_transport(
-                proxy,
+                binding,
                 caller,
                 deadline,
                 instance_id,
@@ -890,13 +891,14 @@ fn remove_empty_juicity_pool(
 }
 
 async fn build_juicity_transport(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     caller: QuicEndpointCallerClass,
     deadline: AbsoluteDeadline,
     instance_id: u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
 ) -> Result<JuicityOwnedTransport, String> {
+    let proxy = binding.plan();
     let ResidentProxyProtocolPlan::JuicityQuicTcp {
         uuid,
         password,
@@ -911,8 +913,7 @@ async fn build_juicity_transport(
         connection,
         ..
     } = open_juicity_quic_connection_candidates_async(
-        &proxy,
-        proxy.mark,
+        &binding,
         *allow_insecure,
         pinned_certchain_sha256,
         deadline,

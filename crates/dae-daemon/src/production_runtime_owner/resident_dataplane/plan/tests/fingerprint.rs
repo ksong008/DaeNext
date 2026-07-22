@@ -72,7 +72,7 @@ fn browser_default_alpn() -> Vec<String> {
 fn default_proxy_for_source(global_tls_fields: &str, source: String) -> ResidentProxyPlan {
     let config = fingerprint_config(global_tls_fields, source);
     let plan = build_resident_dataplane_plan(&config).unwrap();
-    plan.default_proxy_snapshot().unwrap()
+    plan.default_proxy_snapshot().unwrap().as_ref().clone()
 }
 
 #[test]
@@ -86,7 +86,7 @@ pub(super) fn resident_dataplane_plan_resolves_link_fingerprint_before_wire_gate
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let proxy = plan.default_proxy_snapshot().unwrap();
-    let utls = proxy.utls_fingerprint.unwrap();
+    let utls = proxy.utls_fingerprint.as_ref().unwrap();
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "firefox_105");
     assert_eq!(utls.name, "firefox_105");
@@ -110,7 +110,7 @@ pub(super) fn resident_dataplane_plan_carries_generic_link_fingerprint() {
         graph["runtimeComponents"]["underlayFactory"]["fingerprint"]["fullUtlsParityDeclared"],
         false
     );
-    let utls = proxy.utls_fingerprint.unwrap();
+    let utls = proxy.utls_fingerprint.as_ref().unwrap();
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "safari_16_0");
     assert_eq!(utls.family, "safari");
@@ -387,14 +387,20 @@ pub(super) fn latency_probe_helper_preserves_fingerprint_and_adds_control_mark_w
     let config = fingerprint_config_with_mark(0, "", link.clone());
     let normal_plans = build_resident_manual_probe_plans(&config);
     let normal = normal_plans.get(&link).unwrap().as_ref().unwrap();
-    assert_eq!(normal.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
-    assert!(normal.proxy.utls_fingerprint.is_some());
+    assert_eq!(
+        normal.binding.effective_socket_mark(),
+        RESIDENT_CONTROL_PLANE_SO_MARK
+    );
+    assert!(normal.binding.plan().utls_fingerprint.is_some());
 
     let helper_plans =
         build_resident_manual_probe_plans_for_helper(&config, std::slice::from_ref(&link));
     let helper = helper_plans.get(&link).unwrap().as_ref().unwrap();
-    assert_eq!(helper.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
-    let utls = helper.proxy.utls_fingerprint.as_ref().unwrap();
+    assert_eq!(
+        helper.binding.effective_socket_mark(),
+        RESIDENT_CONTROL_PLANE_SO_MARK
+    );
+    let utls = helper.binding.plan().utls_fingerprint.as_ref().unwrap();
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "chrome");
 }
@@ -406,17 +412,23 @@ pub(super) fn latency_probe_helper_preserves_reality_fingerprint_and_adds_contro
     let config = fingerprint_config_with_mark(0, "", link.clone());
     let normal_plans = build_resident_manual_probe_plans(&config);
     let normal = normal_plans.get(&link).unwrap().as_ref().unwrap();
-    assert_eq!(normal.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
-    assert_eq!(normal.proxy.tls, "reality");
-    assert!(normal.proxy.reality.is_some());
-    assert!(normal.proxy.utls_fingerprint.is_some());
+    assert_eq!(
+        normal.binding.effective_socket_mark(),
+        RESIDENT_CONTROL_PLANE_SO_MARK
+    );
+    assert_eq!(normal.binding.plan().tls, "reality");
+    assert!(normal.binding.plan().reality.is_some());
+    assert!(normal.binding.plan().utls_fingerprint.is_some());
 
     let helper_plans =
         build_resident_manual_probe_plans_for_helper(&config, std::slice::from_ref(&link));
     let helper = helper_plans.get(&link).unwrap().as_ref().unwrap();
-    assert_eq!(helper.proxy.mark, RESIDENT_CONTROL_PLANE_SO_MARK);
-    assert_eq!(helper.proxy.tls, "reality");
-    let utls = helper.proxy.utls_fingerprint.as_ref().unwrap();
+    assert_eq!(
+        helper.binding.effective_socket_mark(),
+        RESIDENT_CONTROL_PLANE_SO_MARK
+    );
+    assert_eq!(helper.binding.plan().tls, "reality");
+    let utls = helper.binding.plan().utls_fingerprint.as_ref().unwrap();
     assert_eq!(utls.source, "link fp");
     assert_eq!(utls.requested, "safari_16_0");
 }
@@ -470,7 +482,7 @@ pub(super) fn resident_dataplane_plan_uses_global_utls_when_link_does_not_set_fp
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let proxy = plan.default_proxy_snapshot().unwrap();
-    let utls = proxy.utls_fingerprint.unwrap();
+    let utls = proxy.utls_fingerprint.as_ref().unwrap();
     assert_eq!(utls.source, "global utls_imitate");
     assert_eq!(utls.requested, "safari");
     assert_eq!(utls.canonical, "safari_auto");
@@ -488,7 +500,7 @@ pub(super) fn resident_dataplane_plan_uses_global_utls_when_link_fp_is_empty() {
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let proxy = plan.default_proxy_snapshot().unwrap();
-    let utls = proxy.utls_fingerprint.unwrap();
+    let utls = proxy.utls_fingerprint.as_ref().unwrap();
     assert_eq!(utls.source, "global utls_imitate");
     assert_eq!(utls.requested, "edge");
     assert_eq!(utls.canonical, "edge_auto");
@@ -506,7 +518,7 @@ pub(super) fn resident_dataplane_plan_uses_document_default_when_global_utls_has
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let proxy = plan.default_proxy_snapshot().unwrap();
-    let utls = proxy.utls_fingerprint.unwrap();
+    let utls = proxy.utls_fingerprint.as_ref().unwrap();
     assert_eq!(utls.source, "default fingerprint");
     assert_eq!(utls.requested, "chrome");
     assert_eq!(utls.canonical, "chrome_auto");

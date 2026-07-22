@@ -46,7 +46,7 @@ pub(crate) fn meek_options_from_proxy(
 }
 
 pub(crate) async fn meek_round_trip_async(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     options: &MeekRoundTripOptions,
     body: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -68,7 +68,7 @@ pub(crate) async fn meek_round_trip_async(
 
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
-    let mut lease = acquire_meek_transport(Arc::new(proxy.clone()), deadline).await?;
+    let mut lease = acquire_meek_transport(binding.clone(), deadline).await?;
 
     let result = async {
         let remaining = meek_deadline_remaining(deadline, "write Meek polling request")?;

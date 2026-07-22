@@ -9,7 +9,7 @@ pub(super) async fn run_resident_candidate_family_health_checks(
 ) -> HealthCheckRoundStatus {
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::BackgroundHealth,
-        Some(candidate.proxy.execution_plan().runtime_generation()),
+        Some(candidate.binding.runtime_generation()),
         run_resident_candidate_family_health_checks_scoped(group, candidate, stop, owners, dns),
     )
     .await

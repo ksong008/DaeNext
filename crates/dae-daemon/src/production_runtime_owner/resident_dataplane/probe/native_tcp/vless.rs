@@ -15,10 +15,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::time;
 
 use super::super::super::client::{
-    open_async_vless_tls_client_with_flow, open_proxy_tcp_stream_async_with_flow,
+    open_async_resident_tls_client_with_binding, open_proxy_tcp_stream_with_binding,
 };
 use super::super::super::plan::{
-    ResidentProtocolShape, ResidentProxyPlan, ResidentSecurityUnderlayPlan,
+    ResidentProtocolShape, ResidentProxyBinding, ResidentSecurityUnderlayPlan,
     ResidentStreamWrapperPlan, ResidentXhttpMode,
 };
 use super::super::super::{
@@ -40,11 +40,11 @@ use super::target::native_tcp_probe_selection;
 use super::tunnel::{NativeTcpTunnel, SpawnedNativeTcpTunnel, boxed_native_tcp_tunnel};
 
 pub(super) async fn open_vless_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
     owner_deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    let selection = native_tcp_probe_selection(proxy, target);
+    let selection = native_tcp_probe_selection(binding, target);
     let execution = selection.proxy.execution_plan();
     let key = selection
         .proxy
@@ -59,13 +59,9 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         return open_vless_mux_native_tcp_tunnel(selection, target, owner_deadline).await;
     }
     if execution.security == ResidentSecurityUnderlayPlan::None {
-        let mut stream = open_proxy_tcp_stream_async_with_flow(
-            &selection.proxy,
-            selection.mark,
-            selection.mptcp,
-        )
-        .await
-        .map_err(NativeTcpProbeError::Open)?;
+        let mut stream = open_proxy_tcp_stream_with_binding(&selection.proxy, selection.mptcp)
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
         tokio::io::AsyncWriteExt::write_all(&mut stream, &request)
             .await
             .map_err(|err| {
@@ -153,10 +149,9 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         }
         _ => {}
     }
-    let mut client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+    let mut client = open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
+        .await
+        .map_err(NativeTcpProbeError::Open)?;
     if execution.wrapper == ResidentStreamWrapperPlan::WebSocket {
         let options =
             HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
@@ -246,7 +241,7 @@ async fn open_vless_meek_native_tcp_tunnel(
         path: selection.proxy.stream_path.clone(),
         session_tag: format!("{}|{}", selection.proxy.graph_id, target).into_bytes(),
     };
-    let proxy = Arc::clone(&selection.proxy);
+    let binding = selection.proxy.clone();
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
     let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
@@ -255,7 +250,7 @@ async fn open_vless_meek_native_tcp_tunnel(
     let task = tokio::spawn(async move {
         let _ = relay_tcp_over_vless_meek_native_async(
             &mut relay_side,
-            proxy,
+            binding,
             options,
             first_payload,
             relay_stop,
@@ -273,7 +268,7 @@ async fn open_vless_meek_native_tcp_tunnel(
 
 async fn relay_tcp_over_vless_meek_native_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     options: MeekRoundTripOptions,
     first_payload: Vec<u8>,
     stop: SharedResidentStopSignal,
@@ -309,7 +304,7 @@ async fn relay_tcp_over_vless_meek_native_async(
         if body.is_empty() {
             empty_poll_count = empty_poll_count.saturating_add(1);
         }
-        let response = meek_round_trip_async(&proxy, &options, &body).await?;
+        let response = meek_round_trip_async(&binding, &options, &body).await?;
         let response_payload = stripper.consume(&response)?;
         if !response_payload.is_empty() {
             inbound
@@ -338,7 +333,7 @@ async fn open_vless_mux_native_tcp_tunnel(
     deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let logical =
-        acquire_vless_mux_logical_stream(Arc::clone(&selection.proxy), target.to_owned(), deadline)
+        acquire_vless_mux_logical_stream(selection.proxy.clone(), target.to_owned(), deadline)
             .await
             .map_err(NativeTcpProbeError::Open)?;
     Ok(boxed_native_tcp_tunnel(logical))
@@ -360,7 +355,7 @@ async fn open_vless_xhttp_native_tcp_tunnel(
                 mut upload,
                 mut download,
                 ..
-            } = open_xhttp_packet_up_parts(&selection.proxy, selection.mark, selection.mptcp)
+            } = open_xhttp_packet_up_parts(&selection.proxy, selection.mptcp)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
             send_xhttp_packet_up_request(&mut upload, &session_id, 0, Bytes::from(request))
@@ -388,14 +383,9 @@ async fn open_vless_xhttp_native_tcp_tunnel(
                 mut upload,
                 mut download,
                 ..
-            } = open_xhttp_stream_parts(
-                &selection.proxy,
-                selection.mark,
-                selection.mptcp,
-                Bytes::from(request),
-            )
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+            } = open_xhttp_stream_parts(&selection.proxy, selection.mptcp, Bytes::from(request))
+                .await
+                .map_err(NativeTcpProbeError::Open)?;
             tokio::spawn(async move {
                 let _ = relay_tcp_over_xhttp_stream(
                     &mut relay_side,

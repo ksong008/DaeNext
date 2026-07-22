@@ -11,10 +11,10 @@ use super::super::*;
 use super::xhttp_primary_tls_underlay_name;
 
 pub(crate) async fn open_xhttp_packet_up_parts(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
+    binding: &ResidentProxyBinding,
     mptcp: bool,
 ) -> Result<XhttpPacketUpParts, String> {
+    let proxy = binding.plan();
     let session_id = new_xhttp_session_id_for(proxy.xhttp_settings());
     let upload_endpoint = ResidentXhttpEndpointPlan::from_proxy(proxy);
     let download_endpoint = proxy
@@ -27,9 +27,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
     match (upload_http_version, download_http_version) {
         (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H1) => {
             let recv = open_xhttp_h1_download_stream(
-                proxy,
+                binding,
                 &download_endpoint,
-                mark,
                 mptcp,
                 &session_id,
                 download_separate,
@@ -38,9 +37,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H1 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     mptcp,
                 },
                 download: XhttpDownloadClient::H1 { body: recv },
@@ -51,7 +49,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H2) => {
             let mut download_sender =
-                open_xhttp_h2_endpoint_sender(proxy, &download_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_endpoint_sender(binding, &download_endpoint, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut download_sender.sender,
                 &download_endpoint,
@@ -62,9 +60,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H1 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     mptcp,
                 },
                 download: XhttpDownloadClient::H2 {
@@ -80,7 +77,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H3) => {
             let download_client =
-                open_xhttp_h3_endpoint_client(proxy, &download_endpoint, mark).await?;
+                open_xhttp_h3_endpoint_client(binding, &download_endpoint).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
                 download_client.client.clone(),
@@ -91,9 +88,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H1 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     mptcp,
                 },
                 download: XhttpDownloadClient::H3 {
@@ -109,11 +105,10 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H1) => {
             let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
             let upload_sender =
-                open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_proxy_sender(binding, &upload_endpoint, mptcp).await?;
             let recv = open_xhttp_h1_download_stream(
-                proxy,
+                binding,
                 &download_endpoint,
-                mark,
                 mptcp,
                 &session_id,
                 true,
@@ -122,9 +117,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     mptcp,
                     sender: upload_sender.sender,
                     connection_task: upload_sender.connection_task,
@@ -143,7 +137,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H2) if !download_separate => {
             let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
             let mut upload_sender =
-                open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_proxy_sender(binding, &upload_endpoint, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut upload_sender.sender,
                 &upload_endpoint,
@@ -154,9 +148,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     mptcp,
                     sender: upload_sender.sender,
                     connection_task: upload_sender.connection_task,
@@ -180,9 +173,9 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H2) => {
             let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
             let upload_sender =
-                open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_proxy_sender(binding, &upload_endpoint, mptcp).await?;
             let mut download_sender =
-                open_xhttp_h2_endpoint_sender(proxy, &download_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_endpoint_sender(binding, &download_endpoint, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut download_sender.sender,
                 &download_endpoint,
@@ -193,9 +186,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     mptcp,
                     sender: upload_sender.sender,
                     connection_task: upload_sender.connection_task,
@@ -219,9 +211,9 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H3) => {
             let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
             let upload_sender =
-                open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_proxy_sender(binding, &upload_endpoint, mptcp).await?;
             let download_client =
-                open_xhttp_h3_endpoint_client(proxy, &download_endpoint, mark).await?;
+                open_xhttp_h3_endpoint_client(binding, &download_endpoint).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
                 download_client.client.clone(),
@@ -232,9 +224,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     mptcp,
                     sender: upload_sender.sender,
                     connection_task: upload_sender.connection_task,
@@ -256,11 +247,10 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H1) => {
             let upload_underlay = "quinn-h3";
-            let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
+            let upload_client = open_xhttp_h3_proxy_client(binding, &upload_endpoint).await?;
             let recv = open_xhttp_h1_download_stream(
-                proxy,
+                binding,
                 &download_endpoint,
-                mark,
                 mptcp,
                 &session_id,
                 true,
@@ -269,9 +259,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     client: upload_client.client,
                     connection: upload_client.connection,
                     xmux_request: upload_client
@@ -288,9 +277,9 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H2) => {
             let upload_underlay = "quinn-h3";
-            let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
+            let upload_client = open_xhttp_h3_proxy_client(binding, &upload_endpoint).await?;
             let mut download_sender =
-                open_xhttp_h2_endpoint_sender(proxy, &download_endpoint, mark, mptcp).await?;
+                open_xhttp_h2_endpoint_sender(binding, &download_endpoint, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut download_sender.sender,
                 &download_endpoint,
@@ -301,9 +290,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     client: upload_client.client,
                     connection: upload_client.connection,
                     xmux_request: upload_client
@@ -325,7 +313,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H3) if !download_separate => {
             let upload_underlay = "quinn-h3";
-            let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
+            let upload_client = open_xhttp_h3_proxy_client(binding, &upload_endpoint).await?;
             let recv = open_xhttp_h3_download_stream(
                 &upload_endpoint,
                 upload_client.client.clone(),
@@ -336,9 +324,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     client: upload_client.client,
                     connection: upload_client.connection,
                     xmux_request: upload_client
@@ -359,9 +346,9 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H3) => {
             let upload_underlay = "quinn-h3";
-            let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
+            let upload_client = open_xhttp_h3_proxy_client(binding, &upload_endpoint).await?;
             let download_client =
-                open_xhttp_h3_endpoint_client(proxy, &download_endpoint, mark).await?;
+                open_xhttp_h3_endpoint_client(binding, &download_endpoint).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
                 download_client.client.clone(),
@@ -372,9 +359,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
-                    proxy: Box::new(proxy.clone()),
+                    binding: binding.clone(),
                     endpoint: upload_endpoint,
-                    mark,
                     client: upload_client.client,
                     connection: upload_client.connection,
                     xmux_request: upload_client

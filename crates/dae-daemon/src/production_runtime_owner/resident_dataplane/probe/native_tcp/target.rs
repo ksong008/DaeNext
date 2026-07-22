@@ -1,19 +1,18 @@
-use std::sync::Arc;
-
-use super::super::super::plan::ResidentProxyPlan;
+use super::super::super::plan::ResidentProxyBinding;
 use super::super::super::tcp::{TcpProxySelection, TcpRouteSelection, TcpRoutingLogMetadata};
 
 pub(super) fn native_tcp_probe_selection(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
 ) -> TcpProxySelection {
+    let mark = binding.effective_socket_mark();
+    let mptcp = binding.plan().mptcp;
     TcpProxySelection {
-        mark: proxy.mark,
-        mptcp: proxy.mptcp,
+        mptcp,
         route: TcpRouteSelection {
             initial_outbound: 0,
             final_outbound: 0,
-            final_mark: proxy.mark,
+            final_mark: mark,
             userspace_route_executed: false,
             userspace_route_must: false,
             dial_target: target.to_owned(),
@@ -25,6 +24,6 @@ pub(super) fn native_tcp_probe_selection(
                 mac: String::new(),
             },
         },
-        proxy,
+        proxy: binding,
     }
 }

@@ -60,7 +60,7 @@ enum ResidentProxyDnsUdpActorEvent {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn start_proxy_dns_udp_actor(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     runtime_config: ResidentDnsUdpRuntimeConfig,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -80,7 +80,7 @@ pub(super) fn start_proxy_dns_udp_actor(
             fatal: false,
         };
         metric_guard.fatal = run_proxy_dns_udp_actor(
-            proxy,
+            binding,
             original_dst,
             receiver,
             stop_receiver,
@@ -188,7 +188,7 @@ impl ResidentProxyDnsUdpActorHandle {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_proxy_dns_udp_actor(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     mut receiver: tokio::sync::mpsc::Receiver<ResidentProxyDnsUdpRequest>,
     mut stop: tokio::sync::oneshot::Receiver<()>,
@@ -251,7 +251,7 @@ async fn run_proxy_dns_udp_actor(
             ResidentProxyDnsUdpActorEvent::Request(Some(request)) => {
                 let request_deadline = request.context.deadline();
                 if let Err(err) = handle_proxy_dns_udp_request(
-                    &proxy,
+                    &binding,
                     original_dst,
                     request,
                     &mut pending,

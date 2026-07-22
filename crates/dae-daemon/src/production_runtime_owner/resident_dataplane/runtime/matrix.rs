@@ -616,7 +616,7 @@ pub(super) fn resident_proxy_group_plan_summary_json(
     let mut summary = group
         .default_proxy_snapshot()
         .as_ref()
-        .map(resident_proxy_plan_summary_json)
+        .map(|binding| resident_proxy_plan_summary_json(binding.plan()))
         .unwrap_or_else(|| {
             json!({
                 "group": group.group_name,

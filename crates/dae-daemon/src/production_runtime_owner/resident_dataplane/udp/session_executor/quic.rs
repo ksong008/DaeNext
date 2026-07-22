@@ -24,7 +24,7 @@ fn earliest_expiration(left: Option<Instant>, right: Option<Instant>) -> Option<
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria2QuicDatagramSession
 {
-    proxy: Option<Arc<ResidentProxyPlan>>,
+    binding: Option<ResidentProxyBinding>,
     owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     udp_session: Option<Hysteria2UdpSessionLease>,
@@ -37,12 +37,12 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Hysteria
 
 impl Hysteria2QuicDatagramSession {
     pub(super) fn new(
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     ) -> Self {
         let resources = QuicUdpDatagramResourceProfile::selected();
         Self {
-            proxy: Some(proxy),
+            binding: Some(binding),
             owner_registry,
             owner_deadline: None,
             udp_session: None,
@@ -58,7 +58,7 @@ impl Hysteria2QuicDatagramSession {
     fn new_for_test() -> Self {
         let resources = QuicUdpDatagramResourceProfile::selected();
         Self {
-            proxy: None,
+            binding: None,
             owner_registry: None,
             owner_deadline: None,
             udp_session: None,
@@ -205,8 +205,8 @@ impl Hysteria2QuicDatagramSession {
         let owner_registry = self.owner_registry.as_ref().ok_or_else(|| {
             "Hysteria2 transport owner registry is unavailable for UDP session".to_owned()
         })?;
-        let proxy = self
-            .proxy
+        let binding = self
+            .binding
             .as_ref()
             .ok_or_else(|| "Hysteria2 proxy owner identity is unavailable".to_owned())?;
         let deadline = self.owner_deadline.take().unwrap_or_else(|| {
@@ -216,11 +216,7 @@ impl Hysteria2QuicDatagramSession {
             )
         });
         let transport = owner_registry
-            .acquire(
-                Arc::clone(proxy),
-                QuicEndpointCallerClass::UdpData,
-                deadline,
-            )
+            .acquire(binding.clone(), QuicEndpointCallerClass::UdpData, deadline)
             .await?;
         let udp_session = transport.open_udp_session()?;
         self.session_id = udp_session.session_id();
@@ -238,7 +234,7 @@ impl Hysteria2QuicDatagramSession {
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuicDatagramSession {
-    proxy: Option<Arc<ResidentProxyPlan>>,
+    binding: Option<ResidentProxyBinding>,
     owner_registry: Option<TuicOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     udp_association: Option<TuicUdpAssociationLease>,
@@ -252,12 +248,12 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuic
 
 impl TuicQuicDatagramSession {
     pub(super) fn new(
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         owner_registry: Option<TuicOwnerRegistryHandle>,
     ) -> Self {
         let resources = QuicUdpDatagramResourceProfile::selected();
         Self {
-            proxy: Some(proxy),
+            binding: Some(binding),
             owner_registry,
             owner_deadline: None,
             udp_association: None,
@@ -274,7 +270,7 @@ impl TuicQuicDatagramSession {
     fn new_for_test() -> Self {
         let resources = QuicUdpDatagramResourceProfile::selected();
         Self {
-            proxy: None,
+            binding: None,
             owner_registry: None,
             owner_deadline: None,
             udp_association: None,
@@ -465,8 +461,8 @@ impl TuicQuicDatagramSession {
         let owner_registry = self.owner_registry.as_ref().ok_or_else(|| {
             "TUIC transport owner registry is unavailable for UDP association".to_owned()
         })?;
-        let proxy = self
-            .proxy
+        let binding = self
+            .binding
             .as_ref()
             .ok_or_else(|| "TUIC proxy owner identity is unavailable".to_owned())?;
         let deadline = self.owner_deadline.take().unwrap_or_else(|| {
@@ -476,11 +472,7 @@ impl TuicQuicDatagramSession {
             )
         });
         let transport = owner_registry
-            .acquire(
-                Arc::clone(proxy),
-                QuicEndpointCallerClass::UdpData,
-                deadline,
-            )
+            .acquire(binding.clone(), QuicEndpointCallerClass::UdpData, deadline)
             .await?;
         let udp_association = transport.open_udp_association()?;
         self.assoc_id = udp_association.association_id();
@@ -500,7 +492,7 @@ impl TuicQuicDatagramSession {
 
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct JuicityQuicStreamPacketSession
 {
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     owner_registry: Option<JuicityOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     transport: Option<JuicityTransportLease>,
@@ -513,11 +505,11 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct JuicityQ
 
 impl JuicityQuicStreamPacketSession {
     pub(super) fn new(
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         owner_registry: Option<JuicityOwnerRegistryHandle>,
     ) -> Self {
         Self {
-            proxy,
+            binding,
             owner_registry,
             owner_deadline: None,
             transport: None,
@@ -537,11 +529,11 @@ impl JuicityQuicStreamPacketSession {
 
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if proxy.graph_link_hash != self.proxy.graph_link_hash {
+        if binding.plan().graph_link_hash != self.binding.plan().graph_link_hash {
             return Err("Juicity UDP session proxy identity changed".to_owned());
         }
         self.fixed_target
@@ -620,7 +612,7 @@ impl JuicityQuicStreamPacketSession {
         })?;
         let transport = registry
             .acquire(
-                Arc::clone(&self.proxy),
+                self.binding.clone(),
                 QuicEndpointCallerClass::UdpData,
                 deadline,
             )
@@ -666,16 +658,16 @@ fn juicity_udp_response_result(target: String, payload: Vec<u8>) -> UdpExchangeR
 
 #[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane) async fn exercise_juicity_udp_stream_session(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     registry: JuicityOwnerRegistryHandle,
     target: SocketAddr,
     payloads: &[&[u8]],
 ) -> Result<(u64, Vec<Vec<u8>>), String> {
-    let mut session = JuicityQuicStreamPacketSession::new(proxy, Some(registry));
+    let exchange_binding = binding.clone();
+    let mut session = JuicityQuicStreamPacketSession::new(binding, Some(registry));
     let mut responses = Vec::with_capacity(payloads.len());
     for payload in payloads {
-        let proxy = Arc::clone(&session.proxy);
-        let mut response = session.exchange(&proxy, target, payload).await?;
+        let mut response = session.exchange(&exchange_binding, target, payload).await?;
         let expectation = response.fixed_target_expectation(target);
         let payload = response
             .take_fixed_target_payload(expectation)

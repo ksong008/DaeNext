@@ -4,7 +4,7 @@ pub(super) async fn wait_and_record_udp_session_response(
     key: &UdpSessionKey,
     context: &UdpSessionActorContext,
     executor: &mut Option<UdpSessionExecutor>,
-    proxy: Option<&Arc<ResidentProxyPlan>>,
+    proxy: Option<&ResidentProxyBinding>,
 ) -> Result<(), String> {
     let (Some(executor), Some(proxy)) = (executor.as_mut(), proxy) else {
         return std::future::pending().await;
@@ -25,7 +25,7 @@ pub(super) async fn drain_udp_session_responses(
     key: &UdpSessionKey,
     context: &UdpSessionActorContext,
     executor: &mut UdpSessionExecutor,
-    proxy: &Arc<ResidentProxyPlan>,
+    proxy: &ResidentProxyBinding,
 ) -> Result<(), String> {
     for _ in 0..16 {
         let exchange = match executor.poll_response().await {
@@ -44,7 +44,7 @@ pub(super) async fn drain_udp_session_responses(
 async fn record_response(
     key: &UdpSessionKey,
     context: &UdpSessionActorContext,
-    proxy: &Arc<ResidentProxyPlan>,
+    proxy: &ResidentProxyBinding,
     exchange: (&'static str, UdpExchangeResult),
 ) {
     record_udp_session_response_result(
@@ -63,7 +63,7 @@ async fn record_response(
 async fn record_response_error(
     key: &UdpSessionKey,
     context: &UdpSessionActorContext,
-    proxy: &Arc<ResidentProxyPlan>,
+    proxy: &ResidentProxyBinding,
     error: &str,
 ) {
     record_udp_session_response_result(

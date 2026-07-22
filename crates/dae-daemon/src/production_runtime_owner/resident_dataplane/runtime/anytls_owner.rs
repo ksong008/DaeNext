@@ -18,10 +18,10 @@ use tokio::time;
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::client::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name,
-    open_async_resident_tls_client_with_flow,
+    open_async_resident_tls_client_with_binding,
 };
 use crate::production_runtime_owner::resident_dataplane::plan::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::read_anytls_frame;
 
@@ -34,12 +34,17 @@ struct AnyTlsOwnerKey {
 }
 
 impl AnyTlsOwnerKey {
-    fn for_proxy(proxy: &ResidentProxyPlan) -> Self {
+    fn for_binding(binding: &ResidentProxyBinding) -> Self {
         let mut digest = Sha256::new();
         digest.update(ANYTLS_OWNER_IDENTITY_DOMAIN);
-        update_proxy_identity(&mut digest, proxy);
+        update_proxy_identity_with_mark(
+            &mut digest,
+            binding.plan(),
+            binding.effective_socket_mark(),
+            Some(binding),
+        );
         Self {
-            generation: proxy.execution_plan().runtime_generation(),
+            generation: binding.runtime_generation(),
             digest: digest.finalize().into(),
         }
     }
@@ -47,7 +52,10 @@ impl AnyTlsOwnerKey {
 
 #[cfg(test)]
 pub(super) fn anytls_owner_key_digest_for_test(proxy: &ResidentProxyPlan) -> [u8; 32] {
-    AnyTlsOwnerKey::for_proxy(proxy).digest
+    let mut digest = Sha256::new();
+    digest.update(ANYTLS_OWNER_IDENTITY_DOMAIN);
+    update_proxy_identity(&mut digest, proxy);
+    digest.finalize().into()
 }
 
 impl std::fmt::Debug for AnyTlsOwnerKey {
@@ -71,13 +79,22 @@ fn update_identity_field(digest: &mut Sha256, field: &[u8], value: &[u8]) {
 }
 
 fn update_proxy_identity(digest: &mut Sha256, proxy: &ResidentProxyPlan) {
+    update_proxy_identity_with_mark(digest, proxy, proxy.mark, None);
+}
+
+fn update_proxy_identity_with_mark(
+    digest: &mut Sha256,
+    proxy: &ResidentProxyPlan,
+    effective_mark: u32,
+    binding: Option<&ResidentProxyBinding>,
+) {
     update_identity_field(digest, b"proxy", b"begin");
     update_identity_field(digest, b"graph-link-hash", proxy.graph_link_hash.as_bytes());
     update_identity_field(digest, b"server-host", proxy.server_host.as_bytes());
     update_identity_field(digest, b"server-port", &proxy.server_port.to_be_bytes());
     update_identity_field(digest, b"server-name", proxy.server_name.as_bytes());
     update_identity_field(digest, b"tls", proxy.tls.as_bytes());
-    update_identity_field(digest, b"so-mark", &proxy.mark.to_be_bytes());
+    update_identity_field(digest, b"so-mark", &effective_mark.to_be_bytes());
     update_identity_field(digest, b"mptcp", &[u8::from(proxy.mptcp)]);
     update_identity_field(digest, b"allow-insecure", &[u8::from(proxy.allow_insecure)]);
     update_identity_field(
@@ -159,13 +176,32 @@ fn update_proxy_identity(digest: &mut Sha256, proxy: &ResidentProxyPlan) {
     if let ResidentProxyProtocolPlan::AnyTlsTcpTls { auth } = &proxy.handler {
         update_identity_field(digest, b"anytls-auth", auth.as_bytes());
     }
-    update_identity_field(
-        digest,
-        b"chain-parent-present",
-        &[u8::from(proxy.chain_parent.is_some())],
-    );
-    if let Some(parent) = proxy.chain_parent.as_deref() {
-        update_proxy_identity(digest, parent);
+    if let Some(binding) = binding {
+        let parent = binding
+            .chain_parent()
+            .expect("published AnyTLS proxy chain execution must be materialized");
+        update_identity_field(
+            digest,
+            b"chain-parent-present",
+            &[u8::from(parent.is_some())],
+        );
+        if let Some(parent) = parent.as_ref() {
+            update_proxy_identity_with_mark(
+                digest,
+                parent.plan(),
+                parent.effective_socket_mark(),
+                Some(parent),
+            );
+        }
+    } else {
+        update_identity_field(
+            digest,
+            b"chain-parent-present",
+            &[u8::from(proxy.chain_parent.is_some())],
+        );
+        if let Some(parent) = proxy.chain_parent.as_deref() {
+            update_proxy_identity(digest, parent);
+        }
     }
     update_identity_field(digest, b"proxy", b"end");
 }
@@ -316,7 +352,7 @@ enum AnyTlsAcquireFailure {
 
 struct AnyTlsAcquireCommand {
     key: AnyTlsOwnerKey,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: String,
     deadline: AbsoluteDeadline,
     response: oneshot::Sender<Result<AnyTlsLogicalStreamLease, AnyTlsAcquireFailure>>,
@@ -368,11 +404,11 @@ pub(crate) struct AnyTlsOwnerRegistryHandle {
 impl AnyTlsOwnerRegistryHandle {
     pub(crate) async fn acquire(
         &self,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         target: String,
         deadline: AbsoluteDeadline,
     ) -> Result<AnyTlsLogicalStreamLease, String> {
-        let key = AnyTlsOwnerKey::for_proxy(&proxy);
+        let key = AnyTlsOwnerKey::for_binding(&binding);
         if key.generation != self.generation {
             return Err(format!(
                 "AnyTLS owner generation mismatch: requested={} active={}",
@@ -393,7 +429,7 @@ impl AnyTlsOwnerRegistryHandle {
             let (response, receiver) = oneshot::channel();
             let command = AnyTlsOwnerCommand::Acquire(AnyTlsAcquireCommand {
                 key,
-                proxy: Arc::clone(&proxy),
+                binding: binding.clone(),
                 target: target.clone(),
                 deadline,
                 response,
@@ -1176,7 +1212,7 @@ async fn run_anytls_physical(
     resources: AnyTlsOwnerResourceProfile,
     metrics: Arc<AnyTlsOwnerMetrics>,
 ) {
-    let build = build_anytls_physical(&initial.proxy, initial.deadline).await;
+    let build = build_anytls_physical(&initial.binding, initial.deadline).await;
     metrics.active_builds.fetch_sub(1, Ordering::Relaxed);
     let (mut client, tls_underlay) = match build {
         Ok(opened) => opened,
@@ -1307,9 +1343,10 @@ async fn run_anytls_physical(
 }
 
 async fn build_anytls_physical(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     deadline: AbsoluteDeadline,
 ) -> Result<(AsyncResidentTlsClient, &'static str), String> {
+    let proxy = binding.plan();
     if !matches!(
         &proxy.handler,
         ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
@@ -1321,7 +1358,7 @@ async fn build_anytls_physical(
         .ok_or_else(|| "AnyTLS physical connect deadline elapsed".to_owned())?;
     let mut client = time::timeout(
         remaining,
-        open_async_resident_tls_client_with_flow(proxy, proxy.mark, proxy.mptcp),
+        open_async_resident_tls_client_with_binding(binding, proxy.mptcp),
     )
     .await
     .map_err(|_| "AnyTLS physical TLS connect deadline elapsed".to_owned())??;
@@ -1783,7 +1820,7 @@ mod tests {
         let native_probe = include_str!("../probe/native_tcp/frame_tls.rs");
         let manual_runtime = include_str!("../runtime_owner.rs");
         let health_checks = include_str!("health_checks.rs");
-        let constructor = "open_async_resident_tls_client_with_flow";
+        let constructor = "open_async_resident_tls_client_with_binding";
         let owner_production = owner
             .split_once("#[cfg(test)]\nmod tests")
             .map_or(owner, |(production, _)| production);

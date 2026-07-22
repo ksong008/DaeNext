@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 mod basic_tcp;
@@ -23,7 +22,7 @@ use self::trojan::open_trojan_native_tcp_tunnel;
 use self::tunnel::{NativeTcpTunnel, cleanup_native_tcp_tunnel};
 use self::vless::open_vless_native_tcp_tunnel;
 use self::vmess::open_vmess_native_tcp_tunnel;
-use super::super::plan::{ResidentProxyPlan, ResidentTcpProbeDispatch};
+use super::super::plan::{ResidentProxyBinding, ResidentTcpProbeDispatch};
 use super::super::tcp::QuicEndpointCallerClass;
 use super::super::{
     AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
@@ -32,7 +31,7 @@ use super::super::{
 
 #[allow(clippy::too_many_arguments)]
 pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_native_proxy_tcp_async(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     scheme: &str,
     target: &str,
     host: &str,
@@ -50,7 +49,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
     let opened = await_native_tcp_probe_with_timeout(
         owner_deadline,
         open_native_tcp_tunnel(
-            Arc::clone(&proxy),
+            binding.clone(),
             target,
             hysteria2_owner_registry,
             tuic_owner_registry,
@@ -66,7 +65,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
         Err(NativeTcpProbeError::NotAdmitted) => {
             return Err(format!(
                 "native outbound probe not admitted for protocol {} net {} tls {}",
-                proxy.protocol, proxy.net, proxy.tls
+                binding.plan().protocol,
+                binding.plan().net,
+                binding.plan().tls
             ));
         }
         Err(NativeTcpProbeError::Open(err)) => return Err(err),
@@ -102,7 +103,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 async fn open_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
@@ -111,23 +112,23 @@ async fn open_native_tcp_tunnel(
     caller: QuicEndpointCallerClass,
     owner_deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    match proxy.execution_plan().protocol.probe_dispatch() {
-        ResidentTcpProbeDispatch::Basic => open_basic_native_tcp_tunnel(proxy, target).await,
+    match binding.execution().protocol.probe_dispatch() {
+        ResidentTcpProbeDispatch::Basic => open_basic_native_tcp_tunnel(binding, target).await,
         ResidentTcpProbeDispatch::Vless => {
-            open_vless_native_tcp_tunnel(proxy, target, owner_deadline).await
+            open_vless_native_tcp_tunnel(binding, target, owner_deadline).await
         }
-        ResidentTcpProbeDispatch::Vmess => open_vmess_native_tcp_tunnel(proxy, target).await,
-        ResidentTcpProbeDispatch::Trojan => open_trojan_native_tcp_tunnel(proxy, target).await,
+        ResidentTcpProbeDispatch::Vmess => open_vmess_native_tcp_tunnel(binding, target).await,
+        ResidentTcpProbeDispatch::Trojan => open_trojan_native_tcp_tunnel(binding, target).await,
         ResidentTcpProbeDispatch::AnyTls => {
-            open_frame_tls_native_tcp_tunnel(proxy, target, anytls_owner_registry, owner_deadline)
+            open_frame_tls_native_tcp_tunnel(binding, target, anytls_owner_registry, owner_deadline)
                 .await
         }
         ResidentTcpProbeDispatch::Shadowsocks => {
-            open_shadowsocks_native_tcp_tunnel(proxy, target).await
+            open_shadowsocks_native_tcp_tunnel(binding, target).await
         }
         ResidentTcpProbeDispatch::Quic => {
             open_quic_stream_native_tcp_tunnel(
-                proxy,
+                binding,
                 target,
                 hysteria2_owner_registry,
                 tuic_owner_registry,

@@ -74,7 +74,7 @@ mod tests {
     use std::sync::Arc;
 
     fn proxy(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
-        ResidentProxyPlan {
+        let mut proxy = ResidentProxyPlan {
             graph_id: "graph".to_owned(),
             graph_link_hash: "hash".to_owned(),
             redacted_link_source: "source".to_owned(),
@@ -104,7 +104,9 @@ mod tests {
             chain_parent: None,
             mark: 0,
             mptcp: false,
-        }
+        };
+        proxy.materialize_execution();
+        proxy
     }
 
     fn chained(mut child: ResidentProxyPlan) -> ResidentProxyPlan {

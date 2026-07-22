@@ -465,8 +465,8 @@ impl ResidentDnsForwarderSelectionKey {
     ) -> Self {
         match selection {
             ResidentDnsUpstreamSelection::Direct { .. } => Self::Direct,
-            ResidentDnsUpstreamSelection::Proxy { proxy } => Self::Proxy {
-                graph_link_hash: proxy.graph_link_hash.clone(),
+            ResidentDnsUpstreamSelection::Proxy { binding } => Self::Proxy {
+                graph_link_hash: binding.plan().graph_link_hash.clone(),
             },
         }
     }
@@ -543,7 +543,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Arc<ResidentDnsUdpActorExecutor>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) remote: SocketAddr,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) proxy: Arc<ResidentProxyPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) binding: ResidentProxyBinding,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) owners:
         ResidentTransportOwnerRegistries,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) bridge:
@@ -568,7 +568,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Arc<ResidentDnsUdpActorExecutor>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) remote: SocketAddr,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) proxy: Arc<ResidentProxyPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) binding: ResidentProxyBinding,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) owners:
         ResidentTransportOwnerRegistries,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) metrics:

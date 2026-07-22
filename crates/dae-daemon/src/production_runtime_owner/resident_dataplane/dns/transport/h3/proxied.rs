@@ -36,7 +36,7 @@ pub(super) async fn forward_dns_h3_to_proxy_async(
         let forwarder = time::timeout_at(context.deadline(), forwarder.lock())
             .await
             .map_err(|_| ProxyDnsRequestError::deadline(ProxyDnsRequestStage::OwnerAcquire))?;
-        forwarder.proxy.execution_plan().runtime_generation()
+        forwarder.binding.runtime_generation()
     };
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::ManagedDns,

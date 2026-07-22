@@ -1,14 +1,14 @@
 use sha2::{Digest, Sha256};
 
-use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyPlan;
+use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyBinding;
 
-pub(super) fn resident_transport_identity_digest(
+pub(super) fn resident_transport_binding_identity_digest(
     domain: &[u8],
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(domain);
-    update_proxy_identity(&mut digest, proxy);
+    update_binding_identity(&mut digest, binding);
     digest.finalize().into()
 }
 
@@ -19,14 +19,16 @@ fn update_identity_part(digest: &mut Sha256, field: &[u8], value: &[u8]) {
     digest.update(value);
 }
 
-fn update_proxy_identity(digest: &mut Sha256, proxy: &ResidentProxyPlan) {
+fn update_binding_identity(digest: &mut Sha256, binding: &ResidentProxyBinding) {
+    let proxy = binding.plan();
+    let effective_mark = binding.effective_socket_mark();
     update_identity_part(digest, b"proxy", b"begin");
     update_identity_part(digest, b"graph-link-hash", proxy.graph_link_hash.as_bytes());
     update_identity_part(digest, b"server-host", proxy.server_host.as_bytes());
     update_identity_part(digest, b"server-port", &proxy.server_port.to_be_bytes());
     update_identity_part(digest, b"server-name", proxy.server_name.as_bytes());
     update_identity_part(digest, b"tls", proxy.tls.as_bytes());
-    update_identity_part(digest, b"mark", &proxy.mark.to_be_bytes());
+    update_identity_part(digest, b"mark", &effective_mark.to_be_bytes());
     update_identity_part(digest, b"mptcp", &[u8::from(proxy.mptcp)]);
     update_identity_part(digest, b"allow-insecure", &[u8::from(proxy.allow_insecure)]);
     update_identity_part(
@@ -105,13 +107,12 @@ fn update_proxy_identity(digest: &mut Sha256, proxy: &ResidentProxyPlan) {
         update_identity_part(digest, b"reality-short-id", &reality.short_id);
         update_identity_part(digest, b"reality-spider-x", reality.spider_x.as_bytes());
     }
-    update_identity_part(
-        digest,
-        b"parent-present",
-        &[u8::from(proxy.chain_parent.is_some())],
-    );
-    if let Some(parent) = proxy.chain_parent.as_deref() {
-        update_proxy_identity(digest, parent);
+    let parent = binding
+        .chain_parent()
+        .expect("published resident proxy chain execution must be materialized");
+    update_identity_part(digest, b"parent-present", &[u8::from(parent.is_some())]);
+    if let Some(parent) = parent.as_ref() {
+        update_binding_identity(digest, parent);
     }
     update_identity_part(digest, b"proxy", b"end");
 }

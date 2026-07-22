@@ -67,7 +67,7 @@ async fn probe_udp_family(
                                 return Err(HealthCheckRoundStatus::Cancelled);
                             }
                             result = dns.probe_proxy_dns_udp_health(
-                                Arc::clone(&candidate.proxy),
+                                candidate.binding.clone(),
                                 addr,
                                 &candidate.udp_check.lookup_host,
                             ) => result,
@@ -75,7 +75,7 @@ async fn probe_udp_family(
                     }
                     None => {
                         dns.probe_proxy_dns_udp_health(
-                            Arc::clone(&candidate.proxy),
+                            candidate.binding.clone(),
                             addr,
                             &candidate.udp_check.lookup_host,
                         )

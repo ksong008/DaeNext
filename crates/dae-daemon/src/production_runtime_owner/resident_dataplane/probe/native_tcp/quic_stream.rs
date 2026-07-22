@@ -1,5 +1,4 @@
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use dae_outbound::{
@@ -9,7 +8,7 @@ use dae_outbound::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::super::super::plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
 use super::super::super::tcp::QuicEndpointCallerClass;
 use super::super::super::{
     Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, JuicityOwnerRegistryHandle,
@@ -20,7 +19,7 @@ use super::target::native_tcp_probe_selection;
 use super::tunnel::{NativeTcpTunnel, boxed_native_tcp_tunnel};
 
 pub(super) async fn open_quic_stream_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
@@ -28,8 +27,8 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
     caller: QuicEndpointCallerClass,
     deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    let selection = native_tcp_probe_selection(proxy, target);
-    match selection.proxy.handler.clone() {
+    let selection = native_tcp_probe_selection(binding, target);
+    match &selection.proxy.handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => {
             let owner_registry = hysteria2_owner_registry.ok_or_else(|| {
                 NativeTcpProbeError::Open(
@@ -38,7 +37,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 )
             })?;
             let transport = owner_registry
-                .acquire(Arc::clone(&selection.proxy), caller, deadline)
+                .acquire(selection.proxy.clone(), caller, deadline)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
             let connection = transport.connection();
@@ -73,7 +72,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 )
             })?;
             let transport = owner_registry
-                .acquire(Arc::clone(&selection.proxy), caller, deadline)
+                .acquire(selection.proxy.clone(), caller, deadline)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
             let connection = transport.connection();
@@ -97,7 +96,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
                 )
             })?;
             let transport = owner_registry
-                .acquire(Arc::clone(&selection.proxy), caller, deadline)
+                .acquire(selection.proxy.clone(), caller, deadline)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
             let (mut send, recv) = transport

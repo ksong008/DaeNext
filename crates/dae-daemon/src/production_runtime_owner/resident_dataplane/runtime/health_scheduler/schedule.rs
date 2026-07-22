@@ -93,8 +93,8 @@ pub(super) async fn run_resident_health_group_schedule(
             "probe": "tokio-proxy-tcp-and-dns-udp-check",
             "tcp_probe_executor": "tokio-proxy-tcp-probe",
             "udp_probe_executor": "tokio-proxy-packet-dns-probe",
-            "tcp_check_target": group.tcp_check.target.clone(),
-            "udp_check_target": group.udp_check.target.authority().to_owned(),
+            "tcp_check_target": group.probe_profile.tcp_check.target.clone(),
+            "udp_check_target": group.probe_profile.udp_check.target.authority().to_owned(),
             "scheduler": "shared-resident-health-runtime",
         }),
     );

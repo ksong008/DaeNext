@@ -195,9 +195,9 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
                 .map_err(|err| format!("{remote}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+        ResidentDnsUpstreamSelection::Proxy { binding } => {
             let forwarder = forwarders
-                .proxy_udp_forwarder(upstream, remote, Arc::clone(proxy), &target.selection)
+                .proxy_udp_forwarder(upstream, remote, binding.clone(), &target.selection)
                 .map_err(|error| {
                     ResidentDnsTransportError::proxy(ProxyDnsRequestError::new(
                         ProxyDnsRequestStage::OwnerAcquire,
@@ -331,11 +331,11 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
                 .map_err(|err| format!("{remote}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => forward_dns_tcp_to_proxy_async(
+        ResidentDnsUpstreamSelection::Proxy { binding } => forward_dns_tcp_to_proxy_async(
             upstream,
             remote,
             payload,
-            Arc::clone(proxy),
+            binding.clone(),
             ResidentTransportOwnerRegistries::new(
                 Some(
                     forwarders
@@ -441,12 +441,12 @@ async fn forward_dns_tcp_to_proxy_async(
     upstream: &ResidentDnsUpstream,
     target: SocketAddr,
     payload: &[u8],
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     owners: ResidentTransportOwnerRegistries,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     exchange_resident_proxy_dns_tcp_async(
-        proxy,
+        binding,
         &target.to_string(),
         payload,
         DNS_TCP_MESSAGE_READ_LIMIT,

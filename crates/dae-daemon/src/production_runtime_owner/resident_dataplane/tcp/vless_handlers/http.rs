@@ -226,8 +226,7 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
                 upload_underlay,
                 upload_http_version,
                 download_separate,
-            } = open_xhttp_packet_up_parts(&selection.proxy, selection.mark, selection.mptcp)
-                .await?;
+            } = open_xhttp_packet_up_parts(&selection.proxy, selection.mptcp).await?;
             let result = async {
                 let mut seq = 0_u64;
                 send_xhttp_packet_up_request(&mut upload, &session_id, seq, Bytes::from(request))
@@ -263,13 +262,8 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
                 upload_underlay,
                 upload_http_version,
                 download_separate,
-            } = open_xhttp_stream_parts(
-                &selection.proxy,
-                selection.mark,
-                selection.mptcp,
-                Bytes::from(request),
-            )
-            .await?;
+            } = open_xhttp_stream_parts(&selection.proxy, selection.mptcp, Bytes::from(request))
+                .await?;
             let result = relay_tcp_over_xhttp_stream(
                 inbound,
                 &mut upload,

@@ -73,11 +73,11 @@ async fn forward_dns_tls_to_routed_target_async(
                 .map_err(|err| format!("{remote}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => forward_dns_tls_to_proxy_async(
+        ResidentDnsUpstreamSelection::Proxy { binding } => forward_dns_tls_to_proxy_async(
             upstream,
             remote,
             payload,
-            Arc::clone(proxy),
+            binding.clone(),
             ResidentTransportOwnerRegistries::new(
                 Some(
                     forwarders
@@ -246,11 +246,11 @@ async fn forward_dns_https_to_routed_target_async(
                 .map_err(|err| format!("{remote}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => forward_dns_https_to_proxy_async(
+        ResidentDnsUpstreamSelection::Proxy { binding } => forward_dns_https_to_proxy_async(
             upstream,
             remote,
             payload,
-            Arc::clone(proxy),
+            binding.clone(),
             ResidentTransportOwnerRegistries::new(
                 Some(
                     forwarders

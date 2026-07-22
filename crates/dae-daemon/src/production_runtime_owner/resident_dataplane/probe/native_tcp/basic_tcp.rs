@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
-use super::super::super::client::open_async_resident_tls_client_with_flow;
+use super::super::super::client::open_async_resident_tls_client_with_binding;
 use super::super::super::plan::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
+    ResidentProxyBinding, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
 };
 use super::super::super::tcp::{
     http_proxy_connect_async, http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async,
@@ -13,10 +11,10 @@ use super::target::native_tcp_probe_selection;
 use super::tunnel::{NativeTcpTunnel, PrefixedNativeTcpTunnel, boxed_native_tcp_tunnel};
 
 pub(super) async fn open_basic_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    let selection = native_tcp_probe_selection(proxy, target);
+    let selection = native_tcp_probe_selection(binding, target);
     match &selection.proxy.handler {
         ResidentProxyProtocolPlan::Socks5Tcp { username, password } => {
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
@@ -57,13 +55,10 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             transport_host,
             transport_path,
         } if selection.proxy.execution_plan().security.is_tls_stream() => {
-            let mut stream = open_async_resident_tls_client_with_flow(
-                &selection.proxy,
-                selection.mark,
-                selection.mptcp,
-            )
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+            let mut stream =
+                open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
             let response_leftover = http_proxy_connect_async(
                 &mut stream,
                 target,

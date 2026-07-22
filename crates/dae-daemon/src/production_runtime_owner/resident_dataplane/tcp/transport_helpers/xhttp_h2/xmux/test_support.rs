@@ -1,6 +1,7 @@
 use super::super::resolved_endpoint::XhttpResolvedEndpointIdentity;
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::plan::ResidentRealityUnderlayPlan;
+use std::sync::Arc;
 
 pub(super) fn download_test_plan(runtime_generation: u64) -> ResidentXhttpXmuxPlan {
     ResidentXhttpXmuxPlan {
@@ -42,7 +43,7 @@ pub(super) fn download_test_key(
         tls_fragment: None,
         reality: Some(reality.clone()),
     };
-    let proxy = ResidentProxyPlan {
+    let mut proxy = ResidentProxyPlan {
         graph_id: format!("resident-graph:{graph_link_hash}"),
         graph_link_hash: graph_link_hash.to_owned(),
         redacted_link_source: "vless://<redacted>".to_owned(),
@@ -73,6 +74,12 @@ pub(super) fn download_test_key(
         mark: 0,
         mptcp: false,
     };
+    proxy.materialize_execution();
+    let binding = ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(runtime_generation),
+    )
+    .unwrap();
     let resolved = XhttpResolvedEndpointIdentity::from_candidates(&[remote.parse().unwrap()]);
-    XhttpXmuxKey::download(&proxy, &endpoint, &resolved, &plan, 0, false).unwrap()
+    XhttpXmuxKey::download(&binding, &endpoint, &resolved, &plan, 0, false).unwrap()
 }

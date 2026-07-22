@@ -57,12 +57,14 @@ pub(super) enum TrojanUdpCarrier {
 impl TrojanUdpCarrier {
     pub(super) async fn open(
         kind: TrojanUdpCarrierKind,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         initial_packet: &[u8],
     ) -> Result<Self, String> {
+        let proxy = binding.plan();
         match kind {
             TrojanUdpCarrierKind::Tls => {
-                let mut client = open_async_resident_tls_client(proxy).await?;
+                let mut client =
+                    open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
                 write_async_tls_plain_all(
                     &mut client,
@@ -76,7 +78,8 @@ impl TrojanUdpCarrier {
                 })
             }
             TrojanUdpCarrierKind::WebSocket => {
-                let mut client = open_async_resident_tls_client(proxy).await?;
+                let mut client =
+                    open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
                 let options = HttpUpgradeOptions::new(&proxy.stream_host, &proxy.stream_path);
                 websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
@@ -93,7 +96,8 @@ impl TrojanUdpCarrier {
                 })
             }
             TrojanUdpCarrierKind::HttpUpgrade => {
-                let mut client = open_async_resident_tls_client(proxy).await?;
+                let mut client =
+                    open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
                 let options = HttpUpgradeOptions::new(&proxy.stream_host, &proxy.stream_path);
                 httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
@@ -110,7 +114,7 @@ impl TrojanUdpCarrier {
             }
             TrojanUdpCarrierKind::Grpc => {
                 let (send_stream, response, carrier_lease) =
-                    open_grpc_h2_stream(proxy, initial_packet).await?;
+                    open_grpc_h2_stream(binding, initial_packet).await?;
                 let tls_underlay = carrier_lease.tls_underlay();
                 Ok(Self::Grpc {
                     send_stream,

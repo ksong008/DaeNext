@@ -16,12 +16,11 @@ pub(crate) fn fetch_http_url_via_default_proxy(
         .ok_or_else(|| "subscription proxy fetch missing port".to_owned())?;
     let plan = build_resident_dataplane_plan(config)?;
     let mut proxy = plan
-        .default_proxy_snapshot()
+        .default_proxy_binding()
         .ok_or_else(|| "subscription proxy fetch has no default proxy node".to_owned())?;
-    proxy.apply_latency_probe_control_mark(plan::RESIDENT_CONTROL_PLANE_SO_MARK);
-    proxy.apply_runtime_generation(0);
-    proxy.disable_latency_probe_persistent_caches();
-    proxy.compact_allocations();
+    proxy.bind_control_plane();
+    proxy.apply_control_socket_mark(plan::RESIDENT_CONTROL_PLANE_SO_MARK);
+    let proxy = proxy.without_persistent_xhttp_reuse();
 
     let runtime = build_transient_probe_runtime("subscription proxy fetch")?;
     let owner_stop = ResidentStopSignal::shared();
@@ -32,7 +31,7 @@ pub(crate) fn fetch_http_url_via_default_proxy(
         resources.tcp_flow_stack_bytes.value(),
     )?;
     let requires_tuic_owner = matches!(
-        &proxy.handler,
+        &proxy.plan().handler,
         plan::ResidentProxyProtocolPlan::TuicQuicTcp { .. }
     );
     let (tuic_owner_registry, tuic_owner_thread) = if requires_tuic_owner {
@@ -52,7 +51,7 @@ pub(crate) fn fetch_http_url_via_default_proxy(
         (None, None)
     };
     let requires_juicity_owner = matches!(
-        &proxy.handler,
+        &proxy.plan().handler,
         plan::ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
     );
     let (juicity_owner_registry, juicity_owner_thread) = if requires_juicity_owner {
@@ -74,7 +73,7 @@ pub(crate) fn fetch_http_url_via_default_proxy(
     } else {
         (None, None)
     };
-    let requires_anytls_owner = proxy.requires_anytls_transport_owner();
+    let requires_anytls_owner = proxy.plan().requires_anytls_transport_owner();
     let (anytls_owner_registry, anytls_owner_thread) = if requires_anytls_owner {
         match start_anytls_owner_registry(
             0,
@@ -97,7 +96,7 @@ pub(crate) fn fetch_http_url_via_default_proxy(
     } else {
         (None, None)
     };
-    let requires_h2_carrier_owner = proxy.requires_h2_carrier_owner();
+    let requires_h2_carrier_owner = proxy.plan().requires_h2_carrier_owner();
     let (h2_carrier_owner, h2_carrier_thread) = if requires_h2_carrier_owner {
         match start_h2_carrier_generation_owner(
             0,
@@ -124,7 +123,7 @@ pub(crate) fn fetch_http_url_via_default_proxy(
     } else {
         (None, None)
     };
-    let requires_meek_transport_owner = proxy.requires_meek_transport_owner();
+    let requires_meek_transport_owner = proxy.plan().requires_meek_transport_owner();
     let (meek_transport_owner, meek_transport_thread) = if requires_meek_transport_owner {
         match start_meek_transport_generation_owner(
             0,
@@ -154,7 +153,7 @@ pub(crate) fn fetch_http_url_via_default_proxy(
     } else {
         (None, None)
     };
-    let requires_vless_mux_owner = proxy.requires_vless_mux_owner();
+    let requires_vless_mux_owner = proxy.plan().requires_vless_mux_owner();
     let (vless_mux_owner, vless_mux_thread) = if requires_vless_mux_owner {
         match start_vless_mux_generation_owner(
             0,
@@ -188,7 +187,7 @@ pub(crate) fn fetch_http_url_via_default_proxy(
         (None, None)
     };
     let response = runtime.block_on(fetch_resident_proxy_http_response_async(
-        Arc::new(proxy),
+        proxy,
         tls,
         &format_subscription_target(host, port),
         host,

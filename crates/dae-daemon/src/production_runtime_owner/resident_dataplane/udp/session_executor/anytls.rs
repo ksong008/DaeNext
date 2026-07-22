@@ -1,7 +1,7 @@
 use super::*;
 use tokio::io::AsyncWriteExt;
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct AnyTlsPacketStreamSession {
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     logical: Option<AnyTlsLogicalStreamLease>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
@@ -13,11 +13,11 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct AnyTlsPa
 
 impl AnyTlsPacketStreamSession {
     pub(super) fn new(
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Self {
         Self {
-            proxy,
+            binding,
             owner_registry,
             logical: None,
             owner_deadline: None,
@@ -53,7 +53,7 @@ impl AnyTlsPacketStreamSession {
                 )
             });
             let logical = owner_registry
-                .acquire(Arc::clone(&self.proxy), stream_target, deadline)
+                .acquire(self.binding.clone(), stream_target, deadline)
                 .await?;
             self.tls_underlay = Some(logical.tls_underlay());
             self.logical = Some(logical);
@@ -173,13 +173,14 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct AnyTlsUdpTest
 
 #[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane) async fn exercise_anytls_udp_stream_session(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     owner_registry: AnyTlsOwnerRegistryHandle,
     original_dst: SocketAddr,
     payload: &[u8],
     deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<AnyTlsUdpTestExchange, String> {
-    let mut session = AnyTlsPacketStreamSession::new(Arc::clone(&proxy), Some(owner_registry));
+    let proxy = Arc::clone(binding.shared_plan());
+    let mut session = AnyTlsPacketStreamSession::new(binding, Some(owner_registry));
     session.set_owner_deadline(deadline);
     let mut response = session.exchange(&proxy, original_dst, payload).await?;
     if !response.reply_forwarded {
@@ -211,9 +212,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn exercise_an
 mod tests {
     use super::*;
 
+    fn test_anytls_binding() -> ResidentProxyBinding {
+        let mut proxy = test_anytls_proxy();
+        proxy.materialize_execution();
+        ResidentProxyBinding::configuration(Arc::new(proxy))
+            .expect("materialized AnyTLS UDP test binding")
+    }
+
     #[test]
     fn anytls_udp_stream_pending_result_does_not_forward_empty_reply() {
-        let session = AnyTlsPacketStreamSession::new(Arc::new(test_anytls_proxy()), None);
+        let session = AnyTlsPacketStreamSession::new(test_anytls_binding(), None);
         let pending = session.pending_response_result();
         assert!(!pending.reply_forwarded);
         assert!(pending.payload_for_test().is_empty());
@@ -226,7 +234,7 @@ mod tests {
     fn anytls_udp_stream_pops_concatenated_packet_payloads() {
         let first = anytls_link::packet_next_write(b"one");
         let second = anytls_link::packet_next_write(b"two");
-        let mut session = AnyTlsPacketStreamSession::new(Arc::new(test_anytls_proxy()), None);
+        let mut session = AnyTlsPacketStreamSession::new(test_anytls_binding(), None);
         session.response_plaintext.extend_from_slice(&first);
         session.response_plaintext.extend_from_slice(&second);
 
@@ -245,7 +253,7 @@ mod tests {
     fn anytls_udp_stream_response_is_bound_to_its_fixed_target() {
         let expected: SocketAddr = "192.0.2.1:53".parse().unwrap();
         let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
-        let mut session = AnyTlsPacketStreamSession::new(Arc::new(test_anytls_proxy()), None);
+        let mut session = AnyTlsPacketStreamSession::new(test_anytls_binding(), None);
         session
             .fixed_target
             .bind(expected, "AnyTLS UDP packet stream")

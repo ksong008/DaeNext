@@ -93,7 +93,9 @@ fn apply_fixed_group_selection(
     if let Some(candidate) = selected {
         apply_candidate_identity(snapshot, candidate);
         snapshot["selectionSource"] = json!(RUNTIME_GROUP_SELECTION_SOURCE_FIXED);
-        if let Some(health) = preferred_fixed_candidate_health(group, &candidate.proxy.node_tag) {
+        if let Some(health) =
+            preferred_fixed_candidate_health(group, &candidate.binding.plan().node_tag)
+        {
             snapshot["selectedNetworkType"] = json!(health.network_type.string_without_dns());
             snapshot["selectedNetworkDimension"] = json!(health.network_type.dimension_name());
             snapshot["selectedHealthState"] = json!(health.health_state.as_str());
@@ -227,7 +229,7 @@ fn first_alive_count(selector: &DialerGroup, network_types: &[NetworkType]) -> O
 
 fn runtime_group_tcp_network_types(group: &plan::ResidentProxyGroupPlan) -> Vec<NetworkType> {
     let mut network_types = Vec::new();
-    for target in &group.tcp_check.targets {
+    for target in &group.probe_profile.tcp_check.targets {
         if let Some(network_type) = target.network_type_hint() {
             push_unique_runtime_group_network_type(&mut network_types, network_type);
         }
@@ -251,7 +253,7 @@ fn push_unique_runtime_group_network_type(
 }
 
 fn apply_candidate_identity(snapshot: &mut Value, candidate: &plan::ResidentProxyCandidatePlan) {
-    snapshot["selectedNodeTag"] = json!(candidate.proxy.node_tag);
+    snapshot["selectedNodeTag"] = json!(candidate.binding.plan().node_tag);
     snapshot["selectedLinkHash"] = json!(candidate.link_hash);
     snapshot["selectedRedactedLinkSource"] = json!(candidate.redacted_link_source);
 }

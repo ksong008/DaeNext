@@ -221,7 +221,7 @@ fn vless_mux_test_proxy(
     address: SocketAddr,
     generation: u64,
     graph_link_hash: &str,
-) -> Arc<plan::ResidentProxyPlan> {
+) -> plan::ResidentProxyBinding {
     let mut proxy = plan::ResidentProxyPlan {
         graph_id: format!("resident-graph:{graph_link_hash}"),
         graph_link_hash: graph_link_hash.to_owned(),
@@ -253,8 +253,12 @@ fn vless_mux_test_proxy(
         mark: 0,
         mptcp: false,
     };
-    proxy.apply_runtime_generation(generation);
-    Arc::new(proxy)
+    proxy.materialize_execution();
+    plan::ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .expect("materialized VLESS mux owner test binding")
 }
 
 fn vless_mux_test_deadline(duration: Duration) -> dae_runtime_control::AbsoluteDeadline {
@@ -295,7 +299,7 @@ async fn write_and_read_echo(stream: &mut VlessMuxLogicalStream, payload: &[u8])
 }
 
 async fn acquire_vless_mux_from_fresh_runtime(
-    proxy: Arc<plan::ResidentProxyPlan>,
+    proxy: plan::ResidentProxyBinding,
     target: &str,
 ) -> Result<VlessMuxLogicalStream, String> {
     let target = target.to_owned();
@@ -341,14 +345,12 @@ fn vless_mux_owner_demultiplexes_concurrent_streams_and_isolates_close_and_failu
             )
             .unwrap();
 
-            let mut first =
-                acquire_vless_mux_from_fresh_runtime(Arc::clone(&proxy), "127.0.0.1:443")
-                    .await
-                    .unwrap();
-            let mut second =
-                acquire_vless_mux_from_fresh_runtime(Arc::clone(&proxy), "127.0.0.1:443")
-                    .await
-                    .unwrap();
+            let mut first = acquire_vless_mux_from_fresh_runtime(proxy.clone(), "127.0.0.1:443")
+                .await
+                .unwrap();
+            let mut second = acquire_vless_mux_from_fresh_runtime(proxy.clone(), "127.0.0.1:443")
+                .await
+                .unwrap();
             assert_eq!(first.physical_instance_id(), second.physical_instance_id());
             assert_ne!(first.sid(), second.sid());
             write_and_read_echo(&mut first, b"logical-a").await;
@@ -364,7 +366,7 @@ fn vless_mux_owner_demultiplexes_concurrent_streams_and_isolates_close_and_failu
             write_and_read_echo(&mut second, b"logical-b-survives").await;
 
             let mut third = acquire_vless_mux_logical_stream(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 "127.0.0.1:443".to_owned(),
                 vless_mux_test_deadline(Duration::from_secs(2)),
             )
@@ -534,14 +536,14 @@ fn vless_mux_owner_enforces_capacity_key_partition_idle_expiry_and_generation_cl
                 )
                 .unwrap();
                 let mut first = acquire_vless_mux_logical_stream(
-                    Arc::clone(&first_proxy),
+                    first_proxy.clone(),
                     "127.0.0.1:443".to_owned(),
                     vless_mux_test_deadline(Duration::from_secs(2)),
                 )
                 .await
                 .unwrap();
                 let mut second = acquire_vless_mux_logical_stream(
-                    Arc::clone(&first_proxy),
+                    first_proxy.clone(),
                     "127.0.0.1:443".to_owned(),
                     vless_mux_test_deadline(Duration::from_secs(2)),
                 )

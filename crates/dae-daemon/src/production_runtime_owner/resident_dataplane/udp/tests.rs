@@ -6,11 +6,18 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
     use std::time::{Duration, Instant};
 
     use super::super::super::plan::{
-        ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentXhttpSettingsPlan,
+        ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan,
+        ResidentXhttpSettingsPlan,
     };
     use super::super::*;
 
     const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
+
+    fn udp_test_binding(proxy: &ResidentProxyPlan) -> ResidentProxyBinding {
+        let mut proxy = proxy.clone();
+        proxy.materialize_execution();
+        ResidentProxyBinding::configuration(Arc::new(proxy)).expect("materialized UDP test proxy")
+    }
 
     #[test]
     fn resident_vless_udp_response_parser_handles_vision_payload() {
@@ -87,6 +94,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         proxy.protocol = "vless";
         proxy.flow = XTLS_RPRX_VISION.to_owned();
         proxy.tls = "tls".to_owned();
+        proxy.materialize_execution();
         let request = build_vless_udp_request(
             &proxy,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53)),
@@ -112,8 +120,9 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         let original_dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53));
         let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
         let dns = ResidentDnsPlan::asis(proxy.mark);
+        let binding = udp_test_binding(&proxy);
         let err = executor
-            .execute(&dns, &proxy, original_dst, &[0xde, 0xad])
+            .execute(&dns, &binding, original_dst, &[0xde, 0xad])
             .await
             .unwrap_err();
         executor.shutdown().await;
@@ -191,7 +200,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         proxies.push(vmess_unsupported);
 
         let target = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9));
-        for proxy in proxies {
+        for mut proxy in proxies {
+            proxy.materialize_execution();
             let agreement = proxy.execution_plan().udp.agreement();
             assert!(agreement.policy_closed());
             let graph = proxy.executable_graph_value();
@@ -212,7 +222,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
                 agreement.unsupported_reason().unwrap()
             );
             let result = probe_resident_proxy_udp_async(
-                Arc::new(proxy.clone()),
+                udp_test_binding(&proxy),
                 target,
                 b"probe",
                 false,
@@ -251,7 +261,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             proxy.server_port.saturating_add(1),
         ));
         let bridge = open_resident_proxy_udp_bridge_async(
-            Arc::new(proxy),
+            udp_test_binding(&proxy),
             original_dst,
             None,
             None,
@@ -478,6 +488,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
                 proxy.flow = XTLS_RPRX_VISION.to_owned();
                 proxy.tls = "tls".to_owned();
             }
+            proxy.materialize_execution();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), expected);
             assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
@@ -489,6 +500,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         vless_xhttp.net = "xhttp".to_owned();
         vless_xhttp.tls = "tls".to_owned();
         vless_xhttp.flow = String::new();
+        vless_xhttp.materialize_execution();
         let executor = UdpSessionExecutor::new_proxy_packet(&vless_xhttp);
         assert_eq!(
             udp_executor_shape(&executor),
@@ -497,6 +509,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         assert!(executor.agrees_with(vless_xhttp.execution_plan().udp.agreement()));
 
         vless_xhttp.alpn = vec!["h3".to_owned()];
+        vless_xhttp.materialize_execution();
         let executor = UdpSessionExecutor::new_proxy_packet(&vless_xhttp);
         assert_eq!(
             udp_executor_shape(&executor),
@@ -510,6 +523,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         vless_udp443.net = "tcp".to_owned();
         vless_udp443.tls = "tls".to_owned();
         vless_udp443.flow = "xtls-rprx-vision-udp443".to_owned();
+        vless_udp443.materialize_execution();
         let executor = UdpSessionExecutor::new_proxy_packet(&vless_udp443);
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::VlessVision);
 
@@ -538,6 +552,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             proxy.flow = String::new();
+            proxy.materialize_execution();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(
                 udp_executor_shape(&executor),
@@ -620,6 +635,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             });
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
+            proxy.materialize_execution();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::VmessAead);
             assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
@@ -632,6 +648,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             });
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
+            proxy.materialize_execution();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
             assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
@@ -643,6 +660,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             proxy.flow = String::new();
+            proxy.materialize_execution();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
             assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
@@ -654,6 +672,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             proxy.net = net.to_owned();
             proxy.tls = "tls".to_owned();
             proxy.flow = "xtls-rprx-vision".to_owned();
+            proxy.materialize_execution();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
             assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
@@ -664,6 +683,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         meek.net = "meek".to_owned();
         meek.tls = "tls".to_owned();
         meek.flow = String::new();
+        meek.materialize_execution();
         let executor = UdpSessionExecutor::new_proxy_packet(&meek);
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
         assert!(executor.agrees_with(meek.execution_plan().udp.agreement()));
@@ -673,6 +693,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
                 password: String::new(),
             });
             proxy.net = net.to_owned();
+            proxy.materialize_execution();
             let executor = UdpSessionExecutor::new_proxy_packet(&proxy);
             assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::Trojan);
             assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
@@ -683,6 +704,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             password: String::new(),
         });
         unsupported_trojan.net = "unsupported-wrapper".to_owned();
+        unsupported_trojan.materialize_execution();
         let executor = UdpSessionExecutor::new_proxy_packet(&unsupported_trojan);
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::FailClosed);
         assert!(executor.agrees_with(unsupported_trojan.execution_plan().udp.agreement()));
@@ -729,6 +751,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             proxy.flow = String::new();
+            proxy.materialize_execution();
 
             assert_eq!(
                 udp_packet_semantics_for_destination(&proxy, target),
@@ -773,6 +796,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             proxy.net = "tcp".to_owned();
             proxy.tls = "tls".to_owned();
             proxy.flow = flow.to_owned();
+            proxy.materialize_execution();
 
             assert_eq!(
                 udp_packet_semantics_for_destination(
@@ -808,6 +832,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             proxy.flow = flow.to_owned();
+            proxy.materialize_execution();
 
             assert_eq!(
                 udp_packet_semantics_for_destination(
@@ -912,7 +937,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn test_udp_proxy(
         handler: ResidentProxyProtocolPlan,
     ) -> ResidentProxyPlan {
-        ResidentProxyPlan {
+        let mut proxy = ResidentProxyPlan {
             graph_id: "resident-graph:redacted".to_owned(),
             graph_link_hash: "sha256:redacted".to_owned(),
             redacted_link_source: "source:<redacted>".to_owned(),
@@ -942,7 +967,9 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             chain_parent: None,
             mark: 0,
             mptcp: false,
-        }
+        };
+        proxy.materialize_execution();
+        proxy
     }
 
     fn with_plain_socks5_parent(mut child: ResidentProxyPlan) -> ResidentProxyPlan {

@@ -40,7 +40,7 @@ impl TrojanUdpStreamSession {
 
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
@@ -56,7 +56,8 @@ impl TrojanUdpStreamSession {
                 &packet,
             )
             .map_err(|err| format!("build Trojan UDP-over-stream request: {err}"))?;
-            self.carrier = Some(TrojanUdpCarrier::open(self.carrier_kind, proxy, &request).await?);
+            self.carrier =
+                Some(TrojanUdpCarrier::open(self.carrier_kind, binding, &request).await?);
             Ok(())
         };
         if let Err(err) = result {

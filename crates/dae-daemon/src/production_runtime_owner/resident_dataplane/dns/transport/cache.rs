@@ -195,13 +195,13 @@ impl ResidentDnsForwarderCache {
         &self,
         upstream: &ResidentDnsUpstream,
         target: SocketAddr,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<AsyncMutex<ResidentDnsProxyQuicForwarder>>, String> {
         let key = routed_dns_forwarder_key(
             upstream,
             target,
-            proxy.mark,
+            binding.effective_socket_mark(),
             selection,
             ResidentDnsForwarderTransport::ProxyQuic,
         );
@@ -217,7 +217,7 @@ impl ResidentDnsForwarderCache {
                     task_executor: Arc::clone(&self.udp_executor),
                     upstream: upstream.clone(),
                     remote: target,
-                    proxy,
+                    binding,
                     owners: ResidentTransportOwnerRegistries::new(
                         self.hysteria2_owner_registry.clone(),
                         self.tuic_owner_registry.clone(),
@@ -246,13 +246,13 @@ impl ResidentDnsForwarderCache {
         &self,
         upstream: &ResidentDnsUpstream,
         target: SocketAddr,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<AsyncMutex<ResidentDnsProxyH3Forwarder>>, String> {
         let key = routed_dns_forwarder_key(
             upstream,
             target,
-            proxy.mark,
+            binding.effective_socket_mark(),
             selection,
             ResidentDnsForwarderTransport::ProxyHttp3,
         );
@@ -268,7 +268,7 @@ impl ResidentDnsForwarderCache {
                     task_executor: Arc::clone(&self.udp_executor),
                     upstream: upstream.clone(),
                     remote: target,
-                    proxy,
+                    binding,
                     owners: ResidentTransportOwnerRegistries::new(
                         self.hysteria2_owner_registry.clone(),
                         self.tuic_owner_registry.clone(),
@@ -351,15 +351,15 @@ impl ResidentDnsForwarderCache {
         &self,
         upstream: &ResidentDnsUpstream,
         target: SocketAddr,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         selection: &ResidentDnsUpstreamSelection,
     ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
-        proxy
-            .execution_plan()
+        binding
+            .execution()
             .udp
             .agreement()
             .admit_packet_relay("proxy-routed DNS UDP")?;
-        if let Some(reason) = resident_udp_chain_admission(&proxy).unsupported_reason() {
+        if let Some(reason) = resident_udp_chain_admission(binding.plan()).unsupported_reason() {
             return Err(format!(
                 "proxy-routed DNS UDP rejected by typed chain agreement: {reason}"
             ));
@@ -367,7 +367,7 @@ impl ResidentDnsForwarderCache {
         let key = routed_dns_forwarder_key(
             upstream,
             target,
-            proxy.mark,
+            binding.effective_socket_mark(),
             selection,
             ResidentDnsForwarderTransport::ProxyUdp,
         );
@@ -376,7 +376,7 @@ impl ResidentDnsForwarderCache {
             "proxied UDP",
             || {
                 ResidentProxyDnsUdpForwarder::new_with_optional_transport_owner(
-                    proxy,
+                    binding,
                     target,
                     self.udp_runtime.clone(),
                     Arc::clone(&self.metrics),
@@ -401,16 +401,16 @@ impl ResidentDnsForwarderCache {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn health_proxy_udp_forwarder(
         &self,
         target: SocketAddr,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
     ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
         let key = ResidentDnsForwarderKey {
             scheme: ResidentDnsUpstreamScheme::Udp,
             authority: String::new(),
             path: String::new(),
-            mark: proxy.mark,
+            mark: binding.effective_socket_mark(),
             target: Some(target),
             selection: ResidentDnsForwarderSelectionKey::Proxy {
-                graph_link_hash: proxy.graph_link_hash.clone(),
+                graph_link_hash: binding.plan().graph_link_hash.clone(),
             },
             transport: ResidentDnsForwarderTransport::ProxyUdpHealth,
         };
@@ -420,7 +420,7 @@ impl ResidentDnsForwarderCache {
             "proxied UDP health",
             || {
                 ResidentProxyDnsUdpForwarder::new_with_optional_transport_owner(
-                    proxy,
+                    binding,
                     target,
                     self.udp_runtime.clone(),
                     Arc::clone(&self.metrics),
@@ -920,7 +920,7 @@ mod tests {
     use super::*;
     use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     use crate::production_runtime_owner::resident_dataplane::dns::transport::test_support::{
-        Socks5UdpRelay, dns_a_test_response, socks5_dns_proxy,
+        Socks5UdpRelay, dns_a_test_response, dns_proxy_binding, socks5_dns_proxy,
     };
     use crate::production_runtime_owner::resident_dataplane::plan::{
         ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan,
@@ -928,7 +928,7 @@ mod tests {
     use std::cell::Cell;
 
     fn policy_closed_http_proxy() -> Arc<ResidentProxyPlan> {
-        Arc::new(ResidentProxyPlan {
+        let mut proxy = ResidentProxyPlan {
             graph_id: "resident-graph:redacted".to_owned(),
             graph_link_hash: "sha256:redacted".to_owned(),
             redacted_link_source: "source:<redacted>".to_owned(),
@@ -964,7 +964,9 @@ mod tests {
             chain_parent: None,
             mark: 0,
             mptcp: false,
-        })
+        };
+        proxy.materialize_execution();
+        Arc::new(proxy)
     }
 
     #[test]
@@ -997,12 +999,13 @@ mod tests {
         let upstream =
             parse_dns_upstream(0, "closed", &format!("udp://{target}"), target, 0).unwrap();
         let proxy = policy_closed_http_proxy();
+        let binding = dns_proxy_binding(Arc::clone(&proxy), 0);
         let selection = ResidentDnsUpstreamSelection::Proxy {
-            proxy: Arc::clone(&proxy),
+            binding: binding.clone(),
         };
 
         let err = cache
-            .proxy_udp_forwarder(&upstream, target, proxy, &selection)
+            .proxy_udp_forwarder(&upstream, target, binding, &selection)
             .err()
             .expect("policy-closed DNS UDP must be rejected");
 
@@ -1147,21 +1150,22 @@ mod tests {
         )
         .unwrap();
         let proxy = policy_closed_http_proxy();
+        let binding = dns_proxy_binding(Arc::clone(&proxy), 0);
         let selection = ResidentDnsUpstreamSelection::Proxy {
-            proxy: Arc::clone(&proxy),
+            binding: binding.clone(),
         };
 
         let first_doq = cache
-            .proxy_quic_forwarder(&doq, target, Arc::clone(&proxy), &selection)
+            .proxy_quic_forwarder(&doq, target, binding.clone(), &selection)
             .unwrap();
         let second_doq = cache
-            .proxy_quic_forwarder(&doq, target, Arc::clone(&proxy), &selection)
+            .proxy_quic_forwarder(&doq, target, binding.clone(), &selection)
             .unwrap();
         let first_doh3 = cache
-            .proxy_h3_forwarder(&doh3, target, Arc::clone(&proxy), &selection)
+            .proxy_h3_forwarder(&doh3, target, binding.clone(), &selection)
             .unwrap();
         let second_doh3 = cache
-            .proxy_h3_forwarder(&doh3, target, proxy, &selection)
+            .proxy_h3_forwarder(&doh3, target, binding, &selection)
             .unwrap();
 
         assert!(Arc::ptr_eq(&first_doq, &second_doq));
@@ -1194,14 +1198,13 @@ mod tests {
             }
         });
         let socks = Socks5UdpRelay::start().await;
-        let proxy = socks5_dns_proxy(socks.address(), 7_370);
+        let proxy = socks5_dns_proxy(socks.address());
+        let binding = dns_proxy_binding(Arc::clone(&proxy), 7_370);
         let cache = ResidentDnsForwarderCache::default();
         let first = cache
-            .health_proxy_udp_forwarder(target, Arc::clone(&proxy))
+            .health_proxy_udp_forwarder(target, binding.clone())
             .unwrap();
-        let second = cache
-            .health_proxy_udp_forwarder(target, Arc::clone(&proxy))
-            .unwrap();
+        let second = cache.health_proxy_udp_forwarder(target, binding).unwrap();
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.health_len(), 1);

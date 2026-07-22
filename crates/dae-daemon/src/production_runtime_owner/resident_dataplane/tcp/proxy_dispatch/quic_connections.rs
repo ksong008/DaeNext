@@ -1,4 +1,5 @@
 use super::*;
+use dae_runtime_control::OwnerGeneration;
 
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentConnectedQuicEndpoint {
     pub(in crate::production_runtime_owner::resident_dataplane) remote: SocketAddr,
@@ -10,6 +11,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct Hysteria2Quic
     'a,
 > {
     pub(in crate::production_runtime_owner::resident_dataplane) proxy: &'a ResidentProxyPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) generation: OwnerGeneration,
     pub(in crate::production_runtime_owner::resident_dataplane) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane) obfs: &'a ResidentHysteria2ObfsPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) port_hop_ports: &'a [u16],
@@ -33,6 +35,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
 ) -> Result<ResidentConnectedQuicEndpoint, Hysteria2ConnectionFailure> {
     let Hysteria2QuicConnectionRequest {
         proxy,
+        generation,
         mark,
         obfs,
         port_hop_ports,
@@ -79,6 +82,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Hysteria2,
         caller,
+        generation,
         proxy,
         QuicEndpointIdentityRole::ProtocolCarrier,
         &[],
@@ -186,14 +190,14 @@ fn hysteria2_endpoint_open_failure(error: QuicEndpointOpenError) -> Hysteria2Fai
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_quic_connection_candidates_async(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
+    binding: &ResidentProxyBinding,
     alpn: &[String],
     allow_insecure: bool,
     congestion: TuicCongestionController,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
+    let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
     let client_config =
         build_tuic_runtime_client_config_with_congestion(alpn, allow_insecure, congestion)
@@ -201,6 +205,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Tuic,
         caller,
+        binding.runtime_generation(),
         proxy,
         QuicEndpointIdentityRole::ProtocolCarrier,
         &[],
@@ -212,7 +217,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
         "connect TUIC QUIC endpoint",
         |remote, deadline, cancellation| {
             let mut endpoint = open_marked_quic_endpoint_for_remote(
-                mark,
+                binding.effective_socket_mark(),
                 remote,
                 endpoint_context.clone(),
                 deadline,
@@ -231,13 +236,13 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicity_quic_connection_candidates_async(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
+    binding: &ResidentProxyBinding,
     allow_insecure: bool,
     pinned_certchain_sha256: &str,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
+    let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
     let client_config =
         build_juicity_runtime_client_config(allow_insecure, pinned_certchain_sha256)
@@ -245,6 +250,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Juicity,
         caller,
+        binding.runtime_generation(),
         proxy,
         QuicEndpointIdentityRole::ProtocolCarrier,
         &[],
@@ -256,7 +262,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
         "connect Juicity QUIC endpoint",
         |remote, deadline, cancellation| {
             let mut endpoint = open_marked_quic_endpoint_for_remote(
-                mark,
+                binding.effective_socket_mark(),
                 remote,
                 endpoint_context.clone(),
                 deadline,

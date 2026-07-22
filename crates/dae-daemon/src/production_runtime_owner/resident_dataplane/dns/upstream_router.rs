@@ -14,7 +14,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUp
 #[derive(Clone, Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsUpstreamSelection {
     Direct { mark: u32 },
-    Proxy { proxy: Arc<ResidentProxyPlan> },
+    Proxy { binding: ResidentProxyBinding },
 }
 
 #[derive(Clone, Debug)]
@@ -104,7 +104,7 @@ impl ResidentDnsUpstreamRouter {
                 };
                 Ok(ResidentDnsUpstreamSelectionCandidate {
                     selection: ResidentDnsUpstreamSelection::Proxy {
-                        proxy: proxy_with_dns_upstream_mark(proxy.proxy, mark),
+                        binding: proxy.proxy.with_route_socket_mark(mark),
                     },
                     network_type: proxy.network_type,
                     latency_ms: proxy.latency_ms,
@@ -112,16 +112,4 @@ impl ResidentDnsUpstreamRouter {
             }
         }
     }
-}
-
-fn proxy_with_dns_upstream_mark(
-    proxy: Arc<ResidentProxyPlan>,
-    mark: u32,
-) -> Arc<ResidentProxyPlan> {
-    if mark == 0 || proxy.mark == mark {
-        return proxy;
-    }
-    let mut overridden = proxy.as_ref().clone();
-    overridden.mark = mark;
-    Arc::new(overridden)
 }

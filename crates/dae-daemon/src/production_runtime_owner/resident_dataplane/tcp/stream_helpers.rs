@@ -2,8 +2,7 @@ use super::*;
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_plain_proxy_tcp_stream_async(
     selection: &TcpProxySelection,
 ) -> Result<TokioTcpStream, String> {
-    open_proxy_tcp_stream_async_with_flow(selection.proxy.as_ref(), selection.mark, selection.mptcp)
-        .await
+    open_proxy_tcp_stream_with_binding(&selection.proxy, selection.mptcp).await
 }
 
 pub(crate) async fn read_http_head_and_leftover_from_async_stream<S>(

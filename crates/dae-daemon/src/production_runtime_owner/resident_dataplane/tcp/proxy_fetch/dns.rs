@@ -6,7 +6,7 @@ use crate::production_runtime_owner::resident_dataplane::dns::{
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn exchange_resident_proxy_dns_tcp_stream_async<F, Fut>(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
     dial_ip: bool,
     sniff_payload: Vec<u8>,
@@ -44,7 +44,7 @@ where
         .await?;
     context.ensure(ProxyDnsRequestStage::OwnerAcquire)?;
     let mut handler = start_resident_proxy_tcp_handler(
-        proxy,
+        binding,
         target,
         dial_ip,
         sniff_payload,
@@ -93,7 +93,7 @@ where
 }
 
 pub(crate) async fn exchange_resident_proxy_dns_tcp_async(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
     payload: &[u8],
     response_limit: usize,
@@ -101,7 +101,7 @@ pub(crate) async fn exchange_resident_proxy_dns_tcp_async(
     owners: ResidentTransportOwnerRegistries,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     exchange_resident_proxy_dns_tcp_stream_async(
-        proxy,
+        binding,
         target,
         true,
         Vec::new(),

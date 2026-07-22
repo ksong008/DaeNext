@@ -15,7 +15,7 @@ pub(crate) struct ResidentProxyCandidatePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
     pub(in crate::production_runtime_owner::resident_dataplane) execution_identity: String,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) binding: ResidentProxyBinding,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) type ResidentProxyGroupHandle =
@@ -36,227 +36,11 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn share_resident_pr
     )
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ResidentProxyProbePlan {
-    pub(in crate::production_runtime_owner::resident_dataplane) node_tag: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) link: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) execution_identity: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
-    pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
-    pub(in crate::production_runtime_owner::resident_dataplane) tcp_probe_timeout: Duration,
-    pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
-}
-
-impl ResidentProxyProbePlan {
-    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
-        &mut self,
-        runtime_generation: u64,
-    ) {
-        Arc::make_mut(&mut self.proxy).apply_runtime_generation(runtime_generation);
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_latency_probe_control_mark(
-        &mut self,
-        mark: u32,
-    ) {
-        Arc::make_mut(&mut self.proxy).apply_latency_probe_control_mark(mark);
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_tuic_transport_owner(
-        &self,
-    ) -> bool {
-        matches!(
-            &self.proxy.handler,
-            ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-        )
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_juicity_transport_owner(
-        &self,
-    ) -> bool {
-        matches!(
-            &self.proxy.handler,
-            ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
-        )
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_anytls_transport_owner(
-        &self,
-    ) -> bool {
-        self.proxy.requires_anytls_transport_owner()
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_h2_carrier_owner(
-        &self,
-    ) -> bool {
-        self.proxy.requires_h2_carrier_owner()
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_meek_transport_owner(
-        &self,
-    ) -> bool {
-        self.proxy.requires_meek_transport_owner()
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_vless_mux_owner(
-        &self,
-    ) -> bool {
-        self.proxy.requires_vless_mux_owner()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentTcpCheckPlan {
-    pub(in crate::production_runtime_owner::resident_dataplane) scheme: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) target: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) targets:
-        Vec<ResidentTcpCheckTarget>,
-    pub(in crate::production_runtime_owner::resident_dataplane) host: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) path: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) method: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) resolver:
-        ResidentHealthTargetResolver,
-}
-
-impl ResidentTcpCheckPlan {
-    fn identity(&self, probe_timeout: Duration) -> String {
-        link_hash(
-            &serde_json::json!({
-                "resolver": self.resolver.identity(),
-                "scheme": self.scheme,
-                "host": self.host,
-                "path": self.path,
-                "method": self.method,
-                "probeTimeoutNanos": probe_timeout.as_nanos().to_string(),
-            })
-            .to_string(),
-        )
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentTcpCheckTarget {
-    pub(in crate::production_runtime_owner::resident_dataplane) target: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) network_type: Option<NetworkType>,
-}
-
-impl ResidentTcpCheckTarget {
-    pub(in crate::production_runtime_owner::resident_dataplane) fn network_type_hint(
-        &self,
-    ) -> Option<NetworkType> {
-        self.network_type
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentUdpCheckPlan {
-    pub(in crate::production_runtime_owner::resident_dataplane) target: ResidentUdpCheckTarget,
-    pub(in crate::production_runtime_owner::resident_dataplane) targets:
-        Vec<ResidentUdpCheckTarget>,
-    pub(in crate::production_runtime_owner::resident_dataplane) host: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) lookup_host: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) resolver:
-        ResidentHealthTargetResolver,
-}
-
-impl ResidentUdpCheckPlan {
-    fn identity(&self) -> String {
-        link_hash(
-            &serde_json::json!({
-                "resolver": self.resolver.identity(),
-                "lookupHost": self.lookup_host,
-            })
-            .to_string(),
-        )
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ResidentUdpCheckTarget {
-    authority: String,
-    literal_addr: Option<SocketAddr>,
-}
-
-impl ResidentUdpCheckTarget {
-    pub(in crate::production_runtime_owner::resident_dataplane) fn new(
-        authority: String,
-        literal_addr: Option<SocketAddr>,
-    ) -> Self {
-        Self {
-            authority,
-            literal_addr,
-        }
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn literal(
-        addr: SocketAddr,
-    ) -> Self {
-        Self::new(addr.to_string(), Some(addr))
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn authority(&self) -> &str {
-        &self.authority
-    }
-
-    #[cfg(test)]
-    pub(in crate::production_runtime_owner::resident_dataplane) fn network_type_hint(
-        &self,
-    ) -> Option<NetworkType> {
-        self.literal_addr.map(resident_udp_check_network_type)
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn literal_addr(
-        &self,
-    ) -> Option<SocketAddr> {
-        self.literal_addr
-    }
-}
-
-pub(in crate::production_runtime_owner::resident_dataplane) fn resident_tcp_check_network_type(
-    addr: IpAddr,
-) -> NetworkType {
-    if addr.is_ipv6() {
-        NetworkType::TCP6
-    } else {
-        NetworkType::TCP4
-    }
-}
-
-pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_check_network_type(
-    addr: SocketAddr,
-) -> NetworkType {
-    if addr.is_ipv6() {
-        NetworkType::DNS_UDP6
-    } else {
-        NetworkType::DNS_UDP4
-    }
-}
-
-pub(in crate::production_runtime_owner::resident_dataplane) fn resident_data_udp_network_type(
-    addr: SocketAddr,
-) -> NetworkType {
-    if addr.is_ipv6() {
-        NetworkType::DATA_UDP6
-    } else {
-        NetworkType::DATA_UDP4
-    }
-}
-
 fn push_unique_network_type(network_types: &mut Vec<NetworkType>, network_type: NetworkType) {
     if !network_types.contains(&network_type) {
         network_types.push(network_type);
     }
 }
-
-impl PartialEq for ResidentUdpCheckTarget {
-    fn eq(&self, other: &Self) -> bool {
-        self.authority == other.authority && self.literal_addr == other.literal_addr
-    }
-}
-
-impl Eq for ResidentUdpCheckTarget {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentProxyLatencySnapshot {
@@ -292,7 +76,7 @@ struct ResidentDialerLatencySnapshotState {
 
 #[derive(Clone, Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProxySelection {
-    pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: ResidentProxyBinding,
     pub(in crate::production_runtime_owner::resident_dataplane) network_type: NetworkType,
     pub(in crate::production_runtime_owner::resident_dataplane) latency_ms: i64,
 }
@@ -441,9 +225,10 @@ pub(crate) struct ResidentProxyGroupPlan {
         Vec<ResidentProxyCandidatePlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) selector: Arc<Mutex<DialerGroup>>,
     pub(in crate::production_runtime_owner::resident_dataplane) check_interval: Duration,
-    pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
-    pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
-    pub(in crate::production_runtime_owner::resident_dataplane) tcp_probe_timeout: Duration,
+    pub(in crate::production_runtime_owner::resident_dataplane) probe_profile:
+        Arc<ResidentProbeProfile>,
+    pub(in crate::production_runtime_owner::resident_dataplane) probe_candidates:
+        Arc<[ResidentProxyProbePlan]>,
     pub(in crate::production_runtime_owner::resident_dataplane) resuscitation_last_unix_ms:
         Arc<Vec<AtomicI64>>,
     pub(in crate::production_runtime_owner::resident_dataplane) health_bootstrap:
@@ -454,10 +239,22 @@ impl ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
         &mut self,
         runtime_generation: u64,
-    ) {
+    ) -> Result<(), String> {
         for candidate in &mut self.candidates {
-            Arc::make_mut(&mut candidate.proxy).apply_runtime_generation(runtime_generation);
+            candidate.binding.bind_resident_generation(
+                dae_runtime_control::OwnerGeneration::new(runtime_generation),
+            )?;
         }
+        let probes = Arc::get_mut(&mut self.probe_candidates).ok_or_else(|| {
+            format!(
+                "resident dataplane group {} probe plans were shared before generation binding",
+                self.group_name
+            )
+        })?;
+        for probe in probes {
+            probe.apply_runtime_generation(runtime_generation)?;
+        }
+        Ok(())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn group_policy_name(
@@ -481,7 +278,7 @@ impl ResidentProxyGroupPlan {
     ) -> bool {
         self.candidates.iter().any(|candidate| {
             matches!(
-                &candidate.proxy.handler,
+                &candidate.binding.plan().handler,
                 ResidentProxyProtocolPlan::TuicQuicTcp { .. }
             )
         })
@@ -492,7 +289,7 @@ impl ResidentProxyGroupPlan {
     ) -> bool {
         self.candidates.iter().any(|candidate| {
             matches!(
-                &candidate.proxy.handler,
+                &candidate.binding.plan().handler,
                 ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
             )
         })
@@ -503,7 +300,7 @@ impl ResidentProxyGroupPlan {
     ) -> bool {
         self.candidates
             .iter()
-            .any(|candidate| candidate.proxy.requires_anytls_transport_owner())
+            .any(|candidate| candidate.binding.plan().requires_anytls_transport_owner())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn requires_h2_carrier_owner(
@@ -511,7 +308,7 @@ impl ResidentProxyGroupPlan {
     ) -> bool {
         self.candidates
             .iter()
-            .any(|candidate| candidate.proxy.requires_h2_carrier_owner())
+            .any(|candidate| candidate.binding.plan().requires_h2_carrier_owner())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn requires_meek_transport_owner(
@@ -519,7 +316,7 @@ impl ResidentProxyGroupPlan {
     ) -> bool {
         self.candidates
             .iter()
-            .any(|candidate| candidate.proxy.requires_meek_transport_owner())
+            .any(|candidate| candidate.binding.plan().requires_meek_transport_owner())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn requires_vless_mux_owner(
@@ -527,7 +324,7 @@ impl ResidentProxyGroupPlan {
     ) -> bool {
         self.candidates
             .iter()
-            .any(|candidate| candidate.proxy.requires_vless_mux_owner())
+            .any(|candidate| candidate.binding.plan().requires_vless_mux_owner())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn requires_xhttp_xmux_owner(
@@ -535,7 +332,7 @@ impl ResidentProxyGroupPlan {
     ) -> bool {
         self.candidates
             .iter()
-            .any(|candidate| candidate.proxy.requires_xhttp_xmux_owner())
+            .any(|candidate| candidate.binding.plan().requires_xhttp_xmux_owner())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn annotation_latency_offset_count(
@@ -549,7 +346,7 @@ impl ResidentProxyGroupPlan {
 
     fn tcp_check_network_types(&self) -> Vec<NetworkType> {
         let mut network_types = Vec::new();
-        for target in &self.tcp_check.targets {
+        for target in &self.probe_profile.tcp_check.targets {
             if let Some(network_type) = target.network_type_hint() {
                 push_unique_network_type(&mut network_types, network_type);
             }
@@ -595,9 +392,9 @@ impl ResidentProxyGroupPlan {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn default_proxy_snapshot(
         &self,
-    ) -> Option<ResidentProxyPlan> {
+    ) -> Option<ResidentProxyBinding> {
         self.snapshot_candidate()
-            .map(|candidate| candidate.proxy.as_ref().clone())
+            .map(|candidate| candidate.binding.clone())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn needs_background_checks(
@@ -667,21 +464,8 @@ impl ResidentProxyGroupPlan {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn probe_candidates(
         &self,
-    ) -> Vec<ResidentProxyProbePlan> {
-        self.candidates
-            .iter()
-            .map(|candidate| ResidentProxyProbePlan {
-                node_tag: candidate.proxy.node_tag.clone(),
-                link: candidate.link.clone(),
-                link_hash: candidate.link_hash.clone(),
-                execution_identity: candidate.execution_identity.clone(),
-                redacted_link_source: candidate.redacted_link_source.clone(),
-                tcp_check: self.tcp_check.clone(),
-                udp_check: self.udp_check.clone(),
-                tcp_probe_timeout: self.tcp_probe_timeout,
-                proxy: Arc::new(candidate.proxy.latency_probe_proxy()),
-            })
-            .collect()
+    ) -> Arc<[ResidentProxyProbePlan]> {
+        Arc::clone(&self.probe_candidates)
     }
 
     #[cfg(test)]
@@ -714,8 +498,8 @@ impl ResidentProxyGroupPlan {
                         last_unknown_at_unix: 0,
                     });
                 ResidentProxyLatencySnapshot {
-                    node_tag: candidate.proxy.node_tag.clone(),
-                    graph_id: candidate.proxy.graph_id.clone(),
+                    node_tag: candidate.binding.plan().node_tag.clone(),
+                    graph_id: candidate.binding.plan().graph_id.clone(),
                     link_hash: candidate.link_hash.clone(),
                     execution_identity: candidate.execution_identity.clone(),
                     redacted_link_source: candidate.redacted_link_source.clone(),
@@ -768,8 +552,8 @@ impl ResidentProxyGroupPlan {
                         let snapshot =
                             ResidentDialerLatencySnapshotState::from_dialer(dialer, network_type);
                         ResidentProxyLatencySnapshot {
-                            node_tag: candidate.proxy.node_tag.clone(),
-                            graph_id: candidate.proxy.graph_id.clone(),
+                            node_tag: candidate.binding.plan().node_tag.clone(),
+                            graph_id: candidate.binding.plan().graph_id.clone(),
                             link_hash: candidate.link_hash.clone(),
                             execution_identity: candidate.execution_identity.clone(),
                             redacted_link_source: candidate.redacted_link_source.clone(),
@@ -795,14 +579,18 @@ impl ResidentProxyGroupPlan {
         network_type: NetworkType,
     ) -> Option<String> {
         if network_type == NetworkType::TCP4 || network_type == NetworkType::TCP6 {
-            return Some(self.tcp_check.identity(self.tcp_probe_timeout));
+            return Some(
+                self.probe_profile
+                    .tcp_check
+                    .identity(self.probe_profile.tcp_probe_timeout),
+            );
         }
         if network_type == NetworkType::DNS_TCP4
             || network_type == NetworkType::DNS_TCP6
             || network_type == NetworkType::DNS_UDP4
             || network_type == NetworkType::DNS_UDP6
         {
-            return Some(self.udp_check.identity());
+            return Some(self.probe_profile.udp_check.identity());
         }
         None
     }
@@ -819,7 +607,7 @@ impl ResidentProxyGroupPlan {
         network_type: NetworkType,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
         self.select_candidate(network_type, false)
-            .map(|candidate| Arc::clone(&candidate.proxy))
+            .map(|candidate| Arc::clone(candidate.binding.shared_plan()))
     }
 
     #[cfg(test)]
@@ -829,6 +617,7 @@ impl ResidentProxyGroupPlan {
         strict_ip_version: bool,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
         self.select_proxy_for_tcp_runtime_detail(network_type, strict_ip_version)
+            .map(ResidentProxyBinding::into_shared_plan)
             .map_err(|err| err.message)
     }
 
@@ -836,9 +625,9 @@ impl ResidentProxyGroupPlan {
         &self,
         network_type: NetworkType,
         strict_ip_version: bool,
-    ) -> Result<Arc<ResidentProxyPlan>, ResidentProxySelectionError> {
+    ) -> Result<ResidentProxyBinding, ResidentProxySelectionError> {
         self.select_candidate_with_selection_detail(network_type, strict_ip_version)
-            .map(|candidate| Arc::clone(&candidate.candidate.proxy))
+            .map(|candidate| candidate.candidate.binding.clone())
     }
 
     #[cfg(test)]
@@ -854,7 +643,7 @@ impl ResidentProxyGroupPlan {
         network_type: NetworkType,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
         self.select_candidate(network_type, false)
-            .map(|candidate| Arc::clone(&candidate.proxy))
+            .map(|candidate| Arc::clone(candidate.binding.shared_plan()))
     }
 
     #[cfg(test)]
@@ -864,7 +653,7 @@ impl ResidentProxyGroupPlan {
         strict_ip_version: bool,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
         self.select_proxy_for_udp_runtime_candidate(network_type, strict_ip_version)
-            .map(|selection| selection.proxy)
+            .map(|selection| selection.proxy.into_shared_plan())
     }
 
     #[cfg(test)]
@@ -885,7 +674,7 @@ impl ResidentProxyGroupPlan {
         let selected =
             self.select_candidate_with_selection_detail(network_type, strict_ip_version)?;
         Ok(ResidentProxySelection {
-            proxy: Arc::clone(&selected.candidate.proxy),
+            proxy: selected.candidate.binding.clone(),
             network_type: selected.network_type,
             latency_ms: selected.latency_ms,
         })
@@ -903,7 +692,7 @@ impl ResidentProxyGroupPlan {
         let Some(index) = self
             .candidates
             .iter()
-            .position(|candidate| candidate.proxy.node_tag == node_tag)
+            .position(|candidate| candidate.binding.plan().node_tag == node_tag)
         else {
             return Err(format!(
                 "resident dataplane group {} has no admitted candidate named {node_tag}",
@@ -929,7 +718,7 @@ impl ResidentProxyGroupPlan {
         network_type: NetworkType,
     ) -> Result<Arc<ResidentProxyPlan>, String> {
         self.select_proxy_for_dns_upstream_candidate(network_type)
-            .map(|selection| selection.proxy)
+            .map(|selection| selection.proxy.into_shared_plan())
     }
 
     #[cfg(test)]
@@ -947,7 +736,7 @@ impl ResidentProxyGroupPlan {
     ) -> Result<ResidentProxySelection, ResidentProxySelectionError> {
         let selected = self.select_candidate_with_selection_detail(network_type, false)?;
         Ok(ResidentProxySelection {
-            proxy: Arc::clone(&selected.candidate.proxy),
+            proxy: selected.candidate.binding.clone(),
             network_type: selected.network_type,
             latency_ms: selected.latency_ms,
         })
@@ -991,7 +780,7 @@ impl ResidentProxyGroupPlan {
         network_type: NetworkType,
         strict_ip_version: bool,
     ) -> Result<ResidentSelectedProxyCandidate<'_>, ResidentProxySelectionError> {
-        let network = network_type.string_without_dns();
+        let network = network_type.label_without_dns();
         if self.candidates.is_empty() {
             return Err(resident_proxy_selection_error(
                 format!(
@@ -1077,7 +866,7 @@ impl ResidentProxyGroupPlan {
         let Some(index) = self
             .candidates
             .iter()
-            .position(|candidate| candidate.proxy.node_tag == node_tag)
+            .position(|candidate| candidate.binding.plan().node_tag == node_tag)
         else {
             return Err(format!(
                 "resident dataplane group {} has no admitted candidate named {node_tag}",
@@ -1107,7 +896,7 @@ impl ResidentProxyGroupPlan {
         let Some(index) = self
             .candidates
             .iter()
-            .position(|candidate| candidate.proxy.node_tag == node_tag)
+            .position(|candidate| candidate.binding.plan().node_tag == node_tag)
         else {
             return Err(format!(
                 "resident dataplane group {} has no admitted candidate named {node_tag}",
@@ -1327,8 +1116,9 @@ impl ResidentProxyGroupPlan {
 
     #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn fixed_single_for_test(
-        proxy: ResidentProxyPlan,
+        mut proxy: ResidentProxyPlan,
     ) -> Self {
+        proxy.materialize_execution();
         let udp_check_addr = SocketAddr::new(
             IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT,
@@ -1340,29 +1130,19 @@ impl ResidentProxyGroupPlan {
             network_type: Some(NetworkType::TCP4),
         };
         let udp_check_target = ResidentUdpCheckTarget::literal(udp_check_addr);
-        Self {
-            group_name: proxy.group_name.clone(),
-            group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },
-            matched_candidate_count: 1,
-            candidates: vec![ResidentProxyCandidatePlan {
-                match_index: 0,
-                annotation_add_latency_ms: 0,
-                link: proxy.node_tag.clone(),
-                link_hash: link_hash(&proxy.node_tag),
-                execution_identity: execution_link_hash(&proxy.node_tag),
-                redacted_link_source: redacted_link_source(&proxy.node_tag),
-                proxy: Arc::new(proxy),
-            }],
-            selector: Arc::new(Mutex::new(DialerGroup::new(
-                "test",
-                vec![Dialer::new("test", "")],
-                vec![Annotation::default()],
-                SelectionPolicy::Fixed { index: 0 },
-                true,
-                0,
-            ))),
-            check_interval: Duration::from_secs(30),
-            tcp_check: ResidentTcpCheckPlan {
+        let group_name = proxy.group_name.clone();
+        let candidates = vec![ResidentProxyCandidatePlan {
+            match_index: 0,
+            annotation_add_latency_ms: 0,
+            link: proxy.node_tag.clone(),
+            link_hash: link_hash(&proxy.node_tag),
+            execution_identity: execution_link_hash(&proxy.node_tag),
+            redacted_link_source: redacted_link_source(&proxy.node_tag),
+            binding: ResidentProxyBinding::configuration(Arc::new(proxy))
+                .expect("materialized fixed test proxy binding"),
+        }];
+        let probe_profile = Arc::new(ResidentProbeProfile::new(
+            ResidentTcpCheckPlan {
                 scheme: "http".to_owned(),
                 target: tcp_check_target.target.clone(),
                 targets: vec![tcp_check_target],
@@ -1378,7 +1158,7 @@ impl ResidentProxyGroupPlan {
                     Duration::from_secs(30),
                 ),
             },
-            udp_check: ResidentUdpCheckPlan {
+            ResidentUdpCheckPlan {
                 target: udp_check_target.clone(),
                 targets: vec![udp_check_target],
                 host: "localhost".to_owned(),
@@ -1392,7 +1172,25 @@ impl ResidentProxyGroupPlan {
                     Duration::from_secs(30),
                 ),
             },
-            tcp_probe_timeout: RESIDENT_TCP_LATENCY_PROBE_TIMEOUT,
+            RESIDENT_TCP_LATENCY_PROBE_TIMEOUT,
+        ));
+        let probe_candidates = share_group_probe_plans(&candidates, Arc::clone(&probe_profile));
+        Self {
+            group_name,
+            group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },
+            matched_candidate_count: 1,
+            candidates,
+            selector: Arc::new(Mutex::new(DialerGroup::new(
+                "test",
+                vec![Dialer::new("test", "")],
+                vec![Annotation::default()],
+                SelectionPolicy::Fixed { index: 0 },
+                true,
+                0,
+            ))),
+            check_interval: Duration::from_secs(30),
+            probe_profile,
+            probe_candidates,
             resuscitation_last_unix_ms: Arc::new(
                 (0..NETWORK_TYPE_COLLECTION_COUNT)
                     .map(|_| AtomicI64::new(0))

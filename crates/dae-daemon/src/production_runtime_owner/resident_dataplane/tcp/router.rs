@@ -329,11 +329,11 @@ impl ResidentTcpRouter {
                         return Err(err.message);
                     }
                 };
+                let binding = proxy.with_route_socket_mark(route.final_mark);
                 Ok(TcpSelection::Proxy(TcpProxySelection {
-                    mark: route.final_mark,
                     mptcp: self.mptcp,
                     route,
-                    proxy,
+                    proxy: binding,
                 }))
             }
         }
@@ -436,8 +436,7 @@ impl TcpRoutingLogMetadata {
 #[derive(Debug)]
 pub(crate) struct TcpProxySelection {
     pub(in crate::production_runtime_owner::resident_dataplane) route: TcpRouteSelection,
-    pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
-    pub(in crate::production_runtime_owner::resident_dataplane) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: ResidentProxyBinding,
     pub(in crate::production_runtime_owner::resident_dataplane) mptcp: bool,
 }
 

@@ -19,20 +19,16 @@ pub(crate) async fn send_xhttp_packet_up_request(
 ) -> Result<(), String> {
     match upload {
         XhttpUploadClient::H1 {
-            proxy,
+            binding,
             endpoint,
-            mark,
             mptcp,
         } => {
-            send_xhttp_h1_packet_up_request(
-                proxy, endpoint, *mark, *mptcp, session_id, seq, payload,
-            )
-            .await
+            send_xhttp_h1_packet_up_request(binding, endpoint, *mptcp, session_id, seq, payload)
+                .await
         }
         XhttpUploadClient::H2 {
-            proxy,
+            binding,
             endpoint,
-            mark,
             mptcp,
             sender,
             connection_task,
@@ -40,9 +36,8 @@ pub(crate) async fn send_xhttp_packet_up_request(
             ..
         } => {
             refresh_xhttp_h2_packet_up_client_if_needed(
-                proxy,
+                binding,
                 endpoint,
-                *mark,
                 *mptcp,
                 sender,
                 connection_task,
@@ -52,18 +47,16 @@ pub(crate) async fn send_xhttp_packet_up_request(
             send_xhttp_h2_packet_up_request(sender, endpoint, session_id, seq, payload).await
         }
         XhttpUploadClient::H3 {
-            proxy,
+            binding,
             endpoint,
-            mark,
             client,
             connection,
             xmux_request,
             ..
         } => {
             refresh_xhttp_h3_packet_up_client_if_needed(
-                proxy,
+                binding,
                 endpoint,
-                *mark,
                 client,
                 connection,
                 xmux_request,

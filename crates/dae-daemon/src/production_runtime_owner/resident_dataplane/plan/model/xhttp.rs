@@ -434,13 +434,6 @@ impl ResidentXhttpXmuxPlan {
         normalized
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
-        &mut self,
-        runtime_generation: u64,
-    ) {
-        self.runtime_generation = runtime_generation;
-    }
-
     pub(in crate::production_runtime_owner::resident_dataplane) fn validate_official(
         &self,
         field: &str,
@@ -609,8 +602,8 @@ mod tests {
 
     #[test]
     fn official_xmux_normalization_preserves_runtime_generation() {
-        let mut xmux = ResidentXhttpXmuxPlan {
-            runtime_generation: 0,
+        let xmux = ResidentXhttpXmuxPlan {
+            runtime_generation: 42,
             physical_connection_limit: 0,
             max_concurrency: None,
             max_connections: None,
@@ -619,8 +612,6 @@ mod tests {
             h_max_reusable_secs: None,
             h_keep_alive_period: 0,
         };
-        xmux.apply_runtime_generation(42);
-
         let normalized = xmux.official_normalized();
         assert_eq!(normalized.runtime_generation, 42);
         assert!(normalized.physical_connection_limit > 0);

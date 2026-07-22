@@ -108,15 +108,13 @@ pub(crate) struct XhttpStreamParts {
 
 pub(crate) enum XhttpUploadClient {
     H1 {
-        proxy: Box<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         endpoint: ResidentXhttpEndpointPlan,
-        mark: u32,
         mptcp: bool,
     },
     H2 {
-        proxy: Box<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         endpoint: ResidentXhttpEndpointPlan,
-        mark: u32,
         mptcp: bool,
         sender: h2::client::SendRequest<Bytes>,
         connection_task: Option<tokio::task::JoinHandle<()>>,
@@ -124,9 +122,8 @@ pub(crate) enum XhttpUploadClient {
         xmux_request: Option<XhttpXmuxRequestHandle>,
     },
     H3 {
-        proxy: Box<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         endpoint: ResidentXhttpEndpointPlan,
-        mark: u32,
         client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
         connection: Option<XhttpH3Connection>,
         xmux_lease: Option<XhttpXmuxClientLease>,

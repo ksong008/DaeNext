@@ -64,8 +64,21 @@ pub(crate) fn start_resident_dataplane_workers(
     let sniffing_timeout = plan.sniffing_timeout;
     let dns_plan = plan.dns;
     let mut proxy_groups = plan.proxies;
-    for group in proxy_groups.values_mut() {
-        group.apply_runtime_generation(reload_generation);
+    if let Err(error) = proxy_groups
+        .values_mut()
+        .try_for_each(|group| group.apply_runtime_generation(reload_generation))
+    {
+        return (
+            json!({
+                "status": "fail",
+                "enabled": true,
+                "error": error,
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
+            }),
+            None,
+        );
     }
     let Some(default_outbound) = default_outbound else {
         return (
@@ -382,14 +395,17 @@ pub(crate) fn start_resident_dataplane_workers(
             };
         owner.install_xhttp_xmux_generation_owner_task(xhttp_xmux_owner, xhttp_xmux_owner_thread);
     }
-    let proxy = Arc::new(default_proxy);
+    let proxy = Arc::clone(default_proxy.shared_plan());
     let proxy_group = Arc::clone(&default_group);
     let mut manual_probe_plans = plan::build_resident_manual_probe_plans(config);
-    for probe in manual_probe_plans
-        .values_mut()
-        .filter_map(|probe| probe.as_mut().ok())
-    {
-        probe.apply_runtime_generation(reload_generation);
+    for probe_result in manual_probe_plans.values_mut() {
+        let binding_error = match probe_result {
+            Ok(probe) => probe.apply_runtime_generation(reload_generation).err(),
+            Err(_) => None,
+        };
+        if let Some(error) = binding_error {
+            *probe_result = Err(error);
+        }
     }
     let manual_probe_plan_count = manual_probe_plans
         .values()

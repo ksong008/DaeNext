@@ -124,7 +124,16 @@ impl NetworkType {
     }
 
     pub fn string_without_dns(self) -> String {
-        format!("{}{}", self.l4proto.as_str(), self.ipversion.as_str())
+        self.label_without_dns().to_owned()
+    }
+
+    pub fn label_without_dns(self) -> &'static str {
+        match (self.l4proto, self.ipversion) {
+            (L4Proto::Tcp, IpVersion::V4) => "tcp4",
+            (L4Proto::Tcp, IpVersion::V6) => "tcp6",
+            (L4Proto::Udp, IpVersion::V4) => "udp4",
+            (L4Proto::Udp, IpVersion::V6) => "udp6",
+        }
     }
 
     pub fn dimension_name(self) -> &'static str {

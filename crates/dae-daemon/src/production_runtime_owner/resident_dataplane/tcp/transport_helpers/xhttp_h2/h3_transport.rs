@@ -5,6 +5,7 @@ use super::xmux::{
     select_xhttp_h3_xmux_client,
 };
 use super::*;
+use dae_runtime_control::OwnerGeneration;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -31,14 +32,16 @@ type XhttpH3OwnerOpenFuture = Pin<
     Box<dyn std::future::Future<Output = Result<XhttpH3EndpointClient, String>> + Send + 'static>,
 >;
 pub(super) async fn open_xhttp_h3_proxy_client(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
 ) -> Result<XhttpH3EndpointClient, String> {
-    let Some(xmux) = &proxy.xhttp_xmux else {
+    let proxy = binding.plan();
+    let mark = binding.effective_socket_mark();
+    let Some(xmux) = binding.persistent_xhttp_xmux() else {
         let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
         let connection = open_xhttp_h3_connection(
             proxy,
+            binding.runtime_generation(),
             endpoint,
             resolved.candidates(),
             mark,
@@ -53,15 +56,17 @@ pub(super) async fn open_xhttp_h3_proxy_client(
         });
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-    let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, false)?;
+    let key = XhttpXmuxKey::primary(binding, endpoint, resolved.identity(), xmux, mark, false)?;
     let provenance_identity = key.quic_provenance_identity();
     let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || -> XhttpH3OwnerOpenFuture {
-        let owner_proxy = proxy.clone();
+        let owner_proxy = Arc::clone(binding.shared_plan());
+        let owner_generation = binding.runtime_generation();
         let owner_endpoint = endpoint.clone();
         let owner_candidates = resolved.candidates().to_vec();
         Box::pin(async move {
             let connection = open_xhttp_h3_connection(
                 &owner_proxy,
+                owner_generation,
                 &owner_endpoint,
                 &owner_candidates,
                 mark,
@@ -85,14 +90,16 @@ pub(super) async fn open_xhttp_h3_proxy_client(
 }
 
 pub(super) async fn open_xhttp_h3_endpoint_client(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
 ) -> Result<XhttpH3EndpointClient, String> {
-    let Some(xmux) = &endpoint.xmux else {
+    let proxy = binding.plan();
+    let mark = binding.effective_socket_mark();
+    let Some(xmux) = binding.persistent_xhttp_download_xmux() else {
         let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
         let connection = open_xhttp_h3_connection(
             proxy,
+            binding.runtime_generation(),
             endpoint,
             resolved.candidates(),
             mark,
@@ -107,15 +114,17 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
         });
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-    let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, false)?;
+    let key = XhttpXmuxKey::download(binding, endpoint, resolved.identity(), xmux, mark, false)?;
     let provenance_identity = key.quic_provenance_identity();
     let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || -> XhttpH3OwnerOpenFuture {
-        let owner_proxy = proxy.clone();
+        let owner_proxy = Arc::clone(binding.shared_plan());
+        let owner_generation = binding.runtime_generation();
         let owner_endpoint = endpoint.clone();
         let owner_candidates = resolved.candidates().to_vec();
         Box::pin(async move {
             let connection = open_xhttp_h3_connection(
                 &owner_proxy,
+                owner_generation,
                 &owner_endpoint,
                 &owner_candidates,
                 mark,
@@ -140,6 +149,7 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
 
 async fn open_xhttp_h3_connection(
     proxy: &ResidentProxyPlan,
+    generation: OwnerGeneration,
     endpoint: &ResidentXhttpEndpointPlan,
     candidates: &[SocketAddr],
     mark: u32,
@@ -155,6 +165,7 @@ async fn open_xhttp_h3_connection(
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::XhttpHttp3,
         QuicEndpointCallerClass::TcpData,
+        generation,
         proxy,
         role,
         &[&transport_identity],
@@ -465,9 +476,8 @@ pub(crate) async fn send_xhttp_h3_packet_up_request(
 }
 
 pub(super) async fn refresh_xhttp_h3_packet_up_client_if_needed(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
     client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     connection: &mut Option<XhttpH3Connection>,
     xmux_request: &mut Option<XhttpXmuxRequestHandle>,
@@ -479,7 +489,7 @@ pub(super) async fn refresh_xhttp_h3_packet_up_client_if_needed(
         return Ok(());
     }
 
-    let replacement = open_xhttp_h3_proxy_client(proxy, endpoint, mark).await?;
+    let replacement = open_xhttp_h3_proxy_client(binding, endpoint).await?;
     *client = replacement.client;
     if let Some(new_connection) = replacement.connection
         && let Some(old_connection) = connection.replace(new_connection)

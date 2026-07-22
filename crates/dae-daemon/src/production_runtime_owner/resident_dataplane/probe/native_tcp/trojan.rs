@@ -4,9 +4,9 @@ use dae_outbound::{shared_transport::HttpUpgradeOptions, trojan::packet as troja
 
 use super::super::super::ResidentStopSignal;
 
-use super::super::super::client::open_async_resident_tls_client_with_flow;
+use super::super::super::client::open_async_resident_tls_client_with_binding;
 use super::super::super::plan::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentStreamWrapperPlan,
+    ResidentProxyBinding, ResidentProxyProtocolPlan, ResidentStreamWrapperPlan,
 };
 use super::super::super::{
     ResidentDataplaneMetrics,
@@ -24,26 +24,15 @@ use super::target::native_tcp_probe_selection;
 use super::tunnel::{NativeTcpTunnel, SpawnedNativeTcpTunnel};
 
 pub(super) async fn open_trojan_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    let selection = native_tcp_probe_selection(proxy, target);
+    let selection = native_tcp_probe_selection(binding, target);
     let wrapper = selection.proxy.execution_plan().wrapper;
-    let password = match selection.proxy.handler.clone() {
-        ResidentProxyProtocolPlan::TrojanTcpTls { password } => password.clone(),
-        ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {
-            password,
-            inner_cipher,
-            inner_password,
-        } => {
-            return open_trojan_inner_shadowsocks_native_tcp_tunnel(
-                selection,
-                target,
-                password,
-                inner_cipher,
-                inner_password,
-            )
-            .await;
+    let password = match &selection.proxy.handler {
+        ResidentProxyProtocolPlan::TrojanTcpTls { password } => password.as_str(),
+        ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => {
+            return open_trojan_inner_shadowsocks_native_tcp_tunnel(selection, target).await;
         }
         _ => return Err(NativeTcpProbeError::NotAdmitted),
     };
@@ -57,7 +46,7 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
         return Err(NativeTcpProbeError::NotAdmitted);
     }
 
-    let request = trojan_packet::tcp_request_header(&password, "tcp", target, &[])
+    let request = trojan_packet::tcp_request_header(password, "tcp", target, &[])
         .map_err(|err| NativeTcpProbeError::Open(format!("build native Trojan request: {err}")))?;
     if wrapper == ResidentStreamWrapperPlan::Grpc {
         let (mut h2_send, mut h2_recv, carrier_lease) =
@@ -89,10 +78,9 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
             tunnel_stop,
         )));
     }
-    let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+    let mut client = open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
+        .await
+        .map_err(NativeTcpProbeError::Open)?;
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
@@ -180,17 +168,13 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
 async fn open_trojan_inner_shadowsocks_native_tcp_tunnel(
     selection: super::super::super::tcp::TcpProxySelection,
     target: &str,
-    password: String,
-    inner_cipher: String,
-    inner_password: String,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     if selection.proxy.execution_plan().wrapper != ResidentStreamWrapperPlan::WebSocket {
         return Err(NativeTcpProbeError::NotAdmitted);
     }
-    let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+    let mut client = open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
+        .await
+        .map_err(NativeTcpProbeError::Open)?;
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
     native_websocket_handshake_over_resident_tls_async(&mut client, &options)
@@ -203,15 +187,25 @@ async fn open_trojan_inner_shadowsocks_native_tcp_tunnel(
     let tunnel_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
     let target = target.to_owned();
+    let binding = selection.proxy.clone();
     let task = tokio::spawn(async move {
+        let ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {
+            password,
+            inner_cipher,
+            inner_password,
+        } = &binding.plan().handler
+        else {
+            stop.store(true, Ordering::Relaxed);
+            return;
+        };
         let _ = relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
             &mut relay_side,
             &mut client,
             relay_stop,
             &target,
-            &password,
-            &inner_cipher,
-            &inner_password,
+            password,
+            inner_cipher,
+            inner_password,
             Vec::new(),
             &metrics,
         )

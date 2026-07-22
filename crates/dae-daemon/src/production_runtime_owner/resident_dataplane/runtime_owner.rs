@@ -830,8 +830,14 @@ fn apply_manual_probe_runtime_generation(
     plans: &mut BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
     reload_generation: u64,
 ) {
-    for probe in plans.values_mut().filter_map(|probe| probe.as_mut().ok()) {
-        probe.apply_runtime_generation(reload_generation);
+    for probe_result in plans.values_mut() {
+        let binding_error = match probe_result {
+            Ok(probe) => probe.apply_runtime_generation(reload_generation).err(),
+            Err(_) => None,
+        };
+        if let Some(error) = binding_error {
+            *probe_result = Err(error);
+        }
     }
 }
 
@@ -1422,12 +1428,13 @@ mod tests {
 
         let node_b_hash = group
             .probe_candidates()
-            .into_iter()
-            .find(|candidate| candidate.node_tag == "node_b")
+            .iter()
+            .find(|candidate| candidate.node_tag.as_str() == "node_b")
             .unwrap()
-            .link_hash;
+            .link_hash
+            .clone();
         let snapshots = [json!({
-            "linkHash": node_b_hash,
+            "linkHash": node_b_hash.as_str(),
             "latencyMs": 20,
             "alive": true,
             "checkedAtUnix": 3,
@@ -1484,9 +1491,10 @@ mod tests {
             .unwrap();
         let candidate = group
             .probe_candidates()
-            .into_iter()
-            .find(|candidate| candidate.node_tag == "node_b")
-            .unwrap();
+            .iter()
+            .find(|candidate| candidate.node_tag.as_str() == "node_b")
+            .unwrap()
+            .clone();
         let handle = ResidentManualProbeHandle {
             groups: vec![Arc::clone(&group)],
             manual_probe_index: Arc::new(ResidentManualProbeIndex::new(
@@ -1500,7 +1508,7 @@ mod tests {
             anytls_owner_registry: None,
         };
         let snapshot = json!({
-            "linkHash": candidate.link_hash,
+            "linkHash": candidate.link_hash.as_str(),
             "reloadGeneration": 7,
             "checkedAtUnix": 3,
             "familyResults": [

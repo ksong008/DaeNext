@@ -187,7 +187,7 @@ impl ResidentUdpRouter {
                 .select_proxy_from_group(outbound, final_mark, original_dst, force_proxy_packet)
                 .map(|selection| {
                     let route = ResidentUdpRouteSelection {
-                        final_mark: selection.proxy.mark,
+                        final_mark: selection.proxy.effective_socket_mark(),
                         ..route
                     };
                     ResidentUdpSelection::Proxy(ResidentUdpProxySelection {
@@ -266,7 +266,7 @@ impl ResidentUdpRouter {
         } else {
             resident_data_udp_network_type(original_dst)
         };
-        let mut selection =
+        let selection =
             match proxy_group.select_proxy_for_udp_runtime_candidate_detail(network_type, true) {
                 Ok(selection) => selection,
                 Err(err) => {
@@ -279,13 +279,16 @@ impl ResidentUdpRouter {
                     return Err(err.message);
                 }
             };
-        if mark == 0 || selection.proxy.mark == mark {
-            return Ok(selection);
-        }
-        let mut overridden = selection.proxy.as_ref().clone();
-        overridden.mark = mark;
-        selection.proxy = Arc::new(overridden);
-        Ok(selection)
+        let ResidentProxySelection {
+            proxy,
+            network_type,
+            latency_ms,
+        } = selection;
+        Ok(ResidentProxySelection {
+            proxy: proxy.with_route_socket_mark(mark),
+            network_type,
+            latency_ms,
+        })
     }
 
     pub(super) fn lookup_routing_result(
@@ -318,7 +321,7 @@ impl ResidentUdpRouter {
 }
 
 pub(super) struct ResidentUdpProxySelection {
-    pub(super) proxy: Arc<ResidentProxyPlan>,
+    pub(super) proxy: ResidentProxyBinding,
     pub(super) selected_network_type: NetworkType,
     pub(super) force_proxy_packet: bool,
     pub(super) route: ResidentUdpRouteSelection,

@@ -37,7 +37,7 @@ pub(super) struct PendingProxyDnsDeadline {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_proxy_dns_udp_request(
-    proxy: &Arc<ResidentProxyPlan>,
+    binding: &ResidentProxyBinding,
     original_dst: SocketAddr,
     mut request: ResidentProxyDnsUdpRequest,
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
@@ -186,7 +186,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
     if opening_executor {
         *executor = Some(Box::new(
             UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
-                Arc::clone(proxy),
+                binding.clone(),
                 hysteria2_owner_registry.cloned(),
                 tuic_owner_registry.cloned(),
                 juicity_owner_registry.cloned(),
@@ -216,7 +216,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
     } else {
         ProxyDnsRequestStage::Send
     };
-    let execution = executor.execute_proxy_packet(proxy, original_dst, &request.payload);
+    let execution = executor.execute_proxy_packet(binding, original_dst, &request.payload);
     tokio::pin!(execution);
     let exchange = tokio::select! {
         biased;

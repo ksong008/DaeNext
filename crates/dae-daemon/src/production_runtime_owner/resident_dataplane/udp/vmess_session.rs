@@ -79,7 +79,7 @@ impl VmessAeadUdpOverTcpSession {
 
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
@@ -88,7 +88,7 @@ impl VmessAeadUdpOverTcpSession {
         let result = if self.underlay.is_some() {
             self.exchange_next(payload).await
         } else {
-            self.exchange_first(proxy, original_dst, payload).await
+            self.exchange_first(binding, original_dst, payload).await
         };
         if result.is_err() {
             self.shutdown().await;
@@ -98,7 +98,7 @@ impl VmessAeadUdpOverTcpSession {
 
     async fn exchange_first(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
@@ -109,7 +109,7 @@ impl VmessAeadUdpOverTcpSession {
             self.body_security,
         )
         .map_err(|err| format!("start VMess AEAD UDP-over-TCP session: {err}"))?;
-        let mut underlay = open_vmess_underlay(self.wrapper, proxy, &start.first_write).await?;
+        let mut underlay = open_vmess_underlay(self.wrapper, binding, &start.first_write).await?;
         let echoed = if underlay.is_grpc() {
             start_vmess_grpc_decoder(&mut underlay, start.request.clone())?;
             read_vmess_grpc_payload(&mut underlay).await?
@@ -262,12 +262,13 @@ impl VmessAeadUdpOverTcpSession {
 
 async fn open_vmess_underlay(
     wrapper: VmessAeadUdpWrapperKind,
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     first_write: &[u8],
 ) -> Result<VmessAeadUdpUnderlay, String> {
+    let proxy = binding.plan();
     match wrapper {
         VmessAeadUdpWrapperKind::PlainTcp => {
-            let mut stream = open_proxy_tcp_stream_async(proxy).await?;
+            let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
             write_vmess_stream_bytes(
                 &mut stream,
                 first_write,
@@ -277,7 +278,8 @@ async fn open_vmess_underlay(
             Ok(VmessAeadUdpUnderlay::PlainTcp { stream })
         }
         VmessAeadUdpWrapperKind::TlsTcp => {
-            let mut client = open_async_resident_tls_client(proxy).await?;
+            let mut client =
+                open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
             let tls_underlay = async_resident_tls_underlay_name(&client);
             write_vmess_stream_bytes(
                 &mut client,
@@ -291,7 +293,7 @@ async fn open_vmess_underlay(
             })
         }
         VmessAeadUdpWrapperKind::WebSocketPlain => {
-            let mut stream = open_proxy_tcp_stream_async(proxy).await?;
+            let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
             websocket_handshake_async(
                 &mut stream,
                 &proxy.stream_host,
@@ -311,7 +313,8 @@ async fn open_vmess_underlay(
             })
         }
         VmessAeadUdpWrapperKind::WebSocketTls => {
-            let mut client = open_async_resident_tls_client(proxy).await?;
+            let mut client =
+                open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
             let tls_underlay = async_resident_tls_underlay_name(&client);
             websocket_handshake_async(
                 &mut client,
@@ -333,7 +336,7 @@ async fn open_vmess_underlay(
             })
         }
         VmessAeadUdpWrapperKind::HttpUpgradePlain => {
-            let mut stream = open_proxy_tcp_stream_async(proxy).await?;
+            let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
             httpupgrade_handshake_async(
                 &mut stream,
                 &proxy.stream_host,
@@ -350,7 +353,8 @@ async fn open_vmess_underlay(
             Ok(VmessAeadUdpUnderlay::HttpUpgradePlain { stream })
         }
         VmessAeadUdpWrapperKind::HttpUpgradeTls => {
-            let mut client = open_async_resident_tls_client(proxy).await?;
+            let mut client =
+                open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
             let tls_underlay = async_resident_tls_underlay_name(&client);
             httpupgrade_handshake_async(
                 &mut client,
@@ -372,7 +376,7 @@ async fn open_vmess_underlay(
         }
         VmessAeadUdpWrapperKind::GrpcTls => {
             let (send_stream, response, carrier_lease) =
-                open_grpc_h2_stream(proxy, first_write).await?;
+                open_grpc_h2_stream(binding, first_write).await?;
             let tls_underlay = carrier_lease.tls_underlay();
             Ok(VmessAeadUdpUnderlay::GrpcTls {
                 send_stream,

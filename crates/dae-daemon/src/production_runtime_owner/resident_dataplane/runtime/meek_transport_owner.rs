@@ -11,10 +11,10 @@ use tokio::time;
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::client::{
-    AsyncResidentTlsClient, open_async_resident_tls_client_with_flow,
+    AsyncResidentTlsClient, open_async_resident_tls_client_with_binding,
 };
-use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyPlan;
-use crate::production_runtime_owner::resident_dataplane::transport_identity::resident_transport_identity_digest;
+use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyBinding;
+use crate::production_runtime_owner::resident_dataplane::transport_identity::resident_transport_binding_identity_digest;
 
 const MEEK_TRANSPORT_IDENTITY_DOMAIN: &[u8] = b"dae/meek-transport-owner/v1";
 
@@ -29,10 +29,13 @@ struct MeekTransportKey {
 }
 
 impl MeekTransportKey {
-    fn for_proxy(proxy: &ResidentProxyPlan) -> Self {
+    fn for_binding(binding: &ResidentProxyBinding) -> Self {
         Self {
-            generation: proxy.execution_plan().runtime_generation(),
-            digest: resident_transport_identity_digest(MEEK_TRANSPORT_IDENTITY_DOMAIN, proxy),
+            generation: binding.runtime_generation(),
+            digest: resident_transport_binding_identity_digest(
+                MEEK_TRANSPORT_IDENTITY_DOMAIN,
+                binding,
+            ),
         }
     }
 }
@@ -572,10 +575,10 @@ fn meek_transport_pool(
 }
 
 pub(crate) async fn acquire_meek_transport(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     deadline: AbsoluteDeadline,
 ) -> Result<MeekTransportLease, String> {
-    let key = MeekTransportKey::for_proxy(&proxy);
+    let key = MeekTransportKey::for_binding(&binding);
     let owner = meek_transport_generation(key.generation)?;
     let pool = meek_transport_pool(&owner, key)?;
     loop {
@@ -602,8 +605,7 @@ pub(crate) async fn acquire_meek_transport(
         }
         match try_reserve_meek_physical(&owner, &pool) {
             Ok(slot) => {
-                let receiver =
-                    spawn_meek_transport_build(&owner, Arc::clone(&proxy), deadline, slot)?;
+                let receiver = spawn_meek_transport_build(&owner, binding.clone(), deadline, slot)?;
                 let remaining = deadline
                     .remaining_at(Instant::now())
                     .ok_or_else(|| "Meek transport acquisition deadline elapsed".to_owned())?;
@@ -711,7 +713,7 @@ fn try_reserve_meek_physical(
 
 fn spawn_meek_transport_build(
     owner: &Arc<MeekTransportGenerationOwner>,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     deadline: AbsoluteDeadline,
     slot: MeekPhysicalSlot,
 ) -> Result<tokio::sync::oneshot::Receiver<Result<MeekPhysicalConnection, String>>, String> {
@@ -748,7 +750,7 @@ fn spawn_meek_transport_build(
         if start_receiver.await.is_err() {
             return;
         }
-        let result = build_meek_transport(&build_owner, &proxy, deadline, slot).await;
+        let result = build_meek_transport(&build_owner, &binding, deadline, slot).await;
         if result.is_err() {
             build_owner
                 .metrics
@@ -767,16 +769,17 @@ fn spawn_meek_transport_build(
 
 async fn build_meek_transport(
     owner: &Arc<MeekTransportGenerationOwner>,
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     deadline: AbsoluteDeadline,
     slot: MeekPhysicalSlot,
 ) -> Result<MeekPhysicalConnection, String> {
+    let proxy = binding.plan();
     let remaining = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "Meek transport TLS deadline elapsed".to_owned())?;
     let client = time::timeout(
         remaining,
-        open_async_resident_tls_client_with_flow(proxy, proxy.mark, proxy.mptcp),
+        open_async_resident_tls_client_with_binding(binding, proxy.mptcp),
     )
     .await
     .map_err(|_| "Meek transport TLS deadline elapsed".to_owned())??;
@@ -899,7 +902,7 @@ mod tests {
         let production = owner
             .split_once("#[cfg(test)]\nmod tests")
             .map_or(owner, |(production, _)| production);
-        assert!(production.contains("open_async_resident_tls_client_with_flow"));
+        assert!(production.contains("open_async_resident_tls_client_with_binding"));
         assert!(!polling.contains("open_async_resident_tls_client"));
         assert!(polling.contains("acquire_meek_transport"));
         assert!(workers.contains("start_meek_transport_generation_owner"));

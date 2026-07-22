@@ -14,7 +14,7 @@ const TEST_PASSWORD: &str = "fixture-password";
 const TEST_DNS_QTYPE_A: u16 = 1;
 
 fn proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
-    ResidentProxyPlan {
+    let mut proxy = ResidentProxyPlan {
         graph_id: "resident-graph:redacted".to_owned(),
         graph_link_hash: "sha256:redacted".to_owned(),
         redacted_link_source: "source:<redacted>".to_owned(),
@@ -48,7 +48,9 @@ fn proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
         chain_parent: None,
         mark: 0,
         mptcp: false,
-    }
+    };
+    proxy.materialize_execution();
+    proxy
 }
 
 fn juicity_proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
@@ -61,6 +63,7 @@ fn juicity_proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
         allow_insecure: true,
         pinned_certchain_sha256: String::new(),
     };
+    proxy.materialize_execution();
     proxy
 }
 
@@ -74,6 +77,7 @@ fn policy_closed_proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
         transport_host: String::new(),
         transport_path: String::new(),
     };
+    proxy.materialize_execution();
     proxy
 }
 

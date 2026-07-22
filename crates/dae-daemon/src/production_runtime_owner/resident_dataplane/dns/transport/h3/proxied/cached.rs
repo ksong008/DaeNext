@@ -111,7 +111,7 @@ async fn open_cached_proxy_dns_h3_client(
         (
             forwarder.upstream.clone(),
             forwarder.remote,
-            Arc::clone(&forwarder.proxy),
+            forwarder.binding.clone(),
             forwarder.owners.clone(),
             Arc::clone(&forwarder.metrics),
             proxy_dns_h3_client_config(&forwarder)?,
@@ -122,7 +122,7 @@ async fn open_cached_proxy_dns_h3_client(
             ProxyDnsRequestStage::OwnerAcquire,
             ProxyDnsRequestFailure::Network,
             open_resident_proxy_udp_bridge_async(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 remote,
                 owners.hysteria2(),
                 owners.tuic(),
@@ -145,7 +145,7 @@ async fn open_cached_proxy_dns_h3_client(
     let deadline = dae_runtime_control::AbsoluteDeadline::at(context.deadline().into_std());
     let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
     let mut endpoint = match open_marked_quic_endpoint_for_remote(
-        proxy.mark,
+        proxy.effective_socket_mark(),
         bridge_addr,
         open_context,
         deadline,

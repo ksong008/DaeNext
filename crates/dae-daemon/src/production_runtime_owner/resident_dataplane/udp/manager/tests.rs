@@ -246,7 +246,7 @@ fn udp_router_reroutes_control_plane_with_sniffed_domain() {
     match selection {
         ResidentUdpSelection::Proxy(selection) => {
             assert_eq!(selection.proxy.group_name, "sg");
-            assert_eq!(selection.proxy.mark, 0x3333);
+            assert_eq!(selection.proxy.effective_socket_mark(), 0x3333);
         }
         ResidentUdpSelection::Block(_) => panic!("domain reroute must select proxy"),
         ResidentUdpSelection::Direct(_) => panic!("domain reroute must select proxy"),
@@ -294,7 +294,7 @@ fn udp_router_overrides_proxy_mark_from_routing_result() {
     match selection {
         ResidentUdpSelection::Proxy(selection) => {
             assert_eq!(selection.proxy.group_name, "sg");
-            assert_eq!(selection.proxy.mark, 0x1234_5678);
+            assert_eq!(selection.proxy.effective_socket_mark(), 0x1234_5678);
         }
         ResidentUdpSelection::Block(_) => panic!("route mark override must keep proxy route"),
         ResidentUdpSelection::Direct(_) => panic!("route mark override must keep proxy route"),
@@ -805,7 +805,7 @@ fn test_udp_proxy_with_group(group_name: &str, mark: u32) -> ResidentProxyPlan {
 }
 
 fn test_udp_proxy(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
-    ResidentProxyPlan {
+    let mut proxy = ResidentProxyPlan {
         graph_id: "resident-graph:redacted".to_owned(),
         graph_link_hash: "sha256:redacted".to_owned(),
         redacted_link_source: "source:<redacted>".to_owned(),
@@ -835,5 +835,7 @@ fn test_udp_proxy(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
         chain_parent: None,
         mark: 0,
         mptcp: false,
-    }
+    };
+    proxy.materialize_execution();
+    proxy
 }

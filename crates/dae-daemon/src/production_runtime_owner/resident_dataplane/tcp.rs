@@ -80,10 +80,9 @@ use dae_outbound::vmess::aead_tcp_client_session_start;
 
 use super::client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, async_resident_tls_underlay_name,
-    async_tls_underlay_name, open_async_resident_tls_client_with_flow,
-    open_async_vless_tls_client_with_flow, open_async_vless_tls_client_with_flow_at_candidates,
-    open_async_xhttp_endpoint_tls_client, open_async_xhttp_endpoint_tls_client_at_candidates,
-    open_proxy_tcp_stream_async_with_flow,
+    async_tls_underlay_name, open_async_resident_tls_client_with_binding,
+    open_async_vless_tls_client_with_flow_at_candidates, open_async_xhttp_endpoint_tls_client,
+    open_async_xhttp_endpoint_tls_client_at_candidates, open_proxy_tcp_stream_with_binding,
 };
 use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,
@@ -97,12 +96,12 @@ use super::plan::ResidentProxyGroupPlan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentHysteria2ObfsPlan, ResidentProtocolShape, ResidentProxyPlan, ResidentProxyProtocolPlan,
-    ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan, ResidentTcpRuntimeDispatch,
-    ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion, ResidentXhttpMetaPlacement,
-    ResidentXhttpMode, ResidentXhttpPaddingMethod, ResidentXhttpPaddingPlacement,
-    ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement, ResidentXhttpXmuxPlan,
-    SharedResidentProxyGroupMap,
+    ResidentHysteria2ObfsPlan, ResidentProtocolShape, ResidentProxyBinding, ResidentProxyPlan,
+    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan,
+    ResidentTcpRuntimeDispatch, ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion,
+    ResidentXhttpMetaPlacement, ResidentXhttpMode, ResidentXhttpPaddingMethod,
+    ResidentXhttpPaddingPlacement, ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement,
+    ResidentXhttpXmuxPlan, SharedResidentProxyGroupMap,
 };
 use super::probe::resident_tcp_probe_tls_config;
 #[cfg(test)]

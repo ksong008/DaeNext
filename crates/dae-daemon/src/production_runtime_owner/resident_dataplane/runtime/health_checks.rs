@@ -264,7 +264,7 @@ async fn probe_resident_candidate_tcp_latency_snapshot_scoped(
     let preferred_health_state = preferred_tcp_family_probe_result(&probe.family_results)
         .map(|result| result.health_state.as_str());
     let display_name = candidate.node_tag.as_str();
-    let graph_id = candidate.proxy.graph_id.as_str();
+    let graph_id = candidate.binding.plan().graph_id.as_str();
     let link_hash = candidate.link_hash.as_str();
     let execution_identity = candidate.execution_identity.as_str();
     let redacted_source = candidate.redacted_link_source.as_str();
@@ -280,7 +280,8 @@ async fn probe_resident_candidate_tcp_latency_snapshot_scoped(
         "linkIdentity": latency_link_identity_value(display_name, link_hash, redacted_source),
         "probeExecutor": resident_probe_executor_value(graph_id, reload_generation),
         "runtimeComponents": candidate
-            .proxy
+            .binding
+            .plan()
             .runtime_component_evidence_value_for_reload_generation(reload_generation),
         "latencyMs": latency_ms,
         "alive": latency_ms.is_some(),
@@ -621,7 +622,7 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
 ) -> Result<i64, String> {
     let started = Instant::now();
     probe_native_proxy_tcp_async(
-        Arc::clone(&candidate.proxy),
+        candidate.binding.clone(),
         &candidate.tcp_check.scheme,
         &target.target,
         &candidate.tcp_check.host,
@@ -807,21 +808,24 @@ mod tests {
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
         let group = plan.default_proxy_group().unwrap();
-        let mut candidates = group.probe_candidates();
+        let mut candidates = group.probe_candidates().to_vec();
         let absent = plan::ResidentHealthTargetFamilies {
             ipv4: plan::ResidentHealthTargetFamily::Absent,
             ipv6: plan::ResidentHealthTargetFamily::Absent,
         };
-        candidates[0].tcp_check.resolver = candidates[0]
+        let tcp_resolver = candidates[0]
             .tcp_check
             .resolver
             .clone()
             .with_test_result(absent.clone());
-        candidates[0].udp_check.resolver = candidates[0]
+        let udp_resolver = candidates[0]
             .udp_check
             .resolver
             .clone()
             .with_test_result(absent);
+        let profile = candidates[0].profile_mut_for_test();
+        profile.tcp_check.resolver = tcp_resolver;
+        profile.udp_check.resolver = udp_resolver;
 
         run_resident_group_health_checks(group, &candidates);
 
@@ -878,7 +882,7 @@ mod tests {
                 10,
             )
             .unwrap();
-        let mut candidates = group.probe_candidates();
+        let mut candidates = group.probe_candidates().to_vec();
         let unknown = plan::ResidentHealthTargetFamilies {
             ipv4: plan::ResidentHealthTargetFamily::Unknown(
                 "temporary resolver failure".to_owned(),
@@ -887,18 +891,20 @@ mod tests {
                 "temporary resolver failure".to_owned(),
             ),
         };
-        candidates[0].tcp_check.resolver = candidates[0]
+        let tcp_resolver = candidates[0]
             .tcp_check
             .resolver
             .clone()
             .with_test_result(unknown);
-        candidates[0].udp_check.resolver =
-            candidates[0].udp_check.resolver.clone().with_test_result(
-                plan::ResidentHealthTargetFamilies {
-                    ipv4: plan::ResidentHealthTargetFamily::Absent,
-                    ipv6: plan::ResidentHealthTargetFamily::Absent,
-                },
-            );
+        let udp_resolver = candidates[0].udp_check.resolver.clone().with_test_result(
+            plan::ResidentHealthTargetFamilies {
+                ipv4: plan::ResidentHealthTargetFamily::Absent,
+                ipv6: plan::ResidentHealthTargetFamily::Absent,
+            },
+        );
+        let profile = candidates[0].profile_mut_for_test();
+        profile.tcp_check.resolver = tcp_resolver;
+        profile.udp_check.resolver = udp_resolver;
 
         run_resident_group_health_checks(group, &candidates);
 

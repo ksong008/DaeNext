@@ -1,11 +1,15 @@
 use super::*;
 
+mod binding;
 mod execution;
 mod protocol;
 mod security;
 mod wrapper;
 mod xhttp;
 
+pub(in crate::production_runtime_owner::resident_dataplane) use binding::ResidentProxyBinding;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use binding::ResidentXhttpReusePolicy;
 pub(in crate::production_runtime_owner::resident_dataplane) use execution::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentExecutionPlan,
     ResidentProtocolShape, ResidentStreamPacketTransport, ResidentTcpCarrierOwnership,
@@ -115,7 +119,18 @@ impl ResidentProxyPlan {
         &self,
     ) -> ResidentExecutionPlan {
         self.execution
-            .unwrap_or_else(|| ResidentExecutionPlan::from_proxy(self))
+            .expect("resident proxy execution must be materialized before use")
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn materialized_execution(
+        &self,
+    ) -> Result<ResidentExecutionPlan, String> {
+        self.execution.ok_or_else(|| {
+            format!(
+                "resident proxy {} node {} has no materialized execution plan",
+                self.protocol, self.node_tag
+            )
+        })
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn materialize_execution(
@@ -211,38 +226,6 @@ impl ResidentProxyPlan {
         self.handler.compact_allocations();
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn disable_latency_probe_persistent_caches(
-        &mut self,
-    ) {
-        self.xhttp_xmux = None;
-        if let Some(download) = &mut self.xhttp_download {
-            download.xmux = None;
-        }
-        if let Some(parent) = self.chain_parent.as_mut() {
-            Arc::make_mut(parent).disable_latency_probe_persistent_caches();
-        }
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_runtime_generation(
-        &mut self,
-        runtime_generation: u64,
-    ) {
-        self.execution = Some(self.execution_plan().with_runtime_generation(
-            dae_runtime_control::OwnerGeneration::new(runtime_generation),
-        ));
-        if let Some(xmux) = &mut self.xhttp_xmux {
-            xmux.apply_runtime_generation(runtime_generation);
-        }
-        if let Some(download) = &mut self.xhttp_download
-            && let Some(xmux) = &mut download.xmux
-        {
-            xmux.apply_runtime_generation(runtime_generation);
-        }
-        if let Some(parent) = self.chain_parent.as_mut() {
-            Arc::make_mut(parent).apply_runtime_generation(runtime_generation);
-        }
-    }
-
     pub(in crate::production_runtime_owner::resident_dataplane) fn apply_effective_so_mark_from_dae(
         &mut self,
     ) {
@@ -250,30 +233,6 @@ impl ResidentProxyPlan {
         if let Some(parent) = self.chain_parent.as_mut() {
             Arc::make_mut(parent).apply_effective_so_mark_from_dae();
         }
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn apply_latency_probe_control_mark(
-        &mut self,
-        mark: u32,
-    ) {
-        if mark == 0 {
-            return;
-        }
-        if self.mark == 0 {
-            self.mark = mark;
-        }
-        if let Some(parent) = self.chain_parent.as_mut() {
-            Arc::make_mut(parent).apply_latency_probe_control_mark(mark);
-        }
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn latency_probe_proxy(
-        &self,
-    ) -> Self {
-        let mut proxy = self.clone();
-        proxy.disable_latency_probe_persistent_caches();
-        proxy.compact_allocations();
-        proxy
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn executable_graph_descriptor(

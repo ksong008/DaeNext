@@ -160,7 +160,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
             let default_proxy = plan
                 .default_proxy_snapshot()
                 .as_ref()
-                .map(resident_proxy_plan_summary_json)
+                .map(|proxy| resident_proxy_plan_summary_json(proxy))
                 .unwrap_or(Value::Null);
             let default_group = plan
                 .default_proxy_group()

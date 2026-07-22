@@ -58,12 +58,13 @@ pub(super) enum VlessStandardUdpUnderlay {
 impl VlessStandardUdpUnderlay {
     pub(super) async fn open(
         wrapper: VlessStandardUdpWrapperKind,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         initial_packet: &[u8],
     ) -> Result<Self, String> {
+        let proxy = binding.plan();
         match wrapper {
             VlessStandardUdpWrapperKind::PlainTcp => {
-                let mut stream = open_proxy_tcp_stream_async(proxy).await?;
+                let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
                 write_vless_stream_bytes(
                     &mut stream,
                     initial_packet,
@@ -73,7 +74,8 @@ impl VlessStandardUdpUnderlay {
                 Ok(Self::PlainTcp { stream })
             }
             VlessStandardUdpWrapperKind::TlsTcp => {
-                let mut client = open_async_resident_tls_client(proxy).await?;
+                let mut client =
+                    open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
                 write_vless_stream_bytes(
                     &mut client,
@@ -87,7 +89,7 @@ impl VlessStandardUdpUnderlay {
                 })
             }
             VlessStandardUdpWrapperKind::WebSocketPlain => {
-                let mut stream = open_proxy_tcp_stream_async(proxy).await?;
+                let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
                 websocket_handshake_async(
                     &mut stream,
                     &proxy.stream_host,
@@ -107,7 +109,8 @@ impl VlessStandardUdpUnderlay {
                 })
             }
             VlessStandardUdpWrapperKind::WebSocketTls => {
-                let mut client = open_async_resident_tls_client(proxy).await?;
+                let mut client =
+                    open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
                 websocket_handshake_async(
                     &mut client,
@@ -129,7 +132,7 @@ impl VlessStandardUdpUnderlay {
                 })
             }
             VlessStandardUdpWrapperKind::HttpUpgradePlain => {
-                let mut stream = open_proxy_tcp_stream_async(proxy).await?;
+                let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
                 httpupgrade_handshake_async(
                     &mut stream,
                     &proxy.stream_host,
@@ -146,7 +149,8 @@ impl VlessStandardUdpUnderlay {
                 Ok(Self::HttpUpgradePlain { stream })
             }
             VlessStandardUdpWrapperKind::HttpUpgradeTls => {
-                let mut client = open_async_resident_tls_client(proxy).await?;
+                let mut client =
+                    open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
                 httpupgrade_handshake_async(
                     &mut client,
@@ -168,7 +172,7 @@ impl VlessStandardUdpUnderlay {
             }
             VlessStandardUdpWrapperKind::GrpcTls => {
                 let (send_stream, response, carrier_lease) =
-                    open_grpc_h2_stream(proxy, initial_packet).await?;
+                    open_grpc_h2_stream(binding, initial_packet).await?;
                 let tls_underlay = carrier_lease.tls_underlay();
                 Ok(Self::GrpcTls {
                     send_stream,
@@ -180,7 +184,7 @@ impl VlessStandardUdpUnderlay {
             }
             VlessStandardUdpWrapperKind::H2Tls => {
                 let (send_stream, recv_stream, carrier_lease) =
-                    open_h2_body_stream(proxy, initial_packet, "VLESS H2 UDP").await?;
+                    open_h2_body_stream(binding, initial_packet, "VLESS H2 UDP").await?;
                 let tls_underlay = carrier_lease.tls_underlay();
                 Ok(Self::H2Tls {
                     send_stream,

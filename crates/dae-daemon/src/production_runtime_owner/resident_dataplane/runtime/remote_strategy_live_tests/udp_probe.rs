@@ -80,17 +80,26 @@ pub(crate) fn resident_live_adapter_udp_probe(
                 ) {
                     Ok(proxy) => {
                         let proxy = Arc::new(proxy);
+                        let binding = plan::ResidentProxyBinding::control_plane(Arc::clone(&proxy));
                         let mut probe = match &probe_runtime {
-                            Ok(runtime) => runtime.block_on(probe_resident_proxy_udp_async(
-                                Arc::clone(&proxy),
-                                target,
-                                payload,
-                                include_response_hex,
-                                owner_registry.clone(),
-                                tuic_owner_registry.clone(),
-                                juicity_owner_registry.clone(),
-                                anytls_owner_registry.clone(),
-                            )),
+                            Ok(runtime) => match binding {
+                                Ok(binding) => runtime.block_on(probe_resident_proxy_udp_async(
+                                    binding,
+                                    target,
+                                    payload,
+                                    include_response_hex,
+                                    owner_registry.clone(),
+                                    tuic_owner_registry.clone(),
+                                    juicity_owner_registry.clone(),
+                                    anytls_owner_registry.clone(),
+                                )),
+                                Err(error) => json!({
+                                    "status": "fail",
+                                    "ok": false,
+                                    "protocol_closed": false,
+                                    "error": error,
+                                }),
+                            },
                             Err(_) => json!({
                                 "status": "fail",
                                 "ok": false,

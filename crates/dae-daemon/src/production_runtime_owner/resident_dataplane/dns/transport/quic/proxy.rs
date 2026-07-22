@@ -11,7 +11,7 @@ pub(super) async fn forward_dns_quic_to_proxy_async(
     let generation = {
         let forwarder =
             lock_proxy_dns_quic_forwarder(&forwarder, context, "read generation").await?;
-        forwarder.proxy.execution_plan().runtime_generation()
+        forwarder.binding.runtime_generation()
     };
     scope_quic_endpoint_observation(
         QuicEndpointCallerClass::ManagedDns,
@@ -132,7 +132,7 @@ async fn open_cached_proxy_dns_quic_connection(
         (
             forwarder.upstream.clone(),
             forwarder.remote,
-            Arc::clone(&forwarder.proxy),
+            forwarder.binding.clone(),
             forwarder.owners.clone(),
             proxy_dns_quic_client_config(&forwarder)?,
         )
@@ -142,7 +142,7 @@ async fn open_cached_proxy_dns_quic_connection(
             ProxyDnsRequestStage::OwnerAcquire,
             ProxyDnsRequestFailure::Network,
             open_resident_proxy_udp_bridge_async(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 remote,
                 owners.hysteria2(),
                 owners.tuic(),
@@ -293,7 +293,7 @@ fn open_proxy_dns_quic_endpoint(
     upstream: &ResidentDnsUpstream,
     upstream_remote: SocketAddr,
     bridge_remote: SocketAddr,
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     client_config: quinn::ClientConfig,
     context: ProxyDnsRequestContext,
 ) -> Result<ObservedQuicEndpoint, ProxyDnsRequestError> {
@@ -302,12 +302,12 @@ fn open_proxy_dns_quic_endpoint(
         QuicEndpointProtocol::DnsOverQuic,
         upstream,
         upstream_remote,
-        proxy,
+        binding,
     );
     let deadline = dae_runtime_control::AbsoluteDeadline::at(context.deadline().into_std());
     let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
     let mut endpoint = open_marked_quic_endpoint_for_remote(
-        proxy.mark,
+        binding.effective_socket_mark(),
         bridge_remote,
         open_context,
         deadline,
@@ -599,7 +599,8 @@ mod tests {
     use super::*;
     use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     use crate::production_runtime_owner::resident_dataplane::dns::transport::test_support::{
-        DnsQuicTestProtocol, DnsQuicTestServer, Socks5UdpRelay, dns_test_response, socks5_dns_proxy,
+        DnsQuicTestProtocol, DnsQuicTestServer, Socks5UdpRelay, dns_proxy_binding,
+        dns_test_response, socks5_dns_proxy,
     };
     use crate::production_runtime_owner::resident_dataplane::tcp::quic_endpoint_metrics_snapshot;
 
@@ -669,7 +670,8 @@ mod tests {
         )
         .await;
         let socks = Socks5UdpRelay::start().await;
-        let proxy = socks5_dns_proxy(socks.address(), generation);
+        let proxy = socks5_dns_proxy(socks.address());
+        let binding = dns_proxy_binding(Arc::clone(&proxy), generation);
         let upstream = parse_dns_upstream(
             0,
             "routed-doq",
@@ -679,11 +681,11 @@ mod tests {
         )
         .unwrap();
         let selection = ResidentDnsUpstreamSelection::Proxy {
-            proxy: Arc::clone(&proxy),
+            binding: binding.clone(),
         };
         let cache = ResidentDnsForwarderCache::default();
         let forwarder = cache
-            .proxy_quic_forwarder(&upstream, server.address(), Arc::clone(&proxy), &selection)
+            .proxy_quic_forwarder(&upstream, server.address(), binding, &selection)
             .unwrap();
         forwarder.lock().await.client_config_override = Some(server.client_config());
         let first_query = build_dns_query_packet(0x3411, "small.example", DNS_QTYPE_A).unwrap();

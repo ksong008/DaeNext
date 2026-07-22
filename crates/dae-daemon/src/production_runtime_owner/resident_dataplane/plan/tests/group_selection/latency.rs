@@ -570,13 +570,14 @@ pub(super) fn resident_dataplane_latency_seed_selects_dynamic_group_candidate() 
 
     let node_b_hash = group
         .probe_candidates()
-        .into_iter()
-        .find(|candidate| candidate.node_tag == "node_b")
+        .iter()
+        .find(|candidate| candidate.node_tag.as_str() == "node_b")
         .unwrap()
-        .link_hash;
+        .link_hash
+        .clone();
     group
         .apply_health_seed_snapshot(&serde_json::json!({
-            "linkHash": node_b_hash,
+            "linkHash": node_b_hash.as_str(),
             "latencyMs": 25,
             "alive": true,
             "checkedAtUnix": 42,
@@ -606,13 +607,14 @@ pub(super) fn resident_dataplane_database_health_seed_is_bounded_by_check_interv
     let fresh_group = fresh_plan.default_proxy_group().unwrap();
     let candidate = fresh_group
         .probe_candidates()
-        .into_iter()
-        .find(|candidate| candidate.node_tag == "node_b")
-        .unwrap();
+        .iter()
+        .find(|candidate| candidate.node_tag.as_str() == "node_b")
+        .unwrap()
+        .clone();
     assert_eq!(
         fresh_group
             .apply_health_seed_snapshot(&serde_json::json!({
-                "executionIdentity": candidate.execution_identity,
+                "executionIdentity": candidate.execution_identity.as_str(),
                 "networkDimension": NetworkType::TCP4.dimension_name(),
                 "latencyMs": 25,
                 "alive": true,
@@ -628,7 +630,7 @@ pub(super) fn resident_dataplane_database_health_seed_is_bounded_by_check_interv
     assert_eq!(
         expired_group
             .apply_health_seed_snapshot(&serde_json::json!({
-                "executionIdentity": candidate.execution_identity,
+                "executionIdentity": candidate.execution_identity.as_str(),
                 "networkDimension": NetworkType::TCP4.dimension_name(),
                 "latencyMs": 25,
                 "alive": true,
@@ -696,13 +698,14 @@ pub(super) fn resident_dataplane_latency_seed_uses_snapshot_ip_family_when_prese
 
     let node_b_hash = group
         .probe_candidates()
-        .into_iter()
-        .find(|candidate| candidate.node_tag == "node_b")
+        .iter()
+        .find(|candidate| candidate.node_tag.as_str() == "node_b")
         .unwrap()
-        .link_hash;
+        .link_hash
+        .clone();
     let applied = group
         .apply_health_seed_snapshot(&serde_json::json!({
-            "linkHash": node_b_hash,
+            "linkHash": node_b_hash.as_str(),
             "latencyMs": 25,
             "alive": true,
             "checkedAtUnix": 42,
@@ -744,13 +747,14 @@ pub(super) fn resident_dataplane_legacy_latency_seed_does_not_invent_ipv6_state(
     let group = plan.default_proxy_group().unwrap();
     let node_b_hash = group
         .probe_candidates()
-        .into_iter()
-        .find(|candidate| candidate.node_tag == "node_b")
+        .iter()
+        .find(|candidate| candidate.node_tag.as_str() == "node_b")
         .unwrap()
-        .link_hash;
+        .link_hash
+        .clone();
     let applied = group
         .apply_health_seed_snapshot(&serde_json::json!({
-            "linkHash": node_b_hash,
+            "linkHash": node_b_hash.as_str(),
             "latencyMs": 25,
             "alive": true,
             "checkedAtUnix": 42,
@@ -778,9 +782,10 @@ pub(super) fn resident_dataplane_health_seed_restores_dead_and_unavailable_exact
     let group = plan.default_proxy_group().unwrap();
     let candidate = group
         .probe_candidates()
-        .into_iter()
-        .find(|candidate| candidate.node_tag == "node_b")
-        .unwrap();
+        .iter()
+        .find(|candidate| candidate.node_tag.as_str() == "node_b")
+        .unwrap()
+        .clone();
 
     for (network_type, health_state, checked_at) in [
         (NetworkType::TCP4, HealthState::Dead, 41),
@@ -788,8 +793,8 @@ pub(super) fn resident_dataplane_health_seed_restores_dead_and_unavailable_exact
     ] {
         let applied = group
             .apply_health_seed_snapshot(&serde_json::json!({
-                "executionIdentity": candidate.execution_identity,
-                "linkHash": candidate.link_hash,
+                "executionIdentity": candidate.execution_identity.as_str(),
+                "linkHash": candidate.link_hash.as_str(),
                 "networkDimension": network_type.dimension_name(),
                 "healthState": health_state.as_str(),
                 "alive": false,
@@ -874,11 +879,12 @@ pub(super) fn resident_dataplane_health_seed_uses_execution_and_target_identity(
     let group = plan.default_proxy_group().unwrap();
     let candidate = group
         .probe_candidates()
-        .into_iter()
-        .find(|candidate| candidate.node_tag == "node_b")
-        .unwrap();
+        .iter()
+        .find(|candidate| candidate.node_tag.as_str() == "node_b")
+        .unwrap()
+        .clone();
     let snapshot = serde_json::json!({
-        "executionIdentity": candidate.execution_identity,
+        "executionIdentity": candidate.execution_identity.as_str(),
         "linkHash": link_hash("display-name-only-change"),
         "networkDimension": NetworkType::TCP4.dimension_name(),
         "healthState": HealthState::Alive.as_str(),
@@ -923,13 +929,14 @@ pub(super) fn resident_dataplane_latency_seed_does_not_change_fixed_group_select
 
     let node_b_hash = group
         .probe_candidates()
-        .into_iter()
-        .find(|candidate| candidate.node_tag == "node_b")
+        .iter()
+        .find(|candidate| candidate.node_tag.as_str() == "node_b")
         .unwrap()
-        .link_hash;
+        .link_hash
+        .clone();
     let applied = group
         .apply_health_seed_snapshot(&serde_json::json!({
-            "linkHash": node_b_hash,
+            "linkHash": node_b_hash.as_str(),
             "latencyMs": 1,
             "alive": true,
             "checkedAtUnix": 42,
