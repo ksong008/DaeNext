@@ -103,6 +103,9 @@ where
             let payload = self.response_head.split_off(end);
             self.response_head.clear();
             self.response_head_received = true;
+            if payload.is_empty() {
+                return Pin::new(&mut self.inner).poll_read(cx, output);
+            }
             let copied = payload.len().min(output.remaining());
             output.put_slice(&payload[..copied]);
             if copied < payload.len() {
@@ -161,6 +164,33 @@ mod tests {
                 .write_all(b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\n\r\nvmess-payload")
                 .await
                 .unwrap();
+        });
+        let mut stream = open_vmess_http_header_stream(client, "header.fixture.invalid", "/vmess")
+            .await
+            .unwrap();
+        let mut payload = [0_u8; 13];
+        stream.read_exact(&mut payload).await.unwrap();
+        assert_eq!(&payload, b"vmess-payload");
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn response_head_without_coalesced_payload_waits_for_body() {
+        let (client, mut server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                server.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            server
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\n\r\n")
+                .await
+                .unwrap();
+            server.flush().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            server.write_all(b"vmess-payload").await.unwrap();
         });
         let mut stream = open_vmess_http_header_stream(client, "header.fixture.invalid", "/vmess")
             .await
