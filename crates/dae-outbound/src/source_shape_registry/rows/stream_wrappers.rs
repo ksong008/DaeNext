@@ -39,6 +39,15 @@ pub(super) const STREAM_WRAPPER_GRPC: SourceShapeRegistryRow = admitted_row(
     ),
 );
 
+pub(super) const PLAIN_GRPC_FRAMED_ENDPOINT: SourceShapeRegistryRow = admitted_row(
+    registry_source("plain-grpc-framed-endpoint", "vmess", &["vmess"])
+        .with_transport("none", "grpc", "protocol-closed")
+        .with_runtime(
+            GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP,
+            "registry:plain-grpc-framed-endpoint",
+        ),
+);
+
 pub(super) const STREAM_WRAPPER_HTTPUPGRADE: SourceShapeRegistryRow = admitted_row(
     registry_source(
         "stream-wrapper-httpupgrade",

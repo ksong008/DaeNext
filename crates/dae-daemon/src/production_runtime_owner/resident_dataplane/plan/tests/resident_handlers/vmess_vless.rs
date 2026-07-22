@@ -42,8 +42,8 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         dae_outbound::vmess::VMessBodySecurity::Aes128Gcm
     );
 
-    let mut unsupported_security = VMessLink::parse(&vmess_fixture_url(
-        "vmess-unsupported-security",
+    let mut chacha_security = VMessLink::parse(&vmess_fixture_url(
+        "vmess-chacha-security",
         &primary_host,
         fixture_port(2),
         "tcp",
@@ -52,7 +52,24 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "",
     ))
     .unwrap();
-    unsupported_security.security = "chacha20-poly1305".to_owned();
+    chacha_security.security = "chacha20-poly1305".to_owned();
+    let chacha = build_resident_proxy_plan_for_node(
+        config,
+        "proxy".to_owned(),
+        "vmess_chacha_security".to_owned(),
+        chacha_security.export_url(),
+    )
+    .unwrap();
+    assert!(matches!(
+        chacha.handler,
+        ResidentProxyProtocolPlan::VmessAeadTcp {
+            body_security: dae_outbound::vmess::VMessBodySecurity::Chacha20Poly1305,
+            ..
+        }
+    ));
+
+    let mut unsupported_security = chacha_security;
+    unsupported_security.security = "unknown-cipher".to_owned();
     let err = build_resident_proxy_plan_for_node(
         config,
         "proxy".to_owned(),
@@ -93,6 +110,51 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         vmess_tls_graph["runtimeComponents"]["underlayFactory"]["provider"],
         "rustls"
     );
+
+    let mut vmess_http_header_link = VMessLink::parse(&vmess_fixture_url(
+        "vmess-http-header",
+        &primary_host,
+        fixture_port(2),
+        "tcp",
+        &authority_host,
+        "/vmess-header",
+        "",
+    ))
+    .unwrap();
+    vmess_http_header_link.r#type = "http".to_owned();
+    let vmess_http_header = build_resident_proxy_plan_for_node(
+        config,
+        "proxy".to_owned(),
+        "vmess_http_header".to_owned(),
+        vmess_http_header_link.export_url(),
+    )
+    .unwrap();
+    assert_eq!(vmess_http_header.net, "tcp-http-header");
+    assert_eq!(vmess_http_header.stream_host, authority_host);
+    assert_eq!(vmess_http_header.stream_path, "/vmess-header");
+    assert_eq!(
+        vmess_http_header.execution_plan().wrapper,
+        ResidentStreamWrapperPlan::TcpHttpHeader
+    );
+    assert!(matches!(
+        vmess_http_header.execution_plan().udp,
+        ResidentUdpExecutorFactory::Vmess(ResidentStreamPacketTransport::TcpHttpHeaderPlain)
+    ));
+
+    vmess_http_header_link.tls = "tls".to_owned();
+    vmess_http_header_link.sni = authority_host.clone();
+    let vmess_http_header_tls = build_resident_proxy_plan_for_node(
+        config,
+        "proxy".to_owned(),
+        "vmess_http_header_tls".to_owned(),
+        vmess_http_header_link.export_url(),
+    )
+    .unwrap();
+    assert_eq!(vmess_http_header_tls.alpn, vec!["http/1.1".to_owned()]);
+    assert!(matches!(
+        vmess_http_header_tls.execution_plan().udp,
+        ResidentUdpExecutorFactory::Vmess(ResidentStreamPacketTransport::TcpHttpHeaderTls)
+    ));
 
     let vmess_websocket = build_resident_proxy_plan_for_node(
         config,

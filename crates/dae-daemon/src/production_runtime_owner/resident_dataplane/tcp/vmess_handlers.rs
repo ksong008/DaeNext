@@ -1,5 +1,8 @@
 use super::*;
 
+mod http_header;
+pub(super) use http_header::*;
+
 fn take_vmess_tcp_session(
     id: &str,
     body_security: dae_outbound::vmess::VMessBodySecurity,
@@ -491,7 +494,12 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
     let (mut h2_send, mut h2_recv, carrier_lease) =
         open_grpc_h2_stream(&selection.proxy, &session.first_write).await?;
     discard_vmess_first_write(&mut session);
-    let tls_underlay = carrier_lease.tls_underlay();
+    let tls_underlay = selection
+        .proxy
+        .execution_plan()
+        .security
+        .is_tls_stream()
+        .then(|| carrier_lease.tls_underlay());
     let mut initial_stats = DirectTcpRelayStats::default();
     if initial_payload_len != 0 {
         initial_stats.client_to_direct += initial_payload_len;
@@ -519,13 +527,15 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
                 &stats,
                 "wrapped-grpc-aead",
             );
-            event["tls_underlay"] = json!(tls_underlay);
+            if let Some(tls_underlay) = tls_underlay {
+                event["tls_underlay"] = json!(tls_underlay);
+            }
             event["stream_wrapper"] = json!("grpc");
             append_proxy_tcp_execution_fields(
                 &mut event,
                 "wrapped-grpc-aead",
                 "vmess",
-                Some(tls_underlay),
+                tls_underlay,
                 None,
             );
             event
@@ -540,13 +550,15 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
                 &err,
                 "wrapped-grpc-aead",
             );
-            event["tls_underlay"] = json!(tls_underlay);
+            if let Some(tls_underlay) = tls_underlay {
+                event["tls_underlay"] = json!(tls_underlay);
+            }
             event["stream_wrapper"] = json!("grpc");
             append_proxy_tcp_execution_fields(
                 &mut event,
                 "wrapped-grpc-aead",
                 "vmess",
-                Some(tls_underlay),
+                tls_underlay,
                 None,
             );
             Ok::<Value, String>(event)

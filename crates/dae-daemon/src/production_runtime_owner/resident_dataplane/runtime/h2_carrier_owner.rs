@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::future::poll_fn;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::task::{Context, Poll};
 #[cfg(test)]
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -9,17 +11,67 @@ use std::time::Instant;
 use bytes::Bytes;
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
 use serde_json::{Value, json};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::Notify;
 use tokio::time;
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::client::{
-    async_resident_tls_underlay_name, open_async_resident_tls_client_with_binding,
+    AsyncResidentTlsClient, async_resident_tls_underlay_name,
+    open_async_resident_tls_client_with_binding, open_proxy_tcp_stream_with_binding,
 };
-use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyBinding;
+use crate::production_runtime_owner::resident_dataplane::plan::{
+    ResidentProtocolShape, ResidentProxyBinding, ResidentSecurityUnderlayPlan,
+    ResidentStreamWrapperPlan,
+};
 use crate::production_runtime_owner::resident_dataplane::transport_identity::resident_transport_binding_identity_digest;
 
 const H2_CARRIER_IDENTITY_DOMAIN: &[u8] = b"dae/h2-carrier-owner/v1";
+
+enum H2CarrierIo {
+    Plain(tokio::net::TcpStream),
+    Tls(Box<AsyncResidentTlsClient>),
+}
+
+impl AsyncRead for H2CarrierIo {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            Self::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for H2CarrierIo {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match &mut *self {
+            Self::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            Self::Plain(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Tls(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            Self::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
 
 static H2_CARRIER_GENERATIONS: OnceLock<Mutex<HashMap<u64, Weak<H2CarrierGenerationOwner>>>> =
     OnceLock::new();
@@ -752,25 +804,43 @@ async fn build_h2_carrier(
     String,
 > {
     let proxy = binding.plan();
-    let remaining = deadline
-        .remaining_at(Instant::now())
-        .ok_or_else(|| "HTTP/2 carrier TLS deadline elapsed".to_owned())?;
-    let client = time::timeout(
-        remaining,
-        open_async_resident_tls_client_with_binding(binding, proxy.mptcp),
-    )
-    .await
-    .map_err(|_| "HTTP/2 carrier TLS deadline elapsed".to_owned())??;
-    if client.negotiated_alpn() != Some(b"h2") {
-        return Err(format!(
-            "HTTP/2 carrier negotiated unsupported ALPN {}",
-            client
-                .negotiated_alpn()
-                .map(|alpn| String::from_utf8_lossy(alpn).into_owned())
-                .unwrap_or_else(|| "<none>".to_owned())
-        ));
-    }
-    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let execution = proxy.execution_plan();
+    let plain_vmess_grpc = execution.protocol == ResidentProtocolShape::VmessAead
+        && execution.wrapper == ResidentStreamWrapperPlan::Grpc
+        && execution.security == ResidentSecurityUnderlayPlan::None;
+    let (client, tls_underlay) = if plain_vmess_grpc {
+        let remaining = deadline
+            .remaining_at(Instant::now())
+            .ok_or_else(|| "HTTP/2 carrier connect deadline elapsed".to_owned())?;
+        let stream = time::timeout(
+            remaining,
+            open_proxy_tcp_stream_with_binding(binding, proxy.mptcp),
+        )
+        .await
+        .map_err(|_| "HTTP/2 carrier connect deadline elapsed".to_owned())??;
+        (H2CarrierIo::Plain(stream), "plain-h2c")
+    } else {
+        let remaining = deadline
+            .remaining_at(Instant::now())
+            .ok_or_else(|| "HTTP/2 carrier TLS deadline elapsed".to_owned())?;
+        let client = time::timeout(
+            remaining,
+            open_async_resident_tls_client_with_binding(binding, proxy.mptcp),
+        )
+        .await
+        .map_err(|_| "HTTP/2 carrier TLS deadline elapsed".to_owned())??;
+        if client.negotiated_alpn() != Some(b"h2") {
+            return Err(format!(
+                "HTTP/2 carrier negotiated unsupported ALPN {}",
+                client
+                    .negotiated_alpn()
+                    .map(|alpn| String::from_utf8_lossy(alpn).into_owned())
+                    .unwrap_or_else(|| "<none>".to_owned())
+            ));
+        }
+        let tls_underlay = async_resident_tls_underlay_name(&client);
+        (H2CarrierIo::Tls(Box::new(client)), tls_underlay)
+    };
     let remaining = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "HTTP/2 carrier handshake deadline elapsed".to_owned())?;

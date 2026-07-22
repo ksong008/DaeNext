@@ -54,6 +54,16 @@ pub(super) const STREAM_WRAPPER_GRPC: SourceShapeReconciliation = production(
     ],
 );
 
+pub(super) const PLAIN_GRPC_FRAMED_ENDPOINT: SourceShapeReconciliation = production(
+    "plain-grpc-framed-endpoint",
+    &[standalone(
+        MaterializedProtocol::VmessAead,
+        NO_SECURITY_VARIANTS,
+        MaterializedWrapper::Grpc,
+        MaterializedUdp::PolicyClosed(MaterializedPolicyClosedReason::VmessUnsupportedShape),
+    )],
+);
+
 pub(super) const STREAM_WRAPPER_HTTPUPGRADE: SourceShapeReconciliation = production(
     "stream-wrapper-httpupgrade",
     &[
@@ -221,6 +231,12 @@ pub(super) const NESTED_CHAIN_SHAPE: SourceShapeReconciliation = production(
             NO_SECURITY_VARIANTS,
             MaterializedWrapper::None,
             MaterializedUdp::Vmess(MaterializedStreamPacketTransport::PlainTcp),
+        ),
+        chained_parent_stream(
+            MaterializedProtocol::VmessAead,
+            NO_SECURITY_VARIANTS,
+            MaterializedWrapper::TcpHttpHeader,
+            MaterializedUdp::Vmess(MaterializedStreamPacketTransport::TcpHttpHeaderPlain),
         ),
         chained_parent_stream(
             MaterializedProtocol::VmessAead,

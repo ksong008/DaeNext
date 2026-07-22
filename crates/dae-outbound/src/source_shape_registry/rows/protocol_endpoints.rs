@@ -41,7 +41,11 @@ pub(super) const BASELINE_TLS_AUTH_ENDPOINT: SourceShapeRegistryRow = admitted_r
 
 pub(super) const BASELINE_AEAD_FRAMED_ENDPOINT: SourceShapeRegistryRow = admitted_row(
     registry_source("baseline-aead-framed-endpoint", "vmess", &["vmess"])
-        .with_transport("plain-or-tls-stream-variants", "none", "udp-over-stream")
+        .with_transport(
+            "plain-or-tls-stream-variants",
+            "none-or-tcp-http-header",
+            "udp-over-stream",
+        )
         .with_runtime(
             FLOW_STREAM_PACKET_OWNERSHIP,
             "registry:baseline-aead-framed-endpoint",

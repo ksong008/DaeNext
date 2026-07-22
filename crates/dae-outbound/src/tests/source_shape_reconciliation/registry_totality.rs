@@ -4,7 +4,7 @@ use super::*;
 fn registry_rows_and_reconciliations_are_total_and_unique() {
     let rows = source_shape_registry_rows();
     let reconciliations = source_shape_reconciliations();
-    assert_eq!(rows.len(), 55);
+    assert_eq!(rows.len(), 56);
     assert_eq!(rows.len(), reconciliations.len());
 
     for row in rows {
@@ -35,7 +35,7 @@ fn registry_rows_and_reconciliations_are_total_and_unique() {
             .filter(|reconciliation| reconciliation.kind == kind)
             .count()
     };
-    assert_eq!(count(SourceShapeReconciliationKind::ProductionWitness), 42);
+    assert_eq!(count(SourceShapeReconciliationKind::ProductionWitness), 43);
     assert_eq!(count(SourceShapeReconciliationKind::AggregateCapability), 5);
     assert_eq!(count(SourceShapeReconciliationKind::DeferredCapability), 3);
     assert_eq!(count(SourceShapeReconciliationKind::SourceRejected), 5);

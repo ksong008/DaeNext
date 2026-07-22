@@ -22,6 +22,14 @@ pub(super) fn chained_builder_sources() -> Vec<String> {
                 .cipher,
         ),
         vmess_fixture_url("", &primary, fixture_port(10), "tcp", "", "", ""),
+        vmess_tcp_http_header_fixture_url(
+            &primary,
+            fixture_port(10),
+            &authority,
+            "/vmess-header",
+            "",
+            "",
+        ),
         vmess_fixture_url("", &primary, fixture_port(10), "ws", &authority, "/ws", ""),
         vmess_fixture_url(
             "",

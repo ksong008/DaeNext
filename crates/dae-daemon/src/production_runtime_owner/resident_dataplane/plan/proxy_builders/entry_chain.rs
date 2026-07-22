@@ -123,6 +123,7 @@ pub(crate) fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool 
                 && matches!(
                     execution.wrapper,
                     ResidentStreamWrapperPlan::None
+                        | ResidentStreamWrapperPlan::TcpHttpHeader
                         | ResidentStreamWrapperPlan::WebSocket
                         | ResidentStreamWrapperPlan::HttpUpgrade
                 )

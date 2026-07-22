@@ -38,7 +38,8 @@ use dae_outbound::{
     },
     shared_transport::{
         HttpUpgradeOptions, http_upgrade_request, validate_http_status,
-        websocket_client_binary_frame_with_random_mask, websocket_client_handshake_request,
+        validate_websocket_handshake_response, websocket_client_binary_frame_with_random_mask,
+        websocket_client_handshake,
     },
     socks5::{Socks5Address, udp_packet},
     trojan::packet as trojan_packet,
@@ -78,15 +79,15 @@ use super::plan::{
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,
-    QuicEndpointCallerClass, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
-    XhttpStreamUploadClient, XhttpUploadClient, close_xhttp_download_client,
+    QuicEndpointCallerClass, VmessHttpHeaderStream, XhttpDownloadClient, XhttpPacketUpParts,
+    XhttpStreamParts, XhttpStreamUploadClient, XhttpUploadClient, close_xhttp_download_client,
     close_xhttp_stream_upload_client, close_xhttp_upload_client, collect_vmess_grpc_decrypted,
     decode_vmess_grpc_response_stream_async, httpupgrade_handshake_over_resident_tls_async,
     inherit_quic_endpoint_observation, open_grpc_h2_stream, open_h2_body_stream,
-    open_xhttp_packet_up_parts, open_xhttp_stream_parts, poll_xhttp_download_data,
-    read_xhttp_download_data, send_grpc_hunk, send_h2_data, send_h2_data_with_context,
-    send_xhttp_packet_up_request, send_xhttp_stream_data, set_socket_mark,
-    websocket_handshake_over_resident_tls_async,
+    open_vmess_http_header_stream, open_xhttp_packet_up_parts, open_xhttp_stream_parts,
+    poll_xhttp_download_data, read_xhttp_download_data, send_grpc_hunk, send_h2_data,
+    send_h2_data_with_context, send_xhttp_packet_up_request, send_xhttp_stream_data,
+    set_socket_mark, websocket_handshake_over_resident_tls_async,
     write_websocket_binary_frame_over_resident_tls_async,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};

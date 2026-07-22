@@ -64,6 +64,7 @@ fn materialized_security(security: SecurityDimension) -> MaterializedSecurity {
 fn materialized_wrapper(wrapper: WrapperDimension) -> MaterializedWrapper {
     match wrapper {
         WrapperDimension::None => MaterializedWrapper::None,
+        WrapperDimension::TcpHttpHeader => MaterializedWrapper::TcpHttpHeader,
         WrapperDimension::HttpTransport => MaterializedWrapper::HttpTransport,
         WrapperDimension::WebSocket => MaterializedWrapper::WebSocket,
         WrapperDimension::HttpUpgrade => MaterializedWrapper::HttpUpgrade,
@@ -107,6 +108,12 @@ fn materialized_stream(transport: StreamPacketDimension) -> MaterializedStreamPa
     match transport {
         StreamPacketDimension::PlainTcp => MaterializedStreamPacketTransport::PlainTcp,
         StreamPacketDimension::TlsTcp => MaterializedStreamPacketTransport::TlsTcp,
+        StreamPacketDimension::TcpHttpHeaderPlain => {
+            MaterializedStreamPacketTransport::TcpHttpHeaderPlain
+        }
+        StreamPacketDimension::TcpHttpHeaderTls => {
+            MaterializedStreamPacketTransport::TcpHttpHeaderTls
+        }
         StreamPacketDimension::WebSocketPlain => MaterializedStreamPacketTransport::WebSocketPlain,
         StreamPacketDimension::WebSocketTls => MaterializedStreamPacketTransport::WebSocketTls,
         StreamPacketDimension::HttpUpgradePlain => {

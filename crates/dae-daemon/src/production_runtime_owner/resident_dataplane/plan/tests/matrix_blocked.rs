@@ -401,10 +401,19 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
             "",
         ),
     )
-    .unwrap_err();
-    assert!(vmess_grpc.contains(
-        "VMess grpc handler admits TLS HTTP/2 endpoints only for node vmess_grpc; got tls=none"
-    ));
+    .unwrap();
+    assert_eq!(vmess_grpc.tls, "none");
+    assert!(vmess_grpc.alpn.is_empty());
+    assert_eq!(
+        vmess_grpc.execution_plan().wrapper,
+        ResidentStreamWrapperPlan::Grpc
+    );
+    assert_eq!(
+        vmess_grpc.execution_plan().security,
+        ResidentSecurityUnderlayPlan::None
+    );
+    assert!(vmess_grpc.execution_plan().udp.policy_closed());
+    assert!(vmess_grpc.requires_h2_carrier_owner());
 
     let inner_cipher = aead_cipher_specs()
         .first()

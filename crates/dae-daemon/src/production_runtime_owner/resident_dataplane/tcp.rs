@@ -121,7 +121,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time;
 
 mod shadowsocks_stream;
+mod vmess_http_header;
 mod websocket;
+
+pub(crate) use vmess_http_header::{VmessHttpHeaderStream, open_vmess_http_header_stream};
 
 pub(in crate::production_runtime_owner::resident_dataplane) use self::websocket::{
     httpupgrade_handshake_over_async_stream as native_httpupgrade_handshake_over_async_stream,

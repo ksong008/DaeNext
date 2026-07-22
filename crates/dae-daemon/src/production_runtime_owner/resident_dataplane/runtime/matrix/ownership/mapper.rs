@@ -279,11 +279,13 @@ fn vmess_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfile> 
 
     match (shape.security, shape.wrapper, shape.udp) {
         (NoSecurity, Wrapper::None, Vmess(Stream::PlainTcp))
+        | (NoSecurity, Wrapper::TcpHttpHeader, Vmess(Stream::TcpHttpHeaderPlain))
         | (NoSecurity, Wrapper::WebSocket, Vmess(Stream::WebSocketPlain))
         | (NoSecurity, Wrapper::HttpUpgrade, Vmess(Stream::HttpUpgradePlain)) => {
             Some(FLOW_STREAM_PACKET_OWNERSHIP)
         }
         (security, Wrapper::None, Vmess(Stream::TlsTcp))
+        | (security, Wrapper::TcpHttpHeader, Vmess(Stream::TcpHttpHeaderTls))
         | (security, Wrapper::WebSocket, Vmess(Stream::WebSocketTls))
         | (security, Wrapper::HttpUpgrade, Vmess(Stream::HttpUpgradeTls))
             if is_standard_tls_security(security) =>
@@ -293,6 +295,11 @@ fn vmess_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfile> 
         (security, Wrapper::Grpc, Vmess(Stream::GrpcTls)) if is_standard_tls_security(security) => {
             Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP)
         }
+        (
+            NoSecurity,
+            Wrapper::Grpc,
+            UdpDimension::PolicyClosed(PolicyClosedDimension::VmessUnsupportedShape),
+        ) => Some(GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP),
         (security, Wrapper::H2, UdpDimension::PolicyClosed(PolicyClosedDimension::VmessH2))
             if is_standard_tls_security(security) =>
         {
