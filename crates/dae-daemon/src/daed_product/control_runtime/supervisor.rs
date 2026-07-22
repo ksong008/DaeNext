@@ -58,9 +58,7 @@ fn spawn_control_task(
 ) {
     metrics.dequeued();
     let stop = stop.clone();
-    let metrics = Arc::clone(metrics);
     tasks.spawn(async move {
-        let _active = metrics.active();
         let mut future = command.future;
         tokio::select! {
             _ = stop.cancelled() => {

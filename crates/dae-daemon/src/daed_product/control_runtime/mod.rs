@@ -107,9 +107,12 @@ impl ProductControlRuntime {
         let cancellation = ProductControlCancellation::new();
         let task_cancellation = cancellation.clone();
         let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
+        let metrics = Arc::clone(&self.metrics);
         let future = Box::pin(async move {
+            let active = metrics.active();
             let result = action(task_cancellation).await;
             drop(permit);
+            drop(active);
             let _ = result_sender.send(result);
         });
         let command = ProductControlTaskCommand {
