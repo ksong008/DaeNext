@@ -8,8 +8,8 @@ pub(in crate::daed_product) fn api_runtime_reload(
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
     if dry {
-        let prepared = match prepare_runtime_reload_config(&app.state) {
-            Ok(prepared) => prepared,
+        let plan = match prepare_runtime_reload_preview(&app.state) {
+            Ok(plan) => plan,
             Err(err) => {
                 let mut fields = BTreeMap::new();
                 fields.insert("source".to_owned(), "api".to_owned());
@@ -25,7 +25,7 @@ pub(in crate::daed_product) fn api_runtime_reload(
                 return HttpResponse::json(err.http_status(), json!({"error": err.to_string()}));
             }
         };
-        let preview = prepared.plan.report(Some(&app.config_dir), true);
+        let preview = plan.report(Some(&app.config_dir), true);
         let mut fields = BTreeMap::new();
         fields.insert("source".to_owned(), "api".to_owned());
         fields.insert("dry".to_owned(), "true".to_owned());

@@ -76,6 +76,14 @@ pub(in crate::daed_product) fn apply_runtime_generation(
 ) -> Result<(Value, Value), String> {
     let runtime_log_level = runtime_log_level_for_config(&prepared.config);
     let process_transition = prepared.process_transition.clone();
+    let preflight_evidence = prepared.preflight_evidence.clone();
+    let reload_timings = json!({
+        "snapshotNs": prepared.plan.timings.snapshot_ns,
+        "dependencyResolutionNs": prepared.plan.timings.dependency_resolution_ns,
+        "renderNs": prepared.plan.timings.render_ns,
+        "compileNs": prepared.compile_elapsed_ns,
+        "preflightNs": prepared.preflight_elapsed_ns,
+    });
     let generation = runtime.begin_apply_generation();
     let mut candidate = match prepare_runtime_generation(
         state,
@@ -104,9 +112,9 @@ pub(in crate::daed_product) fn apply_runtime_generation(
             return Err(err);
         }
     };
-    let runtime_report = match activate_runtime_generation(
+    let mut runtime_report = match activate_runtime_generation(
         runtime,
-        prepared.config,
+        prepared.runtime_candidate,
         prepared.plan.content.clone(),
         source,
         latency_seed,
@@ -125,6 +133,10 @@ pub(in crate::daed_product) fn apply_runtime_generation(
             return Err(err);
         }
     };
+    if let Value::Object(report) = &mut runtime_report {
+        report.insert("candidatePreflight".to_owned(), preflight_evidence);
+        report.insert("reloadTimings".to_owned(), reload_timings);
+    }
     candidate.set_probe_generation(runtime.current_probe_generation());
     runtime.set_apply_generation_phase(&generation, "commit");
     let commit_result = checkpoints

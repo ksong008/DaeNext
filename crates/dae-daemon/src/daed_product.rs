@@ -47,10 +47,12 @@ use crate::allocator_bootstrap::{
 use crate::config_validate::{load_config_file, validate_config_file};
 use crate::production_runtime_owner::{
     ResidentDnsReloadSnapshot, ResidentEventLogDecision, ResidentManualProbeHandle,
-    ResidentNodeSourceAdmission, ResidentProductionRuntime, ResidentTrafficCounters,
+    ResidentNodeSourceAdmission, ResidentPreparedGeneration, ResidentProductionRuntime,
+    ResidentTrafficCounters, prepare_resident_production_generation,
     resident_live_adapter_config_assessment, resident_live_adapter_udp_probe,
     resident_node_source_admissions, resident_runtime_defaults_contract,
     set_resident_event_log_policy, set_resident_event_log_sink,
+    start_prepared_resident_production_runtime,
     start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot,
 };
 

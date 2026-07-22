@@ -171,10 +171,11 @@ fn reload_resident_interface_if_current(
             inner.config_content.clone(),
         )
     };
-    reload_product_runtime_with_config_content(
+    let prepared = prepare_product_runtime_candidate(config)?;
+    reload_prepared_product_runtime_with_config_content(
         lifecycle,
         inner,
-        config,
+        prepared,
         config_content,
         PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE,
         &[],

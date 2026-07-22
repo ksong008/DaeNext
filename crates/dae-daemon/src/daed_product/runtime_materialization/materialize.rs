@@ -23,6 +23,14 @@ pub(in crate::daed_product) struct RuntimeMaterializationPlan {
     pub(in crate::daed_product) active_fingerprint: ActiveRuntimeFingerprint,
     pub(in crate::daed_product) group_count: usize,
     pub(in crate::daed_product) node_count: usize,
+    pub(in crate::daed_product) timings: RuntimeMaterializationTimings,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::daed_product) struct RuntimeMaterializationTimings {
+    pub(in crate::daed_product) snapshot_ns: u64,
+    pub(in crate::daed_product) dependency_resolution_ns: u64,
+    pub(in crate::daed_product) render_ns: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,18 +70,22 @@ pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_modifie
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
-    let plan = prepare_runtime_materialization_plan_from_snapshot(&snapshot)?;
+    let started = Instant::now();
+    let mut plan = prepare_runtime_materialization_plan_from_snapshot(&snapshot)?;
     let modified = runtime_modified_with_prepared_plan(&snapshot, running, &plan)?;
     snapshot.commit().map_err(sqlite_io_error)?;
+    plan.timings.snapshot_ns = elapsed_nanos(started);
     Ok((plan, modified))
 }
 
 pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_connection(
     conn: &Connection,
 ) -> io::Result<RuntimeMaterializationPlan> {
+    let started = Instant::now();
     let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
-    let plan = prepare_runtime_materialization_plan_from_snapshot(&snapshot)?;
+    let mut plan = prepare_runtime_materialization_plan_from_snapshot(&snapshot)?;
     snapshot.commit().map_err(sqlite_io_error)?;
+    plan.timings.snapshot_ns = elapsed_nanos(started);
     Ok(plan)
 }
 
@@ -83,7 +95,9 @@ pub(super) fn prepare_runtime_materialization_plan_from_snapshot(
     let config = required_selected_section_raw(conn, SectionKind::Config)?;
     let dns = required_selected_section_raw(conn, SectionKind::Dns)?;
     let routing = required_selected_section_raw(conn, SectionKind::Routing)?;
+    let dependency_started = Instant::now();
     let active = load_active_runtime_resources(conn, &routing.2)?;
+    let dependency_resolution_ns = elapsed_nanos(dependency_started);
     let generated_at = now_text();
     let group_ids = active
         .group_ids
@@ -93,6 +107,7 @@ pub(super) fn prepare_runtime_materialization_plan_from_snapshot(
         .join(",");
     let external_input_version = current_runtime_external_input_version(conn)?;
     let geodata_input_version = current_runtime_geodata_input_version(conn)?;
+    let render_started = Instant::now();
     let active_fingerprint = active_runtime_fingerprint(
         &config,
         &dns,
@@ -109,6 +124,7 @@ pub(super) fn prepare_runtime_materialization_plan_from_snapshot(
         &active.groups,
         &active.nodes,
     )?;
+    let render_ns = elapsed_nanos(render_started);
     Ok(RuntimeMaterializationPlan {
         content,
         generated_at,
@@ -124,6 +140,11 @@ pub(super) fn prepare_runtime_materialization_plan_from_snapshot(
         active_fingerprint,
         group_count: active.groups["items"].as_array().map(Vec::len).unwrap_or(0),
         node_count: active.nodes["items"].as_array().map(Vec::len).unwrap_or(0),
+        timings: RuntimeMaterializationTimings {
+            snapshot_ns: 0,
+            dependency_resolution_ns,
+            render_ns,
+        },
     })
 }
 
@@ -266,8 +287,20 @@ impl RuntimeMaterializationPlan {
             "activeFingerprint".to_owned(),
             json!(self.active_fingerprint.as_str()),
         );
+        report.insert(
+            "timings".to_owned(),
+            json!({
+                "snapshotNs": self.timings.snapshot_ns,
+                "dependencyResolutionNs": self.timings.dependency_resolution_ns,
+                "renderNs": self.timings.render_ns,
+            }),
+        );
         Value::Object(report)
     }
+}
+
+fn elapsed_nanos(started: Instant) -> u64 {
+    started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
 fn required_selected_section_raw(

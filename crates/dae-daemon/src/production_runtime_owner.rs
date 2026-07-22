@@ -58,7 +58,11 @@ pub use netns_link::{NetnsLinkMode, parse_netns_link_mode};
 use reload_runtime::{ReloadRuntimeEvidence, run_reload_runtime_parity_probe};
 use report::{live_handoff_json, report_value, socket_options_verified};
 pub(crate) use resident::preflight_resident_runtime_candidate;
-pub(crate) use resident::start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot;
+pub(crate) use resident::{
+    ResidentPreparedGeneration, prepare_resident_production_generation,
+    start_prepared_resident_production_runtime,
+    start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot,
+};
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime_with_asset_dirs};
 pub(crate) use resident_dataplane::{
     EffectiveProcessMemoryCapacity, ResidentDnsReloadSnapshot, ResidentEventLogDecision,

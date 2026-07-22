@@ -253,7 +253,7 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
             let mut next_deferred_evaluation = None;
             while !app.shutdown.is_requested() {
                 let config = app.runtime.current_config();
-                let policy = AllocatorIdleReclaimPolicy::from_config(config.as_ref());
+                let policy = AllocatorIdleReclaimPolicy::from_config(config.as_deref());
                 let now = Instant::now();
                 let periodic_due = now >= next_periodic_evaluation;
                 let deferred_due = deferred_reclaim_evaluation_due(
@@ -304,7 +304,7 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
 
 pub(crate) fn allocator_idle_reclaim_snapshot_json(app: &AppState) -> Value {
     let config = app.runtime.current_config();
-    let policy = AllocatorIdleReclaimPolicy::from_config(config.as_ref());
+    let policy = AllocatorIdleReclaimPolicy::from_config(config.as_deref());
     let last_report = ALLOCATOR_IDLE_RECLAIM_STATE
         .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
         .lock()

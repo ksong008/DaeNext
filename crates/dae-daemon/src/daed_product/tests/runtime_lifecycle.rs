@@ -691,7 +691,7 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
 }
 
 #[test]
-pub(crate) fn runtime_reload_failure_after_cleanup_reclaims_allocator() {
+pub(crate) fn runtime_prepare_failure_preserves_active_runtime_without_cleanup_reclaim() {
     let manager = ProductRuntimeManager::new();
     {
         let mut inner = manager.inner.lock().unwrap();
@@ -725,10 +725,10 @@ routing {
         .unwrap_or(0);
 
     assert!(err.contains("global.lan_interface"), "{err}");
-    assert!(after > before);
+    assert_eq!(after, before);
     let summary = manager.summary();
-    assert_eq!(summary["state"], json!("error"));
-    assert_eq!(summary["cleanup"]["state"], json!("done"));
+    assert_eq!(summary["state"], json!("running"));
+    assert_eq!(summary["cleanup"]["state"], json!("idle"));
 }
 
 #[test]

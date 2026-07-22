@@ -21,11 +21,14 @@ use cleanup::{
     cleanup_start_blocker_from_report, ensure_cleanup_allows_start_for_inner,
     spawn_background_cleanup,
 };
+pub(in crate::daed_product) use instance::PreparedProductRuntime;
 #[cfg(test)]
 pub(super) use instance::resident_dataplane_admission_detail;
 pub(super) use instance::{
-    preflight_product_runtime_candidate, product_runtime_fake_start_enabled,
-    runtime_started_at_after_success, start_product_runtime_instance_with_dns_reload_snapshot,
+    preflight_product_runtime_candidate, prepare_product_runtime_candidate,
+    product_runtime_fake_start_enabled, runtime_started_at_after_success,
+    start_prepared_product_runtime_instance,
+    start_product_runtime_instance_with_dns_reload_snapshot,
 };
 #[cfg(test)]
 pub(super) use instance::{
@@ -54,7 +57,7 @@ pub(super) struct ProductRuntimeManager {
 #[derive(Debug, Default)]
 pub(super) struct ProductRuntimeState {
     pub(super) runtime: Option<ProductRuntimeInstance>,
-    pub(super) config: Option<Config>,
+    pub(super) config: Option<Arc<Config>>,
     pub(super) config_content: Option<Arc<str>>,
     pub(super) last_error: Option<String>,
     pub(super) last_transition_at: Option<String>,
@@ -324,17 +327,29 @@ impl ProductRuntimeManager {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn reload_with_config_content(
         &self,
-        config: Config,
+        config: impl Into<Arc<Config>>,
         config_content: Option<String>,
         source: &str,
         latency_seed: &[Value],
     ) -> Result<RuntimeStartOutcome, String> {
-        reload_product_runtime_with_config_content(
+        let prepared = prepare_product_runtime_candidate(config.into())?;
+        self.reload_prepared_with_config_content(prepared, config_content, source, latency_seed)
+    }
+
+    pub(super) fn reload_prepared_with_config_content(
+        &self,
+        prepared: PreparedProductRuntime,
+        config_content: Option<String>,
+        source: &str,
+        latency_seed: &[Value],
+    ) -> Result<RuntimeStartOutcome, String> {
+        reload_prepared_product_runtime_with_config_content(
             &self.lifecycle,
             &self.inner,
-            config,
+            prepared,
             config_content.map(Arc::<str>::from),
             source,
             latency_seed,
@@ -379,14 +394,15 @@ impl Drop for ProductRuntimeManager {
     }
 }
 
-fn reload_product_runtime_with_config_content(
+fn reload_prepared_product_runtime_with_config_content(
     lifecycle: &Arc<Mutex<()>>,
     inner: &Arc<Mutex<ProductRuntimeState>>,
-    config: Config,
+    prepared: PreparedProductRuntime,
     config_content: Option<Arc<str>>,
     source: &str,
     latency_seed: &[Value],
 ) -> Result<RuntimeStartOutcome, String> {
+    let config = Arc::clone(prepared.config());
     let _lifecycle = lifecycle
         .lock()
         .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
@@ -466,8 +482,8 @@ fn reload_product_runtime_with_config_content(
             "previous product runtime cleanup failed before reload: {blocker}"
         ));
     }
-    match start_product_runtime_instance_with_dns_reload_snapshot(
-        &config,
+    match start_prepared_product_runtime_instance(
+        prepared,
         source,
         &latency_seed,
         dns_reload_snapshot.clone(),
@@ -700,7 +716,7 @@ impl ProductRuntimeManager {
         }
     }
 
-    pub(super) fn current_config(&self) -> Option<Config> {
+    pub(super) fn current_config(&self) -> Option<Arc<Config>> {
         self.inner
             .lock()
             .ok()

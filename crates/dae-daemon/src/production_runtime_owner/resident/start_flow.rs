@@ -14,7 +14,9 @@ pub(super) struct ResidentRuntimeStartInterfaces {
 pub(super) struct ResidentRuntimeStartContext<'a> {
     pub(super) options: ProductionRuntimeOwnerOptions,
     pub(super) artifacts: ResidentRuntimeArtifactPaths,
-    pub(super) config: &'a Config,
+    pub(super) config: Arc<Config>,
+    pub(super) geodata: ResidentGeodataStore,
+    pub(super) dataplane: ResidentPreparedDataplane,
     pub(super) interfaces: ResidentRuntimeStartInterfaces,
     pub(super) latency_seed: &'a [Value],
     pub(super) dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
@@ -32,6 +34,8 @@ pub(super) fn start_with_options(
                 cleanup_file,
             },
         config,
+        geodata,
+        dataplane: prepared_dataplane,
         interfaces:
             ResidentRuntimeStartInterfaces {
                 lan: lan_ifaces,
@@ -40,6 +44,9 @@ pub(super) fn start_with_options(
         latency_seed,
         dns_reload_snapshot,
     } = context;
+    let config_owner = config;
+    let config = config_owner.as_ref();
+    let mut prepared_dataplane = Some(prepared_dataplane);
     let mut checks = preflight_checks(&options);
     checks.extend(resident_interface_validation_checks(
         &lan_ifaces,
@@ -89,10 +96,9 @@ pub(super) fn start_with_options(
     let mut discovered_routing_map_ids = Vec::new();
     let mut native_lan_ifaces = Vec::new();
     let mut start_report_for_runtime = Value::Null;
+    let mut start_evidence_writer = None;
     let (interface_attach_options, resident_interface_backend_policy) =
         resident_interface_attach_options(&options, &lan_ifaces, &wan_ifaces);
-    let geodata = ResidentGeodataStore::new(options.geodata_asset_dirs.clone());
-
     let result = (|| {
         let mut ok = true;
         executed_steps.push(resident_interface_backend_policy.clone());
@@ -407,10 +413,13 @@ pub(super) fn start_with_options(
                                             handoff,
                                             reload_generation: runtime_generation,
                                             config,
+                                            config_owner: Arc::clone(&config_owner),
                                             artifact_dir: &artifact_dir,
                                             routing_tuple_map_id: discovery.id,
                                             domain_routing_map_id: domain_routing_discovery.id,
-                                            geodata: &geodata,
+                                            prepared: prepared_dataplane.take().expect(
+                                                "prepared resident dataplane is consumed once",
+                                            ),
                                             latency_seed,
                                             dns_reload_snapshot: dns_reload_snapshot.as_ref(),
                                         },
@@ -643,15 +652,27 @@ pub(super) fn start_with_options(
             "discovered_routing_map_ids": discovered_routing_map_ids.clone(),
             "resident_runtime_started": ok,
         });
-        write_json_file(
-            &start_file,
-            "resident-production-runtime-start",
-            start_report.clone(),
-        )?;
         start_report_for_runtime = compact_start_report_for_runtime(&start_report);
         if ok {
+            let evidence_path = start_file.clone();
+            start_evidence_writer = thread::Builder::new()
+                .name("resident-start-evidence".to_owned())
+                .stack_size(RESIDENT_START_EVIDENCE_WRITER_STACK_BYTES)
+                .spawn(move || {
+                    write_json_file(
+                        &evidence_path,
+                        "resident-production-runtime-start",
+                        &start_report,
+                    )
+                })
+                .ok();
             Ok(())
         } else {
+            write_json_file(
+                &start_file,
+                "resident-production-runtime-start",
+                &start_report,
+            )?;
             let detail = resident_start_failure_summary(&start_report)
                 .unwrap_or_else(|| "no failed startup step detail was recorded".to_owned());
             Err(format!(
@@ -710,6 +731,7 @@ pub(super) fn start_with_options(
         discovered_routing_map_ids,
         before_pin_snapshot,
         cleanup_file,
+        start_evidence_writer,
         cleaned: false,
     })
 }

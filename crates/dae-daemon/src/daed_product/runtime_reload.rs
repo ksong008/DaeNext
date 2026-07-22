@@ -2,8 +2,12 @@ use super::*;
 
 pub(in crate::daed_product) struct PreparedRuntimeReload {
     pub(in crate::daed_product) plan: RuntimeMaterializationPlan,
-    pub(in crate::daed_product) config: Config,
+    pub(in crate::daed_product) config: Arc<Config>,
+    pub(in crate::daed_product) runtime_candidate: PreparedProductRuntime,
     pub(in crate::daed_product) process_transition: Option<Value>,
+    pub(in crate::daed_product) preflight_evidence: Value,
+    pub(in crate::daed_product) compile_elapsed_ns: u64,
+    pub(in crate::daed_product) preflight_elapsed_ns: u64,
 }
 
 pub(in crate::daed_product) struct AppliedRuntimeReload {
@@ -81,6 +85,7 @@ impl std::fmt::Display for CoordinatedRuntimeReloadError {
     }
 }
 
+#[cfg(test)]
 pub(in crate::daed_product) fn prepare_runtime_reload_config(
     state: &Path,
 ) -> Result<PreparedRuntimeReload, RuntimeReloadPrepareError> {
@@ -89,16 +94,49 @@ pub(in crate::daed_product) fn prepare_runtime_reload_config(
     build_prepared_runtime_reload(plan)
 }
 
+pub(in crate::daed_product) fn prepare_runtime_reload_preview(
+    state: &Path,
+) -> Result<RuntimeMaterializationPlan, RuntimeReloadPrepareError> {
+    let plan = prepare_runtime_materialization_plan(state)
+        .map_err(|err| RuntimeReloadPrepareError::Materialize(err.to_string()))?;
+    build_runtime_config_from_content(&plan.content)
+        .map_err(RuntimeReloadPrepareError::BuildConfig)?;
+    Ok(plan)
+}
+
 fn build_prepared_runtime_reload(
     plan: RuntimeMaterializationPlan,
 ) -> Result<PreparedRuntimeReload, RuntimeReloadPrepareError> {
-    let config = build_runtime_config_from_content(&plan.content)
-        .map_err(RuntimeReloadPrepareError::BuildConfig)?;
+    let compile_started = Instant::now();
+    let config = Arc::new(
+        build_runtime_config_from_content(&plan.content)
+            .map_err(RuntimeReloadPrepareError::BuildConfig)?,
+    );
+    let runtime_candidate = prepare_product_runtime_candidate(Arc::clone(&config))
+        .map_err(RuntimeReloadPrepareError::Preflight)?;
     Ok(PreparedRuntimeReload {
         plan,
         config,
+        runtime_candidate,
         process_transition: None,
+        preflight_evidence: Value::Null,
+        compile_elapsed_ns: elapsed_nanos(compile_started),
+        preflight_elapsed_ns: 0,
     })
+}
+
+impl PreparedRuntimeReload {
+    fn with_activation_metadata(
+        mut self,
+        preflight_evidence: Value,
+        preflight_elapsed_ns: u64,
+        process_transition: Option<Value>,
+    ) -> Self {
+        self.preflight_evidence = preflight_evidence;
+        self.preflight_elapsed_ns = preflight_elapsed_ns;
+        self.process_transition = process_transition;
+        self
+    }
 }
 
 pub(in crate::daed_product) fn apply_prepared_runtime_reload(
@@ -179,7 +217,7 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
         });
     }
     permit.set_phase("materializing");
-    let mut prepared = match build_prepared_runtime_reload(plan) {
+    let prepared = match build_prepared_runtime_reload(plan) {
         Ok(prepared) => prepared,
         Err(err) => {
             permit.finish("prepare-failed");
@@ -187,13 +225,23 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
         }
     };
     permit.set_phase("preflight");
-    if let Err(err) = preflight_product_runtime_candidate(&prepared.config) {
-        permit.finish("preflight-failed");
-        return Err(CoordinatedRuntimeReloadError::Prepare(
-            RuntimeReloadPrepareError::Preflight(err),
-        ));
-    }
-    prepared.process_transition = runtime.process_transition_for_config(&prepared.config);
+    let preflight_started = Instant::now();
+    let preflight_evidence = match preflight_product_runtime_candidate(&prepared.config) {
+        Ok(evidence) => evidence,
+        Err(err) => {
+            permit.finish("preflight-failed");
+            return Err(CoordinatedRuntimeReloadError::Prepare(
+                RuntimeReloadPrepareError::Preflight(err),
+            ));
+        }
+    };
+    let preflight_elapsed_ns = elapsed_nanos(preflight_started);
+    let process_transition = runtime.process_transition_for_config(&prepared.config);
+    let prepared = prepared.with_activation_metadata(
+        preflight_evidence,
+        preflight_elapsed_ns,
+        process_transition,
+    );
     permit.set_phase("applying");
     let result = apply_prepared_runtime_reload(
         runtime,
@@ -215,6 +263,10 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
             Err(err)
         }
     }
+}
+
+fn elapsed_nanos(started: Instant) -> u64 {
+    started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
 pub(in crate::daed_product) fn runtime_modified_for_running_runtime(

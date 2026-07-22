@@ -5,10 +5,11 @@ pub(crate) struct ResidentDataplaneStartContext<'a> {
     pub(crate) handoff: &'a LiveLoadedTproxyListenSocketMap,
     pub(crate) reload_generation: u64,
     pub(crate) config: &'a Config,
+    pub(crate) config_owner: Arc<Config>,
     pub(crate) artifact_dir: &'a Path,
     pub(crate) routing_tuple_map_id: Option<u32>,
     pub(crate) domain_routing_map_id: Option<u32>,
-    pub(crate) geodata: &'a ResidentGeodataStore,
+    pub(crate) prepared: ResidentPreparedDataplane,
     pub(crate) latency_seed: &'a [Value],
     pub(crate) dns_reload_snapshot: Option<&'a ResidentDnsReloadSnapshot>,
 }
@@ -20,30 +21,20 @@ pub(crate) fn start_resident_dataplane_workers(
         handoff,
         reload_generation,
         config,
+        config_owner,
         artifact_dir,
         routing_tuple_map_id,
         domain_routing_map_id,
-        geodata,
+        prepared,
         latency_seed,
         dns_reload_snapshot,
     } = context;
     let event_file = artifact_dir.join("resident-production-dataplane-events.jsonl");
-    let plan = match build_resident_dataplane_plan_with_geodata(config, geodata) {
-        Ok(plan) => plan,
-        Err(err) => {
-            return (
-                json!({
-                    "status": "fail",
-                    "enabled": false,
-                    "error": err,
-                    "event_file": Value::Null,
-                    "event_file_status": "disabled",
-                    "event_log": "product-log-sink",
-                }),
-                None,
-            );
-        }
-    };
+    let ResidentPreparedDataplane {
+        plan,
+        routing_matcher,
+        protocol_owner_specs,
+    } = prepared;
     if !plan.enabled {
         return (
             json!({
@@ -124,24 +115,6 @@ pub(crate) fn start_resident_dataplane_workers(
             None,
         );
     };
-    let routing_matcher =
-        match build_resident_userspace_routing_matcher_with_geodata(config, geodata) {
-            Ok(matcher) => matcher,
-            Err(err) => {
-                return (
-                    json!({
-                        "status": "fail",
-                        "enabled": true,
-                        "error": err,
-                        "event_file": Value::Null,
-                        "event_file_status": "disabled",
-                        "event_log": "product-log-sink",
-                    }),
-                    None,
-                );
-            }
-        };
-
     let tcp_listener = match handoff.listeners.tcp_listener.try_clone() {
         Ok(listener) => listener,
         Err(err) => {
@@ -242,10 +215,7 @@ pub(crate) fn start_resident_dataplane_workers(
         owner.transport_stop_handle(),
     );
     owner.install_hysteria2_owner_registry_task(hysteria2_owner_registry, hysteria2_owner_task);
-    let requires_tuic_owner = proxy_groups
-        .values()
-        .any(|group| group.requires_tuic_transport_owner());
-    if requires_tuic_owner {
+    if protocol_owner_specs.tuic {
         let (tuic_owner_registry, tuic_owner_task) = start_tuic_owner_registry_on(
             &owner.data_plane_handle(),
             reload_generation,
@@ -253,10 +223,7 @@ pub(crate) fn start_resident_dataplane_workers(
         );
         owner.install_tuic_owner_registry_task(tuic_owner_registry, tuic_owner_task);
     }
-    let requires_juicity_owner = proxy_groups
-        .values()
-        .any(|group| group.requires_juicity_transport_owner());
-    if requires_juicity_owner {
+    if protocol_owner_specs.juicity {
         let (juicity_owner_registry, juicity_owner_task) = start_juicity_owner_registry_on(
             &owner.data_plane_handle(),
             reload_generation,
@@ -264,10 +231,7 @@ pub(crate) fn start_resident_dataplane_workers(
         );
         owner.install_juicity_owner_registry_task(juicity_owner_registry, juicity_owner_task);
     }
-    let requires_anytls_owner = proxy_groups
-        .values()
-        .any(|group| group.requires_anytls_transport_owner());
-    if requires_anytls_owner {
+    if protocol_owner_specs.anytls {
         let (anytls_owner_registry, anytls_owner_task) = start_anytls_owner_registry_on(
             &owner.data_plane_handle(),
             reload_generation,
@@ -275,10 +239,7 @@ pub(crate) fn start_resident_dataplane_workers(
         );
         owner.install_anytls_owner_registry_task(anytls_owner_registry, anytls_owner_task);
     }
-    let requires_h2_carrier_owner = proxy_groups
-        .values()
-        .any(|group| group.requires_h2_carrier_owner());
-    if requires_h2_carrier_owner {
+    if protocol_owner_specs.h2_carrier {
         let (h2_carrier_owner, h2_carrier_task) = match start_h2_carrier_generation_owner_on(
             &owner.data_plane_handle(),
             reload_generation,
@@ -304,10 +265,7 @@ pub(crate) fn start_resident_dataplane_workers(
         };
         owner.install_h2_carrier_generation_owner_task(h2_carrier_owner, h2_carrier_task);
     }
-    let requires_meek_transport_owner = proxy_groups
-        .values()
-        .any(|group| group.requires_meek_transport_owner());
-    if requires_meek_transport_owner {
+    if protocol_owner_specs.meek {
         let (meek_transport_owner, meek_transport_thread) =
             match start_meek_transport_generation_owner_on(
                 &owner.data_plane_handle(),
@@ -337,10 +295,7 @@ pub(crate) fn start_resident_dataplane_workers(
             meek_transport_thread,
         );
     }
-    let requires_vless_mux_owner = proxy_groups
-        .values()
-        .any(|group| group.requires_vless_mux_owner());
-    if requires_vless_mux_owner {
+    if protocol_owner_specs.vless_mux {
         let (vless_mux_owner, vless_mux_task) = match start_vless_mux_generation_owner_on(
             &owner.data_plane_handle(),
             reload_generation,
@@ -366,10 +321,7 @@ pub(crate) fn start_resident_dataplane_workers(
         };
         owner.install_vless_mux_generation_owner_task(vless_mux_owner, vless_mux_task);
     }
-    let requires_xhttp_xmux_owner = proxy_groups
-        .values()
-        .any(|group| group.requires_xhttp_xmux_owner());
-    if requires_xhttp_xmux_owner {
+    if protocol_owner_specs.xhttp_xmux {
         let (xhttp_xmux_owner, xhttp_xmux_owner_thread) =
             match tcp::start_xhttp_xmux_generation_owner_on(
                 &owner.data_plane_handle(),
@@ -397,24 +349,12 @@ pub(crate) fn start_resident_dataplane_workers(
     }
     let proxy = Arc::clone(default_proxy.shared_plan());
     let proxy_group = Arc::clone(&default_group);
-    let mut manual_probe_plans = plan::build_resident_manual_probe_plans(config);
-    for probe_result in manual_probe_plans.values_mut() {
-        let binding_error = match probe_result {
-            Ok(probe) => probe.apply_runtime_generation(reload_generation).err(),
-            Err(_) => None,
-        };
-        if let Some(error) = binding_error {
-            *probe_result = Err(error);
-        }
-    }
-    let manual_probe_plan_count = manual_probe_plans
-        .values()
-        .filter(|plan| plan.is_ok())
-        .count();
-    let manual_probe_unavailable_count = manual_probe_plans
-        .len()
-        .saturating_sub(manual_probe_plan_count);
-    let manual_probe_index = Arc::new(ResidentManualProbeIndex::new(manual_probe_plans));
+    let manual_probe_index = Arc::new(ResidentManualProbeIndex::lazy(
+        config_owner,
+        reload_generation,
+    ));
+    let manual_probe_plan_count = manual_probe_index.cached_plan_count();
+    let manual_probe_unavailable_count = 0;
     let runtime_groups = proxy_groups.values().cloned().collect::<Vec<_>>();
     let health_groups = runtime_groups.clone();
     let health_group_count = health_groups.len();
@@ -816,6 +756,11 @@ pub(crate) fn start_resident_dataplane_workers(
     start_map.insert(
         "manual_probe_unavailable_count".to_owned(),
         json!(manual_probe_unavailable_count),
+    );
+    start_map.insert("manual_probe_catalog".to_owned(), json!("lazy-on-request"));
+    start_map.insert(
+        "manual_probe_cache_key".to_owned(),
+        json!("node-execution-identity"),
     );
     start_map.insert(
         "default_group".to_owned(),

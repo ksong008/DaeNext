@@ -67,7 +67,7 @@ use self::group_health_bootstrap::*;
 mod health_target;
 pub(super) use self::health_target::*;
 mod dataplane_builder;
-pub(super) use self::dataplane_builder::*;
+pub(in crate::production_runtime_owner) use self::dataplane_builder::*;
 mod group_selector;
 use self::group_selector::*;
 mod check_plans;

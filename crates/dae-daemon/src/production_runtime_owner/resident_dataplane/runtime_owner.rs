@@ -585,9 +585,10 @@ impl ResidentManualProbeHandle {
                     );
                 }
             };
+        let plans = self.manual_probe_index.plans_for_links(links);
         let snapshots = probe_resident_manual_latency_snapshots(
             runtime.runtime(),
-            self.manual_probe_index.plans(),
+            &plans,
             links,
             self.reload_generation,
             self.probe_concurrency(),
@@ -640,7 +641,7 @@ impl ResidentManualProbeHandle {
                         continue;
                     };
                     let latency_ms = family_result.get("latencyMs").and_then(Value::as_i64);
-                    for link in links {
+                    for link in &links {
                         for group in &self.groups {
                             let _ = group.record_manual_health_state_for_link(
                                 link,
@@ -658,7 +659,7 @@ impl ResidentManualProbeHandle {
             let Some(network_type) = latency_snapshot_group_network_type(snapshot) else {
                 continue;
             };
-            for link in links {
+            for link in &links {
                 for group in &self.groups {
                     let _ = group.record_manual_latency_result_for_link(
                         link,
@@ -944,6 +945,28 @@ fn fill_manual_probe_join_set(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_probe_index_builds_requested_links_lazily_by_execution_identity() {
+        let config = Arc::new(parse_test_config(
+            r#"
+            global {
+                lan_interface: daerust0
+            }
+            routing {
+                fallback: direct
+            }
+            "#,
+        ));
+        let index = ResidentManualProbeIndex::lazy(config, 7);
+        assert_eq!(index.cached_plan_count(), 0);
+        let first = "socks5://127.0.0.1:1080#first".to_owned();
+        let renamed = "socks5://127.0.0.1:1080#renamed".to_owned();
+        assert!(index.plans_for_links(std::slice::from_ref(&first))[&first].is_ok());
+        assert_eq!(index.cached_plan_count(), 1);
+        assert!(index.plans_for_links(std::slice::from_ref(&renamed))[&renamed].is_ok());
+        assert_eq!(index.cached_plan_count(), 1);
+    }
 
     #[test]
     fn resident_runtime_lifecycle_owner_reports_shutdown_evidence() {

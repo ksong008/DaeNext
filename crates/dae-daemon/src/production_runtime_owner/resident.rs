@@ -1,6 +1,8 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::thread;
 
 use dae_config::Config;
 use dae_ebpf_support::{
@@ -24,7 +26,8 @@ use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{
     ResidentDataplaneRuntime, ResidentDataplaneStartContext, ResidentDnsReloadSnapshot,
-    ResidentManualProbeHandle, ResidentTrafficCounters, next_resident_runtime_generation,
+    ResidentManualProbeHandle, ResidentPreparedDataplane, ResidentTrafficCounters,
+    build_resident_dataplane_plan_with_geodata, next_resident_runtime_generation,
     resident_datapath_postflight_interval_seconds_default, start_resident_dataplane_workers,
 };
 use super::resident_interfaces::{
@@ -38,8 +41,10 @@ use super::resident_lan::{
     lan_start_plan_json, show_resident_lan_program,
 };
 use super::resident_routing::{
-    ResidentGeodataStore, ResidentRoutingApplyCache, seed_resident_outbound_connectivity_maps,
-    update_existing_resident_routing_map, update_new_resident_routing_map,
+    ResidentGeodataStore, ResidentRoutingApplyCache,
+    build_resident_userspace_routing_matcher_with_geodata,
+    seed_resident_outbound_connectivity_maps, update_existing_resident_routing_map,
+    update_new_resident_routing_map,
 };
 use super::topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_blockers,
@@ -56,6 +61,8 @@ mod constants;
 use self::constants::*;
 mod runtime_handle;
 pub use self::runtime_handle::*;
+mod prepared_generation;
+pub(crate) use self::prepared_generation::*;
 mod start_entry;
 pub use self::start_entry::*;
 mod candidate_preflight;
