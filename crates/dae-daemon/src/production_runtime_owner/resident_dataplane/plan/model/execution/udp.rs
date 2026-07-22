@@ -11,6 +11,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) use agreement::{
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentStreamPacketTransport {
     PlainTcp,
     TlsTcp,
+    TcpHttpHeaderPlain,
+    TcpHttpHeaderTls,
     WebSocketPlain,
     WebSocketTls,
     HttpUpgradePlain,
@@ -262,6 +264,14 @@ impl ResidentUdpExecutorFactory {
                 ResidentStreamWrapperPlan::None if security.is_standard_tls_stream() => {
                     Self::Vmess(Stream::TlsTcp)
                 }
+                ResidentStreamWrapperPlan::TcpHttpHeader
+                    if security == ResidentSecurityUnderlayPlan::None =>
+                {
+                    Self::Vmess(Stream::TcpHttpHeaderPlain)
+                }
+                ResidentStreamWrapperPlan::TcpHttpHeader if security.is_standard_tls_stream() => {
+                    Self::Vmess(Stream::TcpHttpHeaderTls)
+                }
                 ResidentStreamWrapperPlan::WebSocket
                     if security == ResidentSecurityUnderlayPlan::None =>
                 {
@@ -347,6 +357,8 @@ fn vless_executor_label(transport: ResidentStreamPacketTransport) -> &'static st
     match transport {
         ResidentStreamPacketTransport::PlainTcp => "resident-vless-udp-over-plain-tcp",
         ResidentStreamPacketTransport::TlsTcp => "resident-vless-udp-over-tls",
+        ResidentStreamPacketTransport::TcpHttpHeaderPlain
+        | ResidentStreamPacketTransport::TcpHttpHeaderTls => "vless-transport-udp-policy-closed",
         ResidentStreamPacketTransport::WebSocketPlain => "resident-vless-udp-over-websocket-plain",
         ResidentStreamPacketTransport::WebSocketTls => "resident-vless-udp-over-websocket",
         ResidentStreamPacketTransport::HttpUpgradePlain => {
@@ -364,6 +376,8 @@ fn vless_executor_label(transport: ResidentStreamPacketTransport) -> &'static st
 fn trojan_executor_label(transport: ResidentStreamPacketTransport) -> &'static str {
     match transport {
         ResidentStreamPacketTransport::TlsTcp => "resident-trojan-udp-over-tcp",
+        ResidentStreamPacketTransport::TcpHttpHeaderPlain
+        | ResidentStreamPacketTransport::TcpHttpHeaderTls => "trojan-transport-udp-policy-closed",
         ResidentStreamPacketTransport::WebSocketTls => "resident-trojan-udp-over-websocket",
         ResidentStreamPacketTransport::HttpUpgradeTls => "resident-trojan-udp-over-httpupgrade",
         ResidentStreamPacketTransport::GrpcTls => "resident-trojan-udp-over-grpc",
@@ -375,6 +389,12 @@ fn vmess_executor_label(transport: ResidentStreamPacketTransport) -> &'static st
     match transport {
         ResidentStreamPacketTransport::PlainTcp => "resident-vmess-udp-over-plain-tcp",
         ResidentStreamPacketTransport::TlsTcp => "resident-vmess-udp-over-tls",
+        ResidentStreamPacketTransport::TcpHttpHeaderPlain => {
+            "resident-vmess-udp-over-tcp-http-header-plain"
+        }
+        ResidentStreamPacketTransport::TcpHttpHeaderTls => {
+            "resident-vmess-udp-over-tcp-http-header-tls"
+        }
         ResidentStreamPacketTransport::WebSocketPlain => "resident-vmess-udp-over-websocket-plain",
         ResidentStreamPacketTransport::WebSocketTls => "resident-vmess-udp-over-websocket",
         ResidentStreamPacketTransport::HttpUpgradePlain => {

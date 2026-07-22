@@ -43,6 +43,7 @@ pub(super) enum SecurityDimension {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WrapperDimension {
     None,
+    TcpHttpHeader,
     HttpTransport,
     WebSocket,
     HttpUpgrade,
@@ -66,6 +67,8 @@ pub(super) enum WrapperDimension {
 pub(super) enum StreamPacketDimension {
     PlainTcp,
     TlsTcp,
+    TcpHttpHeaderPlain,
+    TcpHttpHeaderTls,
     WebSocketPlain,
     WebSocketTls,
     HttpUpgradePlain,
@@ -132,6 +135,7 @@ fn wrapper_dimension(wrapper: plan::ResidentStreamWrapperPlan) -> WrapperDimensi
 
     match wrapper {
         Wrapper::None => WrapperDimension::None,
+        Wrapper::TcpHttpHeader => WrapperDimension::TcpHttpHeader,
         Wrapper::HttpTransport => WrapperDimension::HttpTransport,
         Wrapper::WebSocket => WrapperDimension::WebSocket,
         Wrapper::HttpUpgrade => WrapperDimension::HttpUpgrade,
@@ -198,6 +202,8 @@ fn stream_packet_dimension(
     match transport {
         Stream::PlainTcp => StreamPacketDimension::PlainTcp,
         Stream::TlsTcp => StreamPacketDimension::TlsTcp,
+        Stream::TcpHttpHeaderPlain => StreamPacketDimension::TcpHttpHeaderPlain,
+        Stream::TcpHttpHeaderTls => StreamPacketDimension::TcpHttpHeaderTls,
         Stream::WebSocketPlain => StreamPacketDimension::WebSocketPlain,
         Stream::WebSocketTls => StreamPacketDimension::WebSocketTls,
         Stream::HttpUpgradePlain => StreamPacketDimension::HttpUpgradePlain,

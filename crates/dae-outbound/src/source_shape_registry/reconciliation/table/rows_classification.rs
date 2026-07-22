@@ -41,6 +41,11 @@ pub(super) const LEGACY_LAYER_SHAPE: SourceShapeReconciliation = classified_defe
             MaterializedUdp::Vmess(MaterializedStreamPacketTransport::GrpcTls),
         ),
         legacy_vmess(
+            NO_SECURITY_VARIANTS,
+            MaterializedWrapper::Grpc,
+            MaterializedUdp::PolicyClosed(MaterializedPolicyClosedReason::VmessUnsupportedShape),
+        ),
+        legacy_vmess(
             FULL_STREAM_TLS_VARIANTS,
             MaterializedWrapper::H2,
             MaterializedUdp::PolicyClosed(MaterializedPolicyClosedReason::VmessH2),

@@ -16,6 +16,29 @@ fn plain_stream_and_datagram_sources_have_exact_production_rows() {
             "baseline-aead-framed-endpoint",
         ),
         (
+            vmess_tcp_http_header_fixture_url(
+                &primary,
+                fixture_port(3),
+                &authority,
+                "/vmess-header",
+                "",
+                "",
+            ),
+            "baseline-aead-framed-endpoint",
+        ),
+        (
+            vmess_fixture_url(
+                "",
+                &primary,
+                fixture_port(3),
+                "grpc",
+                &authority,
+                "/grpc",
+                "",
+            ),
+            "plain-grpc-framed-endpoint",
+        ),
+        (
             vmess_fixture_url("", &primary, fixture_port(3), "ws", &authority, "/ws", ""),
             "plain-websocket-framed-endpoint",
         ),

@@ -50,6 +50,36 @@ pub(super) async fn handle_vmess_stream_proxy_async(
             )
             .await
         }
+        (ResidentStreamWrapperPlan::TcpHttpHeader, ResidentSecurityUnderlayPlan::None) => {
+            handle_vmess_http_header_proxy_tcp_connection_async(
+                &mut inbound,
+                peer,
+                original_dst,
+                selection,
+                stop,
+                &mut sniff,
+                &metrics,
+                &id,
+                body_security,
+            )
+            .await
+        }
+        (ResidentStreamWrapperPlan::TcpHttpHeader, security)
+            if security.is_standard_tls_stream() =>
+        {
+            handle_vmess_http_header_tls_proxy_tcp_connection_async(
+                &mut inbound,
+                peer,
+                original_dst,
+                selection,
+                stop,
+                &mut sniff,
+                &metrics,
+                &id,
+                body_security,
+            )
+            .await
+        }
         (ResidentStreamWrapperPlan::WebSocket, ResidentSecurityUnderlayPlan::None) => {
             handle_vmess_websocket_proxy_tcp_connection_async(
                 &mut inbound,
@@ -78,7 +108,10 @@ pub(super) async fn handle_vmess_stream_proxy_async(
             )
             .await
         }
-        (ResidentStreamWrapperPlan::Grpc, security) if security.is_standard_tls_stream() => {
+        (ResidentStreamWrapperPlan::Grpc, security)
+            if security == ResidentSecurityUnderlayPlan::None
+                || security.is_standard_tls_stream() =>
+        {
             handle_vmess_grpc_proxy_tcp_connection_async(
                 &mut inbound,
                 peer,

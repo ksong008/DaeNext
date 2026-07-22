@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentStreamWrapperPlan {
     None,
+    TcpHttpHeader,
     HttpTransport,
     WebSocket,
     HttpUpgrade,
@@ -46,6 +47,7 @@ impl ResidentStreamWrapperPlan {
 
         match proxy.net.as_str() {
             "" | "tcp" | "udp" => Self::None,
+            "tcp-http-header" => Self::TcpHttpHeader,
             "http-transport" => Self::HttpTransport,
             "websocket" => Self::WebSocket,
             "httpupgrade" => Self::HttpUpgrade,
@@ -66,6 +68,7 @@ impl ResidentStreamWrapperPlan {
     ) -> &'static str {
         match self {
             Self::None => "none",
+            Self::TcpHttpHeader => "tcp-http-header",
             Self::HttpTransport => "http-transport",
             Self::WebSocket => "websocket",
             Self::HttpUpgrade => "httpupgrade",

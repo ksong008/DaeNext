@@ -31,6 +31,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
     stream_wrappers::STREAM_WRAPPER_WEBSOCKET,
     stream_wrappers::PLAIN_WEBSOCKET_FRAMED_ENDPOINT,
     stream_wrappers::STREAM_WRAPPER_GRPC,
+    stream_wrappers::PLAIN_GRPC_FRAMED_ENDPOINT,
     stream_wrappers::STREAM_WRAPPER_HTTPUPGRADE,
     stream_wrappers::PLAIN_HTTPUPGRADE_FRAMED_ENDPOINT,
     stream_wrappers::STREAM_WRAPPER_MEEK,

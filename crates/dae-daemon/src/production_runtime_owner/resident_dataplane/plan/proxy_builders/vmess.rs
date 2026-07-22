@@ -16,23 +16,31 @@ pub(crate) fn build_vmess_proxy_plan(
     let body_security = parsed
         .body_security()
         .map_err(|err| format!("validate VMess body security for {node_tag}: {err}"))?;
-    let net = match parsed.net.as_str() {
-        "" | "tcp" => "tcp".to_owned(),
-        "ws" | "websocket" => "websocket".to_owned(),
-        "http" | "h2" => "h2".to_owned(),
-        "httpupgrade" => "httpupgrade".to_owned(),
-        "grpc" => "grpc".to_owned(),
-        other => other.to_owned(),
+    let net = match (parsed.net.as_str(), parsed.r#type.as_str()) {
+        ("" | "tcp", "" | "none") => "tcp".to_owned(),
+        ("" | "tcp", "http") => "tcp-http-header".to_owned(),
+        ("" | "tcp", other) => {
+            return Err(format!(
+                "resident dataplane VMess TCP handler does not admit header type {other} for node {node_tag}"
+            ));
+        }
+        ("ws" | "websocket", _) => "websocket".to_owned(),
+        ("http" | "h2", _) => "h2".to_owned(),
+        ("httpupgrade", _) => "httpupgrade".to_owned(),
+        ("grpc", _) => "grpc".to_owned(),
+        (other, _) => other.to_owned(),
     };
     match net.as_str() {
-        "tcp" | "websocket" | "httpupgrade" | "grpc" | "h2" => {}
+        "tcp" | "tcp-http-header" | "websocket" | "httpupgrade" | "grpc" | "h2" => {}
         other => {
             return Err(format!(
                 "resident dataplane generic AEAD TCP handler admits only VMess tcp, websocket, httpupgrade, grpc, and h2 endpoints for node {node_tag}; got {other}"
             ));
         }
     }
-    if net == "tcp" && !matches!(parsed.tls.as_str(), "" | "none" | "tls") {
+    if matches!(net.as_str(), "tcp" | "tcp-http-header")
+        && !matches!(parsed.tls.as_str(), "" | "none" | "tls")
+    {
         return Err(format!(
             "resident dataplane generic AEAD TCP handler admits plain or TLS VMess TCP endpoints for node {node_tag}; got tls={}",
             parsed.tls
@@ -50,9 +58,9 @@ pub(crate) fn build_vmess_proxy_plan(
             parsed.tls
         ));
     }
-    if net == "grpc" && parsed.tls != "tls" {
+    if net == "grpc" && !matches!(parsed.tls.as_str(), "" | "none" | "tls") {
         return Err(format!(
-            "resident dataplane VMess grpc handler admits TLS HTTP/2 endpoints only for node {node_tag}; got tls={}",
+            "resident dataplane VMess grpc handler admits plain h2c or TLS HTTP/2 endpoints for node {node_tag}; got tls={}",
             if parsed.tls.is_empty() {
                 "none"
             } else {
@@ -76,22 +84,29 @@ pub(crate) fn build_vmess_proxy_plan(
             parsed.port
         )
     })?;
-    let stream_host = if matches!(net.as_str(), "websocket" | "httpupgrade" | "grpc" | "h2") {
+    let stream_host = if matches!(
+        net.as_str(),
+        "tcp-http-header" | "websocket" | "httpupgrade" | "grpc" | "h2"
+    ) {
         resident_stream_host(&parsed.host, &parsed.add)
     } else {
         String::new()
     };
     let stream_path = if net == "grpc" {
         resident_grpc_service_name(&parsed.path)
-    } else if matches!(net.as_str(), "h2" | "websocket" | "httpupgrade") {
+    } else if matches!(
+        net.as_str(),
+        "tcp-http-header" | "h2" | "websocket" | "httpupgrade"
+    ) {
         resident_stream_path(&parsed.path)
     } else {
         String::new()
     };
-    let tls = if (net == "tcp" && parsed.tls == "tls")
-        || net == "grpc"
-        || net == "h2"
-        || (matches!(net.as_str(), "websocket" | "httpupgrade") && parsed.tls == "tls")
+    let tls = if net == "h2"
+        || (matches!(
+            net.as_str(),
+            "tcp" | "tcp-http-header" | "websocket" | "httpupgrade" | "grpc"
+        ) && parsed.tls == "tls")
     {
         "tls"
     } else {
@@ -112,13 +127,19 @@ pub(crate) fn build_vmess_proxy_plan(
         resident_utls_fingerprint_plan_for_boundary(
             config,
             Some(parsed.fingerprint.as_str()),
-            net == "tcp",
+            matches!(net.as_str(), "tcp" | "tcp-http-header"),
         )?
     } else {
         None
     };
-    let alpn = resident_raw_tls_alpn(Vec::new(), net.as_str(), utls_fingerprint.as_ref());
-    validate_resident_h2_carrier_alpn(&alpn, &net, &node_tag)?;
+    let alpn = if tls == "tls" {
+        resident_raw_tls_alpn(Vec::new(), net.as_str(), utls_fingerprint.as_ref())
+    } else {
+        Vec::new()
+    };
+    if tls == "tls" {
+        validate_resident_h2_carrier_alpn(&alpn, &net, &node_tag)?;
+    }
     let allow_insecure = tls == "tls" && (parsed.allow_insecure || config.global.allow_insecure);
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {

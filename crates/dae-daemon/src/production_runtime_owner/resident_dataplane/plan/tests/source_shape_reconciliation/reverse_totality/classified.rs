@@ -96,7 +96,6 @@ fn legacy_vmess_classification_sources() -> Vec<String> {
     };
     let plain_wrapper = |wrapper: &str| plain.replace("obfs=tcp", &format!("obfs={wrapper}"));
     let parent = socks5_fixture_url(&fixture_host(FixtureEndpoint::Secondary), fixture_port(9));
-
     vec![
         plain.clone(),
         tls("tcp"),
@@ -104,6 +103,7 @@ fn legacy_vmess_classification_sources() -> Vec<String> {
         tls("websocket"),
         plain_wrapper("httpupgrade"),
         tls("httpupgrade"),
+        plain_wrapper("grpc"),
         tls("grpc"),
         tls("h2"),
         format!("{parent} -> {plain}"),

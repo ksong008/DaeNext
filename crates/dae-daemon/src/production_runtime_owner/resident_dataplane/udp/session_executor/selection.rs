@@ -165,6 +165,12 @@ impl UdpSessionExecutor {
         let session = match transport {
             ResidentStreamPacketTransport::PlainTcp => VlessStandardUdpOverStreamSession::plain(),
             ResidentStreamPacketTransport::TlsTcp => VlessStandardUdpOverStreamSession::tls(),
+            ResidentStreamPacketTransport::TcpHttpHeaderPlain
+            | ResidentStreamPacketTransport::TcpHttpHeaderTls => {
+                return Self::fail_closed(
+                    "materialized VLESS UDP transport cannot use VMess TCP HTTP headers",
+                );
+            }
             ResidentStreamPacketTransport::WebSocketPlain => {
                 VlessStandardUdpOverStreamSession::websocket_plain()
             }
@@ -219,6 +225,12 @@ impl UdpSessionExecutor {
             }
             ResidentStreamPacketTransport::TlsTcp => {
                 VmessAeadUdpOverTcpSession::tls(id.to_owned(), body_security)
+            }
+            ResidentStreamPacketTransport::TcpHttpHeaderPlain => {
+                VmessAeadUdpOverTcpSession::tcp_http_header_plain(id.to_owned(), body_security)
+            }
+            ResidentStreamPacketTransport::TcpHttpHeaderTls => {
+                VmessAeadUdpOverTcpSession::tcp_http_header_tls(id.to_owned(), body_security)
             }
             ResidentStreamPacketTransport::WebSocketPlain => {
                 VmessAeadUdpOverTcpSession::websocket_plain(id.to_owned(), body_security)

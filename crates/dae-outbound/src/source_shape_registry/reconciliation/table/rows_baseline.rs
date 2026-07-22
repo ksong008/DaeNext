@@ -47,6 +47,18 @@ pub(super) const BASELINE_AEAD_FRAMED_ENDPOINT: SourceShapeReconciliation = prod
             MaterializedWrapper::None,
             MaterializedUdp::Vmess(MaterializedStreamPacketTransport::TlsTcp),
         ),
+        standalone(
+            MaterializedProtocol::VmessAead,
+            NO_SECURITY_VARIANTS,
+            MaterializedWrapper::TcpHttpHeader,
+            MaterializedUdp::Vmess(MaterializedStreamPacketTransport::TcpHttpHeaderPlain),
+        ),
+        standalone(
+            MaterializedProtocol::VmessAead,
+            FULL_STREAM_TLS_VARIANTS,
+            MaterializedWrapper::TcpHttpHeader,
+            MaterializedUdp::Vmess(MaterializedStreamPacketTransport::TcpHttpHeaderTls),
+        ),
     ],
 );
 

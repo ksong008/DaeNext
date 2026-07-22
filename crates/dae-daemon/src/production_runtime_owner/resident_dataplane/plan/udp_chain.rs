@@ -56,6 +56,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_chai
                 && matches!(
                     execution.wrapper,
                     ResidentStreamWrapperPlan::None
+                        | ResidentStreamWrapperPlan::TcpHttpHeader
                         | ResidentStreamWrapperPlan::WebSocket
                         | ResidentStreamWrapperPlan::HttpUpgrade
                 ) =>
@@ -125,6 +126,18 @@ mod tests {
         }));
         assert_eq!(
             resident_udp_chain_admission(&vmess),
+            ResidentUdpChainAdmission::ParentStream
+        );
+
+        let mut vmess_http = proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
+            id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+        });
+        vmess_http.net = "tcp-http-header".to_owned();
+        vmess_http.execution = None;
+        vmess_http.materialize_execution();
+        assert_eq!(
+            resident_udp_chain_admission(&chained(vmess_http)),
             ResidentUdpChainAdmission::ParentStream
         );
 

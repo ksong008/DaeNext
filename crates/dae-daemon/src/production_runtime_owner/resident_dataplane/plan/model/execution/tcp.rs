@@ -39,7 +39,8 @@ impl ResidentTcpCarrierOwnership {
             }
             _ if matches!(
                 wrapper,
-                ResidentStreamWrapperPlan::HttpTransport
+                ResidentStreamWrapperPlan::TcpHttpHeader
+                    | ResidentStreamWrapperPlan::HttpTransport
                     | ResidentStreamWrapperPlan::WebSocket
                     | ResidentStreamWrapperPlan::HttpUpgrade
                     | ResidentStreamWrapperPlan::SimpleObfsHttp

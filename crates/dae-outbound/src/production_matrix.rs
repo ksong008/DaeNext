@@ -140,6 +140,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "secure-websocket-framed-endpoint",
             "secure-httpupgrade-framed-endpoint",
             "stream-wrapper-grpc",
+            "plain-grpc-framed-endpoint",
             "vmess-h2-stream-wrapper",
         ],
         &[

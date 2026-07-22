@@ -175,11 +175,14 @@ impl ResidentProxyPlan {
         &self,
     ) -> bool {
         let execution = self.execution_plan();
-        execution.security.is_tls_stream()
+        (execution.security.is_tls_stream()
             && matches!(
                 execution.wrapper,
                 ResidentStreamWrapperPlan::Grpc | ResidentStreamWrapperPlan::H2
-            )
+            ))
+            || (execution.protocol == ResidentProtocolShape::VmessAead
+                && execution.security == ResidentSecurityUnderlayPlan::None
+                && execution.wrapper == ResidentStreamWrapperPlan::Grpc)
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn requires_meek_transport_owner(

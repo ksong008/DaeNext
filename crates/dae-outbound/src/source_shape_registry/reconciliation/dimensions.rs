@@ -74,6 +74,7 @@ impl MaterializedTlsFeatures {
 #[serde(rename_all = "kebab-case")]
 pub enum MaterializedWrapper {
     None,
+    TcpHttpHeader,
     HttpTransport,
     ConnectUdpH2,
     ConnectUdpH3,
@@ -100,6 +101,8 @@ pub enum MaterializedWrapper {
 pub enum MaterializedStreamPacketTransport {
     PlainTcp,
     TlsTcp,
+    TcpHttpHeaderPlain,
+    TcpHttpHeaderTls,
     WebSocketPlain,
     WebSocketTls,
     HttpUpgradePlain,

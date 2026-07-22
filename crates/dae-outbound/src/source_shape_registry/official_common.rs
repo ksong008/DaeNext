@@ -15,6 +15,7 @@ pub(super) static OFFICIAL_COMMON_SOURCE_SHAPE_IDS: &[&str] = &[
     "stream-wrapper-websocket",
     "plain-websocket-framed-endpoint",
     "stream-wrapper-grpc",
+    "plain-grpc-framed-endpoint",
     "stream-wrapper-httpupgrade",
     "plain-httpupgrade-framed-endpoint",
     "stream-wrapper-meek",
