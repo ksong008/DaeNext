@@ -41,6 +41,7 @@ pub(super) fn build_aead_request_chunks(
     let mut codec = BodyCodec::new(
         parsed.request_body_key,
         parsed.request_body_iv,
+        parsed.security,
         parsed.request_options,
     )?;
     let mut chunks = Vec::with_capacity(payloads.len());
@@ -99,12 +100,17 @@ pub(super) fn request_instruction(
     let metadata = VMessMetadata::parse(network.as_str(), target)?;
     let addr_len = metadata.addr_len();
     let header_padding_len = 0_usize;
+    let request_options = match security {
+        VMessBodySecurity::Aes128Gcm | VMessBodySecurity::Chacha20Poly1305 => REQUEST_OPTIONS_AEAD,
+        VMessBodySecurity::None => REQUEST_OPTIONS_NONE,
+        VMessBodySecurity::Zero => 0,
+    };
     let mut out = vec![0_u8; 45 + addr_len + header_padding_len];
     out[0] = VMESS_VERSION;
     out[1..17].copy_from_slice(&material.request_body_iv);
     out[17..33].copy_from_slice(&material.request_body_key);
     out[33] = material.response_auth;
-    out[34] = REQUEST_OPTIONS;
+    out[34] = request_options;
     out[35] = ((header_padding_len as u8) << 4) | security.wire_value();
     out[36] = 0;
     out[37] = network.byte();

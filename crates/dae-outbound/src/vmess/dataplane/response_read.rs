@@ -64,6 +64,7 @@ where
     let mut codec = BodyCodec::new(
         request.response_body_key,
         request.response_body_iv,
+        request.security,
         request.request_options,
     )?;
     let (payload, chunk_len) = codec.open_chunk(stream)?;
@@ -199,6 +200,7 @@ pub(super) fn try_aead_tcp_response_reader_from_buffer(
     let codec = BodyCodec::new(
         request.response_body_key,
         request.response_body_iv,
+        request.security,
         request.request_options,
     )?;
     Ok(Some(VMessAeadTcpResponseReader {
@@ -299,7 +301,12 @@ pub(super) fn parse_instruction(instruction: &[u8]) -> Result<ParsedInstruction,
     }
     let header_padding_len = (instruction[35] >> 4) as usize;
     let security = instruction[35] & 0x0f;
-    if security != VMESS_AEAD_SECURITY_AES_128_GCM {
+    if !matches!(
+        security,
+        VMESS_AEAD_SECURITY_AES_128_GCM
+            | VMESS_AEAD_SECURITY_CHACHA20_POLY1305
+            | VMESS_AEAD_SECURITY_NONE
+    ) {
         return Err(OutboundError::BadVmess(format!(
             "unsupported VMess AEAD security: {security}"
         )));

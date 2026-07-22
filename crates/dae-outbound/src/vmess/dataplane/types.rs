@@ -330,23 +330,19 @@ impl Default for VMessAeadMaterial {
 }
 
 impl VMessAeadMaterial {
-    pub(super) fn random() -> Self {
-        let mut request_body_iv = [0_u8; 16];
-        let mut request_body_key = [0_u8; 16];
-        let mut eauth_random = [0_u8; 4];
-        let mut connection_nonce = [0_u8; 8];
-        let mut response_auth = [0_u8; 1];
-        fastrand::fill(&mut request_body_iv);
-        fastrand::fill(&mut request_body_key);
-        fastrand::fill(&mut eauth_random);
-        fastrand::fill(&mut connection_nonce);
-        fastrand::fill(&mut response_auth);
-        Self {
-            request_body_iv,
-            request_body_key,
-            response_auth: response_auth[0],
-            eauth_random,
-            connection_nonce,
-        }
+    pub(super) fn random() -> Result<Self, OutboundError> {
+        let mut random = [0_u8; 45];
+        getrandom::fill(&mut random).map_err(|err| {
+            OutboundError::BadVmess(format!("generate VMess session keys: {err}"))
+        })?;
+        Ok(Self {
+            request_body_iv: random[..16].try_into().expect("fixed VMess IV slice"),
+            request_body_key: random[16..32].try_into().expect("fixed VMess key slice"),
+            response_auth: random[32],
+            eauth_random: random[33..37]
+                .try_into()
+                .expect("fixed VMess auth random slice"),
+            connection_nonce: random[37..].try_into().expect("fixed VMess nonce slice"),
+        })
     }
 }

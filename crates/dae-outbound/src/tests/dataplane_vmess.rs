@@ -68,6 +68,70 @@ fn vmess_explicit_aes_body_security_emits_official_wire_value() {
 }
 
 #[test]
+fn vmess_body_security_modes_roundtrip_request_and_response_payloads() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let target = "fixture-vmess-security.fixture.invalid:443";
+    let payload = b"fixture-vmess-security-payload";
+    for (security, wire, options) in [
+        (
+            vmess::VMessBodySecurity::Aes128Gcm,
+            vmess::VMESS_AEAD_SECURITY_AES_128_GCM,
+            0x0d,
+        ),
+        (
+            vmess::VMessBodySecurity::Chacha20Poly1305,
+            vmess::VMESS_AEAD_SECURITY_CHACHA20_POLY1305,
+            0x0d,
+        ),
+        (
+            vmess::VMessBodySecurity::None,
+            vmess::VMESS_AEAD_SECURITY_NONE,
+            0x05,
+        ),
+        (
+            vmess::VMessBodySecurity::Zero,
+            vmess::VMESS_AEAD_SECURITY_NONE,
+            0,
+        ),
+    ] {
+        let session =
+            vmess::aead_tcp_client_session_start_with_security(uuid, target, payload, security)
+                .unwrap();
+        assert_eq!(session.request.security, wire);
+        assert_eq!(session.request.request_options, options);
+
+        let mut request_bytes = std::io::Cursor::new(session.first_write.clone());
+        let accepted = vmess::read_aead_tcp_request_from_stream(&mut request_bytes, uuid).unwrap();
+        assert_eq!(accepted.security, wire);
+        assert_eq!(accepted.payload, payload);
+
+        let mut response = vmess::aead_tcp_response_packet(&session.request, payload).unwrap();
+        let mut reader =
+            vmess::aead_tcp_response_reader_from_buffer(&mut response, &session.request)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            reader.try_read_chunk_from_buffer(&mut response).unwrap(),
+            Some(payload.to_vec())
+        );
+    }
+}
+
+#[test]
+fn vmess_zero_body_security_rejects_udp_without_packet_framing() {
+    let result = vmess::aead_udp_over_tcp_client_session_start_with_security(
+        "7c12c745-63a5-433d-9e60-022e469b5bd4",
+        "fixture-vmess-udp.fixture.invalid:53",
+        b"packet",
+        vmess::VMessBodySecurity::Zero,
+    );
+    let Err(error) = result else {
+        panic!("VMess zero body security must reject UDP without packet framing");
+    };
+    assert!(error.to_string().contains("has no UDP packet boundary"));
+}
+
+#[test]
 fn vmess_aead_udp_over_tcp_session_start_uses_udp_command() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "vmess-udp-target.fixture.invalid:53";

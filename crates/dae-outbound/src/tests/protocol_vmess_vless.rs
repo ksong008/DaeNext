@@ -40,15 +40,32 @@ fn vmess_body_security_defaults_and_aliases_are_explicit() {
 }
 
 #[test]
-fn vmess_unsupported_explicit_body_security_fails_closed() {
-    for value in ["chacha20-poly1305", "none", "zero"] {
+fn vmess_explicit_body_security_names_select_wire_modes() {
+    for (value, expected) in [
+        (
+            "chacha20-poly1305",
+            crate::vmess::VMessBodySecurity::Chacha20Poly1305,
+        ),
+        ("none", crate::vmess::VMessBodySecurity::None),
+        ("zero", crate::vmess::VMessBodySecurity::Zero),
+    ] {
         let parsed =
             crate::vmess::VMessLink::parse(&vmess_json_url_with_security(Some(("scy", value))))
                 .unwrap();
-        let err = parsed.body_security().unwrap_err().to_string();
-        assert!(err.contains("unsupported VMess body security"));
-        assert!(err.contains(value));
+        assert_eq!(parsed.body_security().unwrap(), expected);
     }
+}
+
+#[test]
+fn vmess_unknown_explicit_body_security_fails_closed() {
+    let parsed = crate::vmess::VMessLink::parse(&vmess_json_url_with_security(Some((
+        "scy",
+        "unknown-cipher",
+    ))))
+    .unwrap();
+    let err = parsed.body_security().unwrap_err().to_string();
+    assert!(err.contains("unsupported VMess body security"));
+    assert!(err.contains("unknown-cipher"));
 }
 
 #[test]

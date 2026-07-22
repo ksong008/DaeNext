@@ -288,6 +288,7 @@ where
     let request_codec = BodyCodec::new(
         parsed.request_body_key,
         parsed.request_body_iv,
+        parsed.security,
         parsed.request_options,
     )?;
     Ok((

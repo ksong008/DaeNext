@@ -64,7 +64,7 @@ pub(super) fn aes128_gcm_encrypt(
         Aes128Gcm::new_from_slice(key).map_err(|err| OutboundError::BadVmess(err.to_string()))?;
     cipher
         .encrypt(
-            Nonce::from_slice(nonce),
+            AesNonce::from_slice(nonce),
             Payload {
                 msg: plaintext,
                 aad,
@@ -83,7 +83,7 @@ pub(super) fn aes128_gcm_decrypt(
         Aes128Gcm::new_from_slice(key).map_err(|err| OutboundError::BadVmess(err.to_string()))?;
     cipher
         .decrypt(
-            Nonce::from_slice(nonce),
+            AesNonce::from_slice(nonce),
             Payload {
                 msg: ciphertext,
                 aad,
