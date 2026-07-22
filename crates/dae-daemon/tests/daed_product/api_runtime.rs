@@ -157,7 +157,7 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
         port,
         "POST",
         "/api/routings",
-        Some(r#"{"name":"routing","routing":"routing {}"}"#),
+        Some(r#"{"name":"routing","routing":"routing {\n  fallback: egress\n}"}"#),
         Some(&token),
     );
     let routing_id = json_body(&routing)["id"].as_i64().unwrap();
