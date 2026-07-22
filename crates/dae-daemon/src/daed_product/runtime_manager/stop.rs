@@ -16,7 +16,8 @@ impl ProductRuntimeManager {
         &self,
     ) -> Result<PreparedProductRuntimeStop<'_>, String> {
         let started = Instant::now();
-        let coordinator = self.coordinator.begin_stop()?;
+        self.reconciler.cancel_preparation_for_stop();
+        let coordinator = self.reconciler.begin_stop()?;
         let lifecycle = self
             .lifecycle
             .lock()

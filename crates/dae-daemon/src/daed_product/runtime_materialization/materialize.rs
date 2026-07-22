@@ -40,6 +40,11 @@ impl ActiveRuntimeFingerprint {
     pub(in crate::daed_product) fn as_str(&self) -> &str {
         &self.0
     }
+
+    #[cfg(test)]
+    pub(in crate::daed_product) fn for_test(value: &str) -> Self {
+        Self(value.to_owned())
+    }
 }
 
 pub(in crate::daed_product) fn materialize_runtime(

@@ -894,6 +894,8 @@ mod runtime_materialization;
 use self::runtime_materialization::*;
 mod runtime_reload;
 use self::runtime_reload::*;
+mod runtime_reconcile;
+use self::runtime_reconcile::*;
 mod runtime_apply;
 use self::runtime_apply::*;
 mod logs;

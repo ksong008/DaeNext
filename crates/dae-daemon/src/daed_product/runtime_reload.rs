@@ -10,6 +10,7 @@ pub(in crate::daed_product) struct PreparedRuntimeReload {
     pub(in crate::daed_product) preflight_elapsed_ns: u64,
 }
 
+#[derive(Clone, Debug)]
 pub(in crate::daed_product) struct AppliedRuntimeReload {
     pub(in crate::daed_product) applied: bool,
     pub(in crate::daed_product) coalesced: bool,
@@ -19,7 +20,7 @@ pub(in crate::daed_product) struct AppliedRuntimeReload {
     pub(in crate::daed_product) pending_process_transition: Option<Value>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(in crate::daed_product) enum RuntimeReloadPrepareError {
     Materialize(String),
     BuildConfig(String),
@@ -53,7 +54,7 @@ impl std::fmt::Display for RuntimeReloadPrepareError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(in crate::daed_product) enum CoordinatedRuntimeReloadError {
     Prepare(RuntimeReloadPrepareError),
     Apply(String),
@@ -179,31 +180,52 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
     latency_seed: &[Value],
     reclaim_reason: AllocatorReclaimReason,
 ) -> Result<AppliedRuntimeReload, CoordinatedRuntimeReloadError> {
-    let permit = runtime
-        .begin_apply(intent)
-        .map_err(CoordinatedRuntimeReloadError::Apply)?;
-    permit.set_phase("reread-desired-state");
+    let request = runtime.begin_reconcile(intent);
+    request.set_phase("reread-desired-state");
     let (plan, modified) =
         match prepare_runtime_materialization_plan_with_modified_state(state, runtime.is_running())
         {
             Ok(snapshot) => snapshot,
             Err(err) => {
-                permit.finish("prepare-failed");
                 return Err(CoordinatedRuntimeReloadError::Prepare(
                     RuntimeReloadPrepareError::Materialize(err.to_string()),
                 ));
             }
         };
+    let admission = request
+        .admit(&plan.active_fingerprint)
+        .map_err(CoordinatedRuntimeReloadError::Apply)?;
+    let RuntimeReconcileAdmission::Lead(mut lead) = admission else {
+        let RuntimeReconcileAdmission::Follow(follower) = admission else {
+            unreachable!("runtime reconcile admission has exactly two variants")
+        };
+        return follower.wait();
+    };
+    if let Err(error) = lead.checkpoint("desired-admitted") {
+        return lead.finish(Err(error));
+    }
     let activation_identity_consistent = if runtime.is_running() {
-        runtime_activation_identity_consistent(state, runtime)
-            .map_err(|err| CoordinatedRuntimeReloadError::Apply(err.to_string()))?
+        match runtime_activation_identity_consistent(state, runtime) {
+            Ok(consistent) => consistent,
+            Err(error) => {
+                return lead.finish(Err(CoordinatedRuntimeReloadError::Apply(error.to_string())));
+            }
+        }
     } else {
         true
     };
     if runtime.is_running() && !modified && activation_identity_consistent {
+        let commit = lead.begin_commit();
+        if commit.is_err() {
+            let error = commit
+                .err()
+                .expect("runtime commit admission error was checked");
+            return lead.finish(Err(error));
+        }
+        let permit = commit.expect("runtime commit admission success was checked");
         let runtime_report = runtime.summary();
         permit.finish_coalesced();
-        return Ok(AppliedRuntimeReload {
+        return lead.finish(Ok(AppliedRuntimeReload {
             applied: false,
             coalesced: true,
             runtime_report,
@@ -214,27 +236,35 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
             }),
             allocator_reclaim: Value::Null,
             pending_process_transition: runtime.pending_process_transition(),
-        });
+        }));
     }
-    permit.set_phase("materializing");
+    if let Err(error) = lead.checkpoint("materializing") {
+        return lead.finish(Err(error));
+    }
     let prepared = match build_prepared_runtime_reload(plan) {
         Ok(prepared) => prepared,
         Err(err) => {
-            permit.finish("prepare-failed");
-            return Err(CoordinatedRuntimeReloadError::Prepare(err));
+            return lead.finish(Err(CoordinatedRuntimeReloadError::Prepare(err)));
         }
     };
-    permit.set_phase("preflight");
+    if let Err(error) = lead.checkpoint("compiled") {
+        return lead.finish(Err(error));
+    }
+    if let Err(error) = lead.checkpoint("preflight") {
+        return lead.finish(Err(error));
+    }
     let preflight_started = Instant::now();
     let preflight_evidence = match preflight_product_runtime_candidate(&prepared.config) {
         Ok(evidence) => evidence,
         Err(err) => {
-            permit.finish("preflight-failed");
-            return Err(CoordinatedRuntimeReloadError::Prepare(
+            return lead.finish(Err(CoordinatedRuntimeReloadError::Prepare(
                 RuntimeReloadPrepareError::Preflight(err),
-            ));
+            )));
         }
     };
+    if let Err(error) = lead.checkpoint("preflight-complete") {
+        return lead.finish(Err(error));
+    }
     let preflight_elapsed_ns = elapsed_nanos(preflight_started);
     let process_transition = runtime.process_transition_for_config(&prepared.config);
     let prepared = prepared.with_activation_metadata(
@@ -242,6 +272,14 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
         preflight_elapsed_ns,
         process_transition,
     );
+    let commit = lead.begin_commit();
+    if commit.is_err() {
+        let error = commit
+            .err()
+            .expect("runtime commit admission error was checked");
+        return lead.finish(Err(error));
+    }
+    let permit = commit.expect("runtime commit admission success was checked");
     permit.set_phase("applying");
     let result = apply_prepared_runtime_reload(
         runtime,
@@ -256,11 +294,11 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
     match result {
         Ok(applied) => {
             permit.finish("succeeded");
-            Ok(applied)
+            lead.finish(Ok(applied))
         }
         Err(err) => {
             permit.finish("failed");
-            Err(err)
+            lead.finish(Err(err))
         }
     }
 }
