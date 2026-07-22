@@ -37,6 +37,7 @@ pub(crate) enum NodeListScope {
     Independent,
     SubscriptionBacked,
     Subscription(i64),
+    #[cfg(test)]
     All,
 }
 
@@ -55,12 +56,6 @@ pub(crate) fn list_all_nodes_value(state: &Path) -> io::Result<Value> {
 pub(crate) fn list_nodes_by_scope(state: &Path, scope: NodeListScope) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     list_nodes_by_scope_with_connection(&conn, scope)
-}
-
-pub(in crate::daed_product) fn list_all_nodes_value_with_connection(
-    conn: &Connection,
-) -> io::Result<Value> {
-    list_nodes_by_scope_with_connection(conn, NodeListScope::All)
 }
 
 fn list_nodes_by_scope_with_connection(
@@ -117,6 +112,7 @@ fn list_nodes_by_scope_with_connection(
                 items.push(row.map_err(sqlite_io_error)?);
             }
         }
+        #[cfg(test)]
         NodeListScope::All => {
             let mut stmt = conn
                 .prepare(

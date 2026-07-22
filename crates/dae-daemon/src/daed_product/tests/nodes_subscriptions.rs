@@ -877,7 +877,7 @@ pub(crate) fn update_node_preserves_latency_for_label_only_changes() {
 }
 
 #[test]
-pub(crate) fn manual_node_runtime_changes_advance_external_input_once_per_transaction() {
+pub(crate) fn inactive_manual_node_changes_advance_external_input_once_per_transaction() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
@@ -902,7 +902,7 @@ pub(crate) fn manual_node_runtime_changes_advance_external_input_once_per_transa
     let first_id = body["items"][0]["node"]["id"].as_i64().unwrap();
     let second_id = body["items"][1]["node"]["id"].as_i64().unwrap();
     let conn = open_state_connection(&state).unwrap();
-    assert!(runtime_modified(&conn, true).unwrap());
+    assert!(!runtime_modified(&conn, true).unwrap());
     assert_eq!(current_runtime_external_input_version(&conn).unwrap(), 1);
     drop(conn);
 
@@ -919,7 +919,7 @@ pub(crate) fn manual_node_runtime_changes_advance_external_input_once_per_transa
     };
     assert_eq!(update_node(&state, &update, first_id).status, 200);
     let conn = open_state_connection(&state).unwrap();
-    assert!(runtime_modified(&conn, true).unwrap());
+    assert!(!runtime_modified(&conn, true).unwrap());
     assert_eq!(current_runtime_external_input_version(&conn).unwrap(), 2);
     drop(conn);
 
@@ -949,7 +949,7 @@ pub(crate) fn manual_node_runtime_changes_advance_external_input_once_per_transa
     let body: Value = serde_json::from_slice(&response.body).unwrap();
     assert_eq!(body["removed"], json!(2));
     let conn = open_state_connection(&state).unwrap();
-    assert!(runtime_modified(&conn, true).unwrap());
+    assert!(!runtime_modified(&conn, true).unwrap());
     assert_eq!(current_runtime_external_input_version(&conn).unwrap(), 3);
     fs::remove_dir_all(dir).unwrap();
 }
@@ -1312,7 +1312,7 @@ pub(crate) fn node_lists_keep_manual_subscription_and_runtime_scopes_separate() 
 }
 
 #[test]
-pub(crate) fn subscription_refresh_marks_runtime_modified_for_unbound_node_changes() {
+pub(crate) fn subscription_refresh_keeps_unbound_node_changes_out_of_active_runtime() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
@@ -1352,7 +1352,7 @@ pub(crate) fn subscription_refresh_marks_runtime_modified_for_unbound_node_chang
     let report = refresh_subscription_from_remote(&control_runtime, &state, &dir, 7).unwrap();
     assert_eq!(report["runtimeInputChanged"], json!(true));
     let conn = open_state_connection(&state).unwrap();
-    assert!(runtime_modified(&conn, true).unwrap());
+    assert!(!runtime_modified(&conn, true).unwrap());
     drop(conn);
 
     materialize_runtime(&state, None, false).unwrap();

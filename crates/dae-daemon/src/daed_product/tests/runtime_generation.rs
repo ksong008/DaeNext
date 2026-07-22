@@ -368,6 +368,43 @@ fn waiting_reload_coalesces_after_the_active_generation_reaches_latest_state() {
 }
 
 #[test]
+fn ordinary_unchanged_reload_coalesces_without_waiting() {
+    with_product_runtime_fake_start_override(true, || {
+        let product = FreshProductState::new("ordinary-unchanged-reload");
+        product.seed_selected_resources();
+        let config_dir = product.root().join("config");
+        let runtime = ProductRuntimeManager::new();
+        let initial = coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(&config_dir),
+            RuntimeApplyIntent::ApiReload,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+        assert!(initial.applied);
+
+        let unchanged = coordinate_runtime_reload(
+            &runtime,
+            product.state(),
+            Some(&config_dir),
+            RuntimeApplyIntent::LocalControlReload,
+            &[],
+            AllocatorReclaimReason::ReloadCompleted,
+        )
+        .unwrap();
+        assert!(!unchanged.applied);
+        assert!(unchanged.coalesced);
+        assert_eq!(runtime.summary()["reloadCount"], json!(1));
+        assert_eq!(
+            runtime.summary()["applyCoordinator"]["coalescedCount"],
+            json!(1)
+        );
+    });
+}
+
+#[test]
 fn consecutive_generic_config_changes_do_not_leave_a_cleanup_interlock() {
     with_product_runtime_fake_start_override(true, || {
         let product = FreshProductState::new("consecutive-generic-config-reloads");
@@ -554,10 +591,19 @@ fn general_state_exposes_desired_active_and_generation_consistency() {
         assert_eq!(revision["activationIdentityConsistent"], json!(true));
 
         bump_runtime_external_input_version(product.state()).unwrap();
-        let pending = general_state_report(product.state(), product.root(), &runtime).unwrap();
-        let revision = &pending["runtimeRevision"];
+        let broad_only = general_state_report(product.state(), product.root(), &runtime).unwrap();
+        let revision = &broad_only["runtimeRevision"];
         assert_eq!(revision["desired"]["externalInputVersion"], json!(1));
         assert_eq!(revision["active"]["externalInputVersion"], json!(0));
+        assert_eq!(revision["desiredMatchesActive"], json!(true));
+        assert_eq!(revision["pending"], json!(false));
+        assert_eq!(broad_only["modified"], json!(false));
+
+        let conn = product.connection();
+        bump_runtime_geodata_input_version_with_connection(&conn).unwrap();
+        drop(conn);
+        let pending = general_state_report(product.state(), product.root(), &runtime).unwrap();
+        let revision = &pending["runtimeRevision"];
         assert_eq!(revision["desiredMatchesActive"], json!(false));
         assert_eq!(revision["pending"], json!(true));
         assert_eq!(pending["modified"], json!(true));

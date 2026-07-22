@@ -20,10 +20,6 @@ impl RuntimeApplyIntent {
             Self::InterfaceRecovery => "interface-monitor",
         }
     }
-
-    pub(in crate::daed_product) fn requires_runtime_change(self) -> bool {
-        matches!(self, Self::SubscriptionRefresh)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -50,8 +46,6 @@ pub(in crate::daed_product) struct RuntimeApplyPermit<'a> {
     coordinator: &'a RuntimeApplyCoordinator,
     _gate: MutexGuard<'a, ()>,
     intent_id: u64,
-    intent: RuntimeApplyIntent,
-    waited: bool,
     finished: bool,
 }
 
@@ -81,14 +75,12 @@ impl RuntimeApplyCoordinator {
     ) -> Result<RuntimeApplyPermit<'_>, String> {
         let intent_id = self.next_intent.fetch_add(1, Ordering::Relaxed);
         let accepted_stop_epoch = self.stop_epoch.load(Ordering::Acquire);
-        let (gate, waited) = match self.gate.try_lock() {
-            Ok(gate) => (gate, false),
-            Err(TryLockError::WouldBlock) => (
-                self.gate
-                    .lock()
-                    .map_err(|_| "runtime apply coordinator lock poisoned".to_owned())?,
-                true,
-            ),
+        let gate = match self.gate.try_lock() {
+            Ok(gate) => gate,
+            Err(TryLockError::WouldBlock) => self
+                .gate
+                .lock()
+                .map_err(|_| "runtime apply coordinator lock poisoned".to_owned())?,
             Err(TryLockError::Poisoned(_)) => {
                 return Err("runtime apply coordinator lock poisoned".to_owned());
             }
@@ -113,8 +105,6 @@ impl RuntimeApplyCoordinator {
             coordinator: self,
             _gate: gate,
             intent_id,
-            intent,
-            waited,
             finished: false,
         })
     }
@@ -158,14 +148,6 @@ impl RuntimeApplyCoordinator {
 }
 
 impl RuntimeApplyPermit<'_> {
-    pub(in crate::daed_product) fn intent(&self) -> RuntimeApplyIntent {
-        self.intent
-    }
-
-    pub(in crate::daed_product) fn waited(&self) -> bool {
-        self.waited
-    }
-
     pub(in crate::daed_product) fn set_phase(&self, phase: &str) {
         if let Ok(mut state) = self.coordinator.state.lock()
             && state.active_intent == Some(self.intent_id)

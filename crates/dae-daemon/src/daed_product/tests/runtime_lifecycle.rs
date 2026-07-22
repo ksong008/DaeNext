@@ -865,7 +865,7 @@ pub(crate) fn runtime_modified_matches_running_resource_snapshot() {
 }
 
 #[test]
-pub(crate) fn runtime_modified_tracks_external_input_version_snapshot() {
+pub(crate) fn runtime_modified_tracks_geodata_without_treating_broad_input_as_active() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
@@ -902,12 +902,167 @@ pub(crate) fn runtime_modified_tracks_external_input_version_snapshot() {
 
     bump_runtime_external_input_version(&state).unwrap();
     let conn = open_state_connection(&state).unwrap();
+    assert!(!runtime_modified(&conn, true).unwrap());
+    bump_runtime_geodata_input_version_with_connection(&conn).unwrap();
     assert!(runtime_modified(&conn, true).unwrap());
     drop(conn);
 
     materialize_runtime(&state, None, false).unwrap();
     let conn = open_state_connection(&state).unwrap();
     assert!(!runtime_modified(&conn, true).unwrap());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn runtime_materialization_tracks_only_active_routing_dependencies() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: active_group }', 1, 1);
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(1, 'active_group', 'random', 1),
+                      (2, 'unused_group', 'random', 1);
+        "#,
+    )
+    .unwrap();
+    insert_config_node(
+        &conn,
+        1,
+        "active-node",
+        "socks://127.0.0.1:1080#active-node",
+        None,
+    );
+    insert_config_node(
+        &conn,
+        2,
+        "unused-node",
+        "socks://127.0.0.2:1080#unused-node",
+        None,
+    );
+    conn.execute_batch(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(1, 1);\
+         INSERT INTO group_nodes(group_id, node_id) VALUES(2, 2);",
+    )
+    .unwrap();
+    drop(conn);
+
+    let initial = prepare_runtime_materialization_plan(&state).unwrap();
+    assert_eq!(initial.group_count, 1);
+    assert_eq!(initial.node_count, 1);
+    assert!(initial.content.contains("socks://127.0.0.1:1080"));
+    assert!(!initial.content.contains("socks://127.0.0.2:1080"));
+    assert!(initial.content.contains("active_group"));
+    assert!(!initial.content.contains("unused_group"));
+
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "UPDATE nodes SET link = 'socks://127.0.0.3:1080#unused-node' WHERE id = 2",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let unused_changed = prepare_runtime_materialization_plan(&state).unwrap();
+    assert_eq!(
+        unused_changed.active_fingerprint,
+        initial.active_fingerprint
+    );
+
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "UPDATE nodes SET link = 'socks://127.0.0.4:1080#active-node' WHERE id = 1",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let active_changed = prepare_runtime_materialization_plan(&state).unwrap();
+    assert_ne!(
+        active_changed.active_fingerprint,
+        initial.active_fingerprint
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn active_fingerprint_ignores_subscription_metadata_and_unmatched_nodes() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: active_group }', 1, 1);
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(1, 'active_group', 'random', 1);
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'before', 'https://source.invalid/one', 'fetched', '', 'source');
+            INSERT INTO group_subscriptions(group_id, subscription_id, name_filter_regex)
+                VALUES(1, 7, '^keep');
+        "#,
+    )
+    .unwrap();
+    insert_config_node(
+        &conn,
+        1,
+        "keep-node",
+        "socks://127.0.0.1:1080#keep-node",
+        Some(7),
+    );
+    insert_config_node(
+        &conn,
+        2,
+        "drop-node",
+        "socks://127.0.0.2:1080#drop-node",
+        Some(7),
+    );
+    drop(conn);
+
+    let initial = prepare_runtime_materialization_plan(&state).unwrap();
+    assert_eq!(initial.node_count, 1);
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            UPDATE subscriptions
+               SET updated_at = 'after', link = 'https://source.invalid/two',
+                   status = 'updated', info = 'metadata', tag = 'renamed'
+             WHERE id = 7;
+            UPDATE nodes SET link = 'socks://127.0.0.3:1080#drop-node' WHERE id = 2;
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+    let metadata_changed = prepare_runtime_materialization_plan(&state).unwrap();
+    assert_eq!(
+        metadata_changed.active_fingerprint,
+        initial.active_fingerprint
+    );
+
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute(
+        "UPDATE nodes SET link = 'socks://127.0.0.4:1080#keep-node' WHERE id = 1",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let matched_changed = prepare_runtime_materialization_plan(&state).unwrap();
+    assert_ne!(
+        matched_changed.active_fingerprint,
+        initial.active_fingerprint
+    );
 
     fs::remove_dir_all(dir).unwrap();
 }

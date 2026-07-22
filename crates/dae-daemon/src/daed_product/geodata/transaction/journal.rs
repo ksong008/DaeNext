@@ -24,6 +24,8 @@ pub(in crate::daed_product::geodata) struct GeodataUpdateJournal {
     pub(super) data_backup: Option<String>,
     pub(super) version_backup: Option<String>,
     pub(super) external_input_version_before: Option<i64>,
+    #[serde(default)]
+    pub(super) geodata_input_version_before: Option<i64>,
 }
 
 impl GeodataUpdateJournal {
@@ -34,6 +36,7 @@ impl GeodataUpdateJournal {
         data_backup: Option<&Path>,
         version_backup: Option<&Path>,
         external_input_version_before: Option<i64>,
+        geodata_input_version_before: Option<i64>,
     ) -> io::Result<Self> {
         let journal = Self {
             format_version: GEODATA_JOURNAL_FORMAT_VERSION,
@@ -44,6 +47,7 @@ impl GeodataUpdateJournal {
             data_backup: data_backup.map(artifact_file_name).transpose()?,
             version_backup: version_backup.map(artifact_file_name).transpose()?,
             external_input_version_before,
+            geodata_input_version_before,
         };
         journal.validate(kind)?;
         Ok(journal)
@@ -70,6 +74,14 @@ impl GeodataUpdateJournal {
         {
             return Err(invalid_journal(
                 "geodata journal external input version is negative",
+            ));
+        }
+        if self
+            .geodata_input_version_before
+            .is_some_and(|value| value < 0)
+        {
+            return Err(invalid_journal(
+                "geodata journal geodata input version is negative",
             ));
         }
         Ok(())

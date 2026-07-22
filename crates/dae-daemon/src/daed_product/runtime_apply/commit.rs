@@ -92,6 +92,11 @@ fn commit_runtime_state(
     }
     set_metadata_in_transaction(&tx, RUNTIME_TRANSITION_PHASE_METADATA_KEY, "committed")?;
     set_metadata_in_transaction(&tx, RUNTIME_LOG_LEVEL_METADATA_KEY, runtime_log_level)?;
+    set_metadata_in_transaction(
+        &tx,
+        RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY,
+        plan.active_fingerprint.as_str(),
+    )?;
     tx.execute(
         "DELETE FROM daed_product_metadata WHERE key = ?1",
         params![RUNTIME_LAST_APPLY_ERROR_METADATA_KEY],

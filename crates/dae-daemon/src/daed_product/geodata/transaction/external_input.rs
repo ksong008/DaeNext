@@ -1,8 +1,14 @@
 use super::*;
 
-pub(in crate::daed_product::geodata) fn runtime_external_input_version_if_running(
+#[derive(Clone, Copy, Debug)]
+pub(in crate::daed_product::geodata) struct RuntimeInputVersions {
+    pub(in crate::daed_product::geodata) external: i64,
+    pub(in crate::daed_product::geodata) geodata: i64,
+}
+
+pub(in crate::daed_product::geodata) fn runtime_input_versions_if_running(
     context: &ProductGeodataUpdateContext,
-) -> io::Result<Option<i64>> {
+) -> io::Result<Option<RuntimeInputVersions>> {
     let running = context
         .runtime
         .inner
@@ -14,14 +20,17 @@ pub(in crate::daed_product::geodata) fn runtime_external_input_version_if_runnin
     }
     ensure_state_schema(&context.state)?;
     let conn = open_state_connection(&context.state)?;
-    current_runtime_external_input_version(&conn).map(Some)
+    Ok(Some(RuntimeInputVersions {
+        external: current_runtime_external_input_version(&conn)?,
+        geodata: current_runtime_geodata_input_version(&conn)?,
+    }))
 }
 
-pub(super) fn ensure_runtime_external_input_bumped(
+pub(super) fn ensure_runtime_input_versions_bumped(
     state: &Path,
-    version_before: Option<i64>,
+    versions_before: Option<RuntimeInputVersions>,
 ) -> io::Result<()> {
-    let Some(version_before) = version_before else {
+    let Some(versions_before) = versions_before else {
         return Ok(());
     };
     ensure_state_schema(state)?;
@@ -29,17 +38,31 @@ pub(super) fn ensure_runtime_external_input_bumped(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sqlite_io_error)?;
-    let current = current_runtime_external_input_version(&tx)?;
-    if current < version_before {
+    let current_external = current_runtime_external_input_version(&tx)?;
+    if current_external < versions_before.external {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "runtime external input version moved backwards from {version_before} to {current}"
+                "runtime external input version moved backwards from {} to {current_external}",
+                versions_before.external
             ),
         ));
     }
-    if current == version_before {
+    let current_geodata = current_runtime_geodata_input_version(&tx)?;
+    if current_geodata < versions_before.geodata {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "runtime geodata input version moved backwards from {} to {current_geodata}",
+                versions_before.geodata
+            ),
+        ));
+    }
+    if current_external == versions_before.external {
         bump_runtime_external_input_version_with_connection(&tx)?;
+    }
+    if current_geodata == versions_before.geodata {
+        bump_runtime_geodata_input_version_with_connection(&tx)?;
     }
     tx.commit().map_err(sqlite_io_error)
 }

@@ -1,4 +1,4 @@
-use super::external_input::ensure_runtime_external_input_bumped;
+use super::external_input::{RuntimeInputVersions, ensure_runtime_input_versions_bumped};
 use super::files::{
     cleanup_orphaned_internal_artifacts, copy_file_durable, remove_file_if_exists,
     remove_paths_best_effort, sync_directory,
@@ -72,7 +72,14 @@ pub(super) fn finalize_committed_geodata_journal(
     journal: &GeodataUpdateJournal,
 ) -> io::Result<()> {
     journal.validate(kind)?;
-    ensure_runtime_external_input_bumped(state, journal.external_input_version_before)?;
+    let versions_before =
+        journal
+            .external_input_version_before
+            .map(|external| RuntimeInputVersions {
+                external,
+                geodata: journal.geodata_input_version_before.unwrap_or(0),
+            });
+    ensure_runtime_input_versions_bumped(state, versions_before)?;
     remove_geodata_journal_durable(dir, kind)?;
     remove_paths_best_effort(journal.artifact_paths(dir));
     Ok(())
