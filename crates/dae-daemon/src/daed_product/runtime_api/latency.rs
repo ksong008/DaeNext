@@ -50,6 +50,7 @@ pub(in crate::daed_product) fn api_test_node_latencies(
     match enqueue_node_latency_job(
         &app.state,
         &app.config_dir,
+        Arc::clone(&app.control_runtime),
         Arc::clone(&app.runtime),
         Arc::clone(&app.latency_jobs),
         &ids,

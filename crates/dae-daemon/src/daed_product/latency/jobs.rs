@@ -47,6 +47,7 @@ fn list_stored_node_latencies_from_conn(conn: &Connection) -> io::Result<Value> 
 pub(crate) fn enqueue_node_latency_job(
     state: &Path,
     config_dir: &Path,
+    control_runtime: Arc<ProductControlRuntime>,
     runtime: Arc<ProductRuntimeManager>,
     jobs: Arc<LatencyJobManager>,
     ids: &[i64],
@@ -64,22 +65,17 @@ pub(crate) fn enqueue_node_latency_job(
     if admission.should_spawn() {
         let job_id = job.id();
         let cancellation = job.cancellation();
-        let state = state.to_path_buf();
-        let config_dir = config_dir.to_path_buf();
-        let runtime_for_thread = Arc::clone(&runtime);
-        let jobs_for_thread = Arc::clone(&jobs);
+        let context = LatencyJobRuntimeContext {
+            state: state.to_path_buf(),
+            config_dir: config_dir.to_path_buf(),
+            control_runtime,
+            runtime,
+            jobs: Arc::clone(&jobs),
+        };
         let spawn_result = thread::Builder::new()
             .name(format!("daed-latency-job-{job_id}"))
             .spawn(move || {
-                run_node_latency_job(
-                    job_id,
-                    cancellation,
-                    state,
-                    config_dir,
-                    runtime_for_thread,
-                    jobs_for_thread,
-                    nodes,
-                );
+                run_node_latency_job(job_id, cancellation, context, nodes);
             });
         if let Err(err) = spawn_result {
             jobs.mark_failed(job_id, format!("spawn manual latency probe job: {err}"));
@@ -89,6 +85,14 @@ pub(crate) fn enqueue_node_latency_job(
         }
     }
     Ok(value)
+}
+
+struct LatencyJobRuntimeContext {
+    state: PathBuf,
+    config_dir: PathBuf,
+    control_runtime: Arc<ProductControlRuntime>,
+    runtime: Arc<ProductRuntimeManager>,
+    jobs: Arc<LatencyJobManager>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -107,28 +111,17 @@ impl LatencyJobRunOutcome {
 fn run_node_latency_job(
     job_id: u64,
     cancellation: LatencyJobCancellation,
-    state: PathBuf,
-    config_dir: PathBuf,
-    runtime: Arc<ProductRuntimeManager>,
-    jobs: Arc<LatencyJobManager>,
+    context: LatencyJobRuntimeContext,
     nodes: Vec<LatencyProbeNode>,
 ) {
     debug_assert_eq!(cancellation.job_id(), job_id);
-    jobs.mark_running(job_id);
+    context.jobs.mark_running(job_id);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_node_latency_job_inner(
-            job_id,
-            &cancellation,
-            &state,
-            &config_dir,
-            &runtime,
-            &jobs,
-            &nodes,
-        )
+        run_node_latency_job_inner(job_id, &cancellation, &context, &nodes)
     }));
     match result {
         Ok(Ok(outcome)) if outcome.cancelled || cancellation.is_requested() => {
-            jobs.mark_cancelled(
+            context.jobs.mark_cancelled(
                 job_id,
                 outcome.completed,
                 outcome.succeeded,
@@ -136,15 +129,15 @@ fn run_node_latency_job(
             );
         }
         Ok(Ok(outcome)) => {
-            jobs.mark_finished(
+            context.jobs.mark_finished(
                 job_id,
                 outcome.completed,
                 outcome.succeeded,
                 outcome.failed(),
             );
         }
-        Ok(Err(err)) => jobs.mark_failed(job_id, err.to_string()),
-        Err(payload) => jobs.mark_failed(
+        Ok(Err(err)) => context.jobs.mark_failed(job_id, err.to_string()),
+        Err(payload) => context.jobs.mark_failed(
             job_id,
             format!(
                 "manual latency probe panicked: {}",
@@ -153,10 +146,7 @@ fn run_node_latency_job(
         ),
     }
     drop(nodes);
-    drop(runtime);
-    drop(jobs);
-    drop(config_dir);
-    drop(state);
+    drop(context);
     allocator_request_reclaim(AllocatorReclaimReason::ManualLatencyProbe);
 }
 
@@ -173,12 +163,16 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 fn run_node_latency_job_inner(
     job_id: u64,
     cancellation: &LatencyJobCancellation,
-    state: &Path,
-    config_dir: &Path,
-    runtime: &ProductRuntimeManager,
-    jobs: &LatencyJobManager,
+    context: &LatencyJobRuntimeContext,
     nodes: &[LatencyProbeNode],
 ) -> io::Result<LatencyJobRunOutcome> {
+    let LatencyJobRuntimeContext {
+        state,
+        config_dir,
+        control_runtime,
+        runtime,
+        jobs,
+    } = context;
     let conn = open_state_connection(state)?;
     let mut completed = 0usize;
     let mut succeeded = 0usize;
@@ -210,6 +204,7 @@ fn run_node_latency_job_inner(
             let node_index = RuntimeNodeLatencyIndex::new(&chunk_nodes);
             let mut seen_links = LatencyProbeSeenLinks::default();
             let probe_cancelled = handle.probe_node_latencies_streaming_without_group_update(
+                control_runtime,
                 &link_chunk,
                 || cancellation.is_requested(),
                 |runtime_snapshots| {

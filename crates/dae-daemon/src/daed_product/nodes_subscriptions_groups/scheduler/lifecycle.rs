@@ -35,11 +35,14 @@ pub(super) fn start_subscription_scheduler(
     state: PathBuf,
     config_dir: PathBuf,
     runtime: Arc<ProductRuntimeManager>,
+    control_runtime: Arc<ProductControlRuntime>,
 ) -> io::Result<SubscriptionSchedulerHandle> {
     let (stop, receiver) = std::sync::mpsc::channel();
     let thread = thread::Builder::new()
         .name("daed-subscription-scheduler".to_owned())
-        .spawn(move || run_subscription_scheduler(state, config_dir, runtime, receiver))?;
+        .spawn(move || {
+            run_subscription_scheduler(state, config_dir, runtime, control_runtime, receiver)
+        })?;
     Ok(SubscriptionSchedulerHandle {
         stop: Some(stop),
         thread: Some(thread),
@@ -50,6 +53,7 @@ fn run_subscription_scheduler(
     state: PathBuf,
     config_dir: PathBuf,
     runtime: Arc<ProductRuntimeManager>,
+    control_runtime: Arc<ProductControlRuntime>,
     stop: Receiver<()>,
 ) {
     let _ = ensure_state_schema(&state);
@@ -67,6 +71,7 @@ fn run_subscription_scheduler(
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
         if let Err(err) = refresh_due_subscriptions_for_scheduler_with_tracker(
+            &control_runtime,
             &state,
             &config_dir,
             &runtime,
@@ -105,6 +110,7 @@ mod tests {
             state.clone(),
             dir.clone(),
             Arc::new(ProductRuntimeManager::new()),
+            product_test_control_runtime(),
         )
         .unwrap();
         scheduler.shutdown().unwrap();

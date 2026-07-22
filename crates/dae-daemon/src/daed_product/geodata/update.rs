@@ -31,24 +31,31 @@ pub(super) fn update_geodata_with_lease(
         None
     };
     let release = match source.mode {
-        GeodataSourceMode::ReleaseApi => {
-            fetch_geodata_latest_release(kind, &source.url, proxy_config.as_ref())?
-        }
+        GeodataSourceMode::ReleaseApi => fetch_geodata_latest_release(
+            &context.control_runtime,
+            kind,
+            &source.url,
+            proxy_config.as_ref(),
+        )?,
         GeodataSourceMode::DirectFile => {
-            direct_geodata_release(kind, &source.url, proxy_config.as_ref())
+            direct_geodata_release(context, kind, &source.url, proxy_config.as_ref())
         }
     };
     let tmp_path = context
         .updates
         .reserve_staging_path(&dir, kind, "download")?;
-    let download =
-        match fetch_geodata_url_to_file(&release.download_url, &tmp_path, proxy_config.as_ref()) {
-            Ok(download) => download,
-            Err(err) => {
-                let _ = fs::remove_file(&tmp_path);
-                return Err(err);
-            }
-        };
+    let download = match fetch_geodata_url_to_file(
+        &context.control_runtime,
+        &release.download_url,
+        &tmp_path,
+        proxy_config.as_ref(),
+    ) {
+        Ok(download) => download,
+        Err(err) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+    };
     let summary = match summarize_geodata_file(kind, &tmp_path) {
         Ok(summary) => summary,
         Err(err) => {
@@ -111,12 +118,13 @@ fn geodata_sha256_version(sha256: &str) -> String {
 }
 
 fn direct_geodata_release(
+    context: &ProductGeodataUpdateContext,
     kind: GeodataKind,
     source_url: &url::Url,
     proxy_config: Option<&Config>,
 ) -> GeodataRelease {
     let version = if source_url.as_str() == kind.default_source_url() {
-        default_direct_geodata_version(kind, proxy_config)
+        default_direct_geodata_version(context, kind, proxy_config)
     } else {
         None
     };
@@ -127,11 +135,12 @@ fn direct_geodata_release(
 }
 
 fn default_direct_geodata_version(
+    context: &ProductGeodataUpdateContext,
     kind: GeodataKind,
     proxy_config: Option<&Config>,
 ) -> Option<String> {
     let api_url = url::Url::parse(kind.legacy_release_api_url()).ok()?;
-    fetch_geodata_latest_release(kind, &api_url, proxy_config)
+    fetch_geodata_latest_release(&context.control_runtime, kind, &api_url, proxy_config)
         .ok()?
         .version
 }

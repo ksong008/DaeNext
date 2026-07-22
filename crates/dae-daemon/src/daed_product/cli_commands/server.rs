@@ -70,6 +70,14 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             return DaedProductOutput::error(format!("start runtime sampler failed: {err}"));
         }
     };
+    let control_runtime = match ProductControlRuntime::start_for_http_config(http_config) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return DaedProductOutput::error(format!(
+                "start product control runtime failed: {err}"
+            ));
+        }
+    };
     let shutdown = Arc::new(ProductShutdown::default());
     let mut app = AppState {
         config_dir: options.config_dir,
@@ -87,23 +95,33 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         geodata_update_runtime: None,
+        control_runtime: Arc::clone(&control_runtime),
     };
-    app.geodata_update_runtime =
+    let geodata_update_runtime =
         match geodata::ProductGeodataUpdateRuntime::start_for_app(http_config, &app) {
-            Ok(runtime) => Some(runtime),
+            Ok(runtime) => runtime,
             Err(err) => {
+                drop(app);
+                let _ = control_runtime.shutdown();
                 return DaedProductOutput::error(format!(
                     "start geodata update runtime failed: {err}"
                 ));
             }
         };
+    app.geodata_update_runtime = Some(geodata_update_runtime);
     let subscription_scheduler = match start_subscription_scheduler(
         app.state.clone(),
         app.config_dir.clone(),
         Arc::clone(&app.runtime),
+        Arc::clone(&control_runtime),
     ) {
         Ok(scheduler) => scheduler,
         Err(err) => {
+            if let Some(runtime) = app.geodata_update_runtime.take() {
+                let _ = runtime.shutdown();
+            }
+            drop(app);
+            let _ = control_runtime.shutdown();
             return DaedProductOutput::error(format!("start subscription scheduler failed: {err}"));
         }
     };
@@ -112,6 +130,11 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         Err(err) => {
             shutdown.request(0);
             let _ = subscription_scheduler.shutdown();
+            if let Some(runtime) = app.geodata_update_runtime.take() {
+                let _ = runtime.shutdown();
+            }
+            drop(app);
+            let _ = control_runtime.shutdown();
             return DaedProductOutput::error(format!("install signal control failed: {err}"));
         }
     };
@@ -123,9 +146,14 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     let scheduler_result = subscription_scheduler.shutdown();
     let signal_result = signal_thread.shutdown();
     let recovery_result = runtime.shutdown_recovery_supervisors();
+    let geodata_result = app
+        .geodata_update_runtime
+        .as_ref()
+        .map_or(Ok(()), |runtime| runtime.shutdown());
     let app_release_result = Arc::try_unwrap(app).map(drop).map_err(|_| {
         "product application owners remained referenced after HTTP shutdown".to_owned()
     });
+    let control_result = control_runtime.shutdown();
     let stop_result = runtime.stop_and_wait_for_cleanup("product-shutdown");
     let metadata_result = mark_runtime_process_stopped(&state);
     let mut fields = BTreeMap::new();
@@ -149,11 +177,32 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             fields.insert("cleanup_error".to_owned(), err.clone());
         }
     }
+    match &control_result {
+        Ok(evidence) => {
+            if let Some(status) = evidence.get("status").and_then(Value::as_str) {
+                fields.insert("control_cleanup_status".to_owned(), status.to_owned());
+            }
+            for key in ["joined", "cancelled", "panicked", "forced"] {
+                if let Some(count) = evidence
+                    .get("tasks")
+                    .and_then(|tasks| tasks.get(key))
+                    .and_then(Value::as_u64)
+                {
+                    fields.insert(format!("control_tasks_{key}"), count.to_string());
+                }
+            }
+        }
+        Err(err) => {
+            fields.insert("control_cleanup_error".to_owned(), err.to_string());
+        }
+    }
     let shutdown_ok = server_result.is_ok()
         && scheduler_result.is_ok()
         && signal_result.is_ok()
         && recovery_result.is_ok()
+        && geodata_result.is_ok()
         && app_release_result.is_ok()
+        && control_result.is_ok()
         && stop_result.is_ok()
         && metadata_result.is_ok();
     let _ = append_lifecycle_log_fields_for_config(
@@ -178,8 +227,14 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     if let Err(err) = recovery_result {
         errors.push(format!("runtime recovery: {err}"));
     }
+    if let Err(err) = geodata_result {
+        errors.push(format!("geodata update runtime: {err}"));
+    }
     if let Err(err) = app_release_result {
         errors.push(err);
+    }
+    if let Err(err) = control_result {
+        errors.push(format!("product control runtime: {err}"));
     }
     if let Err(err) = stop_result {
         errors.push(format!("resident runtime: {err}"));

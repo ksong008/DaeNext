@@ -87,6 +87,7 @@ pub(super) fn serve_forever(
     );
     http_fields.insert("sources".to_owned(), config.sources_json().to_string());
     http_fields.extend(app.auth_runtime.startup_fields());
+    http_fields.extend(app.control_runtime.startup_fields());
     if let Some(runtime) = app.geodata_update_runtime.as_ref() {
         http_fields.extend(runtime.startup_fields());
     }

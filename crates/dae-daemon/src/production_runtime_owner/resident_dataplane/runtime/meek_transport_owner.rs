@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+#[cfg(test)]
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -351,6 +352,7 @@ enum MeekReservationError {
     Closing(String),
 }
 
+#[cfg(test)]
 pub(crate) fn start_meek_transport_generation_owner(
     generation: u64,
     stop: SharedResidentStopSignal,
@@ -383,6 +385,7 @@ pub(crate) fn start_meek_transport_generation_owner_for_test(
     )
 }
 
+#[cfg(test)]
 fn start_meek_transport_generation_owner_with_resources(
     generation: u64,
     stop: SharedResidentStopSignal,
@@ -896,8 +899,9 @@ mod tests {
         let owner = include_str!("meek_transport_owner.rs");
         let polling = include_str!("../tcp/vless_handlers/meek.rs");
         let workers = include_str!("workers.rs");
-        let runtime_owner = include_str!("../runtime_owner.rs");
         let subscription = include_str!("../subscription_fetch.rs");
+        let control_owners = include_str!("../control_transport_owners/mod.rs");
+        let requirements = include_str!("../control_transport_owners/requirements.rs");
         let model = include_str!("../plan/model.rs");
         let production = owner
             .split_once("#[cfg(test)]\nmod tests")
@@ -906,8 +910,9 @@ mod tests {
         assert!(!polling.contains("open_async_resident_tls_client"));
         assert!(polling.contains("acquire_meek_transport"));
         assert!(workers.contains("start_meek_transport_generation_owner"));
-        assert!(runtime_owner.contains("requires_meek_transport_owner"));
-        assert!(subscription.contains("start_meek_transport_generation_owner"));
+        assert!(requirements.contains("requires_meek_transport_owner"));
+        assert!(subscription.contains("ControlTransportOwners"));
+        assert!(control_owners.contains("start_meek_transport_generation_owner_on"));
         assert!(model.contains("requires_meek_transport_owner"));
     }
 }

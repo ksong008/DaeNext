@@ -9,8 +9,9 @@ pub(crate) fn start_subscription_scheduler(
     state: PathBuf,
     config_dir: PathBuf,
     runtime: Arc<ProductRuntimeManager>,
+    control_runtime: Arc<ProductControlRuntime>,
 ) -> io::Result<SubscriptionSchedulerHandle> {
-    lifecycle::start_subscription_scheduler(state, config_dir, runtime)
+    lifecycle::start_subscription_scheduler(state, config_dir, runtime, control_runtime)
 }
 
 const SUBSCRIPTION_SCHEDULER_TICK: Duration = Duration::from_secs(60);
@@ -67,7 +68,9 @@ pub(crate) fn refresh_due_subscriptions_for_scheduler(
     now_unix: u64,
 ) -> io::Result<Value> {
     let mut invalid_cron = invalid_cron::InvalidCronLogTracker::default();
+    let control_runtime = product_test_control_runtime();
     refresh_due_subscriptions_for_scheduler_with_tracker(
+        &control_runtime,
         state,
         config_dir,
         runtime,
@@ -77,6 +80,7 @@ pub(crate) fn refresh_due_subscriptions_for_scheduler(
 }
 
 fn refresh_due_subscriptions_for_scheduler_with_tracker(
+    control_runtime: &ProductControlRuntime,
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
@@ -105,7 +109,8 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
     let mut fetch_errors = 0_usize;
     let mut runtime_input_changes = 0_usize;
     for subscription in &scan.due {
-        match refresh_subscription_from_remote(state, config_dir, subscription.id) {
+        match refresh_subscription_from_remote(control_runtime, state, config_dir, subscription.id)
+        {
             Ok(report) => {
                 let outcome = SubscriptionRefreshOutcome::from_report(&report);
                 if outcome.fetched {

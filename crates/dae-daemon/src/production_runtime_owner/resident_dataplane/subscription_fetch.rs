@@ -1,13 +1,21 @@
+use super::control_transport_owners::{ControlTransportOwnerRequirements, ControlTransportOwners};
 use super::tcp::fetch_resident_proxy_http_response_async;
 use super::*;
 
-pub(crate) fn fetch_http_url_via_default_proxy(
+#[cfg(test)]
+mod tests;
+
+pub(crate) async fn fetch_http_url_via_default_proxy_async<C>(
     config: &Config,
     url: &url::Url,
     tls: bool,
     request: &[u8],
     response_limit: usize,
-) -> Result<Vec<u8>, String> {
+    cancellation: C,
+) -> Result<Vec<u8>, String>
+where
+    C: std::future::Future<Output = ()> + Send,
+{
     let host = url
         .host_str()
         .ok_or_else(|| "subscription proxy fetch missing host".to_owned())?;
@@ -21,208 +29,51 @@ pub(crate) fn fetch_http_url_via_default_proxy(
     proxy.bind_control_plane();
     proxy.apply_control_socket_mark(plan::RESIDENT_CONTROL_PLANE_SO_MARK);
     let proxy = proxy.without_persistent_xhttp_reuse();
-
-    let runtime = build_transient_probe_runtime("subscription proxy fetch")?;
-    let owner_stop = ResidentStopSignal::shared();
+    let requirements = ControlTransportOwnerRequirements::from_binding(&proxy);
     let resources = ResidentRuntimeResourceConfig::from_config(config);
-    let (hysteria2_owner_registry, owner_thread) = start_hysteria2_owner_registry(
+    let runtime = tokio::runtime::Handle::current();
+    tokio::pin!(cancellation);
+    let owner_admission = tokio::select! {
+        _ = &mut cancellation => return Err("subscription proxy fetch cancelled".to_owned()),
+        admission = ControlTransportOwners::admit(
+            0,
+            requirements,
+        ) => admission.map_err(|error| error.to_string())?,
+    };
+    let mut owners = ControlTransportOwners::start_admitted(
+        &runtime,
         0,
-        Arc::clone(&owner_stop),
-        resources.tcp_flow_stack_bytes.value(),
-    )?;
-    let requires_tuic_owner = matches!(
-        &proxy.plan().handler,
-        plan::ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-    );
-    let (tuic_owner_registry, tuic_owner_thread) = if requires_tuic_owner {
-        match start_tuic_owner_registry(
-            0,
-            Arc::clone(&owner_stop),
-            resources.tcp_flow_stack_bytes.value(),
-        ) {
-            Ok((handle, thread)) => (Some(handle), Some(thread)),
-            Err(err) => {
-                owner_stop.store(true, Ordering::Release);
-                let _ = owner_thread.join();
-                return Err(err);
-            }
-        }
-    } else {
-        (None, None)
+        resources.tcp_runtime_workers.value(),
+        requirements,
+        owner_admission,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let registries = owners.registries();
+    let target = format_subscription_target(host, port);
+    let response = tokio::select! {
+        _ = &mut cancellation => Err("subscription proxy fetch cancelled".to_owned()),
+        response = fetch_resident_proxy_http_response_async(
+            proxy,
+            tls,
+            &target,
+            host,
+            request,
+            response_limit,
+            Duration::from_secs(20),
+            registries.hysteria2(),
+            registries.tuic(),
+            registries.juicity(),
+            registries.anytls(),
+        ) => response,
     };
-    let requires_juicity_owner = matches!(
-        &proxy.plan().handler,
-        plan::ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
-    );
-    let (juicity_owner_registry, juicity_owner_thread) = if requires_juicity_owner {
-        match start_juicity_owner_registry(
-            0,
-            Arc::clone(&owner_stop),
-            resources.tcp_flow_stack_bytes.value(),
-        ) {
-            Ok((handle, thread)) => (Some(handle), Some(thread)),
-            Err(err) => {
-                owner_stop.store(true, Ordering::Release);
-                let _ = owner_thread.join();
-                if let Some(thread) = tuic_owner_thread {
-                    let _ = thread.join();
-                }
-                return Err(err);
-            }
-        }
-    } else {
-        (None, None)
-    };
-    let requires_anytls_owner = proxy.plan().requires_anytls_transport_owner();
-    let (anytls_owner_registry, anytls_owner_thread) = if requires_anytls_owner {
-        match start_anytls_owner_registry(
-            0,
-            Arc::clone(&owner_stop),
-            resources.tcp_flow_stack_bytes.value(),
-        ) {
-            Ok((handle, thread)) => (Some(handle), Some(thread)),
-            Err(err) => {
-                owner_stop.store(true, Ordering::Release);
-                let _ = owner_thread.join();
-                if let Some(thread) = tuic_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = juicity_owner_thread {
-                    let _ = thread.join();
-                }
-                return Err(err);
-            }
-        }
-    } else {
-        (None, None)
-    };
-    let requires_h2_carrier_owner = proxy.plan().requires_h2_carrier_owner();
-    let (h2_carrier_owner, h2_carrier_thread) = if requires_h2_carrier_owner {
-        match start_h2_carrier_generation_owner(
-            0,
-            Arc::clone(&owner_stop),
-            resources.tcp_flow_stack_bytes.value(),
-            resources.tcp_runtime_workers.value(),
-        ) {
-            Ok((handle, thread)) => (Some(handle), Some(thread)),
-            Err(err) => {
-                owner_stop.store(true, Ordering::Release);
-                let _ = owner_thread.join();
-                if let Some(thread) = tuic_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = juicity_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = anytls_owner_thread {
-                    let _ = thread.join();
-                }
-                return Err(err);
-            }
-        }
-    } else {
-        (None, None)
-    };
-    let requires_meek_transport_owner = proxy.plan().requires_meek_transport_owner();
-    let (meek_transport_owner, meek_transport_thread) = if requires_meek_transport_owner {
-        match start_meek_transport_generation_owner(
-            0,
-            Arc::clone(&owner_stop),
-            resources.tcp_flow_stack_bytes.value(),
-            resources.tcp_runtime_workers.value(),
-        ) {
-            Ok((handle, thread)) => (Some(handle), Some(thread)),
-            Err(err) => {
-                owner_stop.store(true, Ordering::Release);
-                let _ = owner_thread.join();
-                if let Some(thread) = tuic_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = juicity_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = anytls_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = h2_carrier_thread {
-                    let _ = thread.join();
-                }
-                return Err(err);
-            }
-        }
-    } else {
-        (None, None)
-    };
-    let requires_vless_mux_owner = proxy.plan().requires_vless_mux_owner();
-    let (vless_mux_owner, vless_mux_thread) = if requires_vless_mux_owner {
-        match start_vless_mux_generation_owner(
-            0,
-            Arc::clone(&owner_stop),
-            resources.tcp_flow_stack_bytes.value(),
-            resources.tcp_runtime_workers.value(),
-        ) {
-            Ok((handle, thread)) => (Some(handle), Some(thread)),
-            Err(err) => {
-                owner_stop.store(true, Ordering::Release);
-                let _ = owner_thread.join();
-                if let Some(thread) = tuic_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = juicity_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = anytls_owner_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = h2_carrier_thread {
-                    let _ = thread.join();
-                }
-                if let Some(thread) = meek_transport_thread {
-                    let _ = thread.join();
-                }
-                return Err(err);
-            }
-        }
-    } else {
-        (None, None)
-    };
-    let response = runtime.block_on(fetch_resident_proxy_http_response_async(
-        proxy,
-        tls,
-        &format_subscription_target(host, port),
-        host,
-        request,
-        response_limit,
-        Duration::from_secs(20),
-        Some(hysteria2_owner_registry),
-        tuic_owner_registry,
-        juicity_owner_registry,
-        anytls_owner_registry,
-    ));
-    drop(runtime);
-    owner_stop.store(true, Ordering::Release);
-    let _ = owner_thread.join();
-    if let Some(thread) = tuic_owner_thread {
-        let _ = thread.join();
+    let shutdown = owners.shutdown().await;
+    if !shutdown.is_clean() {
+        return Err(format!(
+            "control transport owner cleanup degraded: joined={}, cancelled={}, panicked={}, forced={}",
+            shutdown.joined, shutdown.cancelled, shutdown.panicked, shutdown.forced,
+        ));
     }
-    if let Some(thread) = juicity_owner_thread {
-        let _ = thread.join();
-    }
-    if let Some(thread) = anytls_owner_thread {
-        let _ = thread.join();
-    }
-    if let Some(thread) = h2_carrier_thread {
-        let _ = thread.join();
-    }
-    if let Some(thread) = meek_transport_thread {
-        let _ = thread.join();
-    }
-    if let Some(thread) = vless_mux_thread {
-        let _ = thread.join();
-    }
-    drop(h2_carrier_owner);
-    drop(meek_transport_owner);
-    drop(vless_mux_owner);
     response
 }
 

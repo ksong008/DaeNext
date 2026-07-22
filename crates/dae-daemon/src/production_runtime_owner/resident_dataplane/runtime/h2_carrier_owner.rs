@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::poll_fn;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+#[cfg(test)]
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -390,6 +391,7 @@ impl Drop for H2DriverInventoryGuard {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn start_h2_carrier_generation_owner(
     generation: u64,
     stop: SharedResidentStopSignal,

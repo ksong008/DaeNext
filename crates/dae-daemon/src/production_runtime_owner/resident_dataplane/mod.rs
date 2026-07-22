@@ -41,6 +41,7 @@ use super::resident_routing::{
 
 mod adapter_matrix;
 mod client;
+mod control_transport_owners;
 mod direct;
 mod display;
 mod dns;
@@ -144,9 +145,11 @@ pub(crate) use self::anytls_owner::{
 mod h2_carrier_owner;
 #[path = "runtime/transport_identity.rs"]
 mod transport_identity;
+#[cfg(test)]
+pub(crate) use self::h2_carrier_owner::start_h2_carrier_generation_owner;
 pub(crate) use self::h2_carrier_owner::{
     H2CarrierGenerationOwnerHandle, H2CarrierLease, acquire_h2_carrier,
-    start_h2_carrier_generation_owner, start_h2_carrier_generation_owner_on,
+    start_h2_carrier_generation_owner_on,
 };
 #[cfg(test)]
 #[path = "runtime/h2_carrier_owner_live_tests.rs"]
@@ -154,10 +157,12 @@ mod h2_carrier_owner_live_tests;
 #[path = "runtime/meek_transport_owner.rs"]
 mod meek_transport_owner;
 #[cfg(test)]
+pub(crate) use self::meek_transport_owner::start_meek_transport_generation_owner;
+#[cfg(test)]
 pub(crate) use self::meek_transport_owner::start_meek_transport_generation_owner_for_test;
 pub(crate) use self::meek_transport_owner::{
     MeekTransportGenerationOwnerHandle, acquire_meek_transport,
-    start_meek_transport_generation_owner, start_meek_transport_generation_owner_on,
+    start_meek_transport_generation_owner_on,
 };
 #[cfg(test)]
 #[path = "runtime/meek_transport_owner_live_tests.rs"]
@@ -165,10 +170,12 @@ mod meek_transport_owner_live_tests;
 #[path = "runtime/vless_mux_owner.rs"]
 mod vless_mux_owner;
 #[cfg(test)]
+pub(crate) use self::vless_mux_owner::start_vless_mux_generation_owner;
+#[cfg(test)]
 pub(crate) use self::vless_mux_owner::start_vless_mux_generation_owner_for_test;
 pub(crate) use self::vless_mux_owner::{
     VlessMuxGenerationOwnerHandle, acquire_vless_mux_logical_stream,
-    start_vless_mux_generation_owner, start_vless_mux_generation_owner_on,
+    start_vless_mux_generation_owner_on,
 };
 #[cfg(test)]
 #[path = "runtime/vless_mux_owner_live_tests.rs"]
@@ -239,4 +246,4 @@ pub(crate) use self::remote_strategy_live_tests::*;
 mod matrix;
 use self::matrix::*;
 pub(crate) use self::runtime_owner::*;
-pub(crate) use self::subscription_fetch::fetch_http_url_via_default_proxy;
+pub(crate) use self::subscription_fetch::fetch_http_url_via_default_proxy_async;

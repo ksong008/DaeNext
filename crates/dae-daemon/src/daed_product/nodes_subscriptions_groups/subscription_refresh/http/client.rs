@@ -1,11 +1,12 @@
 use super::request::subscription_http_request;
 use super::response::{
     first_header, is_subscription_redirect, parse_subscription_http_response,
-    read_subscription_http_response, subscription_http_response_limit,
+    subscription_http_response_limit,
 };
 use super::*;
 
 pub(crate) fn fetch_http_url_with_proxy_config(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     _tls: bool,
     proxy_config: Option<&Config>,
@@ -21,7 +22,7 @@ pub(crate) fn fetch_http_url_with_proxy_config(
             ));
         }
         let request = subscription_http_request(&current)?;
-        let raw = exchange_subscription_request(&current, &request, proxy_config)?;
+        let raw = exchange_subscription_request(control_runtime, &current, &request, proxy_config)?;
         let response = parse_subscription_http_response(&raw, subscription_http_body_limit())?;
         if is_subscription_redirect(response.status) {
             if redirect_count == SUBSCRIPTION_HTTP_REDIRECT_LIMIT {
@@ -62,12 +63,14 @@ fn validate_redirect_scheme(url: &url::Url) -> io::Result<()> {
 }
 
 fn exchange_subscription_request(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     request: &str,
     proxy_config: Option<&Config>,
 ) -> io::Result<Vec<u8>> {
     if let Some(config) = proxy_config {
-        return crate::production_runtime_owner::fetch_http_url_via_default_proxy(
+        return fetch_http_url_via_default_proxy_on_control(
+            control_runtime,
             config,
             url,
             url.scheme() == "https",
@@ -76,7 +79,11 @@ fn exchange_subscription_request(
         )
         .map_err(|err| io::Error::other(format!("subscription proxy fetch: {err}")));
     }
-    fetch_http_response(url, request)
+    super::direct_exchange::exchange_direct_subscription_request(
+        control_runtime,
+        url,
+        request.as_bytes(),
+    )
 }
 
 fn redirect_target(
@@ -105,42 +112,4 @@ fn redirect_target(
         ));
     }
     Ok(next)
-}
-
-fn fetch_http_response(url: &url::Url, request: &str) -> io::Result<Vec<u8>> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing host"))?;
-    let port = url.port_or_known_default().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "missing port for subscription")
-    })?;
-    let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10))?;
-    stream.set_read_timeout(Some(Duration::from_secs(20)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(20)))?;
-    if url.scheme() == "https" {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        );
-        let server_name = ServerName::try_from(host.to_owned()).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid tls server name: {err}"),
-            )
-        })?;
-        let conn = ClientConnection::new(config, server_name)
-            .map_err(|err| io::Error::other(format!("tls connect: {err}")))?;
-        let mut tls_stream = rustls::StreamOwned::new(conn, stream);
-        tls_stream.write_all(request.as_bytes())?;
-        tls_stream.flush()?;
-        read_subscription_http_response(&mut tls_stream)
-    } else {
-        let mut stream = stream;
-        stream.write_all(request.as_bytes())?;
-        stream.flush()?;
-        read_subscription_http_response(&mut stream)
-    }
 }

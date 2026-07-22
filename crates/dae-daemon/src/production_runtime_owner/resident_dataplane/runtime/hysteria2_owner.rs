@@ -2318,7 +2318,6 @@ mod tests {
             include_str!("../udp/proxy_dns_forwarder.rs"),
             include_str!("health_scheduler.rs"),
             include_str!("../probe/native_tcp/quic_stream.rs"),
-            include_str!("../subscription_fetch.rs"),
         ];
         for source in consumers {
             assert!(
@@ -2326,6 +2325,13 @@ mod tests {
                 "every production Hysteria2 consumer must receive an explicit owner registry"
             );
         }
+        let subscription = include_str!("../subscription_fetch.rs");
+        let control_owners = include_str!("../control_transport_owners/mod.rs");
+        let requirements = include_str!("../control_transport_owners/requirements.rs");
+        assert!(subscription.contains("ControlTransportOwners"));
+        assert!(subscription.contains("registries.hysteria2()"));
+        assert!(control_owners.contains("start_hysteria2_owner_registry_on"));
+        assert!(requirements.contains("Hysteria2QuicTcp"));
         assert!(
             include_str!("../udp/session_executor/quic.rs").contains("Hysteria2UdpSessionLease")
         );
