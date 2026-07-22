@@ -41,7 +41,8 @@ pub use control_plane_entrypoint::{
 pub use daed_product::{DaedProductOutput, run_daed_product_with_args_and_version};
 #[cfg(feature = "product-api")]
 pub use daed_product::{
-    ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
+    ProductControlBenchmarkFixture, ProductGlobalNormalizeBenchmarkFixture,
+    product_control_benchmark_fixture, product_global_normalize_benchmark_fixture,
 };
 pub use identity::{DAEMON_CRATE_NAME, DAEMON_MANIFEST, PRODUCT_BINARY_NAME, daemon_identity};
 pub use lifecycle::{
