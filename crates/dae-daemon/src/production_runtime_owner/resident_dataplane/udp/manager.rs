@@ -13,8 +13,10 @@ use dae_ebpf_support::BpfRoutingResult;
 use dae_routing::RoutingMatcher;
 use serde_json::Value;
 use tokio::io::unix::AsyncFd;
+use tokio::task::JoinSet;
 
 use super::super::plan::resident_data_udp_network_type;
+use super::super::{ActiveGenerationSlot, ResidentDataplaneGeneration};
 use super::*;
 
 mod dns_dispatcher;
@@ -49,30 +51,210 @@ const UDP_ROUTE_REASON_DISPATCH_QUEUE_FULL: &str = "session dispatch queue full"
 const UDP_ROUTE_REASON_SESSION_UNAVAILABLE: &str = "session actor closed during recreation";
 const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
 const UDP_ROUTE_REASON_DNS_FAST_PATH: &str = "handled resident DNS packet without UDP session";
-pub(super) async fn run_resident_udp_session_manager_async(
-    socket: UdpSocket,
-    proxy_groups: SharedResidentProxyGroupMap,
-    default_outbound: u8,
-    routing_tuple_map_id: Option<u32>,
-    routing_matcher: RoutingMatcher,
-    dial_mode: TcpDialMode,
-    so_mark_from_dae: u32,
+
+#[derive(Clone)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentUdpGenerationPlan {
+    router: Arc<ResidentUdpRouter>,
     dns: Arc<ResidentDnsPlan>,
-    stop: SharedResidentStopSignal,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    active_sessions: Arc<AtomicUsize>,
     runtime_config: ResidentUdpRuntimeConfig,
-    health_resuscitation: ResidentHealthResuscitationHandle,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+}
+
+impl ResidentUdpGenerationPlan {
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new(
+        proxy_groups: SharedResidentProxyGroupMap,
+        default_outbound: u8,
+        routing_tuple_map_id: Option<u32>,
+        routing_matcher: RoutingMatcher,
+        dial_mode: TcpDialMode,
+        so_mark_from_dae: u32,
+        dns: Arc<ResidentDnsPlan>,
+        runtime_config: ResidentUdpRuntimeConfig,
+        health_resuscitation: ResidentHealthResuscitationHandle,
+        hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+        tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+        juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+        anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            router: Arc::new(ResidentUdpRouter::new(
+                proxy_groups,
+                default_outbound,
+                routing_tuple_map_id,
+                routing_matcher,
+                dial_mode,
+                so_mark_from_dae,
+                health_resuscitation,
+            )?),
+            dns,
+            runtime_config,
+            hysteria2_owner_registry,
+            tuic_owner_registry,
+            juicity_owner_registry,
+            anytls_owner_registry,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct UdpGenerationPinKey {
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UdpGenerationPin {
+    generation: u64,
+    expires_at: Instant,
+}
+
+struct ResidentUdpGenerationRuntime {
+    generation: Arc<ResidentDataplaneGeneration>,
+    sniffers: HashMap<UdpSniffKey, UdpPendingSniffer>,
+    reply_dispatcher: UdpReplyDispatcher,
+    udp_reply: UdpReplyHandle,
+    dns_fast_path_dispatcher: ResidentDnsFastPathDispatcher,
+    dns_fast_path: ResidentDnsFastPathHandle,
+    session_shards: ResidentUdpSessionShardPool,
+    session_shard_handle: ResidentUdpSessionShardHandle,
+}
+
+impl ResidentUdpGenerationRuntime {
+    fn start(
+        generation: Arc<ResidentDataplaneGeneration>,
+        event_file: &Path,
+        event_lock: &Arc<Mutex<()>>,
+        active_sessions: &Arc<AtomicUsize>,
+    ) -> Self {
+        let plan = &generation.udp;
+        let config = &plan.runtime_config;
+        let reply_dispatcher = UdpReplyDispatcher::start(
+            config.reply_queue_depth,
+            config.reply_socket_cache_capacity,
+            config.reply_socket_idle_timeout,
+            config.payload_admission.clone(),
+            Arc::clone(&generation.metrics),
+        );
+        let udp_reply = reply_dispatcher.handle();
+        let dns_fast_path_dispatcher = ResidentDnsFastPathDispatcher::start(
+            Arc::clone(&plan.dns),
+            udp_reply.clone(),
+            Arc::clone(&generation.metrics),
+            config.dns_fast_path_concurrency,
+            config.dns_fast_path_queue_depth,
+        );
+        let dns_fast_path = dns_fast_path_dispatcher.handle();
+        let session_shards = ResidentUdpSessionShardPool::start(
+            config,
+            Arc::clone(&plan.dns),
+            plan.router.proxy_groups(),
+            event_file.to_path_buf(),
+            Arc::clone(event_lock),
+            Arc::clone(&generation.metrics),
+            udp_reply.clone(),
+            Arc::clone(active_sessions),
+            plan.hysteria2_owner_registry.clone(),
+            plan.tuic_owner_registry.clone(),
+            plan.juicity_owner_registry.clone(),
+            plan.anytls_owner_registry.clone(),
+        );
+        let session_shard_handle = session_shards.handle();
+        Self {
+            generation,
+            sniffers: HashMap::new(),
+            reply_dispatcher,
+            udp_reply,
+            dns_fast_path_dispatcher,
+            dns_fast_path,
+            session_shards,
+            session_shard_handle,
+        }
+    }
+
+    fn handle_packet(
+        &mut self,
+        packet: UdpOriginalDstPacket,
+        event_file: &Path,
+        event_lock: &Arc<Mutex<()>>,
+    ) {
+        let plan = &self.generation.udp;
+        handle_manager_packet(
+            packet,
+            &plan.router,
+            event_file,
+            event_lock,
+            &mut self.sniffers,
+            &self.dns_fast_path,
+            &self.session_shard_handle,
+            plan.runtime_config.runtime_shards,
+        );
+    }
+
+    async fn shutdown(self) -> Value {
+        let ResidentUdpGenerationRuntime {
+            generation,
+            sniffers,
+            reply_dispatcher,
+            udp_reply,
+            dns_fast_path_dispatcher,
+            dns_fast_path,
+            session_shards,
+            session_shard_handle,
+        } = self;
+        let config = &generation.udp.runtime_config;
+        let shutdown_deadline = time::Instant::now() + config.shutdown_timeout;
+        drop(sniffers);
+        drop(session_shard_handle);
+        let session_shard_shutdown = session_shards.shutdown(shutdown_deadline).await;
+        drop(dns_fast_path);
+        let dns_fast_path_shutdown = dns_fast_path_dispatcher.shutdown(shutdown_deadline).await;
+        let dns_forwarder_shutdown = generation
+            .udp
+            .dns
+            .shutdown_forwarders(shutdown_deadline)
+            .await;
+        drop(udp_reply);
+        let reply_shutdown = reply_dispatcher.shutdown(shutdown_deadline).await;
+        let dns_fast_path_shutdown = match dns_fast_path_shutdown {
+            Ok(completed) => json!({"status": "pass", "completed": completed}),
+            Err(err) => json!({"status": "fail", "error": err}),
+        };
+        let reply_shutdown = match reply_shutdown {
+            Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
+            Err(err) => json!({"status": "fail", "error": err.to_string()}),
+        };
+        let cleanup_passed = config.payload_admission.current() == 0
+            && cleanup_report_passed(&session_shard_shutdown)
+            && cleanup_report_passed(&dns_fast_path_shutdown)
+            && cleanup_report_passed(&dns_forwarder_shutdown)
+            && cleanup_report_passed(&reply_shutdown);
+        json!({
+            "status": if cleanup_passed { "pass" } else { "fail" },
+            "generation": generation.reload_generation,
+            "queuedPayloadAdmission": config.payload_admission.snapshot(),
+            "sessionShards": session_shard_shutdown,
+            "dnsFastPathDispatcher": dns_fast_path_shutdown,
+            "dnsForwarders": dns_forwarder_shutdown,
+            "replyDispatcher": reply_shutdown,
+        })
+    }
+}
+
+pub(super) async fn run_resident_udp_session_manager_async(
+    socket: UdpSocket,
+    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
+    stop: SharedResidentStopSignal,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    active_sessions: Arc<AtomicUsize>,
 ) -> Value {
-    let session_limit = runtime_config.session_limit;
-    let session_queue_depth = runtime_config.session_queue_depth;
-    let dns_fast_path_concurrency = runtime_config.dns_fast_path_concurrency;
+    let initial_generation = active_generation.load();
+    let initial_plan = &initial_generation.udp;
+    let initial_config = &initial_plan.runtime_config;
     if let Err(err) = socket.set_nonblocking(true) {
         let report = udp_session_manager_start_failure("socket-nonblocking", err.to_string());
         append_event(
@@ -94,27 +276,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
             return report;
         }
     };
-    let router = match ResidentUdpRouter::new(
-        proxy_groups,
-        default_outbound,
-        routing_tuple_map_id,
-        routing_matcher,
-        dial_mode,
-        so_mark_from_dae,
-        health_resuscitation,
-    ) {
-        Ok(router) => router,
-        Err(err) => {
-            let report = udp_session_manager_start_failure("router-build", err);
-            append_event(
-                &event_file,
-                &event_lock,
-                udp_session_manager_event("udp_session_manager_start_failed", &report),
-            );
-            return report;
-        }
-    };
-    let default_proxy_group = router.default_proxy_group();
+    let default_proxy_group = initial_plan.router.default_proxy_group();
     append_event(
         &event_file,
         &event_lock,
@@ -124,25 +286,26 @@ pub(super) async fn run_resident_udp_session_manager_async(
             "group_policy": default_proxy_group.group_policy_name(),
             "candidate_count": default_proxy_group.candidate_count(),
             "admitted_candidate_count": default_proxy_group.admitted_candidate_count(),
-            "default_outbound": default_outbound,
-            "routing_tuple_map_id": router.routing_tuple_map_id(),
-            "session_limit": session_limit,
-            "dns_fast_path_concurrency": dns_fast_path_concurrency,
-            "dns_fast_path_queue_depth": runtime_config.dns_fast_path_queue_depth,
-            "forced_dns_session_lanes": runtime_config.runtime_shards,
-            "generation": runtime_config.generation,
-            "runtimeProfile": runtime_config.profile,
-            "queuedPayloadAdmission": runtime_config.payload_admission.snapshot(),
+            "default_outbound": initial_plan.router.default_outbound(),
+            "routing_tuple_map_id": initial_plan.router.routing_tuple_map_id(),
+            "session_limit": initial_config.session_limit,
+            "dns_fast_path_concurrency": initial_config.dns_fast_path_concurrency,
+            "dns_fast_path_queue_depth": initial_config.dns_fast_path_queue_depth,
+            "forced_dns_session_lanes": initial_config.runtime_shards,
+            "generation": initial_config.generation,
+            "runtimeProfile": initial_config.profile,
+            "queuedPayloadAdmission": initial_config.payload_admission.snapshot(),
+            "generationAdmission": "fixed-at-transparent-session-boundary",
             "packetSessionManager": {
                 "schemaVersion": 1,
                 "manager": "resident-udp-session-manager",
-                "runtime": "generation-owned-shared-multi-thread",
-                "sessionShardCount": runtime_config.runtime_shards,
-                "sharedDataPlaneWorkerThreads": runtime_config.runtime_worker_threads,
-                "sessionLimit": session_limit,
-                "perSessionQueueDepth": session_queue_depth,
-                "replyQueueDepth": runtime_config.reply_queue_depth,
-                "replySocketCacheCapacity": runtime_config.reply_socket_cache_capacity,
+                "runtime": "process-owned-shared-multi-thread",
+                "sessionShardCount": initial_config.runtime_shards,
+                "sharedDataPlaneWorkerThreads": initial_config.runtime_worker_threads,
+                "sessionLimit": initial_config.session_limit,
+                "perSessionQueueDepth": initial_config.session_queue_depth,
+                "replyQueueDepth": initial_config.reply_queue_depth,
+                "replySocketCacheCapacity": initial_config.reply_socket_cache_capacity,
                 "keyFields": [
                     "graphIdentityHash",
                     "outbound",
@@ -154,59 +317,67 @@ pub(super) async fn run_resident_udp_session_manager_async(
         }),
     );
 
-    let mut sniffers: HashMap<UdpSniffKey, UdpPendingSniffer> = HashMap::new();
-    let reply_dispatcher = UdpReplyDispatcher::start(
-        runtime_config.reply_queue_depth,
-        runtime_config.reply_socket_cache_capacity,
-        runtime_config.reply_socket_idle_timeout,
-        runtime_config.payload_admission.clone(),
-        Arc::clone(&metrics),
-    );
-    let udp_reply = reply_dispatcher.handle();
-    let dns_fast_path_dispatcher = ResidentDnsFastPathDispatcher::start(
-        Arc::clone(&dns),
-        udp_reply.clone(),
-        Arc::clone(&metrics),
-        dns_fast_path_concurrency,
-        runtime_config.dns_fast_path_queue_depth,
-    );
-    let dns_fast_path = dns_fast_path_dispatcher.handle();
-    let session_shards = ResidentUdpSessionShardPool::start(
-        &runtime_config,
-        Arc::clone(&dns),
-        router.proxy_groups(),
-        event_file.clone(),
-        Arc::clone(&event_lock),
-        Arc::clone(&metrics),
-        udp_reply.clone(),
-        Arc::clone(&active_sessions),
-        hysteria2_owner_registry,
-        tuic_owner_registry,
-        juicity_owner_registry,
-        anytls_owner_registry,
-    );
-    let session_shard_handle = session_shards.handle();
     let payload_pool = UdpPayloadPool::new(
-        runtime_config.payload_pool_capacity(),
-        runtime_config.runtime_shards,
+        initial_config.payload_pool_capacity(),
+        initial_config.runtime_shards,
     );
+    let ingress_drain_budget = initial_config.ingress_drain_budget;
+    let mut generations = HashMap::<u64, ResidentUdpGenerationRuntime>::new();
+    let mut pins = HashMap::<UdpGenerationPinKey, UdpGenerationPin>::new();
+    let mut retired_shutdowns = JoinSet::new();
+    let mut retired_shutdown_count = 0_u64;
+    let mut retired_shutdown_failures = 0_u64;
+    generations.insert(
+        initial_generation.id,
+        ResidentUdpGenerationRuntime::start(
+            Arc::clone(&initial_generation),
+            &event_file,
+            &event_lock,
+            &active_sessions,
+        ),
+    );
+    drop(initial_generation);
 
     let mut stop_listener = stop.listener();
+    let retirement = time::sleep(RESIDENT_IDLE_SLEEP);
+    tokio::pin!(retirement);
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
             batch = recv_udp_batch_with_original_dst_async(
                 &socket,
                 &payload_pool,
-                runtime_config.ingress_drain_budget,
+                ingress_drain_budget,
             ) => {
                 match batch {
                     Ok(batch) => {
-                        metrics.record_udp_ingress_batch(
+                        let active = active_generation.load();
+                        active.metrics.record_udp_ingress_batch(
                             batch.packets.len(),
                             batch.truncated,
                             batch.budget_hit,
                         );
                         for mut packet in batch.packets {
+                            let now = Instant::now();
+                            let pin_key = packet.original_dst.map(|original_dst| UdpGenerationPinKey {
+                                peer: packet.peer,
+                                original_dst,
+                            });
+                            let generation_id = pin_key
+                                .and_then(|key| pinned_udp_generation(&pins, key, now))
+                                .filter(|generation| generations.contains_key(generation))
+                                .unwrap_or(active.id);
+                            generations.entry(generation_id).or_insert_with(|| {
+                                ResidentUdpGenerationRuntime::start(
+                                        Arc::clone(&active),
+                                        &event_file,
+                                        &event_lock,
+                                        &active_sessions,
+                                    )
+                            });
+                            let generation = generations
+                                .get_mut(&generation_id)
+                                .expect("selected UDP generation runtime is installed");
+                            let runtime_config = &generation.generation.udp.runtime_config;
                             if packet
                                 .payload
                                 .admit(&runtime_config.payload_admission)
@@ -214,16 +385,16 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             {
                                 continue;
                             }
-                            handle_manager_packet(
-                                packet,
-                                &router,
-                                &event_file,
-                                &event_lock,
-                                &mut sniffers,
-                                &dns_fast_path,
-                                &session_shard_handle,
-                                runtime_config.runtime_shards,
-                            );
+                            if let Some(pin_key) = pin_key {
+                                pins.insert(
+                                    pin_key,
+                                    UdpGenerationPin {
+                                        generation: generation_id,
+                                        expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+                                    },
+                                );
+                            }
+                            generation.handle_packet(packet, &event_file, &event_lock);
                         }
                         if batch.budget_hit {
                             tokio::task::yield_now().await;
@@ -240,43 +411,57 @@ pub(super) async fn run_resident_udp_session_manager_async(
                     }
                 }
             }
+            _ = &mut retirement => {
+                retire_idle_udp_generations(
+                    &active_generation,
+                    &mut pins,
+                    &mut generations,
+                    &mut retired_shutdowns,
+                );
+                retirement.as_mut().reset(time::Instant::now() + RESIDENT_IDLE_SLEEP);
+            }
+            completed = retired_shutdowns.join_next(), if !retired_shutdowns.is_empty() => {
+                retired_shutdown_count = retired_shutdown_count.saturating_add(1);
+                if !matches!(completed, Some(Ok(report)) if cleanup_report_passed(&report)) {
+                    retired_shutdown_failures = retired_shutdown_failures.saturating_add(1);
+                }
+            }
             _ = stop_listener.cancelled() => break,
         }
     }
 
-    let shutdown_deadline = time::Instant::now() + runtime_config.shutdown_timeout;
-    drop(sniffers);
-    drop(session_shard_handle);
-    let session_shard_shutdown = session_shards.shutdown(shutdown_deadline).await;
-    drop(dns_fast_path);
-    let dns_fast_path_shutdown = dns_fast_path_dispatcher.shutdown(shutdown_deadline).await;
-    let dns_forwarder_shutdown = dns.shutdown_forwarders(shutdown_deadline).await;
-    drop(udp_reply);
-    let reply_shutdown = reply_dispatcher.shutdown(shutdown_deadline).await;
-    let dns_fast_path_shutdown = match dns_fast_path_shutdown {
-        Ok(completed) => json!({"status": "pass", "completed": completed}),
-        Err(err) => json!({"status": "fail", "error": err}),
-    };
-    let reply_shutdown = match reply_shutdown {
-        Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
-        Err(err) => json!({"status": "fail", "error": err.to_string()}),
-    };
+    drop(pins);
+    let active_generation_count = generations.len();
+    for (_, generation) in generations {
+        retired_shutdowns.spawn(generation.shutdown());
+    }
+    let mut generation_shutdown = Vec::with_capacity(active_generation_count);
+    while let Some(completed) = retired_shutdowns.join_next().await {
+        retired_shutdown_count = retired_shutdown_count.saturating_add(1);
+        match completed {
+            Ok(report) => {
+                if !cleanup_report_passed(&report) {
+                    retired_shutdown_failures = retired_shutdown_failures.saturating_add(1);
+                }
+                generation_shutdown.push(report);
+            }
+            Err(error) => {
+                retired_shutdown_failures = retired_shutdown_failures.saturating_add(1);
+                generation_shutdown.push(json!({
+                    "status": "fail",
+                    "error": error.to_string(),
+                }));
+            }
+        }
+    }
     let active_sessions = active_sessions.load(Ordering::Acquire);
-    let queued_payload_admission = runtime_config.payload_admission.snapshot();
-    let cleanup_passed = active_sessions == 0
-        && runtime_config.payload_admission.current() == 0
-        && cleanup_report_passed(&session_shard_shutdown)
-        && cleanup_report_passed(&dns_fast_path_shutdown)
-        && cleanup_report_passed(&dns_forwarder_shutdown)
-        && cleanup_report_passed(&reply_shutdown);
+    let cleanup_passed = active_sessions == 0 && retired_shutdown_failures == 0;
     let report = json!({
         "status": if cleanup_passed { "pass" } else { "fail" },
         "activeSessions": active_sessions,
-        "queuedPayloadAdmission": queued_payload_admission,
-        "sessionShards": session_shard_shutdown,
-        "dnsFastPathDispatcher": dns_fast_path_shutdown,
-        "dnsForwarders": dns_forwarder_shutdown,
-        "replyDispatcher": reply_shutdown,
+        "retiredGenerationShutdowns": retired_shutdown_count,
+        "retiredGenerationShutdownFailures": retired_shutdown_failures,
+        "generations": generation_shutdown,
     });
     append_event(
         &event_file,
@@ -284,6 +469,43 @@ pub(super) async fn run_resident_udp_session_manager_async(
         udp_session_manager_event("udp_session_manager_stopped", &report),
     );
     report
+}
+
+fn pinned_udp_generation(
+    pins: &HashMap<UdpGenerationPinKey, UdpGenerationPin>,
+    key: UdpGenerationPinKey,
+    now: Instant,
+) -> Option<u64> {
+    pins.get(&key)
+        .filter(|pin| pin.expires_at > now)
+        .map(|pin| pin.generation)
+}
+
+fn retire_idle_udp_generations(
+    active_generation: &ActiveGenerationSlot<ResidentDataplaneGeneration>,
+    pins: &mut HashMap<UdpGenerationPinKey, UdpGenerationPin>,
+    generations: &mut HashMap<u64, ResidentUdpGenerationRuntime>,
+    shutdowns: &mut JoinSet<Value>,
+) {
+    let now = Instant::now();
+    pins.retain(|_, pin| pin.expires_at > now);
+    let active_id = active_generation.load().id;
+    let retired = generations
+        .keys()
+        .copied()
+        .filter(|generation| {
+            *generation != active_id
+                && (generations
+                    .get(generation)
+                    .is_some_and(|runtime| runtime.generation.stop.load(Ordering::Acquire))
+                    || !pins.values().any(|pin| pin.generation == *generation))
+        })
+        .collect::<Vec<_>>();
+    for generation in retired {
+        if let Some(runtime) = generations.remove(&generation) {
+            shutdowns.spawn(runtime.shutdown());
+        }
+    }
 }
 
 fn udp_session_manager_start_failure(stage: &'static str, error: String) -> Value {

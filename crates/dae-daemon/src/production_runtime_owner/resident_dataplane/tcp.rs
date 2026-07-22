@@ -157,7 +157,7 @@ pub(super) use self::proxy_fetch::*;
 mod accept_loop;
 pub(super) use self::accept_loop::*;
 mod admission;
-use self::admission::*;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::admission::ResidentTcpAdmission;
 mod executor;
 pub(super) use self::executor::*;
 mod vless_handlers;

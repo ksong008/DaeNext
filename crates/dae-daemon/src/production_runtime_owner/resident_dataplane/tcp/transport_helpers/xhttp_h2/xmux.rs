@@ -54,7 +54,7 @@ pub(crate) struct XhttpXmuxGenerationOwnerHandle {
 impl XhttpXmuxGenerationOwnerHandle {
     pub(crate) fn metrics_snapshot(&self) -> Value {
         let executor = if self.owner.uses_shared_data_plane_executor {
-            "generation-owned-shared-multi-thread"
+            "process-owned-shared-multi-thread"
         } else if self.owner.runtime_worker_threads == 1 {
             "current-thread"
         } else {
@@ -66,7 +66,7 @@ impl XhttpXmuxGenerationOwnerHandle {
             "reloadGeneration": self.owner.runtime_generation,
             "closing": self.owner.closing.load(Ordering::Acquire),
             "persistentRuntime": if self.owner.uses_shared_data_plane_executor {
-                "generation-owned-shared-multi-thread".to_owned()
+                "process-owned-shared-multi-thread".to_owned()
             } else {
                 format!("dedicated-{executor}")
             },

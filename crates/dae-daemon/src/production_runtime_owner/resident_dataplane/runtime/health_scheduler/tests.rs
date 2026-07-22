@@ -337,10 +337,11 @@ async fn udp_resuscitation_runs_on_the_shared_health_runtime() {
 #[test]
 fn production_health_path_has_no_per_group_thread_or_transient_round_runtime() {
     let workers = include_str!("../workers.rs");
+    let generation_builder = include_str!("../generation_builder.rs");
     let checks = include_str!("../health_checks.rs");
     assert!(!workers.contains("health-check-loop"));
     assert!(!workers.contains("for health_group in"));
-    assert!(workers.contains("health-check-scheduler"));
+    assert!(generation_builder.contains("health-check-scheduler"));
     assert!(!checks.contains("build_transient_probe_runtime(\"resident group health probe\")"));
 }
 

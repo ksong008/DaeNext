@@ -106,6 +106,30 @@ fn resident_runtime_shutdown_joins_cooperative_shared_tasks() {
 }
 
 #[test]
+fn resident_runtime_reaps_completed_generation_tasks_between_publications() {
+    let mut owner = test_owner(4_001, "resident-runtime-generation-reap-test");
+    let (completed_tx, completed_rx) = mpsc::sync_channel(1);
+    owner.spawn_generation_async_task(
+        "completed-generation-task",
+        "runtime-lifecycle-test",
+        async move {
+            let _ = completed_tx.send(());
+        },
+    );
+    completed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    for _ in 0..128 {
+        owner.reap_finished_generation_tasks();
+        if owner.task_registry_value()["generationTaskCount"] == 0 {
+            break;
+        }
+        std::thread::yield_now();
+    }
+
+    assert_eq!(owner.task_registry_value()["generationTaskCount"], 0);
+    assert_eq!(owner.shutdown()["status"], "pass");
+}
+
+#[test]
 fn resident_runtime_shutdown_aborts_uncooperative_shared_tasks() {
     let mut owner = test_owner(5, "resident-runtime-owner-async-timeout-test");
     owner.spawn_async_task("pending-task", "runtime-lifecycle-test", async move {
@@ -164,7 +188,7 @@ fn resident_runtime_shutdown_closes_shared_transport_owners() {
     ] {
         assert_eq!(
             registry[owner_name]["executor"],
-            "generation-owned-shared-multi-thread"
+            "process-owned-shared-multi-thread"
         );
         assert_eq!(registry[owner_name]["sharedDataPlaneExecutor"], true);
     }

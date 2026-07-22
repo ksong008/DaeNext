@@ -172,7 +172,7 @@ impl MeekTransportGenerationOwnerHandle {
             "generation": self.owner.generation.get(),
             "closing": self.owner.closing.load(Ordering::Acquire),
             "executor": if self.owner.uses_shared_data_plane_executor {
-                "generation-owned-shared-multi-thread"
+                "process-owned-shared-multi-thread"
             } else if self.owner.runtime_worker_threads == 1 {
                 "current-thread"
             } else {
@@ -898,7 +898,7 @@ mod tests {
     fn meek_transport_source_keeps_tls_construction_inside_the_owner() {
         let owner = include_str!("meek_transport_owner.rs");
         let polling = include_str!("../tcp/vless_handlers/meek.rs");
-        let workers = include_str!("workers.rs");
+        let runtime_owner = include_str!("../runtime_owner.rs");
         let subscription = include_str!("../subscription_fetch.rs");
         let control_owners = include_str!("../control_transport_owners/mod.rs");
         let requirements = include_str!("../control_transport_owners/requirements.rs");
@@ -909,7 +909,7 @@ mod tests {
         assert!(production.contains("open_async_resident_tls_client_with_binding"));
         assert!(!polling.contains("open_async_resident_tls_client"));
         assert!(polling.contains("acquire_meek_transport"));
-        assert!(workers.contains("start_meek_transport_generation_owner"));
+        assert!(runtime_owner.contains("start_meek_transport_generation_owner"));
         assert!(requirements.contains("requires_meek_transport_owner"));
         assert!(subscription.contains("ControlTransportOwners"));
         assert!(control_owners.contains("start_meek_transport_generation_owner_on"));

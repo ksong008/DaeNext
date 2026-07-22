@@ -12,8 +12,45 @@ use super::*;
 #[test]
 fn udp_session_manager_uses_the_generation_data_plane_executor() {
     let source = include_str!("../manager.rs");
-    assert!(source.contains("generation-owned-shared-multi-thread"));
+    assert!(source.contains("process-owned-shared-multi-thread"));
     assert!(!source.contains("thread_name(\"udp-session\")"));
+}
+
+#[test]
+fn udp_generation_pin_is_fixed_by_peer_and_original_destination_until_expiry() {
+    let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
+    let destination = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443);
+    let other_destination = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 2).into(), 443);
+    let key = UdpGenerationPinKey {
+        peer,
+        original_dst: destination,
+    };
+    let now = Instant::now();
+    let mut pins = HashMap::new();
+    pins.insert(
+        key,
+        UdpGenerationPin {
+            generation: 7,
+            expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+        },
+    );
+
+    assert_eq!(pinned_udp_generation(&pins, key, now), Some(7));
+    assert_eq!(
+        pinned_udp_generation(
+            &pins,
+            UdpGenerationPinKey {
+                peer,
+                original_dst: other_destination,
+            },
+            now,
+        ),
+        None
+    );
+    assert_eq!(
+        pinned_udp_generation(&pins, key, now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT),
+        None
+    );
 }
 
 #[test]

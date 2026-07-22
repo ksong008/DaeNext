@@ -22,12 +22,18 @@ impl ResidentTcpRuntimeConfig {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn json(self) -> Value {
         json!({
-            "executor": "generation-owned-shared-multi-thread",
+            "executor": "process-owned-shared-multi-thread",
             "workerThreads": self.worker_threads,
             "workerStackBytes": self.worker_stack_bytes,
             "workerStackScope": "resident shared data-plane runtime OS threads; not Tokio task stacks",
             "connectionLimit": self.connection_limit,
             "admission": "active-flow semaphore before accept; excess connections remain in the kernel listen backlog",
         })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) const fn connection_limit(
+        self,
+    ) -> usize {
+        self.connection_limit
     }
 }

@@ -196,7 +196,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn resident_he
         runtime_report["osThreadCount"] = json!(0);
         runtime_report["maximumOsThreadCount"] = json!(0);
         runtime_report["sharedDataPlaneWorkerThreads"] = json!(worker_threads);
-        runtime_report["runtime"]["executor"] = json!("generation-owned-shared-multi-thread");
+        runtime_report["runtime"]["executor"] = json!("process-owned-shared-multi-thread");
     }
     append_event(
         &event_file,

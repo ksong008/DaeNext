@@ -21,7 +21,77 @@ pub struct ResidentProductionRuntime {
     pub(super) cleaned: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct ResidentActiveGenerationSnapshot {
+    generation: Arc<ResidentDataplaneGeneration>,
+    physical_generation: u64,
+}
+
 impl ResidentProductionRuntime {
+    pub(crate) fn active_generation_snapshot(&self) -> Option<ResidentActiveGenerationSnapshot> {
+        if self.cleaned {
+            return None;
+        }
+        self.dataplane
+            .as_ref()
+            .map(|dataplane| ResidentActiveGenerationSnapshot {
+                generation: dataplane.active_generation_snapshot(),
+                physical_generation: self.runtime_generation,
+            })
+    }
+
+    pub(crate) fn publish_prepared_generation(
+        &mut self,
+        prepared: ResidentPreparedGeneration,
+        latency_seed: &[Value],
+        preserve_dns_cache: bool,
+    ) -> Result<Value, String> {
+        if self.cleaned {
+            return Err("cannot publish a generation on a cleaned resident runtime".to_owned());
+        }
+        let dns_reload_snapshot = preserve_dns_cache
+            .then(|| self.dns_reload_snapshot())
+            .transpose()?
+            .filter(|snapshot| !snapshot.is_empty());
+        let ResidentPreparedGeneration {
+            config,
+            geodata_asset_dirs: _,
+            geodata: _,
+            dataplane: prepared,
+        } = prepared;
+        self.dataplane
+            .as_mut()
+            .ok_or_else(|| "resident dataplane is not active".to_owned())?
+            .publish_prepared_generation(
+                config,
+                prepared,
+                latency_seed,
+                dns_reload_snapshot.as_ref(),
+            )
+    }
+
+    pub(crate) fn restore_active_generation(
+        &mut self,
+        snapshot: &ResidentActiveGenerationSnapshot,
+    ) -> Result<Value, String> {
+        if self.cleaned || snapshot.physical_generation != self.runtime_generation {
+            return Err(
+                "resident generation snapshot belongs to a different physical runtime".to_owned(),
+            );
+        }
+        self.dataplane
+            .as_mut()
+            .ok_or_else(|| "resident dataplane is not active".to_owned())?
+            .restore_generation(Arc::clone(&snapshot.generation))
+    }
+
+    pub(crate) fn owns_generation_snapshot(
+        &self,
+        snapshot: &ResidentActiveGenerationSnapshot,
+    ) -> bool {
+        !self.cleaned && snapshot.physical_generation == self.runtime_generation
+    }
+
     pub fn product_state_summary(&self) -> Value {
         let attach_backend = self
             .start_report

@@ -12,7 +12,7 @@ use tokio::sync::Semaphore;
 use tokio::time;
 
 use super::dns::{
-    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
+    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
     build_dns_server_failure_response, handle_resident_dns_local_trace_async,
     read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
@@ -125,11 +125,10 @@ pub(super) fn prepare_resident_dns_bind_listener(
 
 pub(super) async fn run_resident_dns_bind_listener_async(
     mut listener: ResidentDnsBindListener,
-    dns: Arc<ResidentDnsPlan>,
+    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
 ) {
     let configured = listener.configured.clone();
     let mut tasks = tokio::task::JoinSet::new();
@@ -141,11 +140,10 @@ pub(super) async fn run_resident_dns_bind_listener_async(
                     socket,
                     configured.clone(),
                     local_addr,
-                    Arc::clone(&dns),
+                    active_generation.clone(),
                     Arc::clone(&stop),
                     event_file.clone(),
                     Arc::clone(&event_lock),
-                    Arc::clone(&metrics),
                 ));
             }
             Err(err) => append_event(
@@ -169,11 +167,10 @@ pub(super) async fn run_resident_dns_bind_listener_async(
                     tcp_listener,
                     configured.clone(),
                     local_addr,
-                    dns,
+                    active_generation,
                     Arc::clone(&stop),
                     event_file.clone(),
                     Arc::clone(&event_lock),
-                    metrics,
                 ));
             }
             Err(err) => append_event(
@@ -228,11 +225,10 @@ async fn run_resident_dns_udp_bind_listener_async(
     socket: TokioUdpSocket,
     configured: String,
     local_addr: SocketAddr,
-    dns: Arc<ResidentDnsPlan>,
+    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
 ) {
     append_event(
         &event_file,
@@ -274,15 +270,16 @@ async fn run_resident_dns_udp_bind_listener_async(
                     }
                 };
                 let request = buf[..read].to_vec();
+                let generation = active_generation.load();
                 let permit = match Arc::clone(&semaphore).try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(tokio::sync::TryAcquireError::NoPermits) => {
-                        metrics.add_upload(request.len());
+                        generation.metrics.add_upload(request.len());
                         let _ = send_resident_dns_udp_bind_failure_response(
                             &socket,
                             peer,
                             &request,
-                            metrics.as_ref(),
+                            generation.metrics.as_ref(),
                         ).await;
                         append_event(
                             &event_file,
@@ -303,11 +300,10 @@ async fn run_resident_dns_udp_bind_listener_async(
                     Arc::clone(&socket),
                     local_addr,
                     peer,
-                    Arc::clone(&dns),
+                    generation,
                     request,
                     event_file.clone(),
                     Arc::clone(&event_lock),
-                    Arc::clone(&metrics),
                     permit,
                 ));
             }
@@ -335,16 +331,16 @@ async fn handle_resident_dns_udp_bind_packet_async(
     socket: Arc<TokioUdpSocket>,
     local_addr: SocketAddr,
     peer: SocketAddr,
-    dns: Arc<ResidentDnsPlan>,
+    generation: Arc<ResidentDataplaneGeneration>,
     request: Vec<u8>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
+    let metrics = &generation.metrics;
     metrics.udp_opened();
     metrics.add_upload(request.len());
-    let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
+    let result = handle_resident_dns_local_trace_async(&generation.dns, local_addr, &request).await;
     match result {
         Ok(result) => {
             let response = result.response;
@@ -461,11 +457,10 @@ async fn run_resident_dns_tcp_bind_listener_async(
     listener: TokioTcpListener,
     configured: String,
     local_addr: SocketAddr,
-    dns: Arc<ResidentDnsPlan>,
+    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
 ) {
     append_event(
         &event_file,
@@ -506,6 +501,7 @@ async fn run_resident_dns_tcp_bind_listener_async(
                         continue;
                     }
                 };
+                let generation = active_generation.load();
                 let permit = match Arc::clone(&semaphore).try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(tokio::sync::TryAcquireError::NoPermits) => {
@@ -529,11 +525,9 @@ async fn run_resident_dns_tcp_bind_listener_async(
                     stream,
                     peer,
                     local_addr,
-                    Arc::clone(&dns),
-                    Arc::clone(&stop),
+                    generation,
                     event_file.clone(),
                     Arc::clone(&event_lock),
-                    Arc::clone(&metrics),
                     permit,
                 ));
             }
@@ -560,14 +554,14 @@ async fn handle_resident_dns_tcp_bind_connection_async(
     mut stream: TokioTcpStream,
     peer: SocketAddr,
     local_addr: SocketAddr,
-    dns: Arc<ResidentDnsPlan>,
-    stop: SharedResidentStopSignal,
+    generation: Arc<ResidentDataplaneGeneration>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
-    let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
+    let metrics = &generation.metrics;
+    let stop = Arc::clone(&generation.stop);
+    let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(metrics));
     loop {
         if stop.load(Ordering::Relaxed) {
             return;
@@ -591,7 +585,8 @@ async fn handle_resident_dns_tcp_bind_connection_async(
             }
         };
         metrics.add_upload(request.len());
-        let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
+        let result =
+            handle_resident_dns_local_trace_async(&generation.dns, local_addr, &request).await;
         match result {
             Ok(result) => {
                 let response = result.response;

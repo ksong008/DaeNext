@@ -26,7 +26,8 @@ pub(super) fn shutdown_resident_runtime_workloads(
     let started = Instant::now();
     let deadline = started.checked_add(grace).unwrap_or(started);
     owner.workload_stop.store(true, Ordering::Release);
-    let workload_tasks = take_async_tasks(owner, ResidentRuntimeTaskRole::Workload);
+    let mut workload_tasks = take_async_tasks(owner, ResidentRuntimeTaskRole::Workload);
+    workload_tasks.extend(take_async_tasks(owner, ResidentRuntimeTaskRole::Generation));
     let task_count_started = owner.tasks.len().saturating_add(workload_tasks.len());
     let async_shutdown = owner
         .data_plane_executor

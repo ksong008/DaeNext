@@ -189,7 +189,7 @@ impl H2CarrierGenerationOwnerHandle {
             "generation": self.owner.generation.get(),
             "closing": self.owner.closing.load(Ordering::Acquire),
             "executor": if self.owner.uses_shared_data_plane_executor {
-                "generation-owned-shared-multi-thread"
+                "process-owned-shared-multi-thread"
             } else if self.owner.runtime_worker_threads == 1 {
                 "current-thread"
             } else {

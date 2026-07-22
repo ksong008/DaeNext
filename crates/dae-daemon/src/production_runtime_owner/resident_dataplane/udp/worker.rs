@@ -3,50 +3,25 @@
 
 use serde_json::Value;
 
+use super::super::{ActiveGenerationSlot, ResidentDataplaneGeneration};
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn resident_udp_loop_async(
     socket: std::net::UdpSocket,
-    proxy_groups: SharedResidentProxyGroupMap,
-    default_outbound: u8,
-    routing_tuple_map_id: Option<u32>,
-    routing_matcher: RoutingMatcher,
-    dial_mode: TcpDialMode,
-    so_mark_from_dae: u32,
-    dns: Arc<ResidentDnsPlan>,
+    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
     active_sessions: Arc<AtomicUsize>,
-    runtime_config: ResidentUdpRuntimeConfig,
-    health_resuscitation: ResidentHealthResuscitationHandle,
-    hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
-    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> Value {
     run_resident_udp_session_manager_async(
         socket,
-        proxy_groups,
-        default_outbound,
-        routing_tuple_map_id,
-        routing_matcher,
-        dial_mode,
-        so_mark_from_dae,
-        dns,
+        active_generation,
         stop,
         event_file,
         event_lock,
-        metrics,
         active_sessions,
-        runtime_config,
-        health_resuscitation,
-        hysteria2_owner_registry,
-        tuic_owner_registry,
-        juicity_owner_registry,
-        anytls_owner_registry,
     )
     .await
 }
