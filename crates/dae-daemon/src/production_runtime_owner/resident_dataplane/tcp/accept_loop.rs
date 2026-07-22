@@ -41,15 +41,21 @@ pub(crate) async fn resident_tcp_accept_loop_async(
     });
     append_tcp_execution_fields(&mut event, "async-accept-direct");
     event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
+    drop(initial_generation);
     append_event(&event_file, &event_lock, event);
     let mut stop_listener = stop.listener();
+    let mut publication_listener = active_generation.subscribe_publication();
     let mut flows = tokio::task::JoinSet::new();
     let mut flow_shutdown = ResidentTaskSetShutdown::default();
     'accept: while !stop.load(Ordering::Relaxed) {
         let (reserved_publication, reserved_generation) = active_generation.load_versioned();
+        if *publication_listener.borrow_and_update() != reserved_publication {
+            continue;
+        }
         let permit = loop {
             tokio::select! {
                 _ = stop_listener.cancelled() => break 'accept,
+                _ = publication_listener.changed() => continue 'accept,
                 completed = flows.join_next(), if !flows.is_empty() => {
                     if let Some(completed) = completed {
                         record_resident_task_completion(&mut flow_shutdown, completed);
@@ -81,6 +87,10 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                 _ = stop_listener.cancelled() => {
                     drop(permit);
                     break 'accept;
+                }
+                _ = publication_listener.changed() => {
+                    drop(permit);
+                    continue 'accept;
                 }
                 completed = flows.join_next(), if !flows.is_empty() => {
                     if let Some(completed) = completed {

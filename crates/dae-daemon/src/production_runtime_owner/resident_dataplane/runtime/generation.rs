@@ -10,6 +10,7 @@ pub(super) fn next_resident_dataplane_generation_id() -> u64 {
 struct ActiveGenerationSlotInner<T> {
     generation: RwLock<Arc<T>>,
     publication: AtomicU64,
+    publication_signal: tokio::sync::watch::Sender<u64>,
 }
 
 #[derive(Debug)]
@@ -27,10 +28,12 @@ impl<T> Clone for ActiveGenerationSlot<T> {
 
 impl<T> ActiveGenerationSlot<T> {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(generation: Arc<T>) -> Self {
+        let (publication_signal, _) = tokio::sync::watch::channel(1);
         Self {
             inner: Arc::new(ActiveGenerationSlotInner {
                 generation: RwLock::new(generation),
                 publication: AtomicU64::new(1),
+                publication_signal,
             }),
         }
     }
@@ -58,6 +61,12 @@ impl<T> ActiveGenerationSlot<T> {
         (publication, generation)
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn subscribe_publication(
+        &self,
+    ) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.publication_signal.subscribe()
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn publish(
         &self,
         generation: Arc<T>,
@@ -69,7 +78,12 @@ impl<T> ActiveGenerationSlot<T> {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let previous = std::mem::replace(&mut *active, generation);
-            self.inner.publication.fetch_add(1, Ordering::Release);
+            let publication = self
+                .inner
+                .publication
+                .fetch_add(1, Ordering::Release)
+                .wrapping_add(1);
+            self.inner.publication_signal.send_replace(publication);
             previous
         }
     }
@@ -136,5 +150,22 @@ mod tests {
         assert!(Arc::ptr_eq(&retired, &first));
         assert_eq!(active.as_str(), "second");
         assert!(second_publication > first_publication);
+    }
+
+    #[tokio::test]
+    async fn active_generation_slot_notifies_waiters_after_publication() {
+        let first = Arc::new(String::from("first"));
+        let slot = ActiveGenerationSlot::new(Arc::clone(&first));
+        let mut publication = slot.subscribe_publication();
+        assert_eq!(*publication.borrow_and_update(), 1);
+
+        let previous = slot.publish(Arc::new(String::from("second")));
+
+        tokio::time::timeout(Duration::from_secs(1), publication.changed())
+            .await
+            .expect("generation publication must wake waiters")
+            .expect("active generation slot must retain its publication sender");
+        assert_eq!(*publication.borrow_and_update(), 2);
+        assert!(Arc::ptr_eq(&previous, &first));
     }
 }
