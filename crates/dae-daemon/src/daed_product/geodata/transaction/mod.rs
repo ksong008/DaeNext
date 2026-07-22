@@ -7,7 +7,7 @@ mod journal;
 mod recovery;
 
 pub(super) use commit::commit_geodata_generation;
-pub(super) use external_input::runtime_external_input_version_if_running;
+pub(super) use external_input::runtime_input_versions_if_running;
 pub(super) use recovery::recover_geodata_transaction;
 pub(in crate::daed_product) use recovery::recover_geodata_transactions;
 
@@ -48,10 +48,12 @@ pub(super) struct PreparedGeodataGeneration {
     pub(super) version: String,
     pub(super) summary: dae_geodata::GeoDataSummary,
     pub(super) sha256: String,
-    pub(super) external_input_version_before: Option<i64>,
+    pub(super) input_versions_before: Option<external_input::RuntimeInputVersions>,
 }
 
 #[cfg(test)]
 pub(super) use commit::commit_geodata_generation_with_checkpoints;
+#[cfg(test)]
+pub(super) use external_input::RuntimeInputVersions;
 #[cfg(test)]
 pub(super) use journal::{GeodataJournalPhase, GeodataUpdateJournal, write_geodata_journal};

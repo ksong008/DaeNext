@@ -2,7 +2,8 @@ use super::super::file::{sha256_file, summarize_geodata_file};
 use super::super::transaction::{
     GeodataCommitResult, GeodataJournalPhase, GeodataTransactionCheckpoint,
     GeodataTransactionCheckpoints, GeodataUpdateJournal, PreparedGeodataGeneration,
-    commit_geodata_generation_with_checkpoints, recover_geodata_transaction, write_geodata_journal,
+    RuntimeInputVersions, commit_geodata_generation_with_checkpoints, recover_geodata_transaction,
+    write_geodata_journal,
 };
 use super::*;
 
@@ -71,7 +72,7 @@ impl GeodataTransactionFixture {
                 version: "new-tag".to_owned(),
                 summary: self.summary,
                 sha256: self.sha256.clone(),
-                external_input_version_before,
+                input_versions_before: self.input_versions(external_input_version_before),
             },
             checkpoints,
         )
@@ -107,10 +108,22 @@ impl GeodataTransactionFixture {
             Some(&data_backup),
             Some(&version_backup),
             external_input_version_before,
+            self.input_versions(external_input_version_before)
+                .map(|versions| versions.geodata),
         )
         .unwrap();
         write_geodata_journal(&self.dir, GeodataKind::Geosite, &journal).unwrap();
         (journal, version_stage)
+    }
+
+    fn input_versions(&self, external: Option<i64>) -> Option<RuntimeInputVersions> {
+        external.map(|external| {
+            let conn = open_state_connection(&self.state).unwrap();
+            RuntimeInputVersions {
+                external,
+                geodata: current_runtime_geodata_input_version(&conn).unwrap(),
+            }
+        })
     }
 
     fn assert_old_generation(&self) {

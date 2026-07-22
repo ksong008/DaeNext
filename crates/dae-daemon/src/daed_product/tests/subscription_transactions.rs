@@ -378,7 +378,7 @@ fn bulk_subscription_delete_uses_one_revision_and_one_group_version_change() {
 }
 
 #[test]
-fn create_and_delete_auto_apply_when_runtime_is_running() {
+fn create_and_delete_unbound_subscription_do_not_reload_running_runtime() {
     with_product_runtime_fake_start_override(true, || {
         let fixture = FreshProductState::new("subscription-create-delete-auto-apply");
         fixture.seed_selected_resources();
@@ -415,17 +415,17 @@ fn create_and_delete_auto_apply_when_runtime_is_running() {
         );
         assert_eq!(created.status, 201);
         let created: Value = serde_json::from_slice(&created.body).unwrap();
-        assert_eq!(created["runtimeApplyRequested"], json!(true));
-        assert_eq!(created["runtimeReloaded"], json!(true));
+        assert_eq!(created["runtimeApplyRequested"], json!(false));
+        assert_eq!(created["runtimeReloaded"], json!(false));
         let subscription_id = created["subscription"]["id"].as_i64().unwrap();
 
         let deleted =
             delete_subscription_by_id(fixture.state(), fixture.root(), &runtime, subscription_id);
         assert_eq!(deleted.status, 200);
         let deleted: Value = serde_json::from_slice(&deleted.body).unwrap();
-        assert_eq!(deleted["runtimeApplyRequested"], json!(true));
-        assert_eq!(deleted["runtimeReloaded"], json!(true));
-        assert_eq!(runtime.summary()["reloadCount"], json!(3));
+        assert_eq!(deleted["runtimeApplyRequested"], json!(false));
+        assert_eq!(deleted["runtimeReloaded"], json!(false));
+        assert_eq!(runtime.summary()["reloadCount"], json!(1));
         runtime
             .stop_and_wait_for_cleanup("subscription-auto-apply-test")
             .unwrap();

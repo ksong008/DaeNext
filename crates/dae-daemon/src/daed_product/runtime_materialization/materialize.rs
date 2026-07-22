@@ -20,8 +20,18 @@ pub(in crate::daed_product) struct RuntimeMaterializationPlan {
     pub(in crate::daed_product) group_version_sum: i64,
     pub(in crate::daed_product) group_ids: String,
     pub(in crate::daed_product) external_input_version: i64,
+    pub(in crate::daed_product) active_fingerprint: ActiveRuntimeFingerprint,
     pub(in crate::daed_product) group_count: usize,
     pub(in crate::daed_product) node_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::daed_product) struct ActiveRuntimeFingerprint(String);
+
+impl ActiveRuntimeFingerprint {
+    pub(in crate::daed_product) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 pub(in crate::daed_product) fn materialize_runtime(
@@ -45,25 +55,59 @@ pub(in crate::daed_product) fn prepare_runtime_materialization_plan(
     prepare_runtime_materialization_plan_with_connection(&conn)
 }
 
+pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_modified_state(
+    state: &Path,
+    running: bool,
+) -> io::Result<(RuntimeMaterializationPlan, bool)> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
+    let plan = prepare_runtime_materialization_plan_from_snapshot(&snapshot)?;
+    let modified = runtime_modified_with_prepared_plan(&snapshot, running, &plan)?;
+    snapshot.commit().map_err(sqlite_io_error)?;
+    Ok((plan, modified))
+}
+
 pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_connection(
+    conn: &Connection,
+) -> io::Result<RuntimeMaterializationPlan> {
+    let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
+    let plan = prepare_runtime_materialization_plan_from_snapshot(&snapshot)?;
+    snapshot.commit().map_err(sqlite_io_error)?;
+    Ok(plan)
+}
+
+pub(super) fn prepare_runtime_materialization_plan_from_snapshot(
     conn: &Connection,
 ) -> io::Result<RuntimeMaterializationPlan> {
     let config = required_selected_section_raw(conn, SectionKind::Config)?;
     let dns = required_selected_section_raw(conn, SectionKind::Dns)?;
     let routing = required_selected_section_raw(conn, SectionKind::Routing)?;
-    let groups = list_groups_value_with_connection(conn)?;
-    let nodes = list_all_nodes_value_with_connection(conn)?;
+    let active = load_active_runtime_resources(conn, &routing.2)?;
     let generated_at = now_text();
-    let group_version_sum = group_version_sum(conn)?;
-    let group_ids = group_ids_text(conn)?;
+    let group_ids = active
+        .group_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let external_input_version = current_runtime_external_input_version(conn)?;
+    let geodata_input_version = current_runtime_geodata_input_version(conn)?;
+    let active_fingerprint = active_runtime_fingerprint(
+        &config,
+        &dns,
+        &routing,
+        &active.groups,
+        &active.nodes,
+        geodata_input_version,
+    )?;
     let content = render_generated_config(
         &generated_at,
         Some(&config),
         Some(&dns),
         Some(&routing),
-        &groups,
-        &nodes,
+        &active.groups,
+        &active.nodes,
     )?;
     Ok(RuntimeMaterializationPlan {
         content,
@@ -74,12 +118,78 @@ pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_connect
         dns_version: dns.3,
         routing_id: routing.0,
         routing_version: routing.3,
-        group_version_sum,
+        group_version_sum: active.group_version_sum,
         group_ids,
         external_input_version,
-        group_count: groups["items"].as_array().map(Vec::len).unwrap_or(0),
-        node_count: nodes["items"].as_array().map(Vec::len).unwrap_or(0),
+        active_fingerprint,
+        group_count: active.groups["items"].as_array().map(Vec::len).unwrap_or(0),
+        node_count: active.nodes["items"].as_array().map(Vec::len).unwrap_or(0),
     })
+}
+
+fn active_runtime_fingerprint(
+    config: &(i64, String, String, i64),
+    dns: &(i64, String, String, i64),
+    routing: &(i64, String, String, i64),
+    groups: &Value,
+    nodes: &Value,
+    geodata_input_version: i64,
+) -> io::Result<ActiveRuntimeFingerprint> {
+    let mut hasher = Sha256::new();
+    for value in [&config.2, &dns.2, &routing.2] {
+        update_fingerprint_part(&mut hasher, value.as_bytes());
+    }
+    let groups = normalized_fingerprint_groups(groups);
+    let nodes = normalized_fingerprint_nodes(nodes);
+    let groups = serde_json::to_vec(&groups).map_err(io::Error::other)?;
+    let nodes = serde_json::to_vec(&nodes).map_err(io::Error::other)?;
+    update_fingerprint_part(&mut hasher, &groups);
+    update_fingerprint_part(&mut hasher, &nodes);
+    update_fingerprint_part(&mut hasher, &geodata_input_version.to_le_bytes());
+    Ok(ActiveRuntimeFingerprint(format!(
+        "sha256:{}",
+        hex_encode(&hasher.finalize())
+    )))
+}
+
+fn normalized_fingerprint_groups(groups: &Value) -> Value {
+    let items = groups["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|group| {
+            let node_tags = runtime_group_node_tags(group)
+                .into_iter()
+                .map(RuntimeNodeTag::into_string)
+                .collect::<Vec<_>>();
+            json!({
+                "name": group.get("name").and_then(Value::as_str).unwrap_or(""),
+                "policy": render_group_policy(group),
+                "nodeTags": node_tags,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!(items)
+}
+
+fn normalized_fingerprint_nodes(nodes: &Value) -> Value {
+    let items = nodes["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|node| {
+            json!({
+                "runtimeTag": runtime_node_tag(node).into_string(),
+                "link": node.get("link").and_then(Value::as_str).unwrap_or(""),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!(items)
+}
+
+fn update_fingerprint_part(hasher: &mut Sha256, value: &[u8]) {
+    Digest::update(hasher, (value.len() as u64).to_le_bytes());
+    Digest::update(hasher, value);
 }
 
 pub(in crate::daed_product) fn apply_runtime_materialization_plan(
@@ -119,6 +229,11 @@ pub(in crate::daed_product) fn apply_runtime_materialization_plan(
     )
     .map_err(sqlite_io_error)?;
     set_metadata(state, "runtime_running", "true")?;
+    set_metadata(
+        state,
+        RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY,
+        plan.active_fingerprint.as_str(),
+    )?;
     Ok(plan.report(config_dir, false))
 }
 
@@ -147,6 +262,10 @@ impl RuntimeMaterializationPlan {
         );
         report.insert("groups".to_owned(), json!(self.group_count));
         report.insert("nodes".to_owned(), json!(self.node_count));
+        report.insert(
+            "activeFingerprint".to_owned(),
+            json!(self.active_fingerprint.as_str()),
+        );
         Value::Object(report)
     }
 }

@@ -9,11 +9,14 @@ pub(in crate::daed_product) fn general_state_report(
     let conn = open_state_connection(state)?;
     let runtime_state = runtime.summary();
     let running = runtime_state["running"].as_bool().unwrap_or(false);
-    let modified = runtime_modified(&conn, running)?;
     let selected_config_id = selected_id(&conn, SectionKind::Config)?;
     let selected_dns_id = selected_id(&conn, SectionKind::Dns)?;
     let selected_routing_id = selected_id(&conn, SectionKind::Routing)?;
     let runtime_revision = runtime_revision_report_from_connection(&conn, runtime, &runtime_state)?;
+    let modified = running
+        && !runtime_revision["desiredMatchesActive"]
+            .as_bool()
+            .unwrap_or(false);
     Ok(json!({
         "running": running,
         "modified": modified,
@@ -56,23 +59,47 @@ fn runtime_revision_report_from_connection(
     runtime_state: &Value,
 ) -> io::Result<Value> {
     let desired_external_revision = current_runtime_external_input_version(conn)?;
-    let desired = json!({
-        "config": section_revision_value(selected_section_state(conn, SectionKind::Config)?),
-        "dns": section_revision_value(selected_section_state(conn, SectionKind::Dns)?),
-        "routing": section_revision_value(selected_section_state(conn, SectionKind::Routing)?),
-        "groupVersionSum": group_version_sum(conn)?,
-        "groupIds": group_ids_text(conn)?,
-        "externalInputVersion": desired_external_revision,
-    });
+    let active_fingerprint =
+        metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?;
+    let desired_plan = active_fingerprint
+        .as_ref()
+        .map(|_| prepare_runtime_materialization_plan_with_connection(conn))
+        .transpose()?;
+    let desired = match desired_plan.as_ref() {
+        Some(plan) => json!({
+            "config": {"id": plan.config_id, "version": plan.config_version},
+            "dns": {"id": plan.dns_id, "version": plan.dns_version},
+            "routing": {"id": plan.routing_id, "version": plan.routing_version},
+            "groupVersionSum": plan.group_version_sum,
+            "groupIds": plan.group_ids,
+            "externalInputVersion": desired_external_revision,
+            "activeFingerprint": plan.active_fingerprint.as_str(),
+        }),
+        None => json!({
+            "config": section_revision_value(selected_section_state(conn, SectionKind::Config)?),
+            "dns": section_revision_value(selected_section_state(conn, SectionKind::Dns)?),
+            "routing": section_revision_value(selected_section_state(conn, SectionKind::Routing)?),
+            "groupVersionSum": group_version_sum(conn)?,
+            "groupIds": group_ids_text(conn)?,
+            "externalInputVersion": desired_external_revision,
+            "activeFingerprint": Value::Null,
+        }),
+    };
     let active_state = running_runtime_state(conn)?;
     let active = active_state
         .as_ref()
-        .map(active_runtime_revision_value)
+        .map(|state| active_runtime_revision_value(state, active_fingerprint.as_deref()))
         .unwrap_or(Value::Null);
     let running = runtime_state["running"].as_bool().unwrap_or(false);
-    let desired_matches_active = active_state
-        .as_ref()
-        .is_some_and(|active| active_runtime_revision_matches(active, &desired));
+    let desired_matches_active = active_state.as_ref().is_some_and(|active| {
+        desired_plan
+            .as_ref()
+            .zip(active_fingerprint.as_deref())
+            .map_or_else(
+                || active_runtime_revision_matches(active, &desired),
+                |(plan, active_fingerprint)| plan.active_fingerprint.as_str() == active_fingerprint,
+            )
+    });
     let runtime_product_generation = runtime_state["activeGeneration"].as_str();
     let identity = compare_runtime_activation_identity(
         conn,
@@ -154,7 +181,10 @@ fn section_revision_value(section: Option<RuntimeSectionState>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn active_runtime_revision_value(active: &RunningRuntimeState) -> Value {
+fn active_runtime_revision_value(
+    active: &RunningRuntimeState,
+    active_fingerprint: Option<&str>,
+) -> Value {
     json!({
         "config": {"id": active.config_id, "version": active.config_version},
         "dns": {"id": active.dns_id, "version": active.dns_version},
@@ -162,6 +192,7 @@ fn active_runtime_revision_value(active: &RunningRuntimeState) -> Value {
         "groupVersionSum": active.group_version_sum,
         "groupIds": active.group_ids,
         "externalInputVersion": active.external_input_version,
+        "activeFingerprint": active_fingerprint,
     })
 }
 
@@ -213,6 +244,32 @@ pub(in crate::daed_product) fn runtime_modified(
     if !running {
         return Ok(false);
     }
+    if let Some(active_fingerprint) =
+        metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
+    {
+        let desired = prepare_runtime_materialization_plan_with_connection(conn)?;
+        return Ok(desired.active_fingerprint.as_str() != active_fingerprint);
+    }
+    legacy_runtime_modified(conn)
+}
+
+pub(super) fn runtime_modified_with_prepared_plan(
+    conn: &Connection,
+    running: bool,
+    plan: &RuntimeMaterializationPlan,
+) -> io::Result<bool> {
+    if !running {
+        return Ok(false);
+    }
+    if let Some(active_fingerprint) =
+        metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
+    {
+        return Ok(plan.active_fingerprint.as_str() != active_fingerprint);
+    }
+    legacy_runtime_modified(conn)
+}
+
+fn legacy_runtime_modified(conn: &Connection) -> io::Result<bool> {
     let Some(config) = selected_section_state(conn, SectionKind::Config)? else {
         return Ok(true);
     };
@@ -331,10 +388,20 @@ fn running_group_ids_contain(group_ids: &str, group_id: i64) -> bool {
 pub(in crate::daed_product) fn current_runtime_external_input_version(
     conn: &Connection,
 ) -> io::Result<i64> {
+    runtime_input_version(conn, RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY)
+}
+
+pub(in crate::daed_product) fn current_runtime_geodata_input_version(
+    conn: &Connection,
+) -> io::Result<i64> {
+    runtime_input_version(conn, RUNTIME_GEODATA_INPUT_VERSION_METADATA_KEY)
+}
+
+fn runtime_input_version(conn: &Connection, key: &str) -> io::Result<i64> {
     let value = conn
         .query_row(
             "SELECT value FROM daed_product_metadata WHERE key = ?1",
-            params![RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY],
+            params![key],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -357,14 +424,26 @@ pub(in crate::daed_product) fn bump_runtime_external_input_version(
 pub(in crate::daed_product) fn bump_runtime_external_input_version_with_connection(
     conn: &Connection,
 ) -> io::Result<i64> {
+    bump_runtime_input_version_with_connection(conn, RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY)?;
+    current_runtime_external_input_version(conn)
+}
+
+pub(in crate::daed_product) fn bump_runtime_geodata_input_version_with_connection(
+    conn: &Connection,
+) -> io::Result<i64> {
+    bump_runtime_input_version_with_connection(conn, RUNTIME_GEODATA_INPUT_VERSION_METADATA_KEY)?;
+    current_runtime_geodata_input_version(conn)
+}
+
+fn bump_runtime_input_version_with_connection(conn: &Connection, key: &str) -> io::Result<()> {
     conn.execute(
         "INSERT INTO daed_product_metadata(key, value)
          VALUES(?1, '1')
          ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)",
-        params![RUNTIME_EXTERNAL_INPUT_VERSION_METADATA_KEY],
+        params![key],
     )
     .map_err(sqlite_io_error)?;
-    current_runtime_external_input_version(conn)
+    Ok(())
 }
 
 pub(in crate::daed_product) fn mark_runtime_process_stopped(state: &Path) -> io::Result<()> {

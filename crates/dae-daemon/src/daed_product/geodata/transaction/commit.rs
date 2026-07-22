@@ -1,4 +1,4 @@
-use super::external_input::ensure_runtime_external_input_bumped;
+use super::external_input::ensure_runtime_input_versions_bumped;
 use super::files::{
     backup_live_file, remove_paths_best_effort, sync_directory, write_version_stage,
 };
@@ -37,7 +37,7 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoin
         version,
         summary,
         sha256,
-        external_input_version_before,
+        input_versions_before,
     } = candidate;
     if let Err(error) = checkpoints.checkpoint(GeodataTransactionCheckpoint::WriteVersionStage) {
         remove_paths_best_effort([data_stage]);
@@ -99,7 +99,8 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoin
         &version_stage,
         data_backup.as_deref(),
         version_backup.as_deref(),
-        external_input_version_before,
+        input_versions_before.map(|versions| versions.external),
+        input_versions_before.map(|versions| versions.geodata),
     ) {
         Ok(journal) => journal,
         Err(error) => {
@@ -130,7 +131,7 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoin
         })
         .and_then(|()| {
             checkpoints.checkpoint(GeodataTransactionCheckpoint::BumpExternalInput)?;
-            ensure_runtime_external_input_bumped(state, external_input_version_before)
+            ensure_runtime_input_versions_bumped(state, input_versions_before)
         });
     if let Err(error) = activation {
         return rollback_after_failure(dir, kind, &mut journal, error);
@@ -144,7 +145,7 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoin
     }
     Ok(GeodataCommitResult {
         status,
-        runtime_reload_required: external_input_version_before.is_some(),
+        runtime_reload_required: input_versions_before.is_some(),
     })
 }
 

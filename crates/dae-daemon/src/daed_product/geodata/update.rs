@@ -4,7 +4,7 @@ use super::source::geodata_source;
 use super::status::update_geodata_resource_status_cache;
 use super::transaction::{
     PreparedGeodataGeneration, commit_geodata_generation, recover_geodata_transaction,
-    runtime_external_input_version_if_running,
+    runtime_input_versions_if_running,
 };
 use super::types::{GeodataKind, GeodataRelease, GeodataSourceMode};
 use super::update_admission::ProductGeodataUpdateLease;
@@ -80,7 +80,7 @@ pub(super) fn update_geodata_with_lease(
     let version = release
         .version
         .unwrap_or_else(|| geodata_sha256_version(&download.sha256));
-    let external_input_version_before = match runtime_external_input_version_if_running(context) {
+    let input_versions_before = match runtime_input_versions_if_running(context) {
         Ok(version) => version,
         Err(error) => {
             let _ = fs::remove_file(&tmp_path);
@@ -97,7 +97,7 @@ pub(super) fn update_geodata_with_lease(
             version,
             summary,
             sha256: download.sha256,
-            external_input_version_before,
+            input_versions_before,
         },
     )?;
     let path = dir.join(kind.file_name());

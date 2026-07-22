@@ -86,6 +86,12 @@ pub(in crate::daed_product) fn prepare_runtime_reload_config(
 ) -> Result<PreparedRuntimeReload, RuntimeReloadPrepareError> {
     let plan = prepare_runtime_materialization_plan(state)
         .map_err(|err| RuntimeReloadPrepareError::Materialize(err.to_string()))?;
+    build_prepared_runtime_reload(plan)
+}
+
+fn build_prepared_runtime_reload(
+    plan: RuntimeMaterializationPlan,
+) -> Result<PreparedRuntimeReload, RuntimeReloadPrepareError> {
     let config = build_runtime_config_from_content(&plan.content)
         .map_err(RuntimeReloadPrepareError::BuildConfig)?;
     Ok(PreparedRuntimeReload {
@@ -139,19 +145,24 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
         .begin_apply(intent)
         .map_err(CoordinatedRuntimeReloadError::Apply)?;
     permit.set_phase("reread-desired-state");
-    let modified = runtime_modified_for_running_runtime(state, runtime)
-        .map_err(CoordinatedRuntimeReloadError::Apply)?;
+    let (plan, modified) =
+        match prepare_runtime_materialization_plan_with_modified_state(state, runtime.is_running())
+        {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                permit.finish("prepare-failed");
+                return Err(CoordinatedRuntimeReloadError::Prepare(
+                    RuntimeReloadPrepareError::Materialize(err.to_string()),
+                ));
+            }
+        };
     let activation_identity_consistent = if runtime.is_running() {
         runtime_activation_identity_consistent(state, runtime)
             .map_err(|err| CoordinatedRuntimeReloadError::Apply(err.to_string()))?
     } else {
         true
     };
-    if runtime.is_running()
-        && !modified
-        && activation_identity_consistent
-        && (permit.waited() || permit.intent().requires_runtime_change())
-    {
+    if runtime.is_running() && !modified && activation_identity_consistent {
         let runtime_report = runtime.summary();
         permit.finish_coalesced();
         return Ok(AppliedRuntimeReload {
@@ -168,7 +179,7 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
         });
     }
     permit.set_phase("materializing");
-    let mut prepared = match prepare_runtime_reload_config(state) {
+    let mut prepared = match build_prepared_runtime_reload(plan) {
         Ok(prepared) => prepared,
         Err(err) => {
             permit.finish("prepare-failed");
