@@ -1,15 +1,14 @@
 use super::super::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+use super::super::{ActiveGenerationSlot, ResidentDataplaneGeneration};
 use super::*;
 use std::path::Path;
 
 pub(crate) async fn resident_tcp_accept_loop_async(
     listener: TcpListener,
-    router: Arc<ResidentTcpRouter>,
+    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    runtime_config: ResidentTcpRuntimeConfig,
 ) {
     if let Err(err) = listener.set_nonblocking(true) {
         append_event(
@@ -30,15 +29,15 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             return;
         }
     };
-    let admission =
-        ResidentTcpAdmission::new(runtime_config.connection_limit, Arc::clone(&metrics));
+    let initial_generation = active_generation.load();
     let mut event = json!({
             "event": "tcp_worker_started",
-            "proxy_count": router.proxy_count(),
-            "dial_mode": router.dial_mode_name(),
-            "flowStackBytes": runtime_config.worker_stack_bytes,
+            "proxy_count": initial_generation.tcp_router.proxy_count(),
+            "dial_mode": initial_generation.tcp_router.dial_mode_name(),
+            "flowStackBytes": initial_generation.tcp_runtime_config.worker_stack_bytes,
             "flowStackScope": "resident shared data-plane runtime OS threads; not Tokio task stacks",
-            "runtime": runtime_config.json(),
+            "runtime": initial_generation.tcp_runtime_config.json(),
+            "generationAdmission": "active-generation-read-once-at-accept",
     });
     append_tcp_execution_fields(&mut event, "async-accept-direct");
     event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
@@ -47,6 +46,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
     let mut flows = tokio::task::JoinSet::new();
     let mut flow_shutdown = ResidentTaskSetShutdown::default();
     'accept: while !stop.load(Ordering::Relaxed) {
+        let (reserved_publication, reserved_generation) = active_generation.load_versioned();
         let permit = loop {
             tokio::select! {
                 _ = stop_listener.cancelled() => break 'accept,
@@ -55,13 +55,17 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                         record_resident_task_completion(&mut flow_shutdown, completed);
                     }
                 }
-                permit = admission.acquire() => match permit {
+                permit = reserved_generation.tcp_admission.acquire() => match permit {
                     Ok(permit) => break permit,
                     Err(err) => {
                         append_event(
                             &event_file,
                             &event_lock,
-                            json!({"event": "tcp_admission_failed", "error": err}),
+                            json!({
+                                "event": "tcp_admission_failed",
+                                "generation": reserved_generation.reload_generation,
+                                "error": err,
+                            }),
                         );
                         break 'accept;
                     }
@@ -88,16 +92,47 @@ pub(crate) async fn resident_tcp_accept_loop_async(
         };
         match accepted {
             Ok((stream, peer)) => {
+                let (accepted_publication, accepted_generation) =
+                    active_generation.load_versioned();
+                let (generation, permit) = if accepted_publication == reserved_publication {
+                    (reserved_generation, permit)
+                } else {
+                    drop(permit);
+                    let permit = loop {
+                        tokio::select! {
+                            _ = stop_listener.cancelled() => break 'accept,
+                            completed = flows.join_next(), if !flows.is_empty() => {
+                                if let Some(completed) = completed {
+                                    record_resident_task_completion(&mut flow_shutdown, completed);
+                                }
+                            }
+                            permit = accepted_generation.tcp_admission.acquire() => match permit {
+                                Ok(permit) => break permit,
+                                Err(err) => {
+                                    append_event(
+                                        &event_file,
+                                        &event_lock,
+                                        json!({
+                                            "event": "tcp_admission_failed",
+                                            "generation": accepted_generation.reload_generation,
+                                            "error": err,
+                                        }),
+                                    );
+                                    break 'accept;
+                                }
+                            }
+                        }
+                    };
+                    (accepted_generation, permit)
+                };
                 spawn_async_tcp_flow(
                     &mut flows,
                     stream,
                     peer,
-                    Arc::clone(&router),
-                    Arc::clone(&stop),
+                    generation,
                     event_file.clone(),
                     Arc::clone(&event_lock),
-                    Arc::clone(&metrics),
-                    admission.admitted(permit),
+                    permit,
                 );
             }
             Err(err) => {
@@ -139,22 +174,20 @@ fn spawn_async_tcp_flow(
     flows: &mut tokio::task::JoinSet<()>,
     stream: TokioTcpStream,
     peer: SocketAddr,
-    router: Arc<ResidentTcpRouter>,
-    stop: SharedResidentStopSignal,
+    generation: Arc<ResidentDataplaneGeneration>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    admission: ResidentTcpAdmissionGuard,
+    permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let peer = resident_tcp_accepted_endpoint(peer);
     flows.spawn(async move {
-        let _admission = admission;
+        let _admission = generation.tcp_admission.admitted(permit);
         match handle_tcp_connection_async_or_handoff(
             stream,
             peer,
-            router,
-            stop,
-            Arc::clone(&metrics),
+            Arc::clone(&generation.tcp_router),
+            Arc::clone(&generation.stop),
+            Arc::clone(&generation.metrics),
             &event_file,
             &event_lock,
         )

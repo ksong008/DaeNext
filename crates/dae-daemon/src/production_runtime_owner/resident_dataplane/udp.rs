@@ -14,7 +14,6 @@ use super::{
 };
 
 use bytes::Bytes;
-use dae_datapath::TcpDialMode;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 #[cfg(test)]
 use dae_outbound::hysteria2::decode_hysteria2_udp_message;
@@ -47,7 +46,6 @@ use dae_outbound::{
     vless::packet,
     vmess,
 };
-use dae_routing::RoutingMatcher;
 use serde_json::json;
 use tokio::time;
 
@@ -106,6 +104,7 @@ pub(super) use self::worker::*;
 mod session_key;
 use self::session_key::*;
 mod manager;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::manager::ResidentUdpGenerationPlan;
 use self::manager::*;
 mod session_actor;
 use self::session_actor::*;

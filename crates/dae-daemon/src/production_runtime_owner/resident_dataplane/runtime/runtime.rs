@@ -2,20 +2,27 @@ use super::*;
 #[derive(Debug)]
 pub(crate) struct ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) owner: ResidentRuntimeOwner,
-    pub(in crate::production_runtime_owner) groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
-    pub(in crate::production_runtime_owner) manual_probe_index: Arc<ResidentManualProbeIndex>,
-    pub(in crate::production_runtime_owner) dns_reload_handle: dns::ResidentDnsReloadHandle,
-    pub(in crate::production_runtime_owner) domain_routing_maintenance:
-        Option<dns::ResidentDnsDomainRoutingMaintenanceHandle>,
+    pub(super) active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
+    pub(super) generation_drain: ResidentGenerationDrain,
+    pub(super) routing_tuple_map_id: Option<u32>,
+    pub(super) domain_routing_map_id: Option<u32>,
 }
 
 impl ResidentDataplaneRuntime {
+    pub(in crate::production_runtime_owner) fn active_generation_snapshot(
+        &self,
+    ) -> Arc<ResidentDataplaneGeneration> {
+        self.active_generation.load()
+    }
+
     pub(in crate::production_runtime_owner) fn traffic_counters(&self) -> ResidentTrafficCounters {
         self.owner.traffic_counters()
     }
 
     pub(in crate::production_runtime_owner) fn metrics_snapshot(&self) -> Value {
-        self.owner.metrics_snapshot()
+        let mut metrics = self.owner.metrics_snapshot();
+        metrics["generationDrain"] = self.generation_drain.snapshot();
+        metrics
     }
 
     pub(in crate::production_runtime_owner) fn prune_event_log(&self) -> std::io::Result<()> {
@@ -27,38 +34,41 @@ impl ResidentDataplaneRuntime {
     }
 
     pub(in crate::production_runtime_owner) fn health_state_snapshots(&self) -> Vec<Value> {
-        let reload_generation = self.owner.reload_generation();
-        self.groups
+        let generation = self.active_generation.load();
+        generation
+            .groups
             .iter()
             .flat_map(|group| group.health_state_snapshots())
-            .map(|snapshot| resident_latency_snapshot_json(snapshot, reload_generation))
+            .map(|snapshot| resident_latency_snapshot_json(snapshot, generation.reload_generation))
             .collect()
     }
 
     pub(in crate::production_runtime_owner) fn group_selector_snapshot_map(
         &self,
     ) -> BTreeMap<String, Value> {
-        resident_group_selector_snapshot_map(&self.groups)
+        resident_group_selector_snapshot_map(&self.active_generation.load().groups)
     }
 
     pub(in crate::production_runtime_owner) fn manual_probe_handle(
         &self,
     ) -> ResidentManualProbeHandle {
-        self.owner
-            .manual_probe_handle(&self.groups, &self.manual_probe_index)
+        self.active_generation.load().manual_probe_handle.clone()
     }
 
     pub(in crate::production_runtime_owner) fn dns_reload_snapshot(
         &self,
     ) -> Result<ResidentDnsReloadSnapshot, String> {
-        self.dns_reload_handle.snapshot_for_reload()
+        self.active_generation
+            .load()
+            .dns_reload_handle
+            .snapshot_for_reload()
     }
 
     pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {
-        let reload_generation = self.owner.reload_generation();
-        if let Some(maintenance) = self.domain_routing_maintenance.take() {
-            maintenance.stop();
-        }
+        let generation = self.active_generation.load();
+        let reload_generation = generation.reload_generation;
+        generation.request_stop();
+        self.generation_drain.stop_all();
         let workload = self
             .owner
             .shutdown_workloads(RESIDENT_RUNTIME_TASK_JOIN_GRACE);
@@ -136,5 +146,71 @@ impl ResidentDataplaneRuntime {
             "rustlsEntries": tls_caches.rustls,
             "boringEntries": tls_caches.boring,
         }));
+    }
+
+    pub(in crate::production_runtime_owner) fn publish_prepared_generation(
+        &mut self,
+        config: Arc<Config>,
+        prepared: ResidentPreparedDataplane,
+        latency_seed: &[Value],
+        dns_reload_snapshot: Option<&ResidentDnsReloadSnapshot>,
+    ) -> Result<Value, String> {
+        let started = Instant::now();
+        let built = build_resident_dataplane_generation(ResidentGenerationBuildContext {
+            owner: &mut self.owner,
+            config,
+            prepared,
+            routing_tuple_map_id: self.routing_tuple_map_id,
+            domain_routing_map_id: self.domain_routing_map_id,
+            latency_seed,
+            dns_reload_snapshot,
+        })?;
+        let next_id = built.generation.id;
+        let previous = self.active_generation.publish(built.generation);
+        let previous_id = previous.id;
+        self.generation_drain.retire(previous);
+        Ok(json!({
+            "status": "pass",
+            "strategy": "process-owned-listeners-runtime-and-generation-slot",
+            "previousGeneration": previous_id,
+            "activeGeneration": next_id,
+            "elapsedNs": started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            "listenerReused": true,
+            "sharedRuntimeReused": true,
+            "bpfOwnerReused": true,
+            "tcpAdmission": "generation-pinned-at-accept",
+            "udpAdmission": "generation-pinned-for-session-idle-window",
+            "dnsAdmission": "generation-pinned-per-request-or-connection",
+        }))
+    }
+
+    pub(in crate::production_runtime_owner) fn restore_generation(
+        &mut self,
+        generation: Arc<ResidentDataplaneGeneration>,
+    ) -> Result<Value, String> {
+        let active = self.active_generation.load();
+        if Arc::ptr_eq(&active, &generation) {
+            return Ok(json!({
+                "status": "pass",
+                "strategy": "generation-slot-already-restored",
+                "activeGeneration": generation.id,
+            }));
+        }
+        if active.reload_generation != generation.reload_generation {
+            return Err("resident generation belongs to a different physical runtime".to_owned());
+        }
+        let restored_id = generation.id;
+        let displaced = self.active_generation.publish(generation);
+        let displaced_id = displaced.id;
+        self.generation_drain.retire(displaced);
+        Ok(json!({
+            "status": "pass",
+            "strategy": "restore-previous-generation-slot",
+            "displacedGeneration": displaced_id,
+            "activeGeneration": restored_id,
+            "listenerReused": true,
+            "sharedRuntimeReused": true,
+            "bpfOwnerReused": true,
+        }))
     }
 }

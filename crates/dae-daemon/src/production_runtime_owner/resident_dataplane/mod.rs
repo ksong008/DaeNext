@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -78,6 +78,16 @@ pub(crate) use self::defaults::*;
 #[path = "runtime/runtime.rs"]
 mod runtime;
 pub(super) use self::runtime::*;
+#[path = "runtime/generation.rs"]
+mod generation;
+pub(in crate::production_runtime_owner) use self::generation::ResidentDataplaneGeneration;
+use self::generation::{ActiveGenerationSlot, next_resident_dataplane_generation_id};
+#[path = "runtime/generation_builder.rs"]
+mod generation_builder;
+use self::generation_builder::*;
+#[path = "runtime/generation_drain.rs"]
+mod generation_drain;
+use self::generation_drain::*;
 #[path = "runtime/executor.rs"]
 mod executor;
 use self::executor::*;

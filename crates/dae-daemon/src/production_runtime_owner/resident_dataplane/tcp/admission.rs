@@ -1,25 +1,30 @@
 use super::*;
 
 #[derive(Clone, Debug)]
-pub(super) struct ResidentTcpAdmission {
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentTcpAdmission {
     permits: Arc<Semaphore>,
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
-pub(super) struct ResidentTcpAdmissionGuard {
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentTcpAdmissionGuard {
     _permit: OwnedSemaphorePermit,
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
 impl ResidentTcpAdmission {
-    pub(super) fn new(limit: usize, metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new(
+        limit: usize,
+        metrics: Arc<ResidentDataplaneMetrics>,
+    ) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(limit.max(1))),
             metrics,
         }
     }
 
-    pub(super) async fn acquire(&self) -> Result<OwnedSemaphorePermit, String> {
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn acquire(
+        &self,
+    ) -> Result<OwnedSemaphorePermit, String> {
         if self.permits.available_permits() == 0 {
             self.metrics.tcp_admission_waited();
         }
@@ -29,7 +34,10 @@ impl ResidentTcpAdmission {
             .map_err(|_| "resident TCP admission semaphore closed".to_owned())
     }
 
-    pub(super) fn admitted(&self, permit: OwnedSemaphorePermit) -> ResidentTcpAdmissionGuard {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn admitted(
+        &self,
+        permit: OwnedSemaphorePermit,
+    ) -> ResidentTcpAdmissionGuard {
         ResidentTcpAdmissionGuard::new(permit, Arc::clone(&self.metrics))
     }
 }

@@ -55,11 +55,11 @@ impl ResidentDataPlaneExecutor {
 
     pub(super) fn json(&self) -> Value {
         json!({
-            "executor": "generation-owned-shared-multi-thread",
+            "executor": "process-owned-shared-multi-thread",
             "workerThreads": self.worker_threads,
             "workerStackBytes": self.worker_stack_bytes,
             "threadName": RESIDENT_DATA_PLANE_RUNTIME_THREAD_NAME,
-            "scope": "resident TCP, UDP, DNS, health and transport-owner tasks for one reload generation",
+            "scope": "resident TCP, UDP, DNS, health and transport-owner tasks across active and draining generations",
         })
     }
 

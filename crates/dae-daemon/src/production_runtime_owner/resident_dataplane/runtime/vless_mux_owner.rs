@@ -212,7 +212,7 @@ impl VlessMuxGenerationOwnerHandle {
             "generation": self.owner.generation.get(),
             "closing": self.owner.closing.load(Ordering::Acquire),
             "executor": if self.owner.uses_shared_data_plane_executor {
-                "generation-owned-shared-multi-thread"
+                "process-owned-shared-multi-thread"
             } else if self.owner.runtime_worker_threads == 1 {
                 "current-thread"
             } else {
@@ -1750,7 +1750,7 @@ mod tests {
         let owner = include_str!("vless_mux_owner.rs");
         let connection = include_str!("../tcp/vless_handlers/connection.rs");
         let probe = include_str!("../probe/native_tcp/vless.rs");
-        let workers = include_str!("workers.rs");
+        let runtime_owner = include_str!("../runtime_owner.rs");
         let subscription = include_str!("../subscription_fetch.rs");
         let control_owners = include_str!("../control_transport_owners/mod.rs");
         let requirements = include_str!("../control_transport_owners/requirements.rs");
@@ -1761,7 +1761,7 @@ mod tests {
         assert!(production.contains("open_async_resident_tls_client_with_binding"));
         assert!(connection.contains("acquire_vless_mux_logical_stream"));
         assert!(probe.contains("acquire_vless_mux_logical_stream"));
-        assert!(workers.contains("start_vless_mux_generation_owner"));
+        assert!(runtime_owner.contains("start_vless_mux_generation_owner"));
         assert!(requirements.contains("requires_vless_mux_owner"));
         assert!(subscription.contains("ControlTransportOwners"));
         assert!(control_owners.contains("start_vless_mux_generation_owner_on"));

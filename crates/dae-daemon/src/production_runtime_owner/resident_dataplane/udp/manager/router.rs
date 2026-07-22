@@ -120,6 +120,10 @@ impl ResidentUdpRouter {
         self.routing_tuple_map_id
     }
 
+    pub(super) const fn default_outbound(&self) -> u8 {
+        self.default_outbound
+    }
+
     pub(super) fn default_proxy_group(&self) -> &ResidentProxyGroupPlan {
         self.proxy_groups
             .get(&self.default_outbound)

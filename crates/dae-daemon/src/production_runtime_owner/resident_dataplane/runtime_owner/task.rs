@@ -11,6 +11,7 @@ pub(super) struct ResidentRuntimeTask {
     pub(super) kind: &'static str,
     pub(super) handle: Option<JoinHandle<()>>,
     pub(super) completion: Option<Receiver<ResidentRuntimeTaskExit>>,
+    pub(super) role: ResidentRuntimeTaskRole,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentAsyncRuntimeTask {
@@ -23,6 +24,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentAsync
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentRuntimeTaskRole {
     Workload,
+    Generation,
     Transport,
 }
 
@@ -32,6 +34,7 @@ impl ResidentRuntimeTaskRole {
     ) -> &'static str {
         match self {
             Self::Workload => "workload",
+            Self::Generation => "generation",
             Self::Transport => "transport",
         }
     }
@@ -72,6 +75,7 @@ pub(super) enum ResidentRuntimeTaskExit {
 pub(super) fn registered_resident_runtime_task(
     name: &'static str,
     kind: &'static str,
+    role: ResidentRuntimeTaskRole,
     handle: JoinHandle<()>,
 ) -> ResidentRuntimeTask {
     ResidentRuntimeTask {
@@ -79,6 +83,7 @@ pub(super) fn registered_resident_runtime_task(
         kind,
         handle: Some(handle),
         completion: None,
+        role,
     }
 }
 
@@ -111,5 +116,6 @@ where
         kind,
         handle: Some(handle),
         completion: Some(completion_rx),
+        role: ResidentRuntimeTaskRole::Workload,
     }
 }
