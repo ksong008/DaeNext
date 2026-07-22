@@ -3,6 +3,8 @@ use dae_outbound::shadowsocks::Ss2022UdpReplayMetricsSnapshot;
 
 #[path = "metrics/proxied_doh3.rs"]
 mod proxied_doh3;
+#[path = "metrics/traffic.rs"]
+mod traffic;
 
 pub(in crate::production_runtime_owner::resident_dataplane) use self::proxied_doh3::ProxiedDoh3CleanupMetricObservation;
 use self::proxied_doh3::ProxiedDoh3CleanupMetrics;
@@ -588,10 +590,11 @@ impl ResidentDataplaneMetrics {
     }
 
     pub(super) fn snapshot(&self) -> Value {
+        let traffic = self.traffic_counters();
         let mut snapshot = json!({
-            "uploadTotal": self.upload_total.load(Ordering::Relaxed),
-            "downloadTotal": self.download_total.load(Ordering::Relaxed),
-            "activeTcpConnections": self.active_tcp_connections.load(Ordering::Relaxed),
+            "uploadTotal": traffic.upload_total,
+            "downloadTotal": traffic.download_total,
+            "activeTcpConnections": traffic.active_tcp_connections,
             "tcpAdmissionActive": self.tcp_admission_active.load(Ordering::Relaxed),
             "tcpAdmissionMaximumActive": self.tcp_admission_maximum_active.load(Ordering::Relaxed),
             "tcpAdmissionAcceptedTotal": self.tcp_admission_accepted_total.load(Ordering::Relaxed),
@@ -604,7 +607,7 @@ impl ResidentDataplaneMetrics {
             "healthResuscitationQueued": self.health_resuscitation_queued.load(Ordering::Relaxed),
             "healthResuscitationQueueFull": self.health_resuscitation_queue_full.load(Ordering::Relaxed),
             "healthResuscitationDisconnected": self.health_resuscitation_disconnected.load(Ordering::Relaxed),
-            "activeUdpSessions": self.active_udp_sessions.load(Ordering::Relaxed),
+            "activeUdpSessions": traffic.active_udp_sessions,
             "udpSessionDispatchQueued": self.udp_session_dispatch_queued.load(Ordering::Relaxed),
             "udpSessionDispatchQueueFull": self.udp_session_dispatch_queue_full.load(Ordering::Relaxed),
             "udpSessionCreated": self.udp_session_created.load(Ordering::Relaxed),
