@@ -1350,7 +1350,7 @@ async fn resident_dns_ipversion_prefer_does_not_synthesize_preferred_lookup() {
 }
 
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit parameterized DNS pressure test"]
 async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
     let Some(config) = dns_pressure_config_from_env() else {
         println!(
@@ -1520,7 +1520,7 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
 }
 
 #[tokio::test]
-#[ignore]
+#[ignore = "requires an explicitly configured live DNS upstream"]
 async fn resident_dns_live_upstream_pressure_uses_parameterized_upstream() {
     let Some(config) = dns_live_pressure_config_from_env() else {
         println!(
