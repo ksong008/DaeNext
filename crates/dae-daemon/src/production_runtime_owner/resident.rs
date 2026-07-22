@@ -24,7 +24,7 @@ use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{
     ResidentDataplaneRuntime, ResidentDataplaneStartContext, ResidentDnsReloadSnapshot,
-    ResidentManualProbeHandle, next_resident_runtime_generation,
+    ResidentManualProbeHandle, ResidentTrafficCounters, next_resident_runtime_generation,
     resident_datapath_postflight_interval_seconds_default, start_resident_dataplane_workers,
 };
 use super::resident_interfaces::{

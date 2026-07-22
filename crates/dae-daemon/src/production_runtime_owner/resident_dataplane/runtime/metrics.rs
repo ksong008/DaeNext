@@ -8,6 +8,7 @@ mod traffic;
 
 pub(in crate::production_runtime_owner::resident_dataplane) use self::proxied_doh3::ProxiedDoh3CleanupMetricObservation;
 use self::proxied_doh3::ProxiedDoh3CleanupMetrics;
+pub(crate) use self::traffic::ResidentTrafficCounters;
 
 #[derive(Debug, Default)]
 pub(crate) struct ResidentDataplaneMetrics {

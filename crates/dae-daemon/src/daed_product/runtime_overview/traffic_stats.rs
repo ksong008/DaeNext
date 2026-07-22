@@ -48,8 +48,20 @@ pub(crate) fn resident_runtime_traffic_stats(
         .unwrap_or_default()
 }
 
-pub(crate) fn resident_runtime_traffic_stats_from_metrics(metrics: &Value) -> RuntimeTrafficStats {
-    let observation = runtime_traffic_observation(metrics, unix_now(), Instant::now(), None).0;
+#[cfg(test)]
+fn resident_runtime_traffic_stats_from_metrics(metrics: &Value) -> RuntimeTrafficStats {
+    let observation = runtime_traffic_observation(
+        ResidentTrafficCounters {
+            upload_total: event_u64(metrics, "uploadTotal"),
+            download_total: event_u64(metrics, "downloadTotal"),
+            active_tcp_connections: event_u64(metrics, "activeTcpConnections"),
+            active_udp_sessions: event_u64(metrics, "activeUdpSessions"),
+        },
+        unix_now(),
+        Instant::now(),
+        None,
+    )
+    .0;
     RuntimeTrafficStats {
         upload_total: observation.upload_total,
         download_total: observation.download_total,
@@ -60,13 +72,13 @@ pub(crate) fn resident_runtime_traffic_stats_from_metrics(metrics: &Value) -> Ru
 }
 
 pub(crate) fn runtime_traffic_observation(
-    metrics: &Value,
+    counters: ResidentTrafficCounters,
     timestamp: u64,
     observed_at: Instant,
     previous: Option<RuntimeTrafficTotalSample>,
 ) -> (RuntimeTrafficObservation, bool) {
-    let upload_total = event_u64(metrics, "uploadTotal");
-    let download_total = event_u64(metrics, "downloadTotal");
+    let upload_total = counters.upload_total;
+    let download_total = counters.download_total;
     let mut upload_rate = 0_u64;
     let mut download_rate = 0_u64;
     let mut totals_reset = false;
@@ -91,8 +103,8 @@ pub(crate) fn runtime_traffic_observation(
             download_total,
             upload_rate,
             download_rate,
-            active_connections: event_u64(metrics, "activeTcpConnections"),
-            udp_sessions: event_u64(metrics, "activeUdpSessions"),
+            active_connections: counters.active_tcp_connections,
+            udp_sessions: counters.active_udp_sessions,
         },
         totals_reset,
     )
@@ -147,7 +159,8 @@ fn evenly_downsample(
         .collect()
 }
 
-pub(crate) fn event_u64(event: &Value, key: &str) -> u64 {
+#[cfg(test)]
+fn event_u64(event: &Value, key: &str) -> u64 {
     event
         .get(key)
         .and_then(|value| {

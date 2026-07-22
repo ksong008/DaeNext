@@ -10,6 +10,10 @@ pub(crate) struct ResidentDataplaneRuntime {
 }
 
 impl ResidentDataplaneRuntime {
+    pub(in crate::production_runtime_owner) fn traffic_counters(&self) -> ResidentTrafficCounters {
+        self.owner.traffic_counters()
+    }
+
     pub(in crate::production_runtime_owner) fn metrics_snapshot(&self) -> Value {
         self.owner.metrics_snapshot()
     }

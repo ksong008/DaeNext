@@ -1,12 +1,5 @@
 use super::*;
 
-pub(super) fn runtime_traffic_metrics_snapshot(runtime: &ProductRuntimeInstance) -> Option<Value> {
-    match runtime {
-        ProductRuntimeInstance::Resident(runtime) => runtime.resident_dataplane_metrics_snapshot(),
-        ProductRuntimeInstance::Fake(_) => None,
-    }
-}
-
 pub(super) fn runtime_instance_health_states(runtime: &ProductRuntimeInstance) -> Vec<Value> {
     match runtime {
         ProductRuntimeInstance::Resident(runtime) => runtime.snapshot_health_states(),

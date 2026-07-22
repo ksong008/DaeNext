@@ -49,10 +49,10 @@ impl ResidentProductionRuntime {
                     .to_owned()
             });
         let mut resident_dataplane = self.start_report["resident_dataplane"].clone();
-        if let Some(dataplane) = self.dataplane.as_ref()
+        if let Some(metrics) = self.resident_dataplane_metrics_snapshot()
             && let Value::Object(map) = &mut resident_dataplane
         {
-            map.insert("metrics".to_owned(), dataplane.metrics_snapshot());
+            map.insert("metrics".to_owned(), metrics);
         }
         json!({
             "running": !self.cleaned,
@@ -103,6 +103,15 @@ impl ResidentProductionRuntime {
         } else {
             None
         }
+    }
+
+    pub(crate) fn resident_dataplane_traffic_counters(&self) -> Option<ResidentTrafficCounters> {
+        if self.cleaned {
+            return None;
+        }
+        self.dataplane
+            .as_ref()
+            .map(ResidentDataplaneRuntime::traffic_counters)
     }
 
     pub fn resident_dataplane_metrics_snapshot(&self) -> Option<Value> {

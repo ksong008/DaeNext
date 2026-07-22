@@ -1124,10 +1124,12 @@ fn materialized_global_text_converts_legacy_json_storage() {
 
 #[test]
 fn runtime_traffic_carry_preserves_totals_when_live_metrics_reset() {
-    let carry = RuntimeTrafficCarry::default().absorb_metrics(&json!({
-        "uploadTotal": 500,
-        "downloadTotal": "700",
-    }));
+    let carry = RuntimeTrafficCarry::default().absorb_counters(ResidentTrafficCounters {
+        upload_total: 500,
+        download_total: 700,
+        active_tcp_connections: 0,
+        active_udp_sessions: 0,
+    });
     let mut summary = json!({
         "residentDataplane": {
             "metrics": {
@@ -1194,28 +1196,31 @@ fn runtime_traffic_stats_ignore_legacy_event_file_without_live_metrics() {
 
 #[test]
 fn runtime_traffic_stats_prefer_live_resident_metrics() {
-    let first_metrics = json!({
-        "uploadTotal": 100,
-        "downloadTotal": 200,
-        "activeTcpConnections": 3,
-        "activeUdpSessions": 2
-    });
     let first_at = Instant::now();
-    let (first, reset) = runtime_traffic_observation(&first_metrics, 100, first_at, None);
+    let (first, reset) = runtime_traffic_observation(
+        ResidentTrafficCounters {
+            upload_total: 100,
+            download_total: 200,
+            active_tcp_connections: 3,
+            active_udp_sessions: 2,
+        },
+        100,
+        first_at,
+        None,
+    );
     assert!(!reset);
     assert_eq!(first.upload_total, 100);
     assert_eq!(first.download_total, 200);
     assert_eq!(first.active_connections, 3);
     assert_eq!(first.udp_sessions, 2);
 
-    let second_metrics = json!({
-        "uploadTotal": 300,
-        "downloadTotal": 500,
-        "activeTcpConnections": 1,
-        "activeUdpSessions": 0
-    });
     let (second, reset) = runtime_traffic_observation(
-        &second_metrics,
+        ResidentTrafficCounters {
+            upload_total: 300,
+            download_total: 500,
+            active_tcp_connections: 1,
+            active_udp_sessions: 0,
+        },
         101,
         first_at + Duration::from_secs(1),
         Some(RuntimeTrafficTotalSample {
