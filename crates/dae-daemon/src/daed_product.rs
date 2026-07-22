@@ -46,9 +46,9 @@ use crate::allocator_bootstrap::{
 };
 use crate::config_validate::{load_config_file, validate_config_file};
 use crate::production_runtime_owner::{
-    ResidentDnsReloadSnapshot, ResidentEventLogDecision, ResidentManualProbeHandle,
-    ResidentNodeSourceAdmission, ResidentPreparedGeneration, ResidentProductionRuntime,
-    ResidentTrafficCounters, prepare_resident_production_generation,
+    ResidentActiveGenerationSnapshot, ResidentDnsReloadSnapshot, ResidentEventLogDecision,
+    ResidentManualProbeHandle, ResidentNodeSourceAdmission, ResidentPreparedGeneration,
+    ResidentProductionRuntime, ResidentTrafficCounters, prepare_resident_production_generation,
     resident_live_adapter_config_assessment, resident_live_adapter_udp_probe,
     resident_node_source_admissions, resident_runtime_defaults_contract,
     set_resident_event_log_policy, set_resident_event_log_sink,
@@ -893,6 +893,7 @@ use self::product_net::*;
 mod runtime_materialization;
 use self::runtime_materialization::*;
 mod runtime_reload;
+mod runtime_transition;
 use self::runtime_reload::*;
 mod runtime_reconcile;
 use self::runtime_reconcile::*;

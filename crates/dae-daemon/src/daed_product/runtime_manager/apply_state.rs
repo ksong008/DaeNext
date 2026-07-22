@@ -28,6 +28,8 @@ pub(in crate::daed_product) struct ProductRuntimeApplySnapshot {
     was_running: bool,
     config: Option<Arc<Config>>,
     config_content: Option<Arc<str>>,
+    resident_generation: Option<ResidentActiveGenerationSnapshot>,
+    transition_identity: Option<RuntimeTransitionIdentity>,
 }
 
 impl ProductRuntimeManager {
@@ -94,6 +96,11 @@ impl ProductRuntimeManager {
             was_running: inner.runtime.is_some(),
             config: inner.config.clone(),
             config_content: inner.config_content.clone(),
+            resident_generation: inner.runtime.as_ref().and_then(|runtime| match runtime {
+                ProductRuntimeInstance::Resident(runtime) => runtime.active_generation_snapshot(),
+                ProductRuntimeInstance::Fake(_) => None,
+            }),
+            transition_identity: inner.transition_identity,
         })
     }
 
@@ -102,6 +109,44 @@ impl ProductRuntimeManager {
         snapshot: &ProductRuntimeApplySnapshot,
         latency_seed: &[Value],
     ) -> Result<(), String> {
+        if let Some(generation) = snapshot.resident_generation.as_ref() {
+            let _lifecycle = self
+                .lifecycle
+                .lock()
+                .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
+            let (same_physical_runtime, restored) = {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+                match inner.runtime.as_mut() {
+                    Some(ProductRuntimeInstance::Resident(runtime)) => {
+                        let same_physical_runtime = runtime.owns_generation_snapshot(generation);
+                        let restored =
+                            runtime.restore_active_generation(generation).map(|report| {
+                                inner.config = snapshot.config.clone();
+                                inner.config_content = snapshot.config_content.clone();
+                                inner.transition_identity = snapshot.transition_identity;
+                                inner.last_report = Some(report);
+                            });
+                        (same_physical_runtime, restored)
+                    }
+                    Some(ProductRuntimeInstance::Fake(_)) | None => (
+                        false,
+                        Err(
+                            "active runtime cannot restore the resident generation snapshot"
+                                .to_owned(),
+                        ),
+                    ),
+                }
+            };
+            if restored.is_ok() {
+                return Ok(());
+            }
+            if same_physical_runtime {
+                return restored;
+            }
+        }
         if snapshot.was_running {
             let config = snapshot
                 .config

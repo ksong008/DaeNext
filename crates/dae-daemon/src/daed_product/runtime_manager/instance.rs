@@ -101,11 +101,34 @@ pub(in crate::daed_product) fn start_product_runtime_instance_with_dns_reload_sn
 pub(in crate::daed_product) struct PreparedProductRuntime {
     config: Arc<Config>,
     resident: Option<ResidentPreparedGeneration>,
+    transition_identity: Option<RuntimeTransitionIdentity>,
 }
 
 impl PreparedProductRuntime {
     pub(in crate::daed_product) fn config(&self) -> &Arc<Config> {
         &self.config
+    }
+
+    pub(in crate::daed_product) fn with_transition_identity(
+        mut self,
+        transition_identity: RuntimeTransitionIdentity,
+    ) -> Self {
+        self.transition_identity = Some(transition_identity);
+        self
+    }
+
+    pub(in crate::daed_product) const fn transition_identity(
+        &self,
+    ) -> Option<RuntimeTransitionIdentity> {
+        self.transition_identity
+    }
+
+    pub(in crate::daed_product) fn into_resident_generation(
+        self,
+    ) -> Result<ResidentPreparedGeneration, String> {
+        self.resident.ok_or_else(|| {
+            "prepared product runtime is missing its resident generation plan".to_owned()
+        })
     }
 }
 
@@ -116,6 +139,7 @@ pub(in crate::daed_product) fn prepare_product_runtime_candidate(
         return Ok(PreparedProductRuntime {
             config,
             resident: None,
+            transition_identity: None,
         });
     }
     crate::service_contract::validate_resident_runtime_reload_config(&config)?;
@@ -124,6 +148,7 @@ pub(in crate::daed_product) fn prepare_product_runtime_candidate(
     Ok(PreparedProductRuntime {
         config,
         resident: Some(resident),
+        transition_identity: None,
     })
 }
 
@@ -133,7 +158,11 @@ pub(in crate::daed_product) fn start_prepared_product_runtime_instance(
     latency_seed: &[Value],
     dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> Result<(ProductRuntimeInstance, Value), String> {
-    let PreparedProductRuntime { config, resident } = prepared;
+    let PreparedProductRuntime {
+        config,
+        resident,
+        transition_identity: _,
+    } = prepared;
     if product_runtime_fake_start_enabled() {
         let started_at = now_text();
         let report = json!({
