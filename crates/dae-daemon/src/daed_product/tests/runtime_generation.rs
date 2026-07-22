@@ -384,6 +384,7 @@ fn ordinary_unchanged_reload_coalesces_without_waiting() {
         )
         .unwrap();
         assert!(initial.applied);
+        let active_config = runtime.current_config().unwrap();
 
         let unchanged = coordinate_runtime_reload(
             &runtime,
@@ -396,6 +397,10 @@ fn ordinary_unchanged_reload_coalesces_without_waiting() {
         .unwrap();
         assert!(!unchanged.applied);
         assert!(unchanged.coalesced);
+        assert!(Arc::ptr_eq(
+            &active_config,
+            &runtime.current_config().unwrap()
+        ));
         assert_eq!(runtime.summary()["reloadCount"], json!(1));
         assert_eq!(
             runtime.summary()["applyCoordinator"]["coalescedCount"],
@@ -522,7 +527,8 @@ fn reload_reports_process_owned_http_changes_as_pending_transition() {
             AllocatorReclaimReason::ReloadCompleted,
         )
         .unwrap();
-        let active_http = ProductHttpWorkerConfig::from_config(runtime.current_config().as_ref());
+        let current_config = runtime.current_config();
+        let active_http = ProductHttpWorkerConfig::from_config(current_config.as_deref());
         runtime.set_process_http_config(active_http);
         let desired_workers = if active_http.worker_count == PRODUCT_HTTP_WORKER_MAX {
             PRODUCT_HTTP_WORKER_MIN

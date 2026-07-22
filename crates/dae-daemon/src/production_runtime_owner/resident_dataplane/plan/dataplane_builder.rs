@@ -1,5 +1,12 @@
 use super::*;
+use dae_routing::RoutingMatcher;
 use std::collections::HashSet;
+
+pub(crate) struct ResidentPreparedDataplane {
+    pub(in crate::production_runtime_owner) plan: ResidentDataplanePlan,
+    pub(in crate::production_runtime_owner) routing_matcher: RoutingMatcher,
+    pub(in crate::production_runtime_owner) protocol_owner_specs: ResidentProtocolOwnerSpecs,
+}
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentDataplanePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) enabled: bool,
@@ -10,6 +17,17 @@ pub(crate) struct ResidentDataplanePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) tcp_dial_mode: TcpDialMode,
     pub(in crate::production_runtime_owner::resident_dataplane) sniffing_timeout: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) dns: ResidentDnsPlan,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ResidentProtocolOwnerSpecs {
+    pub(crate) tuic: bool,
+    pub(crate) juicity: bool,
+    pub(crate) anytls: bool,
+    pub(crate) h2_carrier: bool,
+    pub(crate) meek: bool,
+    pub(crate) vless_mux: bool,
+    pub(crate) xhttp_xmux: bool,
 }
 
 impl ResidentDataplanePlan {
@@ -32,6 +50,39 @@ impl ResidentDataplanePlan {
     ) -> Option<ResidentProxyBinding> {
         self.default_proxy_group()
             .and_then(ResidentProxyGroupPlan::default_proxy_snapshot)
+    }
+
+    pub(crate) fn protocol_owner_specs(&self) -> ResidentProtocolOwnerSpecs {
+        ResidentProtocolOwnerSpecs {
+            tuic: self
+                .proxies
+                .values()
+                .any(ResidentProxyGroupPlan::requires_tuic_transport_owner),
+            juicity: self
+                .proxies
+                .values()
+                .any(ResidentProxyGroupPlan::requires_juicity_transport_owner),
+            anytls: self
+                .proxies
+                .values()
+                .any(ResidentProxyGroupPlan::requires_anytls_transport_owner),
+            h2_carrier: self
+                .proxies
+                .values()
+                .any(ResidentProxyGroupPlan::requires_h2_carrier_owner),
+            meek: self
+                .proxies
+                .values()
+                .any(ResidentProxyGroupPlan::requires_meek_transport_owner),
+            vless_mux: self
+                .proxies
+                .values()
+                .any(ResidentProxyGroupPlan::requires_vless_mux_owner),
+            xhttp_xmux: self
+                .proxies
+                .values()
+                .any(ResidentProxyGroupPlan::requires_xhttp_xmux_owner),
+        }
     }
 }
 
@@ -79,6 +130,7 @@ pub(crate) fn build_resident_dataplane_plan_with_geodata(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn build_resident_manual_probe_plans(
     config: &Config,
 ) -> BTreeMap<String, Result<ResidentProxyProbePlan, String>> {
@@ -128,6 +180,24 @@ pub(crate) fn build_resident_manual_probe_plans_for_helper(
                 )
             });
         plans.entry(link).or_insert(plan);
+    }
+    for link in requested_links.iter().filter(|link| !link.is_empty()) {
+        if plans.contains_key(link.as_str()) {
+            continue;
+        }
+        let node_tag = format!("manual_probe_{}", execution_link_hash(link));
+        let plan = profile
+            .as_ref()
+            .map_err(|error| error.clone())
+            .and_then(|profile| {
+                build_resident_manual_probe_plan_with_profile(
+                    config,
+                    node_tag,
+                    link.clone(),
+                    Arc::clone(profile),
+                )
+            });
+        plans.insert(link.clone(), plan);
     }
     for plan in plans.values_mut().filter_map(|plan| plan.as_mut().ok()) {
         plan.apply_latency_probe_control_mark(RESIDENT_CONTROL_PLANE_SO_MARK);

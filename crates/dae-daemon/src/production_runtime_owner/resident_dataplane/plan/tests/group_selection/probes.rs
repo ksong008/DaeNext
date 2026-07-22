@@ -289,6 +289,29 @@ pub(super) fn resident_manual_probe_plans_cover_all_admitted_config_nodes() {
 }
 
 #[test]
+pub(super) fn manual_probe_helper_builds_only_requested_external_links() {
+    let config = parse_config(
+        r#"
+        global {
+            lan_interface: daerust0
+        }
+        routing {
+            fallback: direct
+        }
+        "#,
+    );
+    let link = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let plans = build_resident_manual_probe_plans_for_helper(&config, std::slice::from_ref(&link));
+    let plan = plans
+        .get(&link)
+        .expect("requested external link is represented")
+        .as_ref()
+        .expect("requested SOCKS link is admitted");
+    assert_eq!(plan.execution_identity.as_str(), execution_link_hash(&link));
+    assert_eq!(plans.len(), 1);
+}
+
+#[test]
 pub(super) fn resident_latency_probe_plans_do_not_keep_xhttp_xmux_clients() {
     let xhttp = vless_xhttp_parser_fixture_url(
         "packet-up",

@@ -16,29 +16,22 @@ pub(crate) fn start_resident_production_runtime_with_latency_seed_and_dns_reload
     latency_seed: &[Value],
     dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> Result<ResidentProductionRuntime, String> {
-    start_resident_production_runtime_with_asset_dirs_and_latency_seed(
-        config,
-        Vec::<PathBuf>::new(),
-        latency_seed,
-        dns_reload_snapshot,
-    )
+    let prepared =
+        prepare_resident_production_generation(Arc::new(config.clone()), Vec::<PathBuf>::new())?;
+    start_prepared_resident_production_runtime(prepared, latency_seed, dns_reload_snapshot)
 }
 
 pub fn start_resident_production_runtime_with_asset_dirs(
     config: &Config,
     geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
 ) -> Result<ResidentProductionRuntime, String> {
-    start_resident_production_runtime_with_asset_dirs_and_latency_seed(
-        config,
-        geodata_asset_dirs,
-        &[],
-        None,
-    )
+    let prepared =
+        prepare_resident_production_generation(Arc::new(config.clone()), geodata_asset_dirs)?;
+    start_prepared_resident_production_runtime(prepared, &[], None)
 }
 
-fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
-    config: &Config,
-    geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+pub(crate) fn start_prepared_resident_production_runtime(
+    prepared: ResidentPreparedGeneration,
     latency_seed: &[Value],
     dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> Result<ResidentProductionRuntime, String> {
@@ -59,12 +52,22 @@ fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
         )
     })?;
 
-    let options = resident_runtime_options(config, geodata_asset_dirs, &artifact_dir)?;
+    let options = resident_runtime_options(
+        &prepared.config,
+        prepared.geodata_asset_dirs.clone(),
+        &artifact_dir,
+    )?;
 
     let start_file = artifact_dir.join("resident-production-runtime-start.json");
     let cleanup_file = artifact_dir.join("resident-production-runtime-cleanup.json");
-    let lan_ifaces = configured_lan_ifaces(config);
-    let wan_ifaces = configured_wan_ifaces(config)?;
+    let lan_ifaces = configured_lan_ifaces(&prepared.config);
+    let wan_ifaces = configured_wan_ifaces(&prepared.config)?;
+    let ResidentPreparedGeneration {
+        config,
+        geodata_asset_dirs: _,
+        geodata,
+        dataplane,
+    } = prepared;
     start_with_options(ResidentRuntimeStartContext {
         options,
         artifacts: ResidentRuntimeArtifactPaths {
@@ -73,6 +76,8 @@ fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
             cleanup_file,
         },
         config,
+        geodata,
+        dataplane,
         interfaces: ResidentRuntimeStartInterfaces {
             lan: lan_ifaces,
             wan: wan_ifaces,
@@ -84,7 +89,7 @@ fn start_resident_production_runtime_with_asset_dirs_and_latency_seed(
 
 pub(super) fn resident_runtime_options(
     config: &Config,
-    geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+    geodata_asset_dirs: Vec<PathBuf>,
     artifact_dir: &Path,
 ) -> Result<ProductionRuntimeOwnerOptions, String> {
     let native_ebpf_requested = resident_native_ebpf_enabled();
@@ -107,7 +112,7 @@ pub(super) fn resident_runtime_options(
         execute: true,
         ack_root_gate: true,
         source_object,
-        geodata_asset_dirs: geodata_asset_dirs.into_iter().map(Into::into).collect(),
+        geodata_asset_dirs,
         tproxy_port: config.global.tproxy_port,
         dae_netns_id: DEFAULT_DAE_NETNS_ID,
         netns_link_mode,

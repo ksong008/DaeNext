@@ -10,6 +10,7 @@ pub(super) const DEFAULT_NATIVE_BACKEND_ENV: &str = "RESIDENT_NATIVE_EBPF_BACKEN
 pub(super) const DEFAULT_NATIVE_BACKEND_LEGACY_ENV: &str = "DAE_RUST_NATIVE_EBPF_BACKEND";
 pub(super) const DEFAULT_RESIDENT_DATAPLANE_ENV: &str = "RESIDENT_DATAPLANE";
 pub(super) const DEFAULT_RESIDENT_DATAPLANE_LEGACY_ENV: &str = "DAE_RUST_RESIDENT_DATAPLANE";
+pub(super) const RESIDENT_START_EVIDENCE_WRITER_STACK_BYTES: usize = 256 * 1024;
 pub(super) const COOKIE_PID_MAP_NAME: &str = "cookie_pid_map";
 pub(super) const DOMAIN_ROUTING_MAP_NAME: &str = "domain_routing_map";
 pub(super) const LPM_ARRAY_MAP_NAME: &str = "lpm_array_map";

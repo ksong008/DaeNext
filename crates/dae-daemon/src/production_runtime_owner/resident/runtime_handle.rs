@@ -17,6 +17,7 @@ pub struct ResidentProductionRuntime {
     pub(super) discovered_routing_map_ids: Vec<Option<u32>>,
     pub(super) before_pin_snapshot: Vec<String>,
     pub(super) cleanup_file: PathBuf,
+    pub(super) start_evidence_writer: Option<thread::JoinHandle<Result<(), String>>>,
     pub(super) cleaned: bool,
 }
 
@@ -172,6 +173,21 @@ impl ResidentProductionRuntime {
         }
         let cleanup_started = Instant::now();
         let mut cleanup_phase_timings = Vec::new();
+
+        let phase_started = Instant::now();
+        let evidence_status = match self.start_evidence_writer.take() {
+            Some(writer) => match writer.join() {
+                Ok(Ok(())) => "pass",
+                Ok(Err(_)) | Err(_) => "fail",
+            },
+            None => "skipped",
+        };
+        push_cleanup_phase_timing(
+            &mut cleanup_phase_timings,
+            "start_evidence_writer_join",
+            evidence_status,
+            phase_started.elapsed(),
+        );
 
         let phase_started = Instant::now();
         if let Some(dataplane) = self.dataplane.as_mut() {
@@ -335,7 +351,7 @@ impl ResidentProductionRuntime {
         let write_status = if write_json_file(
             &self.cleanup_file,
             "resident-production-runtime-cleanup",
-            cleanup_report.clone(),
+            &cleanup_report,
         )
         .is_ok()
         {
@@ -355,11 +371,6 @@ impl ResidentProductionRuntime {
                 json!(cleanup_phase_timings),
             );
         }
-        let _ = write_json_file(
-            &self.cleanup_file,
-            "resident-production-runtime-cleanup",
-            cleanup_report.clone(),
-        );
         self.cleaned = true;
         Some(cleanup_report)
     }

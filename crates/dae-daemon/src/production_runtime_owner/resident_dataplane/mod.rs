@@ -28,15 +28,15 @@ pub(crate) use self::events::{
     ResidentEventWriterRuntime, set_event_log_policy, set_event_log_sink,
 };
 use self::events::{append_event, path_string};
+use self::plan::build_resident_dataplane_plan;
 pub(crate) use self::plan::{ResidentNodeSourceAdmission, resident_node_source_admissions};
-use self::plan::{build_resident_dataplane_plan, build_resident_dataplane_plan_with_geodata};
+pub(in crate::production_runtime_owner) use self::plan::{
+    ResidentPreparedDataplane, build_resident_dataplane_plan_with_geodata,
+};
 use self::probe::*;
 use self::tcp::{ResidentTcpRouter, ResidentTcpRuntimeConfig, resident_tcp_accept_loop_async};
 use self::udp::{
     probe_resident_proxy_udp_async, resident_udp_loop_async, resident_udp_proxy_handler_name,
-};
-use super::resident_routing::{
-    ResidentGeodataStore, build_resident_userspace_routing_matcher_with_geodata,
 };
 
 mod adapter_matrix;

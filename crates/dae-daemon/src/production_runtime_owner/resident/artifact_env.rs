@@ -103,8 +103,8 @@ pub(super) fn parse_native_backend(value: &str) -> Option<AttachBackend> {
     }
 }
 
-pub(super) fn write_json_file(path: &Path, label: &str, value: Value) -> Result<(), String> {
-    let encoded = serde_json::to_vec_pretty(&value)
+pub(super) fn write_json_file(path: &Path, label: &str, value: &Value) -> Result<(), String> {
+    let encoded = serde_json::to_vec_pretty(value)
         .map_err(|err| format!("failed to encode {label}: {err}"))?;
     fs::write(path, encoded).map_err(|err| format!("failed to write {}: {err}", path_string(path)))
 }

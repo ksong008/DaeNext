@@ -98,6 +98,98 @@ pub(in crate::daed_product) fn start_product_runtime_instance_with_dns_reload_sn
     Ok((ProductRuntimeInstance::Resident(runtime), report))
 }
 
+pub(in crate::daed_product) struct PreparedProductRuntime {
+    config: Arc<Config>,
+    resident: Option<ResidentPreparedGeneration>,
+}
+
+impl PreparedProductRuntime {
+    pub(in crate::daed_product) fn config(&self) -> &Arc<Config> {
+        &self.config
+    }
+}
+
+pub(in crate::daed_product) fn prepare_product_runtime_candidate(
+    config: Arc<Config>,
+) -> Result<PreparedProductRuntime, String> {
+    if product_runtime_fake_start_enabled() {
+        return Ok(PreparedProductRuntime {
+            config,
+            resident: None,
+        });
+    }
+    crate::service_contract::validate_resident_runtime_reload_config(&config)?;
+    let resident =
+        prepare_resident_production_generation(Arc::clone(&config), Vec::<PathBuf>::new())?;
+    Ok(PreparedProductRuntime {
+        config,
+        resident: Some(resident),
+    })
+}
+
+pub(in crate::daed_product) fn start_prepared_product_runtime_instance(
+    prepared: PreparedProductRuntime,
+    source: &str,
+    latency_seed: &[Value],
+    dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
+) -> Result<(ProductRuntimeInstance, Value), String> {
+    let PreparedProductRuntime { config, resident } = prepared;
+    if product_runtime_fake_start_enabled() {
+        let started_at = now_text();
+        let report = json!({
+            "status": "pass",
+            "runtimeControl": "fake-resident-runtime-test-only",
+            "source": source,
+            "fakeRuntime": true,
+            "startedAt": started_at,
+            "tproxyPort": config.global.tproxy_port,
+        });
+        return Ok((
+            ProductRuntimeInstance::Fake(FakeProductRuntime {
+                started_at,
+                tproxy_port: config.global.tproxy_port,
+            }),
+            report,
+        ));
+    }
+    let resident = resident.ok_or_else(|| {
+        "prepared product runtime is missing its resident generation plan".to_owned()
+    })?;
+    let runtime =
+        start_prepared_resident_production_runtime(resident, latency_seed, dns_reload_snapshot)?;
+    admitted_resident_runtime_report(&config, source, runtime)
+}
+
+fn admitted_resident_runtime_report(
+    config: &Config,
+    source: &str,
+    mut runtime: ResidentProductionRuntime,
+) -> Result<(ProductRuntimeInstance, Value), String> {
+    let state = runtime.product_state_summary();
+    let dataplane_enabled = state["residentDataplane"]["enabled"]
+        .as_bool()
+        .unwrap_or(false);
+    let dataplane_status = state["residentDataplane"]["status"].as_str().unwrap_or("");
+    if !dataplane_enabled || dataplane_status != "pass" {
+        let dataplane_detail = resident_dataplane_admission_detail(&state);
+        let _ = runtime.cleanup();
+        return Err(format!(
+            "resident production runtime started without admitted userspace dataplane: {dataplane_detail}; set {}=1 and require resident_dataplane.status=pass before Rust daed can be the production product path",
+            crate::service_contract::RESIDENT_DATAPLANE_ENV
+        ));
+    }
+    let report = json!({
+        "status": "pass",
+        "runtimeControl": "resident-production-runtime-manager",
+        "source": source,
+        "fakeRuntime": false,
+        "tproxyPort": config.global.tproxy_port,
+        "residentDataplane": state["residentDataplane"].clone(),
+        "residentStartupEvidence": state["startupEvidence"].clone(),
+    });
+    Ok((ProductRuntimeInstance::Resident(runtime), report))
+}
+
 pub(in crate::daed_product) fn preflight_product_runtime_candidate(
     config: &Config,
 ) -> Result<Value, String> {

@@ -21,7 +21,7 @@ pub(super) fn serve_forever(
         }
     };
     let runtime_config = app.runtime.current_config();
-    let config = ProductHttpWorkerConfig::from_config(runtime_config.as_ref());
+    let config = ProductHttpWorkerConfig::from_config(runtime_config.as_deref());
     app.http_metrics.configure(config);
     let sse_runtime =
         match ProductSseRuntime::start(config, Arc::downgrade(&app), Arc::clone(&app.http_metrics))

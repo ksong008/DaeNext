@@ -56,7 +56,8 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     {
         return DaedProductOutput::error(format!("start runtime readiness recovery failed: {err}"));
     }
-    let http_config = ProductHttpWorkerConfig::from_config(runtime.current_config().as_ref());
+    let runtime_config = runtime.current_config();
+    let http_config = ProductHttpWorkerConfig::from_config(runtime_config.as_deref());
     runtime.set_process_http_config(http_config);
     let auth_runtime = match ProductAuthRuntime::start_for_http_config(http_config) {
         Ok(runtime) => runtime,

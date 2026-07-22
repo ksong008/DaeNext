@@ -26,7 +26,7 @@ impl RuntimeApplyState {
 #[derive(Clone)]
 pub(in crate::daed_product) struct ProductRuntimeApplySnapshot {
     was_running: bool,
-    config: Option<Config>,
+    config: Option<Arc<Config>>,
     config_content: Option<Arc<str>>,
 }
 
@@ -107,10 +107,11 @@ impl ProductRuntimeManager {
                 .config
                 .clone()
                 .ok_or_else(|| "running runtime snapshot has no config".to_owned())?;
-            reload_product_runtime_with_config_content(
+            let prepared = prepare_product_runtime_candidate(config)?;
+            reload_prepared_product_runtime_with_config_content(
                 &self.lifecycle,
                 &self.inner,
-                config,
+                prepared,
                 snapshot.config_content.clone(),
                 "runtime-apply-rollback",
                 latency_seed,
