@@ -23,7 +23,7 @@ use tokio::time;
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::plan::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentProxyBinding, ResidentProxyProtocolPlan,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointDrainReport,
@@ -52,12 +52,13 @@ impl std::fmt::Debug for TuicOwnerKey {
 }
 
 impl TuicOwnerKey {
-    fn for_proxy(proxy: &ResidentProxyPlan) -> Self {
-        let generation = proxy.execution_plan().runtime_generation();
+    fn for_binding(binding: &ResidentProxyBinding) -> Self {
+        let proxy = binding.plan();
+        let generation = binding.runtime_generation();
         let mut digest = Sha256::new();
         digest.update(TUIC_OWNER_IDENTITY_DOMAIN);
         update_identity_part(&mut digest, proxy.graph_link_hash.as_bytes());
-        update_identity_part(&mut digest, &proxy.mark.to_be_bytes());
+        update_identity_part(&mut digest, &binding.effective_socket_mark().to_be_bytes());
         Self {
             generation,
             digest: digest.finalize().into(),
@@ -837,7 +838,7 @@ struct TuicBuildCommand {
     key: TuicOwnerKey,
     cell: Arc<TuicOwnerCell>,
     builder: SingleFlightBuilder<TuicSharedTransport>,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     caller: QuicEndpointCallerClass,
     deadline: AbsoluteDeadline,
     response: oneshot::Sender<Result<Arc<TuicSharedTransport>, String>>,
@@ -886,11 +887,11 @@ pub(crate) struct TuicOwnerRegistryHandle {
 impl TuicOwnerRegistryHandle {
     pub(crate) async fn acquire(
         &self,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         caller: QuicEndpointCallerClass,
         deadline: AbsoluteDeadline,
     ) -> Result<TuicTransportLease, String> {
-        let key = TuicOwnerKey::for_proxy(&proxy);
+        let key = TuicOwnerKey::for_binding(&binding);
         if key.generation != self.generation {
             return Err(format!(
                 "TUIC owner generation mismatch: requested={} active={}",
@@ -944,7 +945,7 @@ impl TuicOwnerRegistryHandle {
                     key,
                     cell: Arc::clone(&cell),
                     builder,
-                    proxy,
+                    binding,
                     caller,
                     deadline,
                     response,
@@ -1429,7 +1430,7 @@ async fn run_tuic_owner_build(
     metrics.cumulative_builds.fetch_add(1, Ordering::Relaxed);
     let result = build_tuic_transport(
         command.key,
-        command.proxy,
+        command.binding,
         command.caller,
         command.deadline,
         Arc::clone(&metrics),
@@ -1486,12 +1487,13 @@ struct TuicOwnerBuildError {
 
 async fn build_tuic_transport(
     key: TuicOwnerKey,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     caller: QuicEndpointCallerClass,
     deadline: AbsoluteDeadline,
     metrics: Arc<TuicOwnerRegistryMetrics>,
     resources: TuicOwnerResourceProfile,
 ) -> Result<(TuicSharedTransport, mpsc::Receiver<u16>), TuicOwnerBuildError> {
+    let proxy = binding.plan();
     let ResidentProxyProtocolPlan::TuicQuicTcp {
         uuid,
         password,
@@ -1509,8 +1511,7 @@ async fn build_tuic_transport(
     };
     let dae_outbound::tuic::TuicUdpRelayMode::Native = udp_relay_mode;
     let connected = open_tuic_quic_connection_candidates_async(
-        &proxy,
-        proxy.mark,
+        &binding,
         alpn,
         *allow_insecure,
         *congestion,

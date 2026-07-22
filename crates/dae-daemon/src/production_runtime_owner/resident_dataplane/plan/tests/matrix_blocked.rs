@@ -673,10 +673,10 @@ pub(super) fn resident_dataplane_plan_builds_proxy_by_outbound_index() {
         .unwrap()
         .default_proxy_snapshot()
         .unwrap();
-    assert_eq!(proxy.group_name, "proxy");
-    assert_eq!(proxy.node_tag, "first_node");
-    assert_eq!(secondary.group_name, "secondary");
-    assert_eq!(secondary.node_tag, "second_node");
+    assert_eq!(proxy.plan().group_name, "proxy");
+    assert_eq!(proxy.plan().node_tag, "first_node");
+    assert_eq!(secondary.plan().group_name, "secondary");
+    assert_eq!(secondary.plan().node_tag, "second_node");
 }
 
 #[test]

@@ -72,9 +72,9 @@ async fn forward_dns_h3_to_routed_target_async(
                 .map_err(|err| format!("{target}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+        ResidentDnsUpstreamSelection::Proxy { binding } => {
             let forwarder = forwarders
-                .proxy_h3_forwarder(upstream, target, Arc::clone(proxy), &remote.selection)
+                .proxy_h3_forwarder(upstream, target, binding.clone(), &remote.selection)
                 .map_err(ResidentDnsTransportError::message)?;
             forward_dns_h3_to_proxy_async(upstream, payload, forwarder, context)
                 .await

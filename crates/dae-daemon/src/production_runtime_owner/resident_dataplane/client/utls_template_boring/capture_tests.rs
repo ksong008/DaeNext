@@ -289,6 +289,7 @@ fn test_tls_proxy(fingerprint: &UtlsFingerprint) -> ResidentProxyPlan {
     );
     proxy.protocol = "trojan";
     proxy.tls = "tls".to_owned();
+    proxy.materialize_execution();
     proxy
 }
 
@@ -305,6 +306,7 @@ fn test_reality_proxy(fingerprint: &UtlsFingerprint) -> ResidentProxyPlan {
         short_id: vec![1, 2, 3, 4],
         spider_x: "/".to_owned(),
     });
+    proxy.materialize_execution();
     proxy
 }
 

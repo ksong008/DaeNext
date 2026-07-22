@@ -15,8 +15,7 @@ pub(crate) async fn handle_shadowsocks_v2ray_plugin_tls_ws_proxy_tcp_connection_
     path: &str,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options = HttpUpgradeOptions::new(host, path);
     websocket_handshake_over_resident_tls_async(&mut client, &options).await?;

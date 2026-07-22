@@ -251,7 +251,7 @@ fn meek_test_proxy(
     address: SocketAddr,
     generation: u64,
     graph_link_hash: &str,
-) -> Arc<plan::ResidentProxyPlan> {
+) -> plan::ResidentProxyBinding {
     let mut proxy = plan::ResidentProxyPlan {
         graph_id: format!("resident-graph:{graph_link_hash}"),
         graph_link_hash: graph_link_hash.to_owned(),
@@ -283,8 +283,12 @@ fn meek_test_proxy(
         mark: 0,
         mptcp: false,
     };
-    proxy.apply_runtime_generation(generation);
-    Arc::new(proxy)
+    proxy.materialize_execution();
+    plan::ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .unwrap()
 }
 
 fn meek_test_options(session: &[u8]) -> MeekRoundTripOptions {
@@ -301,7 +305,7 @@ fn meek_owner_deadline(duration: Duration) -> dae_runtime_control::AbsoluteDeadl
 }
 
 async fn meek_round_trip_from_fresh_runtime(
-    proxy: Arc<plan::ResidentProxyPlan>,
+    binding: plan::ResidentProxyBinding,
     options: MeekRoundTripOptions,
     body: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
@@ -311,7 +315,7 @@ async fn meek_round_trip_from_fresh_runtime(
             .enable_time()
             .build()
             .unwrap()
-            .block_on(tcp::meek_round_trip_async(&proxy, &options, &body))
+            .block_on(tcp::meek_round_trip_async(&binding, &options, &body))
     })
     .await
     .unwrap()
@@ -360,14 +364,14 @@ fn meek_transport_reuses_one_physical_across_caller_runtimes_and_sessions() {
             .unwrap();
 
             let first = meek_round_trip_from_fresh_runtime(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 meek_test_options(b"session-a"),
                 b"first".to_vec(),
             )
             .await
             .unwrap();
             let second = meek_round_trip_from_fresh_runtime(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 meek_test_options(b"session-b"),
                 b"second".to_vec(),
             )
@@ -483,7 +487,7 @@ fn cancelled_meek_poll_retires_uncertain_physical_and_generations_drain() {
                 2,
             )
             .unwrap();
-            let cancelled_proxy = Arc::clone(&proxy);
+            let cancelled_proxy = proxy.clone();
             let cancelled = tokio::spawn(async move {
                 tcp::meek_round_trip_async(
                     &cancelled_proxy,
@@ -649,7 +653,7 @@ fn meek_transport_enforces_owner_and_physical_capacity() {
             )
             .with_transport_limits_for_test(1, 1, 1, Duration::from_secs(1));
             let missing_owner = acquire_meek_transport(
-                Arc::clone(&first_proxy),
+                first_proxy.clone(),
                 meek_owner_deadline(Duration::from_millis(40)),
             )
             .await
@@ -668,13 +672,13 @@ fn meek_transport_enforces_owner_and_physical_capacity() {
             .unwrap();
 
             let first = acquire_meek_transport(
-                Arc::clone(&first_proxy),
+                first_proxy.clone(),
                 meek_owner_deadline(Duration::from_secs(1)),
             )
             .await
             .unwrap();
             let capacity = acquire_meek_transport(
-                Arc::clone(&first_proxy),
+                first_proxy.clone(),
                 meek_owner_deadline(Duration::from_millis(40)),
             )
             .await

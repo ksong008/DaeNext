@@ -1,5 +1,49 @@
 use super::*;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
+
+#[test]
+pub(super) fn resident_probe_descriptors_and_profiles_are_shared() {
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let config_text = r#"
+        global {
+            lan_interface: daerust0
+        }
+        node {
+            node_a: '__NODE_A__'
+            node_b: '__NODE_B__'
+        }
+        group {
+            proxy {
+                filter: name(node_a, node_b)
+                policy: min
+            }
+        }
+        routing {
+            fallback: proxy
+        }
+        "#
+    .replace("__NODE_A__", &node_a)
+    .replace("__NODE_B__", &node_b);
+    let config = parse_config(&config_text);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let group = plan.default_proxy_group().unwrap();
+
+    let first = group.probe_candidates();
+    let second = group.probe_candidates();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert!(first[0].shares_profile_with(&first[1]));
+    assert!(Arc::ptr_eq(
+        first[0].binding.shared_plan(),
+        group.candidates[0].binding.shared_plan()
+    ));
+
+    let manual = build_resident_manual_probe_plans(&config);
+    let manual_a = manual.get(&node_a).unwrap().as_ref().unwrap();
+    let manual_b = manual.get(&node_b).unwrap().as_ref().unwrap();
+    assert!(manual_a.shares_profile_with(manual_b));
+}
 
 #[test]
 pub(super) fn latency_probe_helper_materializes_only_requested_links() {
@@ -232,7 +276,7 @@ pub(super) fn resident_manual_probe_plans_cover_all_admitted_config_nodes() {
         .expect("orphan node should be indexed")
         .as_ref()
         .expect("orphan socks node should be admitted");
-    assert_eq!(orphan.node_tag, "orphan");
+    assert_eq!(orphan.node_tag.as_str(), "orphan");
     assert_eq!(orphan.tcp_check.method, "GET");
     assert_eq!(orphan.tcp_check.target, format!("{probe_target}:80"));
     assert_eq!(orphan.tcp_check.host, check_host);
@@ -278,9 +322,10 @@ pub(super) fn resident_latency_probe_plans_do_not_keep_xhttp_xmux_clients() {
         .unwrap()
         .default_proxy_snapshot()
         .unwrap();
-    assert!(runtime_proxy.xhttp_xmux.is_some());
+    assert!(runtime_proxy.plan().xhttp_xmux.is_some());
     assert!(
         runtime_proxy
+            .plan()
             .xhttp_download
             .as_ref()
             .unwrap()
@@ -288,23 +333,16 @@ pub(super) fn resident_latency_probe_plans_do_not_keep_xhttp_xmux_clients() {
             .is_some()
     );
 
-    let group_probe = runtime_plan
+    let group_probes = runtime_plan
         .default_proxy_group()
         .unwrap()
-        .probe_candidates()
-        .into_iter()
-        .next()
-        .unwrap();
-    assert!(group_probe.proxy.xhttp_xmux.is_none());
-    assert!(
-        group_probe
-            .proxy
-            .xhttp_download
-            .as_ref()
-            .unwrap()
-            .xmux
-            .is_none()
+        .probe_candidates();
+    let group_probe = group_probes.first().unwrap();
+    assert_eq!(
+        group_probe.binding.xhttp_reuse_policy(),
+        ResidentXhttpReusePolicy::NoPersistentReuse
     );
+    assert!(group_probe.binding.plan().xhttp_xmux.is_some());
 
     let manual_plans = build_resident_manual_probe_plans(&config);
     let manual_probe = manual_plans
@@ -312,16 +350,11 @@ pub(super) fn resident_latency_probe_plans_do_not_keep_xhttp_xmux_clients() {
         .expect("xHTTP node should be indexed")
         .as_ref()
         .expect("xHTTP node should be admitted");
-    assert!(manual_probe.proxy.xhttp_xmux.is_none());
-    assert!(
-        manual_probe
-            .proxy
-            .xhttp_download
-            .as_ref()
-            .unwrap()
-            .xmux
-            .is_none()
+    assert_eq!(
+        manual_probe.binding.xhttp_reuse_policy(),
+        ResidentXhttpReusePolicy::NoPersistentReuse
     );
+    assert!(manual_probe.binding.plan().xhttp_xmux.is_some());
 }
 
 #[test]

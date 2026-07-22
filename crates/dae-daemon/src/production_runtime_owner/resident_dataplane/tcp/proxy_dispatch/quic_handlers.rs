@@ -89,7 +89,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     });
     let transport = hysteria2_owner_registry
         .acquire(
-            Arc::clone(&selection.proxy),
+            selection.proxy.clone(),
             QuicEndpointCallerClass::TcpData,
             deadline,
         )
@@ -220,7 +220,7 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
     });
     let transport = tuic_owner_registry
         .acquire(
-            Arc::clone(&selection.proxy),
+            selection.proxy.clone(),
             QuicEndpointCallerClass::TcpData,
             deadline,
         )
@@ -319,7 +319,7 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
     });
     let transport = owner_registry
         .acquire(
-            Arc::clone(&selection.proxy),
+            selection.proxy.clone(),
             QuicEndpointCallerClass::TcpData,
             deadline,
         )

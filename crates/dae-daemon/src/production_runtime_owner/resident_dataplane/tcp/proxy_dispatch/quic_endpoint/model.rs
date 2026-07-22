@@ -199,6 +199,7 @@ impl QuicEndpointOpenContext {
     pub(crate) fn for_proxy(
         protocol: QuicEndpointProtocol,
         default_caller: QuicEndpointCallerClass,
+        default_generation: OwnerGeneration,
         proxy: &ResidentProxyPlan,
         role: QuicEndpointIdentityRole,
         additional_identity: &[&[u8]],
@@ -221,7 +222,7 @@ impl QuicEndpointOpenContext {
             caller: task.map_or(default_caller, |value| value.caller),
             generation: task
                 .and_then(|value| value.generation)
-                .or(Some(proxy.execution_plan().runtime_generation())),
+                .or(Some(default_generation)),
             key_seed: identity.finish(),
         }
     }

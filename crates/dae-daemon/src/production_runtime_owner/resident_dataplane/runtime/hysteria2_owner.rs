@@ -29,7 +29,7 @@ use crate::production_runtime_owner::udp_payload_admission::{
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::plan::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentProxyBinding, ResidentProxyProtocolPlan,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::{
     Hysteria2Failure, Hysteria2FailureClass, Hysteria2PortHoppingMetrics,
@@ -59,8 +59,9 @@ impl std::fmt::Debug for Hysteria2OwnerKey {
 }
 
 impl Hysteria2OwnerKey {
-    fn for_proxy(proxy: &ResidentProxyPlan) -> Self {
-        let generation = proxy.execution_plan().runtime_generation();
+    fn for_binding(binding: &ResidentProxyBinding) -> Self {
+        let proxy = binding.plan();
+        let generation = binding.runtime_generation();
         let mut digest = Sha256::new();
         digest.update(HYSTERIA2_OWNER_IDENTITY_DOMAIN);
         update_identity_part(&mut digest, proxy.server_host.as_bytes());
@@ -98,7 +99,7 @@ impl Hysteria2OwnerKey {
             update_identity_part(&mut digest, &port.to_be_bytes());
         }
         update_identity_part(&mut digest, &port_hop_interval.as_nanos().to_be_bytes());
-        update_identity_part(&mut digest, &proxy.mark.to_be_bytes());
+        update_identity_part(&mut digest, &binding.effective_socket_mark().to_be_bytes());
         Self {
             generation,
             digest: digest.finalize().into(),
@@ -974,7 +975,7 @@ struct Hysteria2BuildCommand {
     key: Hysteria2OwnerKey,
     cell: Arc<Hysteria2OwnerCell>,
     builder: SingleFlightBuilder<Hysteria2SharedTransport>,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     caller: QuicEndpointCallerClass,
     deadline: AbsoluteDeadline,
     response: oneshot::Sender<Result<Arc<Hysteria2SharedTransport>, String>>,
@@ -1025,11 +1026,11 @@ pub(crate) struct Hysteria2OwnerRegistryHandle {
 impl Hysteria2OwnerRegistryHandle {
     pub(crate) async fn acquire(
         &self,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         caller: QuicEndpointCallerClass,
         deadline: AbsoluteDeadline,
     ) -> Result<Hysteria2TransportLease, String> {
-        let key = Hysteria2OwnerKey::for_proxy(&proxy);
+        let key = Hysteria2OwnerKey::for_binding(&binding);
         if key.generation != self.generation {
             return Err(format!(
                 "Hysteria2 owner generation mismatch: requested={} active={}",
@@ -1084,7 +1085,7 @@ impl Hysteria2OwnerRegistryHandle {
                     key,
                     cell: Arc::clone(&cell),
                     builder,
-                    proxy,
+                    binding,
                     caller,
                     deadline,
                     response,
@@ -1592,7 +1593,7 @@ async fn run_hysteria2_owner_build(
     metrics.cumulative_builds.fetch_add(1, Ordering::Relaxed);
     let result = build_hysteria2_transport(
         command.key,
-        command.proxy,
+        command.binding,
         command.caller,
         command.deadline,
         Arc::clone(&metrics),
@@ -1720,13 +1721,14 @@ impl Hysteria2OwnerBuildError {
 
 async fn build_hysteria2_transport(
     key: Hysteria2OwnerKey,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     caller: QuicEndpointCallerClass,
     deadline: AbsoluteDeadline,
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     resources: Hysteria2OwnerResourceProfile,
     cancellation: OwnerCancellationSignal,
 ) -> Result<(Hysteria2SharedTransport, Hysteria2AuthenticatedSession), Hysteria2OwnerBuildError> {
+    let proxy = binding.plan();
     let ResidentProxyProtocolPlan::Hysteria2QuicTcp {
         auth,
         tls_identity,
@@ -1757,8 +1759,9 @@ async fn build_hysteria2_transport(
     );
     let connected = open_hysteria2_quic_connection_candidates_async(
         Hysteria2QuicConnectionRequest {
-            proxy: &proxy,
-            mark: proxy.mark,
+            proxy,
+            generation: binding.runtime_generation(),
+            mark: binding.effective_socket_mark(),
             obfs,
             port_hop_ports,
             port_hop_interval: *port_hop_interval,
@@ -1974,8 +1977,10 @@ mod tests {
             link,
         )
         .unwrap();
-        proxy.apply_runtime_generation(41);
-        Hysteria2OwnerKey::for_proxy(&proxy)
+        proxy.materialize_execution();
+        let binding = ResidentProxyBinding::resident(Arc::new(proxy), OwnerGeneration::new(41))
+            .expect("materialized Hysteria2 owner identity test binding");
+        Hysteria2OwnerKey::for_binding(&binding)
     }
 
     #[test]

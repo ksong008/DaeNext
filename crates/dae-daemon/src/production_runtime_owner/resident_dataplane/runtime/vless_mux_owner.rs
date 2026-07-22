@@ -25,12 +25,12 @@ use tokio::time;
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::client::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name,
-    open_async_resident_tls_client_with_flow,
+    open_async_resident_tls_client_with_binding,
 };
 use crate::production_runtime_owner::resident_dataplane::plan::{
-    ResidentProtocolShape, ResidentProxyPlan, ResidentStreamWrapperPlan,
+    ResidentProtocolShape, ResidentProxyBinding, ResidentStreamWrapperPlan,
 };
-use crate::production_runtime_owner::resident_dataplane::transport_identity::resident_transport_identity_digest;
+use crate::production_runtime_owner::resident_dataplane::transport_identity::resident_transport_binding_identity_digest;
 
 const VLESS_MUX_TRANSPORT_IDENTITY_DOMAIN: &[u8] = b"dae/vless-mux-transport-owner/v1";
 
@@ -45,10 +45,13 @@ struct VlessMuxTransportKey {
 }
 
 impl VlessMuxTransportKey {
-    fn for_proxy(proxy: &ResidentProxyPlan) -> Self {
+    fn for_binding(binding: &ResidentProxyBinding) -> Self {
         Self {
-            generation: proxy.execution_plan().runtime_generation(),
-            digest: resident_transport_identity_digest(VLESS_MUX_TRANSPORT_IDENTITY_DOMAIN, proxy),
+            generation: binding.runtime_generation(),
+            digest: resident_transport_binding_identity_digest(
+                VLESS_MUX_TRANSPORT_IDENTITY_DOMAIN,
+                binding,
+            ),
         }
     }
 }
@@ -801,11 +804,11 @@ fn vless_mux_pool(
 }
 
 pub(crate) async fn acquire_vless_mux_logical_stream(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: String,
     deadline: AbsoluteDeadline,
 ) -> Result<VlessMuxLogicalStream, String> {
-    let execution = proxy.execution_plan();
+    let execution = binding.execution();
     if execution.protocol != ResidentProtocolShape::VlessMux
         || execution.wrapper != ResidentStreamWrapperPlan::Mux
     {
@@ -813,7 +816,7 @@ pub(crate) async fn acquire_vless_mux_logical_stream(
     }
     VMessMetadata::parse("tcp", &target)
         .map_err(|error| format!("build VLESS mux target metadata: {error}"))?;
-    let key = VlessMuxTransportKey::for_proxy(&proxy);
+    let key = VlessMuxTransportKey::for_binding(&binding);
     let owner = vless_mux_generation(key.generation)?;
     let pool = vless_mux_pool(&owner, key)?;
     loop {
@@ -837,15 +840,9 @@ pub(crate) async fn acquire_vless_mux_logical_stream(
         let capacity = try_reserve_vless_mux_physical(&owner, &pool);
         if let Some(capacity) = capacity {
             drop(gate);
-            let physical = build_vless_mux_physical(
-                &owner,
-                &pool,
-                Arc::clone(&proxy),
-                key,
-                deadline,
-                capacity,
-            )
-            .await?;
+            let physical =
+                build_vless_mux_physical(&owner, &pool, binding.clone(), key, deadline, capacity)
+                    .await?;
             let permit = physical.reserve_logical(&owner).ok_or_else(|| {
                 "new VLESS mux physical rejected its first logical stream".to_owned()
             })?;
@@ -924,7 +921,7 @@ fn try_reserve_vless_mux_physical(
 async fn build_vless_mux_physical(
     owner: &Arc<VlessMuxGenerationOwner>,
     pool: &Arc<VlessMuxTransportPool>,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     key: VlessMuxTransportKey,
     deadline: AbsoluteDeadline,
     capacity: VlessMuxPhysicalCapacityGuard,
@@ -957,7 +954,7 @@ async fn build_vless_mux_physical(
         start_receiver
             .await
             .map_err(|_| "VLESS mux physical build stopped before startup".to_owned())?;
-        build_vless_mux_physical_on_owner(build_owner, build_pool, proxy, key, deadline, capacity)
+        build_vless_mux_physical_on_owner(build_owner, build_pool, binding, key, deadline, capacity)
             .await
     });
     {
@@ -1007,17 +1004,18 @@ async fn build_vless_mux_physical(
 async fn build_vless_mux_physical_on_owner(
     owner: Arc<VlessMuxGenerationOwner>,
     pool: Arc<VlessMuxTransportPool>,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     key: VlessMuxTransportKey,
     deadline: AbsoluteDeadline,
     capacity: VlessMuxPhysicalCapacityGuard,
 ) -> Result<Arc<VlessMuxPhysicalHandle>, String> {
+    let proxy = binding.plan();
     let remaining = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "VLESS mux physical TLS deadline elapsed".to_owned())?;
     let mut client = time::timeout(
         remaining,
-        open_async_resident_tls_client_with_flow(&proxy, proxy.mark, proxy.mptcp),
+        open_async_resident_tls_client_with_binding(&binding, proxy.mptcp),
     )
     .await
     .map_err(|_| "VLESS mux physical TLS deadline elapsed".to_owned())??;
@@ -1756,7 +1754,7 @@ mod tests {
         let production = owner
             .split_once("#[cfg(test)]\nmod tests")
             .map_or(owner, |(production, _)| production);
-        assert!(production.contains("open_async_resident_tls_client_with_flow"));
+        assert!(production.contains("open_async_resident_tls_client_with_binding"));
         assert!(connection.contains("acquire_vless_mux_logical_stream"));
         assert!(probe.contains("acquire_vless_mux_logical_stream"));
         assert!(workers.contains("start_vless_mux_generation_owner"));

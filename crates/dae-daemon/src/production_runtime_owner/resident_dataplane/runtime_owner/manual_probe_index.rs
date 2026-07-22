@@ -16,7 +16,7 @@ impl ResidentManualProbeIndex {
                 continue;
             };
             links_by_hash
-                .entry(candidate.link_hash.clone())
+                .entry(candidate.link_hash.as_ref().clone())
                 .or_default()
                 .push(link.clone());
         }

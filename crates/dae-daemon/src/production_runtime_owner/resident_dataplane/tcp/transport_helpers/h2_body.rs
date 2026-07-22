@@ -4,7 +4,7 @@ use bytes::BytesMut;
 const H2_UPLOAD_READ_CHUNK: usize = 16 * 1024;
 
 pub(crate) async fn open_h2_body_stream(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     first_payload: &[u8],
     context: &str,
 ) -> Result<(h2::SendStream<Bytes>, h2::RecvStream, H2CarrierLease), String> {
@@ -13,17 +13,18 @@ pub(crate) async fn open_h2_body_stream(
     } else {
         vec![Bytes::copy_from_slice(first_payload)]
     };
-    open_h2_body_stream_with_initial_chunks(proxy, initial_chunks, context).await
+    open_h2_body_stream_with_initial_chunks(binding, initial_chunks, context).await
 }
 
 pub(crate) async fn open_h2_body_stream_with_initial_chunks(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     initial_chunks: Vec<Bytes>,
     context: &str,
 ) -> Result<(h2::SendStream<Bytes>, h2::RecvStream, H2CarrierLease), String> {
+    let proxy = binding.plan();
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
-    let lease = acquire_h2_carrier(Arc::new(proxy.clone()), deadline).await?;
+    let lease = acquire_h2_carrier(binding.clone(), deadline).await?;
     let uri = format!(
         "https://{}{}",
         h2_body_authority(proxy),
@@ -52,7 +53,7 @@ pub(crate) async fn open_h2_body_stream_with_initial_chunks(
 }
 
 pub(crate) async fn open_h2_body_stream_with_deferred_response(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     initial_chunks: Vec<Bytes>,
     context: &'static str,
 ) -> Result<
@@ -63,9 +64,10 @@ pub(crate) async fn open_h2_body_stream_with_deferred_response(
     ),
     String,
 > {
+    let proxy = binding.plan();
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
-    let lease = acquire_h2_carrier(Arc::new(proxy.clone()), deadline).await?;
+    let lease = acquire_h2_carrier(binding.clone(), deadline).await?;
     let uri = format!(
         "https://{}{}",
         h2_body_authority(proxy),

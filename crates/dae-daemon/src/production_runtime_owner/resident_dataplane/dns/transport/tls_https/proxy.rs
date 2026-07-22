@@ -4,13 +4,13 @@ pub(super) async fn forward_dns_tls_to_proxy_async(
     upstream: &ResidentDnsUpstream,
     target: SocketAddr,
     payload: &[u8],
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     owners: ResidentTransportOwnerRegistries,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let target = target.to_string();
     exchange_resident_proxy_dns_tcp_stream_async(
-        proxy,
+        binding,
         &target,
         true,
         Vec::new(),
@@ -36,13 +36,13 @@ pub(super) async fn forward_dns_https_to_proxy_async(
     upstream: &ResidentDnsUpstream,
     target: SocketAddr,
     payload: &[u8],
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     owners: ResidentTransportOwnerRegistries,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let target = target.to_string();
     exchange_resident_proxy_dns_tcp_stream_async(
-        proxy,
+        binding,
         &target,
         true,
         Vec::new(),

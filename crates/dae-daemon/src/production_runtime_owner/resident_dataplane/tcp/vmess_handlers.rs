@@ -94,8 +94,7 @@ pub(super) async fn handle_vmess_tls_proxy_tcp_connection_async(
     body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
@@ -311,8 +310,7 @@ pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
     body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
@@ -403,8 +401,7 @@ pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
     body_security: dae_outbound::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);

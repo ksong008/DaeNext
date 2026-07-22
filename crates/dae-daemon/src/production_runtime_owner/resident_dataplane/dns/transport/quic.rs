@@ -322,9 +322,9 @@ async fn forward_dns_quic_to_routed_target_async(
                 .map_err(|err| format!("{target}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { proxy } => {
+        ResidentDnsUpstreamSelection::Proxy { binding } => {
             let forwarder = forwarders
-                .proxy_quic_forwarder(upstream, target, Arc::clone(proxy), &remote.selection)
+                .proxy_quic_forwarder(upstream, target, binding.clone(), &remote.selection)
                 .map_err(ResidentDnsTransportError::message)?;
             forward_dns_quic_to_proxy_async(upstream, payload, forwarder, context)
                 .await
@@ -469,14 +469,15 @@ pub(super) fn managed_dns_quic_endpoint_context(
     protocol: QuicEndpointProtocol,
     upstream: &ResidentDnsUpstream,
     remote: SocketAddr,
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
 ) -> QuicEndpointOpenContext {
     let port = upstream.target.port.to_be_bytes();
     let remote = remote.to_string();
     QuicEndpointOpenContext::for_proxy(
         protocol,
         QuicEndpointCallerClass::ManagedDns,
-        proxy,
+        binding.runtime_generation(),
+        binding.plan(),
         QuicEndpointIdentityRole::ManagedDnsOuter,
         &[
             upstream.tag.as_bytes(),

@@ -1,7 +1,7 @@
 use super::*;
 
 fn xhttp_child() -> ResidentProxyPlan {
-    ResidentProxyPlan {
+    let mut proxy = ResidentProxyPlan {
         graph_id: "resident-graph:xhttp-chain".to_owned(),
         graph_link_hash: "sha256:xhttp-chain".to_owned(),
         redacted_link_source: "vless://<redacted>".to_owned(),
@@ -31,7 +31,9 @@ fn xhttp_child() -> ResidentProxyPlan {
         chain_parent: None,
         mark: 0,
         mptcp: false,
-    }
+    };
+    proxy.materialize_execution();
+    proxy
 }
 
 #[test]

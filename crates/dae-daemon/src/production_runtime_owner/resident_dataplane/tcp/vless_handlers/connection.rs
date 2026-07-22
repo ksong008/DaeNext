@@ -112,8 +112,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         return Err("materialized VLESS wrapper has no TCP executor".to_owned());
     }
     let mut client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let request = packet::first_write_bytes(
@@ -175,9 +174,7 @@ pub(crate) async fn handle_vless_plain_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let mut client =
-        open_proxy_tcp_stream_async_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+    let mut client = open_proxy_tcp_stream_with_binding(&selection.proxy, selection.mptcp).await?;
     let key = selection.proxy.vless_key()?;
     let request = packet::first_write_bytes(
         &key,
@@ -343,7 +340,7 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
     let mut logical = acquire_vless_mux_logical_stream(
-        Arc::clone(&selection.proxy),
+        selection.proxy.clone(),
         selection.route.dial_target.clone(),
         deadline,
     )
@@ -505,8 +502,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let options =
@@ -580,8 +576,7 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let options =

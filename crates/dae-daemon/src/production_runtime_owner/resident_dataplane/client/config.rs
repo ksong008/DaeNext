@@ -465,6 +465,7 @@ mod tests {
         let mut proxy =
             test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
         proxy.flow = XTLS_RPRX_VISION.to_owned();
+        proxy.materialize_execution();
 
         assert!(!boring_read_ahead_enabled(&proxy));
     }
@@ -522,6 +523,7 @@ mod tests {
             short_id: vec![1, 2, 3, 4],
             spider_x: "/".to_owned(),
         });
+        proxy.materialize_execution();
 
         let first = rustls_vless_client_config(&proxy).unwrap();
         let second = rustls_vless_client_config(&proxy).unwrap();
@@ -542,6 +544,7 @@ mod tests {
         proxy.utls_fingerprint = Some(test_fingerprint_plan(
             dae_outbound::shared_transport::UTLS_FAMILY_IOS,
         ));
+        proxy.materialize_execution();
 
         let err = rustls_vless_client_config(&proxy).unwrap_err();
         assert!(err.contains("rustls cannot implement uTLS fingerprints"));
@@ -560,6 +563,7 @@ mod tests {
         proxy.utls_fingerprint = Some(test_fingerprint_plan(
             dae_outbound::shared_transport::UTLS_FAMILY_CHROME,
         ));
+        proxy.materialize_execution();
 
         assert_eq!(
             ResidentTlsProvider::from_proxy(&proxy).unwrap(),
@@ -616,7 +620,7 @@ mod tests {
     }
 
     fn test_proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
-        ResidentProxyPlan {
+        let mut proxy = ResidentProxyPlan {
             graph_id: "resident-graph:test".to_owned(),
             graph_link_hash: "sha256:test".to_owned(),
             redacted_link_source: "source:<redacted>".to_owned(),
@@ -646,6 +650,8 @@ mod tests {
             chain_parent: None,
             mark: 0,
             mptcp: false,
-        }
+        };
+        proxy.materialize_execution();
+        proxy
     }
 }

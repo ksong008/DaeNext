@@ -13,8 +13,7 @@ pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     password: &str,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
@@ -100,8 +99,7 @@ pub(crate) async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection
     inner_password: &str,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
@@ -178,8 +176,7 @@ pub(crate) async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
     password: &str,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
@@ -348,8 +345,7 @@ pub(crate) async fn handle_trojan_tls_tcp_connection_async(
     password: &str,
 ) -> Result<Value, String> {
     let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
+        open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let initial_payload = sniff.take_payload();
     let initial_payload_len = initial_payload.len();

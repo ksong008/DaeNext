@@ -4,7 +4,7 @@ impl UdpSessionExecutor {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn execute(
         &mut self,
         dns: &ResidentDnsPlan,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<(&'static str, UdpExchangeResult), String> {
@@ -13,7 +13,7 @@ impl UdpSessionExecutor {
                 .await
                 .map(|response| resident_dns_udp_exchange_result(original_dst, response)),
             _ => {
-                self.execute_proxy_packet(proxy, original_dst, payload)
+                self.execute_proxy_packet(binding, original_dst, payload)
                     .await
             }
         }
@@ -21,48 +21,49 @@ impl UdpSessionExecutor {
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn execute_proxy_packet(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<(&'static str, UdpExchangeResult), String> {
+        let proxy = binding.plan();
         match self {
             Self::Dns => Err(
                 "resident DNS UDP executor cannot be used as a proxy packet executor".to_owned(),
             ),
             Self::ShadowsocksAead(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::Shadowsocks2022(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::Socks5(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::VlessVision(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::VlessStandard(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::VlessXhttpH2(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::VlessXhttpH3(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::Trojan(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::VmessAead(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::AnyTls(session) => session
@@ -78,7 +79,7 @@ impl UdpSessionExecutor {
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::Juicity(session) => session
-                .exchange(proxy, original_dst, payload)
+                .exchange(binding, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::FailClosed { reason } => Err(format!(

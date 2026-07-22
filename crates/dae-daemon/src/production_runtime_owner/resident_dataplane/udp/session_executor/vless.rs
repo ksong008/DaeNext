@@ -15,16 +15,17 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXud
 impl VlessXudpStreamSession {
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if proxy.execution_plan().protocol != ResidentProtocolShape::VlessVision {
+        if binding.execution().protocol != ResidentProtocolShape::VlessVision {
             return Err(
                 "VLESS Vision XUDP stream executor requires an official Vision flow; other admitted VLESS UDP shapes use their own executor"
                     .to_owned(),
             );
         }
+        let proxy = binding.plan();
         self.fixed_target
             .bind(original_dst, "VLESS Vision XUDP stream")?;
         let key = match self.key {
@@ -37,7 +38,8 @@ impl VlessXudpStreamSession {
         };
         if self.client.is_none() {
             let frame = xudp_new_frame(original_dst, payload)?;
-            let mut client = open_async_resident_tls_client(proxy).await?;
+            let mut client =
+                open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
             self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
             let mut request =
                 packet::request_header(&key, &proxy.flow, "tcp", XUDP_MUX_TARGET, true, &[])
@@ -201,16 +203,17 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXht
 impl VlessXhttpH2UdpSession {
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if proxy.execution_plan().protocol != ResidentProtocolShape::VlessStandard {
+        if binding.execution().protocol != ResidentProtocolShape::VlessStandard {
             return Err(
                 "VLESS xHTTP UDP uses the standard VLESS UDP-over-stream command; flow must be empty"
                     .to_owned(),
             );
         }
+        let proxy = binding.plan();
         self.fixed_target
             .bind(original_dst, "VLESS xHTTP UDP session")?;
         let key = proxy.vless_key()?;
@@ -231,7 +234,7 @@ impl VlessXhttpH2UdpSession {
         if self.is_open() {
             self.send_packet(request).await?;
         } else {
-            self.open_with_initial_packet(proxy, request).await?;
+            self.open_with_initial_packet(binding, request).await?;
         }
         if let Some(response) = self.poll_response().await? {
             Ok(response)
@@ -246,9 +249,10 @@ impl VlessXhttpH2UdpSession {
 
     async fn open_with_initial_packet(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         initial_packet: Bytes,
     ) -> Result<(), String> {
+        let proxy = binding.plan();
         match proxy.xhttp_mode {
             ResidentXhttpMode::PacketUp => {
                 let XhttpPacketUpParts {
@@ -258,7 +262,7 @@ impl VlessXhttpH2UdpSession {
                     upload_underlay,
                     upload_http_version,
                     ..
-                } = open_xhttp_packet_up_parts(proxy, proxy.mark, proxy.mptcp).await?;
+                } = open_xhttp_packet_up_parts(binding, proxy.mptcp).await?;
                 self.packet_upload = Some(upload);
                 self.download = Some(download);
                 self.session_id = Some(session_id);
@@ -276,7 +280,7 @@ impl VlessXhttpH2UdpSession {
                     upload_underlay,
                     upload_http_version,
                     ..
-                } = open_xhttp_stream_parts(proxy, proxy.mark, proxy.mptcp, initial_packet).await?;
+                } = open_xhttp_stream_parts(binding, proxy.mptcp, initial_packet).await?;
                 self.stream_upload = Some(upload);
                 self.download = Some(download);
                 self.session_id = session_id;
@@ -496,11 +500,11 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXht
 impl VlessXhttpH3UdpSession {
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        self.inner.exchange(proxy, original_dst, payload).await
+        self.inner.exchange(binding, original_dst, payload).await
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {

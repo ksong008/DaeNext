@@ -61,16 +61,17 @@ impl VlessStandardUdpOverStreamSession {
 
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if proxy.execution_plan().protocol != ResidentProtocolShape::VlessStandard {
+        if binding.execution().protocol != ResidentProtocolShape::VlessStandard {
             return Err(
                 "VLESS standard UDP-over-stream requires an empty flow; Vision uses XUDP"
                     .to_owned(),
             );
         }
+        let proxy = binding.plan();
         self.fixed_target
             .bind(original_dst, "VLESS standard UDP-over-stream")?;
         let key = proxy.vless_key()?;
@@ -90,7 +91,7 @@ impl VlessStandardUdpOverStreamSession {
         if self.underlay.is_some() {
             self.write_packet(&request).await?;
         } else {
-            self.open_with_initial_packet(proxy, &request).await?;
+            self.open_with_initial_packet(binding, &request).await?;
         }
         self.seq = self.seq.saturating_add(1);
         if let Some(response) = self.poll_response().await? {
@@ -102,13 +103,13 @@ impl VlessStandardUdpOverStreamSession {
 
     async fn open_with_initial_packet(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         initial_packet: &[u8],
     ) -> Result<(), String> {
         self.response_header_seen = false;
         self.response_plaintext.clear();
         self.underlay =
-            Some(VlessStandardUdpUnderlay::open(self.wrapper, proxy, initial_packet).await?);
+            Some(VlessStandardUdpUnderlay::open(self.wrapper, binding, initial_packet).await?);
         Ok(())
     }
 

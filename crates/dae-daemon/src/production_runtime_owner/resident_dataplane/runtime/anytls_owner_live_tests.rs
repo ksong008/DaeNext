@@ -357,7 +357,7 @@ fn anytls_test_tls_acceptor() -> TlsAcceptor {
     TlsAcceptor::from(Arc::new(config))
 }
 
-fn anytls_proxy(addr: SocketAddr, generation: u64) -> Arc<plan::ResidentProxyPlan> {
+fn anytls_proxy(addr: SocketAddr, generation: u64) -> plan::ResidentProxyBinding {
     let config = dae_config::Config {
         global: dae_config::Global::default(),
         subscription: Vec::new(),
@@ -377,8 +377,12 @@ fn anytls_proxy(addr: SocketAddr, generation: u64) -> Arc<plan::ResidentProxyPla
         ),
     )
     .unwrap();
-    proxy.apply_runtime_generation(generation);
-    Arc::new(proxy)
+    proxy.materialize_execution();
+    plan::ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .expect("materialized AnyTLS owner test binding")
 }
 
 fn anytls_owner_resources(
@@ -396,7 +400,7 @@ fn anytls_owner_deadline() -> dae_runtime_control::AbsoluteDeadline {
 
 async fn acquire_from_fresh_runtime(
     registry: AnyTlsOwnerRegistryHandle,
-    proxy: Arc<plan::ResidentProxyPlan>,
+    proxy: plan::ResidentProxyBinding,
 ) -> AnyTlsLogicalStreamLease {
     tokio::task::spawn_blocking(move || {
         tokio::runtime::Builder::new_current_thread()
@@ -477,7 +481,7 @@ fn anytls_owner_reuses_one_auth_across_caller_runtimes_and_drops_late_sid_frames
             )
             .unwrap();
 
-            let mut first = acquire_from_fresh_runtime(registry.clone(), Arc::clone(&proxy)).await;
+            let mut first = acquire_from_fresh_runtime(registry.clone(), proxy.clone()).await;
             assert_eq!(first.sid(), 1);
             assert!(!first.reused());
             let physical_instance = first.physical_instance_id();
@@ -501,7 +505,7 @@ fn anytls_owner_reuses_one_auth_across_caller_runtimes_and_drops_late_sid_frames
             drop(first);
             wait_until(|| registry.metrics_snapshot()["idlePhysicalSessions"] == 1).await;
 
-            let mut second = acquire_from_fresh_runtime(registry.clone(), Arc::clone(&proxy)).await;
+            let mut second = acquire_from_fresh_runtime(registry.clone(), proxy.clone()).await;
             assert_eq!(second.physical_instance_id(), physical_instance);
             assert_eq!(second.sid(), 2);
             assert!(second.reused());
@@ -518,7 +522,7 @@ fn anytls_owner_reuses_one_auth_across_caller_runtimes_and_drops_late_sid_frames
 
             let udp_target: SocketAddr = "192.0.2.20:5353".parse().unwrap();
             let udp = super::udp::exercise_anytls_udp_stream_session(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 registry.clone(),
                 udp_target,
                 b"udp-payload",
@@ -539,8 +543,7 @@ fn anytls_owner_reuses_one_auth_across_caller_runtimes_and_drops_late_sid_frames
                     && snapshot["activePhysicalSessions"] == 0
             })
             .await;
-            let mut replacement =
-                acquire_from_fresh_runtime(registry.clone(), Arc::clone(&proxy)).await;
+            let mut replacement = acquire_from_fresh_runtime(registry.clone(), proxy.clone()).await;
             assert_ne!(replacement.physical_instance_id(), physical_instance);
             assert_eq!(replacement.sid(), 1);
             assert!(!replacement.reused());
@@ -597,9 +600,9 @@ fn anytls_owner_reuses_one_auth_across_caller_runtimes_and_drops_late_sid_frames
 #[test]
 fn anytls_owner_identity_partitions_tls_security_and_parent_transport() {
     let base = anytls_proxy("127.0.0.1:443".parse().unwrap(), 9_104);
-    let base_digest = super::anytls_owner::anytls_owner_key_digest_for_test(&base);
+    let base_digest = super::anytls_owner::anytls_owner_key_digest_for_test(base.plan());
 
-    let mut fingerprinted = (*base).clone();
+    let mut fingerprinted = base.plan().clone();
     fingerprinted.utls_fingerprint = Some(plan::ResidentUtlsFingerprintPlan {
         source: "link fp",
         requested: "chrome".to_owned(),
@@ -616,7 +619,7 @@ fn anytls_owner_identity_partitions_tls_security_and_parent_transport() {
         super::anytls_owner::anytls_owner_key_digest_for_test(&fingerprinted)
     );
 
-    let mut reality = (*base).clone();
+    let mut reality = base.plan().clone();
     reality.tls = "reality".to_owned();
     reality.reality = Some(plan::ResidentRealityUnderlayPlan {
         public_key: [7_u8; 32],
@@ -628,12 +631,12 @@ fn anytls_owner_identity_partitions_tls_security_and_parent_transport() {
         super::anytls_owner::anytls_owner_key_digest_for_test(&reality)
     );
 
-    let mut parent = (*base).clone();
+    let mut parent = base.plan().clone();
     parent.handler = plan::ResidentProxyProtocolPlan::Socks5Tcp {
         username: String::new(),
         password: String::new(),
     };
-    let mut chained = (*base).clone();
+    let mut chained = base.plan().clone();
     chained.chain_parent = Some(Arc::new(parent));
     assert_ne!(
         base_digest,
@@ -668,7 +671,7 @@ fn anytls_owner_bounds_concurrent_physical_sessions_probes_idle_and_expires() {
 
             let mut first = registry
                 .acquire(
-                    Arc::clone(&proxy),
+                    proxy.clone(),
                     TEST_TARGET.to_owned(),
                     anytls_owner_deadline(),
                 )
@@ -676,7 +679,7 @@ fn anytls_owner_bounds_concurrent_physical_sessions_probes_idle_and_expires() {
                 .unwrap();
             let mut concurrent = registry
                 .acquire(
-                    Arc::clone(&proxy),
+                    proxy.clone(),
                     TEST_TARGET.to_owned(),
                     anytls_owner_deadline(),
                 )
@@ -705,7 +708,7 @@ fn anytls_owner_bounds_concurrent_physical_sessions_probes_idle_and_expires() {
             time::sleep(Duration::from_millis(40)).await;
             let mut reused = registry
                 .acquire(
-                    Arc::clone(&proxy),
+                    proxy.clone(),
                     TEST_TARGET.to_owned(),
                     anytls_owner_deadline(),
                 )
@@ -722,7 +725,7 @@ fn anytls_owner_bounds_concurrent_physical_sessions_probes_idle_and_expires() {
 
             let rebuilt = registry
                 .acquire(
-                    Arc::clone(&proxy),
+                    proxy.clone(),
                     TEST_TARGET.to_owned(),
                     anytls_owner_deadline(),
                 )
@@ -765,7 +768,7 @@ fn anytls_owner_rebuilds_after_idle_probe_failure_and_releases_five_generations(
 
                 let mut first = registry
                     .acquire(
-                        Arc::clone(&proxy),
+                        proxy.clone(),
                         TEST_TARGET.to_owned(),
                         anytls_owner_deadline(),
                     )
@@ -780,7 +783,7 @@ fn anytls_owner_rebuilds_after_idle_probe_failure_and_releases_five_generations(
 
                 let mut rebuilt = registry
                     .acquire(
-                        Arc::clone(&proxy),
+                        proxy.clone(),
                         TEST_TARGET.to_owned(),
                         anytls_owner_deadline(),
                     )

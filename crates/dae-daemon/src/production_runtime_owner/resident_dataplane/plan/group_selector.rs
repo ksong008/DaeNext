@@ -17,7 +17,8 @@ pub(super) fn build_resident_group_selector(
         candidates
             .iter()
             .map(|candidate| {
-                Dialer::new(candidate.proxy.node_tag.clone(), "").with_link(candidate.link.clone())
+                Dialer::new(candidate.binding.plan().node_tag.clone(), "")
+                    .with_link(candidate.link.clone())
             })
             .collect(),
         candidates

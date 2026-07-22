@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 fn proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
-    ResidentProxyPlan {
+    let mut proxy = ResidentProxyPlan {
         graph_id: "resident-graph:redacted".to_owned(),
         graph_link_hash: "sha256:redacted".to_owned(),
         redacted_link_source: "source:<redacted>".to_owned(),
@@ -40,7 +40,16 @@ fn proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
         chain_parent: None,
         mark: 0,
         mptcp: false,
-    }
+    };
+    proxy.materialize_execution();
+    proxy
+}
+
+fn proxy_binding(proxy: &ResidentProxyPlan) -> ResidentProxyBinding {
+    let mut proxy = proxy.clone();
+    proxy.materialize_execution();
+    ResidentProxyBinding::configuration(Arc::new(proxy))
+        .expect("materialized chained UDP test proxy")
 }
 
 async fn read_socks5_target(stream: &mut TcpStream) -> SocketAddr {
@@ -122,9 +131,10 @@ async fn run_chained_packet_case(original_dst: SocketAddr) {
     proxy.chain_parent = Some(Arc::new(parent));
 
     let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
+    let binding = proxy_binding(&proxy);
     let (_, result) = tokio::time::timeout(
         Duration::from_secs(2),
-        executor.execute_proxy_packet(&proxy, original_dst, b"packet"),
+        executor.execute_proxy_packet(&binding, original_dst, b"packet"),
     )
     .await
     .expect("chained UDP execution timed out")

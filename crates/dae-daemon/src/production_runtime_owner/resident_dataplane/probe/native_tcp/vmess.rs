@@ -7,10 +7,10 @@ use tokio::io::AsyncWriteExt;
 
 use super::super::super::ResidentStopSignal;
 
-use super::super::super::client::open_async_resident_tls_client_with_flow;
+use super::super::super::client::open_async_resident_tls_client_with_binding;
 use super::super::super::direct::DirectTcpRelayStats;
 use super::super::super::plan::{
-    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
+    ResidentProxyBinding, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
     ResidentStreamWrapperPlan,
 };
 use super::super::super::{
@@ -33,10 +33,10 @@ use super::target::native_tcp_probe_selection;
 use super::tunnel::{NativeTcpTunnel, SpawnedNativeTcpTunnel};
 
 pub(super) async fn open_vmess_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    let selection = native_tcp_probe_selection(proxy, target);
+    let selection = native_tcp_probe_selection(binding, target);
     let ResidentProxyProtocolPlan::VmessAeadTcp { id, body_security } = &selection.proxy.handler
     else {
         return Err(NativeTcpProbeError::NotAdmitted);
@@ -87,13 +87,10 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             )))
         }
         ResidentStreamWrapperPlan::None if execution.security.is_tls_stream() => {
-            let mut client = open_async_resident_tls_client_with_flow(
-                &selection.proxy,
-                selection.mark,
-                selection.mptcp,
-            )
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+            let mut client =
+                open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
             client
                 .write_plain_all(&session.first_write, "write native VMess TLS request")
                 .await
@@ -151,13 +148,10 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             )))
         }
         ResidentStreamWrapperPlan::WebSocket if execution.security.is_tls_stream() => {
-            let mut client = open_async_resident_tls_client_with_flow(
-                &selection.proxy,
-                selection.mark,
-                selection.mptcp,
-            )
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+            let mut client =
+                open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
             native_websocket_handshake_over_resident_tls_async(&mut client, &options)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -222,13 +216,10 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             )))
         }
         ResidentStreamWrapperPlan::HttpUpgrade if execution.security.is_tls_stream() => {
-            let mut client = open_async_resident_tls_client_with_flow(
-                &selection.proxy,
-                selection.mark,
-                selection.mptcp,
-            )
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+            let mut client =
+                open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
             native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;

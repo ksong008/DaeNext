@@ -10,15 +10,15 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct Socks5Ud
 impl Socks5UdpAssociateSession {
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        self.ensure_open(proxy).await?;
+        self.ensure_open(binding).await?;
         let request = udp_packet::wrap_target(&original_dst.to_string(), payload)
             .map_err(|err| format!("wrap SOCKS5 UDP packet: {err}"))?;
         self.relay
-            .send_packet(&request, proxy.mark, "SOCKS5")
+            .send_packet(&request, binding.effective_socket_mark(), "SOCKS5")
             .await?;
         if let Some(response) = self.poll_response()? {
             return Ok(response);
@@ -60,14 +60,15 @@ impl Socks5UdpAssociateSession {
             .with_underlay_reuse("tcp-control-and-udp-relay-reused")
     }
 
-    async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
+    async fn ensure_open(&mut self, binding: &ResidentProxyBinding) -> Result<(), String> {
         if self.control.is_some() && self.relay.is_open() {
             return Ok(());
         }
+        let proxy = binding.plan();
         let ResidentProxyProtocolPlan::Socks5Tcp { username, password } = &proxy.handler else {
             return Err("SOCKS5 UDP associate executor received a non-SOCKS handler".to_owned());
         };
-        let mut control = open_proxy_tcp_stream_async(proxy).await?;
+        let mut control = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
         let bind =
             socks5_udp_associate_control_async(&mut control, "0.0.0.0:0", username, password)
                 .await?;
@@ -77,7 +78,7 @@ impl Socks5UdpAssociateSession {
         let relay_candidates = socks5_udp_relay_addr_candidates_async(&bind, control_peer).await?;
         let mut relay = DatagramRelay::default();
         relay
-            .open_candidates(relay_candidates, proxy.mark, "SOCKS5")
+            .open_candidates(relay_candidates, binding.effective_socket_mark(), "SOCKS5")
             .await?;
         self.control = Some(control);
         self.relay = relay;

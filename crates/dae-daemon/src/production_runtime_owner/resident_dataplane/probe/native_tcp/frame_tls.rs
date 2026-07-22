@@ -1,18 +1,16 @@
-use std::sync::Arc;
-
 use super::super::super::AnyTlsOwnerRegistryHandle;
-use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::super::super::plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
 use super::errors::NativeTcpProbeError;
 use super::tunnel::{NativeTcpTunnel, boxed_native_tcp_tunnel};
 
 pub(super) async fn open_frame_tls_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
     owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     owner_deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     if !matches!(
-        &proxy.handler,
+        &binding.plan().handler,
         ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
     ) {
         return Err(NativeTcpProbeError::NotAdmitted);
@@ -23,7 +21,7 @@ pub(super) async fn open_frame_tls_native_tcp_tunnel(
         )
     })?;
     let logical = owner_registry
-        .acquire(proxy, target.to_owned(), owner_deadline)
+        .acquire(binding, target.to_owned(), owner_deadline)
         .await
         .map_err(NativeTcpProbeError::Open)?;
     Ok(boxed_native_tcp_tunnel(logical))

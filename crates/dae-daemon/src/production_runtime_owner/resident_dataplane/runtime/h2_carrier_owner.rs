@@ -13,10 +13,10 @@ use tokio::time;
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::client::{
-    async_resident_tls_underlay_name, open_async_resident_tls_client_with_flow,
+    async_resident_tls_underlay_name, open_async_resident_tls_client_with_binding,
 };
-use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyPlan;
-use crate::production_runtime_owner::resident_dataplane::transport_identity::resident_transport_identity_digest;
+use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyBinding;
+use crate::production_runtime_owner::resident_dataplane::transport_identity::resident_transport_binding_identity_digest;
 
 const H2_CARRIER_IDENTITY_DOMAIN: &[u8] = b"dae/h2-carrier-owner/v1";
 
@@ -30,10 +30,10 @@ struct H2CarrierKey {
 }
 
 impl H2CarrierKey {
-    fn for_proxy(proxy: &ResidentProxyPlan) -> Self {
+    fn for_binding(binding: &ResidentProxyBinding) -> Self {
         Self {
-            generation: proxy.execution_plan().runtime_generation(),
-            digest: resident_transport_identity_digest(H2_CARRIER_IDENTITY_DOMAIN, proxy),
+            generation: binding.runtime_generation(),
+            digest: resident_transport_binding_identity_digest(H2_CARRIER_IDENTITY_DOMAIN, binding),
         }
     }
 }
@@ -532,10 +532,10 @@ fn h2_carrier_generation(
 }
 
 pub(crate) async fn acquire_h2_carrier(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     deadline: AbsoluteDeadline,
 ) -> Result<H2CarrierLease, String> {
-    let key = H2CarrierKey::for_proxy(&proxy);
+    let key = H2CarrierKey::for_binding(&binding);
     let owner = h2_carrier_generation(key.generation)?;
     let manager = {
         let mut managers = owner
@@ -599,13 +599,8 @@ pub(crate) async fn acquire_h2_carrier(
             }
             if state.opening_build.is_none() {
                 let physical = try_reserve_h2_physical(&owner)?;
-                let (build_id, start) = spawn_h2_carrier_build(
-                    &owner,
-                    &manager,
-                    Arc::clone(&proxy),
-                    deadline,
-                    physical,
-                )?;
+                let (build_id, start) =
+                    spawn_h2_carrier_build(&owner, &manager, binding.clone(), deadline, physical)?;
                 state.opening_build = Some(build_id);
                 if start.send(()).is_err() {
                     state.opening_build = None;
@@ -626,7 +621,7 @@ pub(crate) async fn acquire_h2_carrier(
 fn spawn_h2_carrier_build(
     owner: &Arc<H2CarrierGenerationOwner>,
     manager: &Arc<H2CarrierManager>,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     deadline: AbsoluteDeadline,
     physical: H2PhysicalPermit,
 ) -> Result<(u64, tokio::sync::oneshot::Sender<()>), String> {
@@ -666,7 +661,7 @@ fn spawn_h2_carrier_build(
         complete_h2_carrier_build(
             build_owner,
             build_manager,
-            proxy,
+            binding,
             deadline,
             build_id,
             physical,
@@ -691,12 +686,12 @@ fn abort_h2_build(owner: &H2CarrierGenerationOwner, build_id: u64) {
 async fn complete_h2_carrier_build(
     owner: Arc<H2CarrierGenerationOwner>,
     manager: Arc<H2CarrierManager>,
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     deadline: AbsoluteDeadline,
     build_id: u64,
     physical: H2PhysicalPermit,
 ) {
-    let result = build_h2_carrier(&owner, &manager, &proxy, deadline, physical).await;
+    let result = build_h2_carrier(&owner, &manager, &binding, deadline, physical).await;
     let mut state = manager.state.lock().await;
     if state.opening_build != Some(build_id) {
         drop(state);
@@ -742,7 +737,7 @@ async fn complete_h2_carrier_build(
 async fn build_h2_carrier(
     owner: &Arc<H2CarrierGenerationOwner>,
     manager: &Arc<H2CarrierManager>,
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     deadline: AbsoluteDeadline,
     physical: H2PhysicalPermit,
 ) -> Result<
@@ -754,12 +749,13 @@ async fn build_h2_carrier(
     ),
     String,
 > {
+    let proxy = binding.plan();
     let remaining = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "HTTP/2 carrier TLS deadline elapsed".to_owned())?;
     let client = time::timeout(
         remaining,
-        open_async_resident_tls_client_with_flow(proxy, proxy.mark, proxy.mptcp),
+        open_async_resident_tls_client_with_binding(binding, proxy.mptcp),
     )
     .await
     .map_err(|_| "HTTP/2 carrier TLS deadline elapsed".to_owned())??;

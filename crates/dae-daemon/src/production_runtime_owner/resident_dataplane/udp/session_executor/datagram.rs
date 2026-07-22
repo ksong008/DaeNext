@@ -16,12 +16,13 @@ pub(super) struct DatagramRelay {
 impl DatagramRelay {
     pub(super) async fn send(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         request: &[u8],
         label: &str,
     ) -> Result<(), String> {
-        self.ensure_open(proxy).await?;
-        self.send_packet(request, proxy.mark, label).await
+        self.ensure_open(binding).await?;
+        self.send_packet(request, binding.effective_socket_mark(), label)
+            .await
     }
 
     pub(super) async fn open_candidates(
@@ -124,12 +125,14 @@ impl DatagramRelay {
         Ok(self.response_buf[..read].to_vec())
     }
 
-    async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
+    async fn ensure_open(&mut self, binding: &ResidentProxyBinding) -> Result<(), String> {
         if self.socket.is_some() && !self.remote_candidates.is_empty() {
             return Ok(());
         }
+        let proxy = binding.plan();
         let candidates = resolve_proxy_udp_socket_addr_candidates_async(proxy).await?;
-        self.open_candidates(candidates, proxy.mark, "proxy").await
+        self.open_candidates(candidates, binding.effective_socket_mark(), "proxy")
+            .await
     }
 
     pub(super) fn is_open(&self) -> bool {

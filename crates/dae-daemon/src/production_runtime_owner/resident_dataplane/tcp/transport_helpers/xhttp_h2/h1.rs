@@ -44,17 +44,17 @@ enum XhttpH1BodyState {
 }
 
 pub(super) async fn open_xhttp_h1_download_stream(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
     mptcp: bool,
     session_id: &str,
     separate_endpoint: bool,
 ) -> Result<XhttpH1DownloadBody, String> {
     let client = if separate_endpoint {
-        open_async_xhttp_endpoint_tls_client(endpoint, mark, mptcp).await?
+        open_async_xhttp_endpoint_tls_client(endpoint, binding.effective_socket_mark(), mptcp)
+            .await?
     } else {
-        open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?
+        open_async_resident_tls_client_with_binding(binding, mptcp).await?
     };
     open_xhttp_h1_download_stream_with_client(client, endpoint, session_id).await
 }
@@ -93,15 +93,14 @@ async fn open_xhttp_h1_download_stream_with_client(
 }
 
 pub(super) async fn send_xhttp_h1_packet_up_request(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
     mptcp: bool,
     session_id: &str,
     seq: u64,
     payload: Bytes,
 ) -> Result<(), String> {
-    let mut client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+    let mut client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
     let request = xhttp_h1_packet_up_request_bytes(endpoint, session_id, seq, payload)?;
     time::timeout(RESIDENT_CONNECT_TIMEOUT, client.write_all(&request))
         .await

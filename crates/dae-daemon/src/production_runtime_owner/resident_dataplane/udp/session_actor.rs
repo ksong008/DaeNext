@@ -13,7 +13,7 @@ use self::response::{drain_udp_session_responses, wait_and_record_udp_session_re
 pub(super) struct ManagedUdpPacket {
     pub(super) packet: UdpOriginalDstPacket,
     pub(super) original_dst: SocketAddr,
-    pub(super) proxy: Arc<ResidentProxyPlan>,
+    pub(super) proxy: ResidentProxyBinding,
     pub(super) proxy_outbound: u8,
     pub(super) data_udp_network_type: Option<NetworkType>,
     pub(super) force_proxy_packet: bool,
@@ -83,7 +83,7 @@ async fn run_udp_session_actor(
     let mut packets = 0_u64;
     let mut stop_reason = "queue-closed".to_owned();
     let mut executor: Option<UdpSessionExecutor> = None;
-    let mut session_proxy: Option<Arc<ResidentProxyPlan>> = None;
+    let mut session_proxy: Option<ResidentProxyBinding> = None;
     let idle_timeout = key.idle_timeout();
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
@@ -101,7 +101,7 @@ async fn run_udp_session_actor(
                 if executor.is_none() {
                     let mut selected_executor = if managed.force_proxy_packet {
                         UdpSessionExecutor::new_proxy_packet_with_transport_owner(
-                            Arc::clone(&managed.proxy),
+                            managed.proxy.clone(),
                             context.hysteria2_owner_registry.clone(),
                             context.tuic_owner_registry.clone(),
                             context.juicity_owner_registry.clone(),
@@ -109,7 +109,7 @@ async fn run_udp_session_actor(
                         )
                     } else {
                         UdpSessionExecutor::new_with_transport_owner(
-                            Arc::clone(&managed.proxy),
+                            managed.proxy.clone(),
                             managed.original_dst,
                             context.hysteria2_owner_registry.clone(),
                             context.tuic_owner_registry.clone(),
@@ -119,7 +119,7 @@ async fn run_udp_session_actor(
                     };
                     selected_executor.set_runtime_metrics(Arc::clone(&context.metrics));
                     executor = Some(selected_executor);
-                    session_proxy = Some(Arc::clone(&managed.proxy));
+                    session_proxy = Some(managed.proxy.clone());
                 }
                 let (exchange, execute_timed_out) = match executor.as_mut() {
                     Some(executor) => match time::timeout(

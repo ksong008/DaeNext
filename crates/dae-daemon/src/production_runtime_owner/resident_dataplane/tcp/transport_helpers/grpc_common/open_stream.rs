@@ -99,13 +99,14 @@ fn validate_grpc_status(headers: &http::HeaderMap, location: &str) -> Result<boo
 }
 
 pub(crate) async fn open_grpc_h2_stream(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     first_payload: &[u8],
 ) -> Result<(h2::SendStream<Bytes>, GrpcH2Response, H2CarrierLease), String> {
+    let proxy = binding.plan();
     let request = grpc_h2_request(proxy)?;
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
-    let lease = acquire_h2_carrier(Arc::new(proxy.clone()), deadline).await?;
+    let lease = acquire_h2_carrier(binding.clone(), deadline).await?;
     let (response, mut send_stream) = lease.open_request(request, false, deadline, "gRPC").await?;
     send_grpc_hunk(&mut send_stream, first_payload, false).await?;
     Ok((send_stream, GrpcH2Response::new(response), lease))

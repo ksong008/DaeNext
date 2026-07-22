@@ -70,16 +70,17 @@ pub(in super::super) struct XhttpXmuxKey {
 
 impl XhttpXmuxKey {
     pub(in super::super) fn primary(
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         endpoint: &ResidentXhttpEndpointPlan,
         resolved_endpoint: &XhttpResolvedEndpointIdentity,
         xmux: &ResidentXhttpXmuxPlan,
         mark: u32,
         mptcp: bool,
     ) -> Result<Self, String> {
+        let proxy = binding.plan();
         Self::new(
             XhttpCarrierRole::Primary,
-            proxy,
+            binding,
             endpoint,
             resolved_endpoint,
             proxy.utls_fingerprint.as_ref(),
@@ -89,7 +90,7 @@ impl XhttpXmuxKey {
     }
 
     pub(in super::super) fn download(
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         endpoint: &ResidentXhttpEndpointPlan,
         resolved_endpoint: &XhttpResolvedEndpointIdentity,
         xmux: &ResidentXhttpXmuxPlan,
@@ -101,7 +102,7 @@ impl XhttpXmuxKey {
         // projected as a download transport setting.
         Self::new(
             XhttpCarrierRole::Download,
-            proxy,
+            binding,
             endpoint,
             resolved_endpoint,
             None,
@@ -112,14 +113,16 @@ impl XhttpXmuxKey {
 
     fn new(
         role: XhttpCarrierRole,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         endpoint: &ResidentXhttpEndpointPlan,
         resolved_endpoint: &XhttpResolvedEndpointIdentity,
         fingerprint: Option<&ResidentUtlsFingerprintPlan>,
         xmux: &ResidentXhttpXmuxPlan,
         socket: XhttpSocketIdentity,
     ) -> Result<Self, String> {
-        let xmux = xmux.clone().official_normalized();
+        let proxy = binding.plan();
+        let mut xmux = xmux.clone().official_normalized();
+        xmux.runtime_generation = binding.runtime_generation().get();
         let carrier_protocol = match endpoint.http_version() {
             ResidentXhttpHttpVersion::H3 => XhttpCarrierProtocol::Http3,
             ResidentXhttpHttpVersion::H1 | ResidentXhttpHttpVersion::H2 => {
@@ -138,7 +141,7 @@ impl XhttpXmuxKey {
         Ok(Self {
             role,
             graph: graph_identity(proxy),
-            runtime_generation: xmux.runtime_generation,
+            runtime_generation: binding.runtime_generation().get(),
             declared_server_host: endpoint.server_host.clone(),
             declared_server_port: endpoint.server_port,
             resolved_endpoint: resolved_endpoint.clone(),

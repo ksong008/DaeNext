@@ -32,7 +32,7 @@ impl Drop for ResidentProxyTcpHandlerGuard {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn fetch_resident_proxy_http_response_async(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     tls: bool,
     target: &str,
     host: &str,
@@ -46,7 +46,7 @@ pub(crate) async fn fetch_resident_proxy_http_response_async(
 ) -> Result<Vec<u8>, String> {
     let sniff_payload = if tls { Vec::new() } else { request.to_vec() };
     exchange_resident_proxy_tcp_stream_async(
-        proxy,
+        binding,
         target,
         false,
         sniff_payload,
@@ -114,7 +114,7 @@ pub(crate) fn sanitize_probe_event(event: Value) -> String {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn exchange_resident_proxy_tcp_stream_async<F, Fut>(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
     dial_ip: bool,
     sniff_payload: Vec<u8>,
@@ -145,7 +145,7 @@ where
         .map_err(|err| format!("accept resident proxy TCP loopback stream: {err}"))?;
 
     let mut handler = start_resident_proxy_tcp_handler(
-        proxy,
+        binding,
         target,
         dial_ip,
         sniff_payload,
@@ -182,7 +182,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn start_resident_proxy_tcp_handler(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
     dial_ip: bool,
     sniff_payload: Vec<u8>,
@@ -196,13 +196,14 @@ fn start_resident_proxy_tcp_handler(
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> ResidentProxyTcpHandlerGuard {
+    let proxy = binding.plan();
+    let mark = binding.effective_socket_mark();
     let selection = TcpProxySelection {
-        mark: proxy.mark,
         mptcp: proxy.mptcp,
         route: TcpRouteSelection {
             initial_outbound: 0,
             final_outbound: 0,
-            final_mark: proxy.mark,
+            final_mark: mark,
             userspace_route_executed: false,
             userspace_route_must: false,
             dial_target: target.to_owned(),
@@ -214,7 +215,7 @@ fn start_resident_proxy_tcp_handler(
                 mac: String::new(),
             },
         },
-        proxy,
+        proxy: binding,
     };
     let sniff = TcpSniffReport {
         payload: sniff_payload,
@@ -228,11 +229,11 @@ fn start_resident_proxy_tcp_handler(
     let original_dst = listen_addr;
     let handle = tokio::spawn(async move {
         let mut inbound = accepted;
-        let runtime_dispatch = selection.proxy.execution_plan().protocol.runtime_dispatch();
+        let runtime_dispatch = selection.proxy.execution().protocol.runtime_dispatch();
         if runtime_dispatch == ResidentTcpRuntimeDispatch::PolicyClosed {
             Err(format!(
                 "resident TCP probe dispatcher policy-closed for UDP-only exact protocol shape {:?}",
-                selection.proxy.execution_plan().protocol
+                selection.proxy.execution().protocol
             ))
         } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
             handle_proxy_tcp_connection_async(

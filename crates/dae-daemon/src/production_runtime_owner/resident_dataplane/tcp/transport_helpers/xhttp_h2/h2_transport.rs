@@ -16,13 +16,13 @@ type XhttpH2OwnerOpenFuture = Pin<
 >;
 
 pub(super) async fn open_xhttp_h2_proxy_sender(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
     mptcp: bool,
 ) -> Result<XhttpH2EndpointSender, String> {
-    let Some(xmux) = &proxy.xhttp_xmux else {
-        let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+    let mark = binding.effective_socket_mark();
+    let Some(xmux) = binding.persistent_xhttp_xmux() else {
+        let client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
         let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
         return Ok(XhttpH2EndpointSender {
             sender,
@@ -31,9 +31,9 @@ pub(super) async fn open_xhttp_h2_proxy_sender(
         });
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-    let key = XhttpXmuxKey::primary(proxy, endpoint, resolved.identity(), xmux, mark, mptcp)?;
+    let key = XhttpXmuxKey::primary(binding, endpoint, resolved.identity(), xmux, mark, mptcp)?;
     let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || -> XhttpH2OwnerOpenFuture {
-        let owner_proxy = proxy.clone();
+        let owner_proxy = Arc::clone(binding.shared_plan());
         let owner_candidates = resolved.candidates().to_vec();
         Box::pin(async move {
             let client = open_async_vless_tls_client_with_flow_at_candidates(
@@ -60,12 +60,12 @@ pub(super) async fn open_xhttp_h2_proxy_sender(
 }
 
 pub(super) async fn open_xhttp_h2_endpoint_sender(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
     mptcp: bool,
 ) -> Result<XhttpH2EndpointSender, String> {
-    let Some(xmux) = &endpoint.xmux else {
+    let mark = binding.effective_socket_mark();
+    let Some(xmux) = binding.persistent_xhttp_download_xmux() else {
         let client = open_async_xhttp_endpoint_tls_client(endpoint, mark, mptcp).await?;
         let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
         return Ok(XhttpH2EndpointSender {
@@ -75,7 +75,7 @@ pub(super) async fn open_xhttp_h2_endpoint_sender(
         });
     };
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
-    let key = XhttpXmuxKey::download(proxy, endpoint, resolved.identity(), xmux, mark, mptcp)?;
+    let key = XhttpXmuxKey::download(binding, endpoint, resolved.identity(), xmux, mark, mptcp)?;
     let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || -> XhttpH2OwnerOpenFuture {
         let owner_endpoint = endpoint.clone();
         let owner_candidates = resolved.candidates().to_vec();
@@ -175,9 +175,8 @@ pub(super) async fn send_xhttp_h2_packet_up_request(
 }
 
 pub(super) async fn refresh_xhttp_h2_packet_up_client_if_needed(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
     mptcp: bool,
     sender: &mut h2::client::SendRequest<Bytes>,
     connection_task: &mut Option<tokio::task::JoinHandle<()>>,
@@ -193,7 +192,7 @@ pub(super) async fn refresh_xhttp_h2_packet_up_client_if_needed(
     if let Some(task) = connection_task.take() {
         task.abort();
     }
-    let replacement = open_xhttp_h2_proxy_sender(proxy, endpoint, mark, mptcp).await?;
+    let replacement = open_xhttp_h2_proxy_sender(binding, endpoint, mptcp).await?;
     *sender = replacement.sender;
     *connection_task = replacement.connection_task;
     *xmux_request = replacement

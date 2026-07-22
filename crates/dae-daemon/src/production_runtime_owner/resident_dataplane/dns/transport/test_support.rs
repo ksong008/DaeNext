@@ -183,7 +183,6 @@ async fn read_socks5_address_tail(
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) fn socks5_dns_proxy(
     address: SocketAddr,
-    generation: u64,
 ) -> Arc<ResidentProxyPlan> {
     let sections = dae_config::parser::parse_config(
         r#"
@@ -206,8 +205,20 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) fn socks5_dns_p
         format!("socks5://{address}#dns-transport-test"),
     )
     .unwrap();
-    proxy.apply_runtime_generation(generation);
+    proxy.materialize_execution();
     Arc::new(proxy)
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) fn dns_proxy_binding(
+    proxy: Arc<ResidentProxyPlan>,
+    generation: u64,
+) -> ResidentProxyBinding {
+    if generation == 0 {
+        ResidentProxyBinding::control_plane(proxy).expect("materialized DNS test proxy")
+    } else {
+        ResidentProxyBinding::resident(proxy, dae_runtime_control::OwnerGeneration::new(generation))
+            .expect("materialized DNS test proxy")
+    }
 }
 
 #[derive(Clone, Copy)]

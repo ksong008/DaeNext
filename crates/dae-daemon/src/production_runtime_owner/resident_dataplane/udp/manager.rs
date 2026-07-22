@@ -460,7 +460,7 @@ fn forward_manager_packet(
             return;
         }
     };
-    let proxy = Arc::clone(&proxy_selection.proxy);
+    let proxy = proxy_selection.proxy.clone();
     if resident_udp_dns_fast_path_applies(original_dst) && !proxy_selection.force_proxy_packet {
         append_event(
             event_file,

@@ -213,7 +213,7 @@ fn tuic_server_config() -> quinn::ServerConfig {
     config
 }
 
-fn tuic_proxy(addr: SocketAddr, generation: u64) -> Arc<plan::ResidentProxyPlan> {
+fn tuic_proxy(addr: SocketAddr, generation: u64) -> plan::ResidentProxyBinding {
     let config = dae_config::Config {
         global: dae_config::Global::default(),
         subscription: Vec::new(),
@@ -233,8 +233,12 @@ fn tuic_proxy(addr: SocketAddr, generation: u64) -> Arc<plan::ResidentProxyPlan>
         ),
     )
     .unwrap();
-    proxy.apply_runtime_generation(generation);
-    Arc::new(proxy)
+    proxy.materialize_execution();
+    plan::ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .expect("materialized TUIC owner test binding")
 }
 
 async fn open_tuic_echo_stream(lease: &TuicTransportLease, payload: [u8; 4]) -> [u8; 4] {
@@ -340,7 +344,7 @@ fn tuic_owner_reuses_auth_and_isolates_associations_across_runtimes() {
 
         let tcp_a = {
             let registry = registry.clone();
-            let proxy = Arc::clone(&proxy);
+            let proxy = proxy.clone();
             tokio::task::spawn_blocking(move || {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_io()
@@ -362,7 +366,7 @@ fn tuic_owner_reuses_auth_and_isolates_associations_across_runtimes() {
         };
         let tcp_b = {
             let registry = registry.clone();
-            let proxy = Arc::clone(&proxy);
+            let proxy = proxy.clone();
             tokio::task::spawn_blocking(move || {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_io()
@@ -390,18 +394,14 @@ fn tuic_owner_reuses_auth_and_isolates_associations_across_runtimes() {
         assert_eq!(open_tuic_echo_stream(&tcp_b, *b"tcpB").await, *b"tcpB");
 
         let mut udp_a = registry
-            .acquire(
-                Arc::clone(&proxy),
-                QuicEndpointCallerClass::UdpData,
-                deadline(),
-            )
+            .acquire(proxy.clone(), QuicEndpointCallerClass::UdpData, deadline())
             .await
             .unwrap()
             .open_udp_association()
             .unwrap();
         let mut udp_b = registry
             .acquire(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 QuicEndpointCallerClass::ManagedDns,
                 deadline(),
             )
@@ -463,7 +463,7 @@ async fn tuic_owner_rebuilds_once_after_remote_close_and_invalidates_old_associa
 
     let first = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::TcpData,
             tuic_owner_deadline(),
         )
@@ -472,7 +472,7 @@ async fn tuic_owner_rebuilds_once_after_remote_close_and_invalidates_old_associa
     let first_connection_id = first.connection().stable_id();
     let mut old_association = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::UdpData,
             tuic_owner_deadline(),
         )
@@ -500,7 +500,7 @@ async fn tuic_owner_rebuilds_once_after_remote_close_and_invalidates_old_associa
 
     let replacement = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::BackgroundHealth,
             tuic_owner_deadline(),
         )
@@ -644,7 +644,7 @@ async fn cancelled_tuic_waiter_does_not_cancel_a_shared_no_response_build() {
     .unwrap();
 
     let elected_registry = registry.clone();
-    let elected_proxy = Arc::clone(&proxy);
+    let elected_proxy = proxy.clone();
     let elected = tokio::spawn(async move {
         elected_registry
             .acquire(
@@ -714,7 +714,7 @@ async fn simultaneous_tuic_no_response_waiters_share_one_physical_attempt() {
     let mut waiters = Vec::with_capacity(waiter_count);
     for _ in 0..waiter_count {
         let registry = registry.clone();
-        let proxy = Arc::clone(&proxy);
+        let proxy = proxy.clone();
         let barrier = Arc::clone(&barrier);
         waiters.push(tokio::spawn(async move {
             barrier.wait().await;

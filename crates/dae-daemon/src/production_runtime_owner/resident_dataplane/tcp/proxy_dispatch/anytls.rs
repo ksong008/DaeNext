@@ -19,7 +19,7 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     });
     let mut logical = owner_registry
         .acquire(
-            Arc::clone(&selection.proxy),
+            selection.proxy.clone(),
             selection.route.dial_target.clone(),
             owner_deadline,
         )

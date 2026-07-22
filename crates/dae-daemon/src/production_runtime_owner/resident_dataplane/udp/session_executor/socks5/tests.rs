@@ -81,12 +81,14 @@ async fn udp_associate_reuses_existing_control_and_relay() {
         .unwrap();
     let relay_addr = relay.local_addr().unwrap();
     let server_task = tokio::spawn(serve_udp_associate_once(listener, relay_addr));
-    let proxy = Arc::new(socks5_proxy(server));
+    let mut proxy = socks5_proxy(server);
+    proxy.materialize_execution();
+    let binding = ResidentProxyBinding::configuration(Arc::new(proxy)).unwrap();
     let mut session = Socks5UdpAssociateSession::default();
 
-    session.ensure_open(&proxy).await.unwrap();
+    session.ensure_open(&binding).await.unwrap();
     let first_peer = session.control.as_ref().unwrap().peer_addr().unwrap();
-    session.ensure_open(&proxy).await.unwrap();
+    session.ensure_open(&binding).await.unwrap();
     let second_peer = session.control.as_ref().unwrap().peer_addr().unwrap();
 
     assert_eq!(first_peer, second_peer);

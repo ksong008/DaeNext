@@ -141,9 +141,15 @@ async fn h3_goaway_retires_the_old_physical_before_rebuild() {
         2,
     )
     .unwrap();
-    let (proxy, endpoint) = xhttp_h3_owner_plan(generation, server_address);
+    let (mut proxy, endpoint) = xhttp_h3_owner_plan(generation, server_address);
+    proxy.materialize_execution();
+    let binding = ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .unwrap();
 
-    let first = open_xhttp_h3_proxy_client(&proxy, &endpoint, 0)
+    let first = open_xhttp_h3_proxy_client(&binding, &endpoint)
         .await
         .unwrap();
     let mut first_response = open_xhttp_h3_download_stream(
@@ -176,7 +182,7 @@ async fn h3_goaway_retires_the_old_physical_before_rebuild() {
     );
     drop(first);
 
-    let replacement = open_xhttp_h3_proxy_client(&proxy, &endpoint, 0)
+    let replacement = open_xhttp_h3_proxy_client(&binding, &endpoint)
         .await
         .unwrap();
     let mut replacement_response = open_xhttp_h3_download_stream(

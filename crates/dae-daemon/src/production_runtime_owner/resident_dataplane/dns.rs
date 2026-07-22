@@ -39,10 +39,12 @@ use super::super::resident_routing::{
 };
 use super::direct::open_direct_tcp_connection_async;
 #[cfg(test)]
+use super::plan::ResidentProxyPlan;
+#[cfg(test)]
 use super::plan::build_resident_dataplane_plan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
-use super::plan::{ResidentProxyPlan, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
+use super::plan::{ResidentProxyBinding, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
 use super::tcp::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
     QuicEndpointOpenContext, QuicEndpointProtocol, open_marked_quic_endpoint_for_remote,
@@ -280,11 +282,13 @@ impl ResidentDnsPlan {
 
     pub(super) async fn probe_proxy_dns_udp_health(
         &self,
-        proxy: Arc<ResidentProxyPlan>,
+        binding: ResidentProxyBinding,
         target: SocketAddr,
         lookup_host: &str,
     ) -> Result<(), String> {
-        let forwarder = self.forwarders.health_proxy_udp_forwarder(target, proxy)?;
+        let forwarder = self
+            .forwarders
+            .health_proxy_udp_forwarder(target, binding)?;
         super::udp::probe_resident_proxy_dns_udp_with_forwarder_async(forwarder, lookup_host).await
     }
 

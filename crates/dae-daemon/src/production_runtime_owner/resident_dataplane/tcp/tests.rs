@@ -349,16 +349,31 @@ fn xhttp_h1_request_uses_official_packet_up_shape() {
 }
 
 #[test]
-fn runtime_generation_reaches_primary_and_download_xmux_keys() {
+fn runtime_generation_is_bound_without_mutating_xmux_configuration() {
     let mut proxy = dummy_proxy_plan();
     proxy.xhttp_xmux = Some(ResidentXhttpXmuxPlan::official_default());
     proxy.xhttp_download = Some(ResidentXhttpEndpointPlan::from_proxy(&proxy));
+    proxy.materialize_execution();
 
-    proxy.apply_runtime_generation(73);
+    let binding = ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(73),
+    )
+    .unwrap();
 
-    assert_eq!(proxy.xhttp_xmux.as_ref().unwrap().runtime_generation, 73);
+    assert_eq!(binding.runtime_generation().get(), 73);
     assert_eq!(
-        proxy
+        binding
+            .plan()
+            .xhttp_xmux
+            .as_ref()
+            .unwrap()
+            .runtime_generation,
+        0
+    );
+    assert_eq!(
+        binding
+            .plan()
             .xhttp_download
             .as_ref()
             .unwrap()
@@ -366,7 +381,7 @@ fn runtime_generation_reaches_primary_and_download_xmux_keys() {
             .as_ref()
             .unwrap()
             .runtime_generation,
-        73
+        0
     );
 }
 
@@ -608,8 +623,11 @@ fn decode_client_websocket_control_frame(frame: &[u8]) -> (u8, Vec<u8>) {
 
 #[test]
 fn proxy_failure_event_carries_relay_diagnostics() {
+    let mut proxy = dummy_proxy_plan();
+    proxy.materialize_execution();
+    let proxy = Arc::new(proxy);
+    let binding = ResidentProxyBinding::configuration(Arc::clone(&proxy)).unwrap();
     let selection = TcpProxySelection {
-        mark: 0x55,
         mptcp: false,
         route: TcpRouteSelection {
             initial_outbound: 7,
@@ -626,7 +644,7 @@ fn proxy_failure_event_carries_relay_diagnostics() {
                 mac: FLOW_MAC.to_owned(),
             },
         },
-        proxy: Arc::new(dummy_proxy_plan()),
+        proxy: binding,
     };
     let sniff = TcpSniffReport {
         payload: Vec::new(),

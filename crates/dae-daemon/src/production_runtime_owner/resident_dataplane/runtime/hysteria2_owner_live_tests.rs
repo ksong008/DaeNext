@@ -236,7 +236,7 @@ async fn read_test_varint(recv: &mut quinn::RecvStream) -> u64 {
     value
 }
 
-fn owner_test_proxy(address: SocketAddr, generation: u64) -> Arc<ResidentProxyPlan> {
+fn owner_test_proxy(address: SocketAddr, generation: u64) -> ResidentProxyBinding {
     owner_test_proxy_for_authority(&address.to_string(), generation, "owner-test-auth")
 }
 
@@ -244,7 +244,7 @@ fn owner_test_proxy_for_authority(
     authority: &str,
     generation: u64,
     auth: &str,
-) -> Arc<ResidentProxyPlan> {
+) -> ResidentProxyBinding {
     let sections = dae_config::parser::parse_config(
         r#"
         global {
@@ -265,8 +265,12 @@ fn owner_test_proxy_for_authority(
         link,
     )
     .unwrap();
-    proxy.apply_runtime_generation(generation);
-    Arc::new(proxy)
+    proxy.materialize_execution();
+    ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .expect("materialized Hysteria2 owner test binding")
 }
 
 fn owner_deadline() -> AbsoluteDeadline {
@@ -341,7 +345,7 @@ async fn generation_owner_reuses_auth_across_runtimes_and_rebuilds_after_remote_
 
     let primary = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::TcpData,
             owner_deadline(),
         )
@@ -359,7 +363,7 @@ async fn generation_owner_reuses_auth_across_runtimes_and_rebuilds_after_remote_
         QuicEndpointCallerClass::BackgroundHealth,
     ] {
         let registry = registry.clone();
-        let proxy = Arc::clone(&proxy);
+        let proxy = proxy.clone();
         let (sender, receiver) = oneshot::channel();
         caller_threads.push(std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -391,7 +395,7 @@ async fn generation_owner_reuses_auth_across_runtimes_and_rebuilds_after_remote_
     );
     let mut udp_a = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::UdpData,
             owner_deadline(),
         )
@@ -401,7 +405,7 @@ async fn generation_owner_reuses_auth_across_runtimes_and_rebuilds_after_remote_
         .unwrap();
     let mut udp_b = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::ManagedDns,
             owner_deadline(),
         )
@@ -428,7 +432,7 @@ async fn generation_owner_reuses_auth_across_runtimes_and_rebuilds_after_remote_
 
     let replacement = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::BackgroundHealth,
             owner_deadline(),
         )
@@ -466,7 +470,7 @@ async fn cancelled_auth_waiter_does_not_cancel_the_generation_owner_build() {
     .unwrap();
 
     let first_registry = registry.clone();
-    let first_proxy = Arc::clone(&proxy);
+    let first_proxy = proxy.clone();
     let first = tokio::spawn(async move {
         first_registry
             .acquire(
@@ -479,7 +483,7 @@ async fn cancelled_auth_waiter_does_not_cancel_the_generation_owner_build() {
     wait_until(|| server.auth_count.load(Ordering::Relaxed) == 1).await;
 
     let observer_registry = registry.clone();
-    let observer_proxy = Arc::clone(&proxy);
+    let observer_proxy = proxy.clone();
     let observer = tokio::spawn(async move {
         observer_registry
             .acquire(
@@ -528,7 +532,7 @@ async fn simultaneous_auth_failure_waiters_share_one_connection_attempt() {
     let mut waiters = Vec::with_capacity(waiter_count);
     for _ in 0..waiter_count {
         let registry = registry.clone();
-        let proxy = Arc::clone(&proxy);
+        let proxy = proxy.clone();
         let barrier = Arc::clone(&barrier);
         waiters.push(tokio::spawn(async move {
             barrier.wait().await;
@@ -582,7 +586,7 @@ async fn tcp_only_auth_rejects_udp_without_reauthenticating() {
 
     let tcp = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::TcpData,
             owner_deadline(),
         )
@@ -592,7 +596,7 @@ async fn tcp_only_auth_rejects_udp_without_reauthenticating() {
     exchange_tcp(tcp.connection(), "tcp-only.invalid:443").await;
     let udp_transport = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::UdpData,
             owner_deadline(),
         )

@@ -255,7 +255,7 @@ fn juicity_server_config() -> quinn::ServerConfig {
     quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()))
 }
 
-fn juicity_proxy(addr: SocketAddr, generation: u64) -> Arc<plan::ResidentProxyPlan> {
+fn juicity_proxy(addr: SocketAddr, generation: u64) -> plan::ResidentProxyBinding {
     let config = dae_config::Config {
         global: dae_config::Global::default(),
         subscription: Vec::new(),
@@ -275,8 +275,12 @@ fn juicity_proxy(addr: SocketAddr, generation: u64) -> Arc<plan::ResidentProxyPl
         ),
     )
     .unwrap();
-    proxy.apply_runtime_generation(generation);
-    Arc::new(proxy)
+    proxy.materialize_execution();
+    plan::ResidentProxyBinding::resident(
+        Arc::new(proxy),
+        dae_runtime_control::OwnerGeneration::new(generation),
+    )
+    .expect("materialized Juicity owner test binding")
 }
 
 fn juicity_owner_deadline() -> dae_runtime_control::AbsoluteDeadline {
@@ -356,7 +360,7 @@ fn juicity_owner_reuses_auth_and_persistent_udp_streams_across_runtimes() {
 
             let acquire_from_runtime = |caller| {
                 let registry = registry.clone();
-                let proxy = Arc::clone(&proxy);
+                let proxy = proxy.clone();
                 tokio::task::spawn_blocking(move || {
                     tokio::runtime::Builder::new_current_thread()
                         .enable_io()
@@ -385,7 +389,7 @@ fn juicity_owner_reuses_auth_and_persistent_udp_streams_across_runtimes() {
 
             let target: SocketAddr = TEST_UDP_TARGET.parse().unwrap();
             let (udp_a_owner, udp_a) = exercise_juicity_udp_stream_session(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 registry.clone(),
                 target,
                 &[b"udp-a1", b"udp-a2"],
@@ -395,7 +399,7 @@ fn juicity_owner_reuses_auth_and_persistent_udp_streams_across_runtimes() {
             assert_eq!(udp_a_owner, tcp_a.physical_owner_id());
             assert_eq!(udp_a, [b"udp-a1".to_vec(), b"udp-a2".to_vec()]);
             let (udp_b_owner, udp_b) = exercise_juicity_udp_stream_session(
-                Arc::clone(&proxy),
+                proxy.clone(),
                 registry.clone(),
                 target,
                 &[b"udp-b1"],
@@ -444,7 +448,7 @@ async fn juicity_owner_expands_a_bounded_pool_only_after_stream_capacity_is_used
 
     let first = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::TcpData,
             juicity_owner_deadline(),
         )
@@ -452,7 +456,7 @@ async fn juicity_owner_expands_a_bounded_pool_only_after_stream_capacity_is_used
         .unwrap();
     let second = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::UdpData,
             juicity_owner_deadline(),
         )
@@ -500,7 +504,7 @@ async fn juicity_owner_rebuilds_once_after_remote_close() {
     .unwrap();
     let old = registry
         .acquire(
-            Arc::clone(&proxy),
+            proxy.clone(),
             QuicEndpointCallerClass::TcpData,
             juicity_owner_deadline(),
         )
@@ -664,7 +668,7 @@ async fn cancelled_and_simultaneous_juicity_waiters_share_one_no_response_attemp
     .unwrap();
 
     let elected_registry = registry.clone();
-    let elected_proxy = Arc::clone(&proxy);
+    let elected_proxy = proxy.clone();
     let elected = tokio::spawn(async move {
         elected_registry
             .acquire(
@@ -683,7 +687,7 @@ async fn cancelled_and_simultaneous_juicity_waiters_share_one_no_response_attemp
     let mut observers = Vec::new();
     for _ in 0..7 {
         let registry = registry.clone();
-        let proxy = Arc::clone(&proxy);
+        let proxy = proxy.clone();
         let barrier = Arc::clone(&barrier);
         observers.push(tokio::spawn(async move {
             barrier.wait().await;

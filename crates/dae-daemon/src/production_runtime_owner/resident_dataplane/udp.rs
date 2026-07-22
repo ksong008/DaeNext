@@ -59,8 +59,8 @@ use super::super::udp_io::{
     try_recv_udp_with_original_dst_from_pool,
 };
 use super::client::{
-    AsyncResidentTlsClient, async_resident_tls_underlay_name, open_async_resident_tls_client,
-    open_proxy_tcp_stream_async,
+    AsyncResidentTlsClient, async_resident_tls_underlay_name,
+    open_async_resident_tls_client_with_binding, open_proxy_tcp_stream_with_binding,
 };
 use super::dns::{
     ResidentDnsPlan, build_dns_server_failure_response, handle_resident_dns_udp_async,
@@ -72,11 +72,11 @@ use super::plan::ResidentHysteria2ObfsPlan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentProtocolShape, ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan,
-    ResidentStreamPacketTransport, ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition,
-    ResidentUdpExecutorFactory, ResidentUdpSourceContract, ResidentUdpWireIdentityContract,
-    ResidentXhttpHttpVersion, ResidentXhttpMode, SharedResidentProxyGroupMap, UdpPacketSemantics,
-    resident_udp_chain_admission,
+    ResidentProtocolShape, ResidentProxyBinding, ResidentProxyGroupPlan, ResidentProxyPlan,
+    ResidentProxyProtocolPlan, ResidentStreamPacketTransport, ResidentUdpExecutionAgreement,
+    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, ResidentUdpSourceContract,
+    ResidentUdpWireIdentityContract, ResidentXhttpHttpVersion, ResidentXhttpMode,
+    SharedResidentProxyGroupMap, UdpPacketSemantics, resident_udp_chain_admission,
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,

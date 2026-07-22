@@ -19,35 +19,35 @@ use super::super::*;
 use super::xhttp_primary_tls_underlay_name;
 
 pub(crate) async fn open_xhttp_stream_parts(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
+    binding: &ResidentProxyBinding,
     mptcp: bool,
     initial_payload: Bytes,
 ) -> Result<XhttpStreamParts, String> {
+    let proxy = binding.plan();
     match proxy.xhttp_mode {
         ResidentXhttpMode::PacketUp => {
             Err("xHTTP stream parts cannot be opened for packet-up mode".to_owned())
         }
         ResidentXhttpMode::StreamOne => {
-            open_xhttp_stream_one_parts(proxy, mark, mptcp, initial_payload).await
+            open_xhttp_stream_one_parts(binding, mptcp, initial_payload).await
         }
         ResidentXhttpMode::StreamUp => {
-            open_xhttp_stream_up_parts(proxy, mark, mptcp, initial_payload).await
+            open_xhttp_stream_up_parts(binding, mptcp, initial_payload).await
         }
     }
 }
 
 async fn open_xhttp_stream_one_parts(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
+    binding: &ResidentProxyBinding,
     mptcp: bool,
     initial_payload: Bytes,
 ) -> Result<XhttpStreamParts, String> {
+    let proxy = binding.plan();
     let endpoint = ResidentXhttpEndpointPlan::from_proxy(proxy);
     let upload_http_version = proxy.xhttp_primary_http_version();
     match upload_http_version {
         ResidentXhttpHttpVersion::H1 => {
-            let mut client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+            let mut client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
             let upload_underlay = async_tls_underlay_name(&client);
             write_xhttp_h1_chunked_request_head(&mut client, &endpoint, "", "stream-one").await?;
             write_xhttp_h1_chunk(&mut client, &initial_payload, false, "stream-one").await?;
@@ -78,8 +78,7 @@ async fn open_xhttp_stream_one_parts(
         }
         ResidentXhttpHttpVersion::H2 => {
             let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
-            let mut endpoint_sender =
-                open_xhttp_h2_proxy_sender(proxy, &endpoint, mark, mptcp).await?;
+            let mut endpoint_sender = open_xhttp_h2_proxy_sender(binding, &endpoint, mptcp).await?;
             note_xhttp_xmux_request(endpoint_sender.xmux_lease.as_ref());
             let request = xhttp_h2_request(http::Method::POST, &endpoint, "", true)?;
             let (response, mut send_stream) = endpoint_sender
@@ -125,7 +124,7 @@ async fn open_xhttp_stream_one_parts(
             })
         }
         ResidentXhttpHttpVersion::H3 => {
-            let mut endpoint_client = open_xhttp_h3_proxy_client(proxy, &endpoint, mark).await?;
+            let mut endpoint_client = open_xhttp_h3_proxy_client(binding, &endpoint).await?;
             note_xhttp_xmux_request(endpoint_client.xmux_lease.as_ref());
             let request = xhttp_h3_request(http::Method::POST, &endpoint, "", true)?;
             let mut stream = open_xhttp_h3_request(
@@ -174,11 +173,11 @@ async fn open_xhttp_stream_one_parts(
 }
 
 async fn open_xhttp_stream_up_parts(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
+    binding: &ResidentProxyBinding,
     mptcp: bool,
     initial_payload: Bytes,
 ) -> Result<XhttpStreamParts, String> {
+    let proxy = binding.plan();
     let session_id = new_xhttp_session_id_for(proxy.xhttp_settings());
     let upload_endpoint = ResidentXhttpEndpointPlan::from_proxy(proxy);
     let download_endpoint = proxy
@@ -193,7 +192,7 @@ async fn open_xhttp_stream_up_parts(
     {
         let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
         let mut endpoint_sender =
-            open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
+            open_xhttp_h2_proxy_sender(binding, &upload_endpoint, mptcp).await?;
         let recv = open_xhttp_h2_download_stream(
             &mut endpoint_sender.sender,
             &upload_endpoint,
@@ -244,19 +243,17 @@ async fn open_xhttp_stream_up_parts(
         });
     }
     let download = open_xhttp_download_client(
-        proxy,
+        binding,
         &download_endpoint,
-        mark,
         mptcp,
         &session_id,
         download_separate,
     )
     .await?;
     let (upload, upload_underlay) = open_xhttp_stream_upload_client(
-        proxy,
+        binding,
         &upload_endpoint,
         upload_http_version,
-        mark,
         mptcp,
         &session_id,
         initial_payload,
@@ -273,9 +270,8 @@ async fn open_xhttp_stream_up_parts(
 }
 
 async fn open_xhttp_download_client(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
-    mark: u32,
     mptcp: bool,
     session_id: &str,
     separate_endpoint: bool,
@@ -283,9 +279,8 @@ async fn open_xhttp_download_client(
     match endpoint.http_version() {
         ResidentXhttpHttpVersion::H1 => {
             let body = open_xhttp_h1_download_stream(
-                proxy,
+                binding,
                 endpoint,
-                mark,
                 mptcp,
                 session_id,
                 separate_endpoint,
@@ -295,9 +290,9 @@ async fn open_xhttp_download_client(
         }
         ResidentXhttpHttpVersion::H2 => {
             let mut endpoint_sender = if separate_endpoint {
-                open_xhttp_h2_endpoint_sender(proxy, endpoint, mark, mptcp).await?
+                open_xhttp_h2_endpoint_sender(binding, endpoint, mptcp).await?
             } else {
-                open_xhttp_h2_proxy_sender(proxy, endpoint, mark, mptcp).await?
+                open_xhttp_h2_proxy_sender(binding, endpoint, mptcp).await?
             };
             let recv = open_xhttp_h2_download_stream(
                 &mut endpoint_sender.sender,
@@ -315,9 +310,9 @@ async fn open_xhttp_download_client(
         }
         ResidentXhttpHttpVersion::H3 => {
             let endpoint_client = if separate_endpoint {
-                open_xhttp_h3_endpoint_client(proxy, endpoint, mark).await?
+                open_xhttp_h3_endpoint_client(binding, endpoint).await?
             } else {
-                open_xhttp_h3_proxy_client(proxy, endpoint, mark).await?
+                open_xhttp_h3_proxy_client(binding, endpoint).await?
             };
             let recv = open_xhttp_h3_download_stream(
                 endpoint,
@@ -336,17 +331,17 @@ async fn open_xhttp_download_client(
 }
 
 async fn open_xhttp_stream_upload_client(
-    proxy: &ResidentProxyPlan,
+    binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
     upload_http_version: ResidentXhttpHttpVersion,
-    mark: u32,
     mptcp: bool,
     session_id: &str,
     initial_payload: Bytes,
 ) -> Result<(XhttpStreamUploadClient, &'static str), String> {
+    let proxy = binding.plan();
     match upload_http_version {
         ResidentXhttpHttpVersion::H1 => {
-            let mut client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+            let mut client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
             let upload_underlay = async_tls_underlay_name(&client);
             write_xhttp_h1_chunked_request_head(&mut client, endpoint, session_id, "stream-up")
                 .await?;
@@ -360,8 +355,7 @@ async fn open_xhttp_stream_upload_client(
         }
         ResidentXhttpHttpVersion::H2 => {
             let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
-            let mut endpoint_sender =
-                open_xhttp_h2_proxy_sender(proxy, endpoint, mark, mptcp).await?;
+            let mut endpoint_sender = open_xhttp_h2_proxy_sender(binding, endpoint, mptcp).await?;
             note_xhttp_xmux_request(endpoint_sender.xmux_lease.as_ref());
             let request = xhttp_h2_request(
                 http::Method::POST,
@@ -397,7 +391,7 @@ async fn open_xhttp_stream_upload_client(
             ))
         }
         ResidentXhttpHttpVersion::H3 => {
-            let mut endpoint_client = open_xhttp_h3_proxy_client(proxy, endpoint, mark).await?;
+            let mut endpoint_client = open_xhttp_h3_proxy_client(binding, endpoint).await?;
             note_xhttp_xmux_request(endpoint_client.xmux_lease.as_ref());
             let request = xhttp_h3_request(
                 http::Method::POST,

@@ -92,7 +92,7 @@ impl Drop for ResidentProxyUdpBridge {
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_resident_proxy_udp_bridge_async(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
@@ -103,7 +103,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     #[cfg(test)]
     {
         open_resident_proxy_udp_bridge_inner(
-            proxy,
+            binding,
             original_dst,
             hysteria2_owner_registry,
             tuic_owner_registry,
@@ -117,7 +117,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     #[cfg(not(test))]
     {
         open_resident_proxy_udp_bridge_inner(
-            proxy,
+            binding,
             original_dst,
             hysteria2_owner_registry,
             tuic_owner_registry,
@@ -135,8 +135,14 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     original_dst: SocketAddr,
     observation: Arc<ResidentProxyUdpBridgeTestObservation>,
 ) -> Result<ResidentProxyUdpBridge, String> {
+    let generation = proxy.execution_plan().runtime_generation();
+    let binding = if generation.get() == 0 {
+        ResidentProxyBinding::control_plane(proxy)
+    } else {
+        ResidentProxyBinding::resident(proxy, generation)
+    }?;
     open_resident_proxy_udp_bridge_inner(
-        proxy,
+        binding,
         original_dst,
         None,
         None,
@@ -149,7 +155,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
 }
 
 async fn open_resident_proxy_udp_bridge_inner(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
@@ -182,7 +188,7 @@ async fn open_resident_proxy_udp_bridge_inner(
         let _task_guard = task_guard;
         #[cfg(test)]
         resident_proxy_udp_bridge_loop(
-            proxy,
+            binding,
             original_dst,
             socket,
             shutdown_rx,
@@ -197,7 +203,7 @@ async fn open_resident_proxy_udp_bridge_inner(
         .await;
         #[cfg(not(test))]
         resident_proxy_udp_bridge_loop(
-            proxy,
+            binding,
             original_dst,
             socket,
             shutdown_rx,
@@ -224,7 +230,7 @@ fn resident_proxy_udp_bridge_bind_addr() -> SocketAddr {
 
 #[allow(clippy::too_many_arguments)]
 async fn resident_proxy_udp_bridge_loop(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     socket: tokio::net::UdpSocket,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
@@ -237,7 +243,7 @@ async fn resident_proxy_udp_bridge_loop(
     #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) {
     let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
-        Arc::clone(&proxy),
+        binding.clone(),
         hysteria2_owner_registry,
         tuic_owner_registry,
         juicity_owner_registry,
@@ -267,10 +273,12 @@ async fn resident_proxy_udp_bridge_loop(
                 #[cfg(test)]
                 let execution = test_observation::observe_execution(
                     test_observation.as_ref(),
-                    executor.execute_proxy_packet(&proxy, original_dst, &payload),
+                    executor.execute_proxy_packet(&binding, original_dst, &payload),
                 ).await;
                 #[cfg(not(test))]
-                let execution = executor.execute_proxy_packet(&proxy, original_dst, &payload).await;
+                let execution = executor
+                    .execute_proxy_packet(&binding, original_dst, &payload)
+                    .await;
                 match execution {
                     Ok((_, response)) if response.reply_forwarded => {
                         if let Err(err) =
@@ -346,7 +354,7 @@ pub(crate) const RESIDENT_UDP_PROBE_PUBLIC_ERROR: &str =
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn probe_resident_proxy_udp_async(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     payload: &[u8],
     include_response_hex: bool,
@@ -356,8 +364,9 @@ pub(crate) async fn probe_resident_proxy_udp_async(
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> serde_json::Value {
     let started = Instant::now();
-    let agreement = proxy.execution_plan().udp.agreement();
-    let handler = resident_udp_proxy_handler_name(&proxy);
+    let proxy = binding.plan();
+    let agreement = binding.execution().udp.agreement();
+    let handler = resident_udp_proxy_handler_name(proxy);
     let packet_semantics = agreement.packet_semantics();
     if let Some(reason) = agreement.unsupported_reason() {
         return json!({
@@ -375,7 +384,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             "error": reason,
             "graphId": proxy.graph_id,
             "packetSession": udp_probe_packet_session_value(
-                &proxy,
+                proxy,
                 original_dst,
                 handler,
                 packet_semantics,
@@ -383,15 +392,15 @@ pub(crate) async fn probe_resident_proxy_udp_async(
         });
     }
     let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
-        Arc::clone(&proxy),
+        binding.clone(),
         hysteria2_owner_registry,
         tuic_owner_registry,
         juicity_owner_registry,
         anytls_owner_registry,
     );
-    let dns = ResidentDnsPlan::asis(proxy.mark);
+    let dns = ResidentDnsPlan::asis(binding.effective_socket_mark());
     let mut exchange = executor
-        .execute(&dns, &proxy, original_dst, payload)
+        .execute(&dns, &binding, original_dst, payload)
         .await
         .map(|(_, response)| response);
     if let Ok(response) = &exchange
@@ -421,7 +430,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
                 "payload_match": payload_match,
                 "elapsed_ms": started.elapsed().as_millis(),
                 "graphId": proxy.graph_id,
-                "packetSession": udp_probe_packet_session_value(&proxy, original_dst, handler, packet_semantics),
+                "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
             });
             response.append_execution_fields(&mut report, handler, &proxy.graph_id);
             if let Some(tls_underlay) = response.tls_underlay {
@@ -448,7 +457,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             "payload_match": false,
             "elapsed_ms": started.elapsed().as_millis(),
             "graphId": proxy.graph_id,
-            "packetSession": udp_probe_packet_session_value(&proxy, original_dst, handler, packet_semantics),
+            "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
             "reasonId": "udp-probe-exchange-failed",
             "error": RESIDENT_UDP_PROBE_PUBLIC_ERROR,
         }),

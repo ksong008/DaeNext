@@ -2,7 +2,8 @@ use super::*;
 
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::production_runtime_owner::resident_dataplane::dns::transport::test_support::{
-    DnsQuicTestProtocol, DnsQuicTestServer, Socks5UdpRelay, dns_test_response, socks5_dns_proxy,
+    DnsQuicTestProtocol, DnsQuicTestServer, Socks5UdpRelay, dns_proxy_binding, dns_test_response,
+    socks5_dns_proxy,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::quic_endpoint_metrics_snapshot;
 
@@ -18,7 +19,8 @@ async fn routed_doh3_reuses_one_outer_relay_and_inner_client_for_large_responses
     )
     .await;
     let socks = Socks5UdpRelay::start().await;
-    let proxy = socks5_dns_proxy(socks.address(), generation);
+    let proxy = socks5_dns_proxy(socks.address());
+    let binding = dns_proxy_binding(Arc::clone(&proxy), generation);
     let upstream = parse_dns_upstream(
         0,
         "routed-doh3",
@@ -28,11 +30,11 @@ async fn routed_doh3_reuses_one_outer_relay_and_inner_client_for_large_responses
     )
     .unwrap();
     let selection = ResidentDnsUpstreamSelection::Proxy {
-        proxy: Arc::clone(&proxy),
+        binding: binding.clone(),
     };
     let cache = ResidentDnsForwarderCache::default();
     let forwarder = cache
-        .proxy_h3_forwarder(&upstream, server.address(), Arc::clone(&proxy), &selection)
+        .proxy_h3_forwarder(&upstream, server.address(), binding, &selection)
         .unwrap();
     forwarder.lock().await.client_config_override = Some(server.client_config());
     let first_query = build_dns_query_packet(0x3431, "small.example", DNS_QTYPE_A).unwrap();
@@ -184,7 +186,8 @@ async fn routed_doh3_owner_survives_the_first_caller_runtime() {
     )
     .await;
     let socks = Socks5UdpRelay::start().await;
-    let proxy = socks5_dns_proxy(socks.address(), generation);
+    let proxy = socks5_dns_proxy(socks.address());
+    let binding = dns_proxy_binding(Arc::clone(&proxy), generation);
     let upstream = parse_dns_upstream(
         0,
         "routed-doh3-caller-runtime",
@@ -194,11 +197,11 @@ async fn routed_doh3_owner_survives_the_first_caller_runtime() {
     )
     .unwrap();
     let selection = ResidentDnsUpstreamSelection::Proxy {
-        proxy: Arc::clone(&proxy),
+        binding: binding.clone(),
     };
     let cache = Arc::new(ResidentDnsForwarderCache::default());
     let forwarder = cache
-        .proxy_h3_forwarder(&upstream, server.address(), Arc::clone(&proxy), &selection)
+        .proxy_h3_forwarder(&upstream, server.address(), binding, &selection)
         .unwrap();
     forwarder.lock().await.client_config_override = Some(server.client_config());
 
@@ -302,7 +305,8 @@ async fn routed_doh3_five_generation_cycles_release_every_owner_resource() {
 
     for cycle in 0..5_u64 {
         let generation = 7_350 + cycle;
-        let proxy = socks5_dns_proxy(socks.address(), generation);
+        let proxy = socks5_dns_proxy(socks.address());
+        let binding = dns_proxy_binding(Arc::clone(&proxy), generation);
         let upstream = parse_dns_upstream(
             0,
             "routed-doh3-reload",
@@ -312,11 +316,11 @@ async fn routed_doh3_five_generation_cycles_release_every_owner_resource() {
         )
         .unwrap();
         let selection = ResidentDnsUpstreamSelection::Proxy {
-            proxy: Arc::clone(&proxy),
+            binding: binding.clone(),
         };
         let cache = ResidentDnsForwarderCache::default();
         let forwarder = cache
-            .proxy_h3_forwarder(&upstream, server.address(), Arc::clone(&proxy), &selection)
+            .proxy_h3_forwarder(&upstream, server.address(), binding, &selection)
             .unwrap();
         forwarder.lock().await.client_config_override = Some(server.client_config());
         let query = build_dns_query_packet(
@@ -365,7 +369,8 @@ async fn generation_shutdown_closes_an_evicted_inflight_doh3_owner() {
     )
     .await;
     let socks = Socks5UdpRelay::start().await;
-    let proxy = socks5_dns_proxy(socks.address(), generation);
+    let proxy = socks5_dns_proxy(socks.address());
+    let binding = dns_proxy_binding(Arc::clone(&proxy), generation);
     let upstream = parse_dns_upstream(
         0,
         "routed-doh3-eviction",
@@ -375,11 +380,11 @@ async fn generation_shutdown_closes_an_evicted_inflight_doh3_owner() {
     )
     .unwrap();
     let selection = ResidentDnsUpstreamSelection::Proxy {
-        proxy: Arc::clone(&proxy),
+        binding: binding.clone(),
     };
     let cache = ResidentDnsForwarderCache::default();
     let retained = cache
-        .proxy_h3_forwarder(&upstream, server.address(), Arc::clone(&proxy), &selection)
+        .proxy_h3_forwarder(&upstream, server.address(), binding, &selection)
         .unwrap();
     retained.lock().await.client_config_override = Some(server.client_config());
     let query = build_dns_query_packet(0x3611, "evicted.example", DNS_QTYPE_A).unwrap();

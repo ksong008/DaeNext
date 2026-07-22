@@ -22,7 +22,14 @@ impl ResidentDataplanePlan {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn default_proxy_snapshot(
         &self,
-    ) -> Option<ResidentProxyPlan> {
+    ) -> Option<Arc<ResidentProxyPlan>> {
+        self.default_proxy_binding()
+            .map(ResidentProxyBinding::into_shared_plan)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn default_proxy_binding(
+        &self,
+    ) -> Option<ResidentProxyBinding> {
         self.default_proxy_group()
             .and_then(ResidentProxyGroupPlan::default_proxy_snapshot)
     }
@@ -75,9 +82,20 @@ pub(crate) fn build_resident_dataplane_plan_with_geodata(
 pub(crate) fn build_resident_manual_probe_plans(
     config: &Config,
 ) -> BTreeMap<String, Result<ResidentProxyProbePlan, String>> {
+    let profile = manual_probe_profile(config);
     let mut plans = BTreeMap::new();
     for (node_tag, link) in tagged_node_links(config) {
-        let plan = build_resident_manual_probe_plan(config, node_tag, link.clone());
+        let plan = profile
+            .as_ref()
+            .map_err(|error| error.clone())
+            .and_then(|profile| {
+                build_resident_manual_probe_plan_with_profile(
+                    config,
+                    node_tag,
+                    link.clone(),
+                    Arc::clone(profile),
+                )
+            });
         plans.entry(link).or_insert(plan);
     }
     plans
@@ -87,6 +105,7 @@ pub(crate) fn build_resident_manual_probe_plans_for_helper(
     config: &Config,
     requested_links: &[String],
 ) -> BTreeMap<String, Result<ResidentProxyProbePlan, String>> {
+    let profile = manual_probe_profile(config);
     let requested = requested_links
         .iter()
         .filter(|link| !link.is_empty())
@@ -97,7 +116,17 @@ pub(crate) fn build_resident_manual_probe_plans_for_helper(
         if !requested.contains(link.as_str()) {
             continue;
         }
-        let plan = build_resident_manual_probe_plan(config, node_tag, link.clone());
+        let plan = profile
+            .as_ref()
+            .map_err(|error| error.clone())
+            .and_then(|profile| {
+                build_resident_manual_probe_plan_with_profile(
+                    config,
+                    node_tag,
+                    link.clone(),
+                    Arc::clone(profile),
+                )
+            });
         plans.entry(link).or_insert(plan);
     }
     for plan in plans.values_mut().filter_map(|plan| plan.as_mut().ok()) {
@@ -106,16 +135,8 @@ pub(crate) fn build_resident_manual_probe_plans_for_helper(
     plans
 }
 
-pub(crate) fn build_resident_manual_probe_plan(
-    config: &Config,
-    node_tag: String,
-    link: String,
-) -> Result<ResidentProxyProbePlan, String> {
+fn manual_probe_profile(config: &Config) -> Result<Arc<ResidentProbeProfile>, String> {
     let group_name = "__manual_native_probe".to_owned();
-    let mut proxy = build_proxy_plan(config, group_name.clone(), node_tag.clone(), link.clone())?;
-    proxy.group_policy = "manual_probe".to_owned();
-    proxy.disable_latency_probe_persistent_caches();
-    proxy.compact_allocations();
     let group = Group {
         name: group_name,
         filter: Vec::new(),
@@ -127,17 +148,36 @@ pub(crate) fn build_resident_manual_probe_plan(
         check_interval: Default::default(),
         check_tolerance: Default::default(),
     };
-    Ok(ResidentProxyProbePlan {
+    Ok(Arc::new(ResidentProbeProfile::new(
+        group_tcp_check_plan(config, &group)?,
+        group_udp_check_plan(config, &group)?,
+        resident_tcp_latency_probe_timeout_from_config(config),
+    )))
+}
+
+fn build_resident_manual_probe_plan_with_profile(
+    config: &Config,
+    node_tag: String,
+    link: String,
+    profile: Arc<ResidentProbeProfile>,
+) -> Result<ResidentProxyProbePlan, String> {
+    let mut proxy = build_proxy_plan(
+        config,
+        "__manual_native_probe".to_owned(),
+        node_tag.clone(),
+        link.clone(),
+    )?;
+    proxy.group_policy = "manual_probe".to_owned();
+    proxy.compact_allocations();
+    Ok(ResidentProxyProbePlan::new(
         node_tag,
-        link_hash: link_hash(&link),
-        execution_identity: execution_link_hash(&link),
-        redacted_link_source: redacted_link_source(&link),
-        link,
-        tcp_check: group_tcp_check_plan(config, &group)?,
-        udp_check: group_udp_check_plan(config, &group)?,
-        tcp_probe_timeout: resident_tcp_latency_probe_timeout_from_config(config),
-        proxy: Arc::new(proxy),
-    })
+        link.clone(),
+        link_hash(&link),
+        execution_link_hash(&link),
+        redacted_link_source(&link),
+        profile,
+        ResidentProxyBinding::configuration(Arc::new(proxy))?.without_persistent_xhttp_reuse(),
+    ))
 }
 
 pub(crate) fn resident_proxy_plans(
@@ -217,7 +257,7 @@ pub(crate) fn resident_proxy_plans(
                 execution_identity: execution_link_hash(&link),
                 redacted_link_source: redacted_link_source(&link),
                 link,
-                proxy: Arc::new(proxy),
+                binding: ResidentProxyBinding::configuration(Arc::new(proxy))?,
             });
         }
         if candidates.is_empty() {
@@ -233,6 +273,12 @@ pub(crate) fn resident_proxy_plans(
             group_check_tolerance_ms(config, group),
         );
         let admitted_candidate_count = candidates.len();
+        let probe_profile = Arc::new(ResidentProbeProfile::new(
+            group_tcp_check_plan(config, group)?,
+            group_udp_check_plan(config, group)?,
+            resident_tcp_latency_probe_timeout_from_config(config),
+        ));
+        let probe_candidates = share_group_probe_plans(&candidates, Arc::clone(&probe_profile));
         let group_plan = ResidentProxyGroupPlan {
             group_name: group.name.clone(),
             group_policy,
@@ -240,9 +286,8 @@ pub(crate) fn resident_proxy_plans(
             selector: Arc::new(Mutex::new(selector)),
             candidates,
             check_interval: group_check_interval(config, group),
-            tcp_check: group_tcp_check_plan(config, group)?,
-            udp_check: group_udp_check_plan(config, group)?,
-            tcp_probe_timeout: resident_tcp_latency_probe_timeout_from_config(config),
+            probe_profile,
+            probe_candidates,
             resuscitation_last_unix_ms: Arc::new(
                 (0..NETWORK_TYPE_COLLECTION_COUNT)
                     .map(|_| AtomicI64::new(0))

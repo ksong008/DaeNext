@@ -22,7 +22,7 @@ impl ShadowsocksAeadDatagramSession {
 
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
@@ -36,7 +36,7 @@ impl ShadowsocksAeadDatagramSession {
             payload,
         )
         .map_err(|err| format!("encode Shadowsocks UDP packet: {err}"))?;
-        self.relay.send(proxy, &request, "Shadowsocks").await?;
+        self.relay.send(binding, &request, "Shadowsocks").await?;
         if let Some(response) = self.poll_response()? {
             return Ok(response);
         }
@@ -108,7 +108,7 @@ impl Shadowsocks2022DatagramSession {
 
     pub(super) async fn exchange(
         &mut self,
-        proxy: &ResidentProxyPlan,
+        binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
@@ -141,7 +141,7 @@ impl Shadowsocks2022DatagramSession {
             )
             .map_err(|err| format!("encode Shadowsocks 2022 UDP packet: {err}"))?;
         self.relay
-            .send(proxy, &request.wire, "Shadowsocks 2022")
+            .send(binding, &request.wire, "Shadowsocks 2022")
             .await?;
         if let Some(response) = self.poll_response()? {
             return Ok(response);

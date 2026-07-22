@@ -269,12 +269,12 @@ fn dns_upstream_router_selects_proxy_group_for_upstream_domain() {
         test_dns_upstream_target_v4(),
         L4Proto::Udp,
     );
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = selection else {
         panic!("expected proxied DNS upstream selection");
     };
-    assert_eq!(proxy.group_name, "proxy");
-    assert_eq!(proxy.node_tag, "node_a");
-    assert_eq!(proxy.mark, 7);
+    assert_eq!(binding.plan().group_name, "proxy");
+    assert_eq!(binding.plan().node_tag, "node_a");
+    assert_eq!(binding.effective_socket_mark(), 7);
 }
 
 #[test]
@@ -355,10 +355,10 @@ fn dns_upstream_router_selects_tcp_upstream_with_tcp_health_state() {
         test_dns_upstream_target_v4(),
         L4Proto::Tcp,
     );
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = selection else {
         panic!("expected proxied DNS upstream selection");
     };
-    assert_eq!(proxy.node_tag, "node_b");
+    assert_eq!(binding.plan().node_tag, "node_b");
 }
 
 #[test]
@@ -397,10 +397,10 @@ fn dns_upstream_router_selects_udp_upstream_with_dns_udp_health_state() {
         test_dns_upstream_target_v4(),
         L4Proto::Udp,
     );
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = selection else {
         panic!("expected proxied DNS upstream selection");
     };
-    assert_eq!(proxy.node_tag, "node_a");
+    assert_eq!(binding.plan().node_tag, "node_a");
 }
 
 #[test]
@@ -438,10 +438,10 @@ fn dns_upstream_candidates_select_lower_latency_tcp_path_for_tcp_udp() {
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(targets[0].target, test_dns_upstream_target_v4());
     assert_eq!(targets[0].l4proto, L4Proto::Tcp);
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = &targets[0].selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = &targets[0].selection else {
         panic!("expected proxied DNS upstream target");
     };
-    assert_eq!(proxy.node_tag, "node_b");
+    assert_eq!(binding.plan().node_tag, "node_b");
 }
 
 #[test]
@@ -480,10 +480,10 @@ fn dns_upstream_candidates_keep_multiple_resolved_targets_generic() {
     assert_eq!(targets.len(), 4);
     assert_eq!(targets[0].target, test_dns_upstream_target_v6());
     assert_eq!(targets[0].l4proto, L4Proto::Tcp);
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = &targets[0].selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = &targets[0].selection else {
         panic!("expected proxied DNS upstream target");
     };
-    assert_eq!(proxy.node_tag, "node_b");
+    assert_eq!(binding.plan().node_tag, "node_b");
 }
 
 #[tokio::test]
@@ -631,10 +631,10 @@ fn dns_upstream_targets_use_matching_family_as_selector_fallback_tie_breaker() {
 
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(targets[0].target, test_dns_upstream_target_v6());
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = &targets[0].selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = &targets[0].selection else {
         panic!("expected proxied DNS upstream target");
     };
-    assert_eq!(proxy.node_tag, "node_b");
+    assert_eq!(binding.plan().node_tag, "node_b");
 }
 
 #[test]
@@ -675,10 +675,10 @@ fn dns_upstream_targets_keep_single_family_selector_fallback() {
 
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(targets[0].target, test_dns_upstream_target_v4());
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = &targets[0].selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = &targets[0].selection else {
         panic!("expected proxied DNS upstream target");
     };
-    assert_eq!(proxy.node_tag, "node_b");
+    assert_eq!(binding.plan().node_tag, "node_b");
 }
 
 #[test]
@@ -712,10 +712,10 @@ fn dns_upstream_fixed_group_stays_fixed_across_udp_and_tcp_selection() {
             test_dns_upstream_target_v4(),
             l4proto,
         );
-        let ResidentDnsUpstreamSelection::Proxy { proxy } = selection else {
+        let ResidentDnsUpstreamSelection::Proxy { binding } = selection else {
             panic!("expected proxied DNS upstream selection");
         };
-        assert_eq!(proxy.node_tag, "node_a");
+        assert_eq!(binding.plan().node_tag, "node_a");
     }
 }
 
@@ -775,17 +775,17 @@ fn dns_upstream_selection_respects_l4_routing_per_phase() {
         L4Proto::Tcp,
     );
 
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = udp else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = udp else {
         panic!("expected UDP phase to select proxy");
     };
-    assert_eq!(proxy.group_name, "udp_proxy");
-    assert_eq!(proxy.node_tag, "node_a");
+    assert_eq!(binding.plan().group_name, "udp_proxy");
+    assert_eq!(binding.plan().node_tag, "node_a");
 
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = tcp else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = tcp else {
         panic!("expected TCP phase to select proxy");
     };
-    assert_eq!(proxy.group_name, "tcp_proxy");
-    assert_eq!(proxy.node_tag, "node_b");
+    assert_eq!(binding.plan().group_name, "tcp_proxy");
+    assert_eq!(binding.plan().node_tag, "node_b");
 }
 
 #[test]
@@ -844,17 +844,17 @@ fn dns_upstream_selection_respects_ipversion_routing_per_target() {
         L4Proto::Udp,
     );
 
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = v4 else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = v4 else {
         panic!("expected IPv4 target to select proxy");
     };
-    assert_eq!(proxy.group_name, "v4_proxy");
-    assert_eq!(proxy.node_tag, "node_a");
+    assert_eq!(binding.plan().group_name, "v4_proxy");
+    assert_eq!(binding.plan().node_tag, "node_a");
 
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = v6 else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = v6 else {
         panic!("expected IPv6 target to select proxy");
     };
-    assert_eq!(proxy.group_name, "v6_proxy");
-    assert_eq!(proxy.node_tag, "node_b");
+    assert_eq!(binding.plan().group_name, "v6_proxy");
+    assert_eq!(binding.plan().node_tag, "node_b");
 }
 
 #[test]
@@ -898,10 +898,10 @@ fn dns_upstream_targets_choose_lower_latency_matching_proxy_candidate() {
 
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(targets[0].target, test_dns_upstream_target_v6());
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = &targets[0].selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = &targets[0].selection else {
         panic!("expected proxied DNS upstream target");
     };
-    assert_eq!(proxy.node_tag, "node_b");
+    assert_eq!(binding.plan().node_tag, "node_b");
 }
 
 fn query_with_qtype(qtype: u16) -> Vec<u8> {
@@ -2458,21 +2458,21 @@ fn resident_dns_forwarder_cache_reuses_proxy_udp_by_selection() {
     let target = test_dns_upstream_target_v4();
     let selection =
         select_single_test_dns_upstream_target(&config, router, &upstream, target, L4Proto::Udp);
-    let ResidentDnsUpstreamSelection::Proxy { proxy } = &selection else {
+    let ResidentDnsUpstreamSelection::Proxy { binding } = &selection else {
         panic!("expected proxied DNS upstream selection");
     };
     let cache = ResidentDnsForwarderCache::default();
     let first = cache
-        .proxy_udp_forwarder(&upstream, target, Arc::clone(proxy), &selection)
+        .proxy_udp_forwarder(&upstream, target, binding.clone(), &selection)
         .unwrap();
     let second = cache
-        .proxy_udp_forwarder(&upstream, target, Arc::clone(proxy), &selection)
+        .proxy_udp_forwarder(&upstream, target, binding.clone(), &selection)
         .unwrap();
     let different_target = cache
         .proxy_udp_forwarder(
             &upstream,
             test_dns_upstream_target_v6(),
-            Arc::clone(proxy),
+            binding.clone(),
             &selection,
         )
         .unwrap();

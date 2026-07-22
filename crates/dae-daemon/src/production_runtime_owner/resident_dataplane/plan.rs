@@ -60,6 +60,8 @@ mod transport_defaults;
 use self::transport_defaults::*;
 mod group_plan;
 pub(super) use self::group_plan::*;
+mod probe_plan;
+pub(super) use self::probe_plan::*;
 mod group_health_bootstrap;
 use self::group_health_bootstrap::*;
 mod health_target;

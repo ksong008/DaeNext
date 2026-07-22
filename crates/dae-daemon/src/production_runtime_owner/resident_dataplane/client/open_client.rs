@@ -1,26 +1,11 @@
 use super::*;
 
-pub(crate) async fn open_async_vless_tls_client_with_flow(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
-    mptcp: bool,
-) -> Result<AsyncVlessTlsClient, String> {
-    open_async_resident_tls_client_with_flow(proxy, mark, mptcp).await
-}
-
-pub(crate) async fn open_async_resident_tls_client(
-    proxy: &ResidentProxyPlan,
-) -> Result<AsyncResidentTlsClient, String> {
-    open_async_resident_tls_client_with_flow(proxy, proxy.mark, proxy.mptcp).await
-}
-
-pub(crate) async fn open_async_resident_tls_client_with_flow(
-    proxy: &ResidentProxyPlan,
-    mark: u32,
+pub(crate) async fn open_async_resident_tls_client_with_binding(
+    binding: &ResidentProxyBinding,
     mptcp: bool,
 ) -> Result<AsyncResidentTlsClient, String> {
-    let tcp = open_proxy_tcp_stream_async_with_flow(proxy, mark, mptcp).await?;
-    open_async_resident_tls_client_over_stream(proxy, tcp).await
+    let tcp = open_proxy_tcp_stream_with_binding(binding, mptcp).await?;
+    open_async_resident_tls_client_over_stream(binding.plan(), tcp).await
 }
 
 pub(crate) async fn open_async_vless_tls_client_with_flow_at_candidates(
@@ -104,25 +89,53 @@ async fn open_async_xhttp_endpoint_tls_client_over_stream(
     })
 }
 
+#[cfg(test)]
 pub(crate) async fn open_proxy_tcp_stream_async(
     proxy: &ResidentProxyPlan,
 ) -> Result<TokioTcpStream, String> {
     open_proxy_tcp_stream_async_with_flow(proxy, proxy.mark, proxy.mptcp).await
 }
 
+#[cfg(test)]
 pub(crate) async fn open_proxy_tcp_stream_async_with_flow(
     proxy: &ResidentProxyPlan,
     mark: u32,
     mptcp: bool,
 ) -> Result<TokioTcpStream, String> {
     if let Some(parent) = proxy.chain_parent.as_deref() {
-        return open_proxy_tcp_stream_through_parent_async(proxy, parent).await;
+        return open_proxy_tcp_stream_through_configured_parent_async(proxy, parent).await;
     }
     let protocol = &proxy.protocol;
     let target = authority_from_host_port(proxy.server_host.as_str(), proxy.server_port);
     let connected = open_direct_tcp_connection_async(target.clone(), mark, mptcp)
         .await
         .map_err(|err| format!("connect {protocol} server {target}: {err}"))?;
+    connected
+        .stream
+        .set_read_timeout(None)
+        .map_err(|err| format!("clear {protocol} TCP read timeout: {err}"))?;
+    connected
+        .stream
+        .set_write_timeout(None)
+        .map_err(|err| format!("clear {protocol} TCP write timeout: {err}"))?;
+    TokioTcpStream::from_std(connected.stream)
+        .map_err(|err| format!("adopt async proxy TCP stream: {err}"))
+}
+
+pub(crate) async fn open_proxy_tcp_stream_with_binding(
+    binding: &ResidentProxyBinding,
+    mptcp: bool,
+) -> Result<TokioTcpStream, String> {
+    let proxy = binding.plan();
+    if proxy.chain_parent.is_some() {
+        return open_proxy_tcp_stream_through_parent_async(binding).await;
+    }
+    let protocol = &proxy.protocol;
+    let target = authority_from_host_port(proxy.server_host.as_str(), proxy.server_port);
+    let connected =
+        open_direct_tcp_connection_async(target.clone(), binding.effective_socket_mark(), mptcp)
+            .await
+            .map_err(|err| format!("connect {protocol} server {target}: {err}"))?;
     connected
         .stream
         .set_read_timeout(None)

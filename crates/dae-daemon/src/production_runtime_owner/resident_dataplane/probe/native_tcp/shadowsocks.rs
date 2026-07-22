@@ -8,8 +8,8 @@ use tokio::io::AsyncWriteExt;
 
 use super::super::super::ResidentStopSignal;
 
-use super::super::super::client::open_async_resident_tls_client_with_flow;
-use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::super::super::client::open_async_resident_tls_client_with_binding;
+use super::super::super::plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
 use super::super::super::{
     ResidentDataplaneMetrics,
     tcp::{
@@ -27,28 +27,15 @@ use super::target::native_tcp_probe_selection;
 use super::tunnel::{NativeTcpTunnel, SpawnedNativeTcpTunnel};
 
 pub(super) async fn open_shadowsocks_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    binding: ResidentProxyBinding,
     target: &str,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    let selection = native_tcp_probe_selection(Arc::clone(&proxy), target);
-    if let ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp {
-        cipher,
-        password,
-        salt_len,
-        host,
-        path,
-    } = selection.proxy.handler.clone()
-    {
-        return open_shadowsocks_v2ray_plugin_native_tcp_tunnel(
-            proxy,
-            target.to_owned(),
-            cipher,
-            password,
-            salt_len,
-            host,
-            path,
-        )
-        .await;
+    let selection = native_tcp_probe_selection(binding, target);
+    if matches!(
+        &selection.proxy.handler,
+        ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
+    ) {
+        return open_shadowsocks_v2ray_plugin_native_tcp_tunnel(selection, target.to_owned()).await;
     }
     let mut stream = open_plain_proxy_tcp_stream_async(&selection)
         .await
@@ -60,165 +47,22 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
     let metrics = ResidentDataplaneMetrics::default();
     let target = target.to_owned();
 
-    match selection.proxy.handler.clone() {
-        ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
-            cipher,
-            password,
-            salt_len,
-        } => {
-            let task = tokio::spawn(async move {
-                let _ = relay_tcp_over_shadowsocks_aead_async(
-                    &mut relay_side,
-                    &mut stream,
-                    relay_stop,
-                    &target,
-                    &cipher,
-                    &password,
-                    salt_len,
-                    Vec::new(),
-                    &metrics,
-                )
-                .await;
-                stop.store(true, Ordering::Relaxed);
-            });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(
-                probe,
-                task,
-                tunnel_stop,
-            )))
-        }
-        ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
-            cipher,
-            password,
-            salt_len,
-            ..
-        } => {
-            let task = tokio::spawn(async move {
-                let _ = relay_tcp_over_shadowsocks_2022_async(
-                    &mut relay_side,
-                    &mut stream,
-                    relay_stop,
-                    &target,
-                    &cipher,
-                    &password,
-                    salt_len,
-                    Vec::new(),
-                    &metrics,
-                )
-                .await;
-                stop.store(true, Ordering::Relaxed);
-            });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(
-                probe,
-                task,
-                tunnel_stop,
-            )))
-        }
-        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
-            cipher,
-            password,
-            salt_len,
-            host,
-            path,
-        } => {
-            let task = tokio::spawn(async move {
-                let _ = relay_tcp_over_shadowsocks_simple_obfs_http_async(
-                    &mut relay_side,
-                    &mut stream,
-                    relay_stop,
-                    &target,
-                    &cipher,
-                    &password,
-                    salt_len,
-                    Vec::new(),
-                    &metrics,
-                    &host,
-                    &path,
-                )
-                .await;
-                stop.store(true, Ordering::Relaxed);
-            });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(
-                probe,
-                task,
-                tunnel_stop,
-            )))
-        }
-        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp {
-            cipher,
-            password,
-            salt_len,
-            host,
-        } => {
-            let task = tokio::spawn(async move {
-                let _ = relay_tcp_over_shadowsocks_simple_obfs_tls_async(
-                    &mut relay_side,
-                    &mut stream,
-                    relay_stop,
-                    &target,
-                    &cipher,
-                    &password,
-                    salt_len,
-                    Vec::new(),
-                    &metrics,
-                    &host,
-                )
-                .await;
-                stop.store(true, Ordering::Relaxed);
-            });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(
-                probe,
-                task,
-                tunnel_stop,
-            )))
-        }
-        ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp {
-            cipher,
-            password,
-            salt_len,
-            host,
-            path,
-        } => {
-            let task = tokio::spawn(async move {
-                let _ = relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
-                    &mut relay_side,
-                    &mut stream,
-                    relay_stop,
-                    &target,
-                    &cipher,
-                    &password,
-                    salt_len,
-                    Vec::new(),
-                    &metrics,
-                    &host,
-                    &path,
-                )
-                .await;
-                stop.store(true, Ordering::Relaxed);
-            });
-            Ok(Box::new(SpawnedNativeTcpTunnel::new(
-                probe,
-                task,
-                tunnel_stop,
-            )))
-        }
+    match &selection.proxy.handler {
         ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp {
             cipher,
             password,
             obfs_host,
             obfs_port,
         } => {
-            let cipher = cipher.clone();
-            let password = password.clone();
             let mut client_iv = [0_u8; 16];
             fastrand::fill(&mut client_iv);
             let (request, mut encoder) = shadowsocksr_http_simple_origin_request(
-                &cipher,
-                &password,
+                cipher,
+                password,
                 &target,
                 &[],
-                &obfs_host,
-                obfs_port,
+                obfs_host,
+                *obfs_port,
                 client_iv,
             )
             .map_err(|err| {
@@ -243,12 +87,11 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                     "validate native ShadowsocksR obfs response: {err}"
                 ))
             })?;
-            let mut decoder =
-                ShadowsocksRStreamDecoder::new(&cipher, &password).map_err(|err| {
-                    NativeTcpProbeError::Open(format!(
-                        "create native ShadowsocksR stream decoder: {err}"
-                    ))
-                })?;
+            let mut decoder = ShadowsocksRStreamDecoder::new(cipher, password).map_err(|err| {
+                NativeTcpProbeError::Open(format!(
+                    "create native ShadowsocksR stream decoder: {err}"
+                ))
+            })?;
             let initial_plain = if leftover.is_empty() {
                 Vec::new()
             } else {
@@ -279,25 +122,142 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
                 tunnel_stop,
             )))
         }
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. }
+        | ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
+            let binding = selection.proxy.clone();
+            let task = tokio::spawn(async move {
+                match &binding.plan().handler {
+                    ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
+                        cipher,
+                        password,
+                        salt_len,
+                    } => {
+                        let _ = relay_tcp_over_shadowsocks_aead_async(
+                            &mut relay_side,
+                            &mut stream,
+                            relay_stop,
+                            &target,
+                            cipher,
+                            password,
+                            *salt_len,
+                            Vec::new(),
+                            &metrics,
+                        )
+                        .await;
+                    }
+                    ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+                        cipher,
+                        password,
+                        salt_len,
+                        ..
+                    } => {
+                        let _ = relay_tcp_over_shadowsocks_2022_async(
+                            &mut relay_side,
+                            &mut stream,
+                            relay_stop,
+                            &target,
+                            cipher,
+                            password,
+                            *salt_len,
+                            Vec::new(),
+                            &metrics,
+                        )
+                        .await;
+                    }
+                    ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
+                        cipher,
+                        password,
+                        salt_len,
+                        host,
+                        path,
+                    } => {
+                        let _ = relay_tcp_over_shadowsocks_simple_obfs_http_async(
+                            &mut relay_side,
+                            &mut stream,
+                            relay_stop,
+                            &target,
+                            cipher,
+                            password,
+                            *salt_len,
+                            Vec::new(),
+                            &metrics,
+                            host,
+                            path,
+                        )
+                        .await;
+                    }
+                    ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp {
+                        cipher,
+                        password,
+                        salt_len,
+                        host,
+                    } => {
+                        let _ = relay_tcp_over_shadowsocks_simple_obfs_tls_async(
+                            &mut relay_side,
+                            &mut stream,
+                            relay_stop,
+                            &target,
+                            cipher,
+                            password,
+                            *salt_len,
+                            Vec::new(),
+                            &metrics,
+                            host,
+                        )
+                        .await;
+                    }
+                    ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp {
+                        cipher,
+                        password,
+                        salt_len,
+                        host,
+                        path,
+                    } => {
+                        let _ = relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
+                            &mut relay_side,
+                            &mut stream,
+                            relay_stop,
+                            &target,
+                            cipher,
+                            password,
+                            *salt_len,
+                            Vec::new(),
+                            &metrics,
+                            host,
+                            path,
+                        )
+                        .await;
+                    }
+                    _ => {}
+                }
+                stop.store(true, Ordering::Relaxed);
+            });
+            Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )))
+        }
         _ => Err(NativeTcpProbeError::NotAdmitted),
     }
 }
 
 async fn open_shadowsocks_v2ray_plugin_native_tcp_tunnel(
-    proxy: Arc<ResidentProxyPlan>,
+    selection: super::super::super::tcp::TcpProxySelection,
     target: String,
-    cipher: String,
-    password: String,
-    salt_len: usize,
-    host: String,
-    path: String,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
-    let selection = native_tcp_probe_selection(proxy, &target);
-    let mut client =
-        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
-    let options = HttpUpgradeOptions::new(&host, &path);
+    let mut client = open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
+        .await
+        .map_err(NativeTcpProbeError::Open)?;
+    let ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { host, path, .. } =
+        &selection.proxy.handler
+    else {
+        return Err(NativeTcpProbeError::NotAdmitted);
+    };
+    let options = HttpUpgradeOptions::new(host, path);
     native_websocket_handshake_over_resident_tls_async(&mut client, &options)
         .await
         .map_err(NativeTcpProbeError::Open)?;
@@ -307,19 +267,28 @@ async fn open_shadowsocks_v2ray_plugin_native_tcp_tunnel(
     let relay_stop = Arc::clone(&stop);
     let tunnel_stop = Arc::clone(&stop);
     let metrics = ResidentDataplaneMetrics::default();
+    let binding = selection.proxy.clone();
     let task = tokio::spawn(async move {
-        let _ = relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
-            &mut relay_side,
-            &mut client,
-            relay_stop,
-            &target,
-            &cipher,
-            &password,
+        if let ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp {
+            cipher,
+            password,
             salt_len,
-            Vec::new(),
-            &metrics,
-        )
-        .await;
+            ..
+        } = &binding.plan().handler
+        {
+            let _ = relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
+                &mut relay_side,
+                &mut client,
+                relay_stop,
+                &target,
+                cipher,
+                password,
+                *salt_len,
+                Vec::new(),
+                &metrics,
+            )
+            .await;
+        }
         stop.store(true, Ordering::Relaxed);
     });
     Ok(Box::new(SpawnedNativeTcpTunnel::new(
