@@ -105,7 +105,7 @@ pub(super) fn runtime_sample_view_for_app(
     app.runtime_sampler.as_ref().map_or_else(
         || {
             fallback_runtime_sample_view(
-                app.runtime.resident_dataplane_metrics_snapshot().as_ref(),
+                app.runtime.resident_traffic_counters(),
                 window_sec,
                 max_points,
             )
@@ -115,14 +115,27 @@ pub(super) fn runtime_sample_view_for_app(
 }
 
 fn fallback_runtime_sample_view(
-    metrics: Option<&Value>,
+    counters: Option<ResidentTrafficCounters>,
     window_sec: u64,
     max_points: usize,
 ) -> ProductRuntimeSampleView {
     let sampled_at = unix_now();
-    let traffic = metrics
-        .map(resident_runtime_traffic_stats_from_metrics)
-        .unwrap_or_default();
+    let observation = runtime_traffic_observation(
+        counters.unwrap_or_default(),
+        sampled_at,
+        Instant::now(),
+        None,
+    )
+    .0;
+    let traffic = RuntimeTrafficStats {
+        upload_total: observation.upload_total,
+        download_total: observation.download_total,
+        upload_rate: observation.upload_rate,
+        download_rate: observation.download_rate,
+        active_connections: observation.active_connections,
+        udp_sessions: observation.udp_sessions,
+        ..RuntimeTrafficStats::default()
+    };
     let history = VecDeque::from([RuntimeTrafficRateSample {
         timestamp: sampled_at,
         upload_rate: traffic.upload_rate,
@@ -133,15 +146,7 @@ fn fallback_runtime_sample_view(
         sample_count: 0,
         traffic: RuntimeTrafficStats {
             samples: runtime_traffic_stats_from_history(
-                RuntimeTrafficObservation {
-                    timestamp: sampled_at,
-                    upload_total: traffic.upload_total,
-                    download_total: traffic.download_total,
-                    upload_rate: traffic.upload_rate,
-                    download_rate: traffic.download_rate,
-                    active_connections: traffic.active_connections,
-                    udp_sessions: traffic.udp_sessions,
-                },
+                observation,
                 &history,
                 window_sec,
                 max_points,

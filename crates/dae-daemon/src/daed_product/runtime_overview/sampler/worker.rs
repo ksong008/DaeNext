@@ -122,12 +122,12 @@ fn run_product_runtime_sampler(
     loop {
         let observed_at = Instant::now();
         let timestamp = unix_now();
-        let runtime_metrics = runtime
+        let runtime_traffic = runtime
             .upgrade()
-            .and_then(|runtime| runtime.resident_dataplane_metrics_snapshot())
-            .unwrap_or_else(|| json!({}));
+            .and_then(|runtime| runtime.resident_traffic_counters())
+            .unwrap_or_default();
         let (traffic, totals_reset) =
-            runtime_traffic_observation(&runtime_metrics, timestamp, observed_at, previous_traffic);
+            runtime_traffic_observation(runtime_traffic, timestamp, observed_at, previous_traffic);
         previous_traffic = Some(RuntimeTrafficTotalSample {
             upload_total: traffic.upload_total,
             download_total: traffic.download_total,

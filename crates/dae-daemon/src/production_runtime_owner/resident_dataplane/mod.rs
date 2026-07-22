@@ -87,7 +87,8 @@ mod group_selector_summary;
 pub(super) use self::group_selector_summary::*;
 #[path = "runtime/metrics.rs"]
 mod metrics;
-pub(super) use self::metrics::*;
+pub(crate) use self::metrics::ResidentTrafficCounters;
+pub(super) use self::metrics::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
 #[path = "runtime/workers.rs"]
 mod workers;
 use self::display::*;

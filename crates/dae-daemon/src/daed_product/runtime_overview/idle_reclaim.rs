@@ -496,12 +496,12 @@ fn deferred_reclaim_evaluation_due(
 }
 
 fn idle_reclaim_observation(app: &AppState) -> Option<AllocatorIdleObservation> {
-    let metrics = app.runtime.resident_dataplane_metrics_snapshot()?;
+    let counters = app.runtime.resident_traffic_counters()?;
     Some(AllocatorIdleObservation {
-        active_tcp: event_u64(&metrics, "activeTcpConnections"),
-        active_udp: event_u64(&metrics, "activeUdpSessions"),
-        upload_total_counter: event_u64(&metrics, "uploadTotal"),
-        download_total_counter: event_u64(&metrics, "downloadTotal"),
+        active_tcp: counters.active_tcp_connections,
+        active_udp: counters.active_udp_sessions,
+        upload_total_counter: counters.upload_total,
+        download_total_counter: counters.download_total,
     })
 }
 

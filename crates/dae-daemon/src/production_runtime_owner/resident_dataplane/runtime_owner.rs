@@ -248,6 +248,10 @@ impl ResidentRuntimeOwner {
         Arc::clone(&self.metrics)
     }
 
+    pub(crate) fn traffic_counters(&self) -> ResidentTrafficCounters {
+        self.metrics.traffic_counters()
+    }
+
     pub(crate) fn cleanup_reporter(&self, owner: &'static str) -> ResidentRuntimeCleanupReporter {
         self.cleanup_inventory.reporter(owner)
     }

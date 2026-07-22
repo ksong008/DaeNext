@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn fallback_view_uses_typed_runtime_traffic_counters() {
+    let view = fallback_runtime_sample_view(
+        Some(ResidentTrafficCounters {
+            upload_total: 101,
+            download_total: 202,
+            active_tcp_connections: 3,
+            active_udp_sessions: 4,
+        }),
+        60,
+        10,
+    );
+
+    assert_eq!(view.sample_count, 0);
+    assert_eq!(view.traffic.upload_total, 101);
+    assert_eq!(view.traffic.download_total, 202);
+    assert_eq!(view.traffic.upload_rate, 0);
+    assert_eq!(view.traffic.download_rate, 0);
+    assert_eq!(view.traffic.active_connections, 3);
+    assert_eq!(view.traffic.udp_sessions, 4);
+    assert_eq!(view.traffic.samples.len(), 1);
+}
+
+#[test]
 fn reader_windows_do_not_mutate_shared_history() {
     let config = ProductRuntimeSamplerConfig::product_default();
     let mut state = ProductRuntimeSamplerState::default();

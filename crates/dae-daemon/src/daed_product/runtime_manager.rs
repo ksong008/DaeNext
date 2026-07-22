@@ -11,6 +11,8 @@ mod recovery;
 mod startup_recovery;
 mod stop;
 mod summary;
+mod traffic;
+pub(super) use traffic::RuntimeTrafficCarry;
 
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
 use apply_state::RuntimeApplyState;
@@ -34,9 +36,8 @@ use recovery::ProductRuntimeInterfaceRecoverySupervisor;
 pub(super) use recovery::resident_interface_recovery_request;
 use startup_recovery::ProductRuntimeStartupRecoverySupervisor;
 use summary::{
-    apply_runtime_traffic_metric_carry, runtime_health_seed_snapshots,
-    runtime_instance_dns_reload_snapshot, runtime_instance_health_states,
-    runtime_traffic_metric_u64, runtime_traffic_metrics_snapshot,
+    runtime_health_seed_snapshots, runtime_instance_dns_reload_snapshot,
+    runtime_instance_health_states,
 };
 
 #[derive(Debug)]
@@ -236,47 +237,6 @@ impl ProductRuntimeProbeHandle {
             Self::Resident { handle, .. } => handle.probe_concurrency(),
             Self::Fake => 8,
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct RuntimeTrafficCarry {
-    pub(super) upload_total: u64,
-    pub(super) download_total: u64,
-}
-
-impl RuntimeTrafficCarry {
-    pub(super) fn absorb_runtime(self, runtime: &ProductRuntimeInstance) -> Self {
-        let Some(metrics) = runtime_traffic_metrics_snapshot(runtime) else {
-            return self;
-        };
-        self.absorb_metrics(&metrics)
-    }
-
-    pub(super) fn absorb_metrics(self, metrics: &Value) -> Self {
-        Self {
-            upload_total: self
-                .upload_total
-                .saturating_add(runtime_traffic_metric_u64(metrics, "uploadTotal")),
-            download_total: self
-                .download_total
-                .saturating_add(runtime_traffic_metric_u64(metrics, "downloadTotal")),
-        }
-    }
-
-    pub(super) fn apply_to_runtime_summary(self, summary: &mut Value) {
-        let Some(metrics) = summary.pointer_mut("/residentDataplane/metrics") else {
-            return;
-        };
-        self.apply_to_metrics(metrics);
-    }
-
-    pub(super) fn apply_to_metrics(self, metrics: &mut Value) {
-        if self.upload_total == 0 && self.download_total == 0 {
-            return;
-        }
-        apply_runtime_traffic_metric_carry(metrics, "uploadTotal", self.upload_total);
-        apply_runtime_traffic_metric_carry(metrics, "downloadTotal", self.download_total);
     }
 }
 
@@ -715,21 +675,6 @@ impl ProductRuntimeManager {
                 "activeGeneration": inner.active_generation,
                 "pendingProcessTransition": inner.pending_process_transition,
             }),
-        }
-    }
-
-    pub(super) fn resident_dataplane_metrics_snapshot(&self) -> Option<Value> {
-        let Ok(inner) = self.inner.lock() else {
-            return None;
-        };
-        match inner.runtime.as_ref() {
-            Some(ProductRuntimeInstance::Resident(runtime)) => runtime
-                .resident_dataplane_metrics_snapshot()
-                .map(|mut metrics| {
-                    inner.traffic_carry.apply_to_metrics(&mut metrics);
-                    metrics
-                }),
-            Some(ProductRuntimeInstance::Fake(_)) | None => None,
         }
     }
 
