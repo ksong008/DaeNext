@@ -553,6 +553,12 @@ fn reload_reports_process_owned_http_changes_as_pending_transition() {
         )
         .unwrap();
         assert!(applied.applied);
+        assert_eq!(
+            applied.runtime_report["transition"],
+            json!("ProcessRestart")
+        );
+        assert_eq!(applied.runtime_report["generationPublished"], json!(false));
+        assert_eq!(applied.runtime_report["physicalRuntimeReused"], json!(true));
         let pending = applied.pending_process_transition.unwrap();
         assert_eq!(pending["state"], json!("pending-process-transition"));
         assert_eq!(

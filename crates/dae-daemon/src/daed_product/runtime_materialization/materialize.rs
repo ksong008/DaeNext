@@ -20,6 +20,7 @@ pub(in crate::daed_product) struct RuntimeMaterializationPlan {
     pub(in crate::daed_product) group_version_sum: i64,
     pub(in crate::daed_product) group_ids: String,
     pub(in crate::daed_product) external_input_version: i64,
+    pub(in crate::daed_product) geodata_input_version: i64,
     pub(in crate::daed_product) active_fingerprint: ActiveRuntimeFingerprint,
     pub(in crate::daed_product) group_count: usize,
     pub(in crate::daed_product) node_count: usize,
@@ -142,6 +143,7 @@ pub(super) fn prepare_runtime_materialization_plan_from_snapshot(
         group_version_sum: active.group_version_sum,
         group_ids,
         external_input_version,
+        geodata_input_version,
         active_fingerprint,
         group_count: active.groups["items"].as_array().map(Vec::len).unwrap_or(0),
         node_count: active.nodes["items"].as_array().map(Vec::len).unwrap_or(0),
@@ -291,6 +293,10 @@ impl RuntimeMaterializationPlan {
         report.insert(
             "activeFingerprint".to_owned(),
             json!(self.active_fingerprint.as_str()),
+        );
+        report.insert(
+            "geodataInputVersion".to_owned(),
+            json!(self.geodata_input_version),
         );
         report.insert(
             "timings".to_owned(),

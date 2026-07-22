@@ -119,6 +119,8 @@ impl<'a> PreparedProductRuntimeStop<'a> {
         }
         self.inner.config = None;
         self.inner.config_content = None;
+        self.inner.transition_identity = None;
+        self.inner.process_baseline_config = None;
         self.inner.traffic_carry = RuntimeTrafficCarry::default();
         self.inner.runtime_started_at = None;
         self.inner.stop_count += 1;

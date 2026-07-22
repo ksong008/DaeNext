@@ -1,3 +1,4 @@
+use super::runtime_transition::RuntimeTransitionIdentity;
 use super::*;
 
 pub(in crate::daed_product) struct PreparedRuntimeReload {
@@ -114,7 +115,11 @@ fn build_prepared_runtime_reload(
             .map_err(RuntimeReloadPrepareError::BuildConfig)?,
     );
     let runtime_candidate = prepare_product_runtime_candidate(Arc::clone(&config))
-        .map_err(RuntimeReloadPrepareError::Preflight)?;
+        .map_err(RuntimeReloadPrepareError::Preflight)?
+        .with_transition_identity(RuntimeTransitionIdentity {
+            routing_version: plan.routing_version,
+            geodata_input_version: plan.geodata_input_version,
+        });
     Ok(PreparedRuntimeReload {
         plan,
         config,

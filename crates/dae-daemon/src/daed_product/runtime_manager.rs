@@ -12,6 +12,10 @@ mod startup_recovery;
 mod stop;
 mod summary;
 mod traffic;
+use super::runtime_transition::{
+    RuntimeTransitionClass, RuntimeTransitionIdentity, classify_runtime_transition,
+    process_owned_field_changes,
+};
 pub(super) use traffic::RuntimeTrafficCarry;
 
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
@@ -71,6 +75,8 @@ pub(super) struct ProductRuntimeState {
     pub(super) apply: RuntimeApplyState,
     pub(super) active_generation: Option<String>,
     pub(super) pending_process_transition: Option<Value>,
+    pub(super) transition_identity: Option<RuntimeTransitionIdentity>,
+    pub(super) process_baseline_config: Option<Arc<Config>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -412,6 +418,181 @@ fn reload_prepared_product_runtime_with_config_content(
     latency_seed: &[Value],
 ) -> Result<RuntimeStartOutcome, String> {
     let config = Arc::clone(prepared.config());
+    let desired_identity = prepared.transition_identity();
+    let transition = {
+        let state = inner
+            .lock()
+            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        match (state.runtime.as_ref(), state.config.as_deref()) {
+            (Some(_), Some(active)) => classify_runtime_transition(
+                active,
+                state.transition_identity,
+                &config,
+                desired_identity,
+            ),
+            (None, _) | (Some(_), None) => RuntimeTransitionClass::KernelRebind,
+        }
+    };
+    match transition {
+        RuntimeTransitionClass::NoChange | RuntimeTransitionClass::ProcessRestart => {
+            publish_runtime_metadata_transition(
+                lifecycle,
+                inner,
+                config,
+                config_content,
+                desired_identity,
+                transition,
+                source,
+            )
+        }
+        RuntimeTransitionClass::GenerationSwap if !product_runtime_fake_start_enabled() => {
+            publish_resident_runtime_generation(
+                lifecycle,
+                inner,
+                prepared,
+                config_content,
+                desired_identity,
+                source,
+                latency_seed,
+            )
+        }
+        RuntimeTransitionClass::GenerationSwap | RuntimeTransitionClass::KernelRebind => {
+            replace_prepared_product_runtime_with_config_content(
+                lifecycle,
+                inner,
+                prepared,
+                config_content,
+                source,
+                latency_seed,
+                transition,
+            )
+        }
+    }
+}
+
+fn process_baseline_after_physical_start(
+    previous: Option<&Config>,
+    desired: &Config,
+) -> Arc<Config> {
+    let Some(previous) = previous else {
+        return Arc::new(desired.clone());
+    };
+    let mut baseline = previous.clone();
+    baseline.global.resident_tcp_flow_stack_bytes = desired.global.resident_tcp_flow_stack_bytes;
+    baseline.global.resident_tcp_runtime_workers = desired.global.resident_tcp_runtime_workers;
+    baseline.global.resident_event_queue_depth = desired.global.resident_event_queue_depth;
+    Arc::new(baseline)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_resident_runtime_generation(
+    lifecycle: &Arc<Mutex<()>>,
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+    prepared: PreparedProductRuntime,
+    config_content: Option<Arc<str>>,
+    desired_identity: Option<RuntimeTransitionIdentity>,
+    source: &str,
+    latency_seed: &[Value],
+) -> Result<RuntimeStartOutcome, String> {
+    let config = Arc::clone(prepared.config());
+    let resident = prepared.into_resident_generation()?;
+    let _lifecycle = lifecycle
+        .lock()
+        .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
+    ensure_cleanup_allows_start_for_inner(inner)?;
+    let mut state = inner
+        .lock()
+        .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+    let preserve_dns_cache = state
+        .config
+        .as_ref()
+        .is_some_and(|active| active.dns == config.dns);
+    let live_latency_seed = state
+        .runtime
+        .as_ref()
+        .map(runtime_instance_health_states)
+        .unwrap_or_default();
+    let latency_seed =
+        runtime_health_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
+    let runtime = match state.runtime.as_mut() {
+        Some(ProductRuntimeInstance::Resident(runtime)) => runtime,
+        Some(ProductRuntimeInstance::Fake(_)) => {
+            return Err("cannot publish a resident generation on a fake runtime".to_owned());
+        }
+        None => return Err("cannot publish a generation without an active runtime".to_owned()),
+    };
+    let publication =
+        runtime.publish_prepared_generation(resident, &latency_seed, preserve_dns_cache)?;
+    state.lifecycle_epoch = state.lifecycle_epoch.wrapping_add(1);
+    state.config = Some(config);
+    state.config_content = config_content;
+    state.transition_identity = desired_identity;
+    state.reload_count = state.reload_count.saturating_add(1);
+    state.last_error = None;
+    state.last_transition_at = Some(now_text());
+    let report = json!({
+        "status": "pass",
+        "runtimeControl": "resident-production-runtime-manager",
+        "source": source,
+        "transition": RuntimeTransitionClass::GenerationSwap.name(),
+        "publication": publication,
+    });
+    state.last_report = Some(report.clone());
+    Ok(RuntimeStartOutcome { report })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_runtime_metadata_transition(
+    lifecycle: &Arc<Mutex<()>>,
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+    config: Arc<Config>,
+    config_content: Option<Arc<str>>,
+    desired_identity: Option<RuntimeTransitionIdentity>,
+    transition: RuntimeTransitionClass,
+    source: &str,
+) -> Result<RuntimeStartOutcome, String> {
+    let _lifecycle = lifecycle
+        .lock()
+        .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
+    ensure_cleanup_allows_start_for_inner(inner)?;
+    let mut state = inner
+        .lock()
+        .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+    if state.runtime.is_none() {
+        return Err("cannot publish runtime metadata without an active runtime".to_owned());
+    }
+    state.lifecycle_epoch = state.lifecycle_epoch.wrapping_add(1);
+    state.config = Some(config);
+    state.config_content = config_content;
+    state.transition_identity = desired_identity;
+    state.reload_count = state.reload_count.saturating_add(1);
+    state.last_error = None;
+    state.last_transition_at = Some(now_text());
+    let report = json!({
+        "status": "pass",
+        "runtimeControl": "resident-production-runtime-manager",
+        "source": source,
+        "transition": transition.name(),
+        "generationPublished": false,
+        "physicalRuntimeReused": true,
+        "processRestartPending": transition == RuntimeTransitionClass::ProcessRestart,
+    });
+    state.last_report = Some(report.clone());
+    Ok(RuntimeStartOutcome { report })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replace_prepared_product_runtime_with_config_content(
+    lifecycle: &Arc<Mutex<()>>,
+    inner: &Arc<Mutex<ProductRuntimeState>>,
+    prepared: PreparedProductRuntime,
+    config_content: Option<Arc<str>>,
+    source: &str,
+    latency_seed: &[Value],
+    transition: RuntimeTransitionClass,
+) -> Result<RuntimeStartOutcome, String> {
+    let config = Arc::clone(prepared.config());
+    let desired_identity = prepared.transition_identity();
     let _lifecycle = lifecycle
         .lock()
         .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
@@ -420,6 +601,8 @@ fn reload_prepared_product_runtime_with_config_content(
         previous_runtime,
         previous_config,
         previous_config_content,
+        previous_transition_identity,
+        previous_process_baseline_config,
         previous_runtime_started_at,
         previous_runtime_was_running,
         lifecycle_epoch,
@@ -431,6 +614,8 @@ fn reload_prepared_product_runtime_with_config_content(
         let previous_runtime = inner.runtime.take();
         let previous_config = inner.config.clone();
         let previous_config_content = inner.config_content.clone();
+        let previous_transition_identity = inner.transition_identity;
+        let previous_process_baseline_config = inner.process_baseline_config.clone();
         let previous_runtime_started_at = inner.runtime_started_at.clone();
         let previous_runtime_was_running = previous_runtime.is_some();
         if let Some(runtime) = previous_runtime.as_ref() {
@@ -444,6 +629,8 @@ fn reload_prepared_product_runtime_with_config_content(
             previous_runtime,
             previous_config,
             previous_config_content,
+            previous_transition_identity,
+            previous_process_baseline_config,
             previous_runtime_started_at,
             previous_runtime_was_running,
             inner.lifecycle_epoch,
@@ -497,7 +684,10 @@ fn reload_prepared_product_runtime_with_config_content(
         &latency_seed,
         dns_reload_snapshot.clone(),
     ) {
-        Ok((runtime, report)) => {
+        Ok((runtime, mut report)) => {
+            if let Value::Object(report) = &mut report {
+                report.insert("transition".to_owned(), json!(transition.name()));
+            }
             let mut inner = inner
                 .lock()
                 .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
@@ -516,6 +706,14 @@ fn reload_prepared_product_runtime_with_config_content(
             inner.runtime = Some(runtime);
             inner.config = Some(config);
             inner.config_content = config_content;
+            inner.transition_identity = desired_identity;
+            inner.process_baseline_config = Some(process_baseline_after_physical_start(
+                previous_process_baseline_config.as_deref(),
+                inner
+                    .config
+                    .as_deref()
+                    .expect("committed runtime config is present"),
+            ));
             inner.reload_count += 1;
             inner.last_error = None;
             inner.last_transition_at = Some(transition_at.clone());
@@ -566,6 +764,8 @@ fn reload_prepared_product_runtime_with_config_content(
                         inner.runtime = Some(runtime);
                         inner.config = previous_config.clone();
                         inner.config_content = previous_config_content.clone();
+                        inner.transition_identity = previous_transition_identity;
+                        inner.process_baseline_config = previous_process_baseline_config.clone();
                         inner.runtime_started_at = previous_runtime_started_at.clone();
                         inner.last_report = Some(report);
                         true
@@ -574,6 +774,8 @@ fn reload_prepared_product_runtime_with_config_content(
                         inner.runtime = None;
                         inner.config = None;
                         inner.config_content = None;
+                        inner.transition_identity = None;
+                        inner.process_baseline_config = None;
                         inner.runtime_started_at = None;
                         inner.last_error = Some(format!(
                             "{start_err}\nrestore failed while restoring previous product runtime: {restore_err}"
