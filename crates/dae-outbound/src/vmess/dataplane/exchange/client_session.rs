@@ -35,6 +35,11 @@ pub fn aead_udp_over_tcp_client_session_start_with_security(
     payload: &[u8],
     security: VMessBodySecurity,
 ) -> Result<VMessAeadTcpClientSessionStart, OutboundError> {
+    if security.uses_raw_body() {
+        return Err(OutboundError::BadVmess(
+            "VMess zero body security has no UDP packet boundary".to_owned(),
+        ));
+    }
     aead_client_session_start(uuid, target, VMessNetwork::Udp, payload, security)
 }
 
@@ -45,7 +50,7 @@ fn aead_client_session_start(
     payload: &[u8],
     security: VMessBodySecurity,
 ) -> Result<VMessAeadTcpClientSessionStart, OutboundError> {
-    let material = VMessAeadMaterial::random();
+    let material = VMessAeadMaterial::random()?;
     let normalized_uuid = normalize_vmess_uuid(uuid);
     let cmd_key = vmess_cmd_key_from_uuid(&normalized_uuid)?;
     let eauth_id = put_eauth_id(&cmd_key, unix_timestamp_now()?, material.eauth_random)?;
@@ -60,6 +65,7 @@ fn aead_client_session_start(
     let mut codec = BodyCodec::new(
         parsed.request_body_key,
         parsed.request_body_iv,
+        parsed.security,
         parsed.request_options,
     )?;
     let chunk = if payload.is_empty() {
@@ -143,6 +149,7 @@ where
     let codec = BodyCodec::new(
         request.response_body_key,
         request.response_body_iv,
+        request.security,
         request.request_options,
     )?;
     Ok(VMessAeadTcpResponseReader {
@@ -163,6 +170,7 @@ where
     let codec = BodyCodec::new(
         request.response_body_key,
         request.response_body_iv,
+        request.security,
         request.request_options,
     )?;
     Ok(VMessAeadTcpResponseReader {

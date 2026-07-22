@@ -5,7 +5,8 @@ pub mod metadata;
 pub mod uuid;
 
 pub use dataplane::{
-    VMESS_AEAD_SECURITY_AES_128_GCM, VMessAeadGrpcHttp2ExchangeReport, VMessAeadGrpcHttp2Request,
+    VMESS_AEAD_SECURITY_AES_128_GCM, VMESS_AEAD_SECURITY_CHACHA20_POLY1305,
+    VMESS_AEAD_SECURITY_NONE, VMessAeadGrpcHttp2ExchangeReport, VMessAeadGrpcHttp2Request,
     VMessAeadGrpcHunkExchangeReport, VMessAeadGrpcHunkRequest,
     VMessAeadHttpTransportExchangeReport, VMessAeadHttpUpgradeExchangeReport,
     VMessAeadHttpUpgradeRequest, VMessAeadHttpsHttpUpgradeTlsExchangeReport,

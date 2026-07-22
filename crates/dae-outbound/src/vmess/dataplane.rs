@@ -7,7 +7,8 @@ use aes_gcm::aes::Aes128;
 use aes_gcm::aes::cipher::{
     BlockDecrypt, BlockEncrypt, KeyInit as BlockKeyInit, generic_array::GenericArray,
 };
-use aes_gcm::{Aes128Gcm, Nonce};
+use aes_gcm::{Aes128Gcm, Nonce as AesNonce};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaChaNonce};
 use md5::{Digest, Md5};
 use sha2::Sha256;
 use sha3::Shake128;
@@ -44,11 +45,14 @@ const VMESS_VERSION: u8 = 1;
 const OPTION_CHUNK_STREAM: u8 = 1;
 const OPTION_CHUNK_LENGTH_MASKING: u8 = 4;
 const OPTION_GLOBAL_PADDING: u8 = 8;
-const REQUEST_OPTIONS: u8 =
+const REQUEST_OPTIONS_AEAD: u8 =
     OPTION_CHUNK_STREAM | OPTION_CHUNK_LENGTH_MASKING | OPTION_GLOBAL_PADDING;
+const REQUEST_OPTIONS_NONE: u8 = OPTION_CHUNK_STREAM | OPTION_CHUNK_LENGTH_MASKING;
 const MAX_CHUNK_SIZE: usize = 1 << 14;
 
 pub const VMESS_AEAD_SECURITY_AES_128_GCM: u8 = 3;
+pub const VMESS_AEAD_SECURITY_CHACHA20_POLY1305: u8 = 4;
+pub const VMESS_AEAD_SECURITY_NONE: u8 = 5;
 
 mod body_codec;
 mod build_request;

@@ -28,13 +28,22 @@ pub struct VMessLink {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VMessBodySecurity {
     Aes128Gcm,
+    Chacha20Poly1305,
+    None,
+    Zero,
 }
 
 impl VMessBodySecurity {
     pub const fn wire_value(self) -> u8 {
         match self {
             Self::Aes128Gcm => crate::vmess::VMESS_AEAD_SECURITY_AES_128_GCM,
+            Self::Chacha20Poly1305 => crate::vmess::VMESS_AEAD_SECURITY_CHACHA20_POLY1305,
+            Self::None | Self::Zero => crate::vmess::VMESS_AEAD_SECURITY_NONE,
         }
+    }
+
+    pub const fn uses_raw_body(self) -> bool {
+        matches!(self, Self::Zero)
     }
 }
 
@@ -86,6 +95,9 @@ impl VMessLink {
     pub fn body_security(&self) -> Result<VMessBodySecurity, OutboundError> {
         match self.security.trim().to_ascii_lowercase().as_str() {
             "" | "auto" | "aes-128-gcm" => Ok(VMessBodySecurity::Aes128Gcm),
+            "chacha20-poly1305" => Ok(VMessBodySecurity::Chacha20Poly1305),
+            "none" => Ok(VMessBodySecurity::None),
+            "zero" => Ok(VMessBodySecurity::Zero),
             security => Err(OutboundError::BadVmess(format!(
                 "unsupported VMess body security: {security}"
             ))),

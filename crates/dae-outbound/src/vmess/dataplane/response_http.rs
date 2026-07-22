@@ -15,6 +15,7 @@ pub fn aead_tcp_response_packet_chunks(
     let mut codec = BodyCodec::new(
         request.response_body_key,
         request.response_body_iv,
+        request.security,
         request.request_options,
     )?;
     for payload in payloads {
