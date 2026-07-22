@@ -49,6 +49,7 @@ mod events;
 mod execution;
 mod execution_types;
 mod memory_bench;
+mod ownership_bench;
 mod plan;
 mod probe;
 mod resolver;
@@ -60,6 +61,9 @@ mod vision;
 pub(crate) use self::dns::ResidentDnsReloadSnapshot;
 pub use self::memory_bench::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
+};
+pub use self::ownership_bench::{
+    ResidentProxyOwnershipBenchmarkFixture, resident_proxy_ownership_benchmark_fixture,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use self::resolver::{
     ResolvedHostAddrs, authority_from_host_port,

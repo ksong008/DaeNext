@@ -2,7 +2,8 @@ use std::hint::black_box;
 
 use dae_daemon::{
     daemon_runtime_native_owner_summary_json, datapath_outbound_ebpf_deep_area_summary_json,
-    product_global_normalize_benchmark_fixture, resident_tcp_selection_benchmark_fixture,
+    product_global_normalize_benchmark_fixture, resident_proxy_ownership_benchmark_fixture,
+    resident_tcp_selection_benchmark_fixture,
 };
 
 use crate::{BenchCase, Measurement, measure};
@@ -23,6 +24,46 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "daemon/resident_tcp_proxy_selection",
             default_iters: 100_000,
             run: bench_resident_tcp_proxy_selection,
+        },
+        BenchCase {
+            id: "daemon/resident_default_proxy_binding",
+            default_iters: 100_000,
+            run: bench_resident_default_proxy_binding,
+        },
+        BenchCase {
+            id: "daemon/resident_udp_route_binding",
+            default_iters: 100_000,
+            run: bench_resident_udp_route_binding,
+        },
+        BenchCase {
+            id: "daemon/resident_dns_route_binding",
+            default_iters: 100_000,
+            run: bench_resident_dns_route_binding,
+        },
+        BenchCase {
+            id: "daemon/resident_health_descriptors_1",
+            default_iters: 100_000,
+            run: bench_resident_health_descriptors_one,
+        },
+        BenchCase {
+            id: "daemon/resident_health_descriptors_10",
+            default_iters: 100_000,
+            run: bench_resident_health_descriptors_ten,
+        },
+        BenchCase {
+            id: "daemon/resident_health_descriptors_large",
+            default_iters: 100_000,
+            run: bench_resident_health_descriptors_large,
+        },
+        BenchCase {
+            id: "daemon/resident_transport_handoff",
+            default_iters: 100_000,
+            run: bench_resident_transport_handoff,
+        },
+        BenchCase {
+            id: "daemon/resident_credential_view",
+            default_iters: 100_000,
+            run: bench_resident_credential_view,
         },
         BenchCase {
             id: "product/global_normalize_simple",
@@ -85,6 +126,78 @@ fn bench_datapath_outbound_ebpf_summary(iters: u64, warmup: u64) -> Result<Measu
 fn bench_resident_tcp_proxy_selection(iters: u64, warmup: u64) -> Result<Measurement, String> {
     let fixture = resident_tcp_selection_benchmark_fixture()?;
     Ok(measure(|| black_box(fixture.run_once()), iters, warmup))
+}
+
+fn bench_resident_default_proxy_binding(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_proxy_ownership_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.default_binding_once()),
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_resident_udp_route_binding(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_proxy_ownership_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.udp_route_binding_once()),
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_resident_dns_route_binding(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_proxy_ownership_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.dns_route_binding_once()),
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_resident_health_descriptors_one(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_proxy_ownership_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.health_descriptors_one_once()),
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_resident_health_descriptors_ten(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_proxy_ownership_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.health_descriptors_ten_once()),
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_resident_health_descriptors_large(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_proxy_ownership_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.health_descriptors_large_once()),
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_resident_transport_handoff(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_proxy_ownership_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.transport_handoff_once()),
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_resident_credential_view(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_proxy_ownership_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.credential_view_once()),
+        iters,
+        warmup,
+    ))
 }
 
 fn bench_product_global_normalize_simple(iters: u64, warmup: u64) -> Result<Measurement, String> {
