@@ -1,6 +1,7 @@
 use dae_outbound::shared_transport::{
     HttpUpgradeOptions, http_upgrade_request, validate_http_status,
-    websocket_client_binary_frame_with_random_mask, websocket_client_handshake_request,
+    validate_websocket_handshake_response, websocket_client_binary_frame_with_random_mask,
+    websocket_client_handshake,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
@@ -19,13 +20,15 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn websocket_h
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
 ) -> Result<(), String> {
-    let request = websocket_client_handshake_request(options);
+    let handshake = websocket_client_handshake(options)
+        .map_err(|err| format!("build websocket handshake: {err}"))?;
     client
-        .write_plain_all(&request, "write websocket handshake")
+        .write_plain_all(&handshake.request, "write websocket handshake")
         .await?;
     let response =
         read_http_head_over_resident_tls_async(client, "read websocket handshake").await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
+    validate_websocket_handshake_response(&response, &handshake.expected_accept)
+        .map_err(|err| format!("validate websocket upgrade: {err}"))
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn httpupgrade_handshake_over_resident_tls_async(
@@ -50,13 +53,15 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn websocket_h
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let request = websocket_client_handshake_request(options);
+    let handshake = websocket_client_handshake(options)
+        .map_err(|err| format!("build websocket handshake: {err}"))?;
     stream
-        .write_all(&request)
+        .write_all(&handshake.request)
         .await
         .map_err(|err| format!("write websocket handshake: {err}"))?;
     let response = read_http_head_from_async_stream(stream, "read websocket handshake").await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
+    validate_websocket_handshake_response(&response, &handshake.expected_accept)
+        .map_err(|err| format!("validate websocket upgrade: {err}"))
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn httpupgrade_handshake_over_async_stream<

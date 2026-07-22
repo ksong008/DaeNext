@@ -7,8 +7,8 @@ use rustls::pki_types::ServerName;
 use crate::error::OutboundError;
 use crate::shared_transport::{
     DEFAULT_WS_KEY, HttpUpgradeOptions, TlsLoopbackMaterial, TlsUnderlayOptions, WS_MASK_KEY,
-    read_http_head, read_websocket_binary_frame, validate_http_status,
-    websocket_client_binary_frame, websocket_handshake_request,
+    read_http_head, read_websocket_binary_frame, websocket_client_binary_frame,
+    websocket_handshake_request,
 };
 
 use super::dataplane::{TrojanTcpRequest, read_tcp_request_from_stream};
@@ -72,7 +72,10 @@ where
     tls.write_all(&handshake)
         .map_err(|err| OutboundError::BadTrojan(err.to_string()))?;
     let response = read_http_head(&mut tls)?;
-    validate_http_status(&response, 101)?;
+    crate::shared_transport::validate_websocket_handshake_response(
+        &response,
+        crate::shared_transport::WS_ACCEPT_SAMPLE,
+    )?;
 
     let metadata = TrojanMetadata::parse("tcp", target)?;
     let target = metadata.authority();

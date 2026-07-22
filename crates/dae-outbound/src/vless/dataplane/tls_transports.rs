@@ -91,7 +91,10 @@ where
     tls.write_all(&handshake)
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;
     let response = read_http_head(&mut tls)?;
-    validate_http_status(&response, 101)?;
+    crate::shared_transport::validate_websocket_handshake_response(
+        &response,
+        crate::shared_transport::WS_ACCEPT_SAMPLE,
+    )?;
 
     let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
     let request_header_len = request.len().saturating_sub(payload.len());

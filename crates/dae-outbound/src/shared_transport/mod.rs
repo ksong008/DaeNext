@@ -20,12 +20,13 @@ pub mod xhttp_h3;
 
 pub use dataplane::{
     DEFAULT_WS_KEY, HttpUpgradeOptions, SharedTransportLoopbackReport, SimpleObfsHttpOptions,
-    WS_ACCEPT_SAMPLE, WS_MASK_KEY, http_upgrade_exchange, http_upgrade_request, read_http_head,
-    read_websocket_binary_frame, simpleobfs_http_exchange, simpleobfs_http_request,
-    validate_http_status, websocket_client_binary_frame,
-    websocket_client_binary_frame_with_random_mask, websocket_client_handshake_key,
-    websocket_client_handshake_request, websocket_client_mask_key, websocket_exchange,
-    websocket_handshake_request, websocket_server_binary_frame,
+    WS_ACCEPT_SAMPLE, WS_MASK_KEY, WebSocketClientHandshake, http_upgrade_exchange,
+    http_upgrade_request, read_http_head, read_websocket_binary_frame, simpleobfs_http_exchange,
+    simpleobfs_http_request, validate_http_status, validate_websocket_handshake_response,
+    websocket_accept_for_key, websocket_client_binary_frame,
+    websocket_client_binary_frame_with_random_mask, websocket_client_handshake,
+    websocket_client_handshake_key, websocket_client_handshake_request, websocket_client_mask_key,
+    websocket_exchange, websocket_handshake_request, websocket_server_binary_frame,
 };
 pub use grpc::{
     GRPC_ACCEPT_ENCODING_HEADER, GRPC_CONTENT_TYPE_APPLICATION, GRPC_CONTENT_TYPE_HEADER,
