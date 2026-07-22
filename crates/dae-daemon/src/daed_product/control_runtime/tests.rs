@@ -90,9 +90,7 @@ fn operation_admission_rejects_excess_work_without_growing_a_waiter_queue() {
         )
     });
     let deadline = Instant::now() + Duration::from_secs(1);
-    while runtime.snapshot()["activeByClass"]["proxyHttp"].as_u64() != Some(1)
-        && Instant::now() < deadline
-    {
+    while runtime.snapshot()["activeTasks"].as_u64() != Some(1) && Instant::now() < deadline {
         thread::yield_now();
     }
     let second = runtime.execute(
