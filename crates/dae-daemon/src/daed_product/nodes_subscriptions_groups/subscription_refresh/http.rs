@@ -1,10 +1,13 @@
 use super::*;
 
 mod client;
+mod direct_exchange;
 mod request;
 mod response;
 
 pub(super) use client::fetch_http_url_with_proxy_config;
+#[cfg(test)]
+pub(crate) use direct_exchange::subscription_tls_alpn_protocols;
 #[cfg(test)]
 pub(crate) use request::subscription_http_request;
 #[cfg(test)]

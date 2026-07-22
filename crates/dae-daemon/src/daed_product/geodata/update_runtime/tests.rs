@@ -112,8 +112,12 @@ fn geodata_update_runtime_shutdown_detaches_a_bounded_blocking_worker_truthfully
     fixture.wait_until_download_started();
 
     let started = Instant::now();
-    drop(runtime);
+    runtime.shutdown().unwrap();
     assert!(started.elapsed() < Duration::from_secs(1));
+    runtime.shutdown().unwrap();
+    assert_eq!(runtime.snapshot()["workersJoinedTotal"], json!(1));
+    assert_eq!(runtime.snapshot()["workersDetachedTotal"], json!(1));
+    drop(runtime);
 
     fixture.release_download();
     let response = read_http_response(&mut client_stream);
@@ -185,6 +189,7 @@ impl GeodataUpdateRuntimeFixture {
             self.state.clone(),
             &self.dir.join("web"),
             Arc::new(ProductRuntimeManager::new()),
+            product_test_control_runtime(),
             Arc::new(ProductGeodataUpdateCoordinator::default()),
             Arc::new(Mutex::new(GeodataStatusCache::default())),
         );
@@ -212,6 +217,7 @@ impl GeodataUpdateRuntimeFixture {
             geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
             geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
             geodata_update_runtime: None,
+            control_runtime: product_test_control_runtime(),
         }
     }
 

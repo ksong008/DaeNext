@@ -235,6 +235,7 @@ fn dae_config_file_api_reports_the_resources_it_imported() {
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         geodata_update_runtime: None,
+        control_runtime: product_test_control_runtime(),
     };
     let content = complete_dae_file(18_080, 18_081, "first");
     let request = HttpRequest {

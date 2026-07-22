@@ -26,7 +26,6 @@ impl ResidentProbeProfile {
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentProxyProbePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) node_tag: Arc<String>,
-    pub(in crate::production_runtime_owner::resident_dataplane) link: Arc<String>,
     pub(in crate::production_runtime_owner::resident_dataplane) link_hash: Arc<String>,
     pub(in crate::production_runtime_owner::resident_dataplane) execution_identity: Arc<String>,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: Arc<String>,
@@ -37,7 +36,6 @@ pub(crate) struct ResidentProxyProbePlan {
 impl ResidentProxyProbePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         node_tag: String,
-        link: String,
         link_hash: String,
         execution_identity: String,
         redacted_link_source: String,
@@ -46,7 +44,6 @@ impl ResidentProxyProbePlan {
     ) -> Self {
         Self {
             node_tag: Arc::new(node_tag),
-            link: Arc::new(link),
             link_hash: Arc::new(link_hash),
             execution_identity: Arc::new(execution_identity),
             redacted_link_source: Arc::new(redacted_link_source),
@@ -70,48 +67,6 @@ impl ResidentProxyProbePlan {
         mark: u32,
     ) {
         self.binding.apply_control_socket_mark(mark);
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_tuic_transport_owner(
-        &self,
-    ) -> bool {
-        matches!(
-            &self.binding.plan().handler,
-            ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-        )
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_juicity_transport_owner(
-        &self,
-    ) -> bool {
-        matches!(
-            &self.binding.plan().handler,
-            ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
-        )
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_anytls_transport_owner(
-        &self,
-    ) -> bool {
-        self.binding.plan().requires_anytls_transport_owner()
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_h2_carrier_owner(
-        &self,
-    ) -> bool {
-        self.binding.plan().requires_h2_carrier_owner()
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_meek_transport_owner(
-        &self,
-    ) -> bool {
-        self.binding.plan().requires_meek_transport_owner()
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn requires_vless_mux_owner(
-        &self,
-    ) -> bool {
-        self.binding.plan().requires_vless_mux_owner()
     }
 
     #[cfg(test)]
@@ -147,7 +102,6 @@ pub(super) fn share_group_probe_plans(
         .map(|candidate| {
             ResidentProxyProbePlan::new(
                 candidate.binding.plan().node_tag.clone(),
-                candidate.link.clone(),
                 candidate.link_hash.clone(),
                 candidate.execution_identity.clone(),
                 candidate.redacted_link_source.clone(),

@@ -1,11 +1,13 @@
 use super::*;
 
 mod cleanup_inventory;
+mod manual_probe_execution;
 mod manual_probe_index;
 mod shutdown;
 mod task;
 
 use self::cleanup_inventory::*;
+use self::manual_probe_execution::{ManualProbeExecution, ManualProbeRuntime};
 pub(crate) use self::manual_probe_index::ResidentManualProbeIndex;
 use self::shutdown::shutdown_resident_runtime_owner;
 use self::shutdown::{ResidentRuntimeWorkloadShutdown, shutdown_resident_runtime_workloads};
@@ -544,11 +546,11 @@ impl ResidentRuntimeOwner {
         json!({
             "schemaVersion": 1,
             "owner": "resident-runtime-owner",
-            "executor": "per-probe-tokio-current-thread",
+            "executor": "helper-owned-bounded-tokio-multi-thread",
             "scope": "manual-latency-probes",
             "available": true,
             "persistent": false,
-            "lifecycle": "created-per-probe-and-dropped-after-probe",
+            "lifecycle": "one runtime per bounded helper request; owner and probe tasks share it",
             "error": Value::Null,
         })
     }
@@ -572,7 +574,19 @@ impl ResidentManualProbeHandle {
     }
 
     pub(crate) fn probe_node_latencies_without_group_update(&self, links: &[String]) -> Vec<Value> {
-        probe_resident_manual_latency_snapshots(
+        let mut runtime =
+            match ManualProbeRuntime::start(&self.resource_config, self.probe_concurrency()) {
+                Ok(runtime) => runtime,
+                Err(detail) => {
+                    return manual_probe_setup_failure_snapshots(
+                        links,
+                        self.reload_generation,
+                        &detail,
+                    );
+                }
+            };
+        let snapshots = probe_resident_manual_latency_snapshots(
+            runtime.runtime(),
             self.manual_probe_index.plans(),
             links,
             self.reload_generation,
@@ -583,7 +597,9 @@ impl ResidentManualProbeHandle {
                 self.juicity_owner_registry.clone(),
             )
             .with_anytls(self.anytls_owner_registry.clone()),
-        )
+        );
+        runtime.shutdown();
+        snapshots
     }
 
     pub(crate) fn apply_latency_probe_snapshots_to_groups(&self, snapshots: &[Value]) {
@@ -685,68 +701,22 @@ pub(crate) fn run_resident_manual_latency_probe_helper(
     reload_generation: u64,
     concurrency: usize,
 ) -> Vec<Value> {
-    let mut manual_probe_plans = plan::build_resident_manual_probe_plans_for_helper(config, links);
-    apply_manual_probe_runtime_generation(&mut manual_probe_plans, reload_generation);
-    let requires_tuic_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_tuic_transport_owner);
-    let requires_juicity_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_juicity_transport_owner);
-    let requires_anytls_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_anytls_transport_owner);
-    let requires_h2_carrier_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_h2_carrier_owner);
-    let requires_meek_transport_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_meek_transport_owner);
-    let requires_vless_mux_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_vless_mux_owner);
-    let owner_scope = ManualProbeTransportOwnerScope::start(
-        config,
-        reload_generation,
-        ManualProbeOwnerRequirements {
-            tuic: requires_tuic_owner,
-            juicity: requires_juicity_owner,
-            anytls: requires_anytls_owner,
-            h2_carrier: requires_h2_carrier_owner,
-            meek: requires_meek_transport_owner,
-            vless_mux: requires_vless_mux_owner,
-        },
-    )
-    .ok();
+    let mut execution =
+        match ManualProbeExecution::start(config, links, reload_generation, concurrency) {
+            Ok(execution) => execution,
+            Err(detail) => {
+                return manual_probe_setup_failure_snapshots(links, reload_generation, &detail);
+            }
+        };
     let snapshots = probe_resident_manual_latency_snapshots(
-        &manual_probe_plans,
+        execution.runtime(),
+        execution.plans(),
         links,
         reload_generation,
         concurrency,
-        ResidentTransportOwnerRegistries::new(
-            owner_scope
-                .as_ref()
-                .map(|scope| scope.hysteria2_handle.clone()),
-            owner_scope
-                .as_ref()
-                .and_then(|scope| scope.tuic_handle.clone()),
-            owner_scope
-                .as_ref()
-                .and_then(|scope| scope.juicity_handle.clone()),
-        )
-        .with_anytls(
-            owner_scope
-                .as_ref()
-                .and_then(|scope| scope.anytls_handle.clone()),
-        ),
+        execution.registries(),
     );
-    drop(owner_scope);
+    let _ = execution.shutdown();
     snapshots
 }
 
@@ -760,323 +730,39 @@ pub(crate) fn run_resident_manual_latency_probe_helper_streaming<F>(
 where
     F: FnMut(Value) -> Result<(), String>,
 {
-    let mut manual_probe_plans = plan::build_resident_manual_probe_plans_for_helper(config, links);
-    apply_manual_probe_runtime_generation(&mut manual_probe_plans, reload_generation);
-    let requires_tuic_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_tuic_transport_owner);
-    let requires_juicity_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_juicity_transport_owner);
-    let requires_anytls_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_anytls_transport_owner);
-    let requires_h2_carrier_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_h2_carrier_owner);
-    let requires_meek_transport_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_meek_transport_owner);
-    let requires_vless_mux_owner = manual_probe_plans
-        .values()
-        .filter_map(|probe| probe.as_ref().ok())
-        .any(plan::ResidentProxyProbePlan::requires_vless_mux_owner);
-    let owner_scope = ManualProbeTransportOwnerScope::start(
-        config,
-        reload_generation,
-        ManualProbeOwnerRequirements {
-            tuic: requires_tuic_owner,
-            juicity: requires_juicity_owner,
-            anytls: requires_anytls_owner,
-            h2_carrier: requires_h2_carrier_owner,
-            meek: requires_meek_transport_owner,
-            vless_mux: requires_vless_mux_owner,
-        },
-    )
-    .ok();
+    let mut execution = ManualProbeExecution::start(config, links, reload_generation, concurrency)?;
     let result = probe_resident_manual_latency_snapshots_streaming(
-        &manual_probe_plans,
+        execution.runtime(),
+        execution.plans(),
         links,
         reload_generation,
         concurrency,
-        ResidentTransportOwnerRegistries::new(
-            owner_scope
-                .as_ref()
-                .map(|scope| scope.hysteria2_handle.clone()),
-            owner_scope
-                .as_ref()
-                .and_then(|scope| scope.tuic_handle.clone()),
-            owner_scope
-                .as_ref()
-                .and_then(|scope| scope.juicity_handle.clone()),
-        )
-        .with_anytls(
-            owner_scope
-                .as_ref()
-                .and_then(|scope| scope.anytls_handle.clone()),
-        ),
+        execution.registries(),
         &mut on_snapshot,
     );
-    drop(owner_scope);
-    result
+    let shutdown = execution.shutdown();
+    result.and(shutdown)
 }
 
-fn apply_manual_probe_runtime_generation(
-    plans: &mut BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+fn manual_probe_setup_failure_snapshots(
+    links: &[String],
     reload_generation: u64,
-) {
-    for probe_result in plans.values_mut() {
-        let binding_error = match probe_result {
-            Ok(probe) => probe.apply_runtime_generation(reload_generation).err(),
-            Err(_) => None,
-        };
-        if let Some(error) = binding_error {
-            *probe_result = Err(error);
-        }
-    }
-}
-
-struct ManualProbeTransportOwnerScope {
-    hysteria2_handle: Hysteria2OwnerRegistryHandle,
-    tuic_handle: Option<TuicOwnerRegistryHandle>,
-    juicity_handle: Option<JuicityOwnerRegistryHandle>,
-    anytls_handle: Option<AnyTlsOwnerRegistryHandle>,
-    h2_carrier_handle: Option<H2CarrierGenerationOwnerHandle>,
-    meek_transport_handle: Option<MeekTransportGenerationOwnerHandle>,
-    vless_mux_handle: Option<VlessMuxGenerationOwnerHandle>,
-    stop: SharedResidentStopSignal,
-    hysteria2_thread: Option<JoinHandle<()>>,
-    tuic_thread: Option<JoinHandle<()>>,
-    juicity_thread: Option<JoinHandle<()>>,
-    anytls_thread: Option<JoinHandle<()>>,
-    h2_carrier_thread: Option<JoinHandle<()>>,
-    meek_transport_thread: Option<JoinHandle<()>>,
-    vless_mux_thread: Option<JoinHandle<()>>,
-}
-
-#[derive(Clone, Copy)]
-struct ManualProbeOwnerRequirements {
-    tuic: bool,
-    juicity: bool,
-    anytls: bool,
-    h2_carrier: bool,
-    meek: bool,
-    vless_mux: bool,
-}
-
-impl ManualProbeTransportOwnerScope {
-    fn start(
-        config: &Config,
-        reload_generation: u64,
-        required: ManualProbeOwnerRequirements,
-    ) -> Result<Self, String> {
-        let resources = ResidentRuntimeResourceConfig::from_config(config);
-        let stop = ResidentStopSignal::shared();
-        let (handle, thread) = start_hysteria2_owner_registry(
+    detail: &str,
+) -> Vec<Value> {
+    let checked_at = unix_now_secs();
+    preferred_latency_snapshots(links.iter().filter(|link| !link.is_empty()).map(|link| {
+        manual_probe_unavailable_snapshot(
+            link,
+            "native outbound probe runtime unavailable",
+            detail,
+            checked_at,
             reload_generation,
-            Arc::clone(&stop),
-            resources.tcp_flow_stack_bytes.value(),
-        )?;
-        let (tuic_handle, tuic_thread) = if required.tuic {
-            match start_tuic_owner_registry(
-                reload_generation,
-                Arc::clone(&stop),
-                resources.tcp_flow_stack_bytes.value(),
-            ) {
-                Ok((handle, thread)) => (Some(handle), Some(thread)),
-                Err(err) => {
-                    stop.store(true, Ordering::Release);
-                    let _ = thread.join();
-                    return Err(err);
-                }
-            }
-        } else {
-            (None, None)
-        };
-        let (juicity_handle, juicity_thread) = if required.juicity {
-            match start_juicity_owner_registry(
-                reload_generation,
-                Arc::clone(&stop),
-                resources.tcp_flow_stack_bytes.value(),
-            ) {
-                Ok((handle, thread)) => (Some(handle), Some(thread)),
-                Err(err) => {
-                    stop.store(true, Ordering::Release);
-                    if let Some(thread) = tuic_thread {
-                        let _ = thread.join();
-                    }
-                    let _ = thread.join();
-                    return Err(err);
-                }
-            }
-        } else {
-            (None, None)
-        };
-        let (anytls_handle, anytls_thread) = if required.anytls {
-            match start_anytls_owner_registry(
-                reload_generation,
-                Arc::clone(&stop),
-                resources.tcp_flow_stack_bytes.value(),
-            ) {
-                Ok((handle, thread)) => (Some(handle), Some(thread)),
-                Err(err) => {
-                    stop.store(true, Ordering::Release);
-                    if let Some(thread) = tuic_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = juicity_thread {
-                        let _ = thread.join();
-                    }
-                    let _ = thread.join();
-                    return Err(err);
-                }
-            }
-        } else {
-            (None, None)
-        };
-        let (h2_carrier_handle, h2_carrier_thread) = if required.h2_carrier {
-            match start_h2_carrier_generation_owner(
-                reload_generation,
-                Arc::clone(&stop),
-                resources.tcp_flow_stack_bytes.value(),
-                resources.tcp_runtime_workers.value(),
-            ) {
-                Ok((handle, thread)) => (Some(handle), Some(thread)),
-                Err(err) => {
-                    stop.store(true, Ordering::Release);
-                    if let Some(thread) = tuic_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = juicity_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = anytls_thread {
-                        let _ = thread.join();
-                    }
-                    let _ = thread.join();
-                    return Err(err);
-                }
-            }
-        } else {
-            (None, None)
-        };
-        let (meek_transport_handle, meek_transport_thread) = if required.meek {
-            match start_meek_transport_generation_owner(
-                reload_generation,
-                Arc::clone(&stop),
-                resources.tcp_flow_stack_bytes.value(),
-                resources.tcp_runtime_workers.value(),
-            ) {
-                Ok((handle, thread)) => (Some(handle), Some(thread)),
-                Err(err) => {
-                    stop.store(true, Ordering::Release);
-                    if let Some(thread) = tuic_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = juicity_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = anytls_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = h2_carrier_thread {
-                        let _ = thread.join();
-                    }
-                    let _ = thread.join();
-                    return Err(err);
-                }
-            }
-        } else {
-            (None, None)
-        };
-        let (vless_mux_handle, vless_mux_thread) = if required.vless_mux {
-            match start_vless_mux_generation_owner(
-                reload_generation,
-                Arc::clone(&stop),
-                resources.tcp_flow_stack_bytes.value(),
-                resources.tcp_runtime_workers.value(),
-            ) {
-                Ok((handle, thread)) => (Some(handle), Some(thread)),
-                Err(err) => {
-                    stop.store(true, Ordering::Release);
-                    if let Some(thread) = tuic_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = juicity_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = anytls_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = h2_carrier_thread {
-                        let _ = thread.join();
-                    }
-                    if let Some(thread) = meek_transport_thread {
-                        let _ = thread.join();
-                    }
-                    let _ = thread.join();
-                    return Err(err);
-                }
-            }
-        } else {
-            (None, None)
-        };
-        Ok(Self {
-            hysteria2_handle: handle,
-            tuic_handle,
-            juicity_handle,
-            anytls_handle,
-            h2_carrier_handle,
-            meek_transport_handle,
-            vless_mux_handle,
-            stop,
-            hysteria2_thread: Some(thread),
-            tuic_thread,
-            juicity_thread,
-            anytls_thread,
-            h2_carrier_thread,
-            meek_transport_thread,
-            vless_mux_thread,
-        })
-    }
-}
-
-impl Drop for ManualProbeTransportOwnerScope {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(thread) = self.hysteria2_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = self.tuic_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = self.juicity_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = self.anytls_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = self.h2_carrier_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = self.meek_transport_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = self.vless_mux_thread.take() {
-            let _ = thread.join();
-        }
-        self.h2_carrier_handle = None;
-        self.meek_transport_handle = None;
-        self.vless_mux_handle = None;
-    }
+        )
+    }))
 }
 
 fn probe_resident_manual_latency_snapshots(
+    runtime: &tokio::runtime::Runtime,
     manual_probe_plans: &BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
     links: &[String],
     reload_generation: u64,
@@ -1122,22 +808,6 @@ fn probe_resident_manual_latency_snapshots(
         return preferred_latency_snapshots(snapshots);
     }
 
-    let runtime = match build_transient_probe_runtime("manual latency probe") {
-        Ok(runtime) => runtime,
-        Err(detail) => {
-            snapshots.extend(tasks.into_iter().map(|candidate| {
-                manual_probe_unavailable_snapshot(
-                    &candidate.link,
-                    "native outbound probe runtime unavailable",
-                    &detail,
-                    checked_at,
-                    reload_generation,
-                )
-            }));
-            return preferred_latency_snapshots(snapshots);
-        }
-    };
-
     let mut task_queue = std::collections::VecDeque::from(tasks);
     let mut task_snapshots = runtime.block_on(async {
         let mut values = Vec::new();
@@ -1164,11 +834,11 @@ fn probe_resident_manual_latency_snapshots(
         values
     });
     snapshots.append(&mut task_snapshots);
-    drop(runtime);
     preferred_latency_snapshots(snapshots)
 }
 
 fn probe_resident_manual_latency_snapshots_streaming<F>(
+    runtime: &tokio::runtime::Runtime,
     manual_probe_plans: &BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
     links: &[String],
     reload_generation: u64,
@@ -1217,22 +887,6 @@ where
         return Ok(());
     }
 
-    let runtime = match build_transient_probe_runtime("manual latency probe") {
-        Ok(runtime) => runtime,
-        Err(detail) => {
-            for candidate in tasks {
-                on_snapshot(manual_probe_unavailable_snapshot(
-                    &candidate.link,
-                    "native outbound probe runtime unavailable",
-                    &detail,
-                    checked_at,
-                    reload_generation,
-                ))?;
-            }
-            return Ok(());
-        }
-    };
-
     let mut task_queue = std::collections::VecDeque::from(tasks);
     runtime.block_on(async {
         let mut handles = tokio::task::JoinSet::new();
@@ -1257,7 +911,6 @@ where
         }
         Ok::<(), String>(())
     })?;
-    drop(runtime);
     Ok(())
 }
 
@@ -1286,16 +939,6 @@ fn fill_manual_probe_join_set(
             .await
         });
     }
-}
-
-pub(crate) fn build_transient_probe_runtime(
-    scope: &str,
-) -> Result<tokio::runtime::Runtime, String> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-        .map_err(|err| format!("start Tokio {scope} runtime: {err}"))
 }
 
 #[cfg(test)]

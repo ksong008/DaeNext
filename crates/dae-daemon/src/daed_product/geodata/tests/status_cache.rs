@@ -117,6 +117,7 @@ fn test_app(dir: &Path) -> AppState {
         geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         geodata_update_runtime: None,
+        control_runtime: product_test_control_runtime(),
     }
 }
 

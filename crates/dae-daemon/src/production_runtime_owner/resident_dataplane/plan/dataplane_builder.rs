@@ -171,7 +171,6 @@ fn build_resident_manual_probe_plan_with_profile(
     proxy.compact_allocations();
     Ok(ResidentProxyProbePlan::new(
         node_tag,
-        link.clone(),
         link_hash(&link),
         execution_link_hash(&link),
         redacted_link_source(&link),

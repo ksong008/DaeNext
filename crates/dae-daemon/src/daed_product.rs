@@ -250,6 +250,7 @@ struct AppState {
     geodata_updates: Arc<geodata::ProductGeodataUpdateCoordinator>,
     geodata_status_cache: Arc<Mutex<GeodataStatusCache>>,
     geodata_update_runtime: Option<Arc<geodata::ProductGeodataUpdateRuntime>>,
+    control_runtime: Arc<ProductControlRuntime>,
 }
 
 #[derive(Debug, Default)]
@@ -911,6 +912,15 @@ mod auth_storage;
 use self::auth_storage::*;
 mod auth_runtime;
 use self::auth_runtime::*;
+mod control_runtime;
+use self::control_runtime::*;
+pub use self::control_runtime::{
+    ProductControlBenchmarkFixture, product_control_benchmark_fixture,
+};
+#[cfg(test)]
+fn product_test_control_runtime() -> Arc<ProductControlRuntime> {
+    ProductControlRuntime::start_for_test().unwrap()
+}
 mod http_request;
 use self::http_request::*;
 mod http_io;

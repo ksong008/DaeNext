@@ -40,6 +40,7 @@ fn start_test_product_server(scope: &str) -> TestProductServer {
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         geodata_update_runtime: None,
+        control_runtime: product_test_control_runtime(),
     });
     let server_app = Arc::clone(&app);
     let server_listen = listen.clone();

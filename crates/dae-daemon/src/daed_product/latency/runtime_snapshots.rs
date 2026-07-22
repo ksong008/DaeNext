@@ -1,17 +1,29 @@
 use super::super::*;
 
-pub(crate) fn fake_runtime_probe_node_latencies(links: &[String]) -> Vec<Value> {
+pub(crate) fn fake_runtime_probe_node_latencies(
+    control_runtime: &ProductControlRuntime,
+    links: &[String],
+) -> Vec<Value> {
     links
         .iter()
         .filter(|link| !link.is_empty())
-        .map(|link| fake_runtime_tcp_latency_snapshot(link))
+        .map(|link| fake_runtime_tcp_latency_snapshot_on_control(control_runtime, link))
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn fake_runtime_tcp_latency_snapshot(link: &str) -> Value {
+    let control_runtime = product_test_control_runtime();
+    fake_runtime_tcp_latency_snapshot_on_control(&control_runtime, link)
+}
+
+fn fake_runtime_tcp_latency_snapshot_on_control(
+    control_runtime: &ProductControlRuntime,
+    link: &str,
+) -> Value {
     let checked_at = unix_now() as i64;
     let started = Instant::now();
-    let probe = fake_runtime_tcp_connect(link);
+    let probe = fake_runtime_tcp_connect(control_runtime, link);
     let latency_ms = probe
         .as_ref()
         .ok()
@@ -34,7 +46,10 @@ pub(crate) fn fake_runtime_tcp_latency_snapshot(link: &str) -> Value {
     })
 }
 
-pub(crate) fn fake_runtime_tcp_connect(link: &str) -> Result<(), String> {
+fn fake_runtime_tcp_connect(
+    control_runtime: &ProductControlRuntime,
+    link: &str,
+) -> Result<(), String> {
     let url = url::Url::parse(link).map_err(|err| format!("parse node link: {err}"))?;
     let host = url
         .host_str()
@@ -43,8 +58,9 @@ pub(crate) fn fake_runtime_tcp_connect(link: &str) -> Result<(), String> {
         .port_or_known_default()
         .ok_or_else(|| "node link does not contain a port".to_owned())?;
     let mut last_error = None;
-    for addr in resolve_tcp_addrs(host, port, Duration::from_millis(500))
-        .map_err(|err| format!("resolve node endpoint: {err}"))?
+    for addr in
+        resolve_tcp_addrs_on_control(control_runtime, host, port, Duration::from_millis(500))
+            .map_err(|err| format!("resolve node endpoint: {err}"))?
     {
         match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
             Ok(_) => return Ok(()),

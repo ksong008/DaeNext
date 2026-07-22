@@ -147,6 +147,7 @@ pub(super) enum ProductRuntimeProbeHandle {
 impl ProductRuntimeProbeHandle {
     pub(super) fn probe_node_latencies_streaming_without_group_update<F, C>(
         &self,
+        control_runtime: &ProductControlRuntime,
         links: &[String],
         mut should_cancel: C,
         mut on_snapshots: F,
@@ -202,7 +203,7 @@ impl ProductRuntimeProbeHandle {
                 if should_cancel() {
                     return true;
                 }
-                let snapshots = fake_runtime_probe_node_latencies(links);
+                let snapshots = fake_runtime_probe_node_latencies(control_runtime, links);
                 if should_cancel() {
                     return true;
                 }

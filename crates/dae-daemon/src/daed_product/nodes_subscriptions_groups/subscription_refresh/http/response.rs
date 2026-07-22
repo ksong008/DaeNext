@@ -6,10 +6,7 @@ pub(super) struct SubscriptionHttpResponse {
     pub(super) body: Vec<u8>,
 }
 
-pub(super) fn read_subscription_http_response<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
-    read_subscription_http_response_with_limit(reader, subscription_http_body_limit())
-}
-
+#[cfg(test)]
 pub(crate) fn read_subscription_http_response_with_limit<R: Read>(
     reader: &mut R,
     body_limit: usize,

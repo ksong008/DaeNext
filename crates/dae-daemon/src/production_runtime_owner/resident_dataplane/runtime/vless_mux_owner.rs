@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::task::{Context, Poll};
+#[cfg(test)]
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -592,6 +593,7 @@ impl VlessMuxResponseHeaderDecoder {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn start_vless_mux_generation_owner(
     generation: u64,
     stop: SharedResidentStopSignal,
@@ -624,6 +626,7 @@ pub(crate) fn start_vless_mux_generation_owner_for_test(
     )
 }
 
+#[cfg(test)]
 fn start_vless_mux_generation_owner_with_resources(
     generation: u64,
     stop: SharedResidentStopSignal,
@@ -1748,8 +1751,9 @@ mod tests {
         let connection = include_str!("../tcp/vless_handlers/connection.rs");
         let probe = include_str!("../probe/native_tcp/vless.rs");
         let workers = include_str!("workers.rs");
-        let runtime_owner = include_str!("../runtime_owner.rs");
         let subscription = include_str!("../subscription_fetch.rs");
+        let control_owners = include_str!("../control_transport_owners/mod.rs");
+        let requirements = include_str!("../control_transport_owners/requirements.rs");
         let model = include_str!("../plan/model.rs");
         let production = owner
             .split_once("#[cfg(test)]\nmod tests")
@@ -1758,8 +1762,9 @@ mod tests {
         assert!(connection.contains("acquire_vless_mux_logical_stream"));
         assert!(probe.contains("acquire_vless_mux_logical_stream"));
         assert!(workers.contains("start_vless_mux_generation_owner"));
-        assert!(runtime_owner.contains("requires_vless_mux_owner"));
-        assert!(subscription.contains("start_vless_mux_generation_owner"));
+        assert!(requirements.contains("requires_vless_mux_owner"));
+        assert!(subscription.contains("ControlTransportOwners"));
+        assert!(control_owners.contains("start_vless_mux_generation_owner_on"));
         assert!(model.contains("requires_vless_mux_owner"));
         assert!(!connection.contains("resident_mux_stream_id"));
         assert!(!connection.contains("relay_tcp_over_vless_mux_tls_async"));

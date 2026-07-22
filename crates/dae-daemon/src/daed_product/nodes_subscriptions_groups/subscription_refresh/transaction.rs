@@ -12,12 +12,18 @@ pub(super) struct SubscriptionRefreshApplyResult {
     pub(super) preserved_existing_nodes: bool,
 }
 
+pub(super) enum SubscriptionCommitResult<T> {
+    Applied(T),
+    Stale,
+}
+
 pub(super) fn apply_subscription_refresh_report(
     state: &Path,
-    id: i64,
+    source: &SubscriptionSourceIdentity,
     fetched_at: &str,
     content: &content::SubscriptionContentReport,
-) -> io::Result<SubscriptionRefreshApplyResult> {
+    persist: Option<(&Path, &[u8])>,
+) -> io::Result<SubscriptionCommitResult<SubscriptionRefreshApplyResult>> {
     let prepared = node_stage::prepare_subscription_nodes(&content.links);
     let admitted_node_count = prepared.admitted.len();
     let invalid_node_count = content
@@ -31,7 +37,12 @@ pub(super) fn apply_subscription_refresh_report(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sqlite_io_error)?;
-    ensure_subscription_exists(&tx, id)?;
+    if !subscription_source_is_current(&tx, source)? {
+        return Ok(SubscriptionCommitResult::Stale);
+    }
+    if let Some((path, bytes)) = persist {
+        super::source::write_persisted_subscription(path, bytes)?;
+    }
 
     let (runtime_input_changed, preserved_existing_nodes, refresh_outcome) =
         if prepared.admitted.is_empty() {
@@ -42,7 +53,7 @@ pub(super) fn apply_subscription_refresh_report(
             )
         } else {
             let sync_result =
-                node_sync::replace_prepared_subscription_nodes(&tx, id, &prepared.admitted)?;
+                node_sync::replace_prepared_subscription_nodes(&tx, source.id, &prepared.admitted)?;
             node_import_result.splice(0..0, sync_result.items);
             let outcome = if invalid_node_count != 0 || not_admitted_node_count != 0 {
                 "partial"
@@ -64,7 +75,7 @@ pub(super) fn apply_subscription_refresh_report(
     );
     tx.execute(
         "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
-        params![fetched_at, "fetched", info, id],
+        params![fetched_at, "fetched", info, source.id],
     )
     .map_err(sqlite_io_error)?;
     if runtime_input_changed {
@@ -72,43 +83,42 @@ pub(super) fn apply_subscription_refresh_report(
     }
     tx.commit().map_err(sqlite_io_error)?;
 
-    Ok(SubscriptionRefreshApplyResult {
-        runtime_input_changed,
-        node_import_result,
-        refresh_outcome,
-        source_kind: content.kind.as_str(),
-        source_node_count: content.source_node_count,
-        admitted_node_count,
-        invalid_node_count,
-        not_admitted_node_count,
-        preserved_existing_nodes,
-    })
+    Ok(SubscriptionCommitResult::Applied(
+        SubscriptionRefreshApplyResult {
+            runtime_input_changed,
+            node_import_result,
+            refresh_outcome,
+            source_kind: content.kind.as_str(),
+            source_node_count: content.source_node_count,
+            admitted_node_count,
+            invalid_node_count,
+            not_admitted_node_count,
+            preserved_existing_nodes,
+        },
+    ))
 }
 
 pub(super) fn record_subscription_fetch_error(
     state: &Path,
-    id: i64,
+    source: &SubscriptionSourceIdentity,
     fetched_at: &str,
     error: &str,
-) -> io::Result<()> {
+) -> io::Result<SubscriptionCommitResult<()>> {
     let _guard = subscription_write_guard()?;
     let mut conn = open_state_connection(state)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sqlite_io_error)?;
-    let updated = tx
-        .execute(
-            "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
-            params![fetched_at, "fetch_error", error, id],
-        )
-        .map_err(sqlite_io_error)?;
-    if updated == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "subscription not found",
-        ));
+    if !subscription_source_is_current(&tx, source)? {
+        return Ok(SubscriptionCommitResult::Stale);
     }
-    tx.commit().map_err(sqlite_io_error)
+    tx.execute(
+        "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
+        params![fetched_at, "fetch_error", error, source.id],
+    )
+    .map_err(sqlite_io_error)?;
+    tx.commit().map_err(sqlite_io_error)?;
+    Ok(SubscriptionCommitResult::Applied(()))
 }
 
 fn preserved_refresh_outcome(
@@ -150,14 +160,25 @@ fn rejected_node_result(node: &node_stage::RejectedSubscriptionNode, class: &str
     })
 }
 
-fn ensure_subscription_exists(conn: &Connection, id: i64) -> io::Result<()> {
-    conn.query_row(
-        "SELECT 1 FROM subscriptions WHERE id = ?1",
-        params![id],
-        |row| row.get::<_, i64>(0),
-    )
-    .optional()
-    .map_err(sqlite_io_error)?
-    .map(|_| ())
-    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "subscription not found"))
+fn subscription_source_is_current(
+    conn: &Connection,
+    expected: &SubscriptionSourceIdentity,
+) -> io::Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT link, tag, use_proxy FROM subscriptions WHERE id = ?1",
+            params![expected.id],
+            |row| {
+                Ok(SubscriptionSourceIdentity {
+                    id: expected.id,
+                    link: row.get(0)?,
+                    tag: row.get(1)?,
+                    use_proxy: row.get::<_, i64>(2)? != 0,
+                })
+            },
+        )
+        .optional()
+        .map_err(sqlite_io_error)?
+        .map(|current| current == *expected)
+        .unwrap_or(false))
 }

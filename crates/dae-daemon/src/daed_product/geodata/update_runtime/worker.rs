@@ -38,19 +38,57 @@ pub(super) struct ProductGeodataUpdateWorkerHandle {
 
 impl ProductGeodataUpdateWorkerHandle {
     pub(super) fn join_if_finished(mut self) {
-        if self.completed.try_recv().is_ok()
-            && let Some(join) = self.join.take()
+        if !matches!(
+            self.completed.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ) && let Some(join) = self.join.take()
         {
             let _ = join.join();
         }
     }
 
-    pub(super) fn join_until(mut self, deadline: Instant) -> bool {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() || self.completed.recv_timeout(remaining).is_err() {
+    fn try_join(&mut self) -> bool {
+        if matches!(
+            self.completed.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ) {
             return false;
         }
-        self.join.take().is_none_or(|join| join.join().is_ok())
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        true
+    }
+}
+
+pub(super) fn join_product_geodata_update_workers(
+    mut workers: Vec<ProductGeodataUpdateWorkerHandle>,
+    deadline: Instant,
+    metrics: &ProductGeodataUpdateMetrics,
+) {
+    while !workers.is_empty() {
+        let mut index = 0;
+        let mut joined_any = false;
+        while index < workers.len() {
+            if workers[index].try_join() {
+                workers.swap_remove(index);
+                metrics.worker_joined();
+                joined_any = true;
+            } else {
+                index += 1;
+            }
+        }
+        if workers.is_empty() || Instant::now() >= deadline {
+            break;
+        }
+        if !joined_any {
+            thread::sleep(
+                Duration::from_millis(1).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
+    for _ in workers {
+        metrics.worker_detached();
     }
 }
 

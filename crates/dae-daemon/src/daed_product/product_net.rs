@@ -1,6 +1,10 @@
 use super::*;
 
-pub(super) fn resolve_tcp_addrs(
+const PRODUCT_CONTROL_RESULT_GRACE: Duration = Duration::from_millis(100);
+const PRODUCT_PROXY_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub(super) fn resolve_tcp_addrs_on_control(
+    control_runtime: &ProductControlRuntime,
     host: &str,
     port: u16,
     timeout: Duration,
@@ -15,46 +19,49 @@ pub(super) fn resolve_tcp_addrs(
     if let Ok(ip) = host.parse() {
         return Ok(vec![SocketAddr::new(ip, port)]);
     }
-    let resolver = thread::Builder::new()
-        .name("product-tcp-resolver".to_owned())
-        .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_io()
-                .enable_time()
-                .build()
-                .map_err(|err| io::Error::other(format!("build tcp resolver runtime: {err}")))?;
-            let result = runtime.block_on(async {
-                let resolved =
-                    tokio::time::timeout(timeout, tokio::net::lookup_host((host.as_str(), port)))
-                        .await
-                        .map_err(|_| {
-                            io::Error::new(io::ErrorKind::TimedOut, "resolve tcp endpoint")
-                        })??;
-                let addrs = resolved.collect::<Vec<_>>();
-                if addrs.is_empty() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AddrNotAvailable,
-                        "tcp endpoint resolved to no socket addresses",
-                    ));
+    let wait_timeout = timeout.saturating_add(PRODUCT_CONTROL_RESULT_GRACE);
+    control_runtime
+        .execute(
+            ProductControlTaskKind::Dns,
+            wait_timeout,
+            move |cancellation| async move {
+                tokio::select! {
+                    _ = cancellation.cancelled() => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "resolve tcp endpoint",
+                    )),
+                    resolved = tokio::time::timeout(
+                        timeout,
+                        tokio::net::lookup_host((host.as_str(), port)),
+                    ) => {
+                        let resolved = resolved
+                            .map_err(|_| io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "resolve tcp endpoint",
+                            ))??;
+                        let addrs = resolved.collect::<Vec<_>>();
+                        if addrs.is_empty() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::AddrNotAvailable,
+                                "tcp endpoint resolved to no socket addresses",
+                            ));
+                        }
+                        Ok(addrs)
+                    }
                 }
-                Ok(addrs)
-            });
-            runtime.shutdown_timeout(Duration::from_millis(100));
-            result
-        })
-        .map_err(|err| io::Error::other(format!("spawn tcp resolver: {err}")))?;
-    resolver
-        .join()
-        .map_err(|_| io::Error::other("tcp resolver thread panicked"))?
+            },
+        )
+        .map_err(product_control_resolver_error)?
 }
 
-pub(super) fn connect_tcp_endpoint(
+pub(super) fn connect_tcp_endpoint_on_control(
+    control_runtime: &ProductControlRuntime,
     host: &str,
     port: u16,
     timeout: Duration,
 ) -> io::Result<TcpStream> {
     let mut last_err = None;
-    for addr in resolve_tcp_addrs(host, port, timeout)? {
+    for addr in resolve_tcp_addrs_on_control(control_runtime, host, port, timeout)? {
         match TcpStream::connect_timeout(&addr, timeout) {
             Ok(stream) => return Ok(stream),
             Err(err) => last_err = Some(err),
@@ -66,6 +73,50 @@ pub(super) fn connect_tcp_endpoint(
             "tcp endpoint resolved to no socket addresses",
         )
     }))
+}
+
+fn product_control_resolver_error(error: ProductControlExecutionError) -> io::Error {
+    match error {
+        ProductControlExecutionError::Busy => {
+            io::Error::new(io::ErrorKind::WouldBlock, error.to_string())
+        }
+        ProductControlExecutionError::Unavailable => {
+            io::Error::new(io::ErrorKind::NotConnected, error.to_string())
+        }
+        ProductControlExecutionError::TimedOut => {
+            io::Error::new(io::ErrorKind::TimedOut, "resolve tcp endpoint")
+        }
+    }
+}
+
+pub(super) fn fetch_http_url_via_default_proxy_on_control(
+    control_runtime: &ProductControlRuntime,
+    config: &Config,
+    url: &url::Url,
+    tls: bool,
+    request: &[u8],
+    response_limit: usize,
+) -> Result<Vec<u8>, String> {
+    let config = config.clone();
+    let url = url.clone();
+    let request = request.to_vec();
+    control_runtime
+        .execute(
+            ProductControlTaskKind::ProxyHttp,
+            PRODUCT_PROXY_FETCH_TIMEOUT.saturating_add(PRODUCT_CONTROL_RESULT_GRACE),
+            move |cancellation| async move {
+                crate::production_runtime_owner::fetch_http_url_via_default_proxy_async(
+                    &config,
+                    &url,
+                    tls,
+                    &request,
+                    response_limit,
+                    cancellation.cancelled(),
+                )
+                .await
+            },
+        )
+        .map_err(|error| error.to_string())?
 }
 
 pub(super) fn product_default_proxy_config(state: &Path) -> io::Result<Config> {

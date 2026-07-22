@@ -36,6 +36,7 @@ pub(crate) fn list_subscriptions_value(state: &Path, expand_nodes: bool) -> io::
 }
 
 pub(crate) fn create_subscription(
+    control_runtime: &ProductControlRuntime,
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
@@ -95,8 +96,8 @@ pub(crate) fn create_subscription(
     drop(_guard);
     let import_log_message = format!("subscription {id} imported");
     let _ = append_log_for_config(config_dir, state, "info", &import_log_message);
-    let import_report =
-        refresh_subscription_from_remote(state, config_dir, id).unwrap_or_else(|err| {
+    let import_report = refresh_subscription_from_remote(control_runtime, state, config_dir, id)
+        .unwrap_or_else(|err| {
             json!({
                 "link": link,
                 "fetched": false,
@@ -219,12 +220,13 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
 }
 
 pub(crate) fn refresh_subscription(
+    control_runtime: &ProductControlRuntime,
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
     id: i64,
 ) -> HttpResponse {
-    match refresh_subscription_from_remote(state, config_dir, id) {
+    match refresh_subscription_from_remote(control_runtime, state, config_dir, id) {
         Ok(mut report) => {
             let outcome = SubscriptionRefreshOutcome::from_report(&report);
             let (level, message) = if outcome.fetched {

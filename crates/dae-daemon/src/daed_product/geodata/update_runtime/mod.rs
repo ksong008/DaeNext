@@ -176,6 +176,25 @@ impl ProductGeodataUpdateRuntime {
         );
         fields
     }
+
+    pub(in crate::daed_product) fn shutdown(&self) -> io::Result<()> {
+        self.stopping.store(true, Ordering::Release);
+        self.sender
+            .lock()
+            .map_err(|_| io::Error::other("geodata update sender lock poisoned"))?
+            .take();
+        let deadline = Instant::now()
+            .checked_add(self.config.shutdown_timeout)
+            .unwrap_or_else(Instant::now);
+        let workers = std::mem::take(
+            &mut *self
+                .workers
+                .lock()
+                .map_err(|_| io::Error::other("geodata update worker lock poisoned"))?,
+        );
+        join_product_geodata_update_workers(workers, deadline, &self.metrics);
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for ProductGeodataUpdateRuntime {
@@ -189,26 +208,7 @@ impl std::fmt::Debug for ProductGeodataUpdateRuntime {
 
 impl Drop for ProductGeodataUpdateRuntime {
     fn drop(&mut self) {
-        self.stopping.store(true, Ordering::Release);
-        self.sender
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        let deadline = Instant::now()
-            .checked_add(self.config.shutdown_timeout)
-            .unwrap_or_else(Instant::now);
-        let workers = std::mem::take(
-            self.workers
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        for worker in workers {
-            if worker.join_until(deadline) {
-                self.metrics.worker_joined();
-            } else {
-                self.metrics.worker_detached();
-            }
-        }
+        let _ = self.shutdown();
     }
 }
 

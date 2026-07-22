@@ -31,7 +31,13 @@ pub(super) fn api_subscriptions(
     if api_path == "/subscriptions" {
         return match request.method.as_str() {
             "GET" => list_subscriptions(&app.state, request),
-            "POST" => create_subscription(&app.state, &app.config_dir, &app.runtime, request),
+            "POST" => create_subscription(
+                &app.control_runtime,
+                &app.state,
+                &app.config_dir,
+                &app.runtime,
+                request,
+            ),
             "DELETE" => delete_subscriptions(&app.state, &app.config_dir, &app.runtime, request),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
@@ -49,7 +55,13 @@ pub(super) fn api_subscriptions(
     }
     if parts.len() == 2 && parts[1] == "refresh" {
         return match request.method.as_str() {
-            "POST" => refresh_subscription(&app.state, &app.config_dir, &app.runtime, id),
+            "POST" => refresh_subscription(
+                &app.control_runtime,
+                &app.state,
+                &app.config_dir,
+                &app.runtime,
+                id,
+            ),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
     }

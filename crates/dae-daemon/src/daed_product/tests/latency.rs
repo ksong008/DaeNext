@@ -172,9 +172,15 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
     let reclaim_before = allocator_reclaim_snapshot_json()["deferred"]["requestedTotal"]
         .as_u64()
         .unwrap_or(0);
-    let value =
-        enqueue_node_latency_job(&state, &dir, Arc::clone(&runtime), Arc::clone(&jobs), &[])
-            .unwrap();
+    let value = enqueue_node_latency_job(
+        &state,
+        &dir,
+        product_test_control_runtime(),
+        Arc::clone(&runtime),
+        Arc::clone(&jobs),
+        &[],
+    )
+    .unwrap();
 
     assert_eq!(value["items"].as_array().map(Vec::len), Some(0));
     assert_eq!(value["admission"].as_str(), Some("started"));
@@ -294,6 +300,7 @@ pub(crate) fn enqueue_latency_probe_reports_the_canonical_existing_job() {
     let response = enqueue_node_latency_job(
         &state,
         &dir,
+        product_test_control_runtime(),
         Arc::new(ProductRuntimeManager::new()),
         Arc::clone(&jobs),
         &[],

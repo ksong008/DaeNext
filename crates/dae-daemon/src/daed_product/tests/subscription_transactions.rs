@@ -405,8 +405,14 @@ fn create_and_delete_auto_apply_when_runtime_is_running() {
             body: br#"{"link":"file://auto.sub","tag":"auto","cronEnable":false}"#.to_vec(),
         };
 
-        let created =
-            create_subscription(fixture.state(), fixture.root(), &runtime, &create_request);
+        let control_runtime = product_test_control_runtime();
+        let created = create_subscription(
+            &control_runtime,
+            fixture.state(),
+            fixture.root(),
+            &runtime,
+            &create_request,
+        );
         assert_eq!(created.status, 201);
         let created: Value = serde_json::from_slice(&created.body).unwrap();
         assert_eq!(created["runtimeApplyRequested"], json!(true));

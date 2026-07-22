@@ -18,6 +18,11 @@ fn snapshot_selected_runtime_resources(state: &Path) {
 }
 
 #[test]
+pub(crate) fn subscription_https_client_does_not_advertise_http2() {
+    assert!(subscription_tls_alpn_protocols().is_empty());
+}
+
+#[test]
 pub(crate) fn subscription_http_request_formats_authority_and_accepts_compression() {
     let ipv4 = url::Url::parse("http://127.0.0.1:18080/list").unwrap();
     let ipv4_request = subscription_http_request(&ipv4).unwrap();
@@ -368,7 +373,8 @@ pub(crate) fn create_subscription_persists_use_proxy_flag() {
     };
 
     let runtime = ProductRuntimeManager::new();
-    let response = create_subscription(&state, &dir, &runtime, &request);
+    let control_runtime = product_test_control_runtime();
+    let response = create_subscription(&control_runtime, &state, &dir, &runtime, &request);
     assert_eq!(response.status, 201);
     let subscriptions = list_subscriptions_value(&state, false).unwrap();
     assert_eq!(subscriptions["items"][0]["useProxy"], json!(true));
@@ -399,10 +405,12 @@ pub(crate) fn subscription_create_delete_operations_are_serialized() {
         fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
+    let control_runtime = product_test_control_runtime();
     let mut handles = Vec::new();
     for index in 0..6 {
         let state = state.clone();
         let dir = dir.clone();
+        let control_runtime = Arc::clone(&control_runtime);
         handles.push(thread::spawn(move || {
             let body = serde_json::to_vec(&json!({
                 "link": "file://sub/test.sub",
@@ -418,7 +426,7 @@ pub(crate) fn subscription_create_delete_operations_are_serialized() {
                 body,
             };
             let runtime = ProductRuntimeManager::new();
-            let response = create_subscription(&state, &dir, &runtime, &request);
+            let response = create_subscription(&control_runtime, &state, &dir, &runtime, &request);
             assert_eq!(response.status, 201);
             let value: Value = serde_json::from_slice(&response.body).unwrap();
             let id = value["subscription"]["id"].as_i64().unwrap();
@@ -453,11 +461,13 @@ pub(crate) fn concurrent_subscription_creates_report_one_typed_tag_conflict() {
     }
 
     let barrier = Arc::new(std::sync::Barrier::new(2));
+    let control_runtime = product_test_control_runtime();
     let mut handles = Vec::new();
     for _ in 0..2 {
         let state = state.clone();
         let dir = dir.clone();
         let barrier = Arc::clone(&barrier);
+        let control_runtime = Arc::clone(&control_runtime);
         handles.push(thread::spawn(move || {
             let request = HttpRequest {
                 method: "POST".to_owned(),
@@ -469,7 +479,7 @@ pub(crate) fn concurrent_subscription_creates_report_one_typed_tag_conflict() {
             };
             let runtime = ProductRuntimeManager::new();
             barrier.wait();
-            create_subscription(&state, &dir, &runtime, &request)
+            create_subscription(&control_runtime, &state, &dir, &runtime, &request)
         }));
     }
 
@@ -534,13 +544,14 @@ pub(crate) fn subscriptions_without_tags_remain_independent() {
         body: br#"{"link":"file://sub/test.sub","cronEnable":false}"#.to_vec(),
     };
     let runtime = ProductRuntimeManager::new();
+    let control_runtime = product_test_control_runtime();
 
     assert_eq!(
-        create_subscription(&state, &dir, &runtime, &request).status,
+        create_subscription(&control_runtime, &state, &dir, &runtime, &request).status,
         201
     );
     assert_eq!(
-        create_subscription(&state, &dir, &runtime, &request).status,
+        create_subscription(&control_runtime, &state, &dir, &runtime, &request).status,
         201
     );
     assert_eq!(
@@ -1337,7 +1348,8 @@ pub(crate) fn subscription_refresh_marks_runtime_modified_for_unbound_node_chang
     assert!(!runtime_modified(&conn, true).unwrap());
     drop(conn);
 
-    let report = refresh_subscription_from_remote(&state, &dir, 7).unwrap();
+    let control_runtime = product_test_control_runtime();
+    let report = refresh_subscription_from_remote(&control_runtime, &state, &dir, 7).unwrap();
     assert_eq!(report["runtimeInputChanged"], json!(true));
     let conn = open_state_connection(&state).unwrap();
     assert!(runtime_modified(&conn, true).unwrap());
@@ -1347,7 +1359,7 @@ pub(crate) fn subscription_refresh_marks_runtime_modified_for_unbound_node_chang
     let conn = open_state_connection(&state).unwrap();
     assert!(!runtime_modified(&conn, true).unwrap());
     drop(conn);
-    let report = refresh_subscription_from_remote(&state, &dir, 7).unwrap();
+    let report = refresh_subscription_from_remote(&control_runtime, &state, &dir, 7).unwrap();
     assert_eq!(report["runtimeInputChanged"], json!(false));
     let conn = open_state_connection(&state).unwrap();
     assert!(!runtime_modified(&conn, true).unwrap());

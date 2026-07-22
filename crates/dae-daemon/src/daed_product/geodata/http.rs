@@ -5,10 +5,13 @@ use super::types::{
 };
 use super::*;
 
-pub(super) fn fetch_geodata_url(url: &url::Url) -> io::Result<Vec<u8>> {
+pub(super) fn fetch_geodata_url(
+    control_runtime: &ProductControlRuntime,
+    url: &url::Url,
+) -> io::Result<Vec<u8>> {
     let mut current = url.clone();
     for _ in 0..=GEODATA_REDIRECT_LIMIT {
-        match fetch_geodata_url_once(&current)? {
+        match fetch_geodata_url_once(control_runtime, &current)? {
             GeodataHttpResult::Body(body) => return Ok(body),
             GeodataHttpResult::Redirect(next) => current = next,
         }
@@ -17,16 +20,22 @@ pub(super) fn fetch_geodata_url(url: &url::Url) -> io::Result<Vec<u8>> {
 }
 
 pub(super) fn fetch_geodata_url_to_file(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     output_path: &Path,
     proxy_config: Option<&Config>,
 ) -> io::Result<GeodataFileDownload> {
     if let Some(config) = proxy_config {
-        return fetch_geodata_url_to_file_via_default_proxy(url, output_path, config);
+        return fetch_geodata_url_to_file_via_default_proxy(
+            control_runtime,
+            url,
+            output_path,
+            config,
+        );
     }
     let mut current = url.clone();
     for _ in 0..=GEODATA_REDIRECT_LIMIT {
-        match fetch_geodata_url_to_file_once(&current, output_path)? {
+        match fetch_geodata_url_to_file_once(control_runtime, &current, output_path)? {
             GeodataHttpFileResult::Body(download) => return Ok(download),
             GeodataHttpFileResult::Redirect(next) => current = next,
         }
@@ -35,11 +44,12 @@ pub(super) fn fetch_geodata_url_to_file(
 }
 
 pub(super) fn fetch_geodata_latest_release(
+    control_runtime: &ProductControlRuntime,
     kind: GeodataKind,
     api_url: &url::Url,
     proxy_config: Option<&Config>,
 ) -> io::Result<GeodataRelease> {
-    let body = fetch_geodata_url_with_proxy_config(api_url, proxy_config)?;
+    let body = fetch_geodata_url_with_proxy_config(control_runtime, api_url, proxy_config)?;
     let release: Value = serde_json::from_slice(&body).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -86,19 +96,24 @@ pub(super) fn fetch_geodata_latest_release(
 }
 
 fn fetch_geodata_url_with_proxy_config(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     proxy_config: Option<&Config>,
 ) -> io::Result<Vec<u8>> {
     if let Some(config) = proxy_config {
-        return fetch_geodata_url_via_default_proxy(url, config);
+        return fetch_geodata_url_via_default_proxy(control_runtime, url, config);
     }
-    fetch_geodata_url(url)
+    fetch_geodata_url(control_runtime, url)
 }
 
-fn fetch_geodata_url_via_default_proxy(url: &url::Url, config: &Config) -> io::Result<Vec<u8>> {
+fn fetch_geodata_url_via_default_proxy(
+    control_runtime: &ProductControlRuntime,
+    url: &url::Url,
+    config: &Config,
+) -> io::Result<Vec<u8>> {
     let mut current = url.clone();
     for _ in 0..=GEODATA_REDIRECT_LIMIT {
-        match fetch_geodata_url_once_via_default_proxy(&current, config)? {
+        match fetch_geodata_url_once_via_default_proxy(control_runtime, &current, config)? {
             GeodataHttpResult::Body(body) => return Ok(body),
             GeodataHttpResult::Redirect(next) => current = next,
         }
@@ -107,13 +122,19 @@ fn fetch_geodata_url_via_default_proxy(url: &url::Url, config: &Config) -> io::R
 }
 
 fn fetch_geodata_url_to_file_via_default_proxy(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     output_path: &Path,
     config: &Config,
 ) -> io::Result<GeodataFileDownload> {
     let mut current = url.clone();
     for _ in 0..=GEODATA_REDIRECT_LIMIT {
-        match fetch_geodata_url_to_file_once_via_default_proxy(&current, output_path, config)? {
+        match fetch_geodata_url_to_file_once_via_default_proxy(
+            control_runtime,
+            &current,
+            output_path,
+            config,
+        )? {
             GeodataHttpFileResult::Body(download) => return Ok(download),
             GeodataHttpFileResult::Redirect(next) => current = next,
         }
@@ -131,7 +152,10 @@ pub(super) enum GeodataHttpFileResult {
     Redirect(url::Url),
 }
 
-fn fetch_geodata_url_once(url: &url::Url) -> io::Result<GeodataHttpResult> {
+fn fetch_geodata_url_once(
+    control_runtime: &ProductControlRuntime,
+    url: &url::Url,
+) -> io::Result<GeodataHttpResult> {
     let tls = match url.scheme() {
         "https" => true,
         "http" => false,
@@ -149,9 +173,11 @@ fn fetch_geodata_url_once(url: &url::Url) -> io::Result<GeodataHttpResult> {
         .port_or_known_default()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing geodata url port"))?;
     let request = geodata_http_request(url)?;
-    let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10)).map_err(|err| {
-        io::Error::new(err.kind(), format!("connect geodata {host}:{port}: {err}"))
-    })?;
+    let stream =
+        connect_tcp_endpoint_on_control(control_runtime, host, port, Duration::from_secs(10))
+            .map_err(|err| {
+                io::Error::new(err.kind(), format!("connect geodata {host}:{port}: {err}"))
+            })?;
     stream.set_read_timeout(Some(Duration::from_secs(90)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
@@ -186,15 +212,22 @@ fn fetch_geodata_url_once(url: &url::Url) -> io::Result<GeodataHttpResult> {
 }
 
 fn fetch_geodata_url_once_via_default_proxy(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     config: &Config,
 ) -> io::Result<GeodataHttpResult> {
     let request = geodata_http_request(url)?;
-    let response = fetch_geodata_http_response_via_default_proxy(url, config, request.as_bytes())?;
+    let response = fetch_geodata_http_response_via_default_proxy(
+        control_runtime,
+        url,
+        config,
+        request.as_bytes(),
+    )?;
     geodata_http_body(url, response)
 }
 
 fn fetch_geodata_url_to_file_once(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     output_path: &Path,
 ) -> io::Result<GeodataHttpFileResult> {
@@ -215,9 +248,11 @@ fn fetch_geodata_url_to_file_once(
         .port_or_known_default()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing geodata url port"))?;
     let request = geodata_http_request(url)?;
-    let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10)).map_err(|err| {
-        io::Error::new(err.kind(), format!("connect geodata {host}:{port}: {err}"))
-    })?;
+    let stream =
+        connect_tcp_endpoint_on_control(control_runtime, host, port, Duration::from_secs(10))
+            .map_err(|err| {
+                io::Error::new(err.kind(), format!("connect geodata {host}:{port}: {err}"))
+            })?;
     stream.set_read_timeout(Some(Duration::from_secs(90)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
@@ -250,16 +285,23 @@ fn fetch_geodata_url_to_file_once(
 }
 
 fn fetch_geodata_url_to_file_once_via_default_proxy(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     output_path: &Path,
     config: &Config,
 ) -> io::Result<GeodataHttpFileResult> {
     let request = geodata_http_request(url)?;
-    let response = fetch_geodata_http_response_via_default_proxy(url, config, request.as_bytes())?;
+    let response = fetch_geodata_http_response_via_default_proxy(
+        control_runtime,
+        url,
+        config,
+        request.as_bytes(),
+    )?;
     geodata_http_response_to_file_from_bytes(url, response, output_path)
 }
 
 fn fetch_geodata_http_response_via_default_proxy(
+    control_runtime: &ProductControlRuntime,
     url: &url::Url,
     config: &Config,
     request: &[u8],
@@ -277,7 +319,8 @@ fn fetch_geodata_http_response_via_default_proxy(
     let host = url
         .host_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing geodata url host"))?;
-    crate::production_runtime_owner::fetch_http_url_via_default_proxy(
+    fetch_http_url_via_default_proxy_on_control(
+        control_runtime,
         config,
         url,
         tls,

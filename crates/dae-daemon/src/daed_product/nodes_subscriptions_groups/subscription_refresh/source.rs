@@ -3,58 +3,90 @@ use super::*;
 
 const SUBSCRIPTION_PERSIST_DIR: &str = "persist.d";
 
+pub(super) struct FetchedSubscriptionContent {
+    pub(super) content: String,
+    pub(super) persist_path: Option<PathBuf>,
+}
+
 #[cfg(test)]
 pub(crate) fn fetch_subscription_content(
     config_dir: &Path,
     tag: Option<&str>,
     link: &str,
 ) -> io::Result<String> {
-    fetch_subscription_content_with_proxy_config(config_dir, tag, link, None)
+    let control_runtime = product_test_control_runtime();
+    fetch_subscription_content_with_proxy_config(&control_runtime, config_dir, tag, link, None)
+        .map(|fetched| fetched.content)
 }
 
 pub(super) fn fetch_subscription_content_with_proxy_config(
+    control_runtime: &ProductControlRuntime,
     config_dir: &Path,
     tag: Option<&str>,
     link: &str,
     proxy_config: Option<&Config>,
-) -> io::Result<String> {
+) -> io::Result<FetchedSubscriptionContent> {
     let url = url::Url::parse(link)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     match url.scheme() {
-        "http" => fetch_http_url_with_proxy_config(&url, false, proxy_config),
-        "https" => fetch_http_url_with_proxy_config(&url, true, proxy_config),
-        "file" => read_subscription_file(&subscription_file_path(config_dir, &url)?),
+        "http" => fetch_http_url_with_proxy_config(control_runtime, &url, false, proxy_config)
+            .map(FetchedSubscriptionContent::without_persist),
+        "https" => fetch_http_url_with_proxy_config(control_runtime, &url, true, proxy_config)
+            .map(FetchedSubscriptionContent::without_persist),
+        "file" => read_subscription_file(&subscription_file_path(config_dir, &url)?)
+            .map(FetchedSubscriptionContent::without_persist),
         "http-file" | "https-file" => {
             let persist_path = persist_subscription_path(config_dir, tag)?;
             let fetch_url = url_with_scheme(&url, url.scheme().trim_end_matches("-file"))?;
             let fetched = match fetch_url.scheme() {
-                "http" => fetch_http_url_with_proxy_config(&fetch_url, false, proxy_config),
-                "https" => fetch_http_url_with_proxy_config(&fetch_url, true, proxy_config),
+                "http" => fetch_http_url_with_proxy_config(
+                    control_runtime,
+                    &fetch_url,
+                    false,
+                    proxy_config,
+                ),
+                "https" => fetch_http_url_with_proxy_config(
+                    control_runtime,
+                    &fetch_url,
+                    true,
+                    proxy_config,
+                ),
                 scheme => Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("unsupported subscription scheme: {scheme}"),
                 )),
             };
             match fetched {
-                Ok(content) => {
-                    write_persisted_subscription(&persist_path, content.as_bytes())?;
-                    Ok(content)
-                }
-                Err(fetch_err) => read_subscription_file(&persist_path).map_err(|read_err| {
-                    io::Error::new(
-                        read_err.kind(),
-                        format!(
-                            "fetch failed: {}; persisted subscription fallback failed: {}",
-                            fetch_err, read_err
-                        ),
-                    )
+                Ok(content) => Ok(FetchedSubscriptionContent {
+                    content,
+                    persist_path: Some(persist_path),
                 }),
+                Err(fetch_err) => read_subscription_file(&persist_path)
+                    .map(FetchedSubscriptionContent::without_persist)
+                    .map_err(|read_err| {
+                        io::Error::new(
+                            read_err.kind(),
+                            format!(
+                                "fetch failed: {}; persisted subscription fallback failed: {}",
+                                fetch_err, read_err
+                            ),
+                        )
+                    }),
             }
         }
         scheme => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("unsupported subscription scheme: {scheme}"),
         )),
+    }
+}
+
+impl FetchedSubscriptionContent {
+    fn without_persist(content: String) -> Self {
+        Self {
+            content,
+            persist_path: None,
+        }
     }
 }
 
@@ -173,7 +205,7 @@ fn reject_open_subscription_file_permissions(
     Ok(())
 }
 
-fn write_persisted_subscription(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(super) fn write_persisted_subscription(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let Some(parent) = path.parent() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
