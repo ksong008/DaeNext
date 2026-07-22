@@ -11,8 +11,8 @@ use crate::shared_transport::mux::{
 };
 use crate::shared_transport::{
     DEFAULT_WS_KEY, HttpUpgradeOptions, TlsLoopbackMaterial, TlsUnderlayOptions, WS_MASK_KEY,
-    read_http_head, read_websocket_binary_frame, validate_http_status,
-    websocket_client_binary_frame, websocket_handshake_request, websocket_server_binary_frame,
+    read_http_head, read_websocket_binary_frame, websocket_client_binary_frame,
+    websocket_handshake_request, websocket_server_binary_frame,
 };
 
 use super::{
@@ -124,7 +124,10 @@ where
     tls.flush()
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     let response = read_http_head(&mut tls)?;
-    validate_http_status(&response, 101)?;
+    crate::shared_transport::validate_websocket_handshake_response(
+        &response,
+        crate::shared_transport::WS_ACCEPT_SAMPLE,
+    )?;
 
     let target_metadata = ShadowsocksMetadata::parse(target)?;
     let mut request_payload = target_metadata.encode()?;

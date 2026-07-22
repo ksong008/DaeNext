@@ -129,7 +129,7 @@ impl WebSocketBinaryFrameDecoder {
     }
 
     fn queue_control_response(&mut self, opcode: u8, payload: &[u8]) -> Result<(), String> {
-        let response = client_control_frame(opcode, payload);
+        let response = client_control_frame(opcode, payload)?;
         let next_bytes = self
             .control_response_bytes
             .checked_add(response.len())
@@ -242,14 +242,15 @@ fn parse_frame(input: &[u8]) -> Result<Option<ParsedWebSocketFrame>, String> {
     }))
 }
 
-fn client_control_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
+fn client_control_frame(opcode: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
     debug_assert!(matches!(
         opcode,
         WEBSOCKET_OPCODE_CLOSE | WEBSOCKET_OPCODE_PONG
     ));
     debug_assert!(payload.len() <= WEBSOCKET_CONTROL_MAX_BYTES);
 
-    let mask_key = websocket_client_mask_key();
+    let mask_key = websocket_client_mask_key()
+        .map_err(|err| format!("generate websocket control frame mask: {err}"))?;
     let mut frame = Vec::with_capacity(2 + mask_key.len() + payload.len());
     frame.push(WEBSOCKET_FIN | opcode);
     frame.push(WEBSOCKET_MASK | payload.len() as u8);
@@ -260,5 +261,5 @@ fn client_control_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
             .enumerate()
             .map(|(index, byte)| byte ^ mask_key[index % mask_key.len()]),
     );
-    frame
+    Ok(frame)
 }

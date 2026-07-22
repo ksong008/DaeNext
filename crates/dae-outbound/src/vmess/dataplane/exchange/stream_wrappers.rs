@@ -17,7 +17,10 @@ where
         .write_all(&handshake)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
     let response = read_http_head(stream)?;
-    validate_http_status(&response, 101)?;
+    crate::shared_transport::validate_websocket_handshake_response(
+        &response,
+        crate::shared_transport::WS_ACCEPT_SAMPLE,
+    )?;
 
     let packet = build_aead_request(uuid, target, VMessNetwork::Tcp, payload)?;
     let mut request_payload = Vec::with_capacity(packet.header.len() + packet.chunk.len());

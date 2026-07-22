@@ -431,10 +431,17 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let options = HttpUpgradeOptions::new(host, path);
-    let request = websocket_client_handshake_request(&options);
-    write_vless_stream_bytes(stream, &request, &format!("write {label} handshake")).await?;
+    let handshake = websocket_client_handshake(&options)
+        .map_err(|err| format!("build {label} handshake: {err}"))?;
+    write_vless_stream_bytes(
+        stream,
+        &handshake.request,
+        &format!("write {label} handshake"),
+    )
+    .await?;
     let response = read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate {label} upgrade: {err}"))
+    validate_websocket_handshake_response(&response, &handshake.expected_accept)
+        .map_err(|err| format!("validate {label} upgrade: {err}"))
 }
 
 async fn httpupgrade_handshake_async<S>(

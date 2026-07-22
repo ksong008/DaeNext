@@ -3,12 +3,20 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use base64::Engine as _;
+use sha1::{Digest as _, Sha1};
 
 use crate::error::OutboundError;
 
 pub const DEFAULT_WS_KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
 pub const WS_ACCEPT_SAMPLE: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
 pub const WS_MASK_KEY: [u8; 4] = [0x11, 0x22, 0x33, 0x44];
+const WEBSOCKET_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebSocketClientHandshake {
+    pub request: Vec<u8>,
+    pub expected_accept: String,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SharedTransportLoopbackReport {
@@ -94,7 +102,7 @@ pub fn websocket_exchange(
         .write_all(&request)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     let response = read_http_head(&mut stream)?;
-    validate_http_status(&response, 101)?;
+    validate_websocket_handshake_response(&response, WS_ACCEPT_SAMPLE)?;
     let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)?;
     stream
         .write_all(&frame)
@@ -153,21 +161,97 @@ pub fn websocket_handshake_request(options: &HttpUpgradeOptions, key: &str) -> V
     .into_bytes()
 }
 
-pub fn websocket_client_handshake_key() -> String {
+pub fn websocket_client_handshake_key() -> Result<String, OutboundError> {
     let mut nonce = [0_u8; 16];
-    fastrand::fill(&mut nonce);
-    base64::engine::general_purpose::STANDARD.encode(nonce)
+    getrandom::fill(&mut nonce).map_err(|err| {
+        OutboundError::BadSharedTransport(format!("generate websocket client nonce: {err}"))
+    })?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(nonce))
 }
 
-pub fn websocket_client_handshake_request(options: &HttpUpgradeOptions) -> Vec<u8> {
-    let key = websocket_client_handshake_key();
-    websocket_handshake_request(options, &key)
+pub fn websocket_client_handshake_request(
+    options: &HttpUpgradeOptions,
+) -> Result<Vec<u8>, OutboundError> {
+    Ok(websocket_client_handshake(options)?.request)
 }
 
-pub fn websocket_client_mask_key() -> [u8; 4] {
+pub fn websocket_client_handshake(
+    options: &HttpUpgradeOptions,
+) -> Result<WebSocketClientHandshake, OutboundError> {
+    let key = websocket_client_handshake_key()?;
+    Ok(WebSocketClientHandshake {
+        request: websocket_handshake_request(options, &key),
+        expected_accept: websocket_accept_for_key(&key),
+    })
+}
+
+pub fn websocket_accept_for_key(key: &str) -> String {
+    let mut sha1 = Sha1::new();
+    sha1.update(key.as_bytes());
+    sha1.update(WEBSOCKET_ACCEPT_GUID);
+    base64::engine::general_purpose::STANDARD.encode(sha1.finalize())
+}
+
+pub fn validate_websocket_handshake_response(
+    response: &[u8],
+    expected_accept: &str,
+) -> Result<(), OutboundError> {
+    let head_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|offset| offset + 4)
+        .ok_or_else(|| {
+            OutboundError::BadSharedTransport("incomplete websocket response head".to_owned())
+        })?;
+    let head = std::str::from_utf8(&response[..head_end])
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+    validate_http_status(head.as_bytes(), 101)?;
+    let mut upgrade = false;
+    let mut connection = false;
+    let mut accept = None;
+    for line in head.split("\r\n").skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("upgrade") {
+            upgrade |= value.eq_ignore_ascii_case("websocket");
+        } else if name.eq_ignore_ascii_case("connection") {
+            connection |= value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
+        } else if name.eq_ignore_ascii_case("sec-websocket-accept")
+            && accept.replace(value).is_some()
+        {
+            return Err(OutboundError::BadSharedTransport(
+                "duplicate Sec-WebSocket-Accept header".to_owned(),
+            ));
+        }
+    }
+    if !upgrade {
+        return Err(OutboundError::BadSharedTransport(
+            "websocket response is missing Upgrade: websocket".to_owned(),
+        ));
+    }
+    if !connection {
+        return Err(OutboundError::BadSharedTransport(
+            "websocket response is missing Connection: upgrade".to_owned(),
+        ));
+    }
+    if accept != Some(expected_accept) {
+        return Err(OutboundError::BadSharedTransport(
+            "websocket Sec-WebSocket-Accept mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn websocket_client_mask_key() -> Result<[u8; 4], OutboundError> {
     let mut mask_key = [0_u8; 4];
-    fastrand::fill(&mut mask_key);
-    mask_key
+    getrandom::fill(&mut mask_key).map_err(|err| {
+        OutboundError::BadSharedTransport(format!("generate websocket frame mask: {err}"))
+    })?;
+    Ok(mask_key)
 }
 
 pub fn simpleobfs_http_request(options: &SimpleObfsHttpOptions) -> Vec<u8> {
@@ -188,7 +272,7 @@ pub fn websocket_client_binary_frame(
 pub fn websocket_client_binary_frame_with_random_mask(
     payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
-    websocket_client_binary_frame(payload, websocket_client_mask_key())
+    websocket_client_binary_frame(payload, websocket_client_mask_key()?)
 }
 
 pub fn websocket_server_binary_frame(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {

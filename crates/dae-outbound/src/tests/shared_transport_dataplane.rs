@@ -46,7 +46,7 @@ fn case_websocket_dataplane_echoes_binary_frame() {
 fn case_websocket_client_material_is_runtime_generated() {
     let options = shared_transport::HttpUpgradeOptions::new("ws.fixture.invalid", "/ws");
     let keys = (0..4)
-        .map(|_| shared_transport::websocket_client_handshake_key())
+        .map(|_| shared_transport::websocket_client_handshake_key().unwrap())
         .collect::<Vec<_>>();
     assert!(
         keys.iter()
@@ -57,14 +57,14 @@ fn case_websocket_client_material_is_runtime_generated() {
             .any(|key| key != shared_transport::DEFAULT_WS_KEY)
     );
 
-    let request = shared_transport::websocket_client_handshake_request(&options);
+    let request = shared_transport::websocket_client_handshake_request(&options).unwrap();
     let request = String::from_utf8(request).unwrap();
     assert!(request.contains("Host: ws.fixture.invalid\r\n"));
     assert!(request.contains("Sec-WebSocket-Key: "));
     assert!(!request.contains(shared_transport::DEFAULT_WS_KEY));
 
     let masks = (0..4)
-        .map(|_| shared_transport::websocket_client_mask_key())
+        .map(|_| shared_transport::websocket_client_mask_key().unwrap())
         .collect::<Vec<_>>();
     assert!(
         masks
@@ -83,6 +83,33 @@ fn case_websocket_client_material_is_runtime_generated() {
         .map(|(index, byte)| byte ^ mask_key[index % 4])
         .collect::<Vec<_>>();
     assert_eq!(decoded, payload);
+}
+
+#[test]
+fn websocket_handshake_binds_server_accept_to_the_client_nonce() {
+    let options = shared_transport::HttpUpgradeOptions::new("ws.fixture.invalid", "/ws");
+    let handshake = shared_transport::websocket_client_handshake(&options).unwrap();
+    let response = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: keep-alive, Upgrade\r\nUpgrade: WebSocket\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+        handshake.expected_accept
+    );
+    shared_transport::validate_websocket_handshake_response(
+        response.as_bytes(),
+        &handshake.expected_accept,
+    )
+    .unwrap();
+
+    let mismatch = response.replace(
+        &handshake.expected_accept,
+        shared_transport::WS_ACCEPT_SAMPLE,
+    );
+    let different_expected = shared_transport::websocket_accept_for_key("different-client-key");
+    let error = shared_transport::validate_websocket_handshake_response(
+        mismatch.as_bytes(),
+        &different_expected,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Sec-WebSocket-Accept mismatch"));
 }
 
 #[test]
