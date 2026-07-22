@@ -20,7 +20,7 @@ pub(in crate::daed_product) struct ProductRuntimeEventIdentity {
 
 impl ProductRuntimeManager {
     pub(in crate::daed_product) fn runtime_event_identity(&self) -> ProductRuntimeEventIdentity {
-        let coordinator = self.coordinator.summary();
+        let coordinator = self.reconciler.summary();
         let Ok(inner) = self.inner.lock() else {
             return ProductRuntimeEventIdentity::lock_error(&coordinator);
         };

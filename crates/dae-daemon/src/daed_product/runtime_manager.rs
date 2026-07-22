@@ -45,7 +45,7 @@ use summary::{
 
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
-    coordinator: RuntimeApplyCoordinator,
+    reconciler: RuntimeReconciler,
     lifecycle: Arc<Mutex<()>>,
     pub(super) inner: Arc<Mutex<ProductRuntimeState>>,
     interface_recovery: Mutex<ProductRuntimeInterfaceRecoverySupervisor>,
@@ -308,6 +308,7 @@ impl ProductRuntimeManager {
 
     fn new_with_state(state: Option<PathBuf>) -> Self {
         let coordinator = RuntimeApplyCoordinator::new();
+        let reconciler = RuntimeReconciler::new(coordinator.clone());
         let lifecycle = Arc::new(Mutex::new(()));
         let inner = Arc::new(Mutex::new(ProductRuntimeState::default()));
         let interface_recovery = ProductRuntimeInterfaceRecoverySupervisor::start(
@@ -317,7 +318,7 @@ impl ProductRuntimeManager {
             state,
         );
         Self {
-            coordinator,
+            reconciler,
             lifecycle,
             inner,
             interface_recovery: Mutex::new(interface_recovery),
@@ -375,11 +376,19 @@ impl ProductRuntimeManager {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(in crate::daed_product) fn begin_apply(
         &self,
         intent: RuntimeApplyIntent,
     ) -> Result<RuntimeApplyPermit<'_>, String> {
-        self.coordinator.begin_apply(intent)
+        self.reconciler.begin_exclusive(intent)
+    }
+
+    pub(in crate::daed_product) fn begin_reconcile(
+        &self,
+        intent: RuntimeApplyIntent,
+    ) -> RuntimeReconcileRequest {
+        self.reconciler.begin(intent)
     }
 }
 
@@ -608,7 +617,7 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn summary(&self) -> Value {
-        let coordinator = self.coordinator.summary();
+        let coordinator = self.reconciler.summary();
         let Ok(inner) = self.inner.lock() else {
             return json!({
                 "running": false,
