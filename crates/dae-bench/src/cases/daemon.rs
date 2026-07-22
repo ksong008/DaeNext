@@ -2,8 +2,8 @@ use std::hint::black_box;
 
 use dae_daemon::{
     daemon_runtime_native_owner_summary_json, datapath_outbound_ebpf_deep_area_summary_json,
-    product_global_normalize_benchmark_fixture, resident_proxy_ownership_benchmark_fixture,
-    resident_tcp_selection_benchmark_fixture,
+    product_control_benchmark_fixture, product_global_normalize_benchmark_fixture,
+    resident_proxy_ownership_benchmark_fixture, resident_tcp_selection_benchmark_fixture,
 };
 
 use crate::{BenchCase, Measurement, measure};
@@ -84,6 +84,16 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "product/global_display_raw",
             default_iters: 100_000,
             run: bench_product_global_display_raw,
+        },
+        BenchCase {
+            id: "product/control_runtime_handoff",
+            default_iters: 10_000,
+            run: bench_product_control_runtime_handoff,
+        },
+        BenchCase {
+            id: "product/control_runtime_rejected_saturated",
+            default_iters: 100_000,
+            run: bench_product_control_runtime_rejected_saturated,
         },
     ]
 }
@@ -231,6 +241,23 @@ fn bench_product_global_display_raw(iters: u64, warmup: u64) -> Result<Measureme
     let fixture = product_global_normalize_benchmark_fixture();
     Ok(measure(
         || black_box(fixture.display_raw_once()),
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_product_control_runtime_handoff(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = product_control_benchmark_fixture()?;
+    Ok(measure(|| black_box(fixture.handoff_once()), iters, warmup))
+}
+
+fn bench_product_control_runtime_rejected_saturated(
+    iters: u64,
+    warmup: u64,
+) -> Result<Measurement, String> {
+    let fixture = product_control_benchmark_fixture()?;
+    Ok(measure(
+        || black_box(fixture.rejected_saturated_submission_once()),
         iters,
         warmup,
     ))
