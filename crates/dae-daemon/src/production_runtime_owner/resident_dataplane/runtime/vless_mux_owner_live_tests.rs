@@ -19,6 +19,8 @@ use super::*;
 
 static NEXT_VLESS_MUX_TEST_GENERATION: AtomicU64 = AtomicU64::new(110_000);
 
+type VlessMuxTestPayloads = Arc<Mutex<Vec<(u16, Vec<u8>)>>>;
+
 #[derive(Clone, Copy)]
 enum VlessMuxTestInjection {
     UnknownSid,
@@ -29,7 +31,7 @@ struct VlessMuxTestServer {
     address: SocketAddr,
     tcp_connections: Arc<AtomicUsize>,
     new_sids: Arc<Mutex<Vec<u16>>>,
-    payloads: Arc<Mutex<Vec<(u16, Vec<u8>)>>>,
+    payloads: VlessMuxTestPayloads,
     unknown_ends: Arc<AtomicUsize>,
     close_connections: Arc<tokio::sync::Notify>,
     stop: SharedResidentStopSignal,
@@ -124,7 +126,7 @@ impl VlessMuxTestServer {
 async fn serve_vless_mux_test_connection(
     mut stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     new_sids: Arc<Mutex<Vec<u16>>>,
-    payloads: Arc<Mutex<Vec<(u16, Vec<u8>)>>>,
+    payloads: VlessMuxTestPayloads,
     unknown_ends: Arc<AtomicUsize>,
     injection: Arc<Mutex<Option<VlessMuxTestInjection>>>,
     close_connections: Arc<tokio::sync::Notify>,

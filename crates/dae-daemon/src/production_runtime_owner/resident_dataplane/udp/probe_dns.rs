@@ -100,15 +100,18 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
 ) -> Result<ResidentProxyUdpBridge, String> {
+    let owner_registries = ResidentTransportOwnerRegistries::new(
+        hysteria2_owner_registry,
+        tuic_owner_registry,
+        juicity_owner_registry,
+    )
+    .with_anytls(anytls_owner_registry);
     #[cfg(test)]
     {
         open_resident_proxy_udp_bridge_inner(
             binding,
             original_dst,
-            hysteria2_owner_registry,
-            tuic_owner_registry,
-            juicity_owner_registry,
-            anytls_owner_registry,
+            owner_registries,
             owner_deadline,
             None,
         )
@@ -119,10 +122,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
         open_resident_proxy_udp_bridge_inner(
             binding,
             original_dst,
-            hysteria2_owner_registry,
-            tuic_owner_registry,
-            juicity_owner_registry,
-            anytls_owner_registry,
+            owner_registries,
             owner_deadline,
         )
         .await
@@ -144,10 +144,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
     open_resident_proxy_udp_bridge_inner(
         binding,
         original_dst,
-        None,
-        None,
-        None,
-        None,
+        ResidentTransportOwnerRegistries::default(),
         None,
         Some(observation),
     )
@@ -157,10 +154,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_reside
 async fn open_resident_proxy_udp_bridge_inner(
     binding: ResidentProxyBinding,
     original_dst: SocketAddr,
-    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
-    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+    owner_registries: ResidentTransportOwnerRegistries,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) -> Result<ResidentProxyUdpBridge, String> {
@@ -173,6 +167,10 @@ async fn open_resident_proxy_udp_bridge_inner(
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let last_error = Arc::new(Mutex::new(None));
     let task_error = Arc::clone(&last_error);
+    let hysteria2_owner_registry = owner_registries.hysteria2();
+    let tuic_owner_registry = owner_registries.tuic();
+    let juicity_owner_registry = owner_registries.juicity();
+    let anytls_owner_registry = owner_registries.anytls();
     #[cfg(test)]
     let socket_guard = test_observation
         .as_ref()

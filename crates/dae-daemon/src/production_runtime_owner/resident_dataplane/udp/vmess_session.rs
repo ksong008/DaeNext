@@ -810,6 +810,20 @@ fn vmess_udp_session_result(
     result.with_session_fixed_target(fixed_target)
 }
 
+fn vmess_udp_pending_session_result(
+    session_executor: &'static str,
+    underlay_reuse: &'static str,
+    tls_underlay: Option<&'static str>,
+) -> UdpExchangeResult {
+    let mut result = UdpExchangeResult::pending_response("aead-udp-over-tcp")
+        .with_session_executor(session_executor)
+        .with_underlay_reuse(underlay_reuse);
+    if let Some(tls_underlay) = tls_underlay {
+        result = result.with_tls_underlay(tls_underlay);
+    }
+    result
+}
+
 #[cfg(test)]
 mod fixed_target_tests {
     use super::*;
@@ -837,18 +851,4 @@ mod fixed_target_tests {
             UdpFixedTargetValidation::Validated
         );
     }
-}
-
-fn vmess_udp_pending_session_result(
-    session_executor: &'static str,
-    underlay_reuse: &'static str,
-    tls_underlay: Option<&'static str>,
-) -> UdpExchangeResult {
-    let mut result = UdpExchangeResult::pending_response("aead-udp-over-tcp")
-        .with_session_executor(session_executor)
-        .with_underlay_reuse(underlay_reuse);
-    if let Some(tls_underlay) = tls_underlay {
-        result = result.with_tls_underlay(tls_underlay);
-    }
-    result
 }
