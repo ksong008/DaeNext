@@ -179,7 +179,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let udp_session_limit = udp_runtime_config.session_limit;
     let udp_session_queue_depth = udp_runtime_config.session_queue_depth;
     let active_generation = ActiveGenerationSlot::new(built_generation.generation);
-    let generation_drain = ResidentGenerationDrain::new(udp_runtime_config.shutdown_timeout);
+    let generation_drain = ResidentGenerationDrain::new(ResidentGenerationDrainPolicy::selected());
     {
         let stop = owner.stop_handle();
         let drain = generation_drain.clone();

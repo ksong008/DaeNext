@@ -52,6 +52,18 @@ pub(crate) async fn resident_tcp_accept_loop_async(
         if *publication_listener.borrow_and_update() != reserved_publication {
             continue;
         }
+        if !reserved_generation.admission_is_open() {
+            tokio::select! {
+                _ = stop_listener.cancelled() => break,
+                _ = publication_listener.changed() => continue,
+                completed = flows.join_next(), if !flows.is_empty() => {
+                    if let Some(completed) = completed {
+                        record_resident_task_completion(&mut flow_shutdown, completed);
+                    }
+                }
+                _ = tokio::task::yield_now() => continue,
+            }
+        }
         let permit = loop {
             tokio::select! {
                 _ = stop_listener.cancelled() => break 'accept,
@@ -81,6 +93,10 @@ pub(crate) async fn resident_tcp_accept_loop_async(
         if stop.load(Ordering::Relaxed) {
             drop(permit);
             break;
+        }
+        if !reserved_generation.admission_is_open() {
+            drop(permit);
+            continue;
         }
         let accepted = loop {
             tokio::select! {

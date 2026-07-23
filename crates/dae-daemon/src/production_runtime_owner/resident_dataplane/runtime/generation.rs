@@ -99,6 +99,7 @@ pub(crate) struct ResidentDataplaneGeneration {
         ResidentTcpRuntimeConfig,
     pub(in crate::production_runtime_owner::resident_dataplane) dns: Arc<dns::ResidentDnsPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) udp: udp::ResidentUdpGenerationPlan,
+    pub(super) lifecycle: ResidentGenerationLifecycle,
     pub(in crate::production_runtime_owner::resident_dataplane) stop: SharedResidentStopSignal,
     pub(in crate::production_runtime_owner::resident_dataplane) metrics:
         Arc<ResidentDataplaneMetrics>,
@@ -125,7 +126,24 @@ impl std::fmt::Debug for ResidentDataplaneGeneration {
 }
 
 impl ResidentDataplaneGeneration {
+    pub(super) fn admission_is_open(&self) -> bool {
+        self.lifecycle.admission_is_open()
+    }
+
+    pub(super) fn close_admission(&self) {
+        self.lifecycle.close_admission();
+    }
+
+    pub(super) fn reopen_admission(&self) -> Result<(), String> {
+        self.lifecycle.reopen_admission().map_err(str::to_owned)
+    }
+
+    pub(super) fn stop_is_requested(&self) -> bool {
+        self.lifecycle.stop_is_requested()
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn request_stop(&self) {
+        self.lifecycle.request_stop();
         self.stop.store(true, Ordering::Release);
         if let Some(maintenance) = self.domain_routing_maintenance.as_ref() {
             maintenance.stop();

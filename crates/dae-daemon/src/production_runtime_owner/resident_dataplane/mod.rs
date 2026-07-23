@@ -83,12 +83,18 @@ pub(super) use self::runtime::*;
 mod generation;
 pub(in crate::production_runtime_owner) use self::generation::ResidentDataplaneGeneration;
 use self::generation::{ActiveGenerationSlot, next_resident_dataplane_generation_id};
+#[path = "runtime/generation_lifecycle.rs"]
+mod generation_lifecycle;
+use self::generation_lifecycle::*;
 #[path = "runtime/generation_builder.rs"]
 mod generation_builder;
 use self::generation_builder::*;
 #[path = "runtime/generation_drain.rs"]
 mod generation_drain;
 use self::generation_drain::*;
+#[path = "runtime/generation_drain_policy.rs"]
+mod generation_drain_policy;
+use self::generation_drain_policy::*;
 #[path = "runtime/read_view.rs"]
 mod read_view;
 pub(in crate::production_runtime_owner) use self::read_view::ResidentDataplaneReadHandle;
