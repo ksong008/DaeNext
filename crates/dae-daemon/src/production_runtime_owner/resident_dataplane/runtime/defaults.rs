@@ -277,6 +277,18 @@ pub(crate) fn resident_manual_latency_probe_concurrency_default() -> usize {
         )
 }
 
+pub(crate) fn resident_manual_latency_probe_concurrency_from_config(config: &Config) -> usize {
+    config
+        .global
+        .resident_manual_probe_concurrency
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_else(resident_manual_latency_probe_concurrency_default)
+        .clamp(
+            RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MIN,
+            RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX,
+        )
+}
+
 pub(crate) fn resident_tcp_latency_probe_timeout_from_config(config: &Config) -> Duration {
     let timeout_ms = config
         .global
@@ -299,5 +311,24 @@ mod tests {
         let value = resident_manual_latency_probe_concurrency_default();
         assert!(value >= RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MIN);
         assert!(value <= RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT_MAX);
+    }
+
+    #[test]
+    fn resident_manual_probe_config_value_is_clamped() {
+        let sections = dae_config::parser::parse_config(
+            "global {}\nnode {}\ngroup {}\nrouting { fallback: direct }\ndns {}",
+        )
+        .unwrap();
+        let mut config = dae_config::schema::build_config(&sections).unwrap();
+        config.global.resident_manual_probe_concurrency = Some(0);
+        assert_eq!(
+            resident_manual_latency_probe_concurrency_from_config(&config),
+            1
+        );
+        config.global.resident_manual_probe_concurrency = Some(u64::MAX);
+        assert_eq!(
+            resident_manual_latency_probe_concurrency_from_config(&config),
+            RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX
+        );
     }
 }
