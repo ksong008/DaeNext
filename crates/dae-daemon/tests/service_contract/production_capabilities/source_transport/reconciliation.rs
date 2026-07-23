@@ -83,8 +83,8 @@ fn assert_public_reconciliation_shapes(report: &Value) {
     let deferred = reconciliation(report, "legacy-layer-shape");
     assert_eq!(deferred["kind"], "deferred-capability");
     assert_eq!(deferred["selectorCount"], 0);
-    assert_eq!(deferred["classificationSelectorCount"], 11);
-    assert_eq!(deferred["materializedShapeCount"], 46);
+    assert_eq!(deferred["classificationSelectorCount"], 12);
+    assert_eq!(deferred["materializedShapeCount"], 47);
     assert_eq!(
         deferred["runtimeOwnershipModels"],
         json!([
@@ -97,7 +97,7 @@ fn assert_public_reconciliation_shapes(report: &Value) {
             .as_array()
             .unwrap()
             .len(),
-        11
+        12
     );
     assert_empty_components(deferred);
     assert_eq!(deferred["contributesProductionWitness"], false);
