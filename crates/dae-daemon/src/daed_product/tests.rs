@@ -44,6 +44,8 @@ mod runtime_stop;
 #[cfg(test)]
 mod state_lifecycle;
 #[cfg(test)]
+mod subscription_fetch_failures;
+#[cfg(test)]
 mod subscription_source_races;
 #[cfg(test)]
 mod subscription_transactions;
