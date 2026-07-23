@@ -38,6 +38,7 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_session_actor_panicked: AtomicU64,
     udp_session_cleanup_notification_failed: AtomicU64,
     udp_session_shutdown_deadline_hits: AtomicU64,
+    udp_generation_pin_unavailable: AtomicU64,
     udp_ingress_packets: AtomicU64,
     udp_ingress_drain_batches: AtomicU64,
     udp_ingress_drain_budget_hits: AtomicU64,
@@ -323,6 +324,11 @@ impl ResidentDataplaneMetrics {
 
     pub(super) fn udp_session_shutdown_deadline_hit(&self) {
         self.udp_session_shutdown_deadline_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_generation_pin_unavailable(&self) {
+        self.udp_generation_pin_unavailable
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -619,6 +625,7 @@ impl ResidentDataplaneMetrics {
             "udpSessionActorPanicked": self.udp_session_actor_panicked.load(Ordering::Relaxed),
             "udpSessionCleanupNotificationFailed": self.udp_session_cleanup_notification_failed.load(Ordering::Relaxed),
             "udpSessionShutdownDeadlineHits": self.udp_session_shutdown_deadline_hits.load(Ordering::Relaxed),
+            "udpGenerationPinUnavailable": self.udp_generation_pin_unavailable.load(Ordering::Relaxed),
             "udpIngressPackets": self.udp_ingress_packets.load(Ordering::Relaxed),
             "udpIngressDrainBatches": self.udp_ingress_drain_batches.load(Ordering::Relaxed),
             "udpIngressDrainBudgetHits": self.udp_ingress_drain_budget_hits.load(Ordering::Relaxed),
@@ -750,6 +757,15 @@ mod tests {
         assert_eq!(snapshot["udpResponseCompatibilityUnverified"], 1);
         assert_eq!(snapshot["udpResponseDropped"], 1);
         assert_eq!(snapshot["udpResponseDroppedBytes"], 512);
+    }
+
+    #[test]
+    fn unavailable_udp_generation_pins_are_visible_without_dynamic_labels() {
+        let metrics = ResidentDataplaneMetrics::default();
+        metrics.udp_generation_pin_unavailable();
+        metrics.udp_generation_pin_unavailable();
+
+        assert_eq!(metrics.snapshot()["udpGenerationPinUnavailable"], 2);
     }
 
     #[test]

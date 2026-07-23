@@ -112,6 +112,12 @@ struct UdpGenerationPin {
     expires_at: Instant,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UdpGenerationChoice {
+    Available(u64),
+    PinUnavailable,
+}
+
 struct ResidentUdpGenerationRuntime {
     generation: Arc<ResidentDataplaneGeneration>,
     sniffers: HashMap<UdpSniffKey, UdpPendingSniffer>,
@@ -362,10 +368,19 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 peer: packet.peer,
                                 original_dst,
                             });
-                            let generation_id = pin_key
-                                .and_then(|key| pinned_udp_generation(&pins, key, now))
-                                .filter(|generation| generations.contains_key(generation))
-                                .unwrap_or(active.id);
+                            let pinned = pin_key
+                                .and_then(|key| pinned_udp_generation(&pins, key, now));
+                            let generation_id = match udp_generation_choice(
+                                pinned,
+                                active.id,
+                                |generation| generations.contains_key(&generation),
+                            ) {
+                                UdpGenerationChoice::Available(generation) => generation,
+                                UdpGenerationChoice::PinUnavailable => {
+                                    active.metrics.udp_generation_pin_unavailable();
+                                    continue;
+                                }
+                            };
                             generations.entry(generation_id).or_insert_with(|| {
                                 ResidentUdpGenerationRuntime::start(
                                         Arc::clone(&active),
@@ -479,6 +494,18 @@ fn pinned_udp_generation(
     pins.get(&key)
         .filter(|pin| pin.expires_at > now)
         .map(|pin| pin.generation)
+}
+
+fn udp_generation_choice(
+    pinned: Option<u64>,
+    active: u64,
+    is_available: impl FnOnce(u64) -> bool,
+) -> UdpGenerationChoice {
+    match pinned {
+        Some(generation) if is_available(generation) => UdpGenerationChoice::Available(generation),
+        Some(_) => UdpGenerationChoice::PinUnavailable,
+        None => UdpGenerationChoice::Available(active),
+    }
 }
 
 fn retire_idle_udp_generations(

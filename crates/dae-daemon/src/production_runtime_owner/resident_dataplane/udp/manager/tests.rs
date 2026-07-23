@@ -54,6 +54,22 @@ fn udp_generation_pin_is_fixed_by_peer_and_original_destination_until_expiry() {
 }
 
 #[test]
+fn unavailable_udp_generation_pin_does_not_fall_back_to_active_generation() {
+    assert_eq!(
+        udp_generation_choice(Some(7), 8, |generation| generation == 8),
+        UdpGenerationChoice::PinUnavailable
+    );
+    assert_eq!(
+        udp_generation_choice(Some(7), 8, |generation| generation == 7),
+        UdpGenerationChoice::Available(7)
+    );
+    assert_eq!(
+        udp_generation_choice(None, 8, |_| false),
+        UdpGenerationChoice::Available(8)
+    );
+}
+
+#[test]
 fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
     let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
     let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
