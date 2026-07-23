@@ -42,7 +42,22 @@ impl Hysteria2OwnerTestServer {
         Self::start_with_auth(Hysteria2OwnerAuthBehavior::UdpEnabled).await
     }
 
+    async fn start_on(ip: std::net::IpAddr) -> Self {
+        Self::start_with_auth_on(Hysteria2OwnerAuthBehavior::UdpEnabled, ip).await
+    }
+
     async fn start_with_auth(auth_behavior: Hysteria2OwnerAuthBehavior) -> Self {
+        Self::start_with_auth_on(
+            auth_behavior,
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        )
+        .await
+    }
+
+    async fn start_with_auth_on(
+        auth_behavior: Hysteria2OwnerAuthBehavior,
+        ip: std::net::IpAddr,
+    ) -> Self {
         let certified = generate_simple_self_signed(vec![SERVER_NAME.to_owned()]).unwrap();
         let certificate = certified.cert.der().clone();
         let private_key =
@@ -55,11 +70,7 @@ impl Hysteria2OwnerTestServer {
         crypto.alpn_protocols = vec![b"h3".to_vec()];
         let server_config =
             quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()));
-        let endpoint = quinn::Endpoint::server(
-            server_config,
-            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0),
-        )
-        .unwrap();
+        let endpoint = quinn::Endpoint::server(server_config, SocketAddr::new(ip, 0)).unwrap();
         let address = endpoint.local_addr().unwrap();
         let auth_count = Arc::new(AtomicUsize::new(0));
         let connection_count = Arc::new(AtomicUsize::new(0));
@@ -453,6 +464,54 @@ async fn generation_owner_reuses_auth_across_runtimes_and_rebuilds_after_remote_
     let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
     assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
     assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ipv6_owner_carries_tcp_and_udp_and_releases_endpoint_resources() {
+    let server =
+        Hysteria2OwnerTestServer::start_on(std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST))
+            .await;
+    let generation = 9_915;
+    let proxy = owner_test_proxy(server.address, generation);
+    let stop = ResidentStopSignal::shared();
+    let (registry, owner_thread) = start_hysteria2_owner_registry(
+        generation,
+        Arc::clone(&stop),
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+    )
+    .unwrap();
+
+    let tcp = registry
+        .acquire(
+            proxy.clone(),
+            QuicEndpointCallerClass::TcpData,
+            owner_deadline(),
+        )
+        .await
+        .unwrap();
+    assert!(tcp.connection().remote_address().is_ipv6());
+    exchange_tcp(tcp.connection(), "ipv6-tcp.invalid:443").await;
+
+    let mut udp = registry
+        .acquire(proxy, QuicEndpointCallerClass::UdpData, owner_deadline())
+        .await
+        .unwrap()
+        .open_udp_session()
+        .unwrap();
+    assert_eq!(udp.connection().stable_id(), tcp.connection().stable_id());
+    exchange_udp(&mut udp, "[2001:db8::53]:53", b"ipv6-udp").await;
+    drop(udp);
+    drop(tcp);
+
+    assert!(stop_owner_registry(stop, owner_thread).await < Duration::from_secs(2));
+    let owner_snapshot = registry.metrics_snapshot();
+    assert_eq!(owner_snapshot["activeOwners"], 0);
+    assert_eq!(owner_snapshot["activeLogicalLeases"], 0);
+    assert_eq!(owner_snapshot["activeUdpSessions"], 0);
+    let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
+    assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
+    assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
+    assert_eq!(endpoint_snapshot["chargedBytes"]["total"], 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
