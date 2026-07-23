@@ -23,6 +23,19 @@ impl SubscriptionTagConflict {
     }
 }
 
+pub(super) fn subscription_tag_exists(conn: &Connection, tag: Option<&str>) -> io::Result<bool> {
+    let Some(tag) = tag else {
+        return Ok(false);
+    };
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM subscriptions WHERE tag = ?1)",
+        params![tag],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(sqlite_io_error)
+}
+
 pub(super) fn subscription_write_guard() -> io::Result<std::sync::MutexGuard<'static, ()>> {
     static SUBSCRIPTION_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     SUBSCRIPTION_WRITE_LOCK

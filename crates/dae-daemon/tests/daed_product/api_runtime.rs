@@ -496,6 +496,49 @@ pub(super) fn daed_run_serves_product_resource_runtime_log_latency_and_bundle_su
     );
     assert!(preview.contains("\"bundle\""), "{preview}");
 
+    let delete_started = Instant::now();
+    let deleted_subscription = http_request(
+        port,
+        "DELETE",
+        "/api/subscriptions",
+        Some(&format!(r#"{{"ids":[{subscription_id}]}}"#)),
+        Some(&token),
+    );
+    let delete_elapsed = delete_started.elapsed();
+    assert!(
+        deleted_subscription.contains("200 OK"),
+        "{deleted_subscription}"
+    );
+    let deleted_subscription = json_body(&deleted_subscription);
+    assert_eq!(deleted_subscription["removed"].as_u64(), Some(1));
+    assert_eq!(
+        deleted_subscription["runtimeApplyRequested"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        delete_elapsed < Duration::from_secs(2),
+        "authenticated subscription delete response took {delete_elapsed:?}"
+    );
+    let subscriptions = json_body(&http_request(
+        port,
+        "GET",
+        "/api/subscriptions",
+        None,
+        Some(&token),
+    ));
+    assert!(
+        subscriptions["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|subscription| subscription["id"].as_i64() != Some(subscription_id))
+    );
+    eprintln!(
+        "authenticated_subscription_delete elapsed_us={} runtime_reloaded={}",
+        delete_elapsed.as_micros(),
+        deleted_subscription["runtimeReloaded"]
+    );
+
     let clear_logs = http_request(port, "DELETE", "/api/logs", Some("{}"), Some(&token));
     assert!(clear_logs.contains("\"cleared\":true"), "{clear_logs}");
     let stop = http_request(port, "POST", "/api/runtime/stop", Some("{}"), Some(&token));

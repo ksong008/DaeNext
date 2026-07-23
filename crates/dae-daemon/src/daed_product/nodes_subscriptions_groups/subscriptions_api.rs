@@ -69,6 +69,11 @@ pub(crate) fn create_subscription(
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
+    match subscription_tag_exists(&conn, tag) {
+        Ok(true) => return SubscriptionTagConflict::response(),
+        Ok(false) => {}
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    }
     if let Err(err) = conn.execute(
         "INSERT INTO subscriptions(updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
@@ -97,25 +102,24 @@ pub(crate) fn create_subscription(
     let import_log_message = format!("subscription {id} imported");
     let _ = append_log_for_config(config_dir, state, "info", &import_log_message);
     let import_report = refresh_subscription_from_remote(control_runtime, state, config_dir, id)
-        .unwrap_or_else(|err| {
+        .unwrap_or_else(|_| {
             json!({
                 "link": link,
                 "fetched": false,
+                "fetchError": Value::Null,
+                "refreshError": {
+                    "code": "refresh_failed",
+                    "message": "subscription refresh could not be completed",
+                    "retryable": true,
+                },
                 "refreshOutcome": "refresh-error-preserved",
                 "preservedExistingNodes": true,
                 "runtimeInputChanged": false,
-                "nodeImportResult": [{
-                    "link": link,
-                    "error": err.to_string(),
-                    "node": Value::Null
-                }]
+                "nodeImportResult": []
             })
         });
-    let mut response = subscription_import_result::subscription_import_response_value(
-        id,
-        link,
-        import_report["nodeImportResult"].clone(),
-    );
+    let mut response =
+        subscription_import_result::subscription_import_response_value(id, link, &import_report);
     copy_subscription_refresh_fields(&import_report, &mut response);
     let outcome = SubscriptionRefreshOutcome::from_report(&import_report);
     apply_runtime_after_subscription_change(
@@ -324,6 +328,8 @@ fn copy_subscription_refresh_fields(source: &Value, target: &mut Value) {
         "notAdmittedNodeCount",
         "preservedExistingNodes",
         "runtimeInputChanged",
+        "fetchError",
+        "refreshError",
     ] {
         if let Some(value) = source.get(key) {
             target.insert(key.to_owned(), value.clone());

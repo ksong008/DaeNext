@@ -1,6 +1,8 @@
 use super::*;
 mod subscription_store;
-use self::subscription_store::{SubscriptionTagConflict, subscription_write_guard};
+use self::subscription_store::{
+    SubscriptionTagConflict, subscription_tag_exists, subscription_write_guard,
+};
 mod node_identity;
 pub(crate) use self::node_identity::{RuntimeNodeTag, StableNodeKey};
 mod nodes;

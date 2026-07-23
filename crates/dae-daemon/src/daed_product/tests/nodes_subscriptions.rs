@@ -391,6 +391,98 @@ pub(crate) fn create_subscription_persists_use_proxy_flag() {
 }
 
 #[test]
+pub(crate) fn failed_initial_fetch_retains_a_retryable_subscription_without_node_errors() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let unavailable = TcpListener::bind("127.0.0.1:0").unwrap();
+    let unavailable_address = unavailable.local_addr().unwrap();
+    drop(unavailable);
+    let source_link =
+        format!("http://{unavailable_address}/subscription?token=must-not-enter-error");
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/subscriptions".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&json!({
+            "link": source_link,
+            "tag": "retry-after-fetch-error",
+            "cronEnable": false,
+        }))
+        .unwrap(),
+    };
+    let runtime = ProductRuntimeManager::new();
+    let control_runtime = product_test_control_runtime();
+
+    let response = create_subscription(&control_runtime, &state, &dir, &runtime, &request);
+    assert_eq!(response.status, 201);
+    let response: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(response["subscriptionCreated"], true);
+    assert_eq!(response["fetched"], false);
+    assert_eq!(response["refreshOutcome"], "fetch-failed-preserved");
+    assert_eq!(response["fetchError"]["code"], "connect");
+    assert_eq!(response["fetchError"]["retryable"], true);
+    assert_eq!(response["importedNodeCount"], 0);
+    assert_eq!(response["failedNodeCount"], 0);
+    assert_eq!(response["partialFailure"], true);
+    assert!(response["nodeImportResult"].as_array().unwrap().is_empty());
+    let error = response["error"].as_str().unwrap();
+    assert!(error.contains("initial fetch failed"));
+    assert!(!error.contains("must-not-enter-error"));
+    assert!(!error.contains("node import"));
+
+    let subscription_id = response["subscription"]["id"].as_i64().unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    let (status, info): (String, String) = conn
+        .query_row(
+            "SELECT status, info FROM subscriptions WHERE id = ?1",
+            params![subscription_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "fetch_error");
+    assert_eq!(info, "subscription endpoint connection failed");
+    assert!(!info.contains("must-not-enter-error"));
+    assert_eq!(
+        count_nodes_for_subscription(&conn, subscription_id).unwrap(),
+        0
+    );
+    drop(conn);
+
+    let replacement = dir.join("retry.sub");
+    fs::write(&replacement, b"socks://127.0.0.1:1080#retried\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let update = HttpRequest {
+        method: "PATCH".to_owned(),
+        path: format!("/api/subscriptions/{subscription_id}"),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"link":"file://retry.sub"}"#.to_vec(),
+    };
+    assert_eq!(
+        update_subscription(&state, &update, subscription_id).status,
+        200
+    );
+    let refreshed = refresh_subscription(&control_runtime, &state, &dir, &runtime, subscription_id);
+    assert_eq!(refreshed.status, 200);
+    let refreshed: Value = serde_json::from_slice(&refreshed.body).unwrap();
+    assert_eq!(refreshed["fetched"], true);
+    assert!(refreshed["fetchError"].is_null());
+    assert_eq!(refreshed["admittedNodeCount"], 1);
+    assert_eq!(
+        count_nodes_for_subscription(&open_state_connection(&state).unwrap(), subscription_id)
+            .unwrap(),
+        1
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn subscription_create_delete_operations_are_serialized() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

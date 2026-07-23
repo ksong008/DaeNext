@@ -63,7 +63,7 @@ async fn exchange_direct_subscription_request_async(
             "tls connect",
         )
         .await?
-        .map_err(|error| io::Error::other(format!("tls connect: {error}")))?;
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         write_subscription_request(&mut stream, request, &cancellation).await?;
         read_subscription_response(&mut stream, &cancellation).await
     } else {

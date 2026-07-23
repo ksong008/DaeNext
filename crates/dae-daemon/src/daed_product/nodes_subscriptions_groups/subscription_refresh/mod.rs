@@ -1,6 +1,7 @@
 use super::*;
 
 mod content;
+mod fetch_error;
 mod http;
 mod node_stage;
 mod node_sync;
@@ -72,6 +73,7 @@ pub(crate) fn refresh_subscription_from_remote(
                 transaction::SubscriptionCommitResult::Applied(applied) => Ok(json!({
                     "link": source.link,
                     "fetched": true,
+                    "fetchError": Value::Null,
                     "fetchedAt": fetched_at,
                     "refreshOutcome": applied.refresh_outcome,
                     "sourceKind": applied.source_kind,
@@ -89,21 +91,22 @@ pub(crate) fn refresh_subscription_from_remote(
             }
         }
         Err(err) => {
-            let error = err.to_string();
-            match transaction::record_subscription_fetch_error(state, &source, &fetched_at, &error)?
-            {
+            let failure = fetch_error::SubscriptionFetchFailure::from_io_error(&err);
+            match transaction::record_subscription_fetch_error(
+                state,
+                &source,
+                &fetched_at,
+                failure.message(),
+            )? {
                 transaction::SubscriptionCommitResult::Applied(()) => Ok(json!({
                     "link": source.link,
                     "fetched": false,
+                    "fetchError": failure.response_value(),
                     "fetchedAt": fetched_at,
                     "refreshOutcome": "fetch-failed-preserved",
                     "preservedExistingNodes": true,
                     "runtimeInputChanged": false,
-                    "nodeImportResult": [{
-                        "link": source.link,
-                        "error": error,
-                        "node": Value::Null
-                    }],
+                    "nodeImportResult": [],
                 })),
                 transaction::SubscriptionCommitResult::Stale => {
                     Ok(stale_subscription_refresh_report(&source, &fetched_at))
@@ -120,6 +123,7 @@ fn stale_subscription_refresh_report(
     json!({
         "link": source.link,
         "fetched": false,
+        "fetchError": Value::Null,
         "fetchedAt": fetched_at,
         "refreshOutcome": "stale-source-discarded",
         "preservedExistingNodes": true,
