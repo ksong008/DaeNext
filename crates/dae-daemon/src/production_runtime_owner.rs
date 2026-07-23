@@ -6,6 +6,8 @@ use dae_ebpf_support::{
 };
 use serde_json::{Value, json};
 
+pub(crate) const RESIDENT_MANUAL_PROBE_TASK_NAME: &str = "daed-latency";
+
 mod command;
 mod deep_area;
 mod host_ops;

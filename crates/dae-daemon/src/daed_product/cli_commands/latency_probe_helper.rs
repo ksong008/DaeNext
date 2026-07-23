@@ -1,7 +1,5 @@
 use super::*;
 
-const LATENCY_PROBE_HELPER_TASK_COMM: &[u8] = b"daed-latency\0";
-
 pub(crate) fn run_latency_probe_helper_command(args: &[String]) -> DaedProductOutput {
     if args != ["--stdin-json"] && args != ["--stdin-json-lines"] {
         return DaedProductOutput::usage(
@@ -31,10 +29,13 @@ pub(crate) fn run_latency_probe_helper_command(args: &[String]) -> DaedProductOu
 }
 
 fn set_latency_probe_helper_task_comm() -> io::Result<()> {
+    let task_name =
+        std::ffi::CString::new(crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let status = unsafe {
         libc::prctl(
             libc::PR_SET_NAME,
-            LATENCY_PROBE_HELPER_TASK_COMM.as_ptr() as libc::c_ulong,
+            task_name.as_ptr() as libc::c_ulong,
             0,
             0,
             0,

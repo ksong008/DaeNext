@@ -6,7 +6,6 @@ use super::*;
 #[cfg(test)]
 mod tests;
 
-const MANUAL_PROBE_RUNTIME_THREAD_NAME: &str = "manual-probe-runtime";
 const MANUAL_PROBE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) struct ManualProbeExecution {
@@ -107,7 +106,7 @@ impl ManualProbeRuntime {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(worker_threads)
             .max_blocking_threads(blocking_threads)
-            .thread_name(MANUAL_PROBE_RUNTIME_THREAD_NAME)
+            .thread_name(crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME)
             .thread_stack_size(worker_stack_bytes)
             .enable_all()
             .build()
