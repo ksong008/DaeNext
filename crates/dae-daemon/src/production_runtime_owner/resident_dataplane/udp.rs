@@ -16,7 +16,7 @@ use super::{
 use bytes::Bytes;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 #[cfg(test)]
-use dae_outbound::hysteria2::decode_hysteria2_udp_message;
+use dae_outbound::hysteria2::{HYSTERIA2_MAX_UDP_MESSAGE_LENGTH, decode_hysteria2_udp_message};
 #[cfg(test)]
 use dae_outbound::juicity::decode_stream_packet_frame;
 #[cfg(test)]
@@ -25,7 +25,7 @@ use dae_outbound::{
     anytls::link as anytls_link,
     hysteria2::{
         HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage, encode_hysteria2_udp_message,
-        fragment_hysteria2_udp_message,
+        fragment_hysteria2_udp_message, hysteria2_udp_payload_capacity,
     },
     juicity::{
         JUICITY_STREAM_PACKET_MAX_FRAME_LEN, JuicityStreamPacketFrame,

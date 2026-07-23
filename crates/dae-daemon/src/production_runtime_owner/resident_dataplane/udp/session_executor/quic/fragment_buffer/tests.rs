@@ -133,6 +133,67 @@ fn duplicate_replacement_keeps_exact_byte_accounting() {
 }
 
 #[test]
+fn lower_per_packet_limit_releases_and_quarantines_buffered_fragments() {
+    let now = Instant::now();
+    let mut buffer = buffer(4_096);
+    assert!(matches!(
+        buffer
+            .push_at_with_reassembly_limit(
+                now,
+                QuicUdpFragmentInput {
+                    packet_id: 17,
+                    fragment_id: 0,
+                    fragment_count: 3,
+                    payload: vec![1; 80],
+                },
+                100,
+                "Hysteria2",
+            )
+            .unwrap(),
+        QuicUdpFragmentOutcome::Pending
+    ));
+
+    let error = buffer
+        .push_at_with_reassembly_limit(
+            now,
+            QuicUdpFragmentInput {
+                packet_id: 17,
+                fragment_id: 1,
+                fragment_count: 3,
+                payload: vec![2; 5],
+            },
+            70,
+            "Hysteria2",
+        )
+        .unwrap_err();
+    assert!(error.contains("decreased below buffered payload"));
+    let snapshot = buffer.snapshot();
+    assert_eq!(snapshot.pending_packets, 0);
+    assert_eq!(snapshot.pending_bytes, 0);
+    assert_eq!(snapshot.quarantined_packets, 1);
+    assert_eq!(snapshot.rejected_fragments, 1);
+    assert_eq!(snapshot.rejected_bytes, 5);
+
+    assert!(matches!(
+        buffer
+            .push_at_with_reassembly_limit(
+                now,
+                QuicUdpFragmentInput {
+                    packet_id: 17,
+                    fragment_id: 2,
+                    fragment_count: 3,
+                    payload: vec![3; 5],
+                },
+                100,
+                "Hysteria2",
+            )
+            .unwrap(),
+        QuicUdpFragmentOutcome::Late(payload) if payload.len() == 5
+    ));
+    assert_eq!(buffer.snapshot().pending_packets, 0);
+}
+
+#[test]
 fn global_fragment_byte_budget_is_independent_from_packet_count() {
     let now = Instant::now();
     let mut buffer = buffer(u16::MAX as usize);
