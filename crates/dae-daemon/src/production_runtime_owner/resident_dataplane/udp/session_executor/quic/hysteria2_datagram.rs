@@ -197,7 +197,8 @@ mod tests {
     #[test]
     fn payload_matrix_fragments_with_ipv4_and_ipv6_targets() {
         for target in ["192.0.2.1:53", "[2001:db8::1]:53"] {
-            for payload_len in [1_250, 1_400, 1_500, 4_096] {
+            let payload_capacity = hysteria2_udp_payload_capacity(target).unwrap();
+            for payload_len in [1_250, 1_400, 1_500, payload_capacity] {
                 let payload = vec![payload_len as u8; payload_len];
                 let message = Hysteria2UdpMessage::new(9, target, &payload).unwrap();
                 let mut sender = SizeBoundedSender::new(1_200);
@@ -236,8 +237,9 @@ mod tests {
 
     #[test]
     fn reduced_pmtu_restarts_from_original_payload_with_new_packet_id() {
-        let payload = vec![5; 4_096];
-        let message = Hysteria2UdpMessage::new(11, "[2001:db8::2]:5353", &payload).unwrap();
+        let target = "[2001:db8::2]:5353";
+        let payload = vec![5; hysteria2_udp_payload_capacity(target).unwrap()];
+        let message = Hysteria2UdpMessage::new(11, target, &payload).unwrap();
         let mut sender = SizeBoundedSender::new(1_250);
         sender.shrink_after_success = Some((1, 900));
         let report =
@@ -279,7 +281,13 @@ mod tests {
 
     #[test]
     fn repeated_too_large_without_lower_limit_fails_closed() {
-        let message = Hysteria2UdpMessage::new(13, "192.0.2.2:53", vec![3; 4_096]).unwrap();
+        let target = "192.0.2.2:53";
+        let message = Hysteria2UdpMessage::new(
+            13,
+            target,
+            vec![3; hysteria2_udp_payload_capacity(target).unwrap()],
+        )
+        .unwrap();
         let mut sender = SizeBoundedSender::new(1_250);
         sender.forced_too_large_attempt = Some(3);
         let err =

@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+#[cfg(test)]
+use dae_outbound::hysteria2::hysteria2_udp_payload_capacity;
 use dae_outbound::hysteria2::{
     Hysteria2AuthReport, Hysteria2AuthenticatedSession, Hysteria2BbrProfile,
     Hysteria2CongestionNegotiation, Hysteria2CongestionRuntime,
@@ -2229,7 +2231,12 @@ mod tests {
         assert_eq!(metrics.udp_session_rejections.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.udp_session_queue_drops.load(Ordering::Relaxed), 1);
         manager.dispatch(
-            Hysteria2UdpMessage::new(session_id, "192.0.2.2:53", vec![0_u8; 4_096]).unwrap(),
+            Hysteria2UdpMessage::new(
+                session_id,
+                "192.0.2.2:53",
+                vec![0_u8; hysteria2_udp_payload_capacity("192.0.2.2:53").unwrap()],
+            )
+            .unwrap(),
         );
         assert_eq!(
             metrics.udp_session_queue_byte_drops.load(Ordering::Relaxed),

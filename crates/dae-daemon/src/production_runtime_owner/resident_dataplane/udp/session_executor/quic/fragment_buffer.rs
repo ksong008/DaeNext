@@ -46,7 +46,15 @@ struct PendingQuicUdpFragments {
     total: u8,
     parts: BTreeMap<u8, Vec<u8>>,
     bytes: usize,
+    reassembly_limit: usize,
     expires_at: Instant,
+}
+
+struct QuicUdpFragmentInput {
+    packet_id: u16,
+    fragment_id: u8,
+    fragment_count: u8,
+    payload: Vec<u8>,
 }
 
 impl QuicUdpFragmentBuffer {
@@ -79,16 +87,39 @@ impl QuicUdpFragmentBuffer {
         payload: Vec<u8>,
         label: &str,
     ) -> Result<QuicUdpFragmentOutcome, String> {
-        self.push_at(
-            Instant::now(),
+        self.push_with_reassembly_limit(
             packet_id,
             fragment_id,
             fragment_count,
             payload,
+            self.max_reassembled_bytes,
             label,
         )
     }
 
+    pub(super) fn push_with_reassembly_limit(
+        &mut self,
+        packet_id: u16,
+        fragment_id: u8,
+        fragment_count: u8,
+        payload: Vec<u8>,
+        reassembly_limit: usize,
+        label: &str,
+    ) -> Result<QuicUdpFragmentOutcome, String> {
+        self.push_at_with_reassembly_limit(
+            Instant::now(),
+            QuicUdpFragmentInput {
+                packet_id,
+                fragment_id,
+                fragment_count,
+                payload,
+            },
+            reassembly_limit,
+            label,
+        )
+    }
+
+    #[cfg(test)]
     fn push_at(
         &mut self,
         now: Instant,
@@ -98,6 +129,32 @@ impl QuicUdpFragmentBuffer {
         payload: Vec<u8>,
         label: &str,
     ) -> Result<QuicUdpFragmentOutcome, String> {
+        self.push_at_with_reassembly_limit(
+            now,
+            QuicUdpFragmentInput {
+                packet_id,
+                fragment_id,
+                fragment_count,
+                payload,
+            },
+            self.max_reassembled_bytes,
+            label,
+        )
+    }
+
+    fn push_at_with_reassembly_limit(
+        &mut self,
+        now: Instant,
+        fragment: QuicUdpFragmentInput,
+        reassembly_limit: usize,
+        label: &str,
+    ) -> Result<QuicUdpFragmentOutcome, String> {
+        let QuicUdpFragmentInput {
+            packet_id,
+            fragment_id,
+            fragment_count,
+            payload,
+        } = fragment;
         if fragment_count == 0 || fragment_id >= fragment_count {
             self.reject(payload.len());
             return Err(format!(
@@ -109,13 +166,22 @@ impl QuicUdpFragmentBuffer {
             return Err(format!("empty {label} UDP fragment payload"));
         }
         self.expire_at(now);
+        let reassembly_limit = reassembly_limit.min(self.max_reassembled_bytes);
+        if reassembly_limit == 0 {
+            if self.pending.contains_key(&packet_id) {
+                self.remove_pending(packet_id);
+                self.quarantine(packet_id, now);
+            }
+            self.reject(payload.len());
+            return Err(format!("{label} UDP reassembly limit is zero"));
+        }
         if fragment_count == 1 {
-            if payload.len() > self.max_reassembled_bytes {
+            if payload.len() > reassembly_limit {
                 self.reject(payload.len());
                 return Err(format!(
                     "{label} UDP payload exceeds reassembly budget: {} > {} bytes",
                     payload.len(),
-                    self.max_reassembled_bytes
+                    reassembly_limit
                 ));
             }
             return Ok(QuicUdpFragmentOutcome::Complete(payload));
@@ -136,6 +202,23 @@ impl QuicUdpFragmentBuffer {
             ));
         }
 
+        let reassembly_limit = self
+            .pending
+            .get(&packet_id)
+            .map_or(reassembly_limit, |entry| {
+                entry.reassembly_limit.min(reassembly_limit)
+            });
+        if let Some(previous_bytes) = self.pending.get(&packet_id).map(|entry| entry.bytes)
+            && previous_bytes > reassembly_limit
+        {
+            self.remove_pending(packet_id);
+            self.quarantine(packet_id, now);
+            self.reject(payload.len());
+            return Err(format!(
+                "{label} UDP reassembly budget decreased below buffered payload: {previous_bytes} > {reassembly_limit} bytes"
+            ));
+        }
+
         let is_new_packet = !self.pending.contains_key(&packet_id);
         if is_new_packet && self.pending.len() >= self.resources.pending_fragment_packets() {
             self.reject(payload.len());
@@ -151,13 +234,13 @@ impl QuicUdpFragmentBuffer {
             .checked_sub(previous_fragment_bytes)
             .and_then(|bytes| bytes.checked_add(payload.len()))
             .ok_or_else(|| format!("{label} UDP fragment byte accounting overflow"))?;
-        if next_packet_bytes > self.max_reassembled_bytes {
+        if next_packet_bytes > reassembly_limit {
             self.remove_pending(packet_id);
             self.quarantine(packet_id, now);
             self.reject(payload.len());
             return Err(format!(
                 "{label} UDP reassembled payload exceeds budget: {next_packet_bytes} > {} bytes",
-                self.max_reassembled_bytes
+                reassembly_limit
             ));
         }
         let next_pending_bytes = self
@@ -184,8 +267,10 @@ impl QuicUdpFragmentBuffer {
                     total: fragment_count,
                     parts: BTreeMap::new(),
                     bytes: 0,
+                    reassembly_limit,
                     expires_at,
                 });
+            entry.reassembly_limit = entry.reassembly_limit.min(reassembly_limit);
             if entry.parts.insert(fragment_id, payload).is_some() {
                 self.duplicate_fragments = self.duplicate_fragments.saturating_add(1);
             }

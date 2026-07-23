@@ -171,11 +171,14 @@ impl Hysteria2QuicDatagramSession {
                     .with_rejected_response_identity(UdpResponseDropReason::UnexpectedWireSource),
             ));
         }
-        let outcome = self.fragments.push(
+        let reassembly_limit = hysteria2_udp_payload_capacity(parsed.target())
+            .map_err(|err| format!("derive Hysteria2 UDP reassembly limit: {err}"))?;
+        let outcome = self.fragments.push_with_reassembly_limit(
             parsed.packet_id(),
             parsed.fragment_id(),
             parsed.fragment_count(),
             parsed.into_payload(),
+            reassembly_limit,
             "Hysteria2",
         )?;
         match outcome {
@@ -795,6 +798,91 @@ mod tests {
             UdpFixedTargetValidation::Validated
         );
         assert_eq!(session.fragments.snapshot().pending_bytes, 0);
+    }
+
+    #[test]
+    fn hysteria2_reassembles_the_largest_valid_wire_message() {
+        let target: SocketAddr = "127.0.0.1:39452".parse().unwrap();
+        let target_text = target.to_string();
+        let payload_capacity = hysteria2_udp_payload_capacity(&target_text).unwrap();
+        assert_eq!(payload_capacity, 4_072);
+        let payload = vec![0x5a; payload_capacity];
+        let message = Hysteria2UdpMessage::new(11, &target_text, &payload).unwrap();
+        let fragments = fragment_hysteria2_udp_message(&message, 19, 1_200).unwrap();
+        assert!(fragments.len() > 1);
+        assert!(
+            fragments
+                .iter()
+                .all(|fragment| { encode_hysteria2_udp_message(fragment).unwrap().len() <= 1_200 })
+        );
+
+        let mut session = Hysteria2QuicDatagramSession::new_for_test();
+        session.session_id = 11;
+        session
+            .fixed_target
+            .bind(target, "Hysteria2 UDP session")
+            .unwrap();
+        for fragment in &fragments[..fragments.len() - 1] {
+            assert!(session.decode_response(fragment.clone()).unwrap().is_none());
+        }
+        let mut response = session
+            .decode_response(fragments.last().unwrap().clone())
+            .unwrap()
+            .unwrap();
+        let expectation = response.fixed_target_expectation(target);
+        let validated = response.take_fixed_target_payload(expectation);
+        assert_eq!(validated.validation(), UdpFixedTargetValidation::Validated);
+        assert_eq!(validated.into_payload().unwrap(), payload);
+        let snapshot = session.fragments.snapshot();
+        assert_eq!(snapshot.pending_packets, 0);
+        assert_eq!(snapshot.pending_bytes, 0);
+        assert_eq!(snapshot.quarantined_packets, 1);
+    }
+
+    #[test]
+    fn hysteria2_packet_limit_cannot_expand_across_equivalent_target_text() {
+        let short_target = "[2001:db8::1]:5353";
+        let long_target = "[2001:0db8:0000:0000:0000:0000:0000:0001]:5353";
+        let target: SocketAddr = short_target.parse().unwrap();
+        assert_eq!(long_target.parse::<SocketAddr>().unwrap(), target);
+        let short_capacity = hysteria2_udp_payload_capacity(short_target).unwrap();
+        let long_capacity = hysteria2_udp_payload_capacity(long_target).unwrap();
+        assert!(short_capacity > long_capacity);
+
+        let fragment_payload = long_capacity / 3 + 1;
+        let max_wire_size = HYSTERIA2_MAX_UDP_MESSAGE_LENGTH - short_capacity + fragment_payload;
+        let short = Hysteria2UdpMessage::new(13, short_target, vec![1; short_capacity]).unwrap();
+        let long = Hysteria2UdpMessage::new(13, long_target, vec![2; long_capacity]).unwrap();
+        let short_fragments = fragment_hysteria2_udp_message(&short, 23, max_wire_size).unwrap();
+        let long_fragments = fragment_hysteria2_udp_message(&long, 23, max_wire_size).unwrap();
+        assert_eq!(short_fragments.len(), 4);
+        assert_eq!(long_fragments.len(), 4);
+        assert!(
+            short_fragments[..3]
+                .iter()
+                .map(|fragment| fragment.payload().len())
+                .sum::<usize>()
+                > long_capacity
+        );
+
+        let mut session = Hysteria2QuicDatagramSession::new_for_test();
+        session.session_id = 13;
+        session
+            .fixed_target
+            .bind(target, "Hysteria2 UDP session")
+            .unwrap();
+        for fragment in &short_fragments[..3] {
+            assert!(session.decode_response(fragment.clone()).unwrap().is_none());
+        }
+        let error = session
+            .decode_response(long_fragments[3].clone())
+            .unwrap_err();
+        assert!(error.contains("decreased below buffered payload"));
+        let snapshot = session.fragments.snapshot();
+        assert_eq!(snapshot.pending_packets, 0);
+        assert_eq!(snapshot.pending_bytes, 0);
+        assert_eq!(snapshot.quarantined_packets, 1);
+        assert_eq!(snapshot.rejected_fragments, 1);
     }
 
     #[test]

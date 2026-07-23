@@ -2,7 +2,12 @@ use crate::error::OutboundError;
 
 pub const HYSTERIA2_FRAME_TYPE_TCP_REQUEST: u64 = 0x401;
 pub const HYSTERIA2_MAX_UDP_ADDRESS_LENGTH: usize = 2048;
-pub const HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH: usize = 4096;
+/// Maximum serialized Hysteria2 UDP message size, including its wire header.
+pub const HYSTERIA2_MAX_UDP_MESSAGE_LENGTH: usize = 4096;
+/// Absolute payload ceiling for the shortest encodable target.
+///
+/// Call [`hysteria2_udp_payload_capacity`] when a concrete target is available.
+pub const HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH: usize = HYSTERIA2_MAX_UDP_MESSAGE_LENGTH - 10;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct TcpRequestFrame {
@@ -95,6 +100,21 @@ impl Hysteria2UdpMessage {
     pub fn encoded_len(&self) -> usize {
         8 + quic_varint_len(self.target.len() as u64) + self.target.len() + self.payload.len()
     }
+}
+
+/// Returns the application payload capacity for a serialized UDP target.
+pub fn hysteria2_udp_payload_capacity(target: &str) -> Result<usize, OutboundError> {
+    if target.is_empty() || target.len() > HYSTERIA2_MAX_UDP_ADDRESS_LENGTH {
+        return Err(bad_wire("invalid Hysteria2 UDP target length"));
+    }
+    let header_len = 8_usize
+        .checked_add(quic_varint_len(target.len() as u64))
+        .and_then(|length| length.checked_add(target.len()))
+        .ok_or_else(|| bad_wire("Hysteria2 UDP header length overflow"))?;
+    HYSTERIA2_MAX_UDP_MESSAGE_LENGTH
+        .checked_sub(header_len)
+        .filter(|capacity| *capacity > 0)
+        .ok_or_else(|| bad_wire("Hysteria2 UDP target leaves no payload capacity"))
 }
 
 pub(super) fn build_tcp_request_stream(
@@ -324,10 +344,8 @@ fn validate_udp_message_fields(
     target: &str,
     payload: &[u8],
 ) -> Result<(), OutboundError> {
-    if target.is_empty() || target.len() > HYSTERIA2_MAX_UDP_ADDRESS_LENGTH {
-        return Err(bad_wire("invalid Hysteria2 UDP target length"));
-    }
-    if payload.is_empty() || payload.len() > HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH {
+    let payload_capacity = hysteria2_udp_payload_capacity(target)?;
+    if payload.is_empty() || payload.len() > payload_capacity {
         return Err(bad_wire("invalid Hysteria2 UDP payload length"));
     }
     if fragment_count > 1 && fragment_id >= fragment_count {
@@ -449,11 +467,15 @@ mod tests {
     #[test]
     fn udp_message_roundtrips_supported_payload_and_address_shapes() {
         for target in ["192.0.2.1:53", "[2001:db8::1]:5353", "dns.example:853"] {
-            for payload_len in [1, 1_250, 1_400, 1_500, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH] {
+            let payload_capacity = hysteria2_udp_payload_capacity(target).unwrap();
+            for payload_len in [1, 1_250, 1_400, 1_500, payload_capacity] {
                 let payload = vec![payload_len as u8; payload_len];
                 let message =
                     Hysteria2UdpMessage::new(0x1122_3344, target, payload.clone()).unwrap();
                 let encoded = encode_hysteria2_udp_message(&message).unwrap();
+                if payload_len == payload_capacity {
+                    assert_eq!(encoded.len(), HYSTERIA2_MAX_UDP_MESSAGE_LENGTH);
+                }
                 let decoded = decode_hysteria2_udp_message(&encoded).unwrap();
                 assert_eq!(decoded, message);
                 assert_eq!(decoded.packet_id(), 0);
@@ -467,20 +489,33 @@ mod tests {
     #[test]
     fn udp_message_rejects_empty_and_oversized_payloads() {
         assert!(Hysteria2UdpMessage::new(1, "192.0.2.1:53", Vec::new()).is_err());
-        assert!(
-            Hysteria2UdpMessage::new(
-                1,
-                "192.0.2.1:53",
-                vec![0; HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH + 1],
-            )
-            .is_err()
+        for target in ["192.0.2.1:53", "[2001:db8::1]:5353", "dns.example:853"] {
+            let payload_capacity = hysteria2_udp_payload_capacity(target).unwrap();
+            assert!(
+                Hysteria2UdpMessage::new(1, target, vec![0; payload_capacity + 1]).is_err(),
+                "{target} must reject a wire message larger than {HYSTERIA2_MAX_UDP_MESSAGE_LENGTH} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn udp_message_limit_includes_the_wire_header() {
+        let target = "127.0.0.1:39452";
+        assert_eq!(hysteria2_udp_payload_capacity(target).unwrap(), 4_072);
+        let maximum = Hysteria2UdpMessage::new(1, target, vec![0; 4_072]).unwrap();
+        assert_eq!(
+            encode_hysteria2_udp_message(&maximum).unwrap().len(),
+            HYSTERIA2_MAX_UDP_MESSAGE_LENGTH
         );
+        assert!(Hysteria2UdpMessage::new(1, target, vec![0; 4_073]).is_err());
     }
 
     #[test]
     fn udp_message_fragments_repeat_identity_and_reassemble_in_order() {
+        let target = "[2001:db8::1]:5353";
+        let payload_capacity = hysteria2_udp_payload_capacity(target).unwrap();
         let message =
-            Hysteria2UdpMessage::new(0x0102_0304, "[2001:db8::1]:5353", vec![7; 4_096]).unwrap();
+            Hysteria2UdpMessage::new(0x0102_0304, target, vec![7; payload_capacity]).unwrap();
         let fragments = fragment_hysteria2_udp_message(&message, 0x7788, 1_250).unwrap();
         assert!(fragments.len() > 1);
         let mut reassembled = Vec::new();
