@@ -95,6 +95,10 @@ impl ResidentEventWriterRuntime {
         self.handle.metrics_snapshot()
     }
 
+    pub(crate) fn read_handle(&self) -> ResidentEventWriterHandle {
+        self.handle.clone()
+    }
+
     pub(crate) fn clear(&self) -> std::io::Result<()> {
         self.handle.clear()
     }

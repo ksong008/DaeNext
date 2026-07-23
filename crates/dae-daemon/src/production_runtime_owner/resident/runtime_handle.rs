@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 pub struct ResidentProductionRuntime {
     pub(super) runtime_generation: u64,
     pub(super) binding_registry: ResidentDatapathBindingRegistry,
+    pub(super) read_handle: Arc<ResidentProductionRuntimeReadHandle>,
     pub(super) live_handoff: Option<LiveLoadedTproxyListenSocketMap>,
     pub(super) native_runtime: NativeEbpfRuntimeState,
     pub(super) dataplane: Option<ResidentDataplaneRuntime>,
     pub(super) interface_monitor: Option<ResidentInterfaceMonitorRuntime>,
-    pub(super) start_report: Value,
     pub(super) lan_ifaces: Vec<String>,
     pub(super) native_lan_ifaces: Vec<String>,
     pub(super) cleanup_steps: Vec<Value>,
@@ -93,64 +93,11 @@ impl ResidentProductionRuntime {
     }
 
     pub fn product_state_summary(&self) -> Value {
-        let attach_backend = self
-            .start_report
-            .get("attachBackend")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| actual_resident_attach_backend(&self.start_report))
-            .unwrap_or_else(|| {
-                self.start_report
-                    .pointer("/resident_interface_backend_policy/effective_backend")
-                    .and_then(Value::as_str)
-                    .unwrap_or("resident-production-runtime")
-                    .to_owned()
-            });
-        let netns_link_mode = self
-            .start_report
-            .get("netnsLinkMode")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| selected_netns_link_mode(&self.start_report))
-            .unwrap_or_else(|| {
-                self.start_report
-                    .pointer("/topology_values/requested_netns_link_mode")
-                    .and_then(Value::as_str)
-                    .unwrap_or("production-runtime-owner")
-                    .to_owned()
-            });
-        let mut resident_dataplane = self.start_report["resident_dataplane"].clone();
-        if let Some(metrics) = self.resident_dataplane_metrics_snapshot()
-            && let Value::Object(map) = &mut resident_dataplane
-        {
-            map.insert("metrics".to_owned(), metrics);
-        }
-        json!({
-            "running": !self.cleaned,
-            "state": if self.cleaned { "stopped" } else { "running" },
-            "runtimeGeneration": self.runtime_generation,
-            "attachBackend": attach_backend,
-            "netnsLinkMode": netns_link_mode,
-            "fakeRuntime": false,
-            "residentRuntimeStarted": self.start_report["resident_runtime_started"].as_bool().unwrap_or(false),
-            "residentDataplane": resident_dataplane,
-            "residentEbpf": self.native_runtime.runtime_metrics(),
-            "residentDatapathBindings": self.binding_registry.to_value(),
-            "residentDatapathBindingPostflight": self.start_report["resident_datapath_binding_postflight"].clone(),
-            "residentInterfaceState": self
-                .resident_interface_state_snapshot(),
-            "startupEvidence": self.start_report["startupEvidence"].clone(),
-            "artifactDir": self.start_report["artifact_dir"].clone(),
-            "startFile": self.start_report["start_file"].clone(),
-            "cleanupFile": self.start_report["cleanup_file"].clone(),
-        })
+        self.read_handle().product_state_summary()
     }
 
-    pub(super) fn resident_interface_state_snapshot(&self) -> Value {
-        self.interface_monitor
-            .as_ref()
-            .map(ResidentInterfaceMonitorRuntime::snapshot)
-            .unwrap_or_else(|| self.start_report["resident_interface_monitor"].clone())
+    pub(crate) fn read_handle(&self) -> Arc<ResidentProductionRuntimeReadHandle> {
+        Arc::clone(&self.read_handle)
     }
 
     pub(crate) fn resident_interface_reattach_ready_snapshot(&self) -> Option<Value> {
@@ -183,15 +130,6 @@ impl ResidentProductionRuntime {
         self.dataplane
             .as_ref()
             .map(ResidentDataplaneRuntime::traffic_counters)
-    }
-
-    pub fn resident_dataplane_metrics_snapshot(&self) -> Option<Value> {
-        if self.cleaned {
-            return None;
-        }
-        self.dataplane
-            .as_ref()
-            .map(ResidentDataplaneRuntime::metrics_snapshot)
     }
 
     pub(crate) fn snapshot_health_states(&self) -> Vec<Value> {
@@ -442,6 +380,7 @@ impl ResidentProductionRuntime {
             );
         }
         self.cleaned = true;
+        self.read_handle.mark_stopped();
         Some(cleanup_report)
     }
 }

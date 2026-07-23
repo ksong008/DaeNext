@@ -407,10 +407,13 @@ pub(crate) fn start_resident_dataplane_workers(
         json!("resident worker consumes live tproxy TCP/UDP sockets and relays through admitted Rust proxy handlers; unsupported protocols fail explicitly instead of faking proxy success"),
     );
     let start = Value::Object(start_map);
+    let read_handle =
+        ResidentDataplaneReadHandle::new(owner.read_handle(), generation_drain.clone());
     (
         start,
         Some(ResidentDataplaneRuntime {
             owner,
+            read_handle,
             active_generation,
             generation_drain,
             routing_tuple_map_id,

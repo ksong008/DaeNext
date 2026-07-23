@@ -23,6 +23,7 @@ pub(crate) use self::adapter_matrix::{
     resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
     resident_live_matrix_evidence_from_env,
 };
+use self::events::ResidentEventWriterHandle;
 pub(crate) use self::events::{
     ResidentEventLogDecision, ResidentEventLogPolicy, ResidentEventLogSink,
     ResidentEventWriterRuntime, set_event_log_policy, set_event_log_sink,
@@ -88,6 +89,10 @@ use self::generation_builder::*;
 #[path = "runtime/generation_drain.rs"]
 mod generation_drain;
 use self::generation_drain::*;
+#[path = "runtime/read_view.rs"]
+mod read_view;
+pub(in crate::production_runtime_owner) use self::read_view::ResidentDataplaneReadHandle;
+use self::read_view::ResidentRuntimeOwnerReadHandle;
 #[path = "runtime/executor.rs"]
 mod executor;
 use self::executor::*;

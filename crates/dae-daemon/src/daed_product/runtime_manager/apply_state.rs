@@ -127,7 +127,7 @@ impl ProductRuntimeManager {
                                 inner.config = snapshot.config.clone();
                                 inner.config_content = snapshot.config_content.clone();
                                 inner.transition_identity = snapshot.transition_identity;
-                                inner.last_report = Some(report);
+                                inner.last_report = Some(Arc::new(report));
                             });
                         (same_physical_runtime, restored)
                     }

@@ -19,15 +19,15 @@ use super::command::{
 #[cfg(feature = "native-ebpf")]
 use super::native_ebpf::EMBEDDED_NATIVE_OBJECT_IDENTITY;
 use super::native_ebpf::{
-    NativeEbpfRuntimeState, NativeParamObjectPreparation, native_cgroup_attach_preflight,
-    prepare_native_param_object,
+    NativeEbpfRuntimeReadHandle, NativeEbpfRuntimeState, NativeParamObjectPreparation,
+    native_cgroup_attach_preflight, prepare_native_param_object,
 };
 use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{
-    ResidentDataplaneGeneration, ResidentDataplaneRuntime, ResidentDataplaneStartContext,
-    ResidentDnsReloadSnapshot, ResidentManualProbeHandle, ResidentPreparedDataplane,
-    ResidentTrafficCounters, build_resident_dataplane_plan_with_geodata,
+    ResidentDataplaneGeneration, ResidentDataplaneReadHandle, ResidentDataplaneRuntime,
+    ResidentDataplaneStartContext, ResidentDnsReloadSnapshot, ResidentManualProbeHandle,
+    ResidentPreparedDataplane, ResidentTrafficCounters, build_resident_dataplane_plan_with_geodata,
     next_resident_runtime_generation, resident_datapath_postflight_interval_seconds_default,
     start_resident_dataplane_workers,
 };
@@ -62,6 +62,8 @@ mod constants;
 use self::constants::*;
 mod runtime_handle;
 pub use self::runtime_handle::*;
+mod runtime_read_view;
+pub(crate) use self::runtime_read_view::*;
 mod prepared_generation;
 pub(crate) use self::prepared_generation::*;
 mod start_entry;
