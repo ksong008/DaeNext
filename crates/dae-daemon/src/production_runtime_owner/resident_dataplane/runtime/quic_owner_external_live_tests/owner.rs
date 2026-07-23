@@ -9,11 +9,13 @@ use super::super::tcp::QuicEndpointCallerClass;
 use super::super::tcp::quic_endpoint_metrics_snapshot;
 use super::super::{
     Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, JuicityOwnerRegistryHandle,
-    ResidentStopSignal, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    TuicOwnerRegistryHandle, start_hysteria2_owner_registry_on, start_juicity_owner_registry_on,
-    start_tuic_owner_registry_on,
+    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, ResidentStopSignal, ResidentTransportOwnerRegistries,
+    SharedResidentStopSignal, TuicOwnerRegistryHandle, start_hysteria2_owner_registry_on,
+    start_juicity_owner_registry_on, start_tuic_owner_registry_on,
 };
 use super::config::QuicOwnerProtocol;
+
+const ENDPOINT_METRIC_SETTLE_INTERVAL: Duration = Duration::from_millis(10);
 
 enum OwnerRegistry {
     Hysteria2(Hysteria2OwnerRegistryHandle),
@@ -209,11 +211,43 @@ impl ExternalLiveOwner {
         );
         assert_eq!(owner["endpointDrain"]["timedOut"], 0);
         assert_eq!(owner["shutdownTimedOut"], false);
-        let endpoint = quic_endpoint_metrics_snapshot(generation);
+        let endpoint = wait_for_endpoint_metrics_to_settle(
+            generation,
+            timeout.min(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE),
+        )
+        .await?;
         assert_eq!(endpoint["liveStates"]["total"], 0);
         assert_eq!(endpoint["endpointDriverTasks"]["live"], 0);
         assert_eq!(endpoint["chargedBytes"]["total"], 0);
         Ok((owner, endpoint))
+    }
+}
+
+async fn wait_for_endpoint_metrics_to_settle(
+    generation: u64,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let snapshot = quic_endpoint_metrics_snapshot(generation);
+        let live_endpoints = snapshot["liveStates"]["total"].as_u64().ok_or_else(|| {
+            "external endpoint metrics omitted the live endpoint count".to_owned()
+        })?;
+        let live_drivers = snapshot["endpointDriverTasks"]["live"]
+            .as_u64()
+            .ok_or_else(|| "external endpoint metrics omitted the live driver count".to_owned())?;
+        let charged_bytes = snapshot["chargedBytes"]["total"]
+            .as_u64()
+            .ok_or_else(|| "external endpoint metrics omitted charged bytes".to_owned())?;
+        if live_endpoints == 0 && live_drivers == 0 && charged_bytes == 0 {
+            return Ok(snapshot);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "external endpoint metrics did not settle before timeout: live_endpoints={live_endpoints}, live_drivers={live_drivers}, charged_bytes={charged_bytes}"
+            ));
+        }
+        time::sleep(ENDPOINT_METRIC_SETTLE_INTERVAL).await;
     }
 }
 
