@@ -4,21 +4,27 @@ use std::sync::Arc;
 
 use crate::RoutingError;
 
+mod index;
+use self::index::IpPrefixLookup;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IpPrefix {
     addr: IpAddr,
     bits: u8,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct SharedIpPrefixSet {
     prefixes: Arc<[IpPrefix]>,
+    lookup: IpPrefixLookup,
 }
 
 impl SharedIpPrefixSet {
     pub fn new(prefixes: impl IntoIterator<Item = IpPrefix>) -> Self {
+        let prefixes: Arc<[IpPrefix]> = Arc::from(prefixes.into_iter().collect::<Vec<_>>());
         Self {
-            prefixes: Arc::from(prefixes.into_iter().collect::<Vec<_>>()),
+            lookup: IpPrefixLookup::for_prefixes(&prefixes),
+            prefixes,
         }
     }
 
@@ -30,10 +36,22 @@ impl SharedIpPrefixSet {
         self.as_slice().iter()
     }
 
+    pub fn contains(&self, addr: IpAddr) -> bool {
+        self.lookup.contains(&self.prefixes, addr)
+    }
+
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.prefixes, &other.prefixes)
     }
 }
+
+impl PartialEq for SharedIpPrefixSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.prefixes == other.prefixes
+    }
+}
+
+impl Eq for SharedIpPrefixSet {}
 
 impl IpPrefix {
     pub fn new(addr: IpAddr, bits: u8) -> Result<Self, RoutingError> {
@@ -159,5 +177,32 @@ mod tests {
         assert!(prefix.contains(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 42))));
         assert!(!prefix.contains(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))));
         assert!(!prefix.contains(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn shared_prefix_set_keeps_a_compact_clone_handle() {
+        assert!(std::mem::size_of::<SharedIpPrefixSet>() <= 3 * std::mem::size_of::<usize>());
+    }
+
+    #[test]
+    fn rebuilt_prefix_sets_do_not_mutate_previous_shared_generations() {
+        let old = SharedIpPrefixSet::new(
+            (0..64)
+                .map(|index| {
+                    IpPrefix::new(IpAddr::V4(Ipv4Addr::new(198, 51, index, 42)), 32).unwrap()
+                })
+                .collect::<Vec<_>>(),
+        );
+        let inherited = old.clone();
+        let replacement = SharedIpPrefixSet::new([
+            IpPrefix::parse("203.0.113.0/24").unwrap(),
+            IpPrefix::parse("2001:db8::/32").unwrap(),
+        ]);
+
+        assert!(old.ptr_eq(&inherited));
+        assert!(!old.ptr_eq(&replacement));
+        assert!(old.contains("198.51.63.42".parse().unwrap()));
+        assert!(!old.contains("203.0.113.42".parse().unwrap()));
+        assert!(replacement.contains("203.0.113.42".parse().unwrap()));
     }
 }

@@ -90,19 +90,19 @@ impl MatchSet {
             MatchType::IpSet => self
                 .lpm_index
                 .and_then(|index| lpm_sets.get(&index))
-                .map(|prefixes| prefixes.iter().any(|prefix| prefix.contains(query.dest)))
+                .map(|prefixes| prefixes.contains(query.dest))
                 .unwrap_or(false),
             MatchType::SourceIpSet => self
                 .lpm_index
                 .and_then(|index| lpm_sets.get(&index))
                 .zip(query.source)
-                .map(|(prefixes, source)| prefixes.iter().any(|prefix| prefix.contains(source)))
+                .map(|(prefixes, source)| prefixes.contains(source))
                 .unwrap_or(false),
             MatchType::Mac => self
                 .lpm_index
                 .and_then(|index| lpm_sets.get(&index))
                 .zip(query.mac_addr())
-                .map(|(prefixes, mac)| prefixes.iter().any(|prefix| prefix.contains(mac)))
+                .map(|(prefixes, mac)| prefixes.contains(mac))
                 .unwrap_or(false),
             MatchType::Port => {
                 let start = self.port_start.unwrap_or(0);
