@@ -9,6 +9,12 @@ pub(in crate::daed_product) struct ActiveRuntimeResources {
 }
 
 #[derive(Debug)]
+pub(in crate::daed_product) struct ActiveRuntimeResourceRevision {
+    pub(in crate::daed_product) group_ids: Vec<i64>,
+    pub(in crate::daed_product) group_version_sum: i64,
+}
+
+#[derive(Debug)]
 struct ActiveGroupRow {
     id: i64,
     name: String,
@@ -117,6 +123,35 @@ pub(in crate::daed_product) fn load_active_runtime_resources(
         }),
         group_ids,
         group_version_sum,
+    })
+}
+
+pub(in crate::daed_product) fn load_active_runtime_resource_revision(
+    conn: &Connection,
+    routing_raw: &str,
+) -> io::Result<ActiveRuntimeResourceRevision> {
+    let routing_text =
+        render_routing_section((!routing_raw.trim().is_empty()).then_some(routing_raw));
+    let referenced_groups =
+        referenced_group_names_from_routing(&routing_text).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "selected routing could not be parsed while resolving runtime groups",
+            )
+        })?;
+    if referenced_groups.is_empty() {
+        return Ok(ActiveRuntimeResourceRevision {
+            group_ids: Vec::new(),
+            group_version_sum: 0,
+        });
+    }
+    let groups = load_groups(conn, &referenced_groups)?;
+    Ok(ActiveRuntimeResourceRevision {
+        group_ids: groups.iter().map(|group| group.id).collect(),
+        group_version_sum: groups
+            .iter()
+            .map(|group| group.version)
+            .fold(0_i64, i64::saturating_add),
     })
 }
 
