@@ -3,6 +3,7 @@ use crate::production_runtime_owner::resident_dataplane::plan::resident_tcp_chec
 use dae_outbound::NetworkType;
 use serde_json::json;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+use std::path::Path;
 
 const FLOW_DIAL_TARGET: &str = "flow-dial-target";
 const FLOW_OUTBOUND: &str = "flow-outbound";
@@ -1205,4 +1206,40 @@ fn plain_http_connect_preserves_tunneled_bytes_read_with_response_head() {
         assert_eq!(&payload, b"early");
         server.await.unwrap();
     });
+}
+
+#[test]
+fn tcp_flow_orchestration_future_remains_bounded() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let _runtime_guard = runtime.enter();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (inbound, peer) = listener.accept().unwrap();
+    inbound.set_nonblocking(true).unwrap();
+    let inbound = TokioTcpStream::from_std(inbound).unwrap();
+    let router = Arc::new(tcp_router_for_test(
+        fallback_matcher("direct", 0),
+        TcpDialMode::Ip,
+    ));
+    let event_lock = Arc::new(Mutex::new(()));
+    let future = handle_tcp_connection_async_or_handoff(
+        inbound,
+        peer,
+        router,
+        ResidentStopSignal::shared(),
+        Arc::new(ResidentDataplaneMetrics::default()),
+        Path::new("tcp-flow-size-test.jsonl"),
+        &event_lock,
+    );
+
+    let future_bytes = std::mem::size_of_val(&future);
+    assert!(
+        future_bytes <= 8 * 1024,
+        "TCP flow orchestration future retained {future_bytes} bytes"
+    );
+    drop(future);
+    drop(client);
 }

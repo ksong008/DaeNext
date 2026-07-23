@@ -236,18 +236,18 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
         .set_nodelay(true)
         .map_err(|err| format!("set inbound TCP_NODELAY: {err}"))?;
     if transparent_tcp_dns_fast_path_applies(original_dst) {
-        handle_transparent_tcp_dns_fast_path_async(
+        Box::pin(handle_transparent_tcp_dns_fast_path_async(
             &mut inbound,
             original_dst,
             Arc::clone(&router.dns),
             Arc::clone(&stop),
             Arc::clone(&metrics),
-        )
+        ))
         .await?;
         return Ok(None);
     }
     let sniff = sniff_initial_tcp_payload_async(&mut inbound, router.sniffing_timeout).await?;
-    let selection = router.select(peer, original_dst, &sniff.domain).await?;
+    let selection = Box::pin(router.select(peer, original_dst, &sniff.domain)).await?;
     append_event(
         event_file,
         event_lock,
@@ -262,7 +262,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     match selection {
         TcpSelection::Direct(selection) => {
             let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
-            let result = handle_direct_tcp_connection_async(
+            let result = Box::pin(handle_direct_tcp_connection_async(
                 &mut inbound,
                 peer,
                 original_dst,
@@ -270,7 +270,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                 Arc::clone(&stop),
                 sniff,
                 &metrics,
-            )
+            ))
             .await;
             result.map(Some)
         }
@@ -304,7 +304,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     selection.proxy.execution_plan().protocol
                 ))
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
-                handle_proxy_tcp_connection_async(
+                Box::pin(handle_proxy_tcp_connection_async(
                     &mut inbound,
                     peer,
                     original_dst,
@@ -312,10 +312,10 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     Arc::clone(&stop),
                     sniff,
                     &metrics,
-                )
+                ))
                 .await
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::FrameTls {
-                handle_frame_tls_tcp_connection_async(
+                Box::pin(handle_frame_tls_tcp_connection_async(
                     &mut inbound,
                     peer,
                     original_dst,
@@ -325,10 +325,10 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     &metrics,
                     router.anytls_owner_registry.as_ref(),
                     None,
-                )
+                ))
                 .await
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Quic {
-                handle_quic_tcp_connection_async(
+                Box::pin(handle_quic_tcp_connection_async(
                     &mut inbound,
                     peer,
                     original_dst,
@@ -340,10 +340,10 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     router.tuic_owner_registry.as_ref(),
                     router.juicity_owner_registry.as_ref(),
                     None,
-                )
+                ))
                 .await
             } else {
-                handle_resident_proxy_tcp_connection_async(
+                Box::pin(handle_resident_proxy_tcp_connection_async(
                     inbound,
                     peer,
                     original_dst,
@@ -351,7 +351,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     Arc::clone(&stop),
                     sniff,
                     Arc::clone(&metrics),
-                )
+                ))
                 .await
             };
             result.map(Some)
