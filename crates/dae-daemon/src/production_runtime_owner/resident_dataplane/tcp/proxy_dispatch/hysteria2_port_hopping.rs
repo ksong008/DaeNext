@@ -8,7 +8,7 @@ use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -210,7 +210,10 @@ impl quinn::Runtime for Hysteria2PortHoppingRuntime {
         self.inner.spawn(Box::pin(async move {
             run_hysteria2_port_hopping(weak, runtime).await;
         }));
-        Ok(Arc::new(Hysteria2PortHoppingUdpSocket { state }))
+        Ok(Arc::new(Hysteria2PortHoppingUdpSocket {
+            state,
+            poll_previous_first: AtomicBool::new(false),
+        }))
     }
 
     fn now(&self) -> std::time::Instant {
@@ -350,6 +353,7 @@ async fn run_hysteria2_port_hopping(
 
 struct Hysteria2PortHoppingUdpSocket {
     state: Arc<Hysteria2PortHoppingState>,
+    poll_previous_first: AtomicBool,
 }
 
 impl fmt::Debug for Hysteria2PortHoppingUdpSocket {
@@ -404,23 +408,19 @@ impl quinn::AsyncUdpSocket for Hysteria2PortHoppingUdpSocket {
             let paths = self.state.paths.read().unwrap();
             (Arc::clone(&paths.current), paths.previous.clone())
         };
-        match current.poll_recv(context, buffers, metadata) {
-            Poll::Ready(Ok(count)) => {
-                self.state.rewrite_received_remote(metadata, count);
-                return Poll::Ready(Ok(count));
-            }
-            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-            Poll::Pending => {}
-        }
         let Some(previous) = previous else {
-            return Poll::Pending;
+            return self.poll_receive_path(&current, context, buffers, metadata);
         };
-        match previous.poll_recv(context, buffers, metadata) {
-            Poll::Ready(Ok(count)) => {
-                self.state.rewrite_received_remote(metadata, count);
-                Poll::Ready(Ok(count))
-            }
-            other => other,
+
+        let previous_first = self.poll_previous_first.fetch_xor(true, Ordering::Relaxed);
+        let (first, second) = if previous_first {
+            (&previous, &current)
+        } else {
+            (&current, &previous)
+        };
+        match self.poll_receive_path(first, context, buffers, metadata) {
+            Poll::Pending => self.poll_receive_path(second, context, buffers, metadata),
+            ready => ready,
         }
     }
 
@@ -448,6 +448,24 @@ impl quinn::AsyncUdpSocket for Hysteria2PortHoppingUdpSocket {
 
     fn may_fragment(&self) -> bool {
         self.state.paths.read().unwrap().current.may_fragment()
+    }
+}
+
+impl Hysteria2PortHoppingUdpSocket {
+    fn poll_receive_path(
+        &self,
+        socket: &Arc<dyn quinn::AsyncUdpSocket>,
+        context: &mut Context<'_>,
+        buffers: &mut [IoSliceMut<'_>],
+        metadata: &mut [udp::RecvMeta],
+    ) -> Poll<io::Result<usize>> {
+        match socket.poll_recv(context, buffers, metadata) {
+            Poll::Ready(Ok(count)) => {
+                self.state.rewrite_received_remote(metadata, count);
+                Poll::Ready(Ok(count))
+            }
+            other => other,
+        }
     }
 }
 
@@ -592,6 +610,80 @@ mod tests {
         })
         .await
         .expect("port-hopping sockets released after owner drop");
+    }
+
+    #[tokio::test]
+    async fn sustained_current_and_previous_receive_paths_are_polled_fairly() {
+        const PACKETS_PER_PATH: usize = 32;
+
+        let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let logical_remote = sender.local_addr().unwrap();
+        let runtime = quinn::default_runtime().unwrap();
+        let current = runtime
+            .wrap_udp_socket(std::net::UdpSocket::bind("127.0.0.1:0").unwrap())
+            .unwrap();
+        let previous = runtime
+            .wrap_udp_socket(std::net::UdpSocket::bind("127.0.0.1:0").unwrap())
+            .unwrap();
+        let current_local = current.local_addr().unwrap();
+        let previous_local = previous.local_addr().unwrap();
+        let metrics = Arc::new(Hysteria2PortHoppingMetrics::default());
+        metrics.socket_opened();
+        metrics.socket_opened();
+        let state = Arc::new(Hysteria2PortHoppingState {
+            runtime,
+            addresses: Arc::new(vec![logical_remote.ip()]),
+            ports: Arc::new(vec![logical_remote.port()]),
+            interval: Duration::from_secs(30),
+            mark: 0,
+            transition_socket_limit: 3,
+            bind: "127.0.0.1:0".parse().unwrap(),
+            logical_remote,
+            metrics: Arc::clone(&metrics),
+            paths: std::sync::RwLock::new(Hysteria2PortHoppingPaths {
+                current,
+                previous: Some(previous),
+                destination: logical_remote,
+                generation: 2,
+            }),
+        });
+        let socket: Arc<dyn quinn::AsyncUdpSocket> = Arc::new(Hysteria2PortHoppingUdpSocket {
+            state,
+            poll_previous_first: AtomicBool::new(false),
+        });
+
+        for sequence in 0..PACKETS_PER_PATH {
+            sender
+                .send_to(format!("c{sequence:02}").as_bytes(), current_local)
+                .await
+                .unwrap();
+            sender
+                .send_to(format!("p{sequence:02}").as_bytes(), previous_local)
+                .await
+                .unwrap();
+        }
+
+        let mut path_order = Vec::with_capacity(PACKETS_PER_PATH * 2);
+        for _ in 0..PACKETS_PER_PATH * 2 {
+            let (payload, source) = receive_one(&socket).await;
+            assert_eq!(source, logical_remote);
+            path_order.push(payload[0]);
+        }
+        assert!(
+            path_order.windows(2).all(|pair| pair[0] != pair[1]),
+            "current and previous receive paths must alternate while both remain readable"
+        );
+        assert_eq!(
+            path_order.iter().filter(|path| **path == b'c').count(),
+            PACKETS_PER_PATH
+        );
+        assert_eq!(
+            path_order.iter().filter(|path| **path == b'p').count(),
+            PACKETS_PER_PATH
+        );
+
+        drop(socket);
+        assert_eq!(metrics.snapshot()["activeSockets"], 0);
     }
 
     #[tokio::test]
