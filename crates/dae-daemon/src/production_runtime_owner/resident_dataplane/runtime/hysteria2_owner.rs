@@ -5,8 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-#[cfg(test)]
-use dae_outbound::hysteria2::hysteria2_udp_payload_capacity;
 use dae_outbound::hysteria2::{
     Hysteria2AuthReport, Hysteria2AuthenticatedSession, Hysteria2BbrProfile,
     Hysteria2CongestionNegotiation, Hysteria2CongestionRuntime,
@@ -2213,9 +2211,10 @@ mod tests {
     #[test]
     fn udp_session_manager_bounds_sessions_and_response_queues() {
         let metrics = Arc::new(Hysteria2OwnerRegistryMetrics::default());
+        let resources = udp_test_resources(1, 2);
         let manager = Hysteria2UdpSessionManager::new(
             OwnerGeneration::new(7),
-            udp_test_resources(1, 1),
+            resources,
             Arc::clone(&metrics),
         );
         let (session_id, mut receiver, registration) = manager.register().unwrap();
@@ -2224,24 +2223,28 @@ mod tests {
         };
         assert!(error.contains("budget is full"));
         let first = Hysteria2UdpMessage::new(session_id, "192.0.2.2:53", b"first").unwrap();
-        let dropped = Hysteria2UdpMessage::new(session_id, "192.0.2.2:53", b"second").unwrap();
+        let second = Hysteria2UdpMessage::new(session_id, "192.0.2.2:53", b"second").unwrap();
+        let dropped = Hysteria2UdpMessage::new(session_id, "192.0.2.2:53", b"third").unwrap();
         manager.dispatch(first.clone());
+        manager.dispatch(second.clone());
         manager.dispatch(dropped);
         assert_eq!(receiver.try_recv().unwrap().into_message(), first);
+        assert_eq!(receiver.try_recv().unwrap().into_message(), second);
         assert_eq!(metrics.udp_session_rejections.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.udp_session_queue_drops.load(Ordering::Relaxed), 1);
-        manager.dispatch(
-            Hysteria2UdpMessage::new(
-                session_id,
-                "192.0.2.2:53",
-                vec![0_u8; hysteria2_udp_payload_capacity("192.0.2.2:53").unwrap()],
-            )
-            .unwrap(),
-        );
+
+        let target = "192.0.2.2:53";
+        let payload_len = resources.udp_session_queue_bytes() / 2 + 1;
+        let large = Hysteria2UdpMessage::new(session_id, target, vec![0_u8; payload_len]).unwrap();
+        assert!(large.encoded_len() <= resources.udp_session_queue_bytes());
+        assert!(large.encoded_len() * 2 > resources.udp_session_queue_bytes());
+        manager.dispatch(large.clone());
+        manager.dispatch(large.clone());
         assert_eq!(
             metrics.udp_session_queue_byte_drops.load(Ordering::Relaxed),
             1
         );
+        assert_eq!(receiver.try_recv().unwrap().into_message(), large);
         assert_eq!(manager.queued_payload_snapshot()["currentBytes"], 0);
         drop(registration);
         assert_eq!(metrics.active_udp_sessions.load(Ordering::Relaxed), 0);
