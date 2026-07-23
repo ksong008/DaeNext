@@ -12,7 +12,8 @@ use process::{
 };
 use protocol::encode_latency_probe_helper_request;
 pub(crate) use protocol::{
-    latency_probe_helper_response_from_request, latency_probe_helper_response_lines_from_request,
+    LatencyProbeConfigSource, latency_probe_helper_response_from_request,
+    latency_probe_helper_response_lines_from_request,
 };
 use stream::{drain_latency_probe_helper_lines, drain_latency_probe_helper_until_closed};
 
@@ -24,6 +25,28 @@ const LATENCY_PROBE_HELPER_CONCURRENCY_BATCHES_PER_PROCESS: usize = 4;
 const LATENCY_PROBE_HELPER_TIMEOUT: Duration = Duration::from_secs(20);
 const LATENCY_PROBE_HELPER_TIMEOUT_GRACE: Duration = Duration::from_secs(20);
 const LATENCY_PROBE_HELPER_READER_JOIN_GRACE: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LatencyProbeHelperInput<'a> {
+    pub(crate) content: &'a str,
+    pub(crate) source: LatencyProbeConfigSource,
+}
+
+impl<'a> LatencyProbeHelperInput<'a> {
+    pub(crate) fn active_runtime(content: &'a str) -> Self {
+        Self {
+            content,
+            source: LatencyProbeConfigSource::ActiveRuntime,
+        }
+    }
+
+    pub(crate) fn selected_state(content: &'a str) -> Self {
+        Self {
+            content,
+            source: LatencyProbeConfigSource::SelectedState,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct LatencyProbeHelperStreamError {
@@ -38,7 +61,7 @@ pub(crate) enum LatencyProbeHelperStreamOutcome {
 }
 
 pub(crate) fn run_latency_probe_helper_streaming<F, C>(
-    config_content: &str,
+    config: LatencyProbeHelperInput<'_>,
     reload_generation: u64,
     concurrency: usize,
     tcp_probe_timeout: Duration,
@@ -57,12 +80,17 @@ where
         seen_links: LatencyProbeSeenLinks::default(),
         message: format!("resolve latency probe helper executable: {err}"),
     })?;
-    let request_json =
-        encode_latency_probe_helper_request(config_content, reload_generation, concurrency, links)
-            .map_err(|err| LatencyProbeHelperStreamError {
-                seen_links: LatencyProbeSeenLinks::default(),
-                message: format!("encode latency probe helper request: {err}"),
-            })?;
+    let request_json = encode_latency_probe_helper_request(
+        config.content,
+        config.source,
+        reload_generation,
+        concurrency,
+        links,
+    )
+    .map_err(|err| LatencyProbeHelperStreamError {
+        seen_links: LatencyProbeSeenLinks::default(),
+        message: format!("encode latency probe helper request: {err}"),
+    })?;
     if request_json.len() > LATENCY_PROBE_HELPER_MAX_IO_BYTES {
         return Err(LatencyProbeHelperStreamError {
             seen_links: LatencyProbeSeenLinks::default(),

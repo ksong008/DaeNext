@@ -172,7 +172,7 @@ impl ProductRuntimeProbeHandle {
             } => {
                 if let Some(config_content) = config_content.as_deref() {
                     match run_latency_probe_helper_streaming(
-                        config_content,
+                        LatencyProbeHelperInput::active_runtime(config_content),
                         handle.reload_generation(),
                         handle.probe_concurrency(),
                         handle.probe_timeout(),
@@ -963,6 +963,13 @@ impl ProductRuntimeManager {
                 .map(|handle| handle.reload_generation()),
             Some(ProductRuntimeInstance::Fake(_)) | None => None,
         }
+    }
+
+    pub(super) fn latency_probe_lifecycle_epoch(&self) -> u64 {
+        self.inner
+            .lock()
+            .map(|inner| inner.lifecycle_epoch)
+            .unwrap_or(u64::MAX)
     }
 
     pub(super) fn active_generation(&self) -> Option<String> {
