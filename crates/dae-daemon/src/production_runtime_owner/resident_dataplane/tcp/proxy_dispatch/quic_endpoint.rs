@@ -1,5 +1,6 @@
 mod admission;
 mod charge;
+mod drain;
 mod metrics;
 mod model;
 mod runtime;
@@ -13,6 +14,10 @@ use dae_runtime_control::OwnerAdmissionRejection;
 #[cfg(test)]
 use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
 
+pub(crate) use self::drain::{
+    QuicEndpointDrainReport, quic_endpoint_drain_deadlines,
+    wait_quic_endpoints_idle_or_released_until, wait_quic_endpoints_idle_until,
+};
 pub(crate) use self::metrics::quic_endpoint_metrics_snapshot;
 pub(crate) use self::model::{
     QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointOpenContext,
@@ -23,7 +28,7 @@ pub(crate) use self::model::{
 pub(super) use self::admission::QuicEndpointAdmissionContext;
 use self::charge::QuicEndpointCharge;
 use self::metrics::QuicEndpointObservation;
-use self::runtime::EndpointDriverTrackingRuntime;
+use self::runtime::{EndpointDriverReleaseHandle, EndpointDriverTrackingRuntime};
 use self::socket::ObservedQuicUdpSocket;
 use super::quic_helpers::set_socket_mark;
 
@@ -34,6 +39,23 @@ pub(crate) struct ObservedQuicEndpoint {
 
 struct EndpointHandleLifecycle {
     observation: Arc<QuicEndpointObservation>,
+    driver_release: EndpointDriverReleaseHandle,
+}
+
+#[derive(Clone)]
+pub(crate) struct QuicEndpointReleaseProbe {
+    signal: Arc<metrics::QuicEndpointReleaseSignal>,
+    driver_release: EndpointDriverReleaseHandle,
+}
+
+impl QuicEndpointReleaseProbe {
+    pub(crate) fn force_driver_release(&self) {
+        self.driver_release.release();
+    }
+
+    pub(crate) async fn released(&self) {
+        self.signal.wait().await;
+    }
 }
 
 impl Clone for ObservedQuicEndpoint {
@@ -99,6 +121,13 @@ impl ObservedQuicEndpoint {
     pub(crate) async fn wait_idle(&self) {
         self.endpoint.wait_idle().await;
         self.handle_lifecycle.observation.wait_idle_completed();
+    }
+
+    pub(crate) fn release_probe(&self) -> QuicEndpointReleaseProbe {
+        QuicEndpointReleaseProbe {
+            signal: self.handle_lifecycle.observation.release_signal(),
+            driver_release: self.handle_lifecycle.driver_release.clone(),
+        }
     }
 }
 
@@ -206,10 +235,9 @@ fn finish_open_observed_quic_endpoint(
     let provenance = context.finalize(remote, bind, mark, underlay, charge, admission_charge);
     let observation = QuicEndpointObservation::register(provenance, reservation);
     let socket = Arc::new(ObservedQuicUdpSocket::new(socket, Arc::clone(&observation)));
-    let tracking_runtime = Arc::new(EndpointDriverTrackingRuntime::new(
-        runtime,
-        Arc::clone(&observation),
-    ));
+    let (tracking_runtime, driver_release) =
+        EndpointDriverTrackingRuntime::new(runtime, Arc::clone(&observation));
+    let tracking_runtime = Arc::new(tracking_runtime);
     let runtime: Arc<dyn quinn::Runtime> = tracking_runtime.clone();
     let endpoint =
         match quinn::Endpoint::new_with_abstract_socket(endpoint_config, None, socket, runtime) {
@@ -227,7 +255,10 @@ fn finish_open_observed_quic_endpoint(
     observation.endpoint_created();
     Ok(ObservedQuicEndpoint {
         endpoint,
-        handle_lifecycle: Arc::new(EndpointHandleLifecycle { observation }),
+        handle_lifecycle: Arc::new(EndpointHandleLifecycle {
+            observation,
+            driver_release,
+        }),
     })
 }
 

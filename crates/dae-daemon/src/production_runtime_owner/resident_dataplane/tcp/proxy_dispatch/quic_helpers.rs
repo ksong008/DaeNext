@@ -12,13 +12,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
-use futures_util::{StreamExt, stream::FuturesUnordered};
-
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
+use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
 
 const HYSTERIA2_SALAMANDER_HASH_LEN: usize = 32;
 pub(crate) async fn relay_tcp_over_quic_stream_async(
@@ -810,67 +808,6 @@ pub(crate) async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicE
         .is_ok()
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct QuicEndpointDrainReport {
-    requested: usize,
-    completed: usize,
-}
-
-impl QuicEndpointDrainReport {
-    pub(crate) const fn requested(self) -> usize {
-        self.requested
-    }
-
-    pub(crate) const fn completed(self) -> usize {
-        self.completed
-    }
-
-    pub(crate) const fn timed_out(self) -> usize {
-        self.requested.saturating_sub(self.completed)
-    }
-
-    pub(crate) const fn is_complete(self) -> bool {
-        self.requested == self.completed
-    }
-}
-
-type QuicEndpointDrainFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
-
-pub(crate) async fn wait_quic_endpoints_idle_until(
-    endpoints: Vec<ObservedQuicEndpoint>,
-    deadline: time::Instant,
-) -> QuicEndpointDrainReport {
-    let waits = endpoints
-        .into_iter()
-        .map(|endpoint| {
-            Box::pin(async move {
-                endpoint.wait_idle().await;
-            }) as QuicEndpointDrainFuture
-        })
-        .collect();
-    wait_quic_endpoint_drain_futures_until(waits, deadline).await
-}
-
-async fn wait_quic_endpoint_drain_futures_until(
-    waits: Vec<QuicEndpointDrainFuture>,
-    deadline: time::Instant,
-) -> QuicEndpointDrainReport {
-    let requested = waits.len();
-    let mut completed = 0_usize;
-    let mut pending = waits.into_iter().collect::<FuturesUnordered<_>>();
-    while !pending.is_empty() {
-        match time::timeout_at(deadline, pending.next()).await {
-            Ok(Some(())) => completed = completed.saturating_add(1),
-            Ok(None) => break,
-            Err(_) => break,
-        }
-    }
-    QuicEndpointDrainReport {
-        requested,
-        completed,
-    }
-}
-
 pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
     let mark = mark as libc::c_int;
     let status = unsafe {
@@ -1111,50 +1048,6 @@ mod tests {
         drop(endpoint);
         tokio::task::yield_now().await;
         assert_eq!(metrics.snapshot()["activeSockets"], 0);
-    }
-
-    #[tokio::test]
-    async fn endpoint_drain_waits_run_concurrently_under_one_deadline() {
-        let waits = (0..16)
-            .map(|_| {
-                Box::pin(async {
-                    time::sleep(Duration::from_millis(30)).await;
-                }) as QuicEndpointDrainFuture
-            })
-            .collect();
-        let report = wait_quic_endpoint_drain_futures_until(
-            waits,
-            time::Instant::now() + Duration::from_millis(150),
-        )
-        .await;
-
-        assert_eq!(report.requested(), 16);
-        assert_eq!(report.completed(), 16);
-        assert_eq!(report.timed_out(), 0);
-        assert!(report.is_complete());
-    }
-
-    #[tokio::test]
-    async fn endpoint_drain_reports_only_waits_left_at_the_shared_deadline() {
-        let waits = vec![
-            Box::pin(async {}) as QuicEndpointDrainFuture,
-            Box::pin(async {
-                time::sleep(Duration::from_millis(10)).await;
-            }) as QuicEndpointDrainFuture,
-            Box::pin(async {
-                time::sleep(Duration::from_secs(1)).await;
-            }) as QuicEndpointDrainFuture,
-        ];
-        let report = wait_quic_endpoint_drain_futures_until(
-            waits,
-            time::Instant::now() + Duration::from_millis(50),
-        )
-        .await;
-
-        assert_eq!(report.requested(), 3);
-        assert_eq!(report.completed(), 2);
-        assert_eq!(report.timed_out(), 1);
-        assert!(!report.is_complete());
     }
 }
 
