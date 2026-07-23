@@ -15,8 +15,28 @@ pub fn read_aya_udp_state_metrics(
     let values = array
         .get(&UDP_STATE_METRICS_KEY, 0)
         .map_err(|err| format!("read {UDP_STATE_METRICS_MAP_NAME}: {err:?}"))?;
-    Ok(values
-        .iter()
+    Ok(sum_udp_state_metrics(values.iter()))
+}
+
+pub fn read_aya_udp_state_metrics_by_id(map_id: u32) -> Result<BpfUdpStateMetrics, String> {
+    let fd = crate::open_map_fd(map_id)
+        .map_err(|err| format!("open {UDP_STATE_METRICS_MAP_NAME} map id {map_id}: {err}"))?;
+    let data = aya::maps::MapData::from_fd(fd)
+        .map_err(|err| format!("open {UDP_STATE_METRICS_MAP_NAME}: {err:?}"))?;
+    let map = aya::maps::Map::PerCpuArray(data);
+    let array = aya::maps::PerCpuArray::<_, BpfUdpStateMetrics>::try_from(map)
+        .map_err(|err| format!("open {UDP_STATE_METRICS_MAP_NAME}: {err:?}"))?;
+    let values = array
+        .get(&UDP_STATE_METRICS_KEY, 0)
+        .map_err(|err| format!("read {UDP_STATE_METRICS_MAP_NAME}: {err:?}"))?;
+    Ok(sum_udp_state_metrics(values.iter()))
+}
+
+fn sum_udp_state_metrics<'a>(
+    values: impl IntoIterator<Item = &'a BpfUdpStateMetrics>,
+) -> BpfUdpStateMetrics {
+    values
+        .into_iter()
         .fold(BpfUdpStateMetrics::default(), |mut total, value| {
             total.state_created_total = total
                 .state_created_total
@@ -40,5 +60,5 @@ pub fn read_aya_udp_state_metrics(
                 .timer_start_failure_total
                 .saturating_add(value.timer_start_failure_total);
             total
-        }))
+        })
 }
