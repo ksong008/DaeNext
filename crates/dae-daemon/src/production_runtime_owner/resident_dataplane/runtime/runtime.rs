@@ -2,6 +2,7 @@ use super::*;
 #[derive(Debug)]
 pub(crate) struct ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) owner: ResidentRuntimeOwner,
+    pub(super) read_handle: ResidentDataplaneReadHandle,
     pub(super) active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
     pub(super) generation_drain: ResidentGenerationDrain,
     pub(super) routing_tuple_map_id: Option<u32>,
@@ -19,10 +20,8 @@ impl ResidentDataplaneRuntime {
         self.owner.traffic_counters()
     }
 
-    pub(in crate::production_runtime_owner) fn metrics_snapshot(&self) -> Value {
-        let mut metrics = self.owner.metrics_snapshot();
-        metrics["generationDrain"] = self.generation_drain.snapshot();
-        metrics
+    pub(in crate::production_runtime_owner) fn read_handle(&self) -> ResidentDataplaneReadHandle {
+        self.read_handle.clone()
     }
 
     pub(in crate::production_runtime_owner) fn prune_event_log(&self) -> std::io::Result<()> {

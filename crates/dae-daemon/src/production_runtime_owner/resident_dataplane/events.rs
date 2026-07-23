@@ -13,7 +13,7 @@ mod writer;
 mod writer_metrics;
 
 use self::model::{ResidentEvent, ResidentEventLifecycleClass, ResidentEventPersistOutcome};
-pub(crate) use self::writer::ResidentEventWriterRuntime;
+pub(crate) use self::writer::{ResidentEventWriterHandle, ResidentEventWriterRuntime};
 
 pub(crate) type ResidentEventLogSink = Arc<dyn Fn(&Value) + Send + Sync + 'static>;
 pub(crate) type ResidentEventLogPolicy =

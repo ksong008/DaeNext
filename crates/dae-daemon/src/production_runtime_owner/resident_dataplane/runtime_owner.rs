@@ -330,6 +330,29 @@ impl ResidentRuntimeOwner {
         self.metrics.traffic_counters()
     }
 
+    pub(super) fn read_handle(&self) -> ResidentRuntimeOwnerReadHandle {
+        ResidentRuntimeOwnerReadHandle {
+            metrics: Arc::clone(&self.metrics),
+            reload_generation: self.reload_generation,
+            runtime_owner: Arc::new(self.runtime_owner_value()),
+            packet_session_manager: Arc::new(json!({
+                "schemaVersion": 1,
+                "manager": "resident-udp-session-manager",
+                "reloadGeneration": self.reload_generation,
+            })),
+            resources: Arc::new(self.resource_config.json()),
+            event_writer: self.event_writer.read_handle(),
+            hysteria2_owner_registry: self.hysteria2_owner_registry.clone(),
+            tuic_owner_registry: self.tuic_owner_registry.clone(),
+            juicity_owner_registry: self.juicity_owner_registry.clone(),
+            anytls_owner_registry: self.anytls_owner_registry.clone(),
+            h2_carrier_generation_owner: self.h2_carrier_generation_owner.clone(),
+            meek_transport_generation_owner: self.meek_transport_generation_owner.clone(),
+            vless_mux_generation_owner: self.vless_mux_generation_owner.clone(),
+            xhttp_xmux_generation_owner: self.xhttp_xmux_generation_owner.clone(),
+        }
+    }
+
     pub(crate) fn cleanup_reporter(&self, owner: &'static str) -> ResidentRuntimeCleanupReporter {
         self.cleanup_inventory.reporter(owner)
     }
@@ -505,63 +528,6 @@ impl ResidentRuntimeOwner {
                 })
             })).collect::<Vec<_>>(),
         })
-    }
-
-    pub(crate) fn metrics_snapshot(&self) -> Value {
-        let mut snapshot = self.metrics.snapshot();
-        snapshot["reloadGeneration"] = json!(self.reload_generation);
-        snapshot["runtimeOwner"] = self.runtime_owner_value();
-        snapshot["packetSessionManager"] = json!({
-            "schemaVersion": 1,
-            "manager": "resident-udp-session-manager",
-            "reloadGeneration": self.reload_generation,
-        });
-        snapshot["resources"] = self.resource_config.json();
-        snapshot["eventWriter"] = self.event_writer.metrics_snapshot();
-        snapshot["connectUdpPools"] =
-            udp::connect_udp_pool_metrics_snapshot(self.reload_generation);
-        snapshot["quicEndpoints"] = tcp::quic_endpoint_metrics_snapshot(self.reload_generation);
-        snapshot["hysteria2Owners"] = self
-            .hysteria2_owner_registry
-            .as_ref()
-            .map(Hysteria2OwnerRegistryHandle::metrics_snapshot)
-            .unwrap_or(Value::Null);
-        snapshot["tuicOwners"] = self
-            .tuic_owner_registry
-            .as_ref()
-            .map(TuicOwnerRegistryHandle::metrics_snapshot)
-            .unwrap_or(Value::Null);
-        snapshot["juicityOwners"] = self
-            .juicity_owner_registry
-            .as_ref()
-            .map(JuicityOwnerRegistryHandle::metrics_snapshot)
-            .unwrap_or(Value::Null);
-        snapshot["anytlsOwners"] = self
-            .anytls_owner_registry
-            .as_ref()
-            .map(AnyTlsOwnerRegistryHandle::metrics_snapshot)
-            .unwrap_or(Value::Null);
-        snapshot["h2CarrierOwners"] = self
-            .h2_carrier_generation_owner
-            .as_ref()
-            .map(H2CarrierGenerationOwnerHandle::metrics_snapshot)
-            .unwrap_or(Value::Null);
-        snapshot["meekTransportOwners"] = self
-            .meek_transport_generation_owner
-            .as_ref()
-            .map(MeekTransportGenerationOwnerHandle::metrics_snapshot)
-            .unwrap_or(Value::Null);
-        snapshot["vlessMuxOwners"] = self
-            .vless_mux_generation_owner
-            .as_ref()
-            .map(VlessMuxGenerationOwnerHandle::metrics_snapshot)
-            .unwrap_or(Value::Null);
-        snapshot["xhttpXmuxOwner"] = self
-            .xhttp_xmux_generation_owner
-            .as_ref()
-            .map(tcp::XhttpXmuxGenerationOwnerHandle::metrics_snapshot)
-            .unwrap_or(Value::Null);
-        snapshot
     }
 
     pub(crate) fn prune_event_log(&self) -> std::io::Result<()> {

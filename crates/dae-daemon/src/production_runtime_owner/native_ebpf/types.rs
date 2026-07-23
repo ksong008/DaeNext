@@ -114,6 +114,20 @@ pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeState {
     pub(super) pname_report: Option<Value>,
 }
 
+#[derive(Clone, Debug)]
+pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeReadHandle {
+    #[cfg(feature = "native-ebpf")]
+    pub(super) map_profile: Option<RuntimeMapProfile>,
+    #[cfg(feature = "native-ebpf")]
+    pub(super) map_profile_source: Option<&'static str>,
+    #[cfg(feature = "native-ebpf")]
+    pub(super) udp_state_capacity: Option<u32>,
+    #[cfg(feature = "native-ebpf")]
+    pub(super) udp_state_metrics_map_id: Option<u32>,
+    #[cfg(feature = "native-ebpf")]
+    pub(super) redirect_generation: Option<u64>,
+}
+
 impl std::fmt::Debug for NativeEbpfRuntimeState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("NativeEbpfRuntimeState");

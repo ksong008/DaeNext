@@ -6,6 +6,8 @@ mod cleanup;
 pub(in crate::daed_product) mod event_identity;
 mod instance;
 mod process_transition;
+mod read_view;
+use self::read_view::ProductRuntimeReadSnapshot;
 mod readiness;
 mod recovery;
 mod startup_recovery;
@@ -56,6 +58,8 @@ pub(super) struct ProductRuntimeManager {
     startup_recovery: Mutex<ProductRuntimeStartupRecoverySupervisor>,
     process_http_config: Mutex<Option<ProductHttpWorkerConfig>>,
     runtime_required_for_readiness: AtomicBool,
+    #[cfg(test)]
+    summary_render_barrier: Mutex<Option<Arc<std::sync::Barrier>>>,
 }
 
 #[derive(Debug, Default)]
@@ -66,7 +70,7 @@ pub(super) struct ProductRuntimeState {
     pub(super) last_error: Option<String>,
     pub(super) last_transition_at: Option<String>,
     pub(super) runtime_started_at: Option<String>,
-    pub(super) last_report: Option<Value>,
+    pub(super) last_report: Option<Arc<Value>>,
     pub(super) reload_count: u64,
     pub(super) stop_count: u64,
     pub(super) lifecycle_epoch: u64,
@@ -86,7 +90,7 @@ pub(super) struct RuntimeCleanupState {
     pub(super) mode: Option<String>,
     pub(super) started_at: Option<String>,
     pub(super) finished_at: Option<String>,
-    pub(super) last_report: Option<Value>,
+    pub(super) last_report: Option<Arc<Value>>,
     pub(super) last_error: Option<String>,
 }
 
@@ -105,7 +109,7 @@ impl RuntimeCleanupState {
         self.running = false;
         self.finished_at = Some(now_text());
         self.last_error = cleanup_report_error(report.as_ref());
-        self.last_report = report;
+        self.last_report = report.map(Arc::new);
     }
 
     fn summary(&self) -> Value {
@@ -125,7 +129,7 @@ impl RuntimeCleanupState {
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "lastError": self.last_error,
-            "lastReport": self.last_report,
+            "lastReport": self.last_report.as_deref(),
         })
     }
 }
@@ -331,6 +335,8 @@ impl ProductRuntimeManager {
             startup_recovery: Mutex::new(ProductRuntimeStartupRecoverySupervisor::default()),
             process_http_config: Mutex::new(None),
             runtime_required_for_readiness: AtomicBool::new(false),
+            #[cfg(test)]
+            summary_render_barrier: Mutex::new(None),
         }
     }
 
@@ -537,7 +543,7 @@ fn publish_resident_runtime_generation(
         "transition": RuntimeTransitionClass::GenerationSwap.name(),
         "publication": publication,
     });
-    state.last_report = Some(report.clone());
+    state.last_report = Some(Arc::new(report.clone()));
     Ok(RuntimeStartOutcome { report })
 }
 
@@ -577,7 +583,7 @@ fn publish_runtime_metadata_transition(
         "physicalRuntimeReused": true,
         "processRestartPending": transition == RuntimeTransitionClass::ProcessRestart,
     });
-    state.last_report = Some(report.clone());
+    state.last_report = Some(Arc::new(report.clone()));
     Ok(RuntimeStartOutcome { report })
 }
 
@@ -722,7 +728,7 @@ fn replace_prepared_product_runtime_with_config_content(
                 previous_runtime_started_at,
                 transition_at,
             ));
-            inner.last_report = Some(report.clone());
+            inner.last_report = Some(Arc::new(report.clone()));
             Ok(RuntimeStartOutcome { report })
         }
         Err(start_err) => {
@@ -767,7 +773,7 @@ fn replace_prepared_product_runtime_with_config_content(
                         inner.transition_identity = previous_transition_identity;
                         inner.process_baseline_config = previous_process_baseline_config.clone();
                         inner.runtime_started_at = previous_runtime_started_at.clone();
-                        inner.last_report = Some(report);
+                        inner.last_report = Some(Arc::new(report));
                         true
                     }
                     Err(restore_err) => {
@@ -820,6 +826,13 @@ impl ProductRuntimeManager {
 
     pub(super) fn summary(&self) -> Value {
         let coordinator = self.reconciler.summary();
+        let fake_runtime_enabled = product_runtime_fake_start_enabled();
+        #[cfg(test)]
+        let render_barrier = self
+            .summary_render_barrier
+            .lock()
+            .ok()
+            .and_then(|barrier| barrier.clone());
         let Ok(inner) = self.inner.lock() else {
             return json!({
                 "running": false,
@@ -829,81 +842,15 @@ impl ProductRuntimeManager {
                 "error": "product runtime manager lock poisoned",
             });
         };
-        match inner.runtime.as_ref() {
-            Some(ProductRuntimeInstance::Resident(runtime)) => {
-                let mut summary = runtime.product_state_summary();
-                inner.traffic_carry.apply_to_runtime_summary(&mut summary);
-                if let Value::Object(map) = &mut summary {
-                    map.insert(
-                        "lastTransitionAt".to_owned(),
-                        json!(inner.last_transition_at.clone()),
-                    );
-                    map.insert(
-                        "startedAt".to_owned(),
-                        json!(inner.runtime_started_at.clone()),
-                    );
-                    map.insert("lastError".to_owned(), json!(inner.last_error.clone()));
-                    map.insert("reloadCount".to_owned(), json!(inner.reload_count));
-                    map.insert("stopCount".to_owned(), json!(inner.stop_count));
-                    map.insert("lastReport".to_owned(), json!(inner.last_report.clone()));
-                    map.insert("cleanup".to_owned(), inner.cleanup.summary());
-                    map.insert("apply".to_owned(), inner.apply.summary());
-                    map.insert("applyCoordinator".to_owned(), coordinator);
-                    map.insert(
-                        "activeGeneration".to_owned(),
-                        json!(inner.active_generation),
-                    );
-                    map.insert(
-                        "pendingProcessTransition".to_owned(),
-                        json!(inner.pending_process_transition),
-                    );
-                }
-                summary
-            }
-            Some(ProductRuntimeInstance::Fake(fake)) => json!({
-                "running": true,
-                "state": "running",
-                "attachBackend": "fake-resident-runtime-test-only",
-                "netnsLinkMode": "fake-test-only",
-                "fakeRuntime": true,
-                "startedAt": inner.runtime_started_at.clone().unwrap_or_else(|| fake.started_at.clone()),
-                "tproxyPort": fake.tproxy_port,
-                "lastTransitionAt": inner.last_transition_at,
-                "lastError": inner.last_error,
-                "reloadCount": inner.reload_count,
-                "stopCount": inner.stop_count,
-                "lastReport": inner.last_report,
-                "cleanup": inner.cleanup.summary(),
-                "apply": inner.apply.summary(),
-                "applyCoordinator": coordinator,
-                "activeGeneration": inner.active_generation,
-                "pendingProcessTransition": inner.pending_process_transition,
-            }),
-            None => json!({
-                "running": false,
-                "state": if inner.cleanup.running {
-                    "stopping"
-                } else if inner.last_error.is_some() {
-                    "error"
-                } else {
-                    "stopped"
-                },
-                "attachBackend": Value::Null,
-                "netnsLinkMode": Value::Null,
-                "fakeRuntime": product_runtime_fake_start_enabled(),
-                "startedAt": Value::Null,
-                "lastTransitionAt": inner.last_transition_at,
-                "lastError": inner.last_error,
-                "reloadCount": inner.reload_count,
-                "stopCount": inner.stop_count,
-                "lastReport": inner.last_report,
-                "cleanup": inner.cleanup.summary(),
-                "apply": inner.apply.summary(),
-                "applyCoordinator": coordinator,
-                "activeGeneration": inner.active_generation,
-                "pendingProcessTransition": inner.pending_process_transition,
-            }),
+        let snapshot =
+            ProductRuntimeReadSnapshot::capture(&inner, coordinator, fake_runtime_enabled);
+        drop(inner);
+        #[cfg(test)]
+        if let Some(barrier) = render_barrier {
+            barrier.wait();
+            barrier.wait();
         }
+        snapshot.render()
     }
 
     pub(super) fn runtime_overview_delta_state(&self) -> RuntimeOverviewDeltaState {

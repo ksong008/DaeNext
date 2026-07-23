@@ -65,16 +65,12 @@ pub(super) struct ResidentInterfaceMonitorRuntime {
     handle: Option<JoinHandle<()>>,
 }
 
-impl std::fmt::Debug for ResidentInterfaceMonitorRuntime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResidentInterfaceMonitorRuntime")
-            .field("running", &self.handle.is_some())
-            .field("state", &self.snapshot())
-            .finish()
-    }
+#[derive(Clone)]
+pub(super) struct ResidentInterfaceMonitorReadHandle {
+    state: Arc<Mutex<Value>>,
 }
 
-impl ResidentInterfaceMonitorRuntime {
+impl ResidentInterfaceMonitorReadHandle {
     pub(super) fn snapshot(&self) -> Value {
         self.state
             .lock()
@@ -85,6 +81,27 @@ impl ResidentInterfaceMonitorRuntime {
                     "error": "resident interface monitor state lock poisoned",
                 })
             })
+    }
+}
+
+impl std::fmt::Debug for ResidentInterfaceMonitorRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResidentInterfaceMonitorRuntime")
+            .field("running", &self.handle.is_some())
+            .field("state", &self.snapshot())
+            .finish()
+    }
+}
+
+impl ResidentInterfaceMonitorRuntime {
+    pub(super) fn read_handle(&self) -> ResidentInterfaceMonitorReadHandle {
+        ResidentInterfaceMonitorReadHandle {
+            state: Arc::clone(&self.state),
+        }
+    }
+
+    pub(super) fn snapshot(&self) -> Value {
+        self.read_handle().snapshot()
     }
 
     pub(super) fn shutdown(&mut self, cleanup_steps: &mut Vec<Value>) {

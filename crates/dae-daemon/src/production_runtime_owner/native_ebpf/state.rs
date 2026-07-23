@@ -88,7 +88,9 @@ impl NativeEbpfRuntimeState {
         value
     }
 
-    pub(in crate::production_runtime_owner) fn runtime_metrics(&self) -> Value {
+    pub(in crate::production_runtime_owner) fn metrics_read_handle(
+        &self,
+    ) -> NativeEbpfRuntimeReadHandle {
         #[cfg(feature = "native-ebpf")]
         {
             let profile = self.load_input.as_ref().map(|input| &input.map_profile);
@@ -103,57 +105,21 @@ impl NativeEbpfRuntimeState {
                     .find(|spec| spec.name == "udp_conn_state_map")
                     .map(|spec| spec.max_entries)
             });
-            let metrics = self.loaded.as_ref().map(|loaded| {
-                dae_ebpf_support::read_aya_udp_state_metrics(loaded).map(|metrics| {
-                    json!({
-                        "stateCreatedTotal": metrics.state_created_total,
-                        "stateRefreshTotal": metrics.state_refresh_total,
-                        "insertFailureTotal": metrics.insert_failure_total,
-                        "postInsertLookupFailureTotal": metrics.post_insert_lookup_failure_total,
-                        "timerInitFailureTotal": metrics.timer_init_failure_total,
-                        "timerCallbackFailureTotal": metrics.timer_callback_failure_total,
-                        "timerStartFailureTotal": metrics.timer_start_failure_total,
-                    })
-                })
-            });
-            match metrics {
-                Some(Ok(metrics)) => json!({
-                    "status": "pass",
-                    "mapProfile": profile.map(|selection| selection.profile.name()),
-                    "mapProfileSource": profile.map(|selection| selection.source),
-                    "udpStateCapacity": udp_state_capacity,
-                    "udpStateIdleTimeoutNs": profile.map(|selection| selection.profile.udp_state_idle_timeout_ns().to_string()),
-                    "udpStateSaturationPolicy": "fail-closed",
-                    "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
-                    "redirectTrackGeneration": redirect_generation.map(|generation| generation.to_string()),
-                    "redirectTrackMigration": "fresh-unpinned-map-per-runtime",
-                    "udpStateMetrics": metrics,
-                }),
-                Some(Err(error)) => json!({
-                    "status": "error",
-                    "error": error,
-                    "mapProfile": profile.map(|selection| selection.profile.name()),
-                    "udpStateCapacity": udp_state_capacity,
-                    "udpStateSaturationPolicy": "fail-closed",
-                    "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
-                    "redirectTrackGeneration": redirect_generation.map(|generation| generation.to_string()),
-                }),
-                None => json!({
-                    "status": "unavailable",
-                    "mapProfile": profile.map(|selection| selection.profile.name()),
-                    "udpStateSaturationPolicy": "fail-closed",
-                    "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
-                    "redirectTrackGeneration": redirect_generation.map(|generation| generation.to_string()),
-                }),
+            NativeEbpfRuntimeReadHandle {
+                map_profile: profile.map(|selection| selection.profile),
+                map_profile_source: profile.map(|selection| selection.source),
+                udp_state_capacity,
+                udp_state_metrics_map_id: self
+                    .loaded
+                    .as_ref()
+                    .and_then(|_| self.loaded_map_id("udp_state_metrics")),
+                redirect_generation,
             }
         }
         #[cfg(not(feature = "native-ebpf"))]
         {
             let _ = self;
-            json!({
-                "status": "unavailable",
-                "reason": "native eBPF support is not compiled",
-            })
+            NativeEbpfRuntimeReadHandle {}
         }
     }
 

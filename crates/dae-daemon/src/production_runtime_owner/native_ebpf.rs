@@ -41,6 +41,7 @@ mod attach_flow;
 mod cgroup;
 pub(in crate::production_runtime_owner) use self::cgroup::native_cgroup_attach_preflight;
 mod map_cleanup;
+mod metrics_view;
 mod state;
 #[cfg(any(feature = "native-ebpf", test))]
 use self::map_cleanup::*;

@@ -716,14 +716,28 @@ pub(super) fn start_with_options(
         return Err(err);
     }
 
+    let binding_registry_snapshot = Arc::new(binding_registry.to_value());
+    let start_report = Arc::new(start_report_for_runtime);
+    let read_handle = Arc::new(ResidentProductionRuntimeReadHandle::new(
+        runtime_generation,
+        Arc::clone(&start_report),
+        Arc::clone(&binding_registry_snapshot),
+        native_runtime.metrics_read_handle(),
+        dataplane
+            .as_ref()
+            .map(ResidentDataplaneRuntime::read_handle),
+        interface_monitor
+            .as_ref()
+            .map(ResidentInterfaceMonitorRuntime::read_handle),
+    ));
     Ok(ResidentProductionRuntime {
         runtime_generation,
         binding_registry,
+        read_handle,
         live_handoff,
         native_runtime,
         dataplane,
         interface_monitor,
-        start_report: start_report_for_runtime,
         lan_ifaces,
         native_lan_ifaces,
         cleanup_steps,
