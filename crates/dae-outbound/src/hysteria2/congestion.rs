@@ -16,8 +16,7 @@ const BRUTAL_SAMPLE_SECONDS: usize = 5;
 const BRUTAL_MINIMUM_SAMPLE_PACKETS: u64 = 50;
 const BRUTAL_MINIMUM_ACK_RATE: f64 = 0.8;
 const BRUTAL_INITIAL_WINDOW_BYTES: u64 = 10_240;
-const QUINN_PACING_NUMERATOR: u64 = 5;
-const QUINN_PACING_DENOMINATOR: u64 = 4;
+const BRUTAL_CONGESTION_WINDOW_MULTIPLIER: u64 = 2;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Hysteria2CongestionController {
@@ -590,9 +589,8 @@ impl BrutalController {
         let compensated = u128::from(self.compensated_rate(target));
         let window = compensated
             .saturating_mul(self.smoothed_rtt.as_nanos())
-            .saturating_mul(u128::from(QUINN_PACING_DENOMINATOR))
-            / 1_000_000_000_u128
-            / u128::from(QUINN_PACING_NUMERATOR);
+            .saturating_mul(u128::from(BRUTAL_CONGESTION_WINDOW_MULTIPLIER))
+            / 1_000_000_000_u128;
         u64::try_from(window)
             .unwrap_or(u64::MAX)
             .max(u64::from(self.mtu))
@@ -745,7 +743,7 @@ mod tests {
         let now = Instant::now();
         let mut controller = BrutalController::new(now, 1_200);
         controller.smoothed_rtt = Duration::from_millis(100);
-        assert_eq!(controller.window(1_000_000), 80_000);
+        assert_eq!(controller.window(1_000_000), 200_000);
 
         controller.samples[0] = BrutalSample {
             second: 0,
@@ -755,10 +753,10 @@ mod tests {
         controller.update_ack_rate(now, false);
         assert_eq!(controller.acknowledgement_rate, BRUTAL_MINIMUM_ACK_RATE);
         assert_eq!(controller.compensated_rate(1_000_000), 1_250_000);
-        assert_eq!(controller.window(1_000_000), 100_000);
+        assert_eq!(controller.window(1_000_000), 250_000);
 
         controller.update_ack_rate(now, true);
         assert_eq!(controller.acknowledgement_rate, 1.0);
-        assert_eq!(controller.window(1_000_000), 80_000);
+        assert_eq!(controller.window(1_000_000), 200_000);
     }
 }
