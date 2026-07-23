@@ -1,5 +1,7 @@
 #[path = "quic_owner_external_live_tests/config.rs"]
 mod config;
+#[path = "quic_owner_external_live_tests/congestion.rs"]
+mod congestion;
 #[path = "quic_owner_external_live_tests/control.rs"]
 mod control;
 #[path = "quic_owner_external_live_tests/owner.rs"]

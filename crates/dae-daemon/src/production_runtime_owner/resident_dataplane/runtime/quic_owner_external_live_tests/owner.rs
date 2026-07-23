@@ -5,11 +5,12 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tokio::time;
 
+use super::super::tcp::QuicEndpointCallerClass;
 use super::super::tcp::quic_endpoint_metrics_snapshot;
 use super::super::{
-    Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle, ResidentStopSignal,
-    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
-    start_hysteria2_owner_registry_on, start_juicity_owner_registry_on,
+    Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, JuicityOwnerRegistryHandle,
+    ResidentStopSignal, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
+    TuicOwnerRegistryHandle, start_hysteria2_owner_registry_on, start_juicity_owner_registry_on,
     start_tuic_owner_registry_on,
 };
 use super::config::QuicOwnerProtocol;
@@ -88,6 +89,23 @@ impl ExternalLiveOwner {
         self.snapshot()["cumulativeBuilds"]
             .as_u64()
             .expect("external owner metrics expose cumulativeBuilds")
+    }
+
+    pub(super) async fn acquire_hysteria2(
+        &self,
+        binding: super::super::plan::ResidentProxyBinding,
+        timeout: Duration,
+    ) -> Result<Hysteria2TransportLease, String> {
+        let OwnerRegistry::Hysteria2(registry) = &self.registry else {
+            return Err("external owner is not Hysteria2".to_owned());
+        };
+        registry
+            .acquire(
+                binding,
+                QuicEndpointCallerClass::TcpData,
+                dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), timeout),
+            )
+            .await
     }
 
     pub(super) fn assert_pressure(&self, session_count: usize) {
