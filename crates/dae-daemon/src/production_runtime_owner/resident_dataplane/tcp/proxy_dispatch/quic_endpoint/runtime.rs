@@ -6,12 +6,26 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use futures_util::future::{AbortHandle, AbortRegistration, Abortable};
+
 use super::metrics::QuicEndpointObservation;
 
 pub(super) struct EndpointDriverTrackingRuntime {
     inner: Arc<dyn quinn::Runtime>,
     observation: Arc<QuicEndpointObservation>,
     endpoint_driver_claimed: AtomicBool,
+    endpoint_driver_abort: std::sync::Mutex<Option<AbortRegistration>>,
+}
+
+#[derive(Clone)]
+pub(super) struct EndpointDriverReleaseHandle {
+    abort: AbortHandle,
+}
+
+impl EndpointDriverReleaseHandle {
+    pub(super) fn release(&self) {
+        self.abort.abort();
+    }
 }
 
 impl std::fmt::Debug for EndpointDriverTrackingRuntime {
@@ -28,12 +42,17 @@ impl EndpointDriverTrackingRuntime {
     pub(super) fn new(
         inner: Arc<dyn quinn::Runtime>,
         observation: Arc<QuicEndpointObservation>,
-    ) -> Self {
-        Self {
-            inner,
-            observation,
-            endpoint_driver_claimed: AtomicBool::new(false),
-        }
+    ) -> (Self, EndpointDriverReleaseHandle) {
+        let (abort, registration) = AbortHandle::new_pair();
+        (
+            Self {
+                inner,
+                observation,
+                endpoint_driver_claimed: AtomicBool::new(false),
+                endpoint_driver_abort: std::sync::Mutex::new(Some(registration)),
+            },
+            EndpointDriverReleaseHandle { abort },
+        )
     }
 
     pub(super) fn endpoint_driver_claimed(&self) -> bool {
@@ -57,9 +76,15 @@ impl quinn::Runtime for EndpointDriverTrackingRuntime {
         self.observation.endpoint_driver_started();
         let observation = Arc::clone(&self.observation);
         let completion = EndpointDriverCompletion { observation };
+        let registration = self
+            .endpoint_driver_abort
+            .lock()
+            .unwrap()
+            .take()
+            .expect("first Quinn EndpointDriver spawn owns its abort registration");
         self.inner.spawn(Box::pin(async move {
             let _completion = completion;
-            future.await;
+            let _ = Abortable::new(future, registration).await;
         }));
     }
 

@@ -1,7 +1,11 @@
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 use dae_runtime_control::{OwnerGeneration, OwnerReservation, PhysicalOwnerState};
 use serde_json::{Value, json};
+use tokio::sync::Notify;
 
 use super::admission::admission_snapshot;
 use super::charge::charge_model_json;
@@ -667,7 +671,37 @@ fn registry() -> &'static Mutex<QuicEndpointMetricsRegistry> {
 pub(super) struct QuicEndpointObservation {
     id: u64,
     provenance: QuicEndpointProvenance,
-    _reservation: OwnerReservation,
+    release: Arc<QuicEndpointReleaseSignal>,
+    reservation: Option<OwnerReservation>,
+}
+
+#[derive(Default)]
+pub(super) struct QuicEndpointReleaseSignal {
+    released: AtomicBool,
+    notify: Notify,
+}
+
+impl QuicEndpointReleaseSignal {
+    fn complete(&self) {
+        if !self.released.swap(true, Ordering::AcqRel) {
+            self.notify.notify_waiters();
+        }
+    }
+
+    pub(super) async fn wait(&self) {
+        loop {
+            if self.released.load(Ordering::Acquire) {
+                return;
+            }
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.released.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 impl QuicEndpointObservation {
@@ -679,7 +713,8 @@ impl QuicEndpointObservation {
         Arc::new(Self {
             id,
             provenance,
-            _reservation: reservation,
+            release: Arc::new(QuicEndpointReleaseSignal::default()),
+            reservation: Some(reservation),
         })
     }
 
@@ -738,11 +773,17 @@ impl QuicEndpointObservation {
     pub(super) fn wait_idle_completed(&self) {
         registry().lock().unwrap().wait_idle_completed(self.id);
     }
+
+    pub(super) fn release_signal(&self) -> Arc<QuicEndpointReleaseSignal> {
+        Arc::clone(&self.release)
+    }
 }
 
 impl Drop for QuicEndpointObservation {
     fn drop(&mut self) {
+        drop(self.reservation.take());
         registry().lock().unwrap().release(self.id);
+        self.release.complete();
     }
 }
 

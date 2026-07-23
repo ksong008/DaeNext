@@ -35,8 +35,8 @@ use crate::production_runtime_owner::resident_dataplane::tcp::{
     Hysteria2Failure, Hysteria2FailureClass, Hysteria2PortHoppingMetrics,
     Hysteria2QuicConnectionRequest, ObservedQuicEndpoint, QuicEndpointCallerClass,
     QuicEndpointDrainReport, ResidentConnectedQuicEndpoint,
-    open_hysteria2_quic_connection_candidates_async, wait_quic_endpoint_idle_after_close,
-    wait_quic_endpoints_idle_until,
+    open_hysteria2_quic_connection_candidates_async, quic_endpoint_drain_deadlines,
+    wait_quic_endpoint_idle_after_close, wait_quic_endpoints_idle_or_released_until,
 };
 
 const HYSTERIA2_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/hysteria2-owner/v2";
@@ -177,6 +177,8 @@ struct Hysteria2OwnerRegistryMetrics {
     shutdown_timed_out: AtomicBool,
     endpoint_drain_requested: AtomicUsize,
     endpoint_drain_completed: AtomicUsize,
+    endpoint_drain_idle_completed: AtomicUsize,
+    endpoint_drain_forced_released: AtomicUsize,
     endpoint_drain_timed_out: AtomicUsize,
     active_brutal_controllers: AtomicUsize,
     active_bbr_controllers: AtomicUsize,
@@ -257,6 +259,10 @@ impl Hysteria2OwnerRegistryMetrics {
         self.endpoint_drain_requested
             .store(requested, Ordering::Release);
         self.endpoint_drain_completed.store(0, Ordering::Release);
+        self.endpoint_drain_idle_completed
+            .store(0, Ordering::Release);
+        self.endpoint_drain_forced_released
+            .store(0, Ordering::Release);
         self.endpoint_drain_timed_out.store(0, Ordering::Release);
     }
 
@@ -265,6 +271,10 @@ impl Hysteria2OwnerRegistryMetrics {
             .store(report.requested(), Ordering::Release);
         self.endpoint_drain_completed
             .store(report.completed(), Ordering::Release);
+        self.endpoint_drain_idle_completed
+            .store(report.idle_completed(), Ordering::Release);
+        self.endpoint_drain_forced_released
+            .store(report.forced_released(), Ordering::Release);
         self.endpoint_drain_timed_out
             .store(report.timed_out(), Ordering::Release);
         if !report.is_complete() {
@@ -417,6 +427,12 @@ impl Drop for Hysteria2EndpointDrainGuard {
         self.metrics
             .endpoint_drain_timed_out
             .store(self.requested, Ordering::Release);
+        self.metrics
+            .endpoint_drain_idle_completed
+            .store(0, Ordering::Release);
+        self.metrics
+            .endpoint_drain_forced_released
+            .store(0, Ordering::Release);
         self.metrics
             .shutdown_timed_out
             .store(true, Ordering::Release);
@@ -1185,6 +1201,8 @@ impl Hysteria2OwnerRegistryHandle {
             "endpointDrain": {
                 "requested": self.metrics.endpoint_drain_requested.load(Ordering::Acquire),
                 "completed": self.metrics.endpoint_drain_completed.load(Ordering::Acquire),
+                "idleCompleted": self.metrics.endpoint_drain_idle_completed.load(Ordering::Acquire),
+                "forcedReleased": self.metrics.endpoint_drain_forced_released.load(Ordering::Acquire),
                 "timedOut": self.metrics.endpoint_drain_timed_out.load(Ordering::Acquire),
             },
             "shutdownTimedOut": self.metrics.shutdown_timed_out.load(Ordering::Relaxed),
@@ -1563,8 +1581,15 @@ async fn run_hysteria2_owner_registry(
         cell.close();
     }
     let drain_guard = Hysteria2EndpointDrainGuard::new(Arc::clone(&metrics), endpoints.len());
-    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-    let report = wait_quic_endpoints_idle_until(endpoints, deadline).await;
+    let drain_started = time::Instant::now();
+    let (peer_close_deadline, resource_release_deadline) =
+        quic_endpoint_drain_deadlines(drain_started, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
+    let report = wait_quic_endpoints_idle_or_released_until(
+        endpoints,
+        peer_close_deadline,
+        resource_release_deadline,
+    )
+    .await;
     drain_guard.finish(report);
     ownership_reconciler.finish_shutdown();
 }
