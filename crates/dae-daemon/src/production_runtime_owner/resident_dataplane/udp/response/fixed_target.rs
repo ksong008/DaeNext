@@ -19,7 +19,7 @@ impl UdpSessionFixedTarget {
                 self.source = Some(source);
                 Ok(())
             }
-            Some(current) if current == source => Ok(()),
+            Some(current) if same_fixed_target(current, source) => Ok(()),
             Some(current) => Err(format!(
                 "{owner} is bound to UDP target {current}, cannot send to {source}"
             )),
@@ -258,7 +258,17 @@ impl UdpResponseIdentityEvidence {
 }
 
 fn same_fixed_target(observed: SocketAddr, expected: SocketAddr) -> bool {
-    observed == expected
+    canonical_fixed_target(observed) == canonical_fixed_target(expected)
+}
+
+fn canonical_fixed_target(target: SocketAddr) -> SocketAddr {
+    let SocketAddr::V6(ipv6_target) = target else {
+        return target;
+    };
+    let Some(ipv4) = ipv6_target.ip().to_ipv4_mapped() else {
+        return target;
+    };
+    SocketAddr::new(ipv4.into(), ipv6_target.port())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

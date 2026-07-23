@@ -50,6 +50,46 @@ fn wrong_or_missing_wire_source_is_dropped() {
 }
 
 #[test]
+fn ipv4_mapped_wire_sources_match_the_equivalent_ipv4_target() {
+    let ipv4 = target(1, 443);
+    let mapped: SocketAddr = "[::ffff:192.0.2.1]:443".parse().unwrap();
+    for (wire_source, expected_target) in [(mapped, ipv4), (ipv4, mapped)] {
+        assert_eq!(
+            UdpResponseIdentityEvidence::Decoded {
+                wire_source: Some(wire_source),
+                observed_identity: None,
+            }
+            .validate_fixed_target(UdpFixedTargetExpectation::decoded_source(expected_target)),
+            UdpFixedTargetValidation::Validated
+        );
+    }
+
+    let different_port: SocketAddr = "[::ffff:192.0.2.1]:444".parse().unwrap();
+    assert_eq!(
+        UdpResponseIdentityEvidence::Decoded {
+            wire_source: Some(different_port),
+            observed_identity: None,
+        }
+        .validate_fixed_target(UdpFixedTargetExpectation::decoded_source(ipv4)),
+        UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+    );
+}
+
+#[test]
+fn native_ipv6_sources_do_not_alias_ipv4_targets() {
+    let ipv4 = target(1, 443);
+    let ipv6: SocketAddr = "[2001:db8::c000:201]:443".parse().unwrap();
+    assert_eq!(
+        UdpResponseIdentityEvidence::Decoded {
+            wire_source: Some(ipv6),
+            observed_identity: None,
+        }
+        .validate_fixed_target(UdpFixedTargetExpectation::decoded_source(ipv4)),
+        UdpFixedTargetValidation::Dropped(UdpResponseDropReason::UnexpectedWireSource)
+    );
+}
+
+#[test]
 fn missing_or_cross_session_identity_is_dropped() {
     let expected_target = target(1, 443);
     let expected_identity = token(b"expected-session");
@@ -188,6 +228,18 @@ fn session_fixed_target_is_idempotent_and_rejects_retargeting() {
     assert_eq!(binding.source(), Some(first));
     binding.clear();
     assert_eq!(binding.source(), None);
+}
+
+#[test]
+fn session_fixed_target_accepts_an_equivalent_ipv4_mapped_target() {
+    let ipv4 = target(1, 443);
+    let mapped: SocketAddr = "[::ffff:192.0.2.1]:443".parse().unwrap();
+    let different_port: SocketAddr = "[::ffff:192.0.2.1]:444".parse().unwrap();
+    let mut binding = UdpSessionFixedTarget::default();
+    binding.bind(ipv4, "fixture session").unwrap();
+    binding.bind(mapped, "fixture session").unwrap();
+    assert!(binding.bind(different_port, "fixture session").is_err());
+    assert_eq!(binding.source(), Some(ipv4));
 }
 
 #[test]
