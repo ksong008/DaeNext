@@ -254,6 +254,9 @@ mod health_checks;
 #[path = "runtime/juicity_owner_live_tests.rs"]
 mod juicity_owner_live_tests;
 #[cfg(test)]
+#[path = "runtime/quic_owner_external_live_tests.rs"]
+mod quic_owner_external_live_tests;
+#[cfg(test)]
 #[path = "runtime/tuic_owner_live_tests.rs"]
 mod tuic_owner_live_tests;
 pub(super) use self::health_checks::*;

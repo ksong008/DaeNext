@@ -86,11 +86,17 @@ mod connect_udp;
 mod datagram;
 mod dispatch;
 mod selection;
+#[cfg(test)]
+mod test_support;
 mod wait;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::connect_udp::{
     clear_connect_udp_h2_pools, clear_connect_udp_h3_pools, connect_udp_pool_metrics_snapshot,
 };
 use self::datagram::*;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::test_support::{
+    ProxyUdpSessionCheckpoint, exercise_proxy_udp_packet_session,
+};
 
 mod anytls;
 mod quic;
