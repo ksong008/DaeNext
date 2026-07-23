@@ -10,8 +10,11 @@ use serde_json::Value;
 
 use crate::{BenchCase, Measurement, measure};
 
+#[path = "routing/prefix_lookup.rs"]
+mod prefix_lookup;
+
 pub(crate) fn cases() -> Vec<BenchCase> {
-    vec![
+    let mut cases = vec![
         BenchCase {
             id: "routing/prefix_parse",
             default_iters: 100_000,
@@ -42,7 +45,9 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             default_iters: 100_000,
             run: bench_routing_lpm_native_plan_build,
         },
-    ]
+    ];
+    cases.extend(prefix_lookup::cases());
+    cases
 }
 
 fn bench_routing_prefix_parse(iters: u64, warmup: u64) -> Result<Measurement, String> {

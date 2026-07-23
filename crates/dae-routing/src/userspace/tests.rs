@@ -147,4 +147,82 @@ mod userspace_matcher_tests {
             vec![0]
         );
     }
+
+    #[test]
+    fn indexed_prefix_sets_preserve_match_order_marks_and_ip_families() {
+        let ipv4 = (0..64)
+            .map(|index| IpPrefix::parse(&format!("198.51.{index}.42/32")).unwrap())
+            .collect();
+        let ipv6 = (0..64)
+            .map(|index| IpPrefix::parse(&format!("2001:db8:{index:x}::/48")).unwrap())
+            .collect();
+        let matcher = RoutingMatcher::from_typed_sets(
+            Vec::new(),
+            vec![
+                RoutingLpmSet {
+                    index: 10,
+                    prefixes: ipv4,
+                },
+                RoutingLpmSet {
+                    index: 20,
+                    prefixes: ipv6,
+                },
+            ],
+            vec![
+                RoutingMatchSet {
+                    kind: RoutingMatchKind::IpSet { lpm_index: 10 },
+                    outbound: OutboundIndex::BLOCK,
+                    not: false,
+                    mark: 11,
+                    must: false,
+                },
+                RoutingMatchSet {
+                    kind: RoutingMatchKind::IpSet { lpm_index: 20 },
+                    outbound: OutboundIndex::DIRECT,
+                    not: false,
+                    mark: 22,
+                    must: true,
+                },
+                RoutingMatchSet {
+                    kind: RoutingMatchKind::Fallback,
+                    outbound: OutboundIndex::DIRECT,
+                    not: false,
+                    mark: 33,
+                    must: false,
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            matcher
+                .match_query_detail(&Query::tcp("198.51.63.42".parse().unwrap(), 443, ""))
+                .unwrap(),
+            MatchOutcome {
+                outbound: OutboundIndex::BLOCK,
+                mark: 11,
+                must: false,
+            }
+        );
+        assert_eq!(
+            matcher
+                .match_query_detail(&Query::tcp("2001:db8:3f::1".parse().unwrap(), 443, ""))
+                .unwrap(),
+            MatchOutcome {
+                outbound: OutboundIndex::DIRECT,
+                mark: 22,
+                must: true,
+            }
+        );
+        assert_eq!(
+            matcher
+                .match_query_detail(&Query::tcp("203.0.113.1".parse().unwrap(), 443, ""))
+                .unwrap(),
+            MatchOutcome {
+                outbound: OutboundIndex::DIRECT,
+                mark: 33,
+                must: false,
+            }
+        );
+    }
 }
