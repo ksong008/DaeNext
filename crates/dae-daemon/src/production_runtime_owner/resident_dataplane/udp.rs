@@ -122,6 +122,10 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::session_ex
 #[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::exercise_juicity_udp_stream_session;
 use self::session_executor::*;
+#[cfg(test)]
+pub(in crate::production_runtime_owner::resident_dataplane) use self::session_executor::{
+    ProxyUdpSessionCheckpoint, exercise_proxy_udp_packet_session,
+};
 mod vmess_session;
 use self::vmess_session::*;
 mod response;
