@@ -196,7 +196,7 @@ pub(crate) fn store_node_latency_result(
     Ok(())
 }
 
-pub(crate) fn native_probe_unavailable_results(
+pub(crate) fn native_probe_missing_results(
     nodes: &[LatencyProbeNode],
     tested_at: &str,
     probe_generation: Option<u64>,
@@ -211,10 +211,7 @@ pub(crate) fn native_probe_unavailable_results(
             latency_ms: None,
             alive: false,
             tested_at: tested_at.to_owned(),
-            message: Some(
-                "native outbound probe unavailable; materialize/reload Rust runtime before testing this node"
-                    .to_owned(),
-            ),
+            message: Some("native outbound probe completed without a node result".to_owned()),
         })
         .collect()
 }

@@ -173,7 +173,7 @@ fn run_node_latency_job_inner(
         runtime,
         jobs,
     } = context;
-    let conn = open_state_connection(state)?;
+    let mut conn = open_state_connection(state)?;
     let mut completed = 0usize;
     let mut succeeded = 0usize;
     jobs.flush_pending_latency_results(job_id, state);
@@ -279,21 +279,21 @@ fn run_node_latency_job_inner(
             }
         }
     } else if !nodes.is_empty() && !cancellation.is_requested() {
-        let nodes = current_latency_probe_nodes(&conn, nodes)?;
-        let tested_at = now_text();
-        let results = native_probe_unavailable_results(&nodes, &tested_at, None);
-        if !results.is_empty() && !cancellation.is_requested() {
-            let alive = results.iter().filter(|result| result.alive).count();
-            completed = results.len();
-            succeeded = alive;
-            jobs.queue_and_flush_latency_results(job_id, state, &results);
-            jobs.mark_progress(
-                job_id,
-                completed,
-                succeeded,
-                completed.saturating_sub(succeeded),
-            );
+        let lifecycle_epoch = runtime.latency_probe_lifecycle_epoch();
+        let config_snapshot = ManualProbeConfigSnapshot::capture(state)?;
+        let outcome = StandaloneManualProbeJob {
+            job_id,
+            cancellation,
+            state,
+            runtime,
+            jobs,
+            conn: &mut conn,
+            lifecycle_epoch,
+            config_snapshot: &config_snapshot,
         }
+        .run(nodes)?;
+        completed = outcome.completed;
+        succeeded = outcome.succeeded;
     }
 
     jobs.flush_pending_latency_results(job_id, state);
@@ -331,18 +331,7 @@ fn apply_and_persist_runtime_latency_results(
     (results.len(), alive)
 }
 
-fn latency_probe_unique_links(nodes: &[LatencyProbeNode]) -> Vec<String> {
-    let mut seen = HashSet::with_capacity(nodes.len());
-    let mut links = Vec::with_capacity(nodes.len());
-    for node in nodes {
-        if seen.insert(node.link.as_str()) {
-            links.push(node.link.clone());
-        }
-    }
-    links
-}
-
-fn node_latency_results_for_runtime_snapshots(
+pub(super) fn node_latency_results_for_runtime_snapshots(
     nodes: &[LatencyProbeNode],
     node_index: &RuntimeNodeLatencyIndex<'_>,
     runtime_snapshots: &[Value],
@@ -358,7 +347,7 @@ fn node_latency_results_for_runtime_snapshots(
     let probe_generation = runtime_snapshots
         .iter()
         .find_map(|snapshot| snapshot.get("reloadGeneration").and_then(Value::as_u64));
-    results.extend(native_probe_unavailable_results(
+    results.extend(native_probe_missing_results(
         &fallback_nodes,
         &tested_at,
         probe_generation,

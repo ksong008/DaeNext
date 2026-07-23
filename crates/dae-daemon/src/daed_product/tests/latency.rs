@@ -159,7 +159,7 @@ pub(crate) fn empty_latency_probe_ids_select_all_nodes() {
 }
 
 #[test]
-pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
+pub(crate) fn latency_snapshot_setup_failure_is_one_job_failure_without_node_poisoning() {
     let dir = std::env::temp_dir().join(format!("daed-product-latency-job-{}", fastrand::u64(..)));
     fs::create_dir_all(&dir).unwrap();
     let state = dir.join("state.db");
@@ -203,19 +203,22 @@ pub(crate) fn enqueue_latency_probe_returns_job_contract_for_all_nodes() {
 
     assert_eq!(
         current["job"]["status"].as_str(),
-        Some("finished"),
+        Some("failed"),
         "job message: {:?}",
         current["job"]["message"]
     );
-    assert_eq!(current["job"]["total"].as_u64(), Some(2));
-    assert_eq!(current["job"]["completed"].as_u64(), Some(2));
-    assert_eq!(current["job"]["persistPending"].as_u64(), Some(0));
-    assert_eq!(
-        list_stored_node_latencies_value(&state).unwrap()["items"]
-            .as_array()
-            .map(Vec::len),
-        Some(2),
+    assert!(
+        current["job"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no selected configs resource"))
     );
+    assert_eq!(current["job"]["total"].as_u64(), Some(2));
+    assert_eq!(current["job"]["completed"].as_u64(), Some(0));
+    assert_eq!(current["job"]["persistPending"].as_u64(), Some(0));
+    let stored = list_stored_node_latencies_value(&state).unwrap();
+    let stored = stored["items"].as_array().unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().all(|item| item["testedAt"] == ""));
     let reclaim_after = allocator_reclaim_snapshot_json()["deferred"]["requestedTotal"]
         .as_u64()
         .unwrap_or(0);
@@ -324,7 +327,7 @@ pub(crate) fn latency_probe_helper_accepts_runtime_config_request() {
         "reloadGeneration": 7,
         "requestedLinks": [],
         "config": {
-            "source": "current-runtime-config",
+            "source": "selected-state-snapshot",
             "content": content,
         },
         "concurrency": 8,

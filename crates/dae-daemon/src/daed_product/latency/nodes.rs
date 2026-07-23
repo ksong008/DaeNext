@@ -27,7 +27,7 @@ pub(crate) fn latency_probe_unique_link_count(nodes: &[LatencyProbeNode]) -> usi
     latency_probe_unique_links(nodes).len()
 }
 
-fn latency_probe_unique_links(nodes: &[LatencyProbeNode]) -> Vec<String> {
+pub(crate) fn latency_probe_unique_links(nodes: &[LatencyProbeNode]) -> Vec<String> {
     let mut seen = HashSet::with_capacity(nodes.len());
     let mut links = Vec::with_capacity(nodes.len());
     for node in nodes {

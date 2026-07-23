@@ -1,3 +1,4 @@
+mod config_snapshot;
 mod helper;
 mod job_state;
 mod jobs;
@@ -5,12 +6,14 @@ mod nodes;
 mod persistence;
 mod runtime_snapshots;
 mod seen;
+mod standalone;
 mod storage;
 
+use config_snapshot::ManualProbeConfigSnapshot;
 #[cfg(test)]
 pub(crate) use helper::latency_probe_helper_timeout;
 pub(crate) use helper::{
-    LATENCY_PROBE_HELPER_MAX_IO_BYTES, LatencyProbeHelperStreamOutcome,
+    LATENCY_PROBE_HELPER_MAX_IO_BYTES, LatencyProbeHelperInput, LatencyProbeHelperStreamOutcome,
     latency_probe_failure_snapshots_for_unseen_links, latency_probe_helper_parent_chunk_size,
     latency_probe_helper_response_from_request, latency_probe_helper_response_lines_from_request,
     run_latency_probe_helper_streaming,
@@ -29,6 +32,7 @@ pub(crate) use jobs::{
 pub(crate) use nodes::{
     LatencyProbeNode, current_latency_probe_nodes, latency_probe_link_chunks,
     latency_probe_nodes_for_ids, latency_probe_nodes_for_links, latency_probe_unique_link_count,
+    latency_probe_unique_links,
 };
 #[cfg(test)]
 pub(crate) use runtime_snapshots::fake_runtime_tcp_latency_snapshot;
@@ -37,10 +41,11 @@ pub(crate) use runtime_snapshots::{
     runtime_link_hash, runtime_link_identity_value, runtime_redacted_link_source,
 };
 pub(crate) use seen::LatencyProbeSeenLinks;
+use standalone::StandaloneManualProbeJob;
 #[cfg(test)]
 pub(crate) use storage::runtime_node_latency_results_for_nodes;
 pub(crate) use storage::{
-    NodeLatencyWrite, RuntimeNodeLatencyIndex, native_probe_unavailable_results,
+    NodeLatencyWrite, RuntimeNodeLatencyIndex, native_probe_missing_results,
     runtime_latency_snapshot_link_hash, store_node_latency_result,
     stored_successful_node_latency_seed_snapshots,
 };

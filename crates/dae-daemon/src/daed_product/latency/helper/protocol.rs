@@ -2,6 +2,29 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LatencyProbeConfigSource {
+    ActiveRuntime,
+    SelectedState,
+}
+
+impl LatencyProbeConfigSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ActiveRuntime => "current-runtime-config",
+            Self::SelectedState => "selected-state-snapshot",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "current-runtime-config" => Some(Self::ActiveRuntime),
+            "selected-state-snapshot" => Some(Self::SelectedState),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct LatencyProbeHelperConfig {
     pub(super) source: String,
@@ -42,6 +65,7 @@ struct LatencyProbeHelperRequestRef<'a> {
 
 pub(super) fn encode_latency_probe_helper_request(
     config_content: &str,
+    config_source: LatencyProbeConfigSource,
     reload_generation: u64,
     concurrency: usize,
     links: &[String],
@@ -52,7 +76,7 @@ pub(super) fn encode_latency_probe_helper_request(
         reload_generation,
         requested_links: links,
         config: LatencyProbeHelperConfigRef {
-            source: "current-runtime-config",
+            source: config_source.as_str(),
             content: config_content,
         },
         concurrency: concurrency.max(1),
@@ -119,7 +143,7 @@ fn latency_probe_helper_request_from_input(
     if request.scope != "manual-latency-probe" {
         return Err("unsupported latency probe helper request scope".to_owned());
     }
-    if request.config.source != "current-runtime-config" {
+    if LatencyProbeConfigSource::parse(&request.config.source).is_none() {
         return Err("unsupported latency probe helper config source".to_owned());
     }
     Ok(request)
