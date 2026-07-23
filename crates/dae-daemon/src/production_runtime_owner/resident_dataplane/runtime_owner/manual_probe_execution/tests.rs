@@ -16,6 +16,43 @@ fn basic_probe_scope_uses_one_bounded_runtime_without_transport_owners() {
     execution.shutdown().unwrap();
 }
 
+#[test]
+fn manual_probe_runtime_workers_keep_the_helper_control_identity() {
+    let link = "socks5://127.0.0.1:1080".to_owned();
+    let config = parse_manual_probe_config(&link);
+    let resources = ResidentRuntimeResourceConfig::from_config(&config);
+    let mut runtime = ManualProbeRuntime::start(&resources, 2).unwrap();
+
+    let (worker_name, task_comm) = runtime.block_on(async {
+        tokio::spawn(async {
+            (
+                std::thread::current().name().map(str::to_owned),
+                std::fs::read_to_string("/proc/thread-self/comm")
+                    .unwrap()
+                    .trim()
+                    .to_owned(),
+            )
+        })
+        .await
+        .unwrap()
+    });
+
+    assert_eq!(
+        crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME,
+        "daed-latency",
+        "the helper task name is an existing eBPF routing contract"
+    );
+    assert_eq!(
+        worker_name.as_deref(),
+        Some(crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME)
+    );
+    assert_eq!(
+        task_comm,
+        crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME
+    );
+    runtime.shutdown();
+}
+
 fn parse_manual_probe_config(link: &str) -> Config {
     let source = format!(
         r#"
