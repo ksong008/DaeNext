@@ -155,6 +155,7 @@ impl ResidentDataplaneRuntime {
         dns_reload_snapshot: Option<&ResidentDnsReloadSnapshot>,
     ) -> Result<Value, String> {
         let started = Instant::now();
+        self.generation_drain.prepare_publication()?;
         let built = build_resident_dataplane_generation(ResidentGenerationBuildContext {
             owner: &mut self.owner,
             config,
@@ -198,6 +199,7 @@ impl ResidentDataplaneRuntime {
         if active.reload_generation != generation.reload_generation {
             return Err("resident generation belongs to a different physical runtime".to_owned());
         }
+        self.generation_drain.reactivate(generation.id)?;
         let restored_id = generation.id;
         let displaced = self.active_generation.publish(generation);
         let displaced_id = displaced.id;

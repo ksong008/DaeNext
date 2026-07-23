@@ -238,6 +238,7 @@ pub(super) fn build_resident_dataplane_generation(
         tcp_runtime_config,
         dns: Arc::clone(&dns),
         udp: udp_generation_plan,
+        lifecycle: ResidentGenerationLifecycle::default(),
         stop: Arc::clone(&generation_stop),
         metrics,
         groups: runtime_groups,
