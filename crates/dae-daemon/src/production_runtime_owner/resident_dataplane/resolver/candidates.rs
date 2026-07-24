@@ -1,24 +1,27 @@
+use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-const SOCKET_CANDIDATE_ERROR_DETAIL_LIMIT: usize = 8;
+use super::candidate_error::{SocketAddressResolutionError, SocketCandidateAttemptError};
+
+pub(super) const SOCKET_CANDIDATE_ERROR_DETAIL_LIMIT: usize = 8;
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_socket_addr_candidates(
     authority: &str,
     timeout: Duration,
     context: &str,
-) -> Result<Vec<SocketAddr>, String> {
+) -> Result<Vec<SocketAddr>, SocketAddressResolutionError> {
     if let Ok(addr) = authority.parse::<SocketAddr>() {
         return Ok(vec![addr]);
     }
     let resolved = tokio::time::timeout(timeout, tokio::net::lookup_host(authority))
         .await
-        .map_err(|_| format!("{context} {authority}: resolution timed out"))?
-        .map_err(|err| format!("{context} {authority}: resolve failed: {err}"))?;
+        .map_err(|_| SocketAddressResolutionError::timed_out(context, authority))?
+        .map_err(|err| SocketAddressResolutionError::resolve(context, authority, err))?;
     let candidates = unique_socket_addr_candidates(resolved);
     if candidates.is_empty() {
-        return Err(format!("{context} {authority}: no IP address"));
+        return Err(SocketAddressResolutionError::no_address(context, authority));
     }
     Ok(candidates)
 }
@@ -27,17 +30,19 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn try_socket_
     T,
     F,
     Fut,
+    E,
 >(
     candidates: &[SocketAddr],
     context: &str,
     mut attempt: F,
-) -> Result<(SocketAddr, T), String>
+) -> Result<(SocketAddr, T), SocketCandidateAttemptError>
 where
     F: FnMut(SocketAddr) -> Fut,
-    Fut: Future<Output = Result<T, String>>,
+    Fut: Future<Output = Result<T, E>>,
+    E: fmt::Display,
 {
     if candidates.is_empty() {
-        return Err(format!("{context}: no resolved address candidates"));
+        return Err(SocketCandidateAttemptError::empty(context));
     }
     let mut failures =
         Vec::with_capacity(candidates.len().min(SOCKET_CANDIDATE_ERROR_DETAIL_LIMIT));
@@ -45,24 +50,16 @@ where
         match attempt(candidate).await {
             Ok(value) => return Ok((candidate, value)),
             Err(err) if failures.len() < SOCKET_CANDIDATE_ERROR_DETAIL_LIMIT => {
-                failures.push(format!("{candidate}: {err}"));
+                failures.push((candidate, err.to_string()));
             }
             Err(_) => {}
         }
     }
-    let omitted = candidates.len().saturating_sub(failures.len());
-    let mut message = format!(
-        "{context}: all {} resolved address candidates failed",
-        candidates.len()
-    );
-    if !failures.is_empty() {
-        message.push_str(": ");
-        message.push_str(&failures.join("; "));
-    }
-    if omitted > 0 {
-        message.push_str(&format!("; {omitted} additional failures omitted"));
-    }
-    Err(message)
+    Err(SocketCandidateAttemptError::all_failed(
+        context,
+        candidates.len(),
+        failures,
+    ))
 }
 
 fn unique_socket_addr_candidates(
@@ -113,5 +110,31 @@ mod tests {
         assert_eq!(selected, second);
         assert_eq!(value, "connected");
         assert_eq!(*attempted.lock().unwrap(), vec![first, second]);
+    }
+
+    #[tokio::test]
+    async fn candidate_failure_retains_bounded_typed_details() {
+        let candidates = (1..=10)
+            .map(|last| SocketAddr::from(([192, 0, 2, last], 443)))
+            .collect::<Vec<_>>();
+        let error =
+            try_socket_addr_candidates(&candidates, "connect fixture", |candidate| async move {
+                Err::<(), _>(format!("injected failure for {}", candidate.ip()))
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SocketCandidateAttemptError::AllFailed {
+                candidate_count: 10,
+                omitted: 2,
+                ..
+            }
+        ));
+        let message = error.to_string();
+        assert!(message.starts_with("connect fixture: all 10 resolved address candidates failed"));
+        assert!(message.contains("192.0.2.1:443: injected failure for 192.0.2.1"));
+        assert!(message.ends_with("2 additional failures omitted"));
     }
 }

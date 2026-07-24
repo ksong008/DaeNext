@@ -12,9 +12,10 @@ use tokio::time;
 #[cfg(test)]
 use super::ResidentStopSignal;
 use super::{
-    RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT, ResidentDataplaneMetrics,
-    SharedResidentStopSignal, reset_resident_relay_idle_deadline, resident_relay_idle_deadline,
-    resolve_socket_addr_candidates, try_socket_addr_candidates,
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY,
+    RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT, RESIDENT_TCP_IDLE_TIMEOUT, ResidentDataplaneMetrics,
+    SharedResidentStopSignal, TcpCandidateRacePolicy, reset_resident_relay_idle_deadline,
+    resident_relay_idle_deadline, resolve_socket_addr_candidates, try_tcp_socket_addr_candidates,
 };
 
 #[derive(Debug)]
@@ -62,10 +63,18 @@ async fn connect_direct_tcp_candidates_async(
     opts: &TcpDirectDialOptions,
     mptcp: bool,
 ) -> Result<(SocketAddr, dae_datapath::TcpDirectConnection), String> {
-    try_socket_addr_candidates(targets, "connect direct TCP", |target| {
-        connect_direct_tcp_candidate_async(target, opts, mptcp)
-    })
+    try_tcp_socket_addr_candidates(
+        targets,
+        "connect direct TCP",
+        TcpCandidateRacePolicy::new(
+            RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY,
+            opts.timeout,
+            RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT,
+        ),
+        |target| connect_direct_tcp_candidate_async(target, opts, mptcp),
+    )
     .await
+    .map_err(|err| err.to_string())
 }
 
 async fn connect_direct_tcp_candidate_async(
@@ -118,6 +127,7 @@ async fn resolve_direct_tcp_targets_async(dial_target: &str) -> Result<Vec<Socke
         "resolve direct TCP target",
     )
     .await
+    .map_err(|err| err.to_string())
 }
 
 pub(super) async fn relay_tcp_direct_async(

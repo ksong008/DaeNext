@@ -7,6 +7,8 @@ pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT: Duration = Duration::from_se
 pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
     Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
 pub(crate) const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
+pub(crate) const RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT: usize = 2;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT: usize = 10_000;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MIN: usize = 500;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX: usize = 30_000;

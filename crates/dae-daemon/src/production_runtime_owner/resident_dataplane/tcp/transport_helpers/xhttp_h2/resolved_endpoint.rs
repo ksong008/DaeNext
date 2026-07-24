@@ -30,7 +30,8 @@ impl XhttpResolvedEndpoint {
             RESIDENT_CONNECT_TIMEOUT,
             "resolve xHTTP shared endpoint",
         )
-        .await?;
+        .await
+        .map_err(|err| err.to_string())?;
         Ok(Self::from_candidates(candidates))
     }
 
