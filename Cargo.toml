@@ -26,6 +26,22 @@ members = [
 ]
 resolver = "3"
 
+[profile.production-performance]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 16
+panic = "unwind"
+strip = false
+
+[profile.production-size]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = true
+
 [patch.crates-io]
 rustls = { git = "https://github.com/Watfaq/rustls.git", branch = "watfaq/0.23.40" }
 tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "watfaq/0.26.4" }
