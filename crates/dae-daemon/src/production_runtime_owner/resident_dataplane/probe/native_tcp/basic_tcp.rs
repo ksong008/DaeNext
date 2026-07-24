@@ -19,7 +19,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
         ResidentProxyProtocolPlan::Socks5Tcp { username, password } => {
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
                 .await
-                .map_err(NativeTcpProbeError::Open)?;
+                .map_err(NativeTcpProbeError::Connect)?;
             socks5_connect_async(&mut stream, target, username, password)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -34,7 +34,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
         } if selection.proxy.execution_plan().security == ResidentSecurityUnderlayPlan::None => {
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
                 .await
-                .map_err(NativeTcpProbeError::Open)?;
+                .map_err(NativeTcpProbeError::Connect)?;
             http_proxy_connect_plain_async(
                 &mut stream,
                 target,
@@ -58,7 +58,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             let mut stream =
                 open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
                     .await
-                    .map_err(NativeTcpProbeError::Open)?;
+                    .map_err(NativeTcpProbeError::Security)?;
             let response_leftover = http_proxy_connect_async(
                 &mut stream,
                 target,

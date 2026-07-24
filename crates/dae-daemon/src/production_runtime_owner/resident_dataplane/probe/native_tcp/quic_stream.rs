@@ -31,7 +31,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
     match &selection.proxy.handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => {
             let owner_registry = hysteria2_owner_registry.ok_or_else(|| {
-                NativeTcpProbeError::Open(
+                NativeTcpProbeError::OwnerAcquire(
                     "Hysteria2 transport owner registry is unavailable for native TCP probe"
                         .to_owned(),
                 )
@@ -39,7 +39,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
             let transport = owner_registry
                 .acquire(selection.proxy.clone(), caller, deadline)
                 .await
-                .map_err(NativeTcpProbeError::Open)?;
+                .map_err(NativeTcpProbeError::OwnerAcquire)?;
             let connection = transport.connection();
             let (mut send, recv) = connection.open_bi().await.map_err(|err| {
                 NativeTcpProbeError::Open(format!("open native Hysteria2 TCP stream: {err}"))
@@ -67,14 +67,14 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
         }
         ResidentProxyProtocolPlan::TuicQuicTcp { .. } => {
             let owner_registry = tuic_owner_registry.ok_or_else(|| {
-                NativeTcpProbeError::Open(
+                NativeTcpProbeError::OwnerAcquire(
                     "TUIC transport owner registry is unavailable for native TCP probe".to_owned(),
                 )
             })?;
             let transport = owner_registry
                 .acquire(selection.proxy.clone(), caller, deadline)
                 .await
-                .map_err(NativeTcpProbeError::Open)?;
+                .map_err(NativeTcpProbeError::OwnerAcquire)?;
             let connection = transport.connection();
             let (mut send, recv) = connection.open_bi().await.map_err(|err| {
                 NativeTcpProbeError::Open(format!("open native TUIC TCP stream: {err}"))
@@ -90,7 +90,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
         }
         ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
             let owner_registry = juicity_owner_registry.ok_or_else(|| {
-                NativeTcpProbeError::Open(
+                NativeTcpProbeError::OwnerAcquire(
                     "Juicity transport owner registry is unavailable for native TCP probe"
                         .to_owned(),
                 )
@@ -98,7 +98,7 @@ pub(super) async fn open_quic_stream_native_tcp_tunnel(
             let transport = owner_registry
                 .acquire(selection.proxy.clone(), caller, deadline)
                 .await
-                .map_err(NativeTcpProbeError::Open)?;
+                .map_err(NativeTcpProbeError::OwnerAcquire)?;
             let (mut send, recv) = transport
                 .open_stream(deadline)
                 .await

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod basic_tcp;
 mod check;
@@ -14,7 +14,7 @@ mod vmess;
 
 use self::basic_tcp::open_basic_native_tcp_tunnel;
 use self::check::probe_native_tcp_tunnel;
-use self::errors::NativeTcpProbeError;
+use self::errors::{NativeTcpProbeError, NativeTcpProbeFailure, NativeTcpProbeStage};
 use self::frame_tls::open_frame_tls_native_tcp_tunnel;
 use self::quic_stream::open_quic_stream_native_tcp_tunnel;
 use self::shadowsocks::open_shadowsocks_native_tcp_tunnel;
@@ -26,7 +26,7 @@ use super::super::plan::{ResidentProxyBinding, ResidentTcpProbeDispatch};
 use super::super::tcp::QuicEndpointCallerClass;
 use super::super::{
     AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
-    TuicOwnerRegistryHandle,
+    RESIDENT_RUNTIME_TASK_JOIN_GRACE, TuicOwnerRegistryHandle,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -43,11 +43,13 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     caller: QuicEndpointCallerClass,
-) -> Result<(), String> {
+) -> Result<Duration, String> {
+    let attempt_started = Instant::now();
     let owner_deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(std::time::Instant::now(), timeout);
     let opened = await_native_tcp_probe_with_timeout(
         owner_deadline,
+        native_tcp_probe_open_stage(binding.execution().protocol.probe_dispatch()),
         open_native_tcp_tunnel(
             binding.clone(),
             target,
@@ -59,37 +61,88 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn probe_nativ
             owner_deadline,
         ),
     )
-    .await?;
+    .await
+    .map_err(|error| error.to_string())?;
     let mut tunnel = match opened {
         Ok(tunnel) => tunnel,
         Err(NativeTcpProbeError::NotAdmitted) => {
-            return Err(format!(
-                "native outbound probe not admitted for protocol {} net {} tls {}",
-                binding.plan().protocol,
-                binding.plan().net,
-                binding.plan().tls
-            ));
+            return Err(NativeTcpProbeFailure::new(
+                NativeTcpProbeStage::Admission,
+                format!(
+                    "not admitted for protocol {} net {} tls {}",
+                    binding.plan().protocol,
+                    binding.plan().net,
+                    binding.plan().tls
+                ),
+            )
+            .to_string());
         }
-        Err(NativeTcpProbeError::Open(err)) => return Err(err),
+        Err(NativeTcpProbeError::Open(error)) => {
+            return Err(
+                NativeTcpProbeFailure::new(NativeTcpProbeStage::ProtocolOpen, error).to_string(),
+            );
+        }
+        Err(NativeTcpProbeError::OwnerAcquire(error)) => {
+            return Err(
+                NativeTcpProbeFailure::new(NativeTcpProbeStage::OwnerAcquire, error).to_string(),
+            );
+        }
+        Err(NativeTcpProbeError::Connect(error)) => {
+            return Err(
+                NativeTcpProbeFailure::new(NativeTcpProbeStage::Connect, error).to_string(),
+            );
+        }
+        Err(NativeTcpProbeError::Security(error)) => {
+            return Err(
+                NativeTcpProbeFailure::new(NativeTcpProbeStage::Security, error).to_string(),
+            );
+        }
     };
-    let probe_result = await_native_tcp_probe_with_timeout(
-        owner_deadline,
-        probe_native_tcp_tunnel(&mut *tunnel, scheme, host, path, method, timeout),
+    let probe_result =
+        probe_native_tcp_tunnel(&mut *tunnel, scheme, host, path, method, owner_deadline).await;
+    let response_elapsed = probe_result
+        .as_ref()
+        .ok()
+        .map(|_| attempt_started.elapsed());
+    let cleanup_result = tokio::time::timeout(
+        RESIDENT_RUNTIME_TASK_JOIN_GRACE,
+        cleanup_native_tcp_tunnel(&mut *tunnel),
     )
-    .await;
-    let cleanup_result = cleanup_native_tcp_tunnel(&mut *tunnel).await;
+    .await
+    .map_err(|_| NativeTcpProbeFailure::deadline(NativeTcpProbeStage::Cleanup))
+    .and_then(|result| {
+        result.map_err(|error| {
+            NativeTcpProbeFailure::new(
+                NativeTcpProbeStage::Cleanup,
+                format!("clean up native outbound probe tunnel: {error}"),
+            )
+        })
+    });
     match (probe_result, cleanup_result) {
-        (Err(err), _) => Err(err),
-        (Ok(result), Ok(())) => result,
-        (Ok(Ok(())), Err(err)) => Err(format!("clean up native outbound probe tunnel: {err}")),
-        (Ok(Err(err)), Err(_)) => Err(err),
+        (Err(error), _) => Err(error.to_string()),
+        (Ok(()), Err(error)) => Err(error.to_string()),
+        (Ok(()), Ok(())) => Ok(response_elapsed.unwrap_or_default()),
+    }
+}
+
+fn native_tcp_probe_open_stage(dispatch: ResidentTcpProbeDispatch) -> NativeTcpProbeStage {
+    match dispatch {
+        ResidentTcpProbeDispatch::Basic => NativeTcpProbeStage::Connect,
+        ResidentTcpProbeDispatch::AnyTls | ResidentTcpProbeDispatch::Quic => {
+            NativeTcpProbeStage::OwnerAcquire
+        }
+        ResidentTcpProbeDispatch::Vless
+        | ResidentTcpProbeDispatch::Vmess
+        | ResidentTcpProbeDispatch::Trojan
+        | ResidentTcpProbeDispatch::Shadowsocks => NativeTcpProbeStage::ProtocolOpen,
     }
 }
 
 async fn await_native_tcp_probe_with_timeout<F>(
     deadline: dae_runtime_control::AbsoluteDeadline,
+    stage: NativeTcpProbeStage,
     operation: F,
-) -> Result<F::Output, String>
+) -> Result<F::Output, NativeTcpProbeFailure>
 where
     F: std::future::Future,
 {
@@ -98,7 +151,7 @@ where
         .unwrap_or(Duration::ZERO);
     tokio::time::timeout(remaining, operation)
         .await
-        .map_err(|_| "native outbound probe deadline elapsed".to_owned())
+        .map_err(|_| NativeTcpProbeFailure::deadline(stage))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -152,12 +205,15 @@ mod tests {
             dae_runtime_control::AbsoluteDeadline::from_now(std::time::Instant::now(), timeout);
         let result = await_native_tcp_probe_with_timeout(
             deadline,
+            NativeTcpProbeStage::ResponseRead,
             std::future::pending::<Result<(), String>>(),
         )
         .await;
+        let error = result.unwrap_err();
+        assert_eq!(error.stage(), NativeTcpProbeStage::ResponseRead);
         assert_eq!(
-            result.unwrap_err(),
-            "native outbound probe deadline elapsed"
+            error.to_string(),
+            "native outbound probe [response-read]: deadline elapsed"
         );
     }
 }

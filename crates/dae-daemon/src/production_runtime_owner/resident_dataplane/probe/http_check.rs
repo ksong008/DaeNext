@@ -5,6 +5,28 @@ use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResidentTcpProbeHttpStage {
+    Security,
+    Write,
+    Read,
+}
+
+#[derive(Debug)]
+pub(crate) struct ResidentTcpProbeHttpError {
+    pub(crate) stage: ResidentTcpProbeHttpStage,
+    pub(crate) detail: String,
+}
+
+impl ResidentTcpProbeHttpError {
+    fn new(stage: ResidentTcpProbeHttpStage, detail: impl Into<String>) -> Self {
+        Self {
+            stage,
+            detail: detail.into(),
+        }
+    }
+}
+
 pub(crate) fn resident_tcp_probe_http_request(method: &str, path: &str, host: &str) -> Vec<u8> {
     let method = if method.is_empty() { "HEAD" } else { method };
     let path = if path.is_empty() { "/" } else { path };
@@ -19,29 +41,72 @@ pub(crate) async fn read_resident_tcp_probe_https_response_over_stream_async<S>(
     host: &str,
     path: &str,
     method: &str,
-    timeout: Duration,
-) -> Result<(), String>
+    deadline: dae_runtime_control::AbsoluteDeadline,
+) -> Result<(), ResidentTcpProbeHttpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let config = resident_tcp_probe_tls_config();
-    let server_name = ServerName::try_from(host.to_owned())
-        .map_err(|err| format!("resident TCP probe invalid HTTPS server name {host}: {err}"))?;
+    let server_name = ServerName::try_from(host.to_owned()).map_err(|err| {
+        ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Security,
+            format!("resident TCP probe invalid HTTPS server name {host}: {err}"),
+        )
+    })?;
     let connector = tokio_rustls::TlsConnector::from(config);
-    let mut tls = time::timeout(timeout, connector.connect(server_name, stream))
-        .await
-        .map_err(|_| "resident TCP probe HTTPS handshake timeout".to_owned())?
-        .map_err(|err| format!("resident TCP probe create HTTPS client: {err}"))?;
+    let mut tls = time::timeout(
+        resident_http_probe_remaining(deadline, ResidentTcpProbeHttpStage::Security)?,
+        connector.connect(server_name, stream),
+    )
+    .await
+    .map_err(|_| {
+        ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Security,
+            "resident TCP probe HTTPS handshake timeout",
+        )
+    })?
+    .map_err(|err| {
+        ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Security,
+            format!("resident TCP probe create HTTPS client: {err}"),
+        )
+    })?;
     let request = resident_tcp_probe_http_request(method, path, host);
-    time::timeout(timeout, tls.write_all(&request))
-        .await
-        .map_err(|_| "write resident HTTPS probe request: timeout".to_owned())?
-        .map_err(|err| format!("write resident HTTPS probe request: {err}"))?;
-    time::timeout(timeout, tls.flush())
-        .await
-        .map_err(|_| "flush resident HTTPS probe request: timeout".to_owned())?
-        .map_err(|err| format!("flush resident HTTPS probe request: {err}"))?;
-    read_resident_tcp_probe_response_async(&mut tls, path, timeout).await
+    time::timeout(
+        resident_http_probe_remaining(deadline, ResidentTcpProbeHttpStage::Write)?,
+        tls.write_all(&request),
+    )
+    .await
+    .map_err(|_| {
+        ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Write,
+            "write resident HTTPS probe request: timeout",
+        )
+    })?
+    .map_err(|err| {
+        ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Write,
+            format!("write resident HTTPS probe request: {err}"),
+        )
+    })?;
+    time::timeout(
+        resident_http_probe_remaining(deadline, ResidentTcpProbeHttpStage::Write)?,
+        tls.flush(),
+    )
+    .await
+    .map_err(|_| {
+        ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Write,
+            "flush resident HTTPS probe request: timeout",
+        )
+    })?
+    .map_err(|err| {
+        ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Write,
+            format!("flush resident HTTPS probe request: {err}"),
+        )
+    })?;
+    read_resident_tcp_probe_response_async(&mut tls, path, deadline).await
 }
 
 pub(crate) fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {
@@ -60,18 +125,31 @@ pub(crate) fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {
 pub(crate) async fn read_resident_tcp_probe_response_async<S>(
     stream: &mut S,
     path: &str,
-    timeout: Duration,
-) -> Result<(), String>
+    deadline: dae_runtime_control::AbsoluteDeadline,
+) -> Result<(), ResidentTcpProbeHttpError>
 where
     S: AsyncRead + Unpin + ?Sized,
 {
     let mut response = Vec::new();
     let mut buf = [0_u8; 256];
     while response.len() < 8192 {
-        let read = time::timeout(timeout, stream.read(&mut buf))
-            .await
-            .map_err(|_| "read resident TCP probe response: timeout".to_owned())?
-            .map_err(|err| format!("read resident TCP probe response: {err}"))?;
+        let read = time::timeout(
+            resident_http_probe_remaining(deadline, ResidentTcpProbeHttpStage::Read)?,
+            stream.read(&mut buf),
+        )
+        .await
+        .map_err(|_| {
+            ResidentTcpProbeHttpError::new(
+                ResidentTcpProbeHttpStage::Read,
+                "read resident TCP probe response: timeout",
+            )
+        })?
+        .map_err(|err| {
+            ResidentTcpProbeHttpError::new(
+                ResidentTcpProbeHttpStage::Read,
+                format!("read resident TCP probe response: {err}"),
+            )
+        })?;
         if read == 0 {
             break;
         }
@@ -81,7 +159,10 @@ where
         }
     }
     if response.is_empty() {
-        return Err("resident TCP probe got empty response".to_owned());
+        return Err(ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Read,
+            "resident TCP probe got empty response",
+        ));
     }
     let text = String::from_utf8_lossy(&response);
     let mut fields = text.split_whitespace();
@@ -89,15 +170,36 @@ where
     let status = fields
         .next()
         .and_then(|status| status.parse::<u16>().ok())
-        .ok_or_else(|| format!("resident TCP probe bad HTTP response: {text:?}"))?;
+        .ok_or_else(|| {
+            ResidentTcpProbeHttpError::new(
+                ResidentTcpProbeHttpStage::Read,
+                format!("resident TCP probe bad HTTP response: {text:?}"),
+            )
+        })?;
     if !version.starts_with("HTTP/") {
-        return Err(format!("resident TCP probe non-HTTP response: {text:?}"));
+        return Err(ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Read,
+            format!("resident TCP probe non-HTTP response: {text:?}"),
+        ));
     }
     if resident_tcp_probe_status_ok(path, status) {
         Ok(())
     } else {
-        Err(format!("resident TCP probe bad HTTP status: {status}"))
+        Err(ResidentTcpProbeHttpError::new(
+            ResidentTcpProbeHttpStage::Read,
+            format!("resident TCP probe bad HTTP status: {status}"),
+        ))
     }
+}
+
+fn resident_http_probe_remaining(
+    deadline: dae_runtime_control::AbsoluteDeadline,
+    stage: ResidentTcpProbeHttpStage,
+) -> Result<Duration, ResidentTcpProbeHttpError> {
+    deadline
+        .remaining_at(std::time::Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| ResidentTcpProbeHttpError::new(stage, "deadline elapsed"))
 }
 
 pub(crate) fn resident_tcp_probe_status_ok(path: &str, status: u16) -> bool {

@@ -16,13 +16,13 @@ pub(super) async fn open_frame_tls_native_tcp_tunnel(
         return Err(NativeTcpProbeError::NotAdmitted);
     }
     let owner_registry = owner_registry.ok_or_else(|| {
-        NativeTcpProbeError::Open(
+        NativeTcpProbeError::OwnerAcquire(
             "AnyTLS generation transport owner is unavailable for native TCP probe".to_owned(),
         )
     })?;
     let logical = owner_registry
         .acquire(binding, target.to_owned(), owner_deadline)
         .await
-        .map_err(NativeTcpProbeError::Open)?;
+        .map_err(NativeTcpProbeError::OwnerAcquire)?;
     Ok(boxed_native_tcp_tunnel(logical))
 }
