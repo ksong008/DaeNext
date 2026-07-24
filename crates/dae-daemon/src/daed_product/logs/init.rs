@@ -35,7 +35,8 @@ pub(crate) fn refresh_resident_event_log_policy(config_dir: &Path, state: &Path)
         max_entries,
         max_bytes,
     } = policy;
-    set_resident_event_log_policy(Some(Arc::new(move |event| {
+    let value_runtime_level = runtime_level.clone();
+    let value_policy = Arc::new(move |event: &Value| {
         let event_name = event.get("event").and_then(Value::as_str).unwrap_or("");
         let level = if event_name.is_empty() {
             "debug"
@@ -43,12 +44,22 @@ pub(crate) fn refresh_resident_event_log_policy(config_dir: &Path, state: &Path)
             resident_event_product_log_level(event_name, event)
         };
         ResidentEventLogDecision {
+            persist: log_level_enabled(level, &value_runtime_level),
+            level: Some(level.to_owned()),
+            max_entries: max_entries as usize,
+            max_bytes: max_bytes as u64,
+        }
+    });
+    let prefilter_policy = Arc::new(move |metadata: ResidentEventMetadata| {
+        let level = resident_event_product_log_level_from_metadata(metadata);
+        ResidentEventLogDecision {
             persist: log_level_enabled(level, &runtime_level),
             level: Some(level.to_owned()),
             max_entries: max_entries as usize,
             max_bytes: max_bytes as u64,
         }
-    })));
+    });
+    set_resident_event_log_policies(Some(value_policy), Some(prefilter_policy));
     Ok(())
 }
 
@@ -105,5 +116,5 @@ fn apply_log_limits_without_runtime(config_dir: &Path, state: &Path) -> io::Resu
 #[cfg(test)]
 pub(crate) fn clear_resident_event_product_log_sink() {
     set_resident_event_log_sink(None);
-    set_resident_event_log_policy(None);
+    set_resident_event_log_policies(None, None);
 }

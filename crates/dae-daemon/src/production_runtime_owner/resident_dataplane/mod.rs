@@ -25,8 +25,9 @@ pub(crate) use self::adapter_matrix::{
 };
 use self::events::ResidentEventWriterHandle;
 pub(crate) use self::events::{
-    ResidentEventLogDecision, ResidentEventLogPolicy, ResidentEventLogSink,
-    ResidentEventWriterRuntime, set_event_log_policy, set_event_log_sink,
+    ResidentEventLogDecision, ResidentEventLogPolicy, ResidentEventLogPrefilter,
+    ResidentEventLogSink, ResidentEventMetadata, ResidentEventWriterRuntime,
+    set_event_log_policies, set_event_log_sink,
 };
 use self::events::{append_event, path_string};
 use self::plan::build_resident_dataplane_plan;

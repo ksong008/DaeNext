@@ -94,6 +94,27 @@ pub(crate) fn resident_event_product_log_level(event_name: &str, event: &Value) 
     "debug"
 }
 
+pub(crate) fn resident_event_product_log_level_from_metadata(
+    metadata: ResidentEventMetadata,
+) -> &'static str {
+    let event_name = metadata.name();
+    if resident_event_trace_product_log(event_name) {
+        return "trace";
+    }
+    match event_name {
+        "tcp_connection_finished" | "tcp_connection_blocked"
+            if metadata.has_route_log_context() =>
+        {
+            "info"
+        }
+        "tcp_connection_finished"
+        | "tcp_connection_blocked"
+        | "udp_packet_finished"
+        | "udp_dns_packet_finished" => "debug",
+        _ => "debug",
+    }
+}
+
 pub(crate) fn resident_event_has_route_log_context(event: &Value) -> bool {
     [
         "network",

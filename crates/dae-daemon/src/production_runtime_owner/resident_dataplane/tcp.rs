@@ -89,7 +89,9 @@ use super::direct::{
     relay_tcp_direct_async,
 };
 use super::dns::{ResidentDnsDomainRouting, ResidentDnsPlan};
-use super::events::append_event;
+use super::events::{
+    ResidentEventKind, ResidentEventMetadata, append_event, append_event_with_metadata,
+};
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
 #[cfg(test)]
 use super::plan::ResidentProxyGroupPlan;

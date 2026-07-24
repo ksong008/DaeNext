@@ -454,29 +454,32 @@ fn append_udp_direct_packet_finished(
     upstream_peer: SocketAddr,
     response_len: usize,
 ) {
-    append_event(
+    append_event_with_metadata(
         &context.event_file,
         &context.event_lock,
-        json!({
-            "event": "udp_packet_finished",
-            "peer": resident_socket_addr_display(key.peer()),
-            "original_dst": resident_socket_addr_display(key.original_destination()),
-            "upstream_peer": resident_socket_addr_display(upstream_peer),
-            "outbound_kind": UDP_DIRECT_OUTBOUND,
-            "network": resident_udp_network_name(key.original_destination()),
-            "outbound": UDP_DIRECT_OUTBOUND,
-            "policy": UDP_DIRECT_POLICY,
-            "dialer": UDP_DIRECT_OUTBOUND,
-            "ip": resident_socket_addr_display(key.original_destination()),
-            "protocol": UDP_DIRECT_PROTOCOL,
-            "handler": UDP_DIRECT_HANDLER,
-            "request_len": 0,
-            "response_len": response_len,
-            "reply_forwarded": true,
-            "sessionExecutor": UDP_DIRECT_SESSION_EXECUTOR,
-            "underlayReuse": UDP_DIRECT_UNDERLAY_REUSE,
-            "packetSession": key.to_value(),
-        }),
+        ResidentEventMetadata::new(ResidentEventKind::UdpPacketFinished).with_route_log_context(),
+        || {
+            json!({
+                "event": ResidentEventKind::UdpPacketFinished.name(),
+                "peer": resident_socket_addr_display(key.peer()),
+                "original_dst": resident_socket_addr_display(key.original_destination()),
+                "upstream_peer": resident_socket_addr_display(upstream_peer),
+                "outbound_kind": UDP_DIRECT_OUTBOUND,
+                "network": resident_udp_network_name(key.original_destination()),
+                "outbound": UDP_DIRECT_OUTBOUND,
+                "policy": UDP_DIRECT_POLICY,
+                "dialer": UDP_DIRECT_OUTBOUND,
+                "ip": resident_socket_addr_display(key.original_destination()),
+                "protocol": UDP_DIRECT_PROTOCOL,
+                "handler": UDP_DIRECT_HANDLER,
+                "request_len": 0,
+                "response_len": response_len,
+                "reply_forwarded": true,
+                "sessionExecutor": UDP_DIRECT_SESSION_EXECUTOR,
+                "underlayReuse": UDP_DIRECT_UNDERLAY_REUSE,
+                "packetSession": key.to_value(),
+            })
+        },
     );
 }
 

@@ -13,17 +13,20 @@ mod writer;
 mod writer_metrics;
 
 use self::model::{ResidentEvent, ResidentEventLifecycleClass, ResidentEventPersistOutcome};
+pub(crate) use self::model::{ResidentEventKind, ResidentEventMetadata};
 pub(crate) use self::writer::{ResidentEventWriterHandle, ResidentEventWriterRuntime};
 
 pub(crate) type ResidentEventLogSink = Arc<dyn Fn(&Value) + Send + Sync + 'static>;
 pub(crate) type ResidentEventLogPolicy =
     Arc<dyn Fn(&Value) -> ResidentEventLogDecision + Send + Sync + 'static>;
+pub(crate) type ResidentEventLogPrefilter =
+    Arc<dyn Fn(ResidentEventMetadata) -> ResidentEventLogDecision + Send + Sync + 'static>;
 
 const DEFAULT_RESIDENT_EVENT_LOG_MAX_ENTRIES: usize = 10_000;
 const DEFAULT_RESIDENT_EVENT_LOG_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 static EVENT_LOG_SINK: OnceLock<Mutex<Option<ResidentEventLogSink>>> = OnceLock::new();
-static EVENT_LOG_POLICY: OnceLock<Mutex<Option<ResidentEventLogPolicy>>> = OnceLock::new();
+static EVENT_LOG_POLICIES: OnceLock<Mutex<ResidentEventLogPolicies>> = OnceLock::new();
 static EVENT_LOG_APPEND_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -32,6 +35,12 @@ pub(crate) struct ResidentEventLogDecision {
     pub(crate) level: Option<String>,
     pub(crate) max_entries: usize,
     pub(crate) max_bytes: u64,
+}
+
+#[derive(Default)]
+struct ResidentEventLogPolicies {
+    value: Option<ResidentEventLogPolicy>,
+    prefilter: Option<ResidentEventLogPrefilter>,
 }
 
 impl Default for ResidentEventLogDecision {
@@ -52,10 +61,19 @@ pub(crate) fn set_event_log_sink(sink: Option<ResidentEventLogSink>) {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn set_event_log_policy(policy: Option<ResidentEventLogPolicy>) {
-    let slot = EVENT_LOG_POLICY.get_or_init(|| Mutex::new(None));
+    set_event_log_policies(policy, None);
+}
+
+pub(crate) fn set_event_log_policies(
+    policy: Option<ResidentEventLogPolicy>,
+    prefilter: Option<ResidentEventLogPrefilter>,
+) {
+    let slot = EVENT_LOG_POLICIES.get_or_init(|| Mutex::new(ResidentEventLogPolicies::default()));
     if let Ok(mut guard) = slot.lock() {
-        *guard = policy;
+        guard.value = policy;
+        guard.prefilter = prefilter;
     }
 }
 
@@ -67,6 +85,55 @@ fn clear_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
 
 pub(super) fn append_event(path: &Path, lock: &Mutex<()>, value: Value) {
     let event = ResidentEvent::new(value);
+    append_resident_event(path, lock, event);
+}
+
+pub(super) fn append_event_with_metadata<F>(
+    path: &Path,
+    lock: &Mutex<()>,
+    metadata: ResidentEventMetadata,
+    build: F,
+) where
+    F: FnOnce() -> Value,
+{
+    let Some(admission) = admit_event(metadata) else {
+        return;
+    };
+    append_admitted_event(path, lock, admission, build());
+}
+
+pub(super) enum ResidentEventAdmission {
+    Legacy,
+    Typed {
+        metadata: ResidentEventMetadata,
+        decision: ResidentEventLogDecision,
+    },
+}
+
+pub(super) fn admit_event(metadata: ResidentEventMetadata) -> Option<ResidentEventAdmission> {
+    let Some(decision) = event_log_decision_from_metadata(metadata) else {
+        return Some(ResidentEventAdmission::Legacy);
+    };
+    (decision.persist || metadata.lossless())
+        .then_some(ResidentEventAdmission::Typed { metadata, decision })
+}
+
+pub(super) fn append_admitted_event(
+    path: &Path,
+    lock: &Mutex<()>,
+    admission: ResidentEventAdmission,
+    value: Value,
+) {
+    let event = match admission {
+        ResidentEventAdmission::Legacy => ResidentEvent::new(value),
+        ResidentEventAdmission::Typed { metadata, decision } => {
+            ResidentEvent::from_metadata(value, metadata, decision)
+        }
+    };
+    append_resident_event(path, lock, event);
+}
+
+fn append_resident_event(path: &Path, lock: &Mutex<()>, event: ResidentEvent) {
     if let Some(writer) = writer::active_resident_event_writer_for_path(path) {
         writer.submit(event);
         return;
@@ -92,15 +159,24 @@ fn event_log_sink() -> Option<ResidentEventLogSink> {
 }
 
 fn event_log_policy() -> Option<ResidentEventLogPolicy> {
-    EVENT_LOG_POLICY
+    EVENT_LOG_POLICIES
         .get()
-        .and_then(|slot| slot.lock().ok().and_then(|guard| guard.clone()))
+        .and_then(|slot| slot.lock().ok().and_then(|guard| guard.value.clone()))
 }
 
 fn event_log_decision(value: &Value) -> ResidentEventLogDecision {
     event_log_policy()
         .map(|policy| normalize_event_log_decision(policy(value)))
         .unwrap_or_default()
+}
+
+fn event_log_decision_from_metadata(
+    metadata: ResidentEventMetadata,
+) -> Option<ResidentEventLogDecision> {
+    EVENT_LOG_POLICIES
+        .get()
+        .and_then(|slot| slot.lock().ok().and_then(|guard| guard.prefilter.clone()))
+        .map(|prefilter| normalize_event_log_decision(prefilter(metadata)))
 }
 
 fn normalize_event_log_decision(
@@ -145,6 +221,7 @@ fn persist_resident_event_direct(
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     static EVENT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -242,6 +319,45 @@ mod tests {
         set_event_log_sink(None);
         set_event_log_policy(None);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn resident_event_prefilter_skips_json_construction() {
+        let _guard = event_test_guard();
+        let path = std::env::temp_dir().join(format!(
+            "resident-event-prefilter-test-{}-{}",
+            std::process::id(),
+            current_unix()
+        ));
+        let lock = Mutex::new(());
+        let built = AtomicBool::new(false);
+        set_event_log_policies(
+            Some(Arc::new(|_| ResidentEventLogDecision::default())),
+            Some(Arc::new(|metadata| {
+                assert_eq!(metadata.name(), "udp_packet_finished");
+                ResidentEventLogDecision {
+                    persist: false,
+                    level: Some("debug".to_owned()),
+                    max_entries: 100,
+                    max_bytes: 4096,
+                }
+            })),
+        );
+
+        append_event_with_metadata(
+            &path,
+            &lock,
+            ResidentEventMetadata::new(ResidentEventKind::UdpPacketFinished)
+                .with_route_log_context(),
+            || {
+                built.store(true, Ordering::Relaxed);
+                json!({"event": "udp_packet_finished"})
+            },
+        );
+
+        assert!(!built.load(Ordering::Relaxed));
+        assert!(!path.exists());
+        set_event_log_policies(None, None);
     }
 
     #[test]

@@ -18,9 +18,9 @@ impl UdpExchangeSessionScope {
 pub(super) fn resident_dns_udp_exchange_result(
     original_dst: SocketAddr,
     response: Vec<u8>,
-) -> (&'static str, UdpExchangeResult) {
+) -> (ResidentEventKind, UdpExchangeResult) {
     (
-        "udp_dns_packet_finished",
+        ResidentEventKind::UdpDnsPacketFinished,
         resident_dns_udp_result(original_dst, response),
     )
 }
@@ -41,7 +41,7 @@ pub(super) async fn record_udp_exchange_result(
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
     udp_reply: &UdpReplyHandle,
-    exchange: Result<(&'static str, UdpExchangeResult), String>,
+    exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
 ) {
     record_udp_session_exchange_result(
         proxy,
@@ -68,7 +68,7 @@ pub(super) async fn record_udp_session_response_result(
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
     udp_reply: &UdpReplyHandle,
-    exchange: Result<(&'static str, UdpExchangeResult), String>,
+    exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
 ) {
     record_udp_session_exchange_result(
         proxy,
@@ -98,14 +98,14 @@ async fn record_udp_session_exchange_result(
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
     udp_reply: &UdpReplyHandle,
-    exchange: Result<(&'static str, UdpExchangeResult), String>,
+    exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
     session_scope: UdpExchangeSessionScope,
 ) {
     if count_upload {
         metrics.add_upload(request_len);
     }
     match exchange {
-        Ok((event, mut response)) => {
+        Ok((event_kind, mut response)) => {
             let (response_len, response_validation, forwarded_payload) = if response.reply_forwarded
             {
                 let expectation = response.fixed_target_expectation(original_dst);
@@ -141,52 +141,60 @@ async fn record_udp_session_exchange_result(
                 }
                 metrics.add_download(response_len);
             }
-            let handler = resident_udp_proxy_handler_name(proxy);
-            let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
-            let network = udp_network_name(original_dst);
-            let mut event_json = udp_exchange_base_event(
-                event,
-                proxy,
-                peer,
-                original_dst,
-                handler,
-                packet_semantics,
-                network,
-                true,
-                session_scope,
-            );
-            if let Some(map) = event_json.as_object_mut() {
-                map.insert("request_len".to_owned(), Value::from(request_len));
-                map.insert("response_len".to_owned(), Value::from(response_len));
-                map.insert(
-                    "reply_forwarded".to_owned(),
-                    Value::from(response.reply_forwarded),
-                );
-                if let Some(validation) = response_validation {
-                    map.insert(
-                        "response_identity_validation".to_owned(),
-                        Value::from(validation.label()),
+            append_event_with_metadata(
+                &event_file,
+                &event_lock,
+                ResidentEventMetadata::new(event_kind).with_route_log_context(),
+                || {
+                    let handler = resident_udp_proxy_handler_name(proxy);
+                    let packet_semantics =
+                        udp_packet_semantics_for_destination(proxy, original_dst);
+                    let network = udp_network_name(original_dst);
+                    let mut event_json = udp_exchange_base_event(
+                        event_kind.name(),
+                        proxy,
+                        peer,
+                        original_dst,
+                        handler,
+                        packet_semantics,
+                        network,
+                        true,
+                        session_scope,
                     );
-                    if let Some(reason) = validation.drop_reason() {
+                    if let Some(map) = event_json.as_object_mut() {
+                        map.insert("request_len".to_owned(), Value::from(request_len));
+                        map.insert("response_len".to_owned(), Value::from(response_len));
                         map.insert(
-                            "response_drop_reason".to_owned(),
-                            Value::from(reason.label()),
+                            "reply_forwarded".to_owned(),
+                            Value::from(response.reply_forwarded),
                         );
+                        if let Some(validation) = response_validation {
+                            map.insert(
+                                "response_identity_validation".to_owned(),
+                                Value::from(validation.label()),
+                            );
+                            if let Some(reason) = validation.drop_reason() {
+                                map.insert(
+                                    "response_drop_reason".to_owned(),
+                                    Value::from(reason.label()),
+                                );
+                            }
+                        }
+                        if let Some(dscp) = dscp {
+                            map.insert("dscp".to_owned(), Value::from(dscp));
+                        }
                     }
-                }
-                if let Some(dscp) = dscp {
-                    map.insert("dscp".to_owned(), Value::from(dscp));
-                }
-            }
-            response.append_execution_fields(&mut event_json, handler, &proxy.graph_id);
-            if let Some(tls_underlay) = response.tls_underlay {
-                event_json["tls_underlay"] = json!(tls_underlay);
-            }
-            if let Some(quic_underlay) = response.quic_underlay {
-                event_json["quic_underlay"] = json!(quic_underlay);
-            }
-            response.append_session_fields(&mut event_json);
-            append_event(&event_file, &event_lock, event_json)
+                    response.append_execution_fields(&mut event_json, handler, &proxy.graph_id);
+                    if let Some(tls_underlay) = response.tls_underlay {
+                        event_json["tls_underlay"] = json!(tls_underlay);
+                    }
+                    if let Some(quic_underlay) = response.quic_underlay {
+                        event_json["quic_underlay"] = json!(quic_underlay);
+                    }
+                    response.append_session_fields(&mut event_json);
+                    event_json
+                },
+            )
         }
         Err(err) => {
             let handler = resident_udp_proxy_handler_name(proxy);

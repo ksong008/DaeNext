@@ -21,6 +21,7 @@ use super::dns::{
     DNS_TRANSPORT_OUTCOME_SUCCESS, DNS_TRANSPORT_ROUTE_DIRECT, DNS_TRANSPORT_TARGET_FAMILY_IPV4,
     DNS_TRANSPORT_TARGET_FAMILY_IPV6,
 };
+use super::events::{ResidentEventKind, ResidentEventMetadata, append_event_with_metadata};
 use super::*;
 
 const DNS_BIND_READ_LIMIT: usize = DNS_MAX_UDP_MESSAGE_SIZE;
@@ -348,20 +349,23 @@ async fn handle_resident_dns_udp_bind_packet_async(
             match socket.send_to(&response, peer).await {
                 Ok(sent) => {
                     metrics.add_download(sent);
-                    append_event(
+                    append_event_with_metadata(
                         &event_file,
                         &event_lock,
-                        dns_path_chosen_event(DnsPathChosenEventInput {
-                            local_addr,
-                            peer,
-                            network: "udp",
-                            handler: "resident-dns-udp",
-                            request_bytes: request.len(),
-                            response_bytes: response_len,
-                            sent_bytes: Some(sent),
-                            send_error: None,
-                            trace: &result.trace,
-                        }),
+                        ResidentEventMetadata::new(ResidentEventKind::DnsPathChosen),
+                        || {
+                            dns_path_chosen_event(DnsPathChosenEventInput {
+                                local_addr,
+                                peer,
+                                network: "udp",
+                                handler: "resident-dns-udp",
+                                request_bytes: request.len(),
+                                response_bytes: response_len,
+                                sent_bytes: Some(sent),
+                                send_error: None,
+                                trace: &result.trace,
+                            })
+                        },
                     );
                     append_event(
                         &event_file,
@@ -380,20 +384,23 @@ async fn handle_resident_dns_udp_bind_packet_async(
                 }
                 Err(err) => {
                     let err = err.to_string();
-                    append_event(
+                    append_event_with_metadata(
                         &event_file,
                         &event_lock,
-                        dns_path_chosen_event(DnsPathChosenEventInput {
-                            local_addr,
-                            peer,
-                            network: "udp",
-                            handler: "resident-dns-udp",
-                            request_bytes: request.len(),
-                            response_bytes: response_len,
-                            sent_bytes: None,
-                            send_error: Some(&err),
-                            trace: &result.trace,
-                        }),
+                        ResidentEventMetadata::new(ResidentEventKind::DnsPathChosen),
+                        || {
+                            dns_path_chosen_event(DnsPathChosenEventInput {
+                                local_addr,
+                                peer,
+                                network: "udp",
+                                handler: "resident-dns-udp",
+                                request_bytes: request.len(),
+                                response_bytes: response_len,
+                                sent_bytes: None,
+                                send_error: Some(&err),
+                                trace: &result.trace,
+                            })
+                        },
                     );
                     append_event(
                         &event_file,
@@ -595,20 +602,23 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                     write_dns_tcp_payload_bind_timeout_async(&mut stream, &response).await
                 {
                     let err = err.to_string();
-                    append_event(
+                    append_event_with_metadata(
                         &event_file,
                         &event_lock,
-                        dns_path_chosen_event(DnsPathChosenEventInput {
-                            local_addr,
-                            peer,
-                            network: "tcp",
-                            handler: "resident-dns-tcp",
-                            request_bytes: request.len(),
-                            response_bytes: response_len,
-                            sent_bytes: None,
-                            send_error: Some(&err),
-                            trace: &result.trace,
-                        }),
+                        ResidentEventMetadata::new(ResidentEventKind::DnsPathChosen),
+                        || {
+                            dns_path_chosen_event(DnsPathChosenEventInput {
+                                local_addr,
+                                peer,
+                                network: "tcp",
+                                handler: "resident-dns-tcp",
+                                request_bytes: request.len(),
+                                response_bytes: response_len,
+                                sent_bytes: None,
+                                send_error: Some(&err),
+                                trace: &result.trace,
+                            })
+                        },
                     );
                     append_event(
                         &event_file,
@@ -626,20 +636,23 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                     return;
                 }
                 metrics.add_download(response_len);
-                append_event(
+                append_event_with_metadata(
                     &event_file,
                     &event_lock,
-                    dns_path_chosen_event(DnsPathChosenEventInput {
-                        local_addr,
-                        peer,
-                        network: "tcp",
-                        handler: "resident-dns-tcp",
-                        request_bytes: request.len(),
-                        response_bytes: response_len,
-                        sent_bytes: Some(response_len + 2),
-                        send_error: None,
-                        trace: &result.trace,
-                    }),
+                    ResidentEventMetadata::new(ResidentEventKind::DnsPathChosen),
+                    || {
+                        dns_path_chosen_event(DnsPathChosenEventInput {
+                            local_addr,
+                            peer,
+                            network: "tcp",
+                            handler: "resident-dns-tcp",
+                            request_bytes: request.len(),
+                            response_bytes: response_len,
+                            sent_bytes: Some(response_len + 2),
+                            send_error: None,
+                            trace: &result.trace,
+                        })
+                    },
                 );
                 append_event(
                     &event_file,
