@@ -80,7 +80,7 @@ pub(crate) fn resident_live_adapter_udp_probe(
                 ) {
                     Ok(proxy) => {
                         let proxy = Arc::new(proxy);
-                        let binding = plan::ResidentProxyBinding::control_plane(Arc::clone(&proxy));
+                        let binding = one_shot_udp_probe_binding(Arc::clone(&proxy));
                         let mut probe = match &probe_runtime {
                             Ok(runtime) => match binding {
                                 Ok(binding) => runtime.block_on(probe_resident_proxy_udp_async(
@@ -189,3 +189,14 @@ pub(crate) fn resident_live_adapter_udp_probe(
         "rows": rows,
     })
 }
+
+fn one_shot_udp_probe_binding(
+    proxy: Arc<plan::ResidentProxyPlan>,
+) -> Result<plan::ResidentProxyBinding, String> {
+    plan::ResidentProxyBinding::control_plane(proxy)
+        .map(plan::ResidentProxyBinding::without_persistent_xhttp_reuse)
+}
+
+#[cfg(test)]
+#[path = "udp_probe/tests.rs"]
+mod tests;
