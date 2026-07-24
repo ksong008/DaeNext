@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+static SSE_RUNTIME_THREAD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn sse_admission_is_bounded_globally_and_per_user() {
     let config = ProductSseRuntimeConfig::for_test();
@@ -23,6 +26,9 @@ fn sse_admission_is_bounded_globally_and_per_user() {
 #[cfg(target_os = "linux")]
 #[test]
 fn multiple_sse_connections_share_one_runtime_thread() {
+    let _thread_guard = SSE_RUNTIME_THREAD_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = std::env::temp_dir().join(format!("daed-product-sse-runtime-{}", fastrand::u64(..)));
     fs::create_dir_all(&dir).unwrap();
     let app = Arc::new(test_app(&dir));
@@ -77,6 +83,9 @@ fn multiple_sse_connections_share_one_runtime_thread() {
 #[cfg(target_os = "linux")]
 #[test]
 fn runtime_shutdown_closes_active_streams_and_releases_metrics() {
+    let _thread_guard = SSE_RUNTIME_THREAD_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = std::env::temp_dir().join(format!(
         "daed-product-sse-runtime-shutdown-{}",
         fastrand::u64(..)
