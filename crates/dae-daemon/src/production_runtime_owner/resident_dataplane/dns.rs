@@ -120,8 +120,8 @@ use self::trace_summary::{
 #[cfg(test)]
 use self::transport::parse_doh_http_response;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::transport::udp_multiplex::{
-    ResidentDnsUdpActorExecutor, ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
-    UdpRequestIdAllocator,
+    ResidentDnsUdpActorCompletion, ResidentDnsUdpActorExecutor, ResidentDnsUdpActorLifecycle,
+    ResidentDnsUdpActorRegistration, UdpRequestIdAllocator,
 };
 use self::transport::{
     forward_dns_tcp_asis_async, forward_dns_to_upstream_async, forward_dns_udp_async,
