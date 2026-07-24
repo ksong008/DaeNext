@@ -620,8 +620,7 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
     owners: ResidentTransportOwnerRegistries,
     caller: QuicEndpointCallerClass,
 ) -> Result<i64, String> {
-    let started = Instant::now();
-    probe_native_proxy_tcp_async(
+    let elapsed = probe_native_proxy_tcp_async(
         candidate.binding.clone(),
         &candidate.tcp_check.scheme,
         &target.target,
@@ -636,7 +635,7 @@ async fn probe_resident_candidate_tcp_target_endpoint_async(
         caller,
     )
     .await?;
-    Ok(elapsed_millis(started.elapsed()))
+    Ok(elapsed_millis(elapsed))
 }
 
 pub(crate) fn elapsed_millis(elapsed: Duration) -> i64 {
