@@ -326,15 +326,21 @@ impl ResidentProxyDnsUdpForwarder {
         let opened = handles.len();
         let mut waits = handles
             .into_iter()
-            .map(|handle| async move { handle.wait_closed(deadline).await })
+            .map(|handle| {
+                let actor_executor = Arc::clone(&self.actor_executor);
+                async move {
+                    actor_executor
+                        .join_actor_task(handle.task_id(), handle.completion(), deadline)
+                        .await
+                }
+            })
             .collect::<FuturesUnordered<_>>();
         let mut closed = 0_usize;
         let mut timed_out = 0_usize;
         while let Some(result) = waits.next().await {
-            if result {
-                closed = closed.saturating_add(1);
-            } else {
-                timed_out = timed_out.saturating_add(1);
+            match result {
+                Ok(()) => closed = closed.saturating_add(1),
+                Err(_) => timed_out = timed_out.saturating_add(1),
             }
         }
         json!({

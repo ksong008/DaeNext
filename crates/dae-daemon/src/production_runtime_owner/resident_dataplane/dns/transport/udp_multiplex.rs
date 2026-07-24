@@ -1,5 +1,8 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::Weak;
+use std::sync::{
+    Weak,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use crate::production_runtime_owner::resident_dataplane::{
@@ -68,6 +71,43 @@ impl Drop for ResidentDnsUdpActorLifecycle {
     }
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUdpActorCompletion {
+    finished: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl ResidentDnsUdpActorCompletion {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            finished: AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+        })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn finish(&self) {
+        self.finished.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn wait(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> bool {
+        loop {
+            if self.finished.load(Ordering::Acquire) {
+                return true;
+            }
+            let notified = self.notify.notified();
+            if self.finished.load(Ordering::Acquire) {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return self.finished.load(Ordering::Acquire);
+            }
+        }
+    }
+}
+
 struct UdpMultiplexActorMetricGuard {
     metrics: Arc<ResidentDataplaneMetrics>,
     fatal: bool,
@@ -85,6 +125,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUd
     pub(in crate::production_runtime_owner::resident_dataplane) handle: T,
     pub(in crate::production_runtime_owner::resident_dataplane) lifecycle:
         Weak<ResidentDnsUdpActorLifecycle>,
+    pub(in crate::production_runtime_owner::resident_dataplane) completion:
+        Arc<ResidentDnsUdpActorCompletion>,
     pub(in crate::production_runtime_owner::resident_dataplane) task: tokio::task::JoinHandle<bool>,
 }
 
@@ -175,6 +217,7 @@ fn start_udp_multiplex_actor(
     let config = UdpMultiplexActorConfig::new(runtime, Arc::clone(&metrics));
     let (sender, receiver) = tokio::sync::mpsc::channel(config.queue_capacity);
     let (lifecycle, stop_receiver) = ResidentDnsUdpActorLifecycle::new();
+    let completion = ResidentDnsUdpActorCompletion::new();
     metrics.dns_udp_actor_opened();
     let task_metrics = Arc::clone(&metrics);
     let task = tokio::spawn(async move {
@@ -197,6 +240,7 @@ fn start_udp_multiplex_actor(
             attempt_timeout: runtime.attempt_timeout,
         },
         lifecycle: Arc::downgrade(&lifecycle),
+        completion,
         task,
     }
 }

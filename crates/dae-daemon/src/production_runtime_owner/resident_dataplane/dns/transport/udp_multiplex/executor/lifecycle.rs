@@ -1,9 +1,10 @@
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
-use super::super::ResidentDnsUdpActorLifecycle;
+use super::super::{ResidentDnsUdpActorCompletion, ResidentDnsUdpActorLifecycle};
 
 pub(super) struct ResidentDnsUdpActorTask {
     pub(super) lifecycle: std::sync::Weak<ResidentDnsUdpActorLifecycle>,
+    pub(super) completion: std::sync::Arc<ResidentDnsUdpActorCompletion>,
     pub(super) task: tokio::task::JoinHandle<bool>,
 }
 
@@ -17,7 +18,11 @@ pub(super) async fn join_dns_udp_actor_tasks(
         .collect::<Vec<_>>();
     let mut pending = actors
         .drain(..)
-        .map(|actor| actor.task)
+        .map(|actor| async move {
+            let result = actor.task.await;
+            actor.completion.finish();
+            result
+        })
         .collect::<FuturesUnordered<_>>();
     let mut joined = 0_usize;
     let mut panicked = 0_usize;

@@ -199,15 +199,16 @@ impl ResidentDnsUdpActorExecutor {
         let ResidentDnsUdpActorRegistration {
             handle,
             lifecycle,
+            completion,
             task,
         } = opened;
+        self.reap_finished_actors().await?;
         let mut task = Some(task);
         let closing = {
             let mut actors = self
                 .actors
                 .lock()
                 .map_err(|_| "shared DNS UDP actor registry lock poisoned".to_owned())?;
-            actors.retain(|actor| !actor.task.is_finished());
             if self.closing.load(std::sync::atomic::Ordering::Acquire) {
                 true
             } else {
@@ -216,6 +217,7 @@ impl ResidentDnsUdpActorExecutor {
                 };
                 actors.push(ResidentDnsUdpActorTask {
                     lifecycle: lifecycle.clone(),
+                    completion: Arc::clone(&completion),
                     task,
                 });
                 false
@@ -227,10 +229,78 @@ impl ResidentDnsUdpActorExecutor {
             }
             if let Some(task) = task {
                 let _ = task.await;
+                completion.finish();
             }
             return Err("shared DNS UDP actor executor closed during initialization".to_owned());
         }
         Ok(handle)
+    }
+
+    async fn reap_finished_actors(&self) -> Result<(), String> {
+        let mut finished = {
+            let mut actors = self
+                .actors
+                .lock()
+                .map_err(|_| "shared DNS UDP actor registry lock poisoned".to_owned())?;
+            let mut finished = Vec::new();
+            let mut active = Vec::with_capacity(actors.len());
+            for actor in std::mem::take(&mut *actors) {
+                if actor.task.is_finished() {
+                    finished.push(actor);
+                } else {
+                    active.push(actor);
+                }
+            }
+            *actors = active;
+            finished
+        };
+        if finished.is_empty() {
+            return Ok(());
+        }
+        let deadline = tokio::time::Instant::now()
+            + crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_TASK_JOIN_GRACE;
+        let (_, panicked, timed_out) = join_dns_udp_actor_tasks(&mut finished, deadline).await;
+        if panicked == 0 && timed_out == 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "reap completed shared DNS UDP actors: panicked={panicked} timedOut={timed_out}"
+            ))
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn join_actor_task(
+        &self,
+        task_id: tokio::task::Id,
+        completion: Arc<super::ResidentDnsUdpActorCompletion>,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), String> {
+        let actor = {
+            let mut actors = self
+                .actors
+                .lock()
+                .map_err(|_| "shared DNS UDP actor registry lock poisoned".to_owned())?;
+            actors
+                .iter()
+                .position(|actor| actor.task.id() == task_id)
+                .map(|index| actors.swap_remove(index))
+        };
+        let Some(actor) = actor else {
+            return if completion.wait(deadline).await {
+                Ok(())
+            } else {
+                Err("shared DNS UDP actor join completion timeout".to_owned())
+            };
+        };
+        let mut actors = vec![actor];
+        let (joined, panicked, timed_out) = join_dns_udp_actor_tasks(&mut actors, deadline).await;
+        if joined == 1 && panicked == 0 && timed_out == 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "join shared DNS UDP actor: joined={joined} panicked={panicked} timedOut={timed_out}"
+            ))
+        }
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown(

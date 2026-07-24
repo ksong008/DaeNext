@@ -4,7 +4,7 @@ use super::*;
 use crate::production_runtime_owner::resident_dataplane::dns::{
     ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext, ProxyDnsRequestError,
     ProxyDnsRequestFailure, ProxyDnsRequestStage, ProxyDnsResponseBytes,
-    ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
+    ResidentDnsUdpActorCompletion, ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
 };
 use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadAdmission;
 
@@ -29,6 +29,8 @@ pub(super) struct ResidentProxyDnsUdpActorHandle {
     lifecycle: Arc<ResidentDnsUdpActorLifecycle>,
     metrics: Arc<ResidentDataplaneMetrics>,
     payload_admission: ResidentUdpPayloadAdmission,
+    task_id: tokio::task::Id,
+    completion: Arc<ResidentDnsUdpActorCompletion>,
 }
 
 pub(super) struct ResidentProxyDnsUdpRequest {
@@ -71,6 +73,7 @@ pub(super) fn start_proxy_dns_udp_actor(
 ) -> ResidentDnsUdpActorRegistration<ResidentProxyDnsUdpActorHandle> {
     let (sender, receiver) = tokio::sync::mpsc::channel(runtime_config.queue_depth.max(1));
     let (lifecycle, stop_receiver) = ResidentDnsUdpActorLifecycle::new();
+    let completion = ResidentDnsUdpActorCompletion::new();
     metrics.dns_udp_actor_opened();
     let task_metrics = Arc::clone(&metrics);
     let actor_config = runtime_config.clone();
@@ -94,34 +97,37 @@ pub(super) fn start_proxy_dns_udp_actor(
         .await;
         metric_guard.fatal
     });
+    let task_id = task.id();
     ResidentDnsUdpActorRegistration {
         handle: ResidentProxyDnsUdpActorHandle {
             sender,
             lifecycle: Arc::clone(&lifecycle),
             metrics,
             payload_admission: runtime_config.payload_admission.clone(),
+            task_id,
+            completion: Arc::clone(&completion),
         },
         lifecycle: Arc::downgrade(&lifecycle),
+        completion,
         task,
     }
 }
 
 impl ResidentProxyDnsUdpActorHandle {
+    pub(super) fn task_id(&self) -> tokio::task::Id {
+        self.task_id
+    }
+
+    pub(super) fn completion(&self) -> Arc<ResidentDnsUdpActorCompletion> {
+        Arc::clone(&self.completion)
+    }
+
     pub(super) fn is_closed(&self) -> bool {
         self.sender.is_closed()
     }
 
     pub(super) fn close(&self) {
         self.lifecycle.stop();
-    }
-
-    pub(super) async fn wait_closed(&self, deadline: time::Instant) -> bool {
-        if self.is_closed() {
-            return true;
-        }
-        time::timeout_at(deadline, self.sender.closed())
-            .await
-            .is_ok()
     }
 
     pub(super) async fn exchange_once(
