@@ -345,7 +345,7 @@ pub(crate) fn resident_proxy_plans(
         let probe_profile = Arc::new(ResidentProbeProfile::new(
             group_tcp_check_plan(config, group)?,
             group_udp_check_plan(config, group)?,
-            resident_tcp_latency_probe_timeout_from_config(config),
+            resident_tcp_health_probe_timeout(),
         ));
         let probe_candidates = share_group_probe_plans(&candidates, Arc::clone(&probe_profile));
         let group_plan = ResidentProxyGroupPlan {

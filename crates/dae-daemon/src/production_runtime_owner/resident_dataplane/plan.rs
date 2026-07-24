@@ -42,7 +42,7 @@ use super::super::resident_routing::ResidentGeodataStore;
 use super::RESIDENT_TCP_LATENCY_PROBE_TIMEOUT;
 use super::{
     dns::{ResidentDnsPlan, build_resident_dns_plan},
-    execution_link_hash, link_hash, redacted_link_source,
+    execution_link_hash, link_hash, redacted_link_source, resident_tcp_health_probe_timeout,
     resident_tcp_latency_probe_timeout_from_config,
     resolve_host_addrs_with_configured_fallback_dns_ttl,
 };

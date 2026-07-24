@@ -7,9 +7,10 @@ pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT: Duration = Duration::from_se
 pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
     Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
 pub(crate) const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT: usize = 4_000;
+pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT: usize = 10_000;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MIN: usize = 500;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX: usize = 30_000;
+pub(crate) const RESIDENT_TCP_HEALTH_PROBE_TIMEOUT_MS_DEFAULT: usize = 4_000;
 #[cfg(test)]
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT: Duration =
     Duration::from_millis(RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT as u64);
@@ -242,6 +243,10 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "min": RESIDENT_HEALTH_CHECK_CONCURRENCY_MIN,
                 "max": RESIDENT_HEALTH_CHECK_CONCURRENCY_MAX,
             },
+            "tcpTimeoutMs": {
+                "default": RESIDENT_TCP_HEALTH_PROBE_TIMEOUT_MS_DEFAULT,
+                "policy": "background health uses an independent bounded attempt budget",
+            },
             "scheduler": resident_health_scheduler_contract(),
         },
         "dnsUpstreamResolver": {
@@ -302,6 +307,10 @@ pub(crate) fn resident_tcp_latency_probe_timeout_from_config(config: &Config) ->
     Duration::from_millis(timeout_ms.try_into().unwrap_or(u64::MAX))
 }
 
+pub(crate) fn resident_tcp_health_probe_timeout() -> Duration {
+    Duration::from_millis(RESIDENT_TCP_HEALTH_PROBE_TIMEOUT_MS_DEFAULT as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +338,32 @@ mod tests {
         assert_eq!(
             resident_manual_latency_probe_concurrency_from_config(&config),
             RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX
+        );
+    }
+
+    #[test]
+    fn manual_and_background_tcp_probe_budgets_are_independent() {
+        let sections = dae_config::parser::parse_config(
+            "global {}\nnode {}\ngroup {}\nrouting { fallback: direct }\ndns {}",
+        )
+        .unwrap();
+        let mut config = dae_config::schema::build_config(&sections).unwrap();
+        assert_eq!(
+            resident_tcp_latency_probe_timeout_from_config(&config),
+            Duration::from_millis(RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT as u64)
+        );
+        assert_eq!(
+            resident_tcp_health_probe_timeout(),
+            Duration::from_millis(RESIDENT_TCP_HEALTH_PROBE_TIMEOUT_MS_DEFAULT as u64)
+        );
+        config.global.resident_tcp_probe_timeout_ms = Some(8_000);
+        assert_eq!(
+            resident_tcp_latency_probe_timeout_from_config(&config),
+            Duration::from_secs(8)
+        );
+        assert_eq!(
+            resident_tcp_health_probe_timeout(),
+            Duration::from_millis(RESIDENT_TCP_HEALTH_PROBE_TIMEOUT_MS_DEFAULT as u64)
         );
     }
 }
