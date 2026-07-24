@@ -16,6 +16,7 @@ pub(super) async fn resolve_proxy_udp_socket_addr_candidates_async(
         "resolve UDP proxy",
     )
     .await
+    .map_err(|err| err.to_string())
 }
 
 pub(super) async fn socks5_udp_relay_addr_candidates_async(
@@ -39,6 +40,7 @@ pub(super) async fn socks5_udp_relay_addr_candidates_async(
         "resolve SOCKS5 UDP relay",
     )
     .await
+    .map_err(|err| err.to_string())
 }
 
 pub(super) async fn write_async_tls_plain_all(

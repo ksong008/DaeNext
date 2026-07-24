@@ -377,7 +377,9 @@ pub(crate) async fn resolve_proxy_udp_addr_candidates_async(
     let timeout = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "resolve QUIC endpoint: connect deadline elapsed".to_owned())?;
-    resolve_socket_addr_candidates(&target, timeout, "resolve QUIC endpoint").await
+    resolve_socket_addr_candidates(&target, timeout, "resolve QUIC endpoint")
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -397,7 +399,9 @@ pub(crate) async fn resolve_hysteria2_quic_remote_plan_async(
         .remaining_at(Instant::now())
         .ok_or_else(|| "resolve Hysteria2 QUIC endpoint: connect deadline elapsed".to_owned())?;
     let resolved =
-        resolve_socket_addr_candidates(&target, timeout, "resolve Hysteria2 QUIC endpoint").await?;
+        resolve_socket_addr_candidates(&target, timeout, "resolve Hysteria2 QUIC endpoint")
+            .await
+            .map_err(|err| err.to_string())?;
     let mut addresses = Vec::with_capacity(resolved.len());
     for candidate in resolved {
         if !addresses.contains(&candidate.ip()) {
@@ -525,7 +529,8 @@ where
                 }
             }
         })
-        .await?;
+        .await
+        .map_err(|err| err.to_string())?;
     Ok((remote, endpoint, connection))
 }
 

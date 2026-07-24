@@ -24,13 +24,18 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::time;
 
-use super::RESIDENT_CONNECT_TIMEOUT;
 use super::direct::{DirectTcpConnection, open_direct_tcp_connection_async};
 use super::plan::{
     ResidentProtocolShape, ResidentProxyBinding, ResidentProxyPlan, ResidentRealityUnderlayPlan,
     ResidentSecurityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
 };
-use super::resolver::{authority_from_host_port, try_socket_addr_candidates};
+use super::resolver::{
+    TcpCandidateRacePolicy, authority_from_host_port, try_tcp_socket_addr_candidates,
+};
+use super::{
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY,
+    RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT,
+};
 
 mod types;
 pub(super) use self::types::*;

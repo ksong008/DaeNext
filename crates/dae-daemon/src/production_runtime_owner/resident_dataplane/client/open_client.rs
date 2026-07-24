@@ -218,10 +218,18 @@ async fn open_direct_tcp_connection_at_candidates(
     mptcp: bool,
     context: &str,
 ) -> Result<DirectTcpConnection, String> {
-    let (_, connected) = try_socket_addr_candidates(candidates, context, |candidate| {
-        open_direct_tcp_connection_async(candidate.to_string(), mark, mptcp)
-    })
-    .await?;
+    let (_, connected) = try_tcp_socket_addr_candidates(
+        candidates,
+        context,
+        TcpCandidateRacePolicy::new(
+            RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY,
+            RESIDENT_CONNECT_TIMEOUT,
+            RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT,
+        ),
+        |candidate| open_direct_tcp_connection_async(candidate.to_string(), mark, mptcp),
+    )
+    .await
+    .map_err(|err| err.to_string())?;
     Ok(connected)
 }
 

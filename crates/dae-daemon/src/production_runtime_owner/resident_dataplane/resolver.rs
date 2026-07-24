@@ -9,9 +9,14 @@ use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::tcp::set_socket_mark;
 use super::udp::encode_dns_qname;
 
+mod candidate_error;
 mod candidates;
+mod tcp_candidates;
 pub(in crate::production_runtime_owner::resident_dataplane) use candidates::{
     resolve_socket_addr_candidates, try_socket_addr_candidates,
+};
+pub(in crate::production_runtime_owner::resident_dataplane) use tcp_candidates::{
+    TcpCandidateRacePolicy, try_tcp_socket_addr_candidates,
 };
 
 const DNS_QTYPE_A: u16 = 1;

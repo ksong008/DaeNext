@@ -72,9 +72,10 @@ impl DatagramRelay {
                             .send_to(request, candidate)
                             .await
                             .map_err(|err| format!("send {label} UDP datagram: {err}"))?;
-                        Ok(socket)
+                        Ok::<_, String>(socket)
                     })
-                    .await?;
+                    .await
+                    .map_err(|err| err.to_string())?;
                 self.selected_index = next
                     + remaining
                         .iter()
@@ -170,7 +171,8 @@ impl DatagramRelay {
             try_socket_addr_candidates(remaining, &format!("open {label} UDP relay"), |remote| {
                 open(remote, mark)
             })
-            .await?;
+            .await
+            .map_err(|err| err.to_string())?;
         self.selected_index = start_index
             + remaining
                 .iter()
