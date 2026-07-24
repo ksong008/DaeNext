@@ -43,6 +43,15 @@ pub(super) fn resident_probe_descriptors_and_profiles_are_shared() {
     let manual_a = manual.get(&node_a).unwrap().as_ref().unwrap();
     let manual_b = manual.get(&node_b).unwrap().as_ref().unwrap();
     assert!(manual_a.shares_profile_with(manual_b));
+    assert_eq!(
+        first[0].tcp_probe_timeout,
+        resident_tcp_health_probe_timeout()
+    );
+    assert_eq!(
+        manual_a.tcp_probe_timeout,
+        resident_tcp_latency_probe_timeout_from_config(&config)
+    );
+    assert_ne!(first[0].tcp_probe_timeout, manual_a.tcp_probe_timeout);
 }
 
 #[test]
