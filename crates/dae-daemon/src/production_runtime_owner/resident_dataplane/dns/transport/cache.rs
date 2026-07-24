@@ -2,6 +2,9 @@ use super::super::*;
 use crate::production_runtime_owner::resident_dataplane::plan::resident_udp_chain_admission;
 use serde_json::{Value, json};
 
+#[cfg(test)]
+mod lifecycle_benchmarks;
+
 impl ResidentDnsForwarderCache {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn shutdown(
         &self,
@@ -1148,7 +1151,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn background_dns_health_reuses_one_bounded_generation_forwarder() {
+    async fn overlapping_background_dns_health_leases_share_then_retire_forwarder() {
         let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap();
