@@ -2,9 +2,13 @@
 #![allow(clippy::large_enum_variant)]
 
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 
 mod resolved_endpoint;
 use self::resolved_endpoint::XhttpResolvedEndpoint;
+
+#[cfg(test)]
+mod cancellation_tests;
 
 mod xmux;
 
@@ -171,4 +175,106 @@ pub(crate) enum XhttpDownloadClient {
     H3StreamOne {
         recv: h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
     },
+}
+
+fn abort_and_reap_xhttp_task(mut task: tokio::task::JoinHandle<()>) {
+    task.abort();
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn(async move {
+            let _ = tokio::time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, &mut task).await;
+        });
+    }
+}
+
+impl Drop for XhttpUploadClient {
+    fn drop(&mut self) {
+        match self {
+            Self::H1 { .. } => {}
+            Self::H2 {
+                connection_task,
+                xmux_lease,
+                ..
+            } => {
+                if let Some(task) = connection_task.take() {
+                    abort_and_reap_xhttp_task(task);
+                }
+                drop(xmux_lease.take());
+            }
+            Self::H3 {
+                connection,
+                xmux_lease,
+                ..
+            } => {
+                if let Some(connection) = connection.take() {
+                    connection.abort_with_reason(b"resident xhttp upload dropped");
+                }
+                drop(xmux_lease.take());
+            }
+        }
+    }
+}
+
+impl Drop for XhttpStreamUploadClient {
+    fn drop(&mut self) {
+        match self {
+            Self::H1 { .. } => {}
+            Self::H2 {
+                upload_response_task,
+                connection_task,
+                xmux_lease,
+                ..
+            } => {
+                if let Some(task) = upload_response_task.take() {
+                    abort_and_reap_xhttp_task(task);
+                }
+                if let Some(task) = connection_task.take() {
+                    abort_and_reap_xhttp_task(task);
+                }
+                drop(xmux_lease.take());
+            }
+            Self::H3 {
+                connection,
+                xmux_lease,
+                ..
+            }
+            | Self::H3StreamOne {
+                connection,
+                xmux_lease,
+                ..
+            } => {
+                if let Some(connection) = connection.take() {
+                    connection.abort_with_reason(b"resident xhttp stream upload dropped");
+                }
+                drop(xmux_lease.take());
+            }
+        }
+    }
+}
+
+impl Drop for XhttpDownloadClient {
+    fn drop(&mut self) {
+        match self {
+            Self::H1 { .. } | Self::H3StreamOne { .. } => {}
+            Self::H2 {
+                connection_task,
+                xmux_lease,
+                ..
+            } => {
+                if let Some(task) = connection_task.take() {
+                    abort_and_reap_xhttp_task(task);
+                }
+                drop(xmux_lease.take());
+            }
+            Self::H3 {
+                connection,
+                xmux_lease,
+                ..
+            } => {
+                if let Some(connection) = connection.take() {
+                    connection.abort_with_reason(b"resident xhttp download dropped");
+                }
+                drop(xmux_lease.take());
+            }
+        }
+    }
 }
