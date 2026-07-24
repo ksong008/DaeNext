@@ -385,9 +385,23 @@ pub(in super::super) async fn select_xhttp_h2_xmux_client<F, Fut>(
     new_sender: F,
 ) -> Result<XhttpXmuxH2SelectedClient, String>
 where
-    F: FnOnce() -> Fut,
+    F: FnOnce() -> Fut + Send,
     Fut: Future<Output = Result<XhttpH2EndpointSender, String>> + Send + 'static,
 {
+    select_xhttp_h2_xmux_client_erased(key, xmux, Box::new(move || Box::pin(new_sender()))).await
+}
+
+type XhttpH2OwnerOpenFactory<'a> = Box<
+    dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<XhttpH2EndpointSender, String>> + Send>>
+        + Send
+        + 'a,
+>;
+
+async fn select_xhttp_h2_xmux_client_erased<'a>(
+    key: XhttpXmuxKey,
+    xmux: ResidentXhttpXmuxPlan,
+    new_sender: XhttpH2OwnerOpenFactory<'a>,
+) -> Result<XhttpXmuxH2SelectedClient, String> {
     let generation = xhttp_xmux_generation_owner(key.runtime_generation())?;
     let manager = {
         let mut managers = generation
