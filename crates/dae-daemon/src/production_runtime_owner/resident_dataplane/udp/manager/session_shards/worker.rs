@@ -143,17 +143,23 @@ async fn handle_proxy_shard_packet(
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
     next_actor_id: &mut u64,
 ) {
-    let mut route_event = udp_route_chosen_event(
-        packet.managed.packet.peer,
-        packet.managed.original_dst,
-        &packet.route,
-        Some(&packet.managed.proxy),
-        Some(&packet.key),
-        packet.sniffed_domain.as_deref().unwrap_or_default(),
-        packet.managed.dscp,
-        true,
-        UDP_ROUTE_REASON_QUEUED,
-    );
+    let route_event = admit_event(ResidentEventMetadata::new(
+        ResidentEventKind::UdpRouteChosen,
+    ))
+    .map(|admission| {
+        let event = udp_route_chosen_event(
+            packet.managed.packet.peer,
+            packet.managed.original_dst,
+            &packet.route,
+            Some(&packet.managed.proxy),
+            Some(&packet.key),
+            packet.sniffed_domain.as_deref().unwrap_or_default(),
+            packet.managed.dscp,
+            true,
+            UDP_ROUTE_REASON_QUEUED,
+        );
+        (admission, event)
+    });
     let outcome = dispatch_proxy_packet(
         packet.key,
         packet.managed,
@@ -163,9 +169,16 @@ async fn handle_proxy_shard_packet(
         next_actor_id,
     )
     .await;
-    route_event["task_queued"] = json!(outcome.queued());
-    route_event["reason"] = json!(outcome.reason());
-    append_event(&context.event_file, &context.event_lock, route_event);
+    if let Some((admission, mut route_event)) = route_event {
+        route_event["task_queued"] = json!(outcome.queued());
+        route_event["reason"] = json!(outcome.reason());
+        append_admitted_event(
+            &context.event_file,
+            &context.event_lock,
+            admission,
+            route_event,
+        );
+    }
 }
 
 async fn handle_direct_shard_packet(
@@ -175,16 +188,22 @@ async fn handle_direct_shard_packet(
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
     next_actor_id: &mut u64,
 ) {
-    let mut route_event = udp_direct_route_chosen_event(
-        packet.managed.packet.peer,
-        packet.managed.original_dst,
-        &packet.route,
-        &packet.key,
-        packet.sniffed_domain.as_deref().unwrap_or_default(),
-        packet.managed.dscp,
-        true,
-        UDP_ROUTE_REASON_QUEUED,
-    );
+    let route_event = admit_event(ResidentEventMetadata::new(
+        ResidentEventKind::UdpRouteChosen,
+    ))
+    .map(|admission| {
+        let event = udp_direct_route_chosen_event(
+            packet.managed.packet.peer,
+            packet.managed.original_dst,
+            &packet.route,
+            &packet.key,
+            packet.sniffed_domain.as_deref().unwrap_or_default(),
+            packet.managed.dscp,
+            true,
+            UDP_ROUTE_REASON_QUEUED,
+        );
+        (admission, event)
+    });
     let outcome = dispatch_direct_packet(
         packet.key,
         packet.managed,
@@ -194,9 +213,16 @@ async fn handle_direct_shard_packet(
         next_actor_id,
     )
     .await;
-    route_event["task_queued"] = json!(outcome.queued());
-    route_event["reason"] = json!(outcome.reason());
-    append_event(&context.event_file, &context.event_lock, route_event);
+    if let Some((admission, mut route_event)) = route_event {
+        route_event["task_queued"] = json!(outcome.queued());
+        route_event["reason"] = json!(outcome.reason());
+        append_admitted_event(
+            &context.event_file,
+            &context.event_lock,
+            admission,
+            route_event,
+        );
+    }
 }
 
 async fn dispatch_proxy_packet(

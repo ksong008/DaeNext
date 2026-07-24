@@ -3,6 +3,81 @@ use serde_json::{Value, json};
 use super::{ResidentEventLogDecision, current_unix, event_log_decision};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResidentEventKind {
+    DnsPathChosen,
+    TcpRouteChosen,
+    UdpDnsPacketFinished,
+    UdpPacketFinished,
+    UdpRouteChosen,
+}
+
+impl ResidentEventKind {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::DnsPathChosen => "dns_path_chosen",
+            Self::TcpRouteChosen => "tcp_route_chosen",
+            Self::UdpDnsPacketFinished => "udp_dns_packet_finished",
+            Self::UdpPacketFinished => "udp_packet_finished",
+            Self::UdpRouteChosen => "udp_route_chosen",
+        }
+    }
+
+    const fn lifecycle_class(self) -> ResidentEventLifecycleClass {
+        match self {
+            Self::TcpRouteChosen => ResidentEventLifecycleClass::Flow,
+            Self::UdpDnsPacketFinished | Self::UdpPacketFinished => {
+                ResidentEventLifecycleClass::Packet
+            }
+            Self::DnsPathChosen | Self::UdpRouteChosen => ResidentEventLifecycleClass::Debug,
+        }
+    }
+
+    const fn severity(self) -> ResidentEventSeverity {
+        ResidentEventSeverity::Debug
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentEventMetadata {
+    kind: ResidentEventKind,
+    route_log_context: bool,
+}
+
+impl ResidentEventMetadata {
+    pub(crate) const fn new(kind: ResidentEventKind) -> Self {
+        Self {
+            kind,
+            route_log_context: false,
+        }
+    }
+
+    pub(crate) const fn with_route_log_context(mut self) -> Self {
+        self.route_log_context = true;
+        self
+    }
+
+    pub(crate) const fn name(self) -> &'static str {
+        self.kind.name()
+    }
+
+    pub(crate) const fn has_route_log_context(self) -> bool {
+        self.route_log_context
+    }
+
+    const fn class(self) -> ResidentEventLifecycleClass {
+        self.kind.lifecycle_class()
+    }
+
+    const fn severity(self) -> ResidentEventSeverity {
+        self.kind.severity()
+    }
+
+    pub(super) const fn lossless(self) -> bool {
+        self.class().is_lossless(self.severity())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ResidentEventLifecycleClass {
     Startup,
     Reload,
@@ -59,7 +134,7 @@ impl ResidentEventLifecycleClass {
         }
     }
 
-    pub(super) fn is_lossless(self, severity: ResidentEventSeverity) -> bool {
+    pub(super) const fn is_lossless(self, severity: ResidentEventSeverity) -> bool {
         matches!(self, Self::Startup | Self::Reload | Self::Error)
             || matches!(
                 severity,
@@ -177,6 +252,26 @@ impl ResidentEvent {
         let class = ResidentEventLifecycleClass::from_event_name(event_name);
         let severity = ResidentEventSeverity::from_event_name(event_name, class);
         let decision = event_log_decision(&value);
+        Self {
+            value,
+            decision,
+            class,
+            severity,
+            priority: severity.priority(),
+        }
+    }
+
+    pub(super) fn from_metadata(
+        value: Value,
+        metadata: ResidentEventMetadata,
+        decision: ResidentEventLogDecision,
+    ) -> Self {
+        debug_assert_eq!(
+            value.get("event").and_then(Value::as_str),
+            Some(metadata.name())
+        );
+        let class = metadata.class();
+        let severity = metadata.severity();
         Self {
             value,
             decision,

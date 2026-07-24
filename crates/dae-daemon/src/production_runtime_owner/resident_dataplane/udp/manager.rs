@@ -677,20 +677,23 @@ fn forward_manager_packet(
             return;
         }
         ResidentUdpSelection::Block(selection) => {
-            append_event(
+            append_event_with_metadata(
                 event_file,
                 event_lock,
-                udp_route_chosen_event(
-                    packet.peer,
-                    original_dst,
-                    &selection,
-                    None,
-                    None,
-                    sniffed_domain_str,
-                    initial.dscp,
-                    false,
-                    UDP_ROUTE_REASON_BLOCK,
-                ),
+                ResidentEventMetadata::new(ResidentEventKind::UdpRouteChosen),
+                || {
+                    udp_route_chosen_event(
+                        packet.peer,
+                        original_dst,
+                        &selection,
+                        None,
+                        None,
+                        sniffed_domain_str,
+                        initial.dscp,
+                        false,
+                        UDP_ROUTE_REASON_BLOCK,
+                    )
+                },
             );
             append_event(
                 event_file,
@@ -711,18 +714,21 @@ fn forward_manager_packet(
     };
     let proxy = proxy_selection.proxy.clone();
     if resident_udp_dns_fast_path_applies(original_dst) && !proxy_selection.force_proxy_packet {
-        append_event(
+        append_event_with_metadata(
             event_file,
             event_lock,
-            udp_route_chosen_event_without_packet_session(
-                packet.peer,
-                original_dst,
-                &proxy_selection.route,
-                &proxy,
-                sniffed_domain_str,
-                initial.dscp,
-                UDP_ROUTE_REASON_DNS_FAST_PATH,
-            ),
+            ResidentEventMetadata::new(ResidentEventKind::UdpRouteChosen),
+            || {
+                udp_route_chosen_event_without_packet_session(
+                    packet.peer,
+                    original_dst,
+                    &proxy_selection.route,
+                    &proxy,
+                    sniffed_domain_str,
+                    initial.dscp,
+                    UDP_ROUTE_REASON_DNS_FAST_PATH,
+                )
+            },
         );
         dns_fast_path.try_dispatch(packet, original_dst);
         return;

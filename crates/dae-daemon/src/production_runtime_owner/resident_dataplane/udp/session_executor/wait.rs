@@ -3,7 +3,7 @@ use super::*;
 impl UdpSessionExecutor {
     pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn wait_response(
         &mut self,
-    ) -> Result<Option<(&'static str, UdpExchangeResult)>, String> {
+    ) -> Result<Option<(ResidentEventKind, UdpExchangeResult)>, String> {
         let response = match self {
             Self::ShadowsocksAead(session) => Some(session.wait_response().await?),
             Self::Shadowsocks2022(session) => Some(session.wait_response().await?),
@@ -21,14 +21,14 @@ impl UdpSessionExecutor {
                 return std::future::pending().await;
             }
         };
-        Ok(response.map(|response| ("udp_packet_finished", response)))
+        Ok(response.map(|response| (ResidentEventKind::UdpPacketFinished, response)))
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn wait_response_with_timeout(
         &mut self,
         timeout: Duration,
         label: &str,
-    ) -> Result<(&'static str, UdpExchangeResult), String> {
+    ) -> Result<(ResidentEventKind, UdpExchangeResult), String> {
         let deadline = time::Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(time::Instant::now());

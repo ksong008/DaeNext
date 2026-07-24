@@ -64,7 +64,10 @@ use super::client::{
 use super::dns::{
     ResidentDnsPlan, build_dns_server_failure_response, handle_resident_dns_udp_async,
 };
-use super::events::append_event;
+use super::events::{
+    ResidentEventKind, ResidentEventMetadata, admit_event, append_admitted_event, append_event,
+    append_event_with_metadata,
+};
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
 #[cfg(test)]
 use super::plan::ResidentHysteria2ObfsPlan;

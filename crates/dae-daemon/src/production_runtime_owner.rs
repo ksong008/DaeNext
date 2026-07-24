@@ -69,15 +69,15 @@ pub(crate) use resident::{
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime_with_asset_dirs};
 pub(crate) use resident_dataplane::{
     EffectiveProcessMemoryCapacity, ResidentDnsReloadSnapshot, ResidentEventLogDecision,
-    ResidentEventLogPolicy, ResidentEventLogSink, ResidentManualProbeHandle,
-    ResidentNodeSourceAdmission, ResidentTrafficCounters, effective_process_memory_capacity,
-    fetch_http_url_via_default_proxy_async, resident_live_adapter_config_assessment,
-    resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
-    resident_live_adapter_matrix_contract, resident_live_adapter_udp_probe,
-    resident_live_matrix_evidence_from_env, resident_manual_latency_probe_concurrency_from_config,
-    resident_node_source_admissions, resident_runtime_defaults_contract,
-    resident_tcp_latency_probe_timeout_from_config, run_resident_manual_latency_probe_helper,
-    run_resident_manual_latency_probe_helper_streaming,
+    ResidentEventLogPolicy, ResidentEventLogPrefilter, ResidentEventLogSink, ResidentEventMetadata,
+    ResidentManualProbeHandle, ResidentNodeSourceAdmission, ResidentTrafficCounters,
+    effective_process_memory_capacity, fetch_http_url_via_default_proxy_async,
+    resident_live_adapter_config_assessment, resident_live_adapter_entry_missing,
+    resident_live_adapter_entry_remote_live_matrix_ready, resident_live_adapter_matrix_contract,
+    resident_live_adapter_udp_probe, resident_live_matrix_evidence_from_env,
+    resident_manual_latency_probe_concurrency_from_config, resident_node_source_admissions,
+    resident_runtime_defaults_contract, resident_tcp_latency_probe_timeout_from_config,
+    run_resident_manual_latency_probe_helper, run_resident_manual_latency_probe_helper_streaming,
 };
 pub use resident_dataplane::{
     ResidentProxyOwnershipBenchmarkFixture, ResidentTcpSelectionBenchmarkFixture,

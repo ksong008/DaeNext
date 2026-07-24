@@ -264,16 +264,19 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     }
     let sniff = sniff_initial_tcp_payload_async(&mut inbound, router.sniffing_timeout).await?;
     let selection = Box::pin(router.select(peer, original_dst, &sniff.domain)).await?;
-    append_event(
+    append_event_with_metadata(
         event_file,
         event_lock,
-        tcp_route_chosen_event(
-            peer,
-            original_dst,
-            &selection,
-            &sniff,
-            router.dial_mode_name(),
-        ),
+        ResidentEventMetadata::new(ResidentEventKind::TcpRouteChosen),
+        || {
+            tcp_route_chosen_event(
+                peer,
+                original_dst,
+                &selection,
+                &sniff,
+                router.dial_mode_name(),
+            )
+        },
     );
     match selection {
         TcpSelection::Direct(selection) => {

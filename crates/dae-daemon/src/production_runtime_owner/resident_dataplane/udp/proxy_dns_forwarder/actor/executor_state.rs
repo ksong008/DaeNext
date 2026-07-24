@@ -3,7 +3,7 @@ use super::*;
 pub(super) async fn wait_proxy_dns_udp_response(
     executor: &mut Option<Box<UdpSessionExecutor>>,
     enabled: bool,
-) -> Result<Option<(&'static str, UdpExchangeResult)>, String> {
+) -> Result<Option<(ResidentEventKind, UdpExchangeResult)>, String> {
     if !enabled {
         return std::future::pending().await;
     }

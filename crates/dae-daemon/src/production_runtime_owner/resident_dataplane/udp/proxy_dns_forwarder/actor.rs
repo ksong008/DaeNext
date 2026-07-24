@@ -55,7 +55,7 @@ impl Drop for ResidentProxyDnsUdpActorMetricGuard {
 enum ResidentProxyDnsUdpActorEvent {
     Stop,
     Request(Option<ResidentProxyDnsUdpRequest>),
-    Response(Result<Option<(&'static str, UdpExchangeResult)>, String>),
+    Response(Result<Option<(ResidentEventKind, UdpExchangeResult)>, String>),
     Cancelled,
     Deadline,
 }

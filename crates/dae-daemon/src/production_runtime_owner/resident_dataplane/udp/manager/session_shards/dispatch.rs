@@ -58,34 +58,40 @@ impl ResidentUdpSessionShardHandle {
 
     fn record_dispatch_rejected(&self, packet: ResidentUdpShardPacket, reason: &str) {
         match packet {
-            ResidentUdpShardPacket::Proxy(packet) => append_event(
+            ResidentUdpShardPacket::Proxy(packet) => append_event_with_metadata(
                 &self.event_file,
                 &self.event_lock,
-                udp_route_chosen_event(
-                    packet.managed.packet.peer,
-                    packet.managed.original_dst,
-                    &packet.route,
-                    Some(&packet.managed.proxy),
-                    Some(&packet.key),
-                    packet.sniffed_domain.as_deref().unwrap_or_default(),
-                    packet.managed.dscp,
-                    false,
-                    reason,
-                ),
+                ResidentEventMetadata::new(ResidentEventKind::UdpRouteChosen),
+                || {
+                    udp_route_chosen_event(
+                        packet.managed.packet.peer,
+                        packet.managed.original_dst,
+                        &packet.route,
+                        Some(&packet.managed.proxy),
+                        Some(&packet.key),
+                        packet.sniffed_domain.as_deref().unwrap_or_default(),
+                        packet.managed.dscp,
+                        false,
+                        reason,
+                    )
+                },
             ),
-            ResidentUdpShardPacket::Direct(packet) => append_event(
+            ResidentUdpShardPacket::Direct(packet) => append_event_with_metadata(
                 &self.event_file,
                 &self.event_lock,
-                udp_direct_route_chosen_event(
-                    packet.managed.packet.peer,
-                    packet.managed.original_dst,
-                    &packet.route,
-                    &packet.key,
-                    packet.sniffed_domain.as_deref().unwrap_or_default(),
-                    packet.managed.dscp,
-                    false,
-                    reason,
-                ),
+                ResidentEventMetadata::new(ResidentEventKind::UdpRouteChosen),
+                || {
+                    udp_direct_route_chosen_event(
+                        packet.managed.packet.peer,
+                        packet.managed.original_dst,
+                        &packet.route,
+                        &packet.key,
+                        packet.sniffed_domain.as_deref().unwrap_or_default(),
+                        packet.managed.dscp,
+                        false,
+                        reason,
+                    )
+                },
             ),
         }
     }

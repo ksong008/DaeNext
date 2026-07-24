@@ -45,7 +45,7 @@ async fn record_response(
     key: &UdpSessionKey,
     context: &UdpSessionActorContext,
     proxy: &ResidentProxyBinding,
-    exchange: (&'static str, UdpExchangeResult),
+    exchange: (ResidentEventKind, UdpExchangeResult),
 ) {
     record_udp_session_response_result(
         proxy,

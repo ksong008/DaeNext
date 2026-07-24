@@ -7,7 +7,7 @@ impl UdpSessionExecutor {
         binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
-    ) -> Result<(&'static str, UdpExchangeResult), String> {
+    ) -> Result<(ResidentEventKind, UdpExchangeResult), String> {
         match self {
             Self::Dns => handle_resident_dns_udp_async(dns, original_dst, payload)
                 .await
@@ -24,7 +24,7 @@ impl UdpSessionExecutor {
         binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
-    ) -> Result<(&'static str, UdpExchangeResult), String> {
+    ) -> Result<(ResidentEventKind, UdpExchangeResult), String> {
         let proxy = binding.plan();
         match self {
             Self::Dns => Err(
@@ -33,55 +33,55 @@ impl UdpSessionExecutor {
             Self::ShadowsocksAead(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::Shadowsocks2022(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::Socks5(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::VlessVision(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::VlessStandard(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::VlessXhttpH2(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::VlessXhttpH3(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::Trojan(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::VmessAead(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::AnyTls(session) => session
                 .exchange(proxy, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::Hysteria2(session) => session
                 .exchange(proxy, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::Tuic(session) => session
                 .exchange(proxy, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::Juicity(session) => session
                 .exchange(binding, original_dst, payload)
                 .await
-                .map(|response| ("udp_packet_finished", response)),
+                .map(|response| (ResidentEventKind::UdpPacketFinished, response)),
             Self::FailClosed { reason } => Err(format!(
                 "unsupported_udp_handler: {reason}; handler={}; protocol={}; policy-closed without alternate execution",
                 resident_udp_proxy_handler_name(proxy),
@@ -112,53 +112,44 @@ impl UdpSessionExecutor {
 
     pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn poll_response(
         &mut self,
-    ) -> Result<Option<(&'static str, UdpExchangeResult)>, String> {
+    ) -> Result<Option<(ResidentEventKind, UdpExchangeResult)>, String> {
         match self {
-            Self::ShadowsocksAead(session) => session
-                .poll_response()
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::Shadowsocks2022(session) => session
-                .poll_response()
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::Socks5(session) => session
-                .poll_response()
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::VlessVision(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::VlessStandard(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::VlessXhttpH2(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::VlessXhttpH3(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::Trojan(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::Hysteria2(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::Tuic(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::AnyTls(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::VmessAead(session) => session
-                .poll_response()
-                .await
-                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::ShadowsocksAead(session) => session.poll_response().map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::Shadowsocks2022(session) => session.poll_response().map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::Socks5(session) => session.poll_response().map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::VlessVision(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::VlessStandard(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::VlessXhttpH2(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::VlessXhttpH3(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::Trojan(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::Hysteria2(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::Tuic(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::AnyTls(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::VmessAead(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
             Self::Dns | Self::Juicity(_) | Self::FailClosed { .. } => Ok(None),
         }
     }

@@ -13,8 +13,11 @@ pub(crate) fn set_resident_event_log_sink(sink: Option<ResidentEventLogSink>) {
     resident_dataplane::set_event_log_sink(sink);
 }
 
-pub(crate) fn set_resident_event_log_policy(policy: Option<ResidentEventLogPolicy>) {
-    resident_dataplane::set_event_log_policy(policy);
+pub(crate) fn set_resident_event_log_policies(
+    policy: Option<ResidentEventLogPolicy>,
+    prefilter: Option<ResidentEventLogPrefilter>,
+) {
+    resident_dataplane::set_event_log_policies(policy, prefilter);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
