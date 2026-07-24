@@ -40,6 +40,12 @@ impl ResidentDnsForwarderCache {
         };
         let entry_count = entries.len();
         let health_entry_count = health_entries.len();
+        for entry in health_entries.values() {
+            self.metrics.proxy_dns_health_forwarder_closed();
+            if let Some(close) = entry.health_close.as_ref() {
+                close.finish(false);
+            }
+        }
         let mut forwarders = Vec::with_capacity(
             entry_count
                 .saturating_add(retired.len())
@@ -398,50 +404,6 @@ impl ResidentDnsForwarderCache {
         )
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn health_proxy_udp_forwarder(
-        &self,
-        target: SocketAddr,
-        binding: ResidentProxyBinding,
-    ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
-        let key = ResidentDnsForwarderKey {
-            scheme: ResidentDnsUpstreamScheme::Udp,
-            authority: String::new(),
-            path: String::new(),
-            mark: binding.effective_socket_mark(),
-            target: Some(target),
-            selection: ResidentDnsForwarderSelectionKey::Proxy {
-                graph_link_hash: binding.plan().graph_link_hash.clone(),
-            },
-            transport: ResidentDnsForwarderTransport::ProxyUdpHealth,
-        };
-        self.get_or_insert_forwarder_lazy_in(
-            &self.health_state,
-            key,
-            "proxied UDP health",
-            || {
-                ResidentProxyDnsUdpForwarder::new_with_optional_transport_owner(
-                    binding,
-                    target,
-                    self.udp_runtime.clone(),
-                    Arc::clone(&self.metrics),
-                    Arc::clone(&self.udp_executor),
-                    ResidentTransportOwnerRegistries::new(
-                        self.hysteria2_owner_registry.clone(),
-                        self.tuic_owner_registry.clone(),
-                        self.juicity_owner_registry.clone(),
-                    )
-                    .with_anytls(self.anytls_owner_registry.clone()),
-                )
-                .map(Arc::new)
-            },
-            |kind| match kind {
-                ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => Some(Arc::clone(forwarder)),
-                _ => None,
-            },
-            ResidentDnsForwarderEntryKind::ProxyUdp,
-        )
-    }
-
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn tcp_forwarder(
         &self,
         upstream: &ResidentDnsUpstream,
@@ -670,6 +632,8 @@ impl ResidentDnsForwarderCache {
                 last_used,
                 kind,
                 owner_observation,
+                health_leases: 0,
+                health_close: None,
             },
         );
         state.lru.insert((last_used, key));
@@ -893,7 +857,7 @@ fn evict_oldest_dns_forwarder(state: &mut ResidentDnsForwarderCacheState) {
     }
 }
 
-fn next_dns_forwarder_tick(state: &mut ResidentDnsForwarderCacheState) -> u64 {
+pub(super) fn next_dns_forwarder_tick(state: &mut ResidentDnsForwarderCacheState) -> u64 {
     if state.next_tick == u64::MAX {
         let mut ordered = state
             .entries
@@ -1200,23 +1164,32 @@ mod tests {
         let socks = Socks5UdpRelay::start().await;
         let proxy = socks5_dns_proxy(socks.address());
         let binding = dns_proxy_binding(Arc::clone(&proxy), 7_370);
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = Arc::new(ResidentDnsForwarderCache::default());
         let first = cache
-            .health_proxy_udp_forwarder(target, binding.clone())
+            .acquire_health_proxy_udp_forwarder(target, binding.clone())
+            .await
             .unwrap();
-        let second = cache.health_proxy_udp_forwarder(target, binding).unwrap();
-        assert!(Arc::ptr_eq(&first, &second));
+        let second = cache
+            .acquire_health_proxy_udp_forwarder(target, binding)
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&first.forwarder(), &second.forwarder()));
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.health_len(), 1);
+        assert_eq!(
+            cache.metrics.snapshot()["proxyDnsHealthForwardersCurrent"],
+            1
+        );
+        assert_eq!(cache.metrics.snapshot()["proxyDnsHealthLeasesCurrent"], 2);
 
         crate::production_runtime_owner::resident_dataplane::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
-            Arc::clone(&first),
+            first.forwarder(),
             "health.example",
         )
         .await
         .unwrap();
         crate::production_runtime_owner::resident_dataplane::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
-            Arc::clone(&second),
+            second.forwarder(),
             "health.example",
         )
         .await
@@ -1228,18 +1201,87 @@ mod tests {
         assert_eq!(active["proxyDnsUdpExecutorsOpened"], 1);
         assert_eq!(active["proxyDnsUdpExecutorsReused"], 1);
         assert_eq!(socks.control_connections(), 1);
-        let report = cache
-            .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
-            .await;
-        assert_eq!(report["status"], "pass", "{report}");
-        assert_eq!(report["entriesClosed"], 0);
-        assert_eq!(report["healthEntriesClosed"], 1);
+        first.release().await.unwrap();
+        assert_eq!(cache.health_len(), 1);
+        assert_eq!(cache.metrics.snapshot()["proxyDnsHealthLeasesCurrent"], 1);
+        second.release().await.unwrap();
+        assert_eq!(cache.health_len(), 0);
+        assert_eq!(
+            cache.metrics.snapshot()["proxyDnsHealthForwardersCurrent"],
+            0
+        );
+        assert_eq!(cache.metrics.snapshot()["proxyDnsHealthLeasesCurrent"], 0);
         assert_eq!(cache.metrics.snapshot()["dnsTransportOwnersCurrent"], 0);
         assert_eq!(cache.metrics.snapshot()["dnsTransportOwnerBytesCurrent"], 0);
         assert_eq!(
             cache.metrics.snapshot()["dnsUdpActorsOpened"],
             cache.metrics.snapshot()["dnsUdpActorsClosed"]
         );
+        let report = cache
+            .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+            .await;
+        assert_eq!(report["status"], "pass", "{report}");
+        assert_eq!(report["entriesClosed"], 0);
+        assert_eq!(report["healthEntriesClosed"], 0);
+        assert_eq!(cache.metrics.snapshot()["dnsTransportOwnersCurrent"], 0);
+        assert_eq!(cache.metrics.snapshot()["dnsTransportOwnerBytesCurrent"], 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_background_dns_health_releases_its_actor_and_executor() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut query = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+            let _ = upstream.recv_from(&mut query).await.unwrap();
+            let _ = received_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let socks = Socks5UdpRelay::start().await;
+        let proxy = socks5_dns_proxy(socks.address());
+        let binding = dns_proxy_binding(proxy, 7_371);
+        let cache = Arc::new(ResidentDnsForwarderCache::default());
+        let lease = cache
+            .acquire_health_proxy_udp_forwarder(target, binding)
+            .await
+            .unwrap();
+        let probe = tokio::spawn(async move {
+            let result = crate::production_runtime_owner::resident_dataplane::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
+                lease.forwarder(),
+                "cancelled-health.example",
+            )
+            .await;
+            let _ = lease.release().await;
+            result
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), received_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        probe.abort();
+        let _ = probe.await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let snapshot = cache.metrics.snapshot();
+                if cache.health_len() == 0
+                    && snapshot["proxyDnsHealthForwardersCurrent"] == 0
+                    && snapshot["proxyDnsHealthLeasesCurrent"] == 0
+                    && snapshot["dnsTransportOwnersCurrent"] == 0
+                    && snapshot["dnsUdpActorsOpened"] == snapshot["dnsUdpActorsClosed"]
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        server.abort();
+        let _ = server.await;
     }
 
     #[tokio::test(flavor = "current_thread")]

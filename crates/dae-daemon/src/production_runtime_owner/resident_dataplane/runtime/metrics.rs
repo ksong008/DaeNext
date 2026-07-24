@@ -64,6 +64,8 @@ pub(crate) struct ResidentDataplaneMetrics {
     proxy_dns_udp_executors_opened: AtomicU64,
     proxy_dns_udp_executors_reused: AtomicU64,
     proxy_dns_udp_executors_reset: AtomicU64,
+    proxy_dns_health_forwarders_current: AtomicU64,
+    proxy_dns_health_leases_current: AtomicU64,
     proxy_dns_udp_queued_current: AtomicU64,
     proxy_dns_udp_queued_bytes_current: AtomicU64,
     proxy_dns_udp_pending_current: AtomicU64,
@@ -440,6 +442,24 @@ impl ResidentDataplaneMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(super) fn proxy_dns_health_forwarder_opened(&self) {
+        self.proxy_dns_health_forwarders_current
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_health_forwarder_closed(&self) {
+        subtract_metric(&self.proxy_dns_health_forwarders_current, 1);
+    }
+
+    pub(super) fn proxy_dns_health_lease_acquired(&self) {
+        self.proxy_dns_health_leases_current
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn proxy_dns_health_lease_released(&self) {
+        subtract_metric(&self.proxy_dns_health_leases_current, 1);
+    }
+
     pub(super) fn proxy_dns_udp_queued_added(&self, bytes: usize) {
         self.proxy_dns_udp_queued_current
             .fetch_add(1, Ordering::Relaxed);
@@ -651,6 +671,8 @@ impl ResidentDataplaneMetrics {
             "proxyDnsUdpExecutorsOpened": self.proxy_dns_udp_executors_opened.load(Ordering::Relaxed),
             "proxyDnsUdpExecutorsReused": self.proxy_dns_udp_executors_reused.load(Ordering::Relaxed),
             "proxyDnsUdpExecutorsReset": self.proxy_dns_udp_executors_reset.load(Ordering::Relaxed),
+            "proxyDnsHealthForwardersCurrent": self.proxy_dns_health_forwarders_current.load(Ordering::Relaxed),
+            "proxyDnsHealthLeasesCurrent": self.proxy_dns_health_leases_current.load(Ordering::Relaxed),
             "proxyDnsUdpQueuedCurrent": self.proxy_dns_udp_queued_current.load(Ordering::Relaxed),
             "proxyDnsUdpQueuedBytesCurrent": self.proxy_dns_udp_queued_bytes_current.load(Ordering::Relaxed),
             "proxyDnsUdpPendingCurrent": self.proxy_dns_udp_pending_current.load(Ordering::Relaxed),

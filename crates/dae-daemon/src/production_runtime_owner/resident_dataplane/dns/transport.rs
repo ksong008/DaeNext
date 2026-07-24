@@ -3,6 +3,7 @@ use super::*;
 mod cache;
 mod error;
 mod h3;
+mod health_forwarder;
 mod plain;
 mod quic;
 mod route;
