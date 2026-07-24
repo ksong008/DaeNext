@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
+use tokio::sync::Notify;
 
 mod h2_recovery;
 mod target_cache;
@@ -136,6 +137,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<JuicityOwnerRegistryHandle>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) anytls_owner_registry:
         Option<AnyTlsOwnerRegistryHandle>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) health_runtime:
+        Option<tokio::runtime::Handle>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) closing:
         std::sync::atomic::AtomicBool,
 }
@@ -157,6 +160,7 @@ impl Default for ResidentDnsForwarderCache {
             tuic_owner_registry: None,
             juicity_owner_registry: None,
             anytls_owner_registry: None,
+            health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -180,6 +184,7 @@ impl ResidentDnsForwarderCache {
             tuic_owner_registry: None,
             juicity_owner_registry: None,
             anytls_owner_registry: None,
+            health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -194,12 +199,13 @@ impl ResidentDnsForwarderCache {
         cache.udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new_on(
             udp_runtime,
             metrics,
-            runtime,
+            runtime.clone(),
         ));
         cache.hysteria2_owner_registry = transport_owners.hysteria2();
         cache.tuic_owner_registry = transport_owners.tuic();
         cache.juicity_owner_registry = transport_owners.juicity();
         cache.anytls_owner_registry = transport_owners.anytls();
+        cache.health_runtime = Some(runtime);
         cache
     }
 
@@ -361,6 +367,94 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         ResidentDnsForwarderEntryKind,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) owner_observation:
         Option<Arc<ResidentDnsTransportOwnerObservation>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) health_leases: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) health_close:
+        Option<Arc<ResidentDnsHealthForwarderClose>>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsHealthForwarderClose
+{
+    complete: AtomicBool,
+    successful: AtomicBool,
+    notify: Notify,
+}
+
+impl ResidentDnsHealthForwarderClose {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            complete: AtomicBool::new(false),
+            successful: AtomicBool::new(false),
+            notify: Notify::new(),
+        })
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn wait(&self) -> bool {
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        if !self.complete.load(Ordering::Acquire) {
+            notified.await;
+        }
+        self.successful.load(Ordering::Acquire)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn finish(
+        &self,
+        successful: bool,
+    ) {
+        self.successful.store(successful, Ordering::Release);
+        self.complete.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsHealthForwarderLease
+{
+    cache: Arc<ResidentDnsForwarderCache>,
+    key: Option<ResidentDnsForwarderKey>,
+    forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+}
+
+impl ResidentDnsHealthForwarderLease {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn new(
+        cache: Arc<ResidentDnsForwarderCache>,
+        key: ResidentDnsForwarderKey,
+        forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+    ) -> Self {
+        Self {
+            cache,
+            key: Some(key),
+            forwarder,
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn forwarder(
+        &self,
+    ) -> Arc<ResidentProxyDnsUdpForwarder> {
+        Arc::clone(&self.forwarder)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn release(
+        mut self,
+    ) -> Result<(), String> {
+        let Some(key) = self.key.take() else {
+            return Ok(());
+        };
+        self.cache.metrics.proxy_dns_health_lease_released();
+        Arc::clone(&self.cache)
+            .release_health_proxy_udp_forwarder(key, Arc::clone(&self.forwarder))
+            .await
+    }
+}
+
+impl Drop for ResidentDnsHealthForwarderLease {
+    fn drop(&mut self) {
+        let Some(key) = self.key.take() else {
+            return;
+        };
+        self.cache.metrics.proxy_dns_health_lease_released();
+        self.cache
+            .schedule_health_proxy_udp_forwarder_release(key, Arc::clone(&self.forwarder));
+    }
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsForwarderEntryKind

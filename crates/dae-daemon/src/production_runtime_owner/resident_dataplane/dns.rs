@@ -58,9 +58,9 @@ use super::udp::{
 };
 use super::{
     AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
-    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics,
-    ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries, TuicOwnerRegistryHandle,
-    apply_resident_udp_socket_buffer_tuning,
+    RESIDENT_IDLE_SLEEP, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT,
+    ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries,
+    TuicOwnerRegistryHandle, apply_resident_udp_socket_buffer_tuning,
 };
 use super::{ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl};
 
@@ -131,12 +131,12 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstr
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
     ResidentDnsForwarderEntryKind, ResidentDnsForwarderKey, ResidentDnsForwarderSelectionKey,
     ResidentDnsForwarderTransport, ResidentDnsH2Forwarder, ResidentDnsH2Recovery,
-    ResidentDnsH3Forwarder, ResidentDnsHttpsForwarder, ResidentDnsProxyH3Forwarder,
-    ResidentDnsProxyQuicForwarder, ResidentDnsQuicForwarder, ResidentDnsRequestAction,
-    ResidentDnsResponseAction, ResidentDnsRetiredForwarder, ResidentDnsTcpForwarder,
-    ResidentDnsTlsForwarder, ResidentDnsUdpForwarder, ResidentDnsUdpForwarderShard,
-    ResidentDnsUpstream, ResidentDnsUpstreamScheme, ResidentDnsUpstreamTarget,
-    ResidentDnsUpstreams,
+    ResidentDnsH3Forwarder, ResidentDnsHealthForwarderClose, ResidentDnsHealthForwarderLease,
+    ResidentDnsHttpsForwarder, ResidentDnsProxyH3Forwarder, ResidentDnsProxyQuicForwarder,
+    ResidentDnsQuicForwarder, ResidentDnsRequestAction, ResidentDnsResponseAction,
+    ResidentDnsRetiredForwarder, ResidentDnsTcpForwarder, ResidentDnsTlsForwarder,
+    ResidentDnsUdpForwarder, ResidentDnsUdpForwarderShard, ResidentDnsUpstream,
+    ResidentDnsUpstreamScheme, ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
 };
 pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_router::ResidentDnsUpstreamSelection;
@@ -286,10 +286,24 @@ impl ResidentDnsPlan {
         target: SocketAddr,
         lookup_host: &str,
     ) -> Result<(), String> {
-        let forwarder = self
+        let lease = self
             .forwarders
-            .health_proxy_udp_forwarder(target, binding)?;
-        super::udp::probe_resident_proxy_dns_udp_with_forwarder_async(forwarder, lookup_host).await
+            .acquire_health_proxy_udp_forwarder(target, binding)
+            .await?;
+        let result = super::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
+            lease.forwarder(),
+            lookup_host,
+        )
+        .await;
+        let release = lease.release().await;
+        match (result, release) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(cleanup)) => Err(format!(
+                "{error}; health forwarder cleanup failed: {cleanup}"
+            )),
+        }
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn reload_handle(
