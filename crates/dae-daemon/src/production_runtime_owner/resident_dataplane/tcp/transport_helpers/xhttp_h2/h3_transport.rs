@@ -19,7 +19,7 @@ pub(crate) struct XhttpH3Connection {
     endpoint: Arc<std::sync::Mutex<Option<ObservedQuicEndpoint>>>,
     connection: quinn::Connection,
     pub(super) client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
-    driver_task: tokio::task::JoinHandle<()>,
+    driver_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub(super) struct XhttpH3EndpointClient {
@@ -227,7 +227,7 @@ async fn open_xhttp_h3_connection(
         endpoint,
         connection,
         client,
-        driver_task,
+        driver_task: Some(driver_task),
     })
 }
 
@@ -299,7 +299,9 @@ fn update_xhttp_h3_identity_part(digest: &mut Sha256, part: &[u8]) {
 
 impl XhttpH3Connection {
     pub(super) fn is_finished(&self) -> bool {
-        self.driver_task.is_finished()
+        self.driver_task
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished)
     }
 
     fn take_endpoint(&self) -> Option<ObservedQuicEndpoint> {
@@ -309,25 +311,43 @@ impl XhttpH3Connection {
             .and_then(|mut endpoint| endpoint.take())
     }
 
-    pub(super) fn abort_with_reason(self, reason: &[u8]) {
+    pub(super) fn abort_with_reason(mut self, reason: &[u8]) {
         self.connection.close(0_u32.into(), reason);
         if let Some(endpoint) = self.take_endpoint() {
             endpoint.close(0_u32.into(), reason);
         }
-        self.driver_task.abort();
+        if let Some(task) = self.driver_task.take() {
+            abort_and_reap_xhttp_task(task);
+        }
     }
 
     pub(super) async fn close(mut self, reason: &[u8]) {
         self.connection.close(0_u32.into(), reason);
         if let Some(endpoint) = self.take_endpoint() {
             endpoint.close(0_u32.into(), reason);
-            self.driver_task.abort();
+            if let Some(task) = self.driver_task.take() {
+                abort_and_reap_xhttp_task(task);
+            }
             endpoint.wait_idle().await;
-        } else if time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, &mut self.driver_task)
-            .await
-            .is_err()
+        } else if let Some(mut task) = self.driver_task.take()
+            && time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, &mut task)
+                .await
+                .is_err()
         {
-            self.driver_task.abort();
+            abort_and_reap_xhttp_task(task);
+        }
+    }
+}
+
+impl Drop for XhttpH3Connection {
+    fn drop(&mut self) {
+        self.connection
+            .close(0_u32.into(), b"resident xhttp connection dropped");
+        if let Some(endpoint) = self.take_endpoint() {
+            endpoint.close(0_u32.into(), b"resident xhttp connection dropped");
+        }
+        if let Some(task) = self.driver_task.take() {
+            abort_and_reap_xhttp_task(task);
         }
     }
 }

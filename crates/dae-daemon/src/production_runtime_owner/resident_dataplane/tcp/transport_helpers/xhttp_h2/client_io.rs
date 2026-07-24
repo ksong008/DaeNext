@@ -195,35 +195,35 @@ pub(crate) async fn read_xhttp_download_data(
     }
 }
 
-pub(crate) async fn close_xhttp_upload_client(upload: XhttpUploadClient) {
-    match upload {
+pub(crate) async fn close_xhttp_upload_client(mut upload: XhttpUploadClient) {
+    match &mut upload {
         XhttpUploadClient::H1 { .. } => {}
         XhttpUploadClient::H2 {
             connection_task,
             xmux_lease,
             ..
         } => {
-            if let Some(task) = connection_task {
-                task.abort();
+            if let Some(task) = connection_task.take() {
+                abort_and_reap_xhttp_task(task);
             }
-            drop(xmux_lease);
+            drop(xmux_lease.take());
         }
         XhttpUploadClient::H3 {
             connection,
             xmux_lease,
             ..
         } => {
-            if let Some(connection) = connection {
+            if let Some(connection) = connection.take() {
                 connection.close(b"resident xhttp upload done").await;
             }
-            drop(xmux_lease);
+            drop(xmux_lease.take());
         }
     }
 }
 
-pub(crate) async fn close_xhttp_download_client(download: XhttpDownloadClient) {
-    match download {
-        XhttpDownloadClient::H1 { mut body } => {
+pub(crate) async fn close_xhttp_download_client(mut download: XhttpDownloadClient) {
+    match &mut download {
+        XhttpDownloadClient::H1 { body } => {
             body.shutdown().await;
         }
         XhttpDownloadClient::H2 {
@@ -231,20 +231,20 @@ pub(crate) async fn close_xhttp_download_client(download: XhttpDownloadClient) {
             xmux_lease,
             ..
         } => {
-            if let Some(task) = connection_task {
-                task.abort();
+            if let Some(task) = connection_task.take() {
+                abort_and_reap_xhttp_task(task);
             }
-            drop(xmux_lease);
+            drop(xmux_lease.take());
         }
         XhttpDownloadClient::H3 {
             connection,
             xmux_lease,
             ..
         } => {
-            if let Some(connection) = connection {
+            if let Some(connection) = connection.take() {
                 connection.close(b"resident xhttp download done").await;
             }
-            drop(xmux_lease);
+            drop(xmux_lease.take());
         }
         XhttpDownloadClient::H3StreamOne { .. } => {}
     }
@@ -328,10 +328,10 @@ pub(crate) async fn close_xhttp_stream_upload_client(mut upload: XhttpStreamUplo
             ..
         } => {
             if let Some(task) = upload_response_task.take() {
-                task.abort();
+                abort_and_reap_xhttp_task(task);
             }
             if let Some(task) = connection_task.take() {
-                task.abort();
+                abort_and_reap_xhttp_task(task);
             }
             drop(xmux_lease.take());
         }
