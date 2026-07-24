@@ -66,6 +66,13 @@ impl ResidentDnsResponseCacheKey {
             scope: self.scope.clone(),
         }
     }
+
+    fn first_for_base(base: &DnsCacheKey) -> Self {
+        Self {
+            base: base.clone(),
+            scope: ResidentDnsResponseCacheScope::Reject,
+        }
+    }
 }
 
 impl ResidentDnsResponseCacheScope {
@@ -137,11 +144,14 @@ impl ResidentDnsRuntimeCache {
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
         sweep_expired_if_due(&mut state, now_unix);
-        Ok(state.entries.iter().any(|(candidate, stored)| {
-            &candidate.base == key
-                && stored.entry.lookup_deadline(ignore_fixed_ttl) > now_unix
-                && stored.entry.has_any_ip
-        }))
+        let first_scoped_key = ResidentDnsResponseCacheKey::first_for_base(key);
+        Ok(state
+            .entries
+            .range(first_scoped_key..)
+            .take_while(|(candidate, _)| &candidate.base == key)
+            .any(|(_, stored)| {
+                stored.entry.lookup_deadline(ignore_fixed_ttl) > now_unix && stored.entry.has_any_ip
+            }))
     }
 
     pub(super) fn insert_response(
@@ -168,10 +178,12 @@ impl ResidentDnsRuntimeCache {
             .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        let first_scoped_key = ResidentDnsResponseCacheKey::first_for_base(key);
         let scoped_keys = state
             .entries
-            .keys()
-            .filter(|candidate| &candidate.base == key)
+            .range(first_scoped_key..)
+            .map(|(candidate, _)| candidate)
+            .take_while(|candidate| &candidate.base == key)
             .cloned()
             .collect::<Vec<_>>();
         let mut removed = Vec::with_capacity(scoped_keys.len());

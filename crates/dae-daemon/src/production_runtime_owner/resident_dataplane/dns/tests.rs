@@ -1224,6 +1224,43 @@ fn resident_dns_response_cache_removes_all_scoped_siblings_for_base_key() {
     assert_eq!(cache.deadline_len(), 0);
 }
 
+#[test]
+fn resident_dns_response_cache_base_lookup_is_limited_to_scoped_siblings() {
+    let cache = ResidentDnsRuntimeCache::default();
+    let response = a_response([203, 0, 113, 42]);
+    let now = unix_now();
+    let cache_plan = build_response_cache_plan_from_packet(now, &response, None)
+        .unwrap()
+        .unwrap();
+    for qname in ["before.invalid", "target.invalid", "z-after.invalid"] {
+        let scope = if qname == "target.invalid" {
+            ResidentDnsResponseCacheScope::AsIs {
+                original_dst: "192.0.2.53:53".parse().unwrap(),
+            }
+        } else {
+            ResidentDnsResponseCacheScope::Reject
+        };
+        cache
+            .insert_response(
+                now,
+                ResidentDnsResponseCacheKey::new(DnsCacheKey::new(qname, 1, 1), scope),
+                cache_plan.entry.clone(),
+            )
+            .unwrap();
+    }
+
+    assert!(
+        cache
+            .lookup_key_has_any_ip(&DnsCacheKey::new("target.invalid", 1, 1), false)
+            .unwrap()
+    );
+    assert!(
+        !cache
+            .lookup_key_has_any_ip(&DnsCacheKey::new("missing.invalid", 1, 1), false)
+            .unwrap()
+    );
+}
+
 #[tokio::test]
 async fn resident_dns_request_reject_removes_scoped_cached_responses() {
     let input = r#"
