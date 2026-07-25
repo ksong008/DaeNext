@@ -74,11 +74,12 @@ use super::plan::ResidentHysteria2ObfsPlan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentProtocolShape, ResidentProxyBinding, ResidentProxyGroupPlan, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentStreamPacketTransport, ResidentUdpExecutionAgreement,
-    ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory, ResidentUdpSourceContract,
-    ResidentUdpWireIdentityContract, ResidentXhttpHttpVersion, ResidentXhttpMode,
-    SharedResidentProxyGroupMap, UdpPacketSemantics, resident_udp_chain_admission,
+    ResidentDataUdpAvailabilityHandle, ResidentProtocolShape, ResidentProxyBinding,
+    ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentStreamPacketTransport, ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition,
+    ResidentUdpExecutorFactory, ResidentUdpSourceContract, ResidentUdpWireIdentityContract,
+    ResidentXhttpHttpVersion, ResidentXhttpMode, SharedResidentProxyGroupMap, UdpPacketSemantics,
+    resident_udp_chain_admission,
 };
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,

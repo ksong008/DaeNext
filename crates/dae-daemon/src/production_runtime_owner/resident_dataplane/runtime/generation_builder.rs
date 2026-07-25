@@ -207,7 +207,10 @@ pub(super) fn build_resident_dataplane_generation(
         resource_config.tcp_connection_limit.value(),
         tcp_flow_stack_bytes,
     );
+    let generation_id = next_resident_dataplane_generation_id();
     let generation_stop = ResidentStopSignal::shared();
+    let generation_drain_control =
+        ResidentGenerationDrainControl::new(generation_id, Arc::clone(&generation_stop));
     let manual_probe_handle =
         owner.manual_probe_handle(&runtime_groups, &manual_probe_index, &resource_config);
     let udp_generation_plan = udp::ResidentUdpGenerationPlan::new(
@@ -228,7 +231,7 @@ pub(super) fn build_resident_dataplane_generation(
         owner.anytls_owner_registry(),
     )?;
     let generation = Arc::new(ResidentDataplaneGeneration {
-        id: next_resident_dataplane_generation_id(),
+        id: generation_id,
         reload_generation,
         tcp_router,
         tcp_admission: tcp::ResidentTcpAdmission::new(
@@ -238,8 +241,7 @@ pub(super) fn build_resident_dataplane_generation(
         tcp_runtime_config,
         dns: Arc::clone(&dns),
         udp: udp_generation_plan,
-        lifecycle: ResidentGenerationLifecycle::default(),
-        stop: Arc::clone(&generation_stop),
+        drain_control: generation_drain_control,
         metrics,
         groups: runtime_groups,
         manual_probe_handle,

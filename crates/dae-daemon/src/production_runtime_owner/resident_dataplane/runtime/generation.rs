@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::AtomicBool;
 
 static RESIDENT_DATAPLANE_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -16,6 +17,100 @@ struct ActiveGenerationSlotInner<T> {
 #[derive(Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ActiveGenerationSlot<T> {
     inner: Arc<ActiveGenerationSlotInner<T>>,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentGenerationDrainControl {
+    id: u64,
+    lifecycle: ResidentGenerationLifecycle,
+    workload_stop: SharedResidentStopSignal,
+    udp_stop: SharedResidentStopSignal,
+    udp_router_retained: AtomicBool,
+    udp_dns_runtime_retained: AtomicBool,
+}
+
+impl std::fmt::Debug for ResidentGenerationDrainControl {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResidentGenerationDrainControl")
+            .field("id", &self.id)
+            .field("stop_requested", &self.stop_is_requested())
+            .field("udp_stop_requested", &self.udp_stop_is_requested())
+            .field("udp_router_retained", &self.udp_router_is_retained())
+            .field(
+                "udp_dns_runtime_retained",
+                &self.udp_dns_runtime_is_retained(),
+            )
+            .finish()
+    }
+}
+
+impl ResidentGenerationDrainControl {
+    pub(super) fn new(id: u64, workload_stop: SharedResidentStopSignal) -> Arc<Self> {
+        Arc::new(Self {
+            id,
+            lifecycle: ResidentGenerationLifecycle::default(),
+            workload_stop,
+            udp_stop: ResidentStopSignal::shared(),
+            udp_router_retained: AtomicBool::new(false),
+            udp_dns_runtime_retained: AtomicBool::new(false),
+        })
+    }
+
+    pub(super) fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub(super) fn admission_is_open(&self) -> bool {
+        self.lifecycle.admission_is_open()
+    }
+
+    pub(super) fn close_admission(&self) {
+        self.lifecycle.close_admission();
+    }
+
+    pub(super) fn reopen_admission(&self) -> Result<(), String> {
+        self.lifecycle.reopen_admission().map_err(str::to_owned)
+    }
+
+    pub(super) fn stop_is_requested(&self) -> bool {
+        self.lifecycle.stop_is_requested()
+    }
+
+    pub(super) fn udp_stop_is_requested(&self) -> bool {
+        self.udp_stop.load(Ordering::Acquire)
+    }
+
+    pub(super) fn retire_workloads(&self) {
+        self.lifecycle.request_stop();
+        self.workload_stop.store(true, Ordering::Release);
+    }
+
+    pub(super) fn request_force_stop(&self) {
+        self.retire_workloads();
+        self.udp_stop.store(true, Ordering::Release);
+    }
+
+    pub(super) fn register_udp_runtime(&self) {
+        self.udp_router_retained.store(true, Ordering::Release);
+        self.udp_dns_runtime_retained.store(true, Ordering::Release);
+    }
+
+    pub(super) fn release_udp_router(&self) {
+        self.udp_router_retained.store(false, Ordering::Release);
+    }
+
+    pub(super) fn release_udp_dns_runtime(&self) {
+        self.udp_dns_runtime_retained
+            .store(false, Ordering::Release);
+    }
+
+    pub(super) fn udp_router_is_retained(&self) -> bool {
+        self.udp_router_retained.load(Ordering::Acquire)
+    }
+
+    pub(super) fn udp_dns_runtime_is_retained(&self) -> bool {
+        self.udp_dns_runtime_retained.load(Ordering::Acquire)
+    }
 }
 
 impl<T> Clone for ActiveGenerationSlot<T> {
@@ -99,8 +194,7 @@ pub(crate) struct ResidentDataplaneGeneration {
         ResidentTcpRuntimeConfig,
     pub(in crate::production_runtime_owner::resident_dataplane) dns: Arc<dns::ResidentDnsPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) udp: udp::ResidentUdpGenerationPlan,
-    pub(super) lifecycle: ResidentGenerationLifecycle,
-    pub(in crate::production_runtime_owner::resident_dataplane) stop: SharedResidentStopSignal,
+    pub(super) drain_control: Arc<ResidentGenerationDrainControl>,
     pub(in crate::production_runtime_owner::resident_dataplane) metrics:
         Arc<ResidentDataplaneMetrics>,
     pub(in crate::production_runtime_owner::resident_dataplane) groups:
@@ -127,24 +221,18 @@ impl std::fmt::Debug for ResidentDataplaneGeneration {
 
 impl ResidentDataplaneGeneration {
     pub(super) fn admission_is_open(&self) -> bool {
-        self.lifecycle.admission_is_open()
+        self.drain_control.admission_is_open()
     }
 
-    pub(super) fn close_admission(&self) {
-        self.lifecycle.close_admission();
-    }
-
-    pub(super) fn reopen_admission(&self) -> Result<(), String> {
-        self.lifecycle.reopen_admission().map_err(str::to_owned)
-    }
-
-    pub(super) fn stop_is_requested(&self) -> bool {
-        self.lifecycle.stop_is_requested()
+    pub(super) fn retire_workloads(&self) {
+        self.drain_control.retire_workloads();
+        if let Some(maintenance) = self.domain_routing_maintenance.as_ref() {
+            maintenance.stop();
+        }
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn request_stop(&self) {
-        self.lifecycle.request_stop();
-        self.stop.store(true, Ordering::Release);
+        self.drain_control.request_force_stop();
         if let Some(maintenance) = self.domain_routing_maintenance.as_ref() {
             maintenance.stop();
         }

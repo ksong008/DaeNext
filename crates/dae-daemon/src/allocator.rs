@@ -15,8 +15,8 @@ pub(crate) use self::control_plane::{
 };
 mod requests;
 pub(crate) use self::requests::{
-    AllocatorReclaimRequestBatch, allocator_pending_reclaim_requests, allocator_request_reclaim,
-    allocator_take_reclaim_requests,
+    AllocatorReclaimRequestBatch, allocator_pending_reclaim_reason,
+    allocator_pending_reclaim_requests, allocator_request_reclaim, allocator_take_reclaim_requests,
 };
 
 #[cfg(not(feature = "allocator-jemalloc"))]
@@ -41,6 +41,7 @@ pub enum AllocatorReclaimReason {
     ManualLatencyProbe,
     GroupHealthProbe,
     GeodataUpdate,
+    RetiredGenerationReleased,
 }
 
 impl AllocatorReclaimReason {
@@ -54,6 +55,7 @@ impl AllocatorReclaimReason {
             Self::ManualLatencyProbe => "manual_latency_probe",
             Self::GroupHealthProbe => "group_health_probe",
             Self::GeodataUpdate => "geodata_update",
+            Self::RetiredGenerationReleased => "retired_generation_released",
         }
     }
 }
@@ -127,6 +129,7 @@ static IDLE_MEMORY_PRESSURE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static MANUAL_LATENCY_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static GROUP_HEALTH_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static GEODATA_UPDATE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static RETIRED_GENERATION_RELEASED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static EXECUTED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static COALESCED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
@@ -269,6 +272,7 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
             "manual_latency_probe": MANUAL_LATENCY_PROBE_RECLAIMS.load(Ordering::Relaxed),
             "group_health_probe": GROUP_HEALTH_PROBE_RECLAIMS.load(Ordering::Relaxed),
             "geodata_update": GEODATA_UPDATE_RECLAIMS.load(Ordering::Relaxed),
+            "retired_generation_released": RETIRED_GENERATION_RELEASED_RECLAIMS.load(Ordering::Relaxed),
         },
         "last": last.as_ref().map(last_allocator_reclaim_json),
     })
@@ -299,6 +303,9 @@ fn increment_reason_counter(reason: AllocatorReclaimReason) {
         }
         AllocatorReclaimReason::GeodataUpdate => {
             GEODATA_UPDATE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
+        AllocatorReclaimReason::RetiredGenerationReleased => {
+            RETIRED_GENERATION_RELEASED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
     };
 }

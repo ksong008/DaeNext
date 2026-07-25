@@ -156,6 +156,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                     stream,
                     peer,
                     generation,
+                    Arc::clone(&stop),
                     event_file.clone(),
                     Arc::clone(&event_lock),
                     permit,
@@ -201,19 +202,24 @@ fn spawn_async_tcp_flow(
     stream: TokioTcpStream,
     peer: SocketAddr,
     generation: Arc<ResidentDataplaneGeneration>,
+    runtime_stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let peer = resident_tcp_accepted_endpoint(peer);
+    let admission = generation.tcp_admission.clone();
+    let router = Arc::clone(&generation.tcp_router);
+    let metrics = Arc::clone(&generation.metrics);
+    drop(generation);
     flows.spawn(async move {
-        let _admission = generation.tcp_admission.admitted(permit);
+        let _admission = admission.admitted(permit);
         match handle_tcp_connection_async_or_handoff(
             stream,
             peer,
-            Arc::clone(&generation.tcp_router),
-            Arc::clone(&generation.stop),
-            Arc::clone(&generation.metrics),
+            router,
+            runtime_stop,
+            metrics,
             &event_file,
             &event_lock,
         )
@@ -252,34 +258,31 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
         .set_nodelay(true)
         .map_err(|err| format!("set inbound TCP_NODELAY: {err}"))?;
     if transparent_tcp_dns_fast_path_applies(original_dst) {
+        let dns = Arc::clone(&router.dns);
+        drop(router);
         Box::pin(handle_transparent_tcp_dns_fast_path_async(
             &mut inbound,
             original_dst,
-            Arc::clone(&router.dns),
+            dns,
             Arc::clone(&stop),
             Arc::clone(&metrics),
         ))
         .await?;
         return Ok(None);
     }
-    let sniff = sniff_initial_tcp_payload_async(&mut inbound, router.sniffing_timeout).await?;
+    let sniffing_timeout = router.sniffing_timeout;
+    let dial_mode = router.dial_mode_name();
+    let sniff = sniff_initial_tcp_payload_async(&mut inbound, sniffing_timeout).await?;
     let selection = Box::pin(router.select(peer, original_dst, &sniff.domain)).await?;
     append_event_with_metadata(
         event_file,
         event_lock,
         ResidentEventMetadata::new(ResidentEventKind::TcpRouteChosen),
-        || {
-            tcp_route_chosen_event(
-                peer,
-                original_dst,
-                &selection,
-                &sniff,
-                router.dial_mode_name(),
-            )
-        },
+        || tcp_route_chosen_event(peer, original_dst, &selection, &sniff, dial_mode),
     );
     match selection {
         TcpSelection::Direct(selection) => {
+            drop(router);
             let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
             let result = Box::pin(handle_direct_tcp_connection_async(
                 &mut inbound,
@@ -294,6 +297,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
             result.map(Some)
         }
         TcpSelection::Block(selection) => {
+            drop(router);
             let _ = inbound.shutdown().await;
             let mut event = json!({
                 "event": "tcp_connection_blocked",
@@ -318,11 +322,13 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
             let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
             let runtime_dispatch = selection.proxy.execution_plan().protocol.runtime_dispatch();
             let result = if runtime_dispatch == ResidentTcpRuntimeDispatch::PolicyClosed {
+                drop(router);
                 Err(format!(
                     "resident TCP dispatcher policy-closed for UDP-only exact protocol shape {:?}",
                     selection.proxy.execution_plan().protocol
                 ))
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
+                drop(router);
                 Box::pin(handle_proxy_tcp_connection_async(
                     &mut inbound,
                     peer,
@@ -334,6 +340,8 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                 ))
                 .await
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::FrameTls {
+                let anytls_owner_registry = router.anytls_owner_registry.clone();
+                drop(router);
                 Box::pin(handle_frame_tls_tcp_connection_async(
                     &mut inbound,
                     peer,
@@ -342,11 +350,15 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     Arc::clone(&stop),
                     sniff,
                     &metrics,
-                    router.anytls_owner_registry.as_ref(),
+                    anytls_owner_registry.as_ref(),
                     None,
                 ))
                 .await
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Quic {
+                let hysteria2_owner_registry = router.hysteria2_owner_registry.clone();
+                let tuic_owner_registry = router.tuic_owner_registry.clone();
+                let juicity_owner_registry = router.juicity_owner_registry.clone();
+                drop(router);
                 Box::pin(handle_quic_tcp_connection_async(
                     &mut inbound,
                     peer,
@@ -355,13 +367,14 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                     Arc::clone(&stop),
                     sniff,
                     &metrics,
-                    router.hysteria2_owner_registry.as_ref(),
-                    router.tuic_owner_registry.as_ref(),
-                    router.juicity_owner_registry.as_ref(),
+                    hysteria2_owner_registry.as_ref(),
+                    tuic_owner_registry.as_ref(),
+                    juicity_owner_registry.as_ref(),
                     None,
                 ))
                 .await
             } else {
+                drop(router);
                 Box::pin(handle_resident_proxy_tcp_connection_async(
                     inbound,
                     peer,

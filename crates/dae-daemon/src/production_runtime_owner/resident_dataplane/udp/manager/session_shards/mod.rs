@@ -67,8 +67,6 @@ pub(super) struct ResidentUdpSessionShardPool {
 impl ResidentUdpSessionShardPool {
     pub(super) fn start(
         runtime_config: &ResidentUdpRuntimeConfig,
-        dns: Arc<ResidentDnsPlan>,
-        proxy_groups: SharedResidentProxyGroupMap,
         event_file: PathBuf,
         event_lock: Arc<Mutex<()>>,
         metrics: Arc<ResidentDataplaneMetrics>,
@@ -83,8 +81,6 @@ impl ResidentUdpSessionShardPool {
         let queue_depth = runtime_config.per_shard_dispatch_queue_depth();
         let admission = Arc::new(Semaphore::new(runtime_config.session_limit));
         let shared = Arc::new(UdpSessionSharedContext {
-            dns,
-            proxy_groups,
             event_file: event_file.clone(),
             event_lock: Arc::clone(&event_lock),
             metrics: Arc::clone(&metrics),

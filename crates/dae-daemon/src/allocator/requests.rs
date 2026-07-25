@@ -1,6 +1,6 @@
 use super::*;
 
-const RECLAIM_REASON_COUNT: usize = 8;
+const RECLAIM_REASON_COUNT: usize = 9;
 const RECLAIM_REQUEST_COUNT_SHIFT: u32 = RECLAIM_REASON_COUNT as u32;
 const RECLAIM_REASON_MASK: u64 = (1_u64 << RECLAIM_REQUEST_COUNT_SHIFT) - 1;
 const RECLAIM_REQUEST_COUNT_MAX: u64 = u64::MAX >> RECLAIM_REQUEST_COUNT_SHIFT;
@@ -29,6 +29,7 @@ impl AllocatorReclaimReason {
             Self::ManualLatencyProbe => 5,
             Self::GroupHealthProbe => 6,
             Self::GeodataUpdate => 7,
+            Self::RetiredGenerationReleased => 8,
         }
     }
 
@@ -46,6 +47,7 @@ impl AllocatorReclaimReason {
             5 => Some(Self::ManualLatencyProbe),
             6 => Some(Self::GroupHealthProbe),
             7 => Some(Self::GeodataUpdate),
+            8 => Some(Self::RetiredGenerationReleased),
             _ => None,
         }
     }
@@ -72,6 +74,7 @@ impl AllocatorReclaimRequestBatch {
             AllocatorReclaimReason::GeodataUpdate,
             AllocatorReclaimReason::ManualLatencyProbe,
             AllocatorReclaimReason::GroupHealthProbe,
+            AllocatorReclaimReason::RetiredGenerationReleased,
             AllocatorReclaimReason::ReloadCompleted,
             AllocatorReclaimReason::StartupControlBuilt,
             AllocatorReclaimReason::ReloadFailedAfterCleanup,
@@ -100,6 +103,10 @@ pub(crate) fn allocator_request_reclaim(reason: AllocatorReclaimReason) {
 
 pub(crate) fn allocator_pending_reclaim_requests() -> bool {
     PENDING_RECLAIM_REQUESTS.load(Ordering::Acquire) & RECLAIM_REASON_MASK != 0
+}
+
+pub(crate) fn allocator_pending_reclaim_reason(reason: AllocatorReclaimReason) -> bool {
+    PENDING_RECLAIM_REQUESTS.load(Ordering::Acquire) & reason.request_bit() != 0
 }
 
 pub(crate) fn allocator_take_reclaim_requests() -> AllocatorReclaimRequestBatch {
@@ -151,6 +158,13 @@ mod tests {
         allocator_request_reclaim(AllocatorReclaimReason::GroupHealthProbe);
         allocator_request_reclaim(AllocatorReclaimReason::GroupHealthProbe);
         allocator_request_reclaim(AllocatorReclaimReason::ManualLatencyProbe);
+
+        assert!(allocator_pending_reclaim_reason(
+            AllocatorReclaimReason::ManualLatencyProbe
+        ));
+        assert!(!allocator_pending_reclaim_reason(
+            AllocatorReclaimReason::RetiredGenerationReleased
+        ));
 
         let batch = allocator_take_reclaim_requests();
         assert_eq!(batch.request_count(), 3);
