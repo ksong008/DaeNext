@@ -98,6 +98,7 @@ pub(super) fn api_groups(app: &AppState, request: &HttpRequest, api_path: &str) 
     if parts.len() == 2 && parts[1] == "nodes" {
         return match request.method.as_str() {
             "POST" => update_group_nodes(&app.state, request, id, true),
+            "PUT" => replace_group_nodes(&app.state, request, id),
             "DELETE" => update_group_nodes(&app.state, request, id, false),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
