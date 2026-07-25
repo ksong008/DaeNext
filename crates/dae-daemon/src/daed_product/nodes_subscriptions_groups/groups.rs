@@ -269,6 +269,67 @@ pub(crate) fn update_group_nodes(
     get_group(state, id)
 }
 
+pub(crate) fn replace_group_nodes(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
+    let body = match json_body(request) {
+        Ok(body) => body,
+        Err(err) => return HttpResponse::json(400, json!({"error": err})),
+    };
+    let mut node_ids = integer_array(&body, "nodeIds");
+    node_ids.sort_unstable();
+    node_ids.dedup();
+    let expected_version = body.get("expectedVersion").and_then(Value::as_i64);
+    let mut conn = match open_state_connection(state) {
+        Ok(conn) => conn,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    let tx = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(tx) => tx,
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    let current_version = match tx
+        .query_row(
+            "SELECT version FROM groups WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(sqlite_io_error)
+    {
+        Ok(Some(version)) => version,
+        Ok(None) => return HttpResponse::json(404, json!({"error": "group not found"})),
+        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
+    };
+    if expected_version.is_some_and(|expected| expected != current_version) {
+        return HttpResponse::json(
+            409,
+            json!({
+                "error": "group changed while its node selection was being edited",
+                "code": "group_version_conflict",
+                "currentVersion": current_version,
+            }),
+        );
+    }
+    if let Err(err) = validate_group_node_ids_exist(&tx, &node_ids) {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
+    }
+    if let Err(err) = tx.execute("DELETE FROM group_nodes WHERE group_id = ?1", params![id]) {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
+    }
+    if let Err(err) = apply_group_node_ids(&tx, id, &node_ids, true) {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
+    }
+    if let Err(err) = tx.execute(
+        "UPDATE groups SET version = version + 1 WHERE id = ?1",
+        params![id],
+    ) {
+        return HttpResponse::json(400, json!({"error": err.to_string()}));
+    }
+    if let Err(err) = tx.commit() {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
+    get_group(state, id)
+}
+
 pub(crate) fn update_group_subscriptions(
     state: &Path,
     request: &HttpRequest,
@@ -621,6 +682,25 @@ pub(crate) fn apply_group_node_ids(
             )
         }
         .map_err(sqlite_io_error)?;
+    }
+    Ok(())
+}
+
+fn validate_group_node_ids_exist(conn: &Connection, ids: &[i64]) -> io::Result<()> {
+    for id in ids {
+        let exists = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM nodes WHERE id = ?1)",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(sqlite_io_error)?;
+        if !exists {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("node {id} not found"),
+            ));
+        }
     }
     Ok(())
 }

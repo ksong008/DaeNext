@@ -1226,6 +1226,105 @@ pub(crate) fn update_group_nodes_rejects_second_node_for_fixed_group_without_mut
 }
 
 #[test]
+pub(crate) fn replace_group_nodes_commits_fixed_selection_atomically_once() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 1, "node-a", "http://127.0.0.1:9/node-a#node-a", None);
+    insert_config_node(&conn, 2, "node-b", "http://127.0.0.2:9/node-b#node-b", None);
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, 'atomic', ?1, 3)",
+        params![GROUP_POLICY_FIXED],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let request = HttpRequest {
+        method: "PUT".to_owned(),
+        path: "/api/groups/9/nodes".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"nodeIds":[2],"expectedVersion":3}"#.to_vec(),
+    };
+
+    let response = replace_group_nodes(&state, &request, 9);
+    assert_eq!(response.status, 200);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["version"], 4);
+    assert_eq!(body["nodes"][0]["id"], 2);
+    let conn = open_state_connection(&state).unwrap();
+    let node_ids = conn
+        .prepare("SELECT node_id FROM group_nodes WHERE group_id = 9 ORDER BY node_id")
+        .unwrap()
+        .query_map([], |row| row.get::<_, i64>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(node_ids, vec![2]);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn replace_group_nodes_rolls_back_invalid_or_stale_selection() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    insert_config_node(&conn, 1, "node-a", "http://127.0.0.1:9/node-a#node-a", None);
+    conn.execute(
+        "INSERT INTO groups(id, name, policy, version) VALUES(9, 'atomic', ?1, 3)",
+        params![GROUP_POLICY_FIXED],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO group_nodes(group_id, node_id) VALUES(9, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    for (expected_version, node_id, expected_status) in [(2, 1, 409), (3, 999, 400)] {
+        let request = HttpRequest {
+            method: "PUT".to_owned(),
+            path: "/api/groups/9/nodes".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: serde_json::to_vec(&json!({
+                "nodeIds": [node_id],
+                "expectedVersion": expected_version,
+            }))
+            .unwrap(),
+        };
+        assert_eq!(
+            replace_group_nodes(&state, &request, 9).status,
+            expected_status
+        );
+    }
+
+    let conn = open_state_connection(&state).unwrap();
+    let node_id: i64 = conn
+        .query_row(
+            "SELECT node_id FROM group_nodes WHERE group_id = 9",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let version: i64 = conn
+        .query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(node_id, 1);
+    assert_eq!(version, 3);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn update_group_subscriptions_rejects_multi_match_for_fixed_group_without_mutating() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
