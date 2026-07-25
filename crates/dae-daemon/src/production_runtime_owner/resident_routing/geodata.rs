@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     ptr::NonNull,
     slice,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 
 use dae_config::Param;
@@ -14,7 +14,7 @@ use dae_geodata::{
     DomainType, decode_entry_range, load_geoip_bytes, load_geoip_entry_bytes, load_geosite_bytes,
     load_geosite_entry_bytes,
 };
-use dae_routing::{DomainKey, SharedDomainSet};
+use dae_routing::{DomainKey, SharedDomainSet, WeakSharedDomainSet};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -248,6 +248,19 @@ struct SharedSetCacheKey {
     digest: [u8; 32],
 }
 
+fn shared_domain_set_interner() -> &'static Mutex<BTreeMap<SharedSetCacheKey, WeakSharedDomainSet>>
+{
+    static INTERNER: OnceLock<Mutex<BTreeMap<SharedSetCacheKey, WeakSharedDomainSet>>> =
+        OnceLock::new();
+    INTERNER.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn shared_prefix_set_interner() -> &'static Mutex<BTreeMap<SharedSetCacheKey, Weak<[IpPrefix]>>> {
+    static INTERNER: OnceLock<Mutex<BTreeMap<SharedSetCacheKey, Weak<[IpPrefix]>>>> =
+        OnceLock::new();
+    INTERNER.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
 pub(super) fn load_geoip_params(
     resolver: &GeodataResolver,
     filename: &str,
@@ -474,8 +487,35 @@ impl GeodataResolver {
         {
             return Ok(cached);
         }
-        let shared = SharedDomainSet::from_vec(values, key)
+        if let Some(shared) = shared_domain_set_interner()
+            .lock()
+            .map_err(|_| "process shared domain set interner lock poisoned".to_owned())?
+            .get(&cache_key)
+            .and_then(WeakSharedDomainSet::upgrade)
+        {
+            self.shared_domain_sets
+                .lock()
+                .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
+                .insert(cache_key, shared.clone());
+            return Ok(shared);
+        }
+        let built = SharedDomainSet::from_vec(values, key)
             .map_err(|err| format!("build shared resident domain set: {err}"))?;
+        let shared = {
+            let mut interner = shared_domain_set_interner()
+                .lock()
+                .map_err(|_| "process shared domain set interner lock poisoned".to_owned())?;
+            interner.retain(|_, shared| shared.upgrade().is_some());
+            if let Some(shared) = interner
+                .get(&cache_key)
+                .and_then(WeakSharedDomainSet::upgrade)
+            {
+                shared
+            } else {
+                interner.insert(cache_key.clone(), built.downgrade());
+                built
+            }
+        };
         self.shared_domain_sets
             .lock()
             .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
@@ -497,7 +537,31 @@ impl GeodataResolver {
         {
             return Ok(cached);
         }
-        let shared = Arc::from(prefixes);
+        if let Some(shared) = shared_prefix_set_interner()
+            .lock()
+            .map_err(|_| "process shared prefix set interner lock poisoned".to_owned())?
+            .get(&cache_key)
+            .and_then(Weak::upgrade)
+        {
+            self.shared_prefix_sets
+                .lock()
+                .map_err(|_| "geodata shared prefix set cache lock poisoned".to_owned())?
+                .insert(cache_key, Arc::clone(&shared));
+            return Ok(shared);
+        }
+        let built: SharedResidentIpPrefixSet = Arc::from(prefixes);
+        let shared = {
+            let mut interner = shared_prefix_set_interner()
+                .lock()
+                .map_err(|_| "process shared prefix set interner lock poisoned".to_owned())?;
+            interner.retain(|_, shared| shared.strong_count() > 0);
+            if let Some(shared) = interner.get(&cache_key).and_then(Weak::upgrade) {
+                shared
+            } else {
+                interner.insert(cache_key.clone(), Arc::downgrade(&built));
+                built
+            }
+        };
         self.shared_prefix_sets
             .lock()
             .map_err(|_| "geodata shared prefix set cache lock poisoned".to_owned())?

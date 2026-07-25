@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use aho_corasick::AhoCorasick;
 use regex::{Regex, RegexSet};
@@ -46,6 +46,11 @@ struct DomainSet {
 #[derive(Clone, Debug)]
 pub struct SharedDomainSet {
     inner: Arc<SharedDomainSetInner>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WeakSharedDomainSet {
+    inner: Weak<SharedDomainSetInner>,
 }
 
 #[derive(Debug)]
@@ -108,6 +113,12 @@ impl SharedDomainSet {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
+    pub fn downgrade(&self) -> WeakSharedDomainSet {
+        WeakSharedDomainSet {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     fn matches(&self, domain: &str) -> bool {
         if let Some(index) = self.inner.index.as_ref() {
             return index.matches(domain);
@@ -118,6 +129,12 @@ impl SharedDomainSet {
             self.patterns(),
             self.inner.regex.as_ref(),
         )
+    }
+}
+
+impl WeakSharedDomainSet {
+    pub fn upgrade(&self) -> Option<SharedDomainSet> {
+        self.inner.upgrade().map(|inner| SharedDomainSet { inner })
     }
 }
 
