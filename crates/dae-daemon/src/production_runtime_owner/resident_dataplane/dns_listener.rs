@@ -12,7 +12,7 @@ use tokio::sync::Semaphore;
 use tokio::time;
 
 use super::dns::{
-    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
+    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
     build_dns_server_failure_response, handle_resident_dns_local_trace_async,
     read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
@@ -275,12 +275,14 @@ async fn run_resident_dns_udp_bind_listener_async(
                 let permit = match Arc::clone(&semaphore).try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(tokio::sync::TryAcquireError::NoPermits) => {
-                        generation.metrics.add_upload(request.len());
+                        let metrics = Arc::clone(&generation.metrics);
+                        drop(generation);
+                        metrics.add_upload(request.len());
                         let _ = send_resident_dns_udp_bind_failure_response(
                             &socket,
                             peer,
                             &request,
-                            generation.metrics.as_ref(),
+                            metrics.as_ref(),
                         ).await;
                         append_event(
                             &event_file,
@@ -297,11 +299,15 @@ async fn run_resident_dns_udp_bind_listener_async(
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => break,
                 };
+                let dns = Arc::clone(&generation.dns);
+                let metrics = Arc::clone(&generation.metrics);
+                drop(generation);
                 tasks.spawn(handle_resident_dns_udp_bind_packet_async(
                     Arc::clone(&socket),
                     local_addr,
                     peer,
-                    generation,
+                    dns,
+                    metrics,
                     request,
                     event_file.clone(),
                     Arc::clone(&event_lock),
@@ -332,16 +338,16 @@ async fn handle_resident_dns_udp_bind_packet_async(
     socket: Arc<TokioUdpSocket>,
     local_addr: SocketAddr,
     peer: SocketAddr,
-    generation: Arc<ResidentDataplaneGeneration>,
+    dns: Arc<ResidentDnsPlan>,
+    metrics: Arc<ResidentDataplaneMetrics>,
     request: Vec<u8>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
-    let metrics = &generation.metrics;
     metrics.udp_opened();
     metrics.add_upload(request.len());
-    let result = handle_resident_dns_local_trace_async(&generation.dns, local_addr, &request).await;
+    let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
     match result {
         Ok(result) => {
             let response = result.response;
@@ -528,11 +534,16 @@ async fn run_resident_dns_tcp_bind_listener_async(
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => break,
                 };
+                let dns = Arc::clone(&generation.dns);
+                let metrics = Arc::clone(&generation.metrics);
+                drop(generation);
                 tasks.spawn(handle_resident_dns_tcp_bind_connection_async(
                     stream,
                     peer,
                     local_addr,
-                    generation,
+                    dns,
+                    metrics,
+                    Arc::clone(&stop),
                     event_file.clone(),
                     Arc::clone(&event_lock),
                     permit,
@@ -561,14 +572,14 @@ async fn handle_resident_dns_tcp_bind_connection_async(
     mut stream: TokioTcpStream,
     peer: SocketAddr,
     local_addr: SocketAddr,
-    generation: Arc<ResidentDataplaneGeneration>,
+    dns: Arc<ResidentDnsPlan>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
-    let metrics = &generation.metrics;
-    let stop = Arc::clone(&generation.stop);
-    let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(metrics));
+    let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
     loop {
         if stop.load(Ordering::Relaxed) {
             return;
@@ -592,8 +603,7 @@ async fn handle_resident_dns_tcp_bind_connection_async(
             }
         };
         metrics.add_upload(request.len());
-        let result =
-            handle_resident_dns_local_trace_async(&generation.dns, local_addr, &request).await;
+        let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
         match result {
             Ok(result) => {
                 let response = result.response;

@@ -17,6 +17,16 @@ fn udp_session_manager_uses_the_generation_data_plane_executor() {
 }
 
 #[test]
+fn udp_generation_runtime_keeps_a_drain_control_instead_of_the_heavy_generation() {
+    let source = include_str!("../manager.rs");
+    assert!(source.contains("drain_control: Arc<ResidentGenerationDrainControl>"));
+    assert!(source.contains("router: Option<Arc<ResidentUdpRouter>>"));
+    assert!(source.contains("dns_runtime: Option<ResidentUdpDnsRuntime>"));
+    assert!(!source.contains("plan: ResidentUdpGenerationPlan"));
+    assert!(!source.contains("generation: Arc<ResidentDataplaneGeneration>"));
+}
+
+#[test]
 fn udp_generation_pin_is_fixed_by_peer_and_original_destination_until_expiry() {
     let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
     let destination = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443);
@@ -32,6 +42,7 @@ fn udp_generation_pin_is_fixed_by_peer_and_original_destination_until_expiry() {
         UdpGenerationPin {
             generation: 7,
             expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+            route: None,
         },
     );
 
@@ -67,6 +78,72 @@ fn unavailable_udp_generation_pin_does_not_fall_back_to_active_generation() {
         udp_generation_choice(None, 8, |_| false),
         UdpGenerationChoice::Available(8)
     );
+}
+
+#[test]
+fn retired_udp_generation_keeps_only_resources_required_by_its_bound_pins() {
+    let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
+    let now = Instant::now();
+    let mut pins = HashMap::new();
+    let key = UdpGenerationPinKey {
+        peer,
+        original_dst: SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443),
+    };
+    pins.insert(
+        key,
+        UdpGenerationPin {
+            generation: 7,
+            expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+            route: None,
+        },
+    );
+    assert_eq!(
+        retained_udp_resources_for_generation(&pins, 7),
+        ResidentUdpRetainedResources {
+            has_pin: true,
+            router: true,
+            dns_runtime: true,
+        }
+    );
+
+    pins.get_mut(&key).unwrap().route = Some(ResidentUdpPinnedRoute::Direct {
+        route: ResidentUdpRouteSelection {
+            initial_outbound: OUTBOUND_DIRECT,
+            final_outbound: OUTBOUND_DIRECT,
+            final_mark: 0,
+            userspace_route_executed: false,
+            userspace_route_must: false,
+        },
+        sniffed_domain: None,
+        dscp: 0,
+    });
+    assert_eq!(
+        retained_udp_resources_for_generation(&pins, 7),
+        ResidentUdpRetainedResources {
+            has_pin: true,
+            router: false,
+            dns_runtime: false,
+        }
+    );
+
+    pins.get_mut(&key).unwrap().route = Some(ResidentUdpPinnedRoute::ResidentDns);
+    assert_eq!(
+        retained_udp_resources_for_generation(&pins, 7),
+        ResidentUdpRetainedResources {
+            has_pin: true,
+            router: false,
+            dns_runtime: true,
+        }
+    );
+}
+
+#[test]
+fn retired_unbound_udp_pin_lasts_only_while_rollback_or_sniffing_can_use_it() {
+    assert!(udp_generation_pin_is_required(true, false, true, false));
+    assert!(udp_generation_pin_is_required(false, true, true, false));
+    assert!(udp_generation_pin_is_required(false, false, false, false));
+    assert!(udp_generation_pin_is_required(false, false, true, true));
+    assert!(!udp_generation_pin_is_required(false, false, true, false));
 }
 
 #[test]
@@ -749,8 +826,9 @@ fn test_udp_router_with_data_udp_health_group() -> ResidentUdpRouter {
         .record_check_result("node_a", NetworkType::DNS_UDP4, Some(20), 1)
         .unwrap();
     group
-        .record_data_udp_available_traffic("node_b", NetworkType::DATA_UDP4, 2)
-        .unwrap();
+        .data_udp_availability_handle("node_b")
+        .unwrap()
+        .record(NetworkType::DATA_UDP4, 2);
     ResidentUdpRouter::from_parts(
         share_resident_proxy_groups(plan.proxies.clone()),
         plan.default_outbound.unwrap(),

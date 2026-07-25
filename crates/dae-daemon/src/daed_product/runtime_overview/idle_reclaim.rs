@@ -1,7 +1,7 @@
 use super::*;
 use crate::allocator::{
-    AllocatorReclaimRequestBatch, allocator_pending_reclaim_requests,
-    allocator_take_reclaim_requests,
+    AllocatorReclaimRequestBatch, allocator_pending_reclaim_reason,
+    allocator_pending_reclaim_requests, allocator_take_reclaim_requests,
 };
 
 #[path = "idle_reclaim/adaptive.rs"]
@@ -350,6 +350,8 @@ fn evaluate_allocator_idle_reclaim(
     let now = Instant::now();
     let deferred_waiting = allocator_pending_reclaim_requests();
     let deferred_pending = admit_deferred_requests && deferred_waiting;
+    let retired_generation_release_pending = deferred_pending
+        && allocator_pending_reclaim_reason(AllocatorReclaimReason::RetiredGenerationReleased);
     let cgroup_pressure = observe_cgroup_reclaim_pressure();
     let Some(observation) = idle_reclaim_observation(app) else {
         reset_idle_reclaim_observation();
@@ -360,6 +362,7 @@ fn evaluate_allocator_idle_reclaim(
     };
     if traffic_rate.bytes_per_second > policy.max_traffic_rate_bytes_per_second
         && !cgroup_pressure.urgent
+        && !retired_generation_release_pending
     {
         reset_idle_reclaim_low_traffic_window();
         return json!({
@@ -393,7 +396,9 @@ fn evaluate_allocator_idle_reclaim(
         });
     }
     let adaptive_min_interval = idle_reclaim_effective_min_interval(policy.min_interval);
-    let effective_min_interval = if cgroup_pressure.urgent {
+    let effective_min_interval = if retired_generation_release_pending {
+        Duration::ZERO
+    } else if cgroup_pressure.urgent {
         adaptive_min_interval.min(policy.sample_interval)
     } else {
         adaptive_min_interval
@@ -424,7 +429,7 @@ fn evaluate_allocator_idle_reclaim(
     } else {
         policy.pressure_threshold_bytes
     };
-    if pressure < effective_pressure_threshold {
+    if pressure < effective_pressure_threshold && !retired_generation_release_pending {
         let deferred = if deferred_pending {
             allocator_take_reclaim_requests()
         } else {

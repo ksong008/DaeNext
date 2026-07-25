@@ -14,8 +14,8 @@ pub(super) struct ManagedUdpPacket {
     pub(super) packet: UdpOriginalDstPacket,
     pub(super) original_dst: SocketAddr,
     pub(super) proxy: ResidentProxyBinding,
-    pub(super) proxy_outbound: u8,
     pub(super) data_udp_network_type: Option<NetworkType>,
+    pub(super) data_udp_availability: ResidentDataUdpAvailabilityHandle,
     pub(super) force_proxy_packet: bool,
     pub(super) dscp: u8,
 }
@@ -26,8 +26,6 @@ pub(super) struct UdpSessionEntry {
 }
 
 pub(super) struct UdpSessionSharedContext {
-    pub(super) dns: Arc<ResidentDnsPlan>,
-    pub(super) proxy_groups: SharedResidentProxyGroupMap,
     pub(super) event_file: PathBuf,
     pub(super) event_lock: Arc<Mutex<()>>,
     pub(super) metrics: Arc<ResidentDataplaneMetrics>,
@@ -124,8 +122,7 @@ async fn run_udp_session_actor(
                 let (exchange, execute_timed_out) = match executor.as_mut() {
                     Some(executor) => match time::timeout(
                         RESIDENT_UDP_RESPONSE_TIMEOUT,
-                        executor.execute(
-                            &context.dns,
+                        executor.execute_proxy_packet(
                             &managed.proxy,
                             managed.original_dst,
                             &managed.packet.payload,
@@ -149,13 +146,10 @@ async fn run_udp_session_actor(
                 };
                 if exchange.is_ok()
                     && let Some(network_type) = managed.data_udp_network_type
-                    && let Some(group) = context.proxy_groups.get(&managed.proxy_outbound)
                 {
-                    let _ = group.record_data_udp_available_traffic(
-                        &managed.proxy.node_tag,
-                        network_type,
-                        unix_now_secs(),
-                    );
+                    managed
+                        .data_udp_availability
+                        .record(network_type, unix_now_secs());
                 }
                 record_udp_exchange_result(
                     &managed.proxy,

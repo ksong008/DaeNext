@@ -130,10 +130,6 @@ impl ResidentUdpRouter {
             .expect("default outbound was validated")
     }
 
-    pub(super) fn proxy_groups(&self) -> SharedResidentProxyGroupMap {
-        Arc::clone(&self.proxy_groups)
-    }
-
     #[cfg(test)]
     pub(super) fn select_from_routing_result(
         &self,
@@ -189,7 +185,7 @@ impl ResidentUdpRouter {
             ),
             outbound => self
                 .select_proxy_from_group(outbound, final_mark, original_dst, force_proxy_packet)
-                .map(|selection| {
+                .map(|(selection, data_udp_availability)| {
                     let route = ResidentUdpRouteSelection {
                         final_mark: selection.proxy.effective_socket_mark(),
                         ..route
@@ -199,6 +195,7 @@ impl ResidentUdpRouter {
                         selected_network_type: selection.network_type,
                         force_proxy_packet,
                         route,
+                        data_udp_availability,
                     })
                 }),
         }
@@ -258,7 +255,7 @@ impl ResidentUdpRouter {
         mark: u32,
         original_dst: SocketAddr,
         force_proxy_packet: bool,
-    ) -> Result<ResidentProxySelection, String> {
+    ) -> Result<(ResidentProxySelection, ResidentDataUdpAvailabilityHandle), String> {
         let Some(proxy_group) = self.proxy_groups.get(&outbound) else {
             return Err(format!(
                 "resident UDP selected outbound {} but no Rust proxy plan is available; unsupported protocol must stay fail-closed until implemented",
@@ -288,11 +285,15 @@ impl ResidentUdpRouter {
             network_type,
             latency_ms,
         } = selection;
-        Ok(ResidentProxySelection {
-            proxy: proxy.with_route_socket_mark(mark),
-            network_type,
-            latency_ms,
-        })
+        let data_udp_availability = proxy_group.data_udp_availability_handle(&proxy.node_tag)?;
+        Ok((
+            ResidentProxySelection {
+                proxy: proxy.with_route_socket_mark(mark),
+                network_type,
+                latency_ms,
+            },
+            data_udp_availability,
+        ))
     }
 
     pub(super) fn lookup_routing_result(
@@ -329,6 +330,7 @@ pub(super) struct ResidentUdpProxySelection {
     pub(super) selected_network_type: NetworkType,
     pub(super) force_proxy_packet: bool,
     pub(super) route: ResidentUdpRouteSelection,
+    pub(super) data_udp_availability: ResidentDataUdpAvailabilityHandle,
 }
 
 pub(super) struct ResidentUdpDirectSelection {

@@ -1,28 +1,15 @@
 use super::*;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 #[derive(Debug)]
-struct TestGeneration {
+struct TestDrainControl {
     id: u64,
     lifecycle: ResidentGenerationLifecycle,
     stop_requests: Arc<AtomicUsize>,
+    udp_stop: AtomicBool,
 }
 
-impl TestGeneration {
-    fn new(id: u64) -> (Arc<Self>, Arc<AtomicUsize>) {
-        let stop_requests = Arc::new(AtomicUsize::new(0));
-        (
-            Arc::new(Self {
-                id,
-                lifecycle: ResidentGenerationLifecycle::default(),
-                stop_requests: Arc::clone(&stop_requests),
-            }),
-            stop_requests,
-        )
-    }
-}
-
-impl ResidentDrainableGeneration for TestGeneration {
+impl ResidentDrainControl for TestDrainControl {
     fn id(&self) -> u64 {
         self.id
     }
@@ -39,10 +26,65 @@ impl ResidentDrainableGeneration for TestGeneration {
         self.lifecycle.stop_is_requested()
     }
 
-    fn request_stop(&self) {
+    fn udp_stop_is_requested(&self) -> bool {
+        self.udp_stop.load(Ordering::Acquire)
+    }
+
+    fn udp_router_is_retained(&self) -> bool {
+        false
+    }
+
+    fn udp_dns_runtime_is_retained(&self) -> bool {
+        false
+    }
+
+    fn request_force_stop(&self) {
+        self.retire_workloads();
+        self.udp_stop.store(true, Ordering::Release);
+    }
+}
+
+impl TestDrainControl {
+    fn retire_workloads(&self) {
         if self.lifecycle.request_stop() {
             self.stop_requests.fetch_add(1, Ordering::Relaxed);
         }
+    }
+}
+
+#[derive(Debug)]
+struct TestGeneration {
+    control: Arc<TestDrainControl>,
+}
+
+impl TestGeneration {
+    fn new(id: u64) -> (Arc<Self>, Arc<AtomicUsize>) {
+        let stop_requests = Arc::new(AtomicUsize::new(0));
+        (
+            Arc::new(Self {
+                control: Arc::new(TestDrainControl {
+                    id,
+                    lifecycle: ResidentGenerationLifecycle::default(),
+                    stop_requests: Arc::clone(&stop_requests),
+                    udp_stop: AtomicBool::new(false),
+                }),
+            }),
+            stop_requests,
+        )
+    }
+}
+
+impl ResidentDrainableGeneration for TestGeneration {
+    fn drain_control(&self) -> Arc<dyn ResidentDrainControl> {
+        Arc::clone(&self.control) as Arc<dyn ResidentDrainControl>
+    }
+
+    fn retire_workloads(&self) {
+        self.control.retire_workloads();
+    }
+
+    fn request_force_stop(&self) {
+        self.control.request_force_stop();
     }
 }
 
@@ -63,7 +105,7 @@ fn retired_generation_survives_the_old_cleanup_grace() {
     drain.reap(now + Duration::from_secs(2));
 
     assert_eq!(stop_requests.load(Ordering::Relaxed), 0);
-    assert!(!generation.lifecycle.admission_is_open());
+    assert!(!generation.control.lifecycle.admission_is_open());
     assert_eq!(drain.snapshot()["retired"], 1);
     assert_eq!(drain.snapshot()["forcedTotal"], 0);
 }
@@ -96,7 +138,7 @@ fn maximum_age_requests_stop_without_losing_retirement_record() {
     drain.reap(now + Duration::from_secs(11));
 
     assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
-    assert!(generation.lifecycle.stop_is_requested());
+    assert!(generation.control.lifecycle.stop_is_requested());
     let snapshot = drain.snapshot();
     assert_eq!(snapshot["retired"], 1);
     assert_eq!(snapshot["deadlineForcedTotal"], 1);
@@ -110,10 +152,10 @@ fn rollback_reactivation_removes_stale_retirement_record() {
     let (generation, stop_requests) = TestGeneration::new(7);
     drain.retire_shared_at(generation.clone(), now);
 
-    drain.reactivate(generation.id).unwrap();
+    drain.reactivate(generation.control.id).unwrap();
     drain.reap(now + Duration::from_secs(120));
 
-    assert!(generation.lifecycle.admission_is_open());
+    assert!(generation.control.lifecycle.admission_is_open());
     assert_eq!(stop_requests.load(Ordering::Relaxed), 0);
     let snapshot = drain.snapshot();
     assert_eq!(snapshot["retired"], 0);
@@ -129,8 +171,8 @@ fn stopped_generation_cannot_be_reactivated() {
 
     assert!(drain.prepare_publication_at(now).is_err());
     assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
-    assert!(drain.reactivate(generation.id).is_err());
-    assert!(!generation.lifecycle.admission_is_open());
+    assert!(drain.reactivate(generation.control.id).is_err());
+    assert!(!generation.control.lifecycle.admission_is_open());
 }
 
 #[test]
@@ -174,5 +216,63 @@ fn process_shutdown_stops_every_retired_generation() {
 
     assert_eq!(first_stop_requests.load(Ordering::Relaxed), 1);
     assert_eq!(second_stop_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(drain.snapshot()["retired"], 0);
+}
+
+#[test]
+fn lightweight_drain_owner_does_not_retain_heavy_generation() {
+    let drain = test_drain(Duration::from_secs(60), 2);
+    let now = Instant::now();
+    let (generation, stop_requests) = TestGeneration::new(1);
+    let drain_owner = Arc::clone(&generation.control);
+    drain.retire_shared_at(generation.clone(), now);
+    drop(generation);
+
+    drain.reap(now + Duration::from_secs(1));
+
+    assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
+    assert!(!drain_owner.udp_stop.load(Ordering::Acquire));
+    let snapshot = drain.snapshot();
+    assert_eq!(snapshot["retired"], 1);
+    assert_eq!(snapshot["detachedTotal"], 1);
+    assert_eq!(snapshot["releasedTotal"], 0);
+    assert_eq!(
+        snapshot["ownerEvidence"][0]["heavyGenerationRetained"],
+        false
+    );
+    assert_eq!(snapshot["ownerEvidence"][0]["externalDrainOwners"], 1);
+    assert_eq!(snapshot["ownerEvidence"][0]["udpStopRequested"], false);
+
+    drop(drain_owner);
+    drain.reap(now + Duration::from_secs(2));
+
+    let snapshot = drain.snapshot();
+    assert_eq!(snapshot["retired"], 0);
+    assert_eq!(snapshot["releasedTotal"], 1);
+    assert_eq!(snapshot["naturalTotal"], 1);
+}
+
+#[test]
+fn detached_udp_owner_is_force_stopped_at_the_generation_deadline() {
+    let drain = test_drain(Duration::from_secs(10), 2);
+    let now = Instant::now();
+    let (generation, stop_requests) = TestGeneration::new(1);
+    let drain_owner = Arc::clone(&generation.control);
+    drain.retire_shared_at(generation.clone(), now);
+    drop(generation);
+
+    drain.reap(now + Duration::from_secs(1));
+    assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
+    assert!(!drain_owner.udp_stop.load(Ordering::Acquire));
+
+    drain.reap(now + Duration::from_secs(11));
+    assert!(drain_owner.udp_stop.load(Ordering::Acquire));
+    let snapshot = drain.snapshot();
+    assert_eq!(snapshot["retired"], 1);
+    assert_eq!(snapshot["deadlineForcedTotal"], 1);
+    assert_eq!(snapshot["ownerEvidence"][0]["udpStopRequested"], true);
+
+    drop(drain_owner);
+    drain.reap(now + Duration::from_secs(12));
     assert_eq!(drain.snapshot()["retired"], 0);
 }

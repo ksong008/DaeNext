@@ -17,7 +17,7 @@ pub(super) struct UdpSniffKey {
 }
 
 impl UdpSniffKey {
-    const fn new(peer: SocketAddr, original_dst: SocketAddr) -> Self {
+    pub(super) const fn new(peer: SocketAddr, original_dst: SocketAddr) -> Self {
         Self { peer, original_dst }
     }
 }
@@ -114,7 +114,7 @@ pub(super) fn udp_sniff_reroute_decision(
     }
 }
 
-fn prune_udp_sniffers(sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>) {
+pub(super) fn prune_udp_sniffers(sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>) {
     let now = Instant::now();
     sniffers.retain(|_, entry| now.duration_since(entry.created_at) <= UDP_PACKET_SNIFFER_TTL);
 }

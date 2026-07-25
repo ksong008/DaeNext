@@ -9,19 +9,27 @@ use std::path::Path;
 use dae_datapath::TcpDialMode;
 #[cfg(test)]
 use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode};
+#[cfg(test)]
 use dae_ebpf_support::BpfRoutingResult;
 use dae_routing::RoutingMatcher;
 use serde_json::Value;
 use tokio::io::unix::AsyncFd;
 use tokio::task::JoinSet;
 
+#[cfg(not(test))]
+use crate::allocator::{AllocatorReclaimReason, allocator_request_reclaim};
+
 use super::super::plan::resident_data_udp_network_type;
-use super::super::{ActiveGenerationSlot, ResidentDataplaneGeneration};
+use super::super::{
+    ActiveGenerationSlot, ResidentDataplaneGeneration, ResidentGenerationDrainControl,
+};
 use super::*;
 
 mod dns_dispatcher;
 mod dns_fast_path;
+mod dns_runtime;
 mod ingress;
+mod pinned_route;
 mod router;
 mod session_shards;
 mod sniff;
@@ -30,12 +38,19 @@ use self::dns_fast_path::{
     minimal_resident_dns_routing_result, resident_udp_dns_fast_path_applies,
     resident_udp_dns_fast_path_can_bypass_missing_tuple,
 };
+use self::dns_runtime::ResidentUdpDnsRuntime;
 use self::ingress::recv_udp_batch_with_original_dst_async;
+#[cfg(test)]
+use self::pinned_route::ResidentUdpRetainedResources;
+use self::pinned_route::{ResidentUdpPinnedRoute, retained_udp_resources_for_generation};
 use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSelection};
 use self::session_shards::{
     ResidentUdpSessionShardHandle, ResidentUdpSessionShardPool, SharedUdpSniffedDomain,
 };
-use self::sniff::{UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, udp_sniff_reroute_decision};
+use self::sniff::{
+    UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, prune_udp_sniffers,
+    udp_sniff_reroute_decision,
+};
 
 const UDP_ROUTE_CHOSEN_EVENT: &str = "udp_route_chosen";
 const UDP_ROUTE_KIND_PROXY: &str = "proxy";
@@ -50,6 +65,7 @@ const UDP_ROUTE_REASON_QUEUE_FULL: &str = "session queue full";
 const UDP_ROUTE_REASON_DISPATCH_QUEUE_FULL: &str = "session dispatch queue full";
 const UDP_ROUTE_REASON_SESSION_UNAVAILABLE: &str = "session actor closed during recreation";
 const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
+#[cfg(test)]
 const UDP_ROUTE_REASON_DNS_FAST_PATH: &str = "handled resident DNS packet without UDP session";
 
 #[derive(Clone)]
@@ -106,10 +122,11 @@ struct UdpGenerationPinKey {
     original_dst: SocketAddr,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 struct UdpGenerationPin {
     generation: u64,
     expires_at: Instant,
+    route: Option<ResidentUdpPinnedRoute>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,25 +136,27 @@ enum UdpGenerationChoice {
 }
 
 struct ResidentUdpGenerationRuntime {
-    generation: Arc<ResidentDataplaneGeneration>,
+    reload_generation: u64,
+    drain_control: Arc<ResidentGenerationDrainControl>,
+    router: Option<Arc<ResidentUdpRouter>>,
+    runtime_config: ResidentUdpRuntimeConfig,
     sniffers: HashMap<UdpSniffKey, UdpPendingSniffer>,
     reply_dispatcher: UdpReplyDispatcher,
     udp_reply: UdpReplyHandle,
-    dns_fast_path_dispatcher: ResidentDnsFastPathDispatcher,
-    dns_fast_path: ResidentDnsFastPathHandle,
+    dns_runtime: Option<ResidentUdpDnsRuntime>,
     session_shards: ResidentUdpSessionShardPool,
     session_shard_handle: ResidentUdpSessionShardHandle,
 }
 
 impl ResidentUdpGenerationRuntime {
     fn start(
-        generation: Arc<ResidentDataplaneGeneration>,
+        generation: &ResidentDataplaneGeneration,
         event_file: &Path,
         event_lock: &Arc<Mutex<()>>,
         active_sessions: &Arc<AtomicUsize>,
     ) -> Self {
         let plan = &generation.udp;
-        let config = &plan.runtime_config;
+        let config = plan.runtime_config.clone();
         let reply_dispatcher = UdpReplyDispatcher::start(
             config.reply_queue_depth,
             config.reply_socket_cache_capacity,
@@ -146,18 +165,15 @@ impl ResidentUdpGenerationRuntime {
             Arc::clone(&generation.metrics),
         );
         let udp_reply = reply_dispatcher.handle();
-        let dns_fast_path_dispatcher = ResidentDnsFastPathDispatcher::start(
+        let dns_runtime = ResidentUdpDnsRuntime::start(
             Arc::clone(&plan.dns),
             udp_reply.clone(),
             Arc::clone(&generation.metrics),
             config.dns_fast_path_concurrency,
             config.dns_fast_path_queue_depth,
         );
-        let dns_fast_path = dns_fast_path_dispatcher.handle();
         let session_shards = ResidentUdpSessionShardPool::start(
-            config,
-            Arc::clone(&plan.dns),
-            plan.router.proxy_groups(),
+            &config,
             event_file.to_path_buf(),
             Arc::clone(event_lock),
             Arc::clone(&generation.metrics),
@@ -169,13 +185,16 @@ impl ResidentUdpGenerationRuntime {
             plan.anytls_owner_registry.clone(),
         );
         let session_shard_handle = session_shards.handle();
+        generation.drain_control.register_udp_runtime();
         Self {
-            generation,
+            reload_generation: generation.reload_generation,
+            drain_control: Arc::clone(&generation.drain_control),
+            router: Some(Arc::clone(&plan.router)),
+            runtime_config: config,
             sniffers: HashMap::new(),
             reply_dispatcher,
             udp_reply,
-            dns_fast_path_dispatcher,
-            dns_fast_path,
+            dns_runtime: Some(dns_runtime),
             session_shards,
             session_shard_handle,
         }
@@ -186,65 +205,118 @@ impl ResidentUdpGenerationRuntime {
         packet: UdpOriginalDstPacket,
         event_file: &Path,
         event_lock: &Arc<Mutex<()>>,
-    ) {
-        let plan = &self.generation.udp;
-        handle_manager_packet(
+    ) -> Option<ResidentUdpPinnedRoute> {
+        let router = self.router.as_deref()?;
+        let dns_fast_path = &self.dns_runtime.as_ref()?.handle;
+        bind_manager_packet(
             packet,
-            &plan.router,
+            router,
             event_file,
             event_lock,
             &mut self.sniffers,
-            &self.dns_fast_path,
+            dns_fast_path,
             &self.session_shard_handle,
-            plan.runtime_config.runtime_shards,
+            self.runtime_config.runtime_shards,
+        )
+    }
+
+    fn handle_pinned_packet(
+        &self,
+        packet: UdpOriginalDstPacket,
+        route: &ResidentUdpPinnedRoute,
+        event_file: &Path,
+        event_lock: &Arc<Mutex<()>>,
+    ) {
+        let dns_fast_path = self.dns_runtime.as_ref().map(|runtime| &runtime.handle);
+        route.dispatch(
+            packet,
+            event_file,
+            event_lock,
+            dns_fast_path,
+            &self.session_shard_handle,
+            self.runtime_config.runtime_shards,
         );
     }
 
+    fn detach_retired_resources(
+        &mut self,
+        keep_router: bool,
+        keep_dns_runtime: bool,
+    ) -> Option<(ResidentUdpDnsRuntime, Duration)> {
+        let mut detached = false;
+        if !keep_router && self.router.take().is_some() {
+            self.sniffers.clear();
+            self.drain_control.release_udp_router();
+            detached = true;
+        }
+        let dns_runtime = if keep_dns_runtime {
+            None
+        } else {
+            self.dns_runtime.take().map(|runtime| {
+                self.drain_control.release_udp_dns_runtime();
+                detached = true;
+                (runtime, self.runtime_config.shutdown_timeout)
+            })
+        };
+        if detached {
+            request_udp_generation_reclaim();
+        }
+        dns_runtime
+    }
+
+    fn prune_pending_sniffers(&mut self) {
+        prune_udp_sniffers(&mut self.sniffers);
+    }
+
+    fn has_pending_sniffer(&self, key: UdpGenerationPinKey) -> bool {
+        self.sniffers
+            .contains_key(&UdpSniffKey::new(key.peer, key.original_dst))
+    }
+
     async fn shutdown(self) -> Value {
+        self.drain_control.release_udp_router();
+        self.drain_control.release_udp_dns_runtime();
         let ResidentUdpGenerationRuntime {
-            generation,
+            reload_generation,
+            drain_control: _,
+            router: _,
+            runtime_config,
             sniffers,
             reply_dispatcher,
             udp_reply,
-            dns_fast_path_dispatcher,
-            dns_fast_path,
+            dns_runtime,
             session_shards,
             session_shard_handle,
         } = self;
-        let config = &generation.udp.runtime_config;
-        let shutdown_deadline = time::Instant::now() + config.shutdown_timeout;
+        let shutdown_deadline = time::Instant::now() + runtime_config.shutdown_timeout;
         drop(sniffers);
         drop(session_shard_handle);
         let session_shard_shutdown = session_shards.shutdown(shutdown_deadline).await;
-        drop(dns_fast_path);
-        let dns_fast_path_shutdown = dns_fast_path_dispatcher.shutdown(shutdown_deadline).await;
-        let dns_forwarder_shutdown = generation
-            .udp
-            .dns
-            .shutdown_forwarders(shutdown_deadline)
-            .await;
+        let dns_shutdown = match dns_runtime {
+            Some(runtime) => runtime.shutdown(shutdown_deadline).await,
+            None => json!({
+                "status": "pass",
+                "dnsFastPathDispatcher": {"status": "pass", "detached": true},
+                "dnsForwarders": {"status": "pass", "detached": true},
+            }),
+        };
         drop(udp_reply);
         let reply_shutdown = reply_dispatcher.shutdown(shutdown_deadline).await;
-        let dns_fast_path_shutdown = match dns_fast_path_shutdown {
-            Ok(completed) => json!({"status": "pass", "completed": completed}),
-            Err(err) => json!({"status": "fail", "error": err}),
-        };
         let reply_shutdown = match reply_shutdown {
             Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
             Err(err) => json!({"status": "fail", "error": err.to_string()}),
         };
-        let cleanup_passed = config.payload_admission.current() == 0
+        let cleanup_passed = runtime_config.payload_admission.current() == 0
             && cleanup_report_passed(&session_shard_shutdown)
-            && cleanup_report_passed(&dns_fast_path_shutdown)
-            && cleanup_report_passed(&dns_forwarder_shutdown)
+            && cleanup_report_passed(&dns_shutdown)
             && cleanup_report_passed(&reply_shutdown);
         json!({
             "status": if cleanup_passed { "pass" } else { "fail" },
-            "generation": generation.reload_generation,
-            "queuedPayloadAdmission": config.payload_admission.snapshot(),
+            "generation": reload_generation,
+            "queuedPayloadAdmission": runtime_config.payload_admission.snapshot(),
             "sessionShards": session_shard_shutdown,
-            "dnsFastPathDispatcher": dns_fast_path_shutdown,
-            "dnsForwarders": dns_forwarder_shutdown,
+            "dnsFastPathDispatcher": dns_shutdown["dnsFastPathDispatcher"].clone(),
+            "dnsForwarders": dns_shutdown["dnsForwarders"].clone(),
             "replyDispatcher": reply_shutdown,
         })
     }
@@ -331,12 +403,15 @@ pub(super) async fn run_resident_udp_session_manager_async(
     let mut generations = HashMap::<u64, ResidentUdpGenerationRuntime>::new();
     let mut pins = HashMap::<UdpGenerationPinKey, UdpGenerationPin>::new();
     let mut retired_shutdowns = JoinSet::new();
+    let mut retired_component_shutdowns = JoinSet::new();
     let mut retired_shutdown_count = 0_u64;
     let mut retired_shutdown_failures = 0_u64;
+    let mut retired_component_shutdown_count = 0_u64;
+    let mut retired_component_shutdown_failures = 0_u64;
     generations.insert(
         initial_generation.id,
         ResidentUdpGenerationRuntime::start(
-            Arc::clone(&initial_generation),
+            initial_generation.as_ref(),
             &event_file,
             &event_lock,
             &active_sessions,
@@ -370,6 +445,11 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             });
                             let pinned = pin_key
                                 .and_then(|key| pinned_udp_generation(&pins, key, now));
+                            let pinned_route = pin_key.and_then(|key| {
+                                pins.get(&key)
+                                    .filter(|pin| pin.expires_at > now)
+                                    .and_then(|pin| pin.route.clone())
+                            });
                             let generation_id = match udp_generation_choice(
                                 pinned,
                                 active.id,
@@ -383,7 +463,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             };
                             generations.entry(generation_id).or_insert_with(|| {
                                 ResidentUdpGenerationRuntime::start(
-                                        Arc::clone(&active),
+                                        active.as_ref(),
                                         &event_file,
                                         &event_lock,
                                         &active_sessions,
@@ -392,7 +472,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             let generation = generations
                                 .get_mut(&generation_id)
                                 .expect("selected UDP generation runtime is installed");
-                            let runtime_config = &generation.generation.udp.runtime_config;
+                            let runtime_config = &generation.runtime_config;
                             if packet
                                 .payload
                                 .admit(&runtime_config.payload_admission)
@@ -400,16 +480,28 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             {
                                 continue;
                             }
+                            let route = match pinned_route {
+                                Some(route) => {
+                                    generation.handle_pinned_packet(
+                                        packet,
+                                        &route,
+                                        &event_file,
+                                        &event_lock,
+                                    );
+                                    Some(route)
+                                }
+                                None => generation.handle_packet(packet, &event_file, &event_lock),
+                            };
                             if let Some(pin_key) = pin_key {
                                 pins.insert(
                                     pin_key,
                                     UdpGenerationPin {
                                         generation: generation_id,
                                         expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+                                        route,
                                     },
                                 );
                             }
-                            generation.handle_packet(packet, &event_file, &event_lock);
                         }
                         if batch.budget_hit {
                             tokio::task::yield_now().await;
@@ -432,6 +524,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                     &mut pins,
                     &mut generations,
                     &mut retired_shutdowns,
+                    &mut retired_component_shutdowns,
                 );
                 retirement.as_mut().reset(time::Instant::now() + RESIDENT_IDLE_SLEEP);
             }
@@ -439,6 +532,12 @@ pub(super) async fn run_resident_udp_session_manager_async(
                 retired_shutdown_count = retired_shutdown_count.saturating_add(1);
                 if !matches!(completed, Some(Ok(report)) if cleanup_report_passed(&report)) {
                     retired_shutdown_failures = retired_shutdown_failures.saturating_add(1);
+                }
+            }
+            completed = retired_component_shutdowns.join_next(), if !retired_component_shutdowns.is_empty() => {
+                retired_component_shutdown_count = retired_component_shutdown_count.saturating_add(1);
+                if !matches!(completed, Some(Ok(report)) if cleanup_report_passed(&report)) {
+                    retired_component_shutdown_failures = retired_component_shutdown_failures.saturating_add(1);
                 }
             }
             _ = stop_listener.cancelled() => break,
@@ -449,6 +548,13 @@ pub(super) async fn run_resident_udp_session_manager_async(
     let active_generation_count = generations.len();
     for (_, generation) in generations {
         retired_shutdowns.spawn(generation.shutdown());
+    }
+    while let Some(completed) = retired_component_shutdowns.join_next().await {
+        retired_component_shutdown_count = retired_component_shutdown_count.saturating_add(1);
+        if !matches!(completed, Ok(report) if cleanup_report_passed(&report)) {
+            retired_component_shutdown_failures =
+                retired_component_shutdown_failures.saturating_add(1);
+        }
     }
     let mut generation_shutdown = Vec::with_capacity(active_generation_count);
     while let Some(completed) = retired_shutdowns.join_next().await {
@@ -470,12 +576,16 @@ pub(super) async fn run_resident_udp_session_manager_async(
         }
     }
     let active_sessions = active_sessions.load(Ordering::Acquire);
-    let cleanup_passed = active_sessions == 0 && retired_shutdown_failures == 0;
+    let cleanup_passed = active_sessions == 0
+        && retired_shutdown_failures == 0
+        && retired_component_shutdown_failures == 0;
     let report = json!({
         "status": if cleanup_passed { "pass" } else { "fail" },
         "activeSessions": active_sessions,
         "retiredGenerationShutdowns": retired_shutdown_count,
         "retiredGenerationShutdownFailures": retired_shutdown_failures,
+        "retiredComponentShutdowns": retired_component_shutdown_count,
+        "retiredComponentShutdownFailures": retired_component_shutdown_failures,
         "generations": generation_shutdown,
     });
     append_event(
@@ -513,10 +623,49 @@ fn retire_idle_udp_generations(
     pins: &mut HashMap<UdpGenerationPinKey, UdpGenerationPin>,
     generations: &mut HashMap<u64, ResidentUdpGenerationRuntime>,
     shutdowns: &mut JoinSet<Value>,
+    component_shutdowns: &mut JoinSet<Value>,
 ) {
     let now = Instant::now();
     pins.retain(|_, pin| pin.expires_at > now);
     let active_id = active_generation.load().id;
+    for (generation_id, runtime) in generations.iter_mut() {
+        if *generation_id != active_id
+            && runtime.drain_control.stop_is_requested()
+            && !runtime.drain_control.udp_stop_is_requested()
+        {
+            runtime.prune_pending_sniffers();
+        }
+    }
+    pins.retain(|key, pin| {
+        let runtime = generations.get(&pin.generation);
+        udp_generation_pin_is_required(
+            pin.generation == active_id,
+            pin.route.is_some(),
+            runtime.is_some_and(|runtime| runtime.drain_control.stop_is_requested()),
+            runtime.is_some_and(|runtime| runtime.has_pending_sniffer(*key)),
+        )
+    });
+    for (generation_id, runtime) in generations.iter_mut() {
+        if *generation_id == active_id
+            || !runtime.drain_control.stop_is_requested()
+            || runtime.drain_control.udp_stop_is_requested()
+        {
+            continue;
+        }
+        let retained = retained_udp_resources_for_generation(pins, *generation_id);
+        if retained.has_pin
+            && let Some((dns_runtime, shutdown_timeout)) =
+                runtime.detach_retired_resources(retained.router, retained.dns_runtime)
+        {
+            component_shutdowns.spawn(async move {
+                let report = dns_runtime
+                    .shutdown(time::Instant::now() + shutdown_timeout)
+                    .await;
+                request_udp_generation_reclaim();
+                report
+            });
+        }
+    }
     let retired = generations
         .keys()
         .copied()
@@ -524,7 +673,7 @@ fn retire_idle_udp_generations(
             *generation != active_id
                 && (generations
                     .get(generation)
-                    .is_some_and(|runtime| runtime.generation.stop.load(Ordering::Acquire))
+                    .is_some_and(|runtime| runtime.drain_control.udp_stop_is_requested())
                     || !pins.values().any(|pin| pin.generation == *generation))
         })
         .collect::<Vec<_>>();
@@ -533,6 +682,15 @@ fn retire_idle_udp_generations(
             shutdowns.spawn(runtime.shutdown());
         }
     }
+}
+
+fn udp_generation_pin_is_required(
+    active_generation: bool,
+    route_is_bound: bool,
+    retirement_started: bool,
+    sniff_is_pending: bool,
+) -> bool {
+    active_generation || route_is_bound || !retirement_started || sniff_is_pending
 }
 
 fn udp_session_manager_start_failure(stage: &'static str, error: String) -> Value {
@@ -547,6 +705,14 @@ fn cleanup_report_passed(report: &Value) -> bool {
     report["status"].as_str() == Some("pass")
 }
 
+#[cfg(not(test))]
+fn request_udp_generation_reclaim() {
+    allocator_request_reclaim(AllocatorReclaimReason::RetiredGenerationReleased);
+}
+
+#[cfg(test)]
+fn request_udp_generation_reclaim() {}
+
 fn udp_session_manager_event(event: &'static str, report: &Value) -> Value {
     let mut value = report.clone();
     if let Some(object) = value.as_object_mut() {
@@ -555,7 +721,7 @@ fn udp_session_manager_event(event: &'static str, report: &Value) -> Value {
     value
 }
 
-fn handle_manager_packet(
+fn bind_manager_packet(
     packet: UdpOriginalDstPacket,
     router: &ResidentUdpRouter,
     event_file: &Path,
@@ -564,14 +730,14 @@ fn handle_manager_packet(
     dns_fast_path: &ResidentDnsFastPathHandle,
     session_shards: &ResidentUdpSessionShardHandle,
     forced_dns_session_lanes: usize,
-) {
+) -> Option<ResidentUdpPinnedRoute> {
     let Some(original_dst) = packet.original_dst else {
         append_event(
             event_file,
             event_lock,
             json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer)}),
         );
-        return;
+        return None;
     };
     let initial = match router.lookup_routing_result(packet.peer, original_dst) {
         Ok(initial) => initial,
@@ -587,176 +753,73 @@ fn handle_manager_packet(
                     None,
                     err,
                 );
-                return;
+                return None;
             }
         }
     };
     let ready = match udp_sniff_reroute_decision(packet, router, original_dst, initial, sniffers) {
         UdpSniffDecision::Ready(ready) => ready,
-        UdpSniffDecision::Pending => return,
+        UdpSniffDecision::Pending => return None,
     };
     let sniffed_domain = if ready.sniffed_domain.is_empty() {
         None
     } else {
         Some(Arc::<str>::from(ready.sniffed_domain))
     };
-    for packet in ready.packets {
-        forward_manager_packet(
-            packet,
-            router,
-            event_file,
-            event_lock,
-            dns_fast_path,
-            session_shards,
-            forced_dns_session_lanes,
-            ready.initial,
-            &sniffed_domain,
-        );
-    }
-}
-
-fn forward_manager_packet(
-    packet: UdpOriginalDstPacket,
-    router: &ResidentUdpRouter,
-    event_file: &Path,
-    event_lock: &Arc<Mutex<()>>,
-    dns_fast_path: &ResidentDnsFastPathHandle,
-    session_shards: &ResidentUdpSessionShardHandle,
-    forced_dns_session_lanes: usize,
-    initial: BpfRoutingResult,
-    sniffed_domain: &SharedUdpSniffedDomain,
-) {
-    let sniffed_domain_str = sniffed_domain.as_deref().unwrap_or_default();
-    let Some(original_dst) = packet.original_dst else {
-        append_event(
-            event_file,
-            event_lock,
-            json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer), "dscp": initial.dscp}),
-        );
-        return;
-    };
+    let first = ready.packets.first()?;
+    let first_original_dst = first.original_dst?;
     let selection = match router.select_from_routing_result_with_domain(
-        packet.peer,
-        original_dst,
-        initial,
-        sniffed_domain_str,
+        first.peer,
+        first_original_dst,
+        ready.initial,
+        sniffed_domain.as_deref().unwrap_or_default(),
     ) {
         Ok(selection) => selection,
         Err(err) => {
             append_udp_route_selection_failed(
                 event_file,
                 event_lock,
-                packet.peer,
-                original_dst,
-                Some(initial.dscp),
+                first.peer,
+                first_original_dst,
+                Some(ready.initial.dscp),
                 err,
             );
-            return;
+            return None;
         }
     };
-    let proxy_selection = match selection {
-        ResidentUdpSelection::ResidentDns => {
-            dns_fast_path.try_dispatch(packet, original_dst);
-            return;
-        }
-        ResidentUdpSelection::Proxy(selection) => selection,
-        ResidentUdpSelection::Direct(selection) => {
-            let key =
-                UdpDirectSessionKey::new(packet.peer, original_dst, selection.route.final_mark);
-            let managed = ManagedDirectUdpPacket {
-                packet,
-                original_dst,
-                dscp: initial.dscp,
-            };
-            session_shards.try_dispatch_direct(
-                key,
-                managed,
-                selection.route,
-                sniffed_domain.clone(),
-            );
-            return;
-        }
-        ResidentUdpSelection::Block(selection) => {
-            append_event_with_metadata(
-                event_file,
-                event_lock,
-                ResidentEventMetadata::new(ResidentEventKind::UdpRouteChosen),
-                || {
-                    udp_route_chosen_event(
-                        packet.peer,
-                        original_dst,
-                        &selection,
-                        None,
-                        None,
-                        sniffed_domain_str,
-                        initial.dscp,
-                        false,
-                        UDP_ROUTE_REASON_BLOCK,
-                    )
-                },
-            );
-            append_event(
-                event_file,
-                event_lock,
-                json!({
-                    "event": "udp_packet_dropped",
-                    "reason": "resident UDP selected block outbound",
-                    "peer": resident_socket_addr_display(packet.peer),
-                    "original_dst": resident_socket_addr_display(original_dst),
-                    "initial_outbound": selection.initial_outbound,
-                    "final_outbound": selection.final_outbound,
-                    "network": resident_udp_network_name(original_dst),
-                    "dscp": initial.dscp,
-                }),
-            );
-            return;
-        }
+    let route = match selection {
+        ResidentUdpSelection::ResidentDns => ResidentUdpPinnedRoute::ResidentDns,
+        ResidentUdpSelection::Proxy(selection) => ResidentUdpPinnedRoute::Proxy {
+            proxy: selection.proxy,
+            selected_network_type: selection.selected_network_type,
+            force_proxy_packet: selection.force_proxy_packet,
+            route: selection.route,
+            data_udp_availability: selection.data_udp_availability,
+            sniffed_domain,
+            dscp: ready.initial.dscp,
+        },
+        ResidentUdpSelection::Direct(selection) => ResidentUdpPinnedRoute::Direct {
+            route: selection.route,
+            sniffed_domain,
+            dscp: ready.initial.dscp,
+        },
+        ResidentUdpSelection::Block(route) => ResidentUdpPinnedRoute::Block {
+            route,
+            sniffed_domain,
+            dscp: ready.initial.dscp,
+        },
     };
-    let proxy = proxy_selection.proxy.clone();
-    if resident_udp_dns_fast_path_applies(original_dst) && !proxy_selection.force_proxy_packet {
-        append_event_with_metadata(
+    for packet in ready.packets {
+        route.dispatch(
+            packet,
             event_file,
             event_lock,
-            ResidentEventMetadata::new(ResidentEventKind::UdpRouteChosen),
-            || {
-                udp_route_chosen_event_without_packet_session(
-                    packet.peer,
-                    original_dst,
-                    &proxy_selection.route,
-                    &proxy,
-                    sniffed_domain_str,
-                    initial.dscp,
-                    UDP_ROUTE_REASON_DNS_FAST_PATH,
-                )
-            },
+            Some(dns_fast_path),
+            session_shards,
+            forced_dns_session_lanes,
         );
-        dns_fast_path.try_dispatch(packet, original_dst);
-        return;
     }
-    let key = if proxy_selection.force_proxy_packet
-        && resident_udp_dns_fast_path_applies(original_dst)
-    {
-        let dispatch_lane = dns_request_dispatch_lane(&packet.payload, forced_dns_session_lanes);
-        UdpSessionKey::with_dispatch_lane(&proxy, packet.peer, original_dst, dispatch_lane)
-    } else {
-        UdpSessionKey::new(&proxy, packet.peer, original_dst)
-    };
-    let managed = ManagedUdpPacket {
-        packet,
-        original_dst,
-        proxy,
-        proxy_outbound: proxy_selection.route.final_outbound,
-        data_udp_network_type: if proxy_selection.force_proxy_packet {
-            None
-        } else if proxy_selection.selected_network_type.is_data_udp() {
-            Some(proxy_selection.selected_network_type)
-        } else {
-            Some(resident_data_udp_network_type(original_dst))
-        },
-        force_proxy_packet: proxy_selection.force_proxy_packet,
-        dscp: initial.dscp,
-    };
-    session_shards.try_dispatch_proxy(key, managed, proxy_selection.route, sniffed_domain.clone());
+    Some(route)
 }
 
 fn append_udp_route_selection_failed(
@@ -895,6 +958,7 @@ fn udp_direct_route_chosen_event(
     })
 }
 
+#[cfg(test)]
 fn udp_route_chosen_event_without_packet_session(
     peer: SocketAddr,
     original_dst: SocketAddr,

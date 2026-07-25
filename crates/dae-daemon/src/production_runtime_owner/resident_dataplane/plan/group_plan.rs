@@ -25,6 +25,34 @@ pub(in crate::production_runtime_owner::resident_dataplane) type ResidentProxyGr
 pub(in crate::production_runtime_owner::resident_dataplane) type SharedResidentProxyGroupMap =
     Arc<ResidentProxyGroupHandleMap>;
 
+#[derive(Clone)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDataUdpAvailabilityHandle
+{
+    selector: std::sync::Weak<Mutex<DialerGroup>>,
+    health_bootstrap: ResidentGroupHealthBootstrap,
+    candidate_index: usize,
+    enabled: bool,
+}
+
+impl ResidentDataUdpAvailabilityHandle {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn record(
+        &self,
+        network_type: NetworkType,
+        checked_at_unix: i64,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        if let Some(selector) = self.selector.upgrade()
+            && let Ok(mut selector) = selector.lock()
+        {
+            selector.record_available_traffic(self.candidate_index, network_type, checked_at_unix);
+        }
+        self.health_bootstrap
+            .observe(self.candidate_index, HealthState::Alive);
+    }
+}
+
 pub(in crate::production_runtime_owner::resident_dataplane) fn share_resident_proxy_groups(
     groups: BTreeMap<u8, ResidentProxyGroupPlan>,
 ) -> SharedResidentProxyGroupMap {
@@ -680,16 +708,11 @@ impl ResidentProxyGroupPlan {
         })
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn record_data_udp_available_traffic(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn data_udp_availability_handle(
         &self,
         node_tag: &str,
-        network_type: NetworkType,
-        checked_at_unix: i64,
-    ) -> Result<(), String> {
-        if !self.group_policy.needs_alive_state() {
-            return Ok(());
-        }
-        let Some(index) = self
+    ) -> Result<ResidentDataUdpAvailabilityHandle, String> {
+        let Some(candidate_index) = self
             .candidates
             .iter()
             .position(|candidate| candidate.binding.plan().node_tag == node_tag)
@@ -699,17 +722,12 @@ impl ResidentProxyGroupPlan {
                 self.group_name
             ));
         };
-        self.selector
-            .lock()
-            .map_err(|_| {
-                format!(
-                    "resident dataplane group {} selector lock is poisoned",
-                    self.group_name
-                )
-            })?
-            .record_available_traffic(index, network_type, checked_at_unix);
-        self.health_bootstrap.observe(index, HealthState::Alive);
-        Ok(())
+        Ok(ResidentDataUdpAvailabilityHandle {
+            selector: Arc::downgrade(&self.selector),
+            health_bootstrap: self.health_bootstrap.clone(),
+            candidate_index,
+            enabled: self.group_policy.needs_alive_state(),
+        })
     }
 
     #[cfg(test)]
