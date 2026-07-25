@@ -361,11 +361,19 @@ routing {
     )
     .unwrap();
     let config = build_config(&sections).unwrap();
-    let geodata = ResidentGeodataStore::new([root]);
+    let geodata = ResidentGeodataStore::new([root.clone()]);
 
     let plan = build_routing_plan_with_geodata_resolver(&config, &geodata).unwrap();
     assert_eq!(plan.domain_sets.len(), 1);
     assert_eq!(geodata.shared_domain_set_count(), 1);
+
+    let next_geodata = ResidentGeodataStore::new([root]);
+    let next_plan = build_routing_plan_with_geodata_resolver(&config, &next_geodata).unwrap();
+    assert!(
+        plan.domain_sets[0]
+            .values
+            .ptr_eq(&next_plan.domain_sets[0].values)
+    );
 
     let matcher = build_resident_userspace_routing_matcher_with_geodata(&config, &geodata).unwrap();
     assert_eq!(geodata.shared_domain_set_count(), 1);
@@ -412,11 +420,18 @@ routing {
     )
     .unwrap();
     let config = build_config(&sections).unwrap();
-    let geodata = ResidentGeodataStore::new([root]);
+    let geodata = ResidentGeodataStore::new([root.clone()]);
     let plan = build_routing_plan_with_geodata_resolver(&config, &geodata).unwrap();
 
     assert_eq!(plan.lpm_sets.len(), 2);
     assert_eq!(geodata.shared_prefix_set_count(), 1);
+
+    let next_geodata = ResidentGeodataStore::new([root]);
+    let next_plan = build_routing_plan_with_geodata_resolver(&config, &next_geodata).unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &plan.lpm_sets[0],
+        &next_plan.lpm_sets[0]
+    ));
 }
 
 #[test]
