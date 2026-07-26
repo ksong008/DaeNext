@@ -2,8 +2,6 @@ use super::*;
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, AtomicI32};
 
-const PRODUCT_SHUTDOWN_WAIT_POLL: Duration = Duration::from_millis(250);
-
 #[derive(Debug, Default)]
 pub(super) struct ProductShutdown {
     requested: AtomicBool,
@@ -50,10 +48,6 @@ impl ProductShutdown {
         self.is_requested()
             .then(|| self.signal.load(Ordering::Acquire))
             .filter(|signal| *signal != 0)
-    }
-
-    pub(super) fn wait(&self) -> bool {
-        self.wait_timeout(PRODUCT_SHUTDOWN_WAIT_POLL)
     }
 
     pub(super) fn wait_timeout(&self, timeout: Duration) -> bool {

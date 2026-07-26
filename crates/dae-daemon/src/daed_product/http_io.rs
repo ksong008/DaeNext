@@ -1,5 +1,8 @@
 use super::*;
 const STATIC_FILE_CHUNK_BYTES: usize = 16 * 1024;
+const STATIC_ASSET_HASH_SUFFIX_BYTES: usize = 8;
+const STATIC_INDEX_CACHE_CONTROL: &str = "no-cache";
+const STATIC_HASHED_ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 pub(super) fn write_static_file_response(
     stream: &mut TcpStream,
@@ -36,11 +39,13 @@ pub(super) fn write_static_file_response(
         .checked_add(PRODUCT_HTTP_RESPONSE_WRITE_TIMEOUT)
         .unwrap_or_else(Instant::now);
     let mut head = Vec::with_capacity(256);
+    let cache_control = static_cache_control(web_root, &path);
     write!(
         head,
-        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: {}\r\n\r\n",
         mime_for_path(&path),
         content_length,
+        cache_control,
     )?;
     write_all_with_deadline(stream, &head, deadline)?;
     if !head_only {
@@ -79,13 +84,46 @@ pub(super) fn serve_static_file(web_root: &Path, request: &HttpRequest) -> HttpR
     match fs::read(&path) {
         Ok(body) => {
             let mut response = HttpResponse::text(200, mime_for_path(&path), body);
-            response
-                .extra_headers
-                .push(("Cache-Control".to_owned(), "no-cache".to_owned()));
+            response.extra_headers.push((
+                "Cache-Control".to_owned(),
+                static_cache_control(web_root, &path).to_owned(),
+            ));
             response
         }
         Err(err) => HttpResponse::json(404, json!({"error": err.to_string()})),
     }
+}
+
+fn static_cache_control(web_root: &Path, path: &Path) -> &'static str {
+    if is_content_hashed_asset(web_root, path) {
+        STATIC_HASHED_ASSET_CACHE_CONTROL
+    } else {
+        STATIC_INDEX_CACHE_CONTROL
+    }
+}
+
+fn is_content_hashed_asset(web_root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(web_root) else {
+        return false;
+    };
+    if relative
+        .components()
+        .next()
+        .is_none_or(|component| component.as_os_str() != "assets")
+    {
+        return false;
+    }
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    let bytes = stem.as_bytes();
+    let Some(hash_start) = bytes.len().checked_sub(STATIC_ASSET_HASH_SUFFIX_BYTES) else {
+        return false;
+    };
+    bytes[..hash_start].contains(&b'-')
+        && bytes[hash_start..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 pub(super) fn safe_static_path(web_root: &Path, request_path: &str) -> Option<PathBuf> {
@@ -566,5 +604,33 @@ mod static_response_tests {
             String::from_utf8_lossy(&response[..body_start])
                 .contains(&format!("Content-Length: {}", body.len()))
         );
+    }
+
+    #[test]
+    fn hashed_assets_are_immutable_while_index_stays_revalidated() {
+        let root = std::env::temp_dir().join(format!("daed-static-cache-{}", fastrand::u64(..)));
+        let assets = root.join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        let index = root.join("index.html");
+        let asset = assets.join("index-AbCd1234.js");
+        let unhashed_asset = assets.join("runtime.js");
+        fs::write(&index, b"index").unwrap();
+        fs::write(&asset, b"asset").unwrap();
+        fs::write(&unhashed_asset, b"runtime").unwrap();
+
+        assert_eq!(
+            static_cache_control(&root, &index),
+            STATIC_INDEX_CACHE_CONTROL
+        );
+        assert_eq!(
+            static_cache_control(&root, &asset),
+            STATIC_HASHED_ASSET_CACHE_CONTROL
+        );
+        assert_eq!(
+            static_cache_control(&root, &unhashed_asset),
+            STATIC_INDEX_CACHE_CONTROL
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

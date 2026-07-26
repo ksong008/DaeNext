@@ -1,7 +1,9 @@
 use super::*;
 
 mod job_queue;
+mod listener_readiness;
 use job_queue::{ProductHttpJobQueue, ProductHttpQueueReceiveError, ProductHttpQueueSendError};
+use listener_readiness::{LISTENER_SHUTDOWN_CHECK_INTERVAL, wait_for_listener_readiness};
 
 pub(super) fn serve_forever(
     listen: &str,
@@ -148,7 +150,13 @@ pub(super) fn serve_forever(
                 }
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                app.shutdown.wait();
+                if let Err(err) =
+                    wait_for_listener_readiness(&listener, LISTENER_SHUTDOWN_CHECK_INTERVAL)
+                {
+                    accept_error = Some(err);
+                    app.shutdown.request(0);
+                    break;
+                }
             }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
