@@ -77,6 +77,27 @@ fn product_shutdown_wakes_accept_loop_joins_workers_and_removes_control_socket()
 }
 
 #[test]
+fn incoming_http_connection_does_not_wait_for_shutdown_poll_interval() {
+    let fixture = start_test_product_server("accept-readiness");
+    thread::sleep(Duration::from_millis(20));
+    let started = Instant::now();
+    let mut client = TcpStream::connect(&fixture.listen).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client
+        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).unwrap();
+    assert!(started.elapsed() < Duration::from_millis(200));
+    assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+    assert!(fixture.shutdown.request(libc::SIGTERM));
+    finish_test_product_server(fixture);
+}
+
+#[test]
 fn product_shutdown_interrupts_an_active_http_body_read() {
     let fixture = start_test_product_server("active-body-shutdown");
     let mut client = TcpStream::connect(&fixture.listen).unwrap();
