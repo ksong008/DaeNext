@@ -257,7 +257,15 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     inbound
         .set_nodelay(true)
         .map_err(|err| format!("set inbound TCP_NODELAY: {err}"))?;
-    if transparent_tcp_dns_fast_path_applies(original_dst) {
+    let explicit_dns_route = if transparent_tcp_dns_destination(original_dst) {
+        router
+            .lookup_routing_result(peer, original_dst)
+            .ok()
+            .filter(|route| route.must > 0)
+    } else {
+        None
+    };
+    if transparent_tcp_dns_fast_path_applies(original_dst, explicit_dns_route.as_ref()) {
         let dns = Arc::clone(&router.dns);
         drop(router);
         Box::pin(handle_transparent_tcp_dns_fast_path_async(
@@ -272,8 +280,25 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     }
     let sniffing_timeout = router.sniffing_timeout;
     let dial_mode = router.dial_mode_name();
-    let sniff = sniff_initial_tcp_payload_async(&mut inbound, sniffing_timeout).await?;
-    let selection = Box::pin(router.select(peer, original_dst, &sniff.domain)).await?;
+    let (sniff, selection) = if let Some(initial_route) = explicit_dns_route {
+        let sniff = TcpSniffReport {
+            payload: Vec::new(),
+            domain: String::new(),
+            error: None,
+        };
+        let selection = router.select_from_routing_result_with_domain_real(
+            peer,
+            original_dst,
+            &sniff.domain,
+            initial_route,
+            false,
+        )?;
+        (sniff, selection)
+    } else {
+        let sniff = sniff_initial_tcp_payload_async(&mut inbound, sniffing_timeout).await?;
+        let selection = Box::pin(router.select(peer, original_dst, &sniff.domain)).await?;
+        (sniff, selection)
+    };
     append_event_with_metadata(
         event_file,
         event_lock,

@@ -1112,6 +1112,41 @@ fn tcp_router_for_test(
     .unwrap()
 }
 
+#[test]
+fn explicit_tcp_dns_route_selects_configured_outbound_without_a_sniffed_domain() {
+    let router = tcp_router_for_test(fallback_matcher("direct", 0), TcpDialMode::Domain);
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 11), 43100));
+    let original_dst = SocketAddr::V4(SocketAddrV4::new(
+        Ipv4Addr::new(198, 51, 100, 53),
+        dae_dns::DNS_DEFAULT_PORT,
+    ));
+    let initial_route = BpfRoutingResult {
+        outbound: OutboundIndex::USER_DEFINED_MIN.value(),
+        must: 1,
+        ..BpfRoutingResult::default()
+    };
+
+    assert!(!transparent_tcp_dns_fast_path_applies(
+        original_dst,
+        Some(&initial_route)
+    ));
+    let selection = router
+        .select_from_routing_result(peer, original_dst, "", initial_route)
+        .unwrap();
+    let TcpSelection::Proxy(selection) = selection else {
+        panic!("explicit TCP DNS route must retain its configured outbound");
+    };
+    assert_eq!(
+        selection.route.initial_outbound,
+        OutboundIndex::USER_DEFINED_MIN.value()
+    );
+    assert_eq!(
+        selection.route.final_outbound,
+        OutboundIndex::USER_DEFINED_MIN.value()
+    );
+    assert_eq!(selection.route.dial_target, original_dst.to_string());
+}
+
 fn fallback_matcher(outbound: &str, mark: u32) -> RoutingMatcher {
     RoutingMatcher::from_fixture_value(&json!({
         "matches": [
