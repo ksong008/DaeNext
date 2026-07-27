@@ -166,6 +166,7 @@ pub(in crate::daed_product) fn apply_runtime_generation(
     match commit_result {
         Ok(materialized_report) => {
             runtime.publish_process_transition(process_transition);
+            runtime.finalize_runtime_generation_publication();
             record_apply_success(runtime, &generation);
             Ok((runtime_report, materialized_report))
         }

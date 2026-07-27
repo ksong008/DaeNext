@@ -1,12 +1,29 @@
 use super::*;
-#[derive(Debug)]
 pub(crate) struct ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) owner: ResidentRuntimeOwner,
     pub(super) read_handle: ResidentDataplaneReadHandle,
     pub(super) active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
     pub(super) generation_drain: ResidentGenerationDrain,
+    pub(super) workload_shutdown: Option<ResidentRuntimeWorkloadShutdown>,
     pub(super) routing_tuple_map_id: Option<u32>,
     pub(super) domain_routing_map_id: Option<u32>,
+}
+
+impl std::fmt::Debug for ResidentDataplaneRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResidentDataplaneRuntime")
+            .field(
+                "active_reload_generation",
+                &self.active_generation.load().reload_generation,
+            )
+            .field(
+                "workload_shutdown_prepared",
+                &self.workload_shutdown.is_some(),
+            )
+            .field("routing_tuple_map_id", &self.routing_tuple_map_id)
+            .field("domain_routing_map_id", &self.domain_routing_map_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ResidentDataplaneRuntime {
@@ -64,13 +81,13 @@ impl ResidentDataplaneRuntime {
     }
 
     pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {
+        self.quiesce_workloads();
         let generation = self.active_generation.load();
         let reload_generation = generation.reload_generation;
-        generation.request_stop();
-        self.generation_drain.stop_all();
         let workload = self
-            .owner
-            .shutdown_workloads(RESIDENT_RUNTIME_TASK_JOIN_GRACE);
+            .workload_shutdown
+            .take()
+            .expect("resident dataplane workload shutdown was prepared");
         let xmux = self.owner.shutdown_xhttp_xmux_generation_owner();
         steps.push(json!({
             "name": "clear-resident-xhttp-xmux-managers",
@@ -147,6 +164,19 @@ impl ResidentDataplaneRuntime {
         }));
     }
 
+    pub(in crate::production_runtime_owner) fn quiesce_workloads(&mut self) {
+        if self.workload_shutdown.is_some() {
+            return;
+        }
+        let generation = self.active_generation.load();
+        generation.request_stop();
+        self.generation_drain.stop_all();
+        self.workload_shutdown = Some(
+            self.owner
+                .shutdown_workloads(RESIDENT_RUNTIME_TASK_JOIN_GRACE),
+        );
+    }
+
     pub(in crate::production_runtime_owner) fn publish_prepared_generation(
         &mut self,
         config: Arc<Config>,
@@ -204,6 +234,7 @@ impl ResidentDataplaneRuntime {
         let displaced = self.active_generation.publish(generation);
         let displaced_id = displaced.id;
         self.generation_drain.retire(displaced);
+        self.generation_drain.finalize_retirement(displaced_id);
         Ok(json!({
             "status": "pass",
             "strategy": "restore-previous-generation-slot",
@@ -213,5 +244,9 @@ impl ResidentDataplaneRuntime {
             "sharedRuntimeReused": true,
             "bpfOwnerReused": true,
         }))
+    }
+
+    pub(in crate::production_runtime_owner) fn finalize_generation_publication(&self) {
+        self.generation_drain.finalize_retirements();
     }
 }
