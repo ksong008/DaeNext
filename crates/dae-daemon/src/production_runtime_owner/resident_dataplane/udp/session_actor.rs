@@ -36,6 +36,7 @@ pub(super) struct UdpSessionSharedContext {
     pub(super) juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     pub(super) anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     pub(super) response_buffer_idle_timeout: Duration,
+    pub(super) actor_stop: SharedResidentStopSignal,
 }
 
 pub(super) type UdpSessionActorContext = Arc<UdpSessionSharedContext>;
@@ -85,8 +86,14 @@ async fn run_udp_session_actor(
     let idle_timeout = key.idle_timeout();
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
-    loop {
+    let mut stop_listener = context.actor_stop.listener();
+    'session: loop {
         tokio::select! {
+            biased;
+            _ = stop_listener.cancelled() => {
+                stop_reason = "generation-stop".to_owned();
+                break;
+            }
             maybe_managed = receiver.recv() => {
                 let managed = match maybe_managed {
                     Some(managed) => managed,
@@ -120,24 +127,29 @@ async fn run_udp_session_actor(
                     session_proxy = Some(managed.proxy.clone());
                 }
                 let (exchange, execute_timed_out) = match executor.as_mut() {
-                    Some(executor) => match time::timeout(
-                        RESIDENT_UDP_RESPONSE_TIMEOUT,
-                        executor.execute_proxy_packet(
-                            &managed.proxy,
-                            managed.original_dst,
-                            &managed.packet.payload,
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(exchange) => (exchange, false),
-                        Err(_) => (
-                            Err(format!(
-                                "UDP session executor timed out after {}ms",
-                                RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
-                            )),
-                            true,
-                        ),
+                    Some(executor) => tokio::select! {
+                        biased;
+                        _ = stop_listener.cancelled() => {
+                            stop_reason = "generation-stop".to_owned();
+                            break 'session;
+                        }
+                        result = time::timeout(
+                            RESIDENT_UDP_RESPONSE_TIMEOUT,
+                            executor.execute_proxy_packet(
+                                &managed.proxy,
+                                managed.original_dst,
+                                &managed.packet.payload,
+                            ),
+                        ) => match result {
+                            Ok(exchange) => (exchange, false),
+                            Err(_) => (
+                                Err(format!(
+                                    "UDP session executor timed out after {}ms",
+                                    RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
+                                )),
+                                true,
+                            ),
+                        }
                     },
                     None => (
                         Err("UDP session executor was not initialized".to_owned()),
@@ -151,27 +163,43 @@ async fn run_udp_session_actor(
                         .data_udp_availability
                         .record(network_type, unix_now_secs());
                 }
-                record_udp_exchange_result(
-                    &managed.proxy,
-                    managed.packet,
-                    managed.original_dst,
-                    managed.dscp,
-                    context.event_file.clone(),
-                    Arc::clone(&context.event_lock),
-                    Arc::clone(&context.metrics),
-                    &context.udp_reply,
-                    exchange,
-                )
-                .await;
+                tokio::select! {
+                    biased;
+                    _ = stop_listener.cancelled() => {
+                        stop_reason = "generation-stop".to_owned();
+                        break 'session;
+                    }
+                    _ = record_udp_exchange_result(
+                        &managed.proxy,
+                        managed.packet,
+                        managed.original_dst,
+                        managed.dscp,
+                        context.event_file.clone(),
+                        Arc::clone(&context.event_lock),
+                        Arc::clone(&context.metrics),
+                        &context.udp_reply,
+                        exchange,
+                    ) => {}
+                }
                 if execute_timed_out {
                     stop_reason = "execute-timeout".to_owned();
                     break;
                 }
                 if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref())
-                    && let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
-                        stop_reason = err;
-                        break;
+                {
+                    let drain = drain_udp_session_responses(&key, &context, executor, proxy);
+                    tokio::select! {
+                        biased;
+                        _ = stop_listener.cancelled() => {
+                            stop_reason = "generation-stop".to_owned();
+                            break 'session;
+                        }
+                        result = drain => if let Err(err) = result {
+                            stop_reason = err;
+                            break 'session;
+                        }
                     }
+                }
             }
             response = wait_and_record_udp_session_response(
                 &key,
@@ -192,7 +220,7 @@ async fn run_udp_session_actor(
     }
 
     if let Some(mut executor) = executor {
-        executor.shutdown().await;
+        let _ = time::timeout(RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE, executor.shutdown()).await;
     }
     append_event(
         &context.event_file,
