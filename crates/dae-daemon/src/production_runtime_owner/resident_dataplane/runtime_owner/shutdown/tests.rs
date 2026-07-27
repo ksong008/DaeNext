@@ -149,6 +149,25 @@ fn resident_runtime_shutdown_aborts_uncooperative_shared_tasks() {
 }
 
 #[test]
+fn resident_runtime_propagates_forced_owned_cleanup_without_latching_failure() {
+    let mut owner = test_owner(5_001, "resident-runtime-forced-owned-cleanup-test");
+    owner.cleanup_reporter("udp-session-manager").finish(json!({
+        "status": "pass",
+        "safetyStatus": "pass",
+        "graceful": false,
+        "completionMode": "forced-bounded",
+    }));
+
+    let evidence = owner.shutdown_with_grace(Duration::from_secs(1));
+
+    assert_eq!(evidence["status"], "pass");
+    assert_eq!(evidence["safetyStatus"], "pass");
+    assert_eq!(evidence["graceful"], false);
+    assert_eq!(evidence["completionMode"], "forced-bounded");
+    assert_eq!(evidence["resource_release"]["ownedCleanup"], true);
+}
+
+#[test]
 fn resident_runtime_shutdown_closes_shared_transport_owners() {
     let mut owner = test_owner(6_001, "resident-runtime-owner-shared-transports-test");
     let runtime = owner.data_plane_handle();

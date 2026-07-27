@@ -37,8 +37,27 @@ impl ResidentRuntimeCleanupInventory {
         let passed = reports
             .values()
             .all(|report| report["status"].as_str() == Some("pass"));
+        let forced = reports
+            .values()
+            .any(|report| report["completionMode"].as_str() == Some("forced-bounded"));
+        let graceful = passed
+            && reports
+                .values()
+                .all(|report| report["graceful"].as_bool().unwrap_or(true));
+        let completion_mode = if !passed {
+            "incomplete"
+        } else if forced {
+            "forced-bounded"
+        } else if graceful {
+            "graceful"
+        } else {
+            "completed-degraded"
+        };
         json!({
             "status": if passed { "pass" } else { "fail" },
+            "safetyStatus": if passed { "pass" } else { "fail" },
+            "graceful": graceful,
+            "completionMode": completion_mode,
             "owners": reports,
         })
     }
@@ -94,5 +113,22 @@ mod tests {
             .reporter("udp")
             .finish(json!({"status": "pass", "sessions": 0}));
         assert_eq!(inventory.snapshot()["status"], "pass");
+    }
+
+    #[test]
+    fn forced_owner_cleanup_is_safe_but_not_graceful() {
+        let inventory = ResidentRuntimeCleanupInventory::default();
+        inventory.reporter("udp").finish(json!({
+            "status": "pass",
+            "safetyStatus": "pass",
+            "graceful": false,
+            "completionMode": "forced-bounded",
+        }));
+
+        let snapshot = inventory.snapshot();
+        assert_eq!(snapshot["status"], "pass");
+        assert_eq!(snapshot["safetyStatus"], "pass");
+        assert_eq!(snapshot["graceful"], false);
+        assert_eq!(snapshot["completionMode"], "forced-bounded");
     }
 }

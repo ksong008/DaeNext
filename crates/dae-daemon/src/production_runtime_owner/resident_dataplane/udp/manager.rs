@@ -32,6 +32,7 @@ mod ingress;
 mod pinned_route;
 mod router;
 mod session_shards;
+mod shutdown_evidence;
 mod sniff;
 use self::dns_dispatcher::{ResidentDnsFastPathDispatcher, ResidentDnsFastPathHandle};
 use self::dns_fast_path::{
@@ -47,6 +48,7 @@ use self::router::{ResidentUdpRouteSelection, ResidentUdpRouter, ResidentUdpSele
 use self::session_shards::{
     ResidentUdpSessionShardHandle, ResidentUdpSessionShardPool, SharedUdpSniffedDomain,
 };
+use self::shutdown_evidence::*;
 use self::sniff::{
     UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, prune_udp_sniffers,
     udp_sniff_reroute_decision,
@@ -136,6 +138,7 @@ enum UdpGenerationChoice {
 }
 
 struct ResidentUdpGenerationRuntime {
+    generation_id: u64,
     reload_generation: u64,
     drain_control: Arc<ResidentGenerationDrainControl>,
     router: Option<Arc<ResidentUdpRouter>>,
@@ -187,6 +190,7 @@ impl ResidentUdpGenerationRuntime {
         let session_shard_handle = session_shards.handle();
         generation.drain_control.register_udp_runtime();
         Self {
+            generation_id: generation.id,
             reload_generation: generation.reload_generation,
             drain_control: Arc::clone(&generation.drain_control),
             router: Some(Arc::clone(&plan.router)),
@@ -277,6 +281,7 @@ impl ResidentUdpGenerationRuntime {
         self.drain_control.release_udp_router();
         self.drain_control.release_udp_dns_runtime();
         let ResidentUdpGenerationRuntime {
+            generation_id,
             reload_generation,
             drain_control: _,
             router: _,
@@ -289,31 +294,41 @@ impl ResidentUdpGenerationRuntime {
             session_shard_handle,
         } = self;
         let shutdown_deadline = time::Instant::now() + runtime_config.shutdown_timeout;
+        let component_deadline = shutdown_deadline
+            .checked_sub(RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE)
+            .unwrap_or(shutdown_deadline);
         drop(sniffers);
         drop(session_shard_handle);
-        let session_shard_shutdown = session_shards.shutdown(shutdown_deadline).await;
-        let dns_shutdown = match dns_runtime {
-            Some(runtime) => runtime.shutdown(shutdown_deadline).await,
-            None => json!({
-                "status": "pass",
-                "dnsFastPathDispatcher": {"status": "pass", "detached": true},
-                "dnsForwarders": {"status": "pass", "detached": true},
-            }),
+        let dns_shutdown = async move {
+            match dns_runtime {
+                Some(runtime) => runtime.shutdown(component_deadline).await,
+                None => json!({
+                    "status": "pass",
+                    "dnsFastPathDispatcher": {"status": "pass", "detached": true},
+                    "dnsForwarders": {"status": "pass", "detached": true},
+                }),
+            }
         };
+        let (session_shard_shutdown, dns_shutdown) =
+            tokio::join!(session_shards.shutdown(component_deadline), dns_shutdown,);
         drop(udp_reply);
         let reply_shutdown = reply_dispatcher.shutdown(shutdown_deadline).await;
-        let reply_shutdown = match reply_shutdown {
-            Ok(sockets) => json!({"status": "pass", "closedSockets": sockets}),
-            Err(err) => json!({"status": "fail", "error": err.to_string()}),
-        };
-        let cleanup_passed = runtime_config.payload_admission.current() == 0
-            && cleanup_report_passed(&session_shard_shutdown)
-            && cleanup_report_passed(&dns_shutdown)
-            && cleanup_report_passed(&reply_shutdown);
+        let cleanup_passed =
+            udp_generation_cleanup_passed(&session_shard_shutdown, &dns_shutdown, &reply_shutdown);
+        let (graceful, completion_mode) = udp_cleanup_completion(
+            cleanup_passed,
+            [&session_shard_shutdown, &dns_shutdown, &reply_shutdown],
+        );
         json!({
             "status": if cleanup_passed { "pass" } else { "fail" },
+            "safetyStatus": if cleanup_passed { "pass" } else { "fail" },
+            "graceful": graceful,
+            "completionMode": completion_mode,
             "generation": reload_generation,
+            "generationId": generation_id,
+            "reloadGeneration": reload_generation,
             "queuedPayloadAdmission": runtime_config.payload_admission.snapshot(),
+            "queuedPayloadAdmissionScope": "resident-runtime-shared",
             "sessionShards": session_shard_shutdown,
             "dnsFastPathDispatcher": dns_shutdown["dnsFastPathDispatcher"].clone(),
             "dnsForwarders": dns_shutdown["dnsForwarders"].clone(),
@@ -333,6 +348,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
     let initial_generation = active_generation.load();
     let initial_plan = &initial_generation.udp;
     let initial_config = &initial_plan.runtime_config;
+    let shared_payload_admission = initial_config.payload_admission.clone();
     if let Err(err) = socket.set_nonblocking(true) {
         let report = udp_session_manager_start_failure("socket-nonblocking", err.to_string());
         append_event(
@@ -406,8 +422,12 @@ pub(super) async fn run_resident_udp_session_manager_async(
     let mut retired_component_shutdowns = JoinSet::new();
     let mut retired_shutdown_count = 0_u64;
     let mut retired_shutdown_failures = 0_u64;
+    let mut retired_shutdown_forced = 0_u64;
+    let mut retired_shutdown_degraded = 0_u64;
     let mut retired_component_shutdown_count = 0_u64;
     let mut retired_component_shutdown_failures = 0_u64;
+    let mut retired_component_shutdown_forced = 0_u64;
+    let mut retired_component_shutdown_degraded = 0_u64;
     generations.insert(
         initial_generation.id,
         ResidentUdpGenerationRuntime::start(
@@ -530,14 +550,32 @@ pub(super) async fn run_resident_udp_session_manager_async(
             }
             completed = retired_shutdowns.join_next(), if !retired_shutdowns.is_empty() => {
                 retired_shutdown_count = retired_shutdown_count.saturating_add(1);
-                if !matches!(completed, Some(Ok(report)) if cleanup_report_passed(&report)) {
-                    retired_shutdown_failures = retired_shutdown_failures.saturating_add(1);
+                match completed {
+                    Some(Ok(report)) if cleanup_report_passed(&report) => {
+                        record_udp_cleanup_mode(
+                            &report,
+                            &mut retired_shutdown_forced,
+                            &mut retired_shutdown_degraded,
+                        );
+                    }
+                    _ => {
+                        retired_shutdown_failures = retired_shutdown_failures.saturating_add(1);
+                    }
                 }
             }
             completed = retired_component_shutdowns.join_next(), if !retired_component_shutdowns.is_empty() => {
                 retired_component_shutdown_count = retired_component_shutdown_count.saturating_add(1);
-                if !matches!(completed, Some(Ok(report)) if cleanup_report_passed(&report)) {
-                    retired_component_shutdown_failures = retired_component_shutdown_failures.saturating_add(1);
+                match completed {
+                    Some(Ok(report)) if cleanup_report_passed(&report) => {
+                        record_udp_cleanup_mode(
+                            &report,
+                            &mut retired_component_shutdown_forced,
+                            &mut retired_component_shutdown_degraded,
+                        );
+                    }
+                    _ => {
+                        retired_component_shutdown_failures = retired_component_shutdown_failures.saturating_add(1);
+                    }
                 }
             }
             _ = stop_listener.cancelled() => break,
@@ -551,9 +589,18 @@ pub(super) async fn run_resident_udp_session_manager_async(
     }
     while let Some(completed) = retired_component_shutdowns.join_next().await {
         retired_component_shutdown_count = retired_component_shutdown_count.saturating_add(1);
-        if !matches!(completed, Ok(report) if cleanup_report_passed(&report)) {
-            retired_component_shutdown_failures =
-                retired_component_shutdown_failures.saturating_add(1);
+        match completed {
+            Ok(report) if cleanup_report_passed(&report) => {
+                record_udp_cleanup_mode(
+                    &report,
+                    &mut retired_component_shutdown_forced,
+                    &mut retired_component_shutdown_degraded,
+                );
+            }
+            _ => {
+                retired_component_shutdown_failures =
+                    retired_component_shutdown_failures.saturating_add(1);
+            }
         }
     }
     let mut generation_shutdown = Vec::with_capacity(active_generation_count);
@@ -563,6 +610,12 @@ pub(super) async fn run_resident_udp_session_manager_async(
             Ok(report) => {
                 if !cleanup_report_passed(&report) {
                     retired_shutdown_failures = retired_shutdown_failures.saturating_add(1);
+                } else {
+                    record_udp_cleanup_mode(
+                        &report,
+                        &mut retired_shutdown_forced,
+                        &mut retired_shutdown_degraded,
+                    );
                 }
                 generation_shutdown.push(report);
             }
@@ -576,16 +629,44 @@ pub(super) async fn run_resident_udp_session_manager_async(
         }
     }
     let active_sessions = active_sessions.load(Ordering::Acquire);
-    let cleanup_passed = active_sessions == 0
-        && retired_shutdown_failures == 0
-        && retired_component_shutdown_failures == 0;
+    let queued_payload_admission = shared_payload_admission.snapshot();
+    let queued_payload_released = queued_payload_admission["currentBytes"].as_u64() == Some(0);
+    let cleanup_passed = udp_manager_cleanup_passed(
+        active_sessions,
+        retired_shutdown_failures,
+        retired_component_shutdown_failures,
+        queued_payload_released,
+    );
+    let forced_cleanup_count =
+        retired_shutdown_forced.saturating_add(retired_component_shutdown_forced);
+    let degraded_cleanup_count =
+        retired_shutdown_degraded.saturating_add(retired_component_shutdown_degraded);
+    let graceful = cleanup_passed && forced_cleanup_count == 0 && degraded_cleanup_count == 0;
+    let completion_mode = if !cleanup_passed {
+        "incomplete"
+    } else if forced_cleanup_count != 0 {
+        "forced-bounded"
+    } else if graceful {
+        "graceful"
+    } else {
+        "completed-degraded"
+    };
     let report = json!({
         "status": if cleanup_passed { "pass" } else { "fail" },
+        "safetyStatus": if cleanup_passed { "pass" } else { "fail" },
+        "graceful": graceful,
+        "completionMode": completion_mode,
         "activeSessions": active_sessions,
+        "queuedPayloadAdmission": queued_payload_admission,
+        "queuedPayloadReleased": queued_payload_released,
         "retiredGenerationShutdowns": retired_shutdown_count,
         "retiredGenerationShutdownFailures": retired_shutdown_failures,
+        "retiredGenerationShutdownForced": retired_shutdown_forced,
+        "retiredGenerationShutdownDegraded": retired_shutdown_degraded,
         "retiredComponentShutdowns": retired_component_shutdown_count,
         "retiredComponentShutdownFailures": retired_component_shutdown_failures,
+        "retiredComponentShutdownForced": retired_component_shutdown_forced,
+        "retiredComponentShutdownDegraded": retired_component_shutdown_degraded,
         "generations": generation_shutdown,
     });
     append_event(
@@ -699,10 +780,6 @@ fn udp_session_manager_start_failure(stage: &'static str, error: String) -> Valu
         "stage": stage,
         "error": error,
     })
-}
-
-fn cleanup_report_passed(report: &Value) -> bool {
-    report["status"].as_str() == Some("pass")
 }
 
 #[cfg(not(test))]

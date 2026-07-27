@@ -237,10 +237,13 @@ pub(super) fn shutdown_resident_runtime_owner(
     let graceful = shutdown_safe
         && task_count_panicked == 0
         && task_count_cancelled == 0
-        && task_count_timed_out == 0;
+        && task_count_timed_out == 0
+        && owned_cleanup["graceful"].as_bool().unwrap_or(true);
     let completion_mode = if !shutdown_safe {
         "incomplete"
-    } else if aborted_async_tasks > 0 {
+    } else if aborted_async_tasks > 0
+        || owned_cleanup["completionMode"].as_str() == Some("forced-bounded")
+    {
         "forced-bounded"
     } else if graceful {
         "graceful"

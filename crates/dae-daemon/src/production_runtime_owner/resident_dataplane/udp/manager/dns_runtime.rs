@@ -36,17 +36,19 @@ impl ResidentUdpDnsRuntime {
             handle,
         } = self;
         drop(handle);
-        let fast_path = match dispatcher.shutdown(deadline).await {
-            Ok(completed) => json!({"status": "pass", "completed": completed}),
-            Err(err) => json!({"status": "fail", "error": err}),
-        };
-        let forwarders = plan.shutdown_forwarders(deadline).await;
+        let (fast_path, forwarders) = tokio::join!(
+            dispatcher.shutdown(deadline),
+            plan.shutdown_forwarders(deadline),
+        );
+        let cleanup_passed =
+            cleanup_report_passed(&fast_path) && cleanup_report_passed(&forwarders);
+        let (graceful, completion_mode) =
+            udp_cleanup_completion(cleanup_passed, [&fast_path, &forwarders]);
         json!({
-            "status": if cleanup_report_passed(&fast_path) && cleanup_report_passed(&forwarders) {
-                "pass"
-            } else {
-                "fail"
-            },
+            "status": if cleanup_passed { "pass" } else { "fail" },
+            "safetyStatus": if cleanup_passed { "pass" } else { "fail" },
+            "graceful": graceful,
+            "completionMode": completion_mode,
             "dnsFastPathDispatcher": fast_path,
             "dnsForwarders": forwarders,
         })

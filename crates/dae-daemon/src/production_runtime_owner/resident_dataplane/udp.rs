@@ -96,7 +96,8 @@ use super::tcp::{
 };
 use super::vision::{VisionUnpadder, vision_padding_block};
 use super::{
-    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT, RESIDENT_UDP_RESPONSE_TIMEOUT,
+    RESIDENT_IDLE_SLEEP, RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE,
+    RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT, RESIDENT_UDP_RESPONSE_TIMEOUT,
     RESIDENT_UDP_SESSION_IDLE_TIMEOUT, ResidentDataplaneMetrics, ResidentHealthResuscitationHandle,
     ResidentUdpRuntimeConfig, VISION_COMMAND_CONTINUE, VLESS_RESPONSE_VERSION, XUDP_COMMAND_KEEP,
     XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
@@ -106,6 +107,8 @@ use super::{
 
 mod worker;
 pub(super) use self::worker::*;
+mod task_shutdown;
+use self::task_shutdown::*;
 mod session_key;
 use self::session_key::*;
 mod manager;

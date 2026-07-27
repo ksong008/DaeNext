@@ -93,25 +93,28 @@ impl ResidentDnsFastPathDispatcher {
         self.handle.clone()
     }
 
-    pub(super) async fn shutdown(mut self, deadline: time::Instant) -> Result<usize, String> {
+    pub(super) async fn shutdown(mut self, deadline: time::Instant) -> Value {
         self.handle.closing.store(true, Ordering::Release);
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        match time::timeout_at(deadline, &mut self.task).await {
-            Ok(Ok(completed)) => Ok(completed),
-            Ok(Err(err)) => Err(format!(
-                "resident DNS fast-path dispatcher join failed: {err}"
-            )),
-            Err(_) => {
-                self.task.abort();
-                let _ = (&mut self.task).await;
-                Err(
-                    "resident DNS fast-path dispatcher exceeded the generation shutdown deadline"
-                        .to_owned(),
-                )
-            }
-        }
+        let shutdown = shutdown_resident_owned_task(&mut self.task, deadline).await;
+        let status = shutdown.status();
+        let safety_status = shutdown.safety_status();
+        let graceful = shutdown.graceful();
+        let completion_mode = shutdown.completion_mode();
+        json!({
+            "status": status,
+            "safetyStatus": safety_status,
+            "graceful": graceful,
+            "completionMode": completion_mode,
+            "completed": shutdown.output,
+            "taskJoined": shutdown.joined,
+            "taskForced": shutdown.forced,
+            "taskCancelled": shutdown.cancelled,
+            "taskPanicked": shutdown.panicked,
+            "joinError": shutdown.error,
+        })
     }
 }
 

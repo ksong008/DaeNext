@@ -323,22 +323,38 @@ impl ResidentDnsUdpActorExecutor {
                 lifecycle.stop();
             }
         }
+        let task_count = actors.len();
         let (joined, panicked, timed_out) = join_dns_udp_actor_tasks(&mut actors, deadline).await;
+        let tasks_reaped = joined.saturating_add(panicked).saturating_add(timed_out) == task_count;
         let pool = self.pool.lock().await.take();
         let runtime_shutdown = match pool {
             Some(pool) => pool.shutdown(deadline).await,
             None => Ok(()),
         };
+        let shutdown_safe = tasks_reaped && panicked == 0 && runtime_shutdown.is_ok();
+        let graceful = shutdown_safe && timed_out == 0;
+        let completion_mode = if !shutdown_safe {
+            "incomplete"
+        } else if timed_out != 0 {
+            "forced-bounded"
+        } else if graceful {
+            "graceful"
+        } else {
+            "completed-degraded"
+        };
         serde_json::json!({
-            "status": if panicked == 0 && timed_out == 0 && runtime_shutdown.is_ok() {
-                "pass"
-            } else {
-                "fail"
-            },
+            "status": if shutdown_safe { "pass" } else { "fail" },
+            "safetyStatus": if shutdown_safe { "pass" } else { "fail" },
+            "graceful": graceful,
+            "completionMode": completion_mode,
             "generation": self.runtime_config.generation,
+            "taskCount": task_count,
             "joined": joined,
             "panicked": panicked,
             "timedOut": timed_out,
+            "forced": timed_out,
+            "detached": if tasks_reaped { 0 } else { task_count.saturating_sub(joined.saturating_add(panicked).saturating_add(timed_out)) },
+            "tasksReaped": tasks_reaped,
             "runtime": match runtime_shutdown {
                 Ok(()) => serde_json::json!({"status": "pass"}),
                 Err(err) => serde_json::json!({"status": "fail", "error": err}),
