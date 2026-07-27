@@ -158,8 +158,14 @@ async fn run_udp_direct_session_actor(
     let idle_timeout = key.idle_timeout();
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
-    loop {
+    let mut stop_listener = context.actor_stop.listener();
+    'session: loop {
         tokio::select! {
+            biased;
+            _ = stop_listener.cancelled() => {
+                stop_reason = "generation-stop".to_owned();
+                break;
+            }
             maybe_managed = receiver.recv() => {
                 let managed = match maybe_managed {
                     Some(managed) => managed,
@@ -170,7 +176,15 @@ async fn run_udp_direct_session_actor(
                     .reset(time::Instant::now() + idle_timeout);
                 packets += 1;
                 if session.is_none() {
-                    match DirectUdpSession::open(managed.original_dst, key.mark()).await {
+                    let opened = tokio::select! {
+                        biased;
+                        _ = stop_listener.cancelled() => {
+                            stop_reason = "generation-stop".to_owned();
+                            break 'session;
+                        }
+                        opened = DirectUdpSession::open(managed.original_dst, key.mark()) => opened,
+                    };
+                    match opened {
                         Ok(opened) => session = Some(opened),
                         Err(err) => {
                             append_udp_direct_exchange_failed(
@@ -186,11 +200,17 @@ async fn run_udp_direct_session_actor(
                     }
                 }
                 let send_result = match session.as_ref() {
-                    Some(session) => time::timeout(
-                        RESIDENT_UDP_RESPONSE_TIMEOUT,
-                        session.send(&managed.packet.payload, managed.original_dst),
-                    )
-                    .await,
+                    Some(session) => tokio::select! {
+                        biased;
+                        _ = stop_listener.cancelled() => {
+                            stop_reason = "generation-stop".to_owned();
+                            break 'session;
+                        }
+                        result = time::timeout(
+                            RESIDENT_UDP_RESPONSE_TIMEOUT,
+                            session.send(&managed.packet.payload, managed.original_dst),
+                        ) => result,
+                    },
                     None => continue,
                 };
                 match send_result {
@@ -223,23 +243,39 @@ async fn run_udp_direct_session_actor(
                         break;
                     }
                 }
-                if let Some(session) = session.as_mut()
-                    && let Err(err) = drain_direct_udp_session_responses(&key, &context, session).await {
-                        stop_reason = err;
-                        break;
+                if let Some(session) = session.as_mut() {
+                    let drain = drain_direct_udp_session_responses(&key, &context, session);
+                    tokio::select! {
+                        biased;
+                        _ = stop_listener.cancelled() => {
+                            stop_reason = "generation-stop".to_owned();
+                            break 'session;
+                        }
+                        result = drain => if let Err(err) = result {
+                            stop_reason = err;
+                            break 'session;
+                        }
                     }
+                }
             }
             readiness = wait_direct_udp_session_response(session.as_ref()), if session.is_some() => {
                 if let Err(err) = readiness {
                     stop_reason = err;
                     break;
                 }
-                if let Some(session) = session.as_mut()
-                    && let Err(err) =
-                        drain_direct_udp_session_responses(&key, &context, session).await
-                {
-                    stop_reason = err;
-                    break;
+                if let Some(session) = session.as_mut() {
+                    let drain = drain_direct_udp_session_responses(&key, &context, session);
+                    tokio::select! {
+                        biased;
+                        _ = stop_listener.cancelled() => {
+                            stop_reason = "generation-stop".to_owned();
+                            break 'session;
+                        }
+                        result = drain => if let Err(err) = result {
+                            stop_reason = err;
+                            break 'session;
+                        }
+                    }
                 }
             }
             _ = &mut idle_timer => {

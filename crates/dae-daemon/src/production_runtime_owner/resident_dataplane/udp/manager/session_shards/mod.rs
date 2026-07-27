@@ -3,6 +3,8 @@ use std::ops::Deref;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::production_runtime_owner::resident_dataplane::ResidentStopSignal;
+
 use super::*;
 
 mod dispatch;
@@ -60,6 +62,7 @@ pub(super) struct ResidentUdpSessionShardHandle {
 
 pub(super) struct ResidentUdpSessionShardPool {
     handle: ResidentUdpSessionShardHandle,
+    actor_stop: SharedResidentStopSignal,
     stops: Vec<oneshot::Sender<time::Instant>>,
     tasks: Vec<JoinHandle<Value>>,
 }
@@ -82,6 +85,7 @@ impl ResidentUdpSessionShardPool {
         let admission = runtime_config
             .session_admission_limit
             .map(|limit| Arc::new(Semaphore::new(limit)));
+        let actor_stop = ResidentStopSignal::shared();
         let shared = Arc::new(UdpSessionSharedContext {
             event_file: event_file.clone(),
             event_lock: Arc::clone(&event_lock),
@@ -93,6 +97,7 @@ impl ResidentUdpSessionShardPool {
             juicity_owner_registry,
             anytls_owner_registry,
             response_buffer_idle_timeout: runtime_config.direct_response_buffer_idle_timeout,
+            actor_stop: Arc::clone(&actor_stop),
         });
         let context = ResidentUdpSessionShardContext {
             shared,
@@ -123,6 +128,7 @@ impl ResidentUdpSessionShardPool {
         };
         Self {
             handle,
+            actor_stop,
             stops,
             tasks,
         }
@@ -134,8 +140,12 @@ impl ResidentUdpSessionShardPool {
 
     pub(super) async fn shutdown(mut self, deadline: time::Instant) -> Value {
         self.handle.closing.store(true, Ordering::Release);
+        self.actor_stop.store(true, Ordering::Release);
+        let actor_deadline = deadline
+            .checked_sub(RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE)
+            .unwrap_or(deadline);
         for stop in self.stops.drain(..) {
-            let _ = stop.send(deadline);
+            let _ = stop.send(actor_deadline);
         }
         let started = Instant::now();
         let (joined, panicked, timed_out) =
