@@ -281,5 +281,117 @@ fn compact_owner_release_failure_details(step: &Value) -> serde_json::Map<String
         }
         details.insert(detail_key.to_owned(), Value::Object(selected));
     }
+    if step
+        .pointer("/resource_release/ownedCleanup")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        details.insert(
+            "ownedCleanup".to_owned(),
+            compact_udp_session_manager_cleanup(step),
+        );
+    }
     details
+}
+
+fn compact_udp_session_manager_cleanup(step: &Value) -> Value {
+    let Some(manager) = step.pointer("/owned_cleanup/owners/udp-session-manager") else {
+        return json!({"snapshotMissing": true});
+    };
+    let mut selected = serde_json::Map::new();
+    for key in [
+        "status",
+        "safetyStatus",
+        "graceful",
+        "completionMode",
+        "activeSessions",
+        "queuedPayloadReleased",
+        "retiredGenerationShutdowns",
+        "retiredGenerationShutdownFailures",
+        "retiredGenerationShutdownForced",
+        "retiredGenerationShutdownDegraded",
+        "retiredComponentShutdowns",
+        "retiredComponentShutdownFailures",
+        "retiredComponentShutdownForced",
+        "retiredComponentShutdownDegraded",
+    ] {
+        if let Some(value) = manager.get(key) {
+            selected.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(admission) = manager.get("queuedPayloadAdmission") {
+        let mut payload = serde_json::Map::new();
+        for key in ["generation", "currentBytes", "limitBytes"] {
+            if let Some(value) = admission.get(key) {
+                payload.insert(key.to_owned(), value.clone());
+            }
+        }
+        selected.insert("queuedPayloadAdmission".to_owned(), Value::Object(payload));
+    }
+    let failed_generations = manager
+        .get("generations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|generation| generation["status"].as_str() != Some("pass"))
+        .take(4)
+        .map(compact_udp_generation_cleanup)
+        .collect::<Vec<_>>();
+    if !failed_generations.is_empty() {
+        selected.insert(
+            "failedGenerations".to_owned(),
+            Value::Array(failed_generations),
+        );
+    }
+    Value::Object(selected)
+}
+
+fn compact_udp_generation_cleanup(generation: &Value) -> Value {
+    let mut selected = serde_json::Map::new();
+    for key in [
+        "generationId",
+        "reloadGeneration",
+        "status",
+        "safetyStatus",
+        "graceful",
+        "completionMode",
+    ] {
+        if let Some(value) = generation.get(key) {
+            selected.insert(key.to_owned(), value.clone());
+        }
+    }
+    for (source, target) in [
+        ("sessionShards", "sessionShards"),
+        ("dnsFastPathDispatcher", "dnsFastPathDispatcher"),
+        ("dnsForwarders", "dnsForwarders"),
+        ("replyDispatcher", "replyDispatcher"),
+    ] {
+        if let Some(report) = generation.get(source) {
+            selected.insert(target.to_owned(), compact_cleanup_status(report));
+        }
+    }
+    Value::Object(selected)
+}
+
+fn compact_cleanup_status(report: &Value) -> Value {
+    let mut selected = serde_json::Map::new();
+    for key in [
+        "status",
+        "safetyStatus",
+        "graceful",
+        "completionMode",
+        "joined",
+        "panicked",
+        "timedOut",
+        "forced",
+        "detached",
+        "taskJoined",
+        "taskForced",
+        "taskPanicked",
+    ] {
+        if let Some(value) = report.get(key) {
+            selected.insert(key.to_owned(), value.clone());
+        }
+    }
+    Value::Object(selected)
 }
