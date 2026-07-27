@@ -331,6 +331,67 @@ pub(crate) fn owner_cleanup_failure_keeps_bounded_protocol_diagnostics() {
 }
 
 #[test]
+pub(crate) fn udp_owner_cleanup_failure_keeps_bounded_generation_diagnostics() {
+    let manager = ProductRuntimeManager::new();
+    let report = json!({
+        "status": "fail",
+        "cleanup_step_failed": true,
+        "cleanup_steps": [{
+            "name": "stop-resident-dataplane-runtime",
+            "status": "fail",
+            "resource_release": {"ownedCleanup": false},
+            "owned_cleanup": {
+                "owners": {
+                    "udp-session-manager": {
+                        "status": "fail",
+                        "activeSessions": 0,
+                        "queuedPayloadReleased": false,
+                        "queuedPayloadAdmission": {
+                            "generation": 1,
+                            "currentBytes": 262,
+                            "limitBytes": 1024,
+                            "highCardinalityPayload": ["must-not-be-copied"]
+                        },
+                        "retiredGenerationShutdownFailures": 1,
+                        "generations": [{
+                            "generationId": 7,
+                            "reloadGeneration": 1,
+                            "status": "fail",
+                            "dnsFastPathDispatcher": {
+                                "status": "fail",
+                                "completionMode": "incomplete",
+                                "unboundedDetail": ["must-not-be-copied"]
+                            },
+                            "replyDispatcher": {
+                                "status": "pass",
+                                "completionMode": "forced-bounded",
+                                "taskJoined": true
+                            }
+                        }]
+                    }
+                }
+            }
+        }],
+        "loaded_map_cleaned": true,
+        "cleanup_command_timed_out": false,
+        "leftovers_after_cleanup": [],
+        "sys_fs_bpf_dae_mutated": false,
+    });
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.cleanup.begin(11, "reload-replace");
+        inner.cleanup.finish(Some(report));
+    }
+
+    let error = manager.ensure_cleanup_allows_start().unwrap_err();
+    assert!(error.contains("ownedCleanup"));
+    assert!(error.contains("generationId"));
+    assert!(error.contains("\"currentBytes\":262"));
+    assert!(error.contains("forced-bounded"));
+    assert!(!error.contains("must-not-be-copied"));
+}
+
+#[test]
 pub(crate) fn forced_bounded_cleanup_without_residuals_does_not_latch_interlock() {
     let manager = ProductRuntimeManager::new();
     {
