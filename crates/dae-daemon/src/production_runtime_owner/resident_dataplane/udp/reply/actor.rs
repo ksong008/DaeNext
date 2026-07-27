@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Value;
 use std::fmt;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -16,7 +17,7 @@ pub(in super::super) enum UdpReplyError {
     QueueFull,
     PayloadLimit(ResidentUdpPayloadAdmissionError),
     DispatcherClosed,
-    TimedOut,
+    ResponseTimedOut,
     Socket(String),
 }
 
@@ -37,7 +38,7 @@ impl fmt::Display for UdpReplyError {
                 error.requested, error.current, error.limit
             ),
             Self::DispatcherClosed => formatter.write_str("resident UDP reply dispatcher stopped"),
-            Self::TimedOut => write!(
+            Self::ResponseTimedOut => write!(
                 formatter,
                 "resident UDP reply timed out after {}ms",
                 RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
@@ -114,7 +115,7 @@ impl UdpReplyHandle {
         match time::timeout_at(deadline, receiver).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(UdpReplyError::DispatcherClosed),
-            Err(_) => Err(UdpReplyError::TimedOut),
+            Err(_) => Err(UdpReplyError::ResponseTimedOut),
         }
     }
 
@@ -204,24 +205,28 @@ impl UdpReplyDispatcher {
         self.handle.clone()
     }
 
-    pub(in super::super) async fn shutdown(
-        mut self,
-        deadline: time::Instant,
-    ) -> Result<usize, UdpReplyError> {
+    pub(in super::super) async fn shutdown(mut self, deadline: time::Instant) -> Value {
         self.handle.closing.store(true, Ordering::Release);
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        match time::timeout_at(deadline, &mut self.task).await {
-            Ok(Ok(socket_count)) => Ok(socket_count),
-            Ok(Err(err)) => Err(UdpReplyError::Socket(format!(
-                "resident UDP reply actor join failed: {err}"
-            ))),
-            Err(_) => {
-                self.task.abort();
-                Err(UdpReplyError::TimedOut)
-            }
-        }
+        let shutdown = shutdown_resident_owned_task(&mut self.task, deadline).await;
+        let status = shutdown.status();
+        let safety_status = shutdown.safety_status();
+        let graceful = shutdown.graceful();
+        let completion_mode = shutdown.completion_mode();
+        json!({
+            "status": status,
+            "safetyStatus": safety_status,
+            "graceful": graceful,
+            "completionMode": completion_mode,
+            "closedSockets": shutdown.output,
+            "taskJoined": shutdown.joined,
+            "taskForced": shutdown.forced,
+            "taskCancelled": shutdown.cancelled,
+            "taskPanicked": shutdown.panicked,
+            "joinError": shutdown.error,
+        })
     }
 }
 
@@ -287,10 +292,32 @@ mod tests {
         assert_eq!(
             dispatcher
                 .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
-                .await
-                .unwrap(),
+                .await["closedSockets"],
             0
         );
+    }
+
+    #[tokio::test]
+    async fn reply_dispatcher_preserves_joined_ownership_at_expired_deadline() {
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let dispatcher = UdpReplyDispatcher::start(
+            2,
+            2,
+            Duration::from_secs(1),
+            ResidentUdpPayloadAdmission::new(1, 1024),
+            metrics,
+        );
+
+        let report = dispatcher.shutdown(time::Instant::now()).await;
+
+        assert_eq!(report["status"], "pass");
+        assert_eq!(report["safetyStatus"], "pass");
+        assert_eq!(report["taskJoined"], true);
+        assert!(matches!(
+            report["completionMode"].as_str(),
+            Some("graceful" | "forced-bounded")
+        ));
+        assert!(report.get("error").is_none());
     }
 
     #[tokio::test]
@@ -346,7 +373,7 @@ mod tests {
             })
             .should_log()
         );
-        assert!(!UdpReplyError::TimedOut.should_log());
+        assert!(!UdpReplyError::ResponseTimedOut.should_log());
         assert!(UdpReplyError::Socket("fatal".to_owned()).should_log());
     }
 

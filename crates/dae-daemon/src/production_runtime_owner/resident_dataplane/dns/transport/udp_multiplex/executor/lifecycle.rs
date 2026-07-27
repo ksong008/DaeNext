@@ -42,3 +42,27 @@ pub(super) async fn join_dns_udp_actor_tasks(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn deadline_abort_reaps_every_dns_udp_actor_task() {
+        let completion = ResidentDnsUdpActorCompletion::new();
+        let mut actors = vec![ResidentDnsUdpActorTask {
+            lifecycle: std::sync::Weak::<ResidentDnsUdpActorLifecycle>::new(),
+            completion: std::sync::Arc::clone(&completion),
+            task: tokio::spawn(std::future::pending::<bool>()),
+        }];
+
+        let (joined, panicked, timed_out) =
+            join_dns_udp_actor_tasks(&mut actors, tokio::time::Instant::now()).await;
+
+        assert_eq!(joined, 0);
+        assert_eq!(panicked, 0);
+        assert_eq!(timed_out, 1);
+        assert!(actors.is_empty());
+        assert!(completion.wait(tokio::time::Instant::now()).await);
+    }
+}

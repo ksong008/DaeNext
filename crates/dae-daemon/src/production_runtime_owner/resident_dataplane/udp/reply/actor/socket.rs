@@ -90,7 +90,7 @@ pub(super) async fn send_udp_reply(
     request: &UdpReplyRequest,
 ) -> Result<(), UdpReplyError> {
     if time::Instant::now() >= request.deadline {
-        return Err(UdpReplyError::TimedOut);
+        return Err(UdpReplyError::ResponseTimedOut);
     }
     let socket = reply_socket(cache, request.original_dst)?;
     match time::timeout_at(
@@ -103,9 +103,9 @@ pub(super) async fn send_udp_reply(
             metrics.udp_reply_sent();
             return Ok(());
         }
-        Err(_) => return Err(UdpReplyError::TimedOut),
+        Err(_) => return Err(UdpReplyError::ResponseTimedOut),
         Ok(Err(err)) if err.kind() == io::ErrorKind::WouldBlock => {
-            return Err(UdpReplyError::TimedOut);
+            return Err(UdpReplyError::ResponseTimedOut);
         }
         Ok(Err(_)) => {}
     }
@@ -126,7 +126,7 @@ pub(super) async fn send_udp_reply(
         Ok(Err(err)) => Err(UdpReplyError::Socket(format!(
             "send transparent UDP reply after socket recreation: {err}"
         ))),
-        Err(_) => Err(UdpReplyError::TimedOut),
+        Err(_) => Err(UdpReplyError::ResponseTimedOut),
     }
 }
 

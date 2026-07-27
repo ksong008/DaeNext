@@ -6,6 +6,7 @@ use dae_outbound::NetworkType;
 use crate::production_runtime_owner::resident_dataplane::plan::{
     RESIDENT_CONTROL_PLANE_SO_MARK, ResidentXhttpSettingsPlan,
 };
+use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadAdmission;
 
 use super::*;
 
@@ -19,11 +20,64 @@ fn udp_session_manager_uses_the_generation_data_plane_executor() {
 #[test]
 fn udp_generation_runtime_keeps_a_drain_control_instead_of_the_heavy_generation() {
     let source = include_str!("../manager.rs");
+    assert!(source.contains("generation_id: u64"));
     assert!(source.contains("drain_control: Arc<ResidentGenerationDrainControl>"));
     assert!(source.contains("router: Option<Arc<ResidentUdpRouter>>"));
     assert!(source.contains("dns_runtime: Option<ResidentUdpDnsRuntime>"));
     assert!(!source.contains("plan: ResidentUdpGenerationPlan"));
     assert!(!source.contains("generation: Arc<ResidentDataplaneGeneration>"));
+}
+
+#[test]
+fn per_generation_cleanup_does_not_fail_on_shared_payload_owned_elsewhere() {
+    let payload_admission = ResidentUdpPayloadAdmission::new(1, 1024);
+    let retained_by_another_generation = payload_admission.try_acquire(262).unwrap();
+    let passed = json!({"status": "pass"});
+
+    assert_eq!(payload_admission.current(), 262);
+    assert!(udp_generation_cleanup_passed(&passed, &passed, &passed));
+    assert!(!udp_manager_cleanup_passed(0, 0, 0, false));
+
+    drop(retained_by_another_generation);
+    assert_eq!(payload_admission.current(), 0);
+    assert!(udp_manager_cleanup_passed(0, 0, 0, true));
+}
+
+#[test]
+fn final_udp_manager_cleanup_rejects_real_owner_failures() {
+    assert!(!udp_manager_cleanup_passed(1, 0, 0, true));
+    assert!(!udp_manager_cleanup_passed(0, 1, 0, true));
+    assert!(!udp_manager_cleanup_passed(0, 0, 1, true));
+    assert!(!udp_manager_cleanup_passed(0, 0, 0, false));
+}
+
+#[test]
+fn forced_generation_cleanup_stays_safe_without_being_reported_graceful() {
+    let forced = json!({
+        "status": "pass",
+        "safetyStatus": "pass",
+        "graceful": false,
+        "completionMode": "forced-bounded",
+    });
+    let graceful = json!({
+        "status": "pass",
+        "safetyStatus": "pass",
+        "graceful": true,
+        "completionMode": "graceful",
+    });
+
+    assert_eq!(
+        udp_cleanup_completion(true, [&graceful, &forced]),
+        (false, "forced-bounded")
+    );
+    assert_eq!(
+        udp_cleanup_completion(true, [&graceful]),
+        (true, "graceful")
+    );
+    assert_eq!(
+        udp_cleanup_completion(false, [&graceful]),
+        (false, "incomplete")
+    );
 }
 
 #[test]
