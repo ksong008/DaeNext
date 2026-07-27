@@ -176,7 +176,8 @@ pub(crate) fn start_resident_dataplane_workers(
         .to_owned();
     let tcp_sniffing_timeout = built_generation.generation.tcp_router.sniffing_timeout();
     let proxy_count = built_generation.generation.tcp_router.proxy_count();
-    let udp_session_limit = udp_runtime_config.session_limit;
+    let udp_session_admission_limit = udp_runtime_config.session_admission_limit;
+    let udp_session_soft_watermark = udp_runtime_config.session_soft_watermark;
     let udp_session_queue_depth = udp_runtime_config.session_queue_depth;
     let active_generation = ActiveGenerationSlot::new(built_generation.generation);
     let generation_drain = ResidentGenerationDrain::new(ResidentGenerationDrainPolicy::selected());
@@ -290,7 +291,14 @@ pub(crate) fn start_resident_dataplane_workers(
         "tcp_connection_limit_env".to_owned(),
         json!(RESIDENT_TCP_CONNECTION_LIMIT_ENV),
     );
-    start_map.insert("udp_session_limit".to_owned(), json!(udp_session_limit));
+    start_map.insert(
+        "udp_session_admission".to_owned(),
+        json!({
+            "mode": if udp_session_admission_limit.is_some() { "fixed" } else { "automatic" },
+            "fixed_limit": udp_session_admission_limit,
+            "soft_watermark": udp_session_soft_watermark,
+        }),
+    );
     start_map.insert(
         "udp_session_limit_env".to_owned(),
         json!(RESIDENT_UDP_SESSION_LIMIT_ENV),

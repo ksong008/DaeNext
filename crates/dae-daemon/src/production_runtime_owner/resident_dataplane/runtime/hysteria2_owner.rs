@@ -481,16 +481,19 @@ fn subtract_count(active: &AtomicUsize, count: usize) {
 }
 
 struct Hysteria2LogicalLeaseAdmission {
-    limit: usize,
+    limit: Option<usize>,
     active: AtomicUsize,
     high_water: AtomicUsize,
     registry_metrics: Arc<Hysteria2OwnerRegistryMetrics>,
 }
 
 impl Hysteria2LogicalLeaseAdmission {
-    fn new(limit: usize, registry_metrics: Arc<Hysteria2OwnerRegistryMetrics>) -> Arc<Self> {
+    fn new(
+        limit: Option<usize>,
+        registry_metrics: Arc<Hysteria2OwnerRegistryMetrics>,
+    ) -> Arc<Self> {
         Arc::new(Self {
-            limit: limit.max(1),
+            limit: limit.map(|value| value.max(1)),
             active: AtomicUsize::new(0),
             high_water: AtomicUsize::new(0),
             registry_metrics,
@@ -500,18 +503,24 @@ impl Hysteria2LogicalLeaseAdmission {
     fn reserve(self: &Arc<Self>) -> Result<Hysteria2LogicalLeaseReservation, String> {
         let mut active = self.active.load(Ordering::Acquire);
         loop {
-            if active >= self.limit {
+            if self.limit.is_some_and(|limit| active >= limit) {
                 self.registry_metrics
                     .logical_lease_rejections
                     .fetch_add(1, Ordering::Relaxed);
                 return Err(format!(
                     "Hysteria2 logical lease budget is full ({})",
-                    self.limit
+                    self.limit.expect("fixed logical lease limit is present")
                 ));
             }
+            let Some(next_active) = active.checked_add(1) else {
+                self.registry_metrics
+                    .logical_lease_rejections
+                    .fetch_add(1, Ordering::Relaxed);
+                return Err("Hysteria2 logical lease counter is exhausted".to_owned());
+            };
             match self.active.compare_exchange_weak(
                 active,
-                active + 1,
+                next_active,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
@@ -519,7 +528,7 @@ impl Hysteria2LogicalLeaseAdmission {
                 Err(observed) => active = observed,
             }
         }
-        update_high_water(&self.high_water, active + 1);
+        update_high_water(&self.high_water, active.saturating_add(1));
         self.registry_metrics.lease_opened();
         Ok(Hysteria2LogicalLeaseReservation {
             admission: Some(Arc::clone(self)),
@@ -576,7 +585,7 @@ impl Hysteria2QueuedUdpMessage {
 
 struct Hysteria2UdpSessionManager {
     generation: OwnerGeneration,
-    limit: usize,
+    limit: Option<usize>,
     queue_depth: usize,
     session_queue_bytes: usize,
     quarantine_limit: usize,
@@ -594,7 +603,7 @@ impl Hysteria2UdpSessionManager {
     ) -> Arc<Self> {
         Arc::new(Self {
             generation,
-            limit: resources.udp_session_limit().max(1),
+            limit: resources.udp_session_limit().map(|value| value.max(1)),
             queue_depth: resources.udp_session_queue_depth().max(1),
             session_queue_bytes: resources.udp_session_queue_bytes().max(1),
             quarantine_limit: resources.udp_session_quarantine_limit().max(1),
@@ -628,17 +637,25 @@ impl Hysteria2UdpSessionManager {
             return Err("Hysteria2 UDP session manager is closed".to_owned());
         }
         self.expire_quarantine(&mut state, Instant::now());
-        if state.sessions.len() >= self.limit {
+        if self
+            .limit
+            .is_some_and(|limit| state.sessions.len() >= limit)
+        {
             self.metrics
                 .udp_session_rejections
                 .fetch_add(1, Ordering::Relaxed);
             return Err(format!(
                 "Hysteria2 UDP session budget is full ({})",
-                self.limit
+                self.limit.expect("fixed UDP session limit is present")
             ));
         }
         let mut session_id = state.next_session_id;
-        let search_limit = self.limit.saturating_add(1);
+        let search_limit = state
+            .sessions
+            .len()
+            .saturating_add(state.quarantine.len())
+            .saturating_add(1)
+            .min(u32::MAX as usize);
         for _ in 0..search_limit {
             session_id = session_id.wrapping_add(1).max(1);
             if !state.sessions.contains_key(&session_id)
@@ -794,7 +811,7 @@ impl Hysteria2UdpSessionManager {
 
     /*
      * Session removal is synchronous so a dropped logical lease cannot leave a
-     * stale SessionID occupying the bounded registry while the transport is idle.
+     * stale SessionID occupying the transport registry while the owner is idle.
      */
     fn remove_session(&self, session_id: u32) {
         self.unregister(session_id);
@@ -1159,7 +1176,7 @@ impl Hysteria2OwnerRegistryHandle {
             })
             .collect::<Vec<_>>();
         json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "owner": "resident-hysteria2-owner-registry",
             "generation": self.generation.get(),
             "draining": index.draining,
@@ -1274,8 +1291,16 @@ impl Hysteria2OwnerRegistryHandle {
             "budget": {
                 "owners": self.resources.owner_limit(),
                 "commandQueueDepth": self.resources.command_queue_depth(),
-                "logicalLeasesPerOwner": self.resources.logical_lease_limit(),
-                "udpSessionsPerOwner": self.resources.udp_session_limit(),
+                "logicalLeaseAdmission": {
+                    "mode": if self.resources.logical_lease_limit().is_some() { "fixed" } else { "automatic" },
+                    "fixedLimit": self.resources.logical_lease_limit(),
+                    "softWatermark": self.resources.logical_lease_soft_watermark(),
+                },
+                "udpSessionAdmission": {
+                    "mode": if self.resources.udp_session_limit().is_some() { "fixed" } else { "automatic" },
+                    "fixedLimit": self.resources.udp_session_limit(),
+                    "softWatermark": self.resources.udp_session_soft_watermark(),
+                },
                 "udpSessionQueueDepth": self.resources.udp_session_queue_depth(),
                 "udpSessionQueueBytes": self.resources.udp_session_queue_bytes(),
                 "udpOwnerQueueBytes": self.resources.udp_owner_queue_bytes(),
@@ -2181,7 +2206,7 @@ mod tests {
     #[test]
     fn logical_lease_admission_reconciles_after_drop() {
         let metrics = Arc::new(Hysteria2OwnerRegistryMetrics::default());
-        let admission = Hysteria2LogicalLeaseAdmission::new(2, Arc::clone(&metrics));
+        let admission = Hysteria2LogicalLeaseAdmission::new(Some(2), Arc::clone(&metrics));
         let first = admission.reserve().unwrap();
         let second = admission.reserve().unwrap();
         let Err(error) = admission.reserve() else {
@@ -2196,6 +2221,22 @@ mod tests {
         assert_eq!(admission.active.load(Ordering::Relaxed), 0);
         assert_eq!(metrics.active_leases.load(Ordering::Relaxed), 0);
         assert_eq!(metrics.logical_lease_rejections.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn automatic_logical_lease_admission_exceeds_old_profile_watermarks_and_reconciles() {
+        let metrics = Arc::new(Hysteria2OwnerRegistryMetrics::default());
+        let admission = Hysteria2LogicalLeaseAdmission::new(None, Arc::clone(&metrics));
+        let reservations = (0..8_192)
+            .map(|_| admission.reserve().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(admission.active.load(Ordering::Relaxed), 8_192);
+        assert_eq!(admission.high_water.load(Ordering::Relaxed), 8_192);
+        assert_eq!(metrics.logical_lease_rejections.load(Ordering::Relaxed), 0);
+        drop(reservations);
+        assert_eq!(admission.active.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.active_leases.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -2274,6 +2315,36 @@ mod tests {
         drop(registration);
         assert_eq!(metrics.active_udp_sessions.load(Ordering::Relaxed), 0);
         assert_eq!(manager.quarantine_len(), 1);
+    }
+
+    #[test]
+    fn automatic_udp_session_admission_exceeds_old_profile_limits_and_reconciles() {
+        let metrics = Arc::new(Hysteria2OwnerRegistryMetrics::default());
+        let resources =
+            Hysteria2OwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::Balanced);
+        assert_eq!(resources.udp_session_limit(), None);
+        let manager = Hysteria2UdpSessionManager::new(
+            OwnerGeneration::new(7),
+            resources,
+            Arc::clone(&metrics),
+        );
+        let sessions = (0..2_048)
+            .map(|_| manager.register().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(metrics.active_udp_sessions.load(Ordering::Relaxed), 2_048);
+        assert_eq!(
+            metrics.high_water_udp_sessions.load(Ordering::Relaxed),
+            2_048
+        );
+        assert_eq!(metrics.udp_session_rejections.load(Ordering::Relaxed), 0);
+
+        drop(sessions);
+        assert_eq!(metrics.active_udp_sessions.load(Ordering::Relaxed), 0);
+        assert!(manager.state.lock().unwrap().sessions.is_empty());
+        assert_eq!(
+            manager.quarantine_len(),
+            resources.udp_session_quarantine_limit()
+        );
     }
 
     #[test]

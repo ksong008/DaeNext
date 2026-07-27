@@ -35,9 +35,8 @@ pub(crate) const RESIDENT_TCP_CONNECTION_LIMIT_MIN: usize = 16;
 pub(crate) const RESIDENT_TCP_CONNECTION_LIMIT_MAX: usize = 65_536;
 pub(crate) const RESIDENT_UDP_SESSION_LIMIT_ENV: &str = "RESIDENT_UDP_SESSION_LIMIT";
 pub(crate) const RESIDENT_UDP_SESSION_LIMIT_LEGACY_ENV: &str = "DAE_RESIDENT_UDP_PACKET_WORKERS";
-pub(crate) const RESIDENT_UDP_SESSION_LIMIT_DEFAULT: usize = 512;
 pub(crate) const RESIDENT_UDP_SESSION_LIMIT_MIN: usize = 1;
-pub(crate) const RESIDENT_UDP_SESSION_LIMIT_MAX: usize = 1024;
+pub(crate) const RESIDENT_UDP_SESSION_LIMIT_MAX: usize = tokio::sync::Semaphore::MAX_PERMITS;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV: &str = "RESIDENT_UDP_SESSION_QUEUE_DEPTH";
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT: usize = 128;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN: usize = 1;
@@ -139,10 +138,10 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
             },
         },
         "udpSessions": {
-            "limit": {
+            "admission": {
                 "configKey": "resident_udp_session_limit",
                 "env": RESIDENT_UDP_SESSION_LIMIT_ENV,
-                "default": RESIDENT_UDP_SESSION_LIMIT_DEFAULT,
+                "defaultPolicy": "automatic count admission; the runtime profile soft watermark sizes bounded queues and caches",
                 "min": RESIDENT_UDP_SESSION_LIMIT_MIN,
                 "max": RESIDENT_UDP_SESSION_LIMIT_MAX,
             },

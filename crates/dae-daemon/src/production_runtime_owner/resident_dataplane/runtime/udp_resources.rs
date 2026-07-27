@@ -4,7 +4,8 @@ use super::*;
 pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) generation: u64,
     pub(crate) profile: &'static str,
-    pub(crate) session_limit: usize,
+    pub(crate) session_admission_limit: Option<usize>,
+    pub(crate) session_soft_watermark: usize,
     pub(crate) session_queue_depth: usize,
     pub(crate) runtime_shards: usize,
     pub(crate) runtime_worker_threads: usize,
@@ -46,21 +47,15 @@ impl ResidentUdpRuntimeConfig {
         resources: &ResidentRuntimeResourceConfig,
         payload_admission: ResidentUdpPayloadAdmission,
     ) -> Self {
-        let session_limit = resources.udp_session_limit.value().max(1);
+        let session_soft_watermark = resources.udp_session_limit.value().max(1);
+        let session_admission_limit = resources.udp_session_limit.explicit_value();
         let session_queue_depth = resources.udp_session_queue_depth.value().max(1);
-        let requested_runtime_shards = resources
-            .udp_runtime_shards
-            .value()
-            .max(1)
-            .min(session_limit);
+        let requested_runtime_shards = resources.udp_runtime_shards.value().max(1);
         let available_parallelism = std::thread::available_parallelism()
             .map(|parallelism| parallelism.get())
             .unwrap_or(1);
-        let (runtime_shards, runtime_worker_threads) = resident_udp_runtime_topology(
-            requested_runtime_shards,
-            session_limit,
-            available_parallelism,
-        );
+        let (runtime_shards, runtime_worker_threads) =
+            resident_udp_runtime_topology(requested_runtime_shards, available_parallelism);
         let dispatch_queue_depth = resources
             .udp_dispatch_queue_depth
             .value()
@@ -68,7 +63,8 @@ impl ResidentUdpRuntimeConfig {
         Self {
             generation,
             profile: resources.runtime_profile.profile.name(),
-            session_limit,
+            session_admission_limit,
+            session_soft_watermark,
             session_queue_depth,
             runtime_shards,
             runtime_worker_threads,
@@ -76,7 +72,7 @@ impl ResidentUdpRuntimeConfig {
             dispatch_queue_depth,
             ingress_drain_budget: session_queue_depth,
             reply_queue_depth: dispatch_queue_depth,
-            reply_socket_cache_capacity: session_limit,
+            reply_socket_cache_capacity: session_admission_limit.unwrap_or(session_soft_watermark),
             reply_socket_idle_timeout: resources
                 .runtime_profile
                 .profile
@@ -101,7 +97,7 @@ impl ResidentUdpRuntimeConfig {
     }
 
     pub(crate) fn payload_pool_capacity(&self) -> usize {
-        self.session_limit
+        self.session_soft_watermark
             .saturating_mul(self.session_queue_depth)
             .clamp(16, 1_024)
     }
@@ -113,7 +109,7 @@ impl ResidentUdpRuntimeConfig {
     }
 
     pub(crate) fn per_shard_cleanup_queue_depth(&self) -> usize {
-        self.session_limit.max(1)
+        self.session_soft_watermark.max(1)
     }
 
     pub(crate) fn dns_udp_runtime_config(&self) -> ResidentDnsUdpRuntimeConfig {
@@ -146,7 +142,7 @@ impl ResidentUdpRuntimeConfig {
     pub(crate) fn resource_inventory(&self) -> Value {
         let dns_udp = self.dns_udp_runtime_config();
         json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "generation": self.generation,
             "profile": self.profile,
             "ingress": {
@@ -158,7 +154,11 @@ impl ResidentUdpRuntimeConfig {
                 "count": self.runtime_shards,
                 "workerThreads": self.runtime_worker_threads,
                 "workerStackBytes": self.worker_stack_bytes,
-                "globalSessionLimit": self.session_limit,
+                "sessionAdmission": {
+                    "mode": if self.session_admission_limit.is_some() { "fixed" } else { "automatic" },
+                    "fixedLimit": self.session_admission_limit,
+                    "softWatermark": self.session_soft_watermark,
+                },
                 "perSessionQueueDepth": self.session_queue_depth,
                 "dispatchQueueDepth": self.dispatch_queue_depth,
                 "perShardDispatchQueueDepth": self.per_shard_dispatch_queue_depth(),
@@ -208,7 +208,7 @@ impl ResidentDnsUdpRuntimeConfig {
         let profile = ResidentRuntimeProfile::Balanced;
         let requested_shards = profile.udp_runtime_shards_default(available_parallelism);
         let (direct_shards, actor_worker_threads) =
-            resident_udp_runtime_topology(requested_shards, usize::MAX, available_parallelism);
+            resident_udp_runtime_topology(requested_shards, available_parallelism);
         Self {
             generation: 0,
             direct_shards,
@@ -260,14 +260,10 @@ fn resident_dns_udp_attempt_timeout(attempts: usize) -> Duration {
 
 fn resident_udp_runtime_topology(
     requested_shards: usize,
-    session_limit: usize,
     available_parallelism: usize,
 ) -> (usize, usize) {
     let available_parallelism = available_parallelism.max(1);
-    let runtime_shards = requested_shards
-        .max(1)
-        .min(session_limit.max(1))
-        .min(available_parallelism);
+    let runtime_shards = requested_shards.max(1).min(available_parallelism);
     let worker_threads = if runtime_shards > 1 {
         runtime_shards.min(available_parallelism.saturating_sub(1))
     } else {
@@ -285,7 +281,8 @@ mod tests {
         let runtime = ResidentUdpRuntimeConfig {
             generation: 9,
             profile: "test",
-            session_limit: 512,
+            session_admission_limit: None,
+            session_soft_watermark: 512,
             session_queue_depth: 128,
             runtime_shards: 4,
             runtime_worker_threads: 3,
@@ -306,7 +303,6 @@ mod tests {
             shutdown_timeout: RESIDENT_UDP_RESPONSE_TIMEOUT,
         };
         assert!(runtime.runtime_shards >= 1);
-        assert!(runtime.runtime_shards <= runtime.session_limit);
         assert!(runtime.per_shard_dispatch_queue_depth() >= 1);
         assert!(runtime.per_shard_cleanup_queue_depth() >= 1);
         assert!(runtime.payload_pool_capacity() <= 1_024);
@@ -314,14 +310,71 @@ mod tests {
     }
 
     #[test]
+    fn default_session_admission_is_automatic_and_keeps_bounded_derived_resources() {
+        let sections = dae_config::parser::parse_config(
+            "global {}\nnode {}\ngroup {}\nrouting { fallback: direct }\ndns {}",
+        )
+        .unwrap();
+        let config = dae_config::schema::build_config(&sections).unwrap();
+        let resources = ResidentRuntimeResourceConfig::from_config(&config);
+        let runtime = ResidentUdpRuntimeConfig::from_resources(
+            9,
+            &resources,
+            ResidentUdpPayloadAdmission::new(9, 32 * 1024 * 1024),
+        );
+
+        assert_eq!(runtime.session_admission_limit, None);
+        assert!(runtime.session_soft_watermark >= 1);
+        assert_eq!(
+            runtime.reply_socket_cache_capacity,
+            runtime.session_soft_watermark
+        );
+        assert_eq!(
+            runtime.resource_inventory()["sessionShards"]["sessionAdmission"]["mode"],
+            "automatic"
+        );
+        assert_eq!(
+            runtime.resource_inventory()["sessionShards"]["sessionAdmission"]["fixedLimit"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn configured_session_limit_sizes_fixed_admission_and_reply_socket_cache() {
+        let sections = dae_config::parser::parse_config(
+            "global {}\nnode {}\ngroup {}\nrouting { fallback: direct }\ndns {}",
+        )
+        .unwrap();
+        let mut config = dae_config::schema::build_config(&sections).unwrap();
+        config.global.resident_udp_session_limit = Some(4_096);
+        let resources = ResidentRuntimeResourceConfig::from_config(&config);
+        let runtime = ResidentUdpRuntimeConfig::from_resources(
+            9,
+            &resources,
+            ResidentUdpPayloadAdmission::new(9, 32 * 1024 * 1024),
+        );
+
+        assert_eq!(runtime.session_admission_limit, Some(4_096));
+        assert_eq!(runtime.reply_socket_cache_capacity, 4_096);
+        assert_eq!(
+            runtime.resource_inventory()["sessionShards"]["sessionAdmission"]["fixedLimit"],
+            4_096
+        );
+        assert_eq!(
+            runtime.resource_inventory()["transparentReply"]["socketCacheCapacity"],
+            4_096
+        );
+    }
+
+    #[test]
     fn udp_runtime_topology_keeps_single_core_single_owner() {
-        assert_eq!(resident_udp_runtime_topology(8, 512, 1), (1, 0));
+        assert_eq!(resident_udp_runtime_topology(8, 1), (1, 0));
     }
 
     #[test]
     fn udp_runtime_topology_reserves_capacity_for_ingress_owner() {
-        assert_eq!(resident_udp_runtime_topology(8, 512, 4), (4, 3));
-        assert_eq!(resident_udp_runtime_topology(2, 1, 8), (1, 0));
+        assert_eq!(resident_udp_runtime_topology(8, 4), (4, 3));
+        assert_eq!(resident_udp_runtime_topology(2, 8), (2, 2));
     }
 
     #[test]
@@ -329,7 +382,8 @@ mod tests {
         let runtime = ResidentUdpRuntimeConfig {
             generation: 12,
             profile: "test",
-            session_limit: 64,
+            session_admission_limit: Some(64),
+            session_soft_watermark: 64,
             session_queue_depth: 16,
             runtime_shards: 3,
             runtime_worker_threads: 2,

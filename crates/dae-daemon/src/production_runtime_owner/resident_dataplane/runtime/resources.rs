@@ -35,7 +35,8 @@ impl ResidentRuntimeResourceConfig {
             .profile
             .tcp_runtime_workers_default(available_parallelism);
         let tcp_connection_limit_default = runtime_profile.profile.tcp_connection_limit_default();
-        let udp_session_limit_default = runtime_profile.profile.udp_session_limit_default();
+        let udp_session_soft_watermark =
+            runtime_profile.profile.udp_session_soft_watermark_default();
         let udp_session_queue_depth_default =
             runtime_profile.profile.udp_session_queue_depth_default();
         let udp_runtime_shards_default = runtime_profile
@@ -90,7 +91,7 @@ impl ResidentRuntimeResourceConfig {
                 Some(RESIDENT_UDP_SESSION_LIMIT_ENV),
                 Some(RESIDENT_UDP_SESSION_LIMIT_LEGACY_ENV),
                 global.resident_udp_session_limit,
-                udp_session_limit_default,
+                udp_session_soft_watermark,
                 RESIDENT_UDP_SESSION_LIMIT_MIN,
                 RESIDENT_UDP_SESSION_LIMIT_MAX,
             ),
@@ -246,7 +247,7 @@ impl ResidentRuntimeResourceConfig {
         let ss2022_replay = dae_outbound::shadowsocks::Ss2022UdpReplayPolicy::default();
         json!({
             "runtimeProfile": self.runtime_profile.json(),
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "tcpFlow": {
                 "stackBytes": self.tcp_flow_stack_bytes.json(),
                 "stackScope": "resident TCP runtime OS threads; Tokio tasks do not receive per-flow stacks",
@@ -258,7 +259,16 @@ impl ResidentRuntimeResourceConfig {
                 "admission": "active-flow semaphore before accept; excess connections remain in the kernel listen backlog",
             },
             "udpSessions": {
-                "limit": self.udp_session_limit.json(),
+                "admission": {
+                    "mode": if self.udp_session_limit.explicit_value().is_some() {
+                        "fixed"
+                    } else {
+                        "automatic"
+                    },
+                    "fixedLimit": self.udp_session_limit.explicit_value(),
+                    "softWatermark": self.udp_session_limit.value(),
+                    "configuration": self.udp_session_limit.json(),
+                },
                 "queueDepth": self.udp_session_queue_depth.json(),
                 "runtimeShards": self.udp_runtime_shards.json(),
                 "dispatchQueueDepth": self.udp_dispatch_queue_depth.json(),
@@ -294,8 +304,16 @@ impl ResidentRuntimeResourceConfig {
                 "profileSource": "runtimeProfile",
                 "ownerLimit": hysteria2.owner_limit(),
                 "commandQueueDepth": hysteria2.command_queue_depth(),
-                "logicalLeaseLimit": hysteria2.logical_lease_limit(),
-                "udpSessionLimit": hysteria2.udp_session_limit(),
+                "logicalLeaseAdmission": {
+                    "mode": if hysteria2.logical_lease_limit().is_some() { "fixed" } else { "automatic" },
+                    "fixedLimit": hysteria2.logical_lease_limit(),
+                    "softWatermark": hysteria2.logical_lease_soft_watermark(),
+                },
+                "udpSessionAdmission": {
+                    "mode": if hysteria2.udp_session_limit().is_some() { "fixed" } else { "automatic" },
+                    "fixedLimit": hysteria2.udp_session_limit(),
+                    "softWatermark": hysteria2.udp_session_soft_watermark(),
+                },
                 "udpSessionQueueDepth": hysteria2.udp_session_queue_depth(),
                 "udpSessionQueueBytes": hysteria2.udp_session_queue_bytes(),
                 "udpOwnerQueueBytes": hysteria2.udp_owner_queue_bytes(),
@@ -426,6 +444,10 @@ impl EffectiveResidentUsize {
         self.value
     }
 
+    pub(crate) fn explicit_value(&self) -> Option<usize> {
+        (self.source != EffectiveResidentValueSource::Default).then_some(self.value)
+    }
+
     fn json(&self) -> Value {
         json!({
             "value": self.value,
@@ -476,7 +498,14 @@ fn effective_resident_usize(
                 .and_then(read_env_usize)
                 .map(|value| (value, EffectiveResidentValueSource::CompatibilityEnv))
         })
-        .or_else(|| configured.map(|value| (value as usize, EffectiveResidentValueSource::Config)))
+        .or_else(|| {
+            configured.map(|value| {
+                (
+                    usize::try_from(value).unwrap_or(usize::MAX),
+                    EffectiveResidentValueSource::Config,
+                )
+            })
+        })
         .unwrap_or((default, EffectiveResidentValueSource::Default));
     EffectiveResidentUsize {
         value: value.clamp(min, max),
