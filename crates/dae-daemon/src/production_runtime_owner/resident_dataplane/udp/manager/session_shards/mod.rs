@@ -36,7 +36,7 @@ enum ResidentUdpShardPacket {
 #[derive(Clone)]
 struct ResidentUdpSessionShardContext {
     shared: Arc<UdpSessionSharedContext>,
-    admission: Arc<Semaphore>,
+    admission: Option<Arc<Semaphore>>,
     session_queue_depth: usize,
     cleanup_queue_depth: usize,
 }
@@ -79,7 +79,9 @@ impl ResidentUdpSessionShardPool {
     ) -> Self {
         let shard_count = runtime_config.runtime_shards.max(1);
         let queue_depth = runtime_config.per_shard_dispatch_queue_depth();
-        let admission = Arc::new(Semaphore::new(runtime_config.session_limit));
+        let admission = runtime_config
+            .session_admission_limit
+            .map(|limit| Arc::new(Semaphore::new(limit)));
         let shared = Arc::new(UdpSessionSharedContext {
             event_file: event_file.clone(),
             event_lock: Arc::clone(&event_lock),

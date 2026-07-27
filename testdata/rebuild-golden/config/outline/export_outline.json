@@ -222,7 +222,7 @@
             "type": "time.Duration"
           },
           {
-            "desc": "Optional resident UDP session ceiling. Leave empty to use the product default or compatibility environment override.",
+            "desc": "Optional fixed resident UDP session ceiling. Leave empty for automatic count admission; bounded queues, payload bytes, socket caches, idle cleanup, and physical transport-owner budgets still apply.",
             "mapping": "resident_udp_session_limit",
             "name": "ResidentUdpSessionLimit",
             "type": "uint64"

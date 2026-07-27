@@ -133,7 +133,7 @@ fn global_outline() -> Value {
             leaf("BandwidthMaxTx", "bandwidth_max_tx", "string", Some("0"), None, false, false),
             leaf("BandwidthMaxRx", "bandwidth_max_rx", "string", Some("0"), None, false, false),
             leaf("UDPHopInterval", "udphop_interval", "time.Duration", Some("30s"), None, false, false),
-            leaf("ResidentUdpSessionLimit", "resident_udp_session_limit", "uint64", None, Some("Optional resident UDP session ceiling. Leave empty to use the product default or compatibility environment override."), false, false),
+            leaf("ResidentUdpSessionLimit", "resident_udp_session_limit", "uint64", None, Some("Optional fixed resident UDP session ceiling. Leave empty for automatic count admission; bounded queues, payload bytes, socket caches, idle cleanup, and physical transport-owner budgets still apply."), false, false),
             leaf("ResidentUdpSessionQueueDepth", "resident_udp_session_queue_depth", "uint64", None, Some("Optional bounded queue depth per resident UDP session."), false, false),
             leaf("ResidentTcpFlowStackBytes", "resident_tcp_flow_stack_bytes", "uint64", None, Some("Optional stack size for resident TCP runtime OS threads. This does not change Tokio task stack size."), false, false),
             leaf("ResidentTcpRuntimeWorkers", "resident_tcp_runtime_workers", "uint64", None, Some("Optional resident TCP Tokio runtime worker count. Leave empty for the CPU- and profile-aware default."), false, false),

@@ -5,13 +5,13 @@ use super::*;
 struct ResidentUdpProxyShardEntry {
     actor_id: u64,
     session: UdpSessionEntry,
-    _admission: OwnedSemaphorePermit,
+    _admission: Option<OwnedSemaphorePermit>,
 }
 
 struct ResidentUdpDirectShardEntry {
     actor_id: u64,
     session: UdpDirectSessionEntry,
-    _admission: OwnedSemaphorePermit,
+    _admission: Option<OwnedSemaphorePermit>,
 }
 
 pub(super) async fn run_resident_udp_session_shard(
@@ -316,7 +316,7 @@ fn create_proxy_session(
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
     next_actor_id: &mut u64,
 ) -> bool {
-    let Ok(admission) = Arc::clone(&context.admission).try_acquire_owned() else {
+    let Ok(admission) = try_reserve_session(&context.admission) else {
         context.metrics.udp_session_admission_rejected();
         return false;
     };
@@ -349,7 +349,7 @@ fn create_direct_session(
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
     next_actor_id: &mut u64,
 ) -> bool {
-    let Ok(admission) = Arc::clone(&context.admission).try_acquire_owned() else {
+    let Ok(admission) = try_reserve_session(&context.admission) else {
         context.metrics.udp_session_admission_rejected();
         return false;
     };
@@ -373,6 +373,18 @@ fn create_direct_session(
     );
     context.metrics.udp_session_created();
     true
+}
+
+fn try_reserve_session(
+    admission: &Option<Arc<Semaphore>>,
+) -> Result<Option<OwnedSemaphorePermit>, ()> {
+    let Some(admission) = admission else {
+        return Ok(None);
+    };
+    Arc::clone(admission)
+        .try_acquire_owned()
+        .map(Some)
+        .map_err(|_| ())
 }
 
 fn allocate_actor_id(next_actor_id: &mut u64) -> u64 {
@@ -460,5 +472,24 @@ mod tests {
     fn stale_cleanup_cannot_remove_a_recreated_actor() {
         assert!(cleanup_matches_actor(12, 12));
         assert!(!cleanup_matches_actor(13, 12));
+    }
+
+    #[test]
+    fn automatic_session_admission_has_no_fixed_count_rejection() {
+        let admission = None;
+        for _ in 0..65_536 {
+            assert!(matches!(try_reserve_session(&admission), Ok(None)));
+        }
+    }
+
+    #[test]
+    fn configured_session_admission_releases_capacity_on_drop() {
+        let admission = Some(Arc::new(Semaphore::new(2)));
+        let first = try_reserve_session(&admission).unwrap().unwrap();
+        let second = try_reserve_session(&admission).unwrap().unwrap();
+        assert!(try_reserve_session(&admission).is_err());
+        drop(first);
+        assert!(try_reserve_session(&admission).is_ok());
+        drop(second);
     }
 }
