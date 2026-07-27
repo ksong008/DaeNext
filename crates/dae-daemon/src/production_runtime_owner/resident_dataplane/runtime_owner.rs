@@ -10,8 +10,9 @@ mod task;
 use self::cleanup_inventory::*;
 use self::manual_probe_execution::{ManualProbeExecution, ManualProbeRuntime};
 pub(crate) use self::manual_probe_index::ResidentManualProbeIndex;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::shutdown::ResidentRuntimeWorkloadShutdown;
 use self::shutdown::shutdown_resident_runtime_owner;
-use self::shutdown::{ResidentRuntimeWorkloadShutdown, shutdown_resident_runtime_workloads};
+use self::shutdown::shutdown_resident_runtime_workloads;
 #[cfg(test)]
 use self::task::spawn_resident_runtime_task;
 pub(super) use self::task::{

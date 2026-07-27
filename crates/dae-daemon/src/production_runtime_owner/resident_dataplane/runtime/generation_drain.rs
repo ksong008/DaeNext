@@ -83,6 +83,7 @@ struct ResidentGenerationDrainState {
     natural_total: u64,
     deadline_forced_total: u64,
     pressure_forced_total: u64,
+    pressure_evicted_total: u64,
     reactivated_total: u64,
     publication_rejected_total: u64,
 }
@@ -175,6 +176,40 @@ impl ResidentGenerationDrain {
 
     pub(super) fn retire(&self, generation: Arc<ResidentDataplaneGeneration>) {
         self.retire_shared_at(generation, Instant::now());
+    }
+
+    pub(super) fn finalize_retirement(&self, generation_id: u64) {
+        let target = {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state
+                .retired
+                .iter()
+                .find(|retired| retired.id() == generation_id)
+                .and_then(|retired| retired.generation.as_ref().cloned())
+        };
+        if let Some(generation) = target {
+            generation.retire_workloads();
+        }
+    }
+
+    pub(super) fn finalize_retirements(&self) {
+        let targets = {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state
+                .retired
+                .iter()
+                .filter_map(|retired| retired.generation.as_ref().cloned())
+                .collect::<Vec<_>>()
+        };
+        for generation in targets {
+            generation.retire_workloads();
+        }
     }
 
     pub(super) fn reactivate(&self, generation_id: u64) -> Result<(), String> {
@@ -277,6 +312,7 @@ impl ResidentGenerationDrain {
             "forcedTotal": forced_total,
             "deadlineForcedTotal": state.deadline_forced_total,
             "pressureForcedTotal": state.pressure_forced_total,
+            "pressureEvictedTotal": state.pressure_evicted_total,
             "reactivatedTotal": state.reactivated_total,
             "publicationRejectedTotal": state.publication_rejected_total,
             "maximumRetired": self.policy.maximum_retired,
@@ -290,7 +326,7 @@ impl ResidentGenerationDrain {
 
     fn prepare_publication_at(&self, now: Instant) -> Result<(), String> {
         self.reap(now);
-        let pressure_stop = {
+        let pressure_eviction = {
             let mut state = self
                 .state
                 .lock()
@@ -298,25 +334,17 @@ impl ResidentGenerationDrain {
             if state.retired.len() < self.policy.maximum_retired {
                 return Ok(());
             }
-            state.publication_rejected_total = state.publication_rejected_total.saturating_add(1);
-            let pressure_stop = state.retired.first_mut().and_then(|retired| {
-                if retired.stop_reason.is_none() {
-                    retired.stop_reason = Some(ResidentGenerationStopReason::ResourcePressure);
-                    Some(retired.force_stop_target())
-                } else {
-                    None
-                }
-            });
-            if pressure_stop.is_some() {
-                state.pressure_forced_total = state.pressure_forced_total.saturating_add(1);
-            }
-            pressure_stop
+            let mut retired = state.retired.remove(0);
+            retired.stop_reason = Some(ResidentGenerationStopReason::ResourcePressure);
+            let target = retired.force_stop_target();
+            state.pressure_forced_total = state.pressure_forced_total.saturating_add(1);
+            state.pressure_evicted_total = state.pressure_evicted_total.saturating_add(1);
+            (target, retired)
         };
-        if let Some(target) = pressure_stop {
-            target.request_force_stop();
-        }
-        Err("retired resident generations are still draining; retry publication after cleanup progress"
-            .to_owned())
+        pressure_eviction.0.request_force_stop();
+        drop(pressure_eviction.1);
+        request_retired_generation_reclaim();
+        Ok(())
     }
 
     fn retire_shared_at(

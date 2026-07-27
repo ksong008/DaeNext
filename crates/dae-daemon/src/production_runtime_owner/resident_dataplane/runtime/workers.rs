@@ -424,6 +424,7 @@ pub(crate) fn start_resident_dataplane_workers(
             read_handle,
             active_generation,
             generation_drain,
+            workload_shutdown: None,
             routing_tuple_map_id,
             domain_routing_map_id,
         }),

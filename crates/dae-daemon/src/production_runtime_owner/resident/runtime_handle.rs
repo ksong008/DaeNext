@@ -18,6 +18,7 @@ pub struct ResidentProductionRuntime {
     pub(super) before_pin_snapshot: Vec<String>,
     pub(super) cleanup_file: PathBuf,
     pub(super) start_evidence_writer: Option<thread::JoinHandle<Result<(), String>>>,
+    pub(super) reload_conflict_cleanup: Option<Value>,
     pub(super) cleaned: bool,
 }
 
@@ -83,6 +84,12 @@ impl ResidentProductionRuntime {
             .as_mut()
             .ok_or_else(|| "resident dataplane is not active".to_owned())?
             .restore_generation(Arc::clone(&snapshot.generation))
+    }
+
+    pub(crate) fn finalize_generation_publication(&self) {
+        if let Some(dataplane) = self.dataplane.as_ref() {
+            dataplane.finalize_generation_publication();
+        }
     }
 
     pub(crate) fn owns_generation_snapshot(
@@ -175,12 +182,174 @@ impl ResidentProductionRuntime {
         }
     }
 
+    pub(crate) fn release_reload_conflicts(&mut self) -> Value {
+        if let Some(report) = self.reload_conflict_cleanup.as_ref() {
+            return report.clone();
+        }
+        let started = Instant::now();
+        let mut phase_timings = Vec::new();
+
+        let phase_started = Instant::now();
+        if let Some(monitor) = self.interface_monitor.as_mut() {
+            monitor.shutdown(&mut self.cleanup_steps);
+            push_cleanup_phase_timing(
+                &mut phase_timings,
+                "interface_monitor_shutdown",
+                "pass",
+                phase_started.elapsed(),
+            );
+        } else {
+            push_cleanup_phase_timing(
+                &mut phase_timings,
+                "interface_monitor_shutdown",
+                "skipped",
+                phase_started.elapsed(),
+            );
+        }
+        self.interface_monitor = None;
+
+        let native_peer_attached = self.native_runtime.peer_attached();
+        let native_host_attached = self.native_runtime.host_attached();
+        let phase_started = Instant::now();
+        self.native_runtime.reset();
+        push_cleanup_phase_timing(
+            &mut phase_timings,
+            "native_ebpf_reset",
+            "pass",
+            phase_started.elapsed(),
+        );
+
+        let phase_started = Instant::now();
+        self.live_handoff.take();
+        push_cleanup_phase_timing(
+            &mut phase_timings,
+            "live_handoff_drop",
+            "pass",
+            phase_started.elapsed(),
+        );
+
+        let phase_started = Instant::now();
+        let binding_cleanup_postflight = self.binding_registry.cleanup_postflight();
+        let binding_cleanup_ok = binding_cleanup_postflight["status"].as_str() == Some("pass");
+        self.cleanup_steps.push(json!({
+            "name": "resident-datapath-binding-cleanup-postflight",
+            "status": if binding_cleanup_ok { "pass" } else { "fail" },
+            "report": binding_cleanup_postflight,
+        }));
+        push_cleanup_phase_timing(
+            &mut phase_timings,
+            "datapath_binding_cleanup_postflight",
+            if binding_cleanup_ok { "pass" } else { "fail" },
+            phase_started.elapsed(),
+        );
+
+        let phase_started = Instant::now();
+        if let Some(dataplane) = self.dataplane.as_mut() {
+            dataplane.quiesce_workloads();
+            push_cleanup_phase_timing(
+                &mut phase_timings,
+                "dataplane_workload_quiesce",
+                "pass",
+                phase_started.elapsed(),
+            );
+        } else {
+            push_cleanup_phase_timing(
+                &mut phase_timings,
+                "dataplane_workload_quiesce",
+                "skipped",
+                phase_started.elapsed(),
+            );
+        }
+
+        let phase_started = Instant::now();
+        cleanup_resident_lan_programs(
+            &mut self.cleanup_steps,
+            &self.lan_ifaces,
+            &self.native_lan_ifaces,
+        );
+        push_cleanup_phase_timing(
+            &mut phase_timings,
+            "resident_lan_cleanup",
+            "pass",
+            phase_started.elapsed(),
+        );
+
+        let phase_started = Instant::now();
+        cleanup_production_topology(
+            &mut self.cleanup_steps,
+            native_peer_attached,
+            native_host_attached,
+        );
+        push_cleanup_phase_timing(
+            &mut phase_timings,
+            "production_topology_cleanup",
+            "pass",
+            phase_started.elapsed(),
+        );
+
+        let mut discovered_map_ids = Vec::with_capacity(1 + self.discovered_routing_map_ids.len());
+        discovered_map_ids.push(self.discovered_map_id);
+        discovered_map_ids.extend(self.discovered_routing_map_ids.iter().copied());
+        let phase_started = Instant::now();
+        let (after_map_ids, loaded_map_cleaned) = wait_for_loaded_map_cleanup(&discovered_map_ids);
+        push_cleanup_phase_timing(
+            &mut phase_timings,
+            "bpf_map_cleanup_wait",
+            if loaded_map_cleaned { "pass" } else { "fail" },
+            phase_started.elapsed(),
+        );
+
+        let phase_started = Instant::now();
+        let after_pin_snapshot = bpf_dae_snapshot();
+        let leftovers_after_cleanup = runtime_resource_leftovers(false);
+        let sys_fs_bpf_dae_mutated = self.before_pin_snapshot != after_pin_snapshot;
+        push_cleanup_phase_timing(
+            &mut phase_timings,
+            "leftover_check",
+            if leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated {
+                "pass"
+            } else {
+                "fail"
+            },
+            phase_started.elapsed(),
+        );
+        let cleanup_command_timed_out = self
+            .cleanup_steps
+            .iter()
+            .any(|step| step["timed_out"].as_bool().unwrap_or(false));
+        let elapsed_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        let report = json!({
+            "status": if binding_cleanup_ok
+                && loaded_map_cleaned
+                && leftovers_after_cleanup.is_empty()
+                && !sys_fs_bpf_dae_mutated
+                && !cleanup_command_timed_out
+            { "pass" } else { "fail" },
+            "binding_cleanup_postflight": binding_cleanup_postflight,
+            "after_map_ids": after_map_ids,
+            "loaded_map_cleaned": loaded_map_cleaned,
+            "leftovers_after_cleanup": leftovers_after_cleanup,
+            "sys_fs_bpf_dae_mutated": sys_fs_bpf_dae_mutated,
+            "cleanup_command_timed_out": cleanup_command_timed_out,
+            "phaseTimings": phase_timings,
+            "elapsedNs": elapsed_ns,
+            "elapsedMs": elapsed_ns / 1_000_000,
+        });
+        self.reload_conflict_cleanup = Some(report.clone());
+        report
+    }
+
     pub fn cleanup(&mut self) -> Option<Value> {
         if self.cleaned {
             return None;
         }
         let cleanup_started = Instant::now();
         let mut cleanup_phase_timings = Vec::new();
+
+        let conflict_cleanup = self.release_reload_conflicts();
+        if let Some(timings) = conflict_cleanup["phaseTimings"].as_array() {
+            cleanup_phase_timings.extend(timings.iter().cloned());
+        }
 
         let phase_started = Instant::now();
         let evidence_status = match self.start_evidence_writer.take() {
@@ -216,112 +385,19 @@ impl ResidentProductionRuntime {
         }
         self.dataplane = None;
 
-        let phase_started = Instant::now();
-        if let Some(monitor) = self.interface_monitor.as_mut() {
-            monitor.shutdown(&mut self.cleanup_steps);
-            push_cleanup_phase_timing(
-                &mut cleanup_phase_timings,
-                "interface_monitor_shutdown",
-                "pass",
-                phase_started.elapsed(),
-            );
-        } else {
-            push_cleanup_phase_timing(
-                &mut cleanup_phase_timings,
-                "interface_monitor_shutdown",
-                "skipped",
-                phase_started.elapsed(),
-            );
-        }
-        self.interface_monitor = None;
-
-        let phase_started = Instant::now();
-        self.live_handoff.take();
-        push_cleanup_phase_timing(
-            &mut cleanup_phase_timings,
-            "live_handoff_drop",
-            "pass",
-            phase_started.elapsed(),
-        );
-
-        let native_peer_attached = self.native_runtime.peer_attached();
-        let native_host_attached = self.native_runtime.host_attached();
-        let phase_started = Instant::now();
-        self.native_runtime.reset();
-        push_cleanup_phase_timing(
-            &mut cleanup_phase_timings,
-            "native_ebpf_reset",
-            "pass",
-            phase_started.elapsed(),
-        );
-
-        let phase_started = Instant::now();
-        let binding_cleanup_postflight = self.binding_registry.cleanup_postflight();
+        let binding_cleanup_postflight = conflict_cleanup["binding_cleanup_postflight"].clone();
         let binding_cleanup_ok = binding_cleanup_postflight["status"].as_str() == Some("pass");
-        self.cleanup_steps.push(json!({
-            "name": "resident-datapath-binding-cleanup-postflight",
-            "status": if binding_cleanup_ok { "pass" } else { "fail" },
-            "report": binding_cleanup_postflight,
-        }));
-        push_cleanup_phase_timing(
-            &mut cleanup_phase_timings,
-            "datapath_binding_cleanup_postflight",
-            if binding_cleanup_ok { "pass" } else { "fail" },
-            phase_started.elapsed(),
-        );
-
-        let phase_started = Instant::now();
-        cleanup_resident_lan_programs(
-            &mut self.cleanup_steps,
-            &self.lan_ifaces,
-            &self.native_lan_ifaces,
-        );
-        push_cleanup_phase_timing(
-            &mut cleanup_phase_timings,
-            "resident_lan_cleanup",
-            "pass",
-            phase_started.elapsed(),
-        );
-
-        let phase_started = Instant::now();
-        cleanup_production_topology(
-            &mut self.cleanup_steps,
-            native_peer_attached,
-            native_host_attached,
-        );
-        push_cleanup_phase_timing(
-            &mut cleanup_phase_timings,
-            "production_topology_cleanup",
-            "pass",
-            phase_started.elapsed(),
-        );
-
-        let mut discovered_map_ids = Vec::with_capacity(1 + self.discovered_routing_map_ids.len());
-        discovered_map_ids.push(self.discovered_map_id);
-        discovered_map_ids.extend(self.discovered_routing_map_ids.iter().copied());
-        let phase_started = Instant::now();
-        let (after_map_ids, loaded_map_cleaned) = wait_for_loaded_map_cleanup(&discovered_map_ids);
-        push_cleanup_phase_timing(
-            &mut cleanup_phase_timings,
-            "bpf_map_cleanup_wait",
-            if loaded_map_cleaned { "pass" } else { "fail" },
-            phase_started.elapsed(),
-        );
-
-        let phase_started = Instant::now();
-        let after_pin_snapshot = bpf_dae_snapshot();
-        let leftovers_after_cleanup = runtime_resource_leftovers(false);
-        let sys_fs_bpf_dae_mutated = self.before_pin_snapshot != after_pin_snapshot;
-        push_cleanup_phase_timing(
-            &mut cleanup_phase_timings,
-            "leftover_check",
-            if leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated {
-                "pass"
-            } else {
-                "fail"
-            },
-            phase_started.elapsed(),
-        );
+        let after_map_ids = conflict_cleanup["after_map_ids"].clone();
+        let loaded_map_cleaned = conflict_cleanup["loaded_map_cleaned"]
+            .as_bool()
+            .unwrap_or(false);
+        let leftovers_after_cleanup = conflict_cleanup["leftovers_after_cleanup"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let sys_fs_bpf_dae_mutated = conflict_cleanup["sys_fs_bpf_dae_mutated"]
+            .as_bool()
+            .unwrap_or(false);
 
         let cleanup_elapsed_ns = cleanup_started
             .elapsed()
@@ -354,6 +430,7 @@ impl ResidentProductionRuntime {
             "loaded_map_cleaned": loaded_map_cleaned,
             "leftovers_after_cleanup": leftovers_after_cleanup,
             "sys_fs_bpf_dae_mutated": sys_fs_bpf_dae_mutated,
+            "reload_conflict_cleanup": conflict_cleanup,
         });
         let phase_started = Instant::now();
         let write_status = if write_json_file(

@@ -746,6 +746,7 @@ pub(super) fn start_with_options(
         before_pin_snapshot,
         cleanup_file,
         start_evidence_writer,
+        reload_conflict_cleanup: None,
         cleaned: false,
     })
 }

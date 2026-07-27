@@ -169,14 +169,15 @@ fn stopped_generation_cannot_be_reactivated() {
     let (generation, stop_requests) = TestGeneration::new(3);
     drain.retire_shared_at(generation.clone(), now);
 
-    assert!(drain.prepare_publication_at(now).is_err());
+    assert!(drain.prepare_publication_at(now).is_ok());
     assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
     assert!(drain.reactivate(generation.control.id).is_err());
     assert!(!generation.control.lifecycle.admission_is_open());
+    assert_eq!(drain.snapshot()["retired"], 0);
 }
 
 #[test]
-fn capacity_rejection_stops_the_oldest_generation_first() {
+fn capacity_pressure_evicts_the_oldest_generation_and_keeps_publication_admitted() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();
     let (first, first_stop_requests) = TestGeneration::new(1);
@@ -187,20 +188,31 @@ fn capacity_rejection_stops_the_oldest_generation_first() {
     assert!(
         drain
             .prepare_publication_at(now + Duration::from_secs(2))
-            .is_err()
-    );
-    assert!(
-        drain
-            .prepare_publication_at(now + Duration::from_secs(3))
-            .is_err()
+            .is_ok()
     );
 
     assert_eq!(first_stop_requests.load(Ordering::Relaxed), 1);
     assert_eq!(second_stop_requests.load(Ordering::Relaxed), 0);
     let snapshot = drain.snapshot();
-    assert_eq!(snapshot["retired"], 2);
+    assert_eq!(snapshot["retired"], 1);
     assert_eq!(snapshot["pressureForcedTotal"], 1);
-    assert_eq!(snapshot["publicationRejectedTotal"], 2);
+    assert_eq!(snapshot["pressureEvictedTotal"], 1);
+    assert_eq!(snapshot["publicationRejectedTotal"], 0);
+}
+
+#[test]
+fn committed_publication_stops_retired_control_plane_without_forcing_udp() {
+    let drain = test_drain(Duration::from_secs(60), 2);
+    let now = Instant::now();
+    let (generation, stop_requests) = TestGeneration::new(1);
+    drain.retire_shared_at(generation.clone(), now);
+
+    drain.finalize_retirements();
+
+    assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
+    assert!(generation.control.lifecycle.stop_is_requested());
+    assert!(!generation.control.udp_stop.load(Ordering::Acquire));
+    assert_eq!(drain.snapshot()["retired"], 1);
 }
 
 #[test]
