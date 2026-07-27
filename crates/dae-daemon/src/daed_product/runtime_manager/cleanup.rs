@@ -39,15 +39,60 @@ pub(super) fn spawn_background_cleanup(
     cleanup_epoch: u64,
     runtime: Option<ProductRuntimeInstance>,
 ) {
+    spawn_background_cleanup_with_reason(
+        inner,
+        cleanup_epoch,
+        runtime,
+        AllocatorReclaimReason::StopRuntime,
+    );
+}
+
+pub(super) fn spawn_background_replacement_cleanup(
+    inner: Arc<Mutex<ProductRuntimeState>>,
+    cleanup_epoch: u64,
+    runtime: Option<ProductRuntimeInstance>,
+) {
+    spawn_background_cleanup_with_reason(
+        inner,
+        cleanup_epoch,
+        runtime,
+        AllocatorReclaimReason::ReloadCompleted,
+    );
+}
+
+fn spawn_background_cleanup_with_reason(
+    inner: Arc<Mutex<ProductRuntimeState>>,
+    cleanup_epoch: u64,
+    runtime: Option<ProductRuntimeInstance>,
+    reclaim_reason: AllocatorReclaimReason,
+) {
     let _ = thread::spawn(move || {
-        let cleanup_report =
-            cleanup_runtime_instance_with_reclaim(runtime, AllocatorReclaimReason::StopRuntime);
+        let cleanup_report = cleanup_runtime_instance_with_reclaim(runtime, reclaim_reason);
         if let Ok(mut inner) = inner.lock()
             && inner.cleanup.epoch == cleanup_epoch
         {
             inner.cleanup.finish(cleanup_report);
         }
     });
+}
+
+pub(super) fn release_runtime_conflicts_for_replacement(
+    runtime: Option<&mut ProductRuntimeInstance>,
+) -> Option<Value> {
+    match runtime? {
+        ProductRuntimeInstance::Resident(runtime) => Some(runtime.release_reload_conflicts()),
+        ProductRuntimeInstance::Fake(_) => Some(json!({
+            "status": "pass",
+            "binding_cleanup_postflight": {"status": "pass"},
+            "after_map_ids": [],
+            "loaded_map_cleaned": true,
+            "leftovers_after_cleanup": [],
+            "sys_fs_bpf_dae_mutated": false,
+            "cleanup_command_timed_out": false,
+            "phaseTimings": [],
+            "fakeRuntime": true,
+        })),
+    }
 }
 
 pub(super) fn wait_for_cleanup_idle_for_inner(
@@ -73,6 +118,14 @@ pub(super) fn wait_for_cleanup_idle_for_inner(
 pub(super) fn ensure_cleanup_allows_start_for_inner(
     inner: &Arc<Mutex<ProductRuntimeState>>,
 ) -> Result<(), String> {
+    {
+        let inner = inner.lock().map_err(|_| {
+            "product runtime manager lock poisoned while checking cleanup".to_owned()
+        })?;
+        if inner.runtime.is_some() {
+            return Ok(());
+        }
+    }
     if !wait_for_cleanup_idle_for_inner(inner, PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT) {
         return Err(cleanup_start_blocker_for_inner(inner).unwrap_or_else(|| {
             "product runtime cleanup is still running; retry after cleanup finishes".to_owned()
@@ -88,6 +141,9 @@ fn cleanup_start_blocker_for_inner(inner: &Arc<Mutex<ProductRuntimeState>>) -> O
     let Ok(inner) = inner.lock() else {
         return Some("product runtime manager lock poisoned while checking cleanup".to_owned());
     };
+    if inner.runtime.is_some() {
+        return None;
+    }
     cleanup_start_blocker(&inner.cleanup)
 }
 
@@ -99,7 +155,7 @@ fn cleanup_start_blocker(cleanup: &RuntimeCleanupState) -> Option<String> {
             cleanup.mode.as_deref().unwrap_or("unknown")
         ));
     }
-    cleanup.last_error.as_ref().map(|err| {
+    cleanup.last_start_blocker.as_ref().map(|err| {
         format!(
             "previous product runtime cleanup failed: epoch={}, mode={}, error={err}",
             cleanup.epoch,
@@ -109,7 +165,46 @@ fn cleanup_start_blocker(cleanup: &RuntimeCleanupState) -> Option<String> {
 }
 
 pub(super) fn cleanup_start_blocker_from_report(report: Option<&Value>) -> Option<String> {
-    cleanup_report_error(report)
+    let report = report?;
+    if report.get("status").and_then(Value::as_str) == Some("pass") {
+        return None;
+    }
+    let binding_cleanup_failed = report
+        .get("binding_cleanup_postflight")
+        .is_some_and(|binding| binding["status"].as_str() != Some("pass"));
+    let loaded_map_cleaned = report
+        .get("loaded_map_cleaned")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let cleanup_command_timed_out = report
+        .get("cleanup_command_timed_out")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let sys_fs_bpf_dae_mutated = report
+        .get("sys_fs_bpf_dae_mutated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let leftovers = report
+        .get("leftovers_after_cleanup")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !binding_cleanup_failed
+        && loaded_map_cleaned
+        && !cleanup_command_timed_out
+        && !sys_fs_bpf_dae_mutated
+        && leftovers.is_empty()
+    {
+        return None;
+    }
+    Some(format!(
+        "runtime conflict cleanup failed: binding_cleanup_failed={}, loaded_map_cleaned={}, cleanup_command_timed_out={}, sys_fs_bpf_dae_mutated={}, leftovers_after_cleanup={}",
+        binding_cleanup_failed,
+        loaded_map_cleaned,
+        cleanup_command_timed_out,
+        sys_fs_bpf_dae_mutated,
+        Value::Array(leftovers),
+    ))
 }
 
 pub(super) fn cleanup_report_error(report: Option<&Value>) -> Option<String> {

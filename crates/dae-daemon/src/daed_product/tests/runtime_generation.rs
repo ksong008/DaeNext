@@ -451,6 +451,7 @@ fn consecutive_generic_config_changes_do_not_leave_a_cleanup_interlock() {
             assert!(applied.applied);
             assert!(!applied.coalesced);
             runtime.ensure_cleanup_allows_start().unwrap();
+            assert!(runtime.wait_for_cleanup_idle(Duration::from_secs(1)));
             let summary = runtime.summary();
             assert_eq!(summary["state"], json!("running"));
             assert_eq!(summary["cleanup"]["state"], json!("done"));

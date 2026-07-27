@@ -255,7 +255,23 @@ pub(crate) fn runtime_cleanup_interlock_blocks_failed_cleanup() {
 }
 
 #[test]
-pub(crate) fn stuck_runtime_thread_cleanup_prevents_replacement_publication() {
+pub(crate) fn active_runtime_allows_reload_while_retired_cleanup_finishes() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
+            started_at: "2026-07-27T12:00:00.000Z".to_owned(),
+            tproxy_port: 12345,
+        }));
+        inner.cleanup.begin(8, "reload-replace");
+    }
+
+    manager.ensure_cleanup_allows_start().unwrap();
+    assert_eq!(manager.summary()["cleanup"]["running"], json!(true));
+}
+
+#[test]
+pub(crate) fn retired_runtime_thread_failure_does_not_block_replacement_publication() {
     let manager = ProductRuntimeManager::new();
     {
         let mut inner = manager.inner.lock().unwrap();
@@ -276,11 +292,13 @@ pub(crate) fn stuck_runtime_thread_cleanup_prevents_replacement_publication() {
         })));
     }
 
-    let error = manager.ensure_cleanup_allows_start().unwrap_err();
-    assert!(error.contains("previous product runtime cleanup failed"));
+    manager.ensure_cleanup_allows_start().unwrap();
+    let summary = manager.summary();
+    let error = summary["cleanup"]["lastError"].as_str().unwrap();
     assert!(error.contains("stop-resident-dataplane-runtime"));
     assert!(error.contains("task_count_timed_out"));
     assert!(error.contains("task_count_detached"));
+    assert_eq!(summary["cleanup"]["lastStartBlocker"], Value::Null);
     assert!(!manager.is_running());
 }
 
@@ -322,7 +340,9 @@ pub(crate) fn owner_cleanup_failure_keeps_bounded_protocol_diagnostics() {
         inner.cleanup.finish(Some(report));
     }
 
-    let error = manager.ensure_cleanup_allows_start().unwrap_err();
+    manager.ensure_cleanup_allows_start().unwrap();
+    let summary = manager.summary();
+    let error = summary["cleanup"]["lastError"].as_str().unwrap();
     assert!(error.contains("ownerReleaseDetails"));
     assert!(error.contains("registryOwnershipReleased"));
     assert!(error.contains("endpointDrain"));
@@ -383,7 +403,9 @@ pub(crate) fn udp_owner_cleanup_failure_keeps_bounded_generation_diagnostics() {
         inner.cleanup.finish(Some(report));
     }
 
-    let error = manager.ensure_cleanup_allows_start().unwrap_err();
+    manager.ensure_cleanup_allows_start().unwrap();
+    let summary = manager.summary();
+    let error = summary["cleanup"]["lastError"].as_str().unwrap();
     assert!(error.contains("ownedCleanup"));
     assert!(error.contains("generationId"));
     assert!(error.contains("\"currentBytes\":262"));

@@ -23,9 +23,9 @@ pub(super) use traffic::RuntimeTrafficCarry;
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
 use apply_state::RuntimeApplyState;
 use cleanup::{
-    cleanup_report_error, cleanup_runtime_instance, cleanup_runtime_instance_with_reclaim,
-    cleanup_start_blocker_from_report, ensure_cleanup_allows_start_for_inner,
-    spawn_background_cleanup,
+    cleanup_report_error, cleanup_runtime_instance_with_reclaim, cleanup_start_blocker_from_report,
+    ensure_cleanup_allows_start_for_inner, release_runtime_conflicts_for_replacement,
+    spawn_background_cleanup, spawn_background_replacement_cleanup,
 };
 pub(in crate::daed_product) use instance::PreparedProductRuntime;
 #[cfg(test)]
@@ -92,6 +92,7 @@ pub(super) struct RuntimeCleanupState {
     pub(super) finished_at: Option<String>,
     pub(super) last_report: Option<Arc<Value>>,
     pub(super) last_error: Option<String>,
+    pub(super) last_start_blocker: Option<String>,
 }
 
 impl RuntimeCleanupState {
@@ -103,12 +104,14 @@ impl RuntimeCleanupState {
         self.finished_at = None;
         self.last_report = None;
         self.last_error = None;
+        self.last_start_blocker = None;
     }
 
     pub(super) fn finish(&mut self, report: Option<Value>) {
         self.running = false;
         self.finished_at = Some(now_text());
         self.last_error = cleanup_report_error(report.as_ref());
+        self.last_start_blocker = cleanup_start_blocker_from_report(report.as_ref());
         self.last_report = report.map(Arc::new);
     }
 
@@ -129,6 +132,7 @@ impl RuntimeCleanupState {
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "lastError": self.last_error,
+            "lastStartBlocker": self.last_start_blocker,
             "lastReport": self.last_report.as_deref(),
         })
     }
@@ -604,7 +608,7 @@ fn replace_prepared_product_runtime_with_config_content(
         .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
     ensure_cleanup_allows_start_for_inner(inner)?;
     let (
-        previous_runtime,
+        mut previous_runtime,
         previous_config,
         previous_config_content,
         previous_transition_identity,
@@ -669,21 +673,16 @@ fn replace_prepared_product_runtime_with_config_content(
         .flatten();
     let latency_seed =
         runtime_health_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
-    let previous_cleanup_report = cleanup_runtime_instance(previous_runtime);
-    if previous_runtime_was_running
-        && let Ok(mut inner) = inner.lock()
-        && inner.lifecycle_epoch == lifecycle_epoch
-    {
-        inner.cleanup.finish(previous_cleanup_report.clone());
+    let previous_cleanup_report =
+        release_runtime_conflicts_for_replacement(previous_runtime.as_mut());
+    if previous_runtime_was_running {
+        spawn_background_replacement_cleanup(Arc::clone(inner), lifecycle_epoch, previous_runtime);
+    } else {
+        drop(previous_runtime);
     }
-    if previous_runtime_was_running
-        && let Some(blocker) = cleanup_start_blocker_from_report(previous_cleanup_report.as_ref())
-    {
-        let _ = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
-        return Err(format!(
-            "previous product runtime cleanup failed before reload: {blocker}"
-        ));
-    }
+    let previous_cleanup_error = cleanup_report_error(previous_cleanup_report.as_ref());
+    let previous_cleanup_start_blocker =
+        cleanup_start_blocker_from_report(previous_cleanup_report.as_ref());
     match start_prepared_product_runtime_instance(
         prepared,
         source,
@@ -693,6 +692,14 @@ fn replace_prepared_product_runtime_with_config_content(
         Ok((runtime, mut report)) => {
             if let Value::Object(report) = &mut report {
                 report.insert("transition".to_owned(), json!(transition.name()));
+                report.insert(
+                    "previousRuntimeCleanup".to_owned(),
+                    previous_cleanup_report.clone().unwrap_or(Value::Null),
+                );
+                report.insert(
+                    "previousRuntimeCleanupDegraded".to_owned(),
+                    json!(previous_cleanup_error.is_some()),
+                );
             }
             let mut inner = inner
                 .lock()
@@ -722,6 +729,7 @@ fn replace_prepared_product_runtime_with_config_content(
             ));
             inner.reload_count += 1;
             inner.last_error = None;
+            inner.cleanup.last_start_blocker = None;
             inner.last_transition_at = Some(transition_at.clone());
             inner.runtime_started_at = Some(runtime_started_at_after_success(
                 previous_runtime_was_running,
@@ -789,7 +797,7 @@ fn replace_prepared_product_runtime_with_config_content(
                         false
                     }
                 });
-            let message = match restored {
+            let mut message = match restored {
                 Some(true) => {
                     format!("{start_err}\nrestore: restored previous product runtime")
                 }
@@ -799,6 +807,13 @@ fn replace_prepared_product_runtime_with_config_content(
                     .unwrap_or_else(|| start_err.clone()),
                 None => start_err,
             };
+            if let Some(blocker) = previous_cleanup_start_blocker.as_deref() {
+                message.push_str("\nprevious runtime conflict cleanup: ");
+                message.push_str(blocker);
+            } else if let Some(cleanup_error) = previous_cleanup_error.as_deref() {
+                message.push_str("\nprevious runtime retirement degraded: ");
+                message.push_str(cleanup_error);
+            }
             inner.last_transition_at = Some(now_text());
             if restored != Some(true) {
                 inner.runtime_started_at = None;
