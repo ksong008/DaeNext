@@ -5,6 +5,7 @@ const RESIDENT_DATA_PLANE_RUNTIME_THREAD_NAME: &str = "resident-data-runtime";
 
 pub(super) struct ResidentDataPlaneExecutor {
     runtime: Option<tokio::runtime::Runtime>,
+    _allocator_reclaim: crate::allocator::AllocatorRuntimeReclaimHooks,
     worker_threads: usize,
     worker_stack_bytes: usize,
 }
@@ -27,15 +28,25 @@ impl ResidentDataPlaneExecutor {
             .tcp_flow_stack_bytes
             .value()
             .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN);
+        let allocator_reclaim = crate::allocator::AllocatorRuntimeReclaimHooks::new(
+            crate::allocator::AllocatorWorkerKind::ResidentData,
+            worker_threads,
+        );
+        let start_reclaim = allocator_reclaim.clone();
+        let stop_reclaim = allocator_reclaim.clone();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(worker_threads)
             .thread_name(RESIDENT_DATA_PLANE_RUNTIME_THREAD_NAME)
             .thread_stack_size(worker_stack_bytes)
+            .on_thread_start(move || start_reclaim.thread_start())
+            .on_thread_stop(move || stop_reclaim.thread_stop())
             .enable_all()
             .build()
             .map_err(|error| format!("build resident data-plane Tokio runtime: {error}"))?;
+        allocator_reclaim.activate(runtime.handle().clone());
         Ok(Self {
             runtime: Some(runtime),
+            _allocator_reclaim: allocator_reclaim,
             worker_threads,
             worker_stack_bytes,
         })
@@ -113,6 +124,7 @@ impl ResidentDataPlaneExecutor {
     }
 
     pub(super) fn shutdown(&mut self, timeout: Duration) {
+        self._allocator_reclaim.deactivate();
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown_timeout(timeout);
         }

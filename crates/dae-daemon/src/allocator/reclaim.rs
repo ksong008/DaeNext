@@ -27,16 +27,7 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
 
     let epoch_before = epoch::advance().ok();
     let (thread_cache_flush_ok, thread_cache_flush) =
-        match mallctl::command(b"thread.tcache.flush\0") {
-            Ok(()) => (true, json!({"status": "pass"})),
-            Err(err) => (
-                false,
-                json!({
-                    "status": "fail",
-                    "error": err,
-                }),
-            ),
-        };
+        cooperative::allocator_flush_registered_worker_caches();
     let narenas = match mallctl::read_u32(b"arenas.narenas\0") {
         Ok(value) => value,
         Err(err) => {
@@ -45,7 +36,8 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
                 json!({
                     "operation": "jemalloc_arena_purge",
                     "threadCacheFlush": thread_cache_flush,
-                    "threadCacheScope": "calling-thread",
+                    "workerCacheFlush": thread_cache_flush,
+                    "threadCacheScope": "registered-workers-and-calling-thread",
                     "arenaPurgeScope": "all-initialized-arenas",
                     "error": err,
                 }),
@@ -94,7 +86,8 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
         json!({
             "operation": "jemalloc_thread_tcache_flush_and_arena_purge",
             "threadCacheFlush": thread_cache_flush,
-            "threadCacheScope": "calling-thread",
+            "workerCacheFlush": thread_cache_flush,
+            "threadCacheScope": "registered-workers-and-calling-thread",
             "arenaPurgeScope": "all-initialized-arenas",
             "arenasObserved": narenas,
             "arenasAttempted": attempted,

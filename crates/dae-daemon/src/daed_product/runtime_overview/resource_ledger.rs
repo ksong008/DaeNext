@@ -223,6 +223,8 @@ fn allocator_ledger_json(stats: &AllocatorStatsSnapshot) -> Value {
         "residentBytes": stats.resident.to_string(),
         "mappedBytes": stats.mapped.to_string(),
         "retainedBytes": stats.retained.to_string(),
+        "mergedTcacheBytes": stats.merged_tcache.to_string(),
+        "applicationLiveExcludingTcacheBytes": stats.application_live_excluding_tcache().to_string(),
         "activeMinusAllocatedBytes": stats.active_minus_allocated().to_string(),
         "residentMinusActiveBytes": stats.resident_minus_active().to_string(),
     })

@@ -22,6 +22,7 @@ pub(super) struct ProductControlRuntimeConfig {
     pub(super) dns_limit: usize,
     pub(super) direct_http_limit: usize,
     pub(super) proxy_http_limit: usize,
+    pub(super) runtime_lifecycle_limit: usize,
     pub(super) shutdown_timeout: Duration,
 }
 
@@ -55,6 +56,7 @@ impl ProductControlRuntimeConfig {
         let maximum_admitted_work = dns_limit
             .saturating_add(direct_http_limit)
             .saturating_add(proxy_http_limit)
+            .saturating_add(http.worker_count.max(1))
             .max(1);
         let worker_threads = available_parallelism
             .min(worker_max)
@@ -73,6 +75,7 @@ impl ProductControlRuntimeConfig {
             dns_limit,
             direct_http_limit,
             proxy_http_limit,
+            runtime_lifecycle_limit: http.worker_count.max(1),
             shutdown_timeout: PRODUCT_CONTROL_SHUTDOWN_TIMEOUT,
         }
     }
@@ -92,6 +95,7 @@ impl ProductControlRuntimeConfig {
             dns_limit: 1,
             direct_http_limit: 1,
             proxy_http_limit: 1,
+            runtime_lifecycle_limit: 1,
             shutdown_timeout: Duration::from_millis(250),
         }
     }
@@ -108,6 +112,7 @@ impl ProductControlRuntimeConfig {
                 "dns": self.dns_limit,
                 "directHttp": self.direct_http_limit,
                 "proxyHttp": self.proxy_http_limit,
+                "runtimeLifecycle": self.runtime_lifecycle_limit,
             },
         })
     }
@@ -141,6 +146,10 @@ impl ProductControlRuntimeConfig {
             (
                 "controlRuntimeProxyHttpAdmission".to_owned(),
                 self.proxy_http_limit.to_string(),
+            ),
+            (
+                "controlRuntimeLifecycleAdmission".to_owned(),
+                self.runtime_lifecycle_limit.to_string(),
             ),
         ])
     }
@@ -176,7 +185,10 @@ mod tests {
         );
         assert_eq!(
             standard.queue_capacity,
-            standard.dns_limit + standard.direct_http_limit + standard.proxy_http_limit
+            standard.dns_limit
+                + standard.direct_http_limit
+                + standard.proxy_http_limit
+                + standard.runtime_lifecycle_limit
         );
 
         let low_memory = ProductControlRuntimeConfig::from_parallelism(

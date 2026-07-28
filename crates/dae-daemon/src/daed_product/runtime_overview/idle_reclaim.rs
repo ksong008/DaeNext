@@ -423,7 +423,9 @@ fn evaluate_allocator_idle_reclaim(
     let Some(stats) = allocator_stats_snapshot() else {
         return json!({"status": "skipped", "reason": "allocator_stats_unavailable"});
     };
-    let pressure = stats.idle_reclaim_pressure_bytes();
+    let page_pressure = stats.idle_reclaim_pressure_bytes();
+    let cache_pressure = stats.cache_reclaim_pressure_bytes();
+    let pressure = page_pressure.max(cache_pressure);
     let effective_pressure_threshold = if cgroup_pressure.urgent {
         (policy.pressure_threshold_bytes / 4).max(ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN)
     } else {
@@ -440,9 +442,10 @@ fn evaluate_allocator_idle_reclaim(
             "status": "skipped",
             "reason": "pressure_below_threshold",
             "pressureBytes": pressure.to_string(),
-            "pressureMetric": "allocator-resident-minus-active",
+            "pressureMetric": "maximum-of-page-and-worker-cache-pressure",
             "pressureThresholdBytes": effective_pressure_threshold.to_string(),
-            "allocatorResidentMinusActiveBytes": stats.resident_minus_active().to_string(),
+            "allocatorResidentMinusActiveBytes": page_pressure.to_string(),
+            "allocatorMergedTcacheBytes": cache_pressure.to_string(),
             "allocatorRetainedBytes": stats.retained.to_string(),
             "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
             "trafficRateSource": "resident_dataplane_total_counter_delta",
@@ -471,8 +474,9 @@ fn evaluate_allocator_idle_reclaim(
         "status": "reclaimed",
         "reason": reclaim_reason.as_str(),
         "pressureBytes": pressure.to_string(),
-        "pressureMetric": "allocator-resident-minus-active",
-        "allocatorResidentMinusActiveBytes": stats.resident_minus_active().to_string(),
+        "pressureMetric": "maximum-of-page-and-worker-cache-pressure",
+        "allocatorResidentMinusActiveBytes": page_pressure.to_string(),
+        "allocatorMergedTcacheBytes": cache_pressure.to_string(),
         "allocatorRetainedBytes": stats.retained.to_string(),
         "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
         "trafficRateSource": "resident_dataplane_total_counter_delta",

@@ -32,6 +32,7 @@ pub(super) fn start_product_sse_worker(
         .stack_size(config.worker_stack_bytes)
         .spawn(move || {
             let _completion = ProductSseWorkerCompletion(completed_sender);
+            let mut allocator_worker = allocator_register_reclaim_worker(AllocatorWorkerKind::Sse);
             let mut reclaim_worker = app
                 .upgrade()
                 .map(|app| app.ui_runtime.register_reclaim_worker());
@@ -41,6 +42,7 @@ pub(super) fn start_product_sse_worker(
                 stop,
                 metrics,
                 &mut reclaim_worker,
+                &mut allocator_worker,
                 overview,
             ));
         })?;
@@ -64,6 +66,7 @@ async fn run_product_sse_runtime(
     mut stop: tokio::sync::watch::Receiver<bool>,
     metrics: Arc<ProductHttpMetrics>,
     reclaim_worker: &mut Option<ProductUiReclaimWorker>,
+    allocator_worker: &mut AllocatorReclaimWorker,
     overview: tokio::sync::broadcast::Sender<Arc<ProductRuntimeOverviewTick>>,
 ) {
     let mut tasks = tokio::task::JoinSet::new();
@@ -99,6 +102,7 @@ async fn run_product_sse_runtime(
                 drop(completed);
             }
             _ = maintenance.tick() => {
+                allocator_worker.poll();
                 if let (Some(app), Some(worker)) = (app.upgrade(), reclaim_worker.as_mut()) {
                     app.ui_runtime.maintain(&metrics, worker);
                 }

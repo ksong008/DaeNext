@@ -54,6 +54,22 @@ fn completed_result_releases_admission_before_the_caller_resumes() {
 }
 
 #[test]
+fn lifecycle_work_waits_for_completion_without_an_artificial_deadline() {
+    let runtime = ProductControlRuntime::start(ProductControlRuntimeConfig::for_test()).unwrap();
+    let result = runtime
+        .execute_to_completion(ProductControlTaskKind::RuntimeLifecycle, |_| async {
+            11_u64
+        })
+        .unwrap();
+
+    assert_eq!(result, 11);
+    let snapshot = runtime.snapshot();
+    assert_eq!(snapshot["activeByClass"]["runtimeLifecycle"], json!(0));
+    assert_eq!(snapshot["completedTotal"], json!(1));
+    runtime.shutdown().unwrap();
+}
+
+#[test]
 fn caller_timeout_requests_cooperative_task_cancellation() {
     let runtime = ProductControlRuntime::start(ProductControlRuntimeConfig::for_test()).unwrap();
     let result = runtime.execute(
