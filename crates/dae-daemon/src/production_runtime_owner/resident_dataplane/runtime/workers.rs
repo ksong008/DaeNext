@@ -338,8 +338,8 @@ pub(crate) fn start_resident_dataplane_workers(
         json!({
             "enabled": domain_routing_map_id.is_some(),
             "map_id": domain_routing_map_id,
-            "source": "resident DNS accepted response cache and TCP domain++ sniffed-domain learning",
-            "scope": "accepted DNS responses and TCP sniffed domains update domain_routing_map for kernel domain routing hits",
+            "source": "resident DNS accepted response cache",
+            "scope": "accepted DNS responses update domain_routing_map for kernel domain routing hits",
         }),
     );
     start_map.insert("tcp_dial_mode".to_owned(), json!(tcp_dial_mode_name));

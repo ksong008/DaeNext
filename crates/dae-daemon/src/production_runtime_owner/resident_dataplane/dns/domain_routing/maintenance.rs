@@ -124,12 +124,7 @@ impl ResidentDnsDomainRouting {
             .state
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        Ok(state
-            .cache
-            .next_expiry_unix()
-            .into_iter()
-            .chain(state.sniff_owners.values().map(|owner| owner.deadline_unix))
-            .min())
+        Ok(state.cache.next_expiry_unix())
     }
 
     fn sweep_expired(&self) -> Result<(), String> {

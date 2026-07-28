@@ -175,7 +175,6 @@ pub(super) fn build_resident_dataplane_generation(
         Arc::clone(&proxy_groups),
         routing_tuple_map_id,
         routing_matcher.clone(),
-        dns_domain_routing.clone(),
         Arc::clone(&dns),
         tcp_dial_mode,
         sniffing_timeout,

@@ -88,7 +88,7 @@ use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,
     relay_tcp_direct_async,
 };
-use super::dns::{ResidentDnsDomainRouting, ResidentDnsPlan};
+use super::dns::ResidentDnsPlan;
 use super::events::{
     ResidentEventKind, ResidentEventMetadata, append_event, append_event_with_metadata,
 };

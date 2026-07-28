@@ -4,7 +4,6 @@ use super::*;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsDomainRoutingReloadSnapshot
 {
     accepted_responses: Vec<(DnsCacheKey, DnsCacheEntry)>,
-    sniffed_domains: Vec<ResidentSniffDomainOwner>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -22,7 +21,7 @@ impl ResidentDnsDomainRoutingReloadSnapshot {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn entry_count(
         &self,
     ) -> usize {
-        self.accepted_responses.len() + self.sniffed_domains.len()
+        self.accepted_responses.len()
     }
 }
 
@@ -37,17 +36,7 @@ impl ResidentDnsDomainRouting {
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
         self.sweep_expired_locked(now_unix, &mut state)?;
         let accepted_responses = state.cache.snapshot_live_entries(now_unix);
-        let mut sniffed_domains = state
-            .sniff_owners
-            .values()
-            .filter(|owner| owner.deadline_unix > now_unix)
-            .cloned()
-            .collect::<Vec<_>>();
-        sniffed_domains.sort_by(|left, right| left.owner_key.cmp(&right.owner_key));
-        Ok(ResidentDnsDomainRoutingReloadSnapshot {
-            accepted_responses,
-            sniffed_domains,
-        })
+        Ok(ResidentDnsDomainRoutingReloadSnapshot { accepted_responses })
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn restore_reload_snapshot(
@@ -89,39 +78,6 @@ impl ResidentDnsDomainRouting {
                 .cache
                 .insert_without_route_owner_key(now_unix, plan.key, plan.entry);
             report.accepted_response_entries += 1;
-        }
-        for owner in &snapshot.sniffed_domains {
-            if owner.deadline_unix <= now_unix {
-                report.skipped_expired_entries += 1;
-                continue;
-            }
-            let Some(plan) = build_resident_domain_routing_ip_update_plan(
-                &self.routing_matcher,
-                &mut state.domain_bitmap,
-                TCP_SNIFF_OWNER_PREFIX,
-                &owner.domain,
-                owner.ip,
-            )?
-            else {
-                report.skipped_unmatched_entries += 1;
-                continue;
-            };
-            self.apply_event(
-                &mut state.owner,
-                DomainRoutingDnsEvent::from_keys(&plan.owner_key, &plan.bitmap, [plan.ip]),
-            )
-            .map_err(|err| format!("restore resident TCP sniff domain routing owner: {err}"))?;
-            let owner_key = plan.owner_key;
-            state.sniff_owners.insert(
-                owner_key.clone(),
-                ResidentSniffDomainOwner {
-                    owner_key,
-                    domain: owner.domain.clone(),
-                    ip: owner.ip,
-                    deadline_unix: owner.deadline_unix,
-                },
-            );
-            report.sniffed_domain_entries += 1;
         }
         drop(state);
         self.maintenance.notify_deadline_changed();
@@ -174,21 +130,14 @@ mod tests {
         entry.ips.push("192.0.2.40".parse().unwrap());
         let snapshot = ResidentDnsDomainRoutingReloadSnapshot {
             accepted_responses: vec![(key, entry)],
-            sniffed_domains: vec![ResidentSniffDomainOwner {
-                owner_key: "tcp-sniff|expired.example|192.0.2.41".to_owned(),
-                domain: "expired.example".to_owned(),
-                ip: "192.0.2.41".parse().unwrap(),
-                deadline_unix: now_unix,
-            }],
         };
 
         let report = domain_routing.restore_reload_snapshot(&snapshot).unwrap();
-        assert_eq!(report.skipped_expired_entries, 2);
+        assert_eq!(report.skipped_expired_entries, 1);
         assert_eq!(report.accepted_response_entries, 0);
         assert_eq!(report.sniffed_domain_entries, 0);
         let state = domain_routing.state.lock().unwrap();
         assert!(state.cache.is_empty());
-        assert!(state.sniff_owners.is_empty());
         assert_eq!(state.owner.tracker().owner_count(), 0);
     }
 }
