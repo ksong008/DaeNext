@@ -208,6 +208,27 @@ impl ResidentProductionRuntime {
         }
         self.interface_monitor = None;
 
+        // Keep the native pin directory as crash-recovery ownership evidence until every
+        // fallible runtime wait has completed. A replacement process can then distinguish
+        // this topology from a foreign dae0/daens name collision after an abnormal exit.
+        let phase_started = Instant::now();
+        if let Some(dataplane) = self.dataplane.as_mut() {
+            dataplane.quiesce_workloads();
+            push_cleanup_phase_timing(
+                &mut phase_timings,
+                "dataplane_workload_quiesce",
+                "pass",
+                phase_started.elapsed(),
+            );
+        } else {
+            push_cleanup_phase_timing(
+                &mut phase_timings,
+                "dataplane_workload_quiesce",
+                "skipped",
+                phase_started.elapsed(),
+            );
+        }
+
         let native_peer_attached = self.native_runtime.peer_attached();
         let native_host_attached = self.native_runtime.host_attached();
         let phase_started = Instant::now();
@@ -242,24 +263,6 @@ impl ResidentProductionRuntime {
             if binding_cleanup_ok { "pass" } else { "fail" },
             phase_started.elapsed(),
         );
-
-        let phase_started = Instant::now();
-        if let Some(dataplane) = self.dataplane.as_mut() {
-            dataplane.quiesce_workloads();
-            push_cleanup_phase_timing(
-                &mut phase_timings,
-                "dataplane_workload_quiesce",
-                "pass",
-                phase_started.elapsed(),
-            );
-        } else {
-            push_cleanup_phase_timing(
-                &mut phase_timings,
-                "dataplane_workload_quiesce",
-                "skipped",
-                phase_started.elapsed(),
-            );
-        }
 
         let phase_started = Instant::now();
         cleanup_resident_lan_programs(
