@@ -8,6 +8,7 @@ trait ResidentDrainControl: std::fmt::Debug + Send + Sync {
     fn close_admission(&self);
     fn reopen_admission(&self) -> Result<(), String>;
     fn stop_is_requested(&self) -> bool;
+    fn flow_stop_is_requested(&self) -> bool;
     fn udp_stop_is_requested(&self) -> bool;
     fn udp_router_is_retained(&self) -> bool;
     fn udp_dns_runtime_is_retained(&self) -> bool;
@@ -29,6 +30,10 @@ impl ResidentDrainControl for ResidentGenerationDrainControl {
 
     fn stop_is_requested(&self) -> bool {
         ResidentGenerationDrainControl::stop_is_requested(self)
+    }
+
+    fn flow_stop_is_requested(&self) -> bool {
+        ResidentGenerationDrainControl::flow_stop_is_requested(self)
     }
 
     fn udp_stop_is_requested(&self) -> bool {
@@ -83,6 +88,7 @@ struct ResidentGenerationDrainState {
     natural_total: u64,
     deadline_forced_total: u64,
     pressure_forced_total: u64,
+    finalization_forced_total: u64,
     pressure_evicted_total: u64,
     reactivated_total: u64,
     publication_rejected_total: u64,
@@ -90,6 +96,7 @@ struct ResidentGenerationDrainState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResidentGenerationStopReason {
+    Finalized,
     MaximumAge,
     ResourcePressure,
 }
@@ -179,37 +186,38 @@ impl ResidentGenerationDrain {
     }
 
     pub(super) fn finalize_retirement(&self, generation_id: u64) {
-        let target = {
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state
-                .retired
-                .iter()
-                .find(|retired| retired.id() == generation_id)
-                .and_then(|retired| retired.generation.as_ref().cloned())
-        };
-        if let Some(generation) = target {
-            generation.retire_workloads();
-        }
+        self.finalize_matching_retirements(Some(generation_id));
     }
 
     pub(super) fn finalize_retirements(&self) {
+        self.finalize_matching_retirements(None);
+    }
+
+    fn finalize_matching_retirements(&self, generation_id: Option<u64>) {
         let targets = {
-            let state = self
+            let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state
-                .retired
-                .iter()
-                .filter_map(|retired| retired.generation.as_ref().cloned())
-                .collect::<Vec<_>>()
+            let mut targets = Vec::new();
+            let mut finalized = 0_u64;
+            for retired in &mut state.retired {
+                if generation_id.is_none_or(|generation_id| retired.id() == generation_id)
+                    && retired.stop_reason.is_none()
+                {
+                    retired.stop_reason = Some(ResidentGenerationStopReason::Finalized);
+                    finalized = finalized.saturating_add(1);
+                    targets.push(retired.force_stop_target());
+                }
+            }
+            state.finalization_forced_total =
+                state.finalization_forced_total.saturating_add(finalized);
+            targets
         };
-        for generation in targets {
-            generation.retire_workloads();
+        for target in targets {
+            target.request_force_stop();
         }
+        self.reap(Instant::now());
     }
 
     pub(super) fn reactivate(&self, generation_id: u64) -> Result<(), String> {
@@ -282,7 +290,8 @@ impl ResidentGenerationDrain {
             .as_millis();
         let forced_total = state
             .deadline_forced_total
-            .saturating_add(state.pressure_forced_total);
+            .saturating_add(state.pressure_forced_total)
+            .saturating_add(state.finalization_forced_total);
         let owner_evidence = state
             .retired
             .iter()
@@ -297,6 +306,7 @@ impl ResidentGenerationDrain {
                     "externalDrainOwners": external_drain_owners,
                     "externalStrongOwners": external_generation_owners.saturating_add(external_drain_owners),
                     "stopRequested": retired.control.stop_is_requested(),
+                    "flowStopRequested": retired.control.flow_stop_is_requested(),
                     "udpStopRequested": retired.control.udp_stop_is_requested(),
                     "udpRouterRetained": retired.control.udp_router_is_retained(),
                     "udpDnsRuntimeRetained": retired.control.udp_dns_runtime_is_retained(),
@@ -312,6 +322,7 @@ impl ResidentGenerationDrain {
             "forcedTotal": forced_total,
             "deadlineForcedTotal": state.deadline_forced_total,
             "pressureForcedTotal": state.pressure_forced_total,
+            "finalizationForcedTotal": state.finalization_forced_total,
             "pressureEvictedTotal": state.pressure_evicted_total,
             "reactivatedTotal": state.reactivated_total,
             "publicationRejectedTotal": state.publication_rejected_total,

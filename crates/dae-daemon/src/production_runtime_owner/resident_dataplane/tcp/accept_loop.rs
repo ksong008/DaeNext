@@ -156,7 +156,6 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                     stream,
                     peer,
                     generation,
-                    Arc::clone(&stop),
                     event_file.clone(),
                     Arc::clone(&event_lock),
                     permit,
@@ -202,7 +201,6 @@ fn spawn_async_tcp_flow(
     stream: TokioTcpStream,
     peer: SocketAddr,
     generation: Arc<ResidentDataplaneGeneration>,
-    runtime_stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     permit: tokio::sync::OwnedSemaphorePermit,
@@ -211,20 +209,27 @@ fn spawn_async_tcp_flow(
     let admission = generation.tcp_admission.clone();
     let router = Arc::clone(&generation.tcp_router);
     let metrics = Arc::clone(&generation.metrics);
+    let flow_stop = generation.drain_control.flow_stop_handle();
     drop(generation);
     flows.spawn(async move {
         let _admission = admission.admitted(permit);
-        match handle_tcp_connection_async_or_handoff(
-            stream,
-            peer,
-            router,
-            runtime_stop,
-            metrics,
-            &event_file,
-            &event_lock,
+        let Some(outcome) = run_until_resident_stop(
+            &flow_stop,
+            handle_tcp_connection_async_or_handoff(
+                stream,
+                peer,
+                router,
+                Arc::clone(&flow_stop),
+                metrics,
+                &event_file,
+                &event_lock,
+            ),
         )
         .await
-        {
+        else {
+            return;
+        };
+        match outcome {
             Ok(Some(event)) => append_event(&event_file, &event_lock, event),
             Ok(None) => {}
             Err(err) => append_event(
