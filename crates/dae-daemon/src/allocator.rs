@@ -7,6 +7,16 @@ use serde_json::{Value, json};
 
 mod reclaim;
 use self::reclaim::allocator_reclaim_impl;
+mod arena_stats;
+#[cfg(feature = "allocator-jemalloc")]
+mod cooperative;
+#[cfg(not(feature = "allocator-jemalloc"))]
+#[path = "allocator/cooperative_stub.rs"]
+mod cooperative;
+pub(crate) use self::cooperative::{
+    AllocatorReclaimWorker, AllocatorRuntimeReclaimHooks, AllocatorWorkerKind,
+    allocator_register_reclaim_worker,
+};
 mod control_plane;
 mod mallctl;
 pub(crate) use self::control_plane::{
@@ -68,6 +78,7 @@ pub struct AllocatorStatsSnapshot {
     pub resident: u64,
     pub mapped: u64,
     pub retained: u64,
+    pub merged_tcache: u64,
 }
 
 impl AllocatorStatsSnapshot {
@@ -87,6 +98,14 @@ impl AllocatorStatsSnapshot {
         self.resident_minus_active()
     }
 
+    pub fn cache_reclaim_pressure_bytes(self) -> u64 {
+        self.merged_tcache
+    }
+
+    pub fn application_live_excluding_tcache(self) -> u64 {
+        self.allocated.saturating_sub(self.merged_tcache)
+    }
+
     fn from_bytes(stats: BTreeMap<&'static str, u64>) -> Option<Self> {
         Some(Self {
             allocated: *stats.get("allocated")?,
@@ -95,6 +114,7 @@ impl AllocatorStatsSnapshot {
             resident: *stats.get("resident")?,
             mapped: *stats.get("mapped")?,
             retained: *stats.get("retained")?,
+            merged_tcache: *stats.get("merged_tcache")?,
         })
     }
 
@@ -106,6 +126,11 @@ impl AllocatorStatsSnapshot {
             ("resident", self.resident),
             ("mapped", self.mapped),
             ("retained", self.retained),
+            ("mergedTcache", self.merged_tcache),
+            (
+                "applicationLiveExcludingTcache",
+                self.application_live_excluding_tcache(),
+            ),
         ]
         .into_iter()
         .map(|(key, value)| (key, json!(value.to_string())))
@@ -169,7 +194,7 @@ pub fn allocator_derived_stats_json_from(
         Some(stats) => json!({
             "available": true,
             "profile": allocator_profile(),
-            "idleReclaimPressureSource": "jemalloc-resident-minus-active",
+            "idleReclaimPressureSource": "maximum-of-page-and-worker-cache-pressure",
             "retainedSemantics": "virtual-address-space-not-physical-rss",
             "bytes": {
                 "activeMinusAllocated": stats.active_minus_allocated().to_string(),
@@ -177,6 +202,8 @@ pub fn allocator_derived_stats_json_from(
                 "retained": stats.retained.to_string(),
                 "rssAnonMinusAllocated": stats.rss_anon_minus_allocated(anonymous_rss_bytes).to_string(),
                 "idleReclaimPressure": stats.idle_reclaim_pressure_bytes().to_string(),
+                "cacheReclaimPressure": stats.cache_reclaim_pressure_bytes().to_string(),
+                "applicationLiveExcludingTcache": stats.application_live_excluding_tcache().to_string(),
             },
         }),
         None => json!({
@@ -191,6 +218,7 @@ pub fn allocator_reclaim(reason: AllocatorReclaimReason) -> Value {
     TOTAL_RECLAIMS.fetch_add(1, Ordering::Relaxed);
 
     let stats_before = allocator_stats_snapshot();
+    let arenas_before = arena_stats::allocator_arena_stats_json();
     let started_at = Instant::now();
     let (status, detail) = allocator_reclaim_impl();
     if status == "coalesced" {
@@ -200,7 +228,15 @@ pub fn allocator_reclaim(reason: AllocatorReclaimReason) -> Value {
     }
     let elapsed = started_at.elapsed();
     let stats_after = allocator_stats_snapshot();
-    let detail = allocator_reclaim_detail(detail, stats_before, stats_after, elapsed);
+    let arenas_after = arena_stats::allocator_arena_stats_json();
+    let detail = allocator_reclaim_detail(
+        detail,
+        stats_before,
+        stats_after,
+        arenas_before,
+        arenas_after,
+        elapsed,
+    );
     let report = LastAllocatorReclaim {
         reason: reason.as_str(),
         profile: allocator_profile(),
@@ -217,12 +253,16 @@ fn allocator_reclaim_detail(
     detail: Value,
     stats_before: Option<AllocatorStatsSnapshot>,
     stats_after: Option<AllocatorStatsSnapshot>,
+    arenas_before: Value,
+    arenas_after: Value,
     elapsed: std::time::Duration,
 ) -> Value {
     let mut detail = match detail {
         Value::Object(detail) => detail,
         detail => serde_json::Map::from_iter([("backendDetail".to_owned(), detail)]),
     };
+    detail.insert("arenasBefore".to_owned(), arenas_before);
+    detail.insert("arenasAfter".to_owned(), arenas_after);
     detail.insert(
         "elapsedMicros".to_owned(),
         json!(elapsed.as_micros().to_string()),
@@ -262,6 +302,7 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
         "requestedTotal": TOTAL_RECLAIMS.load(Ordering::Relaxed),
         "executedTotal": EXECUTED_RECLAIMS.load(Ordering::Relaxed),
         "coalescedTotal": COALESCED_RECLAIMS.load(Ordering::Relaxed),
+        "workers": cooperative::allocator_worker_reclaim_snapshot_json(),
         "deferred": requests::allocator_reclaim_request_snapshot_json(),
         "reasons": {
             "startup_control_built": STARTUP_CONTROL_BUILT_RECLAIMS.load(Ordering::Relaxed),
@@ -331,6 +372,11 @@ fn allocator_stats_bytes() -> Option<BTreeMap<&'static str, u64>> {
     values.insert("resident", stats::resident::read().ok()? as u64);
     values.insert("mapped", stats::mapped::read().ok()? as u64);
     values.insert("retained", stats::retained::read().ok()? as u64);
+    values.insert(
+        "merged_tcache",
+        // MALLCTL_ARENAS_ALL is a stable jemalloc ABI index, not a product arena count.
+        mallctl::read_usize(b"stats.arenas.4096.tcache_bytes\0").ok()? as u64,
+    );
     Some(values)
 }
 
@@ -352,8 +398,11 @@ mod tests {
             resident: 52 * 1024 * 1024,
             mapped: 72 * 1024 * 1024,
             retained: 220 * 1024 * 1024,
+            merged_tcache: 6 * 1024 * 1024,
         };
 
         assert_eq!(stats.idle_reclaim_pressure_bytes(), 12 * 1024 * 1024);
+        assert_eq!(stats.cache_reclaim_pressure_bytes(), 6 * 1024 * 1024);
+        assert_eq!(stats.application_live_excluding_tcache(), 30 * 1024 * 1024);
     }
 }

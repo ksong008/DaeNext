@@ -34,9 +34,10 @@ use sha3::{
 };
 
 use crate::allocator::{
-    AllocatorReclaimReason, AllocatorStatsSnapshot, allocator_bind_control_plane_thread,
-    allocator_derived_stats_json_from, allocator_flush_current_thread_cache, allocator_profile,
-    allocator_purge_control_plane_arena, allocator_reclaim, allocator_reclaim_snapshot_json,
+    AllocatorReclaimReason, AllocatorReclaimWorker, AllocatorStatsSnapshot, AllocatorWorkerKind,
+    allocator_bind_control_plane_thread, allocator_derived_stats_json_from,
+    allocator_flush_current_thread_cache, allocator_profile, allocator_purge_control_plane_arena,
+    allocator_reclaim, allocator_reclaim_snapshot_json, allocator_register_reclaim_worker,
     allocator_request_reclaim, allocator_stats_json_from, allocator_stats_snapshot,
 };
 use crate::allocator_bootstrap::{

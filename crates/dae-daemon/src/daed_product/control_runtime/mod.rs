@@ -19,9 +19,16 @@ mod tests;
 
 const PRODUCT_CONTROL_RUNTIME_THREAD_NAME: &str = "product-control-runtime";
 
+#[derive(Clone, Copy)]
+enum ProductControlWait {
+    Timeout(Duration),
+    Completion,
+}
+
 pub(in crate::daed_product) struct ProductControlRuntime {
     config: ProductControlRuntimeConfig,
     runtime: Mutex<Option<tokio::runtime::Runtime>>,
+    _allocator_reclaim: crate::allocator::AllocatorRuntimeReclaimHooks,
     sender: Mutex<Option<tokio::sync::mpsc::Sender<ProductControlTaskCommand>>>,
     supervisor: Mutex<Option<tokio::task::JoinHandle<ProductControlTaskShutdown>>>,
     stop: ProductControlCancellation,
@@ -44,14 +51,23 @@ impl ProductControlRuntime {
     }
 
     fn start(config: ProductControlRuntimeConfig) -> io::Result<Arc<Self>> {
+        let allocator_reclaim = crate::allocator::AllocatorRuntimeReclaimHooks::new(
+            crate::allocator::AllocatorWorkerKind::ProductControl,
+            config.worker_threads,
+        );
+        let start_reclaim = allocator_reclaim.clone();
+        let stop_reclaim = allocator_reclaim.clone();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(config.worker_threads)
             .max_blocking_threads(config.maximum_blocking_threads)
             .thread_name(PRODUCT_CONTROL_RUNTIME_THREAD_NAME)
             .thread_stack_size(config.worker_stack_bytes)
+            .on_thread_start(move || start_reclaim.thread_start())
+            .on_thread_stop(move || stop_reclaim.thread_stop())
             .enable_all()
             .build()
             .map_err(|error| io::Error::other(format!("start product control runtime: {error}")))?;
+        allocator_reclaim.activate(runtime.handle().clone());
         let (sender, receiver) = tokio::sync::mpsc::channel(config.queue_capacity);
         let stop = ProductControlCancellation::new();
         let admission = Arc::new(ProductControlAdmission::new(config));
@@ -65,6 +81,7 @@ impl ProductControlRuntime {
         Ok(Arc::new(Self {
             config,
             runtime: Mutex::new(Some(runtime)),
+            _allocator_reclaim: allocator_reclaim,
             sender: Mutex::new(Some(sender)),
             supervisor: Mutex::new(Some(supervisor)),
             stop,
@@ -79,6 +96,33 @@ impl ProductControlRuntime {
         &self,
         kind: ProductControlTaskKind,
         timeout: Duration,
+        action: F,
+    ) -> Result<T, ProductControlExecutionError>
+    where
+        T: Send + 'static,
+        F: FnOnce(ProductControlCancellation) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = T> + Send + 'static,
+    {
+        self.execute_with_wait(kind, ProductControlWait::Timeout(timeout), action)
+    }
+
+    pub(in crate::daed_product) fn execute_to_completion<T, F, Fut>(
+        &self,
+        kind: ProductControlTaskKind,
+        action: F,
+    ) -> Result<T, ProductControlExecutionError>
+    where
+        T: Send + 'static,
+        F: FnOnce(ProductControlCancellation) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = T> + Send + 'static,
+    {
+        self.execute_with_wait(kind, ProductControlWait::Completion, action)
+    }
+
+    fn execute_with_wait<T, F, Fut>(
+        &self,
+        kind: ProductControlTaskKind,
+        wait: ProductControlWait,
         action: F,
     ) -> Result<T, ProductControlExecutionError>
     where
@@ -133,7 +177,13 @@ impl ProductControlRuntime {
                 return Err(ProductControlExecutionError::Unavailable);
             }
         }
-        match result_receiver.recv_timeout(timeout) {
+        let received = match wait {
+            ProductControlWait::Timeout(timeout) => result_receiver.recv_timeout(timeout),
+            ProductControlWait::Completion => result_receiver
+                .recv()
+                .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
+        };
+        match received {
             Ok(result) => Ok(result),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 cancellation.request();
@@ -179,6 +229,7 @@ impl ProductControlRuntime {
             .map_err(|_| io::Error::other("product control sender lock poisoned"))?
             .take();
         self.stop.request();
+        self._allocator_reclaim.deactivate();
         let mut supervisor = self
             .supervisor
             .lock()

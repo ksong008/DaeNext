@@ -152,7 +152,6 @@ pub(in crate::daed_product) fn apply_prepared_runtime_reload(
     source: &str,
     prepared: PreparedRuntimeReload,
     latency_seed: &[Value],
-    reclaim_reason: AllocatorReclaimReason,
 ) -> Result<AppliedRuntimeReload, String> {
     let mut checkpoints = NoopRuntimeApplyCheckpoints;
     let (runtime_report, materialized_report) = apply_runtime_generation(
@@ -165,25 +164,23 @@ pub(in crate::daed_product) fn apply_prepared_runtime_reload(
         &mut checkpoints,
     )?;
     runtime.set_runtime_required_for_readiness(true);
-    let allocator_reclaim = allocator_reclaim(reclaim_reason);
     let pending_process_transition = runtime.pending_process_transition();
     Ok(AppliedRuntimeReload {
         applied: true,
         coalesced: false,
         runtime_report,
         materialized_report,
-        allocator_reclaim,
+        allocator_reclaim: Value::Null,
         pending_process_transition,
     })
 }
 
-pub(in crate::daed_product) fn coordinate_runtime_reload(
+pub(in crate::daed_product) fn coordinate_runtime_reload_without_reclaim(
     runtime: &ProductRuntimeManager,
     state: &Path,
     config_dir: Option<&Path>,
     intent: RuntimeApplyIntent,
     latency_seed: &[Value],
-    reclaim_reason: AllocatorReclaimReason,
 ) -> Result<AppliedRuntimeReload, CoordinatedRuntimeReloadError> {
     let request = runtime.begin_reconcile(intent);
     request.set_phase("reread-desired-state");
@@ -293,7 +290,6 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
         intent.source(),
         prepared,
         latency_seed,
-        reclaim_reason,
     )
     .map_err(CoordinatedRuntimeReloadError::Apply);
     match result {
@@ -306,6 +302,27 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
             lead.finish(Err(err))
         }
     }
+}
+
+pub(in crate::daed_product) fn coordinate_runtime_reload(
+    runtime: &ProductRuntimeManager,
+    state: &Path,
+    config_dir: Option<&Path>,
+    intent: RuntimeApplyIntent,
+    latency_seed: &[Value],
+    reclaim_reason: AllocatorReclaimReason,
+) -> Result<AppliedRuntimeReload, CoordinatedRuntimeReloadError> {
+    let mut applied = coordinate_runtime_reload_without_reclaim(
+        runtime,
+        state,
+        config_dir,
+        intent,
+        latency_seed,
+    )?;
+    if applied.applied {
+        applied.allocator_reclaim = allocator_reclaim(reclaim_reason);
+    }
+    Ok(applied)
 }
 
 fn elapsed_nanos(started: Instant) -> u64 {

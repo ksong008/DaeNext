@@ -19,6 +19,7 @@ fn allocator() -> AllocatorStatsSnapshot {
         resident: 32 * 1024 * 1024,
         mapped: 40 * 1024 * 1024,
         retained: 8 * 1024 * 1024,
+        merged_tcache: 2 * 1024 * 1024,
     }
 }
 

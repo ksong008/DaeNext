@@ -4,9 +4,11 @@ pub(super) struct ProductControlAdmission {
     dns_active: AtomicU64,
     direct_http_active: AtomicU64,
     proxy_http_active: AtomicU64,
+    runtime_lifecycle_active: AtomicU64,
     dns_limit: u64,
     direct_http_limit: u64,
     proxy_http_limit: u64,
+    runtime_lifecycle_limit: u64,
 }
 
 impl ProductControlAdmission {
@@ -15,9 +17,11 @@ impl ProductControlAdmission {
             dns_active: AtomicU64::new(0),
             direct_http_active: AtomicU64::new(0),
             proxy_http_active: AtomicU64::new(0),
+            runtime_lifecycle_active: AtomicU64::new(0),
             dns_limit: config.dns_limit as u64,
             direct_http_limit: config.direct_http_limit as u64,
             proxy_http_limit: config.proxy_http_limit as u64,
+            runtime_lifecycle_limit: config.runtime_lifecycle_limit as u64,
         }
     }
 
@@ -44,6 +48,9 @@ impl ProductControlAdmission {
                 (&self.direct_http_active, self.direct_http_limit)
             }
             ProductControlTaskKind::ProxyHttp => (&self.proxy_http_active, self.proxy_http_limit),
+            ProductControlTaskKind::RuntimeLifecycle => {
+                (&self.runtime_lifecycle_active, self.runtime_lifecycle_limit)
+            }
         }
     }
 
@@ -52,6 +59,7 @@ impl ProductControlAdmission {
             "dns": self.dns_active.load(Ordering::Relaxed),
             "directHttp": self.direct_http_active.load(Ordering::Relaxed),
             "proxyHttp": self.proxy_http_active.load(Ordering::Relaxed),
+            "runtimeLifecycle": self.runtime_lifecycle_active.load(Ordering::Relaxed),
         })
     }
 }

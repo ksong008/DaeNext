@@ -52,6 +52,31 @@ pub(super) fn read_bool(name: &[u8]) -> Result<bool, String> {
 }
 
 #[cfg(feature = "allocator-jemalloc")]
+pub(super) fn read_usize(name: &[u8]) -> Result<usize, String> {
+    validate_name(name)?;
+    let mut value = 0_usize;
+    let mut length = std::mem::size_of::<usize>();
+    let result = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            name.as_ptr().cast(),
+            (&mut value as *mut usize).cast::<c_void>(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result == 0 && length == std::mem::size_of::<usize>() {
+        Ok(value)
+    } else if result == 0 {
+        Err(format!(
+            "mallctl returned an unexpected value size {length}"
+        ))
+    } else {
+        Err(error(result))
+    }
+}
+
+#[cfg(feature = "allocator-jemalloc")]
 pub(super) fn write_u32(name: &[u8], value: u32) -> Result<(), String> {
     validate_name(name)?;
     let result = unsafe {

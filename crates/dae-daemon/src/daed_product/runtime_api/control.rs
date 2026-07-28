@@ -49,16 +49,21 @@ pub(in crate::daed_product) fn api_runtime_reload(
     }
     let latency_seed =
         stored_successful_node_latency_seed_snapshots(&app.state).unwrap_or_default();
-    let applied = match coordinate_runtime_reload(
-        &app.runtime,
-        &app.state,
-        Some(&app.config_dir),
-        RuntimeApplyIntent::ApiReload,
-        &latency_seed,
-        AllocatorReclaimReason::ReloadCompleted,
+    let reload_app = app.clone();
+    let mut applied = match app.control_runtime.execute_to_completion(
+        ProductControlTaskKind::RuntimeLifecycle,
+        move |_cancellation| async move {
+            coordinate_runtime_reload_without_reclaim(
+                &reload_app.runtime,
+                &reload_app.state,
+                Some(&reload_app.config_dir),
+                RuntimeApplyIntent::ApiReload,
+                &latency_seed,
+            )
+        },
     ) {
-        Ok(applied) => applied,
-        Err(err) => {
+        Ok(Ok(applied)) => applied,
+        Ok(Err(err)) => {
             let mut fields = BTreeMap::new();
             fields.insert("source".to_owned(), "api".to_owned());
             fields.insert("dry".to_owned(), "false".to_owned());
@@ -72,7 +77,24 @@ pub(in crate::daed_product) fn api_runtime_reload(
             );
             return HttpResponse::json(err.http_status(), json!({"error": err.to_string()}));
         }
+        Err(err) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "api".to_owned());
+            fields.insert("dry".to_owned(), "false".to_owned());
+            fields.insert("error".to_owned(), err.to_string());
+            let _ = append_lifecycle_log_fields_for_config(
+                &app.config_dir,
+                &app.state,
+                "error",
+                "[Reload] Failed to enter the product control runtime",
+                fields,
+            );
+            return HttpResponse::json(503, json!({"error": err.to_string()}));
+        }
     };
+    if applied.applied {
+        applied.allocator_reclaim = allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);
+    }
     let mut fields = BTreeMap::new();
     fields.insert("source".to_owned(), "api".to_owned());
     fields.insert("dry".to_owned(), "false".to_owned());

@@ -203,6 +203,7 @@ fn product_http_worker_loop(
     connections: Arc<ProductHttpConnectionRegistry>,
 ) {
     let mut reclaim_worker = app.ui_runtime.register_reclaim_worker();
+    let mut allocator_worker = allocator_register_reclaim_worker(AllocatorWorkerKind::Http);
     loop {
         match queue.receive_timeout(PRODUCT_HTTP_WORKER_RECV_TIMEOUT) {
             Ok(job) => {
@@ -237,6 +238,7 @@ fn product_http_worker_loop(
             Err(ProductHttpQueueReceiveError::Timeout) => {}
             Err(ProductHttpQueueReceiveError::Closed) => break,
         }
+        allocator_worker.poll();
         app.ui_runtime.maintain(&metrics, &mut reclaim_worker);
     }
 }

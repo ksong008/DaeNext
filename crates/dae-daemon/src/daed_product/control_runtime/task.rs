@@ -9,6 +9,7 @@ pub(in crate::daed_product) enum ProductControlTaskKind {
     Dns,
     DirectHttp,
     ProxyHttp,
+    RuntimeLifecycle,
 }
 
 pub(super) struct ProductControlTaskCommand {
