@@ -90,7 +90,6 @@ use self::domain_routing::{
 use self::domain_routing::{
     build_resident_dns_domain_routing_update_plan,
     build_resident_dns_domain_routing_update_plan_from_entry,
-    build_resident_domain_routing_ip_update_plan,
 };
 pub(super) use self::error_response::build_dns_server_failure_response;
 use self::error_response::build_reject_response;
@@ -153,7 +152,6 @@ const DNS_HTTPS_DEFAULT_PORT: u16 = 443;
 const DNS_DEFAULT_DOH_PATH: &str = "/dns-query";
 const DNS_DOH3_ALPN: &str = "h3";
 const DNS_DOQ_ALPN: &str = "doq";
-const TCP_SNIFF_DOMAIN_ROUTING_TTL_SECS: i64 = 600;
 const DNS_FORWARDER_CACHE_MAX_ENTRIES: usize = 128;
 const DNS_STREAM_POOL_MAX_STREAMS: usize = 16;
 const DNS_STREAM_POOL_MAX_IDLE: usize = 8;

@@ -2012,42 +2012,6 @@ fn resident_dns_runtime_cache_replacement_updates_deadline_index() {
 }
 
 #[test]
-fn resident_tcp_sniff_domain_routing_update_plan_records_target_ip() {
-    let matcher = domain_routing_test_matcher();
-    let mut bitmap_buffer = Vec::new();
-    let plan = build_resident_domain_routing_ip_update_plan(
-        &matcher,
-        &mut bitmap_buffer,
-        "tcp-sniff",
-        "www.example.com.",
-        "198.51.100.10".parse().unwrap(),
-    )
-    .unwrap()
-    .unwrap();
-
-    assert_eq!(plan.owner_key, "tcp-sniff|www.example.com|198.51.100.10");
-    assert_eq!(plan.bitmap[0], 0x1);
-    assert!(plan.bitmap[1..].iter().all(|word| *word == 0));
-    assert_eq!(plan.ip, ip_to_key("198.51.100.10".parse().unwrap()));
-}
-
-#[test]
-fn resident_tcp_sniff_domain_routing_update_plan_skips_unmatched_domain() {
-    let matcher = domain_routing_test_matcher();
-    let mut bitmap_buffer = Vec::new();
-    let plan = build_resident_domain_routing_ip_update_plan(
-        &matcher,
-        &mut bitmap_buffer,
-        "tcp-sniff",
-        "invalid.test",
-        "198.51.100.10".parse().unwrap(),
-    )
-    .unwrap();
-
-    assert_eq!(plan, None);
-}
-
-#[test]
 fn resident_dns_plan_admits_request_qname_and_qtype_rules() {
     let input = r#"
         global {}
