@@ -11,7 +11,7 @@ pub(super) struct PreparedRuntimeGeneration {
     committed: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct RuntimeDatabaseSnapshot {
     pub(super) system: Option<RuntimeSystemSnapshot>,
     pub(super) metadata: Vec<(String, Option<String>)>,
@@ -43,6 +43,11 @@ impl PreparedRuntimeGeneration {
     pub(super) fn mark_committed(&mut self) {
         self.committed = true;
         self.candidate_path = None;
+    }
+
+    pub(super) fn discard_rollback_state(&mut self) {
+        self.previous_content = None;
+        self.database_snapshot = RuntimeDatabaseSnapshot::default();
     }
 }
 
