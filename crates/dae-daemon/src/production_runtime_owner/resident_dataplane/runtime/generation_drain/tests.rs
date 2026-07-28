@@ -6,6 +6,7 @@ struct TestDrainControl {
     id: u64,
     lifecycle: ResidentGenerationLifecycle,
     stop_requests: Arc<AtomicUsize>,
+    flow_stop: AtomicBool,
     udp_stop: AtomicBool,
 }
 
@@ -30,6 +31,10 @@ impl ResidentDrainControl for TestDrainControl {
         self.udp_stop.load(Ordering::Acquire)
     }
 
+    fn flow_stop_is_requested(&self) -> bool {
+        self.flow_stop.load(Ordering::Acquire)
+    }
+
     fn udp_router_is_retained(&self) -> bool {
         false
     }
@@ -40,6 +45,7 @@ impl ResidentDrainControl for TestDrainControl {
 
     fn request_force_stop(&self) {
         self.retire_workloads();
+        self.flow_stop.store(true, Ordering::Release);
         self.udp_stop.store(true, Ordering::Release);
     }
 }
@@ -66,6 +72,7 @@ impl TestGeneration {
                     id,
                     lifecycle: ResidentGenerationLifecycle::default(),
                     stop_requests: Arc::clone(&stop_requests),
+                    flow_stop: AtomicBool::new(false),
                     udp_stop: AtomicBool::new(false),
                 }),
             }),
@@ -156,6 +163,8 @@ fn rollback_reactivation_removes_stale_retirement_record() {
     drain.reap(now + Duration::from_secs(120));
 
     assert!(generation.control.lifecycle.admission_is_open());
+    assert!(!generation.control.flow_stop.load(Ordering::Acquire));
+    assert!(!generation.control.udp_stop.load(Ordering::Acquire));
     assert_eq!(stop_requests.load(Ordering::Relaxed), 0);
     let snapshot = drain.snapshot();
     assert_eq!(snapshot["retired"], 0);
@@ -201,7 +210,7 @@ fn capacity_pressure_evicts_the_oldest_generation_and_keeps_publication_admitted
 }
 
 #[test]
-fn committed_publication_stops_retired_control_plane_without_forcing_udp() {
+fn committed_publication_hard_stops_retired_generation() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
@@ -211,8 +220,48 @@ fn committed_publication_stops_retired_control_plane_without_forcing_udp() {
 
     assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
     assert!(generation.control.lifecycle.stop_is_requested());
-    assert!(!generation.control.udp_stop.load(Ordering::Acquire));
+    assert!(generation.control.flow_stop.load(Ordering::Acquire));
+    assert!(generation.control.udp_stop.load(Ordering::Acquire));
     assert_eq!(drain.snapshot()["retired"], 1);
+    assert_eq!(drain.snapshot()["finalizationForcedTotal"], 1);
+}
+
+#[test]
+fn committed_publication_detaches_unowned_generation_immediately() {
+    let drain = test_drain(Duration::from_secs(60), 2);
+    let now = Instant::now();
+    let (generation, stop_requests) = TestGeneration::new(1);
+    drain.retire_shared_at(generation.clone(), now);
+    drop(generation);
+
+    drain.finalize_retirements();
+
+    assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
+    let snapshot = drain.snapshot();
+    assert_eq!(snapshot["retired"], 0);
+    assert_eq!(snapshot["detachedTotal"], 1);
+    assert_eq!(snapshot["releasedTotal"], 1);
+    assert_eq!(snapshot["naturalTotal"], 0);
+    assert_eq!(snapshot["finalizationForcedTotal"], 1);
+}
+
+#[test]
+fn committed_publication_does_not_stop_the_active_generation() {
+    let drain = test_drain(Duration::from_secs(60), 2);
+    let now = Instant::now();
+    let (retired, retired_stop_requests) = TestGeneration::new(1);
+    let (active, active_stop_requests) = TestGeneration::new(2);
+    drain.retire_shared_at(retired.clone(), now);
+
+    drain.finalize_retirements();
+
+    assert_eq!(retired_stop_requests.load(Ordering::Relaxed), 1);
+    assert!(retired.control.flow_stop.load(Ordering::Acquire));
+    assert!(retired.control.udp_stop.load(Ordering::Acquire));
+    assert_eq!(active_stop_requests.load(Ordering::Relaxed), 0);
+    assert!(active.control.lifecycle.admission_is_open());
+    assert!(!active.control.flow_stop.load(Ordering::Acquire));
+    assert!(!active.control.udp_stop.load(Ordering::Acquire));
 }
 
 #[test]

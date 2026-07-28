@@ -741,6 +741,23 @@ pub(crate) struct ResidentTcpConnectionGuard {
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
+pub(crate) struct ResidentUdpActivityGuard {
+    metrics: Arc<ResidentDataplaneMetrics>,
+}
+
+impl ResidentUdpActivityGuard {
+    pub(super) fn new(metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+        metrics.udp_opened();
+        Self { metrics }
+    }
+}
+
+impl Drop for ResidentUdpActivityGuard {
+    fn drop(&mut self) {
+        self.metrics.udp_closed();
+    }
+}
+
 impl ResidentTcpConnectionGuard {
     pub(super) fn new(metrics: Arc<ResidentDataplaneMetrics>) -> Self {
         metrics.tcp_opened();
@@ -766,6 +783,16 @@ mod tests {
             assert_eq!(metrics.active_tcp_connections.load(Ordering::Relaxed), 1);
         }
         assert_eq!(metrics.active_tcp_connections.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn udp_activity_guard_closes_on_drop() {
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        {
+            let _guard = ResidentUdpActivityGuard::new(Arc::clone(&metrics));
+            assert_eq!(metrics.active_udp_sessions.load(Ordering::Relaxed), 1);
+        }
+        assert_eq!(metrics.active_udp_sessions.load(Ordering::Relaxed), 0);
     }
 
     #[test]

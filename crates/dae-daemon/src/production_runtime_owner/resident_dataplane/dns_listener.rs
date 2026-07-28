@@ -301,18 +301,28 @@ async fn run_resident_dns_udp_bind_listener_async(
                 };
                 let dns = Arc::clone(&generation.dns);
                 let metrics = Arc::clone(&generation.metrics);
+                let flow_stop = generation.drain_control.flow_stop_handle();
                 drop(generation);
-                tasks.spawn(handle_resident_dns_udp_bind_packet_async(
-                    Arc::clone(&socket),
-                    local_addr,
-                    peer,
-                    dns,
-                    metrics,
-                    request,
-                    event_file.clone(),
-                    Arc::clone(&event_lock),
-                    permit,
-                ));
+                let task_socket = Arc::clone(&socket);
+                let task_event_file = event_file.clone();
+                let task_event_lock = Arc::clone(&event_lock);
+                tasks.spawn(async move {
+                    let _ = run_until_resident_stop(
+                        &flow_stop,
+                        handle_resident_dns_udp_bind_packet_async(
+                            task_socket,
+                            local_addr,
+                            peer,
+                            dns,
+                            metrics,
+                            request,
+                            task_event_file,
+                            task_event_lock,
+                            permit,
+                        ),
+                    )
+                    .await;
+                });
             }
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {}
         }
@@ -345,7 +355,7 @@ async fn handle_resident_dns_udp_bind_packet_async(
     event_lock: Arc<Mutex<()>>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
-    metrics.udp_opened();
+    let _udp_guard = ResidentUdpActivityGuard::new(Arc::clone(&metrics));
     metrics.add_upload(request.len());
     let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
     match result {
@@ -446,7 +456,6 @@ async fn handle_resident_dns_udp_bind_packet_async(
             );
         }
     }
-    metrics.udp_closed();
 }
 
 async fn send_resident_dns_udp_bind_failure_response(
@@ -536,18 +545,27 @@ async fn run_resident_dns_tcp_bind_listener_async(
                 };
                 let dns = Arc::clone(&generation.dns);
                 let metrics = Arc::clone(&generation.metrics);
+                let flow_stop = generation.drain_control.flow_stop_handle();
                 drop(generation);
-                tasks.spawn(handle_resident_dns_tcp_bind_connection_async(
-                    stream,
-                    peer,
-                    local_addr,
-                    dns,
-                    metrics,
-                    Arc::clone(&stop),
-                    event_file.clone(),
-                    Arc::clone(&event_lock),
-                    permit,
-                ));
+                let task_event_file = event_file.clone();
+                let task_event_lock = Arc::clone(&event_lock);
+                tasks.spawn(async move {
+                    let _ = run_until_resident_stop(
+                        &flow_stop,
+                        handle_resident_dns_tcp_bind_connection_async(
+                            stream,
+                            peer,
+                            local_addr,
+                            dns,
+                            metrics,
+                            Arc::clone(&flow_stop),
+                            task_event_file,
+                            task_event_lock,
+                            permit,
+                        ),
+                    )
+                    .await;
+                });
             }
         }
     }

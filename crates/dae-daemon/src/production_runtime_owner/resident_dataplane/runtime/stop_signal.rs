@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -55,6 +56,24 @@ impl ResidentStopListener {
     }
 }
 
+pub(crate) async fn run_until_resident_stop<F>(
+    stop: &SharedResidentStopSignal,
+    future: F,
+) -> Option<F::Output>
+where
+    F: Future,
+{
+    if stop.load(Ordering::Acquire) {
+        return None;
+    }
+    let mut listener = stop.listener();
+    tokio::select! {
+        biased;
+        _ = listener.cancelled() => None,
+        output = future => Some(output),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -91,5 +110,32 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(20), listener.cancelled())
             .await
             .expect("late listener must observe the stop request");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn scoped_future_is_cancelled_by_stop_signal() {
+        let stop = ResidentStopSignal::shared();
+        let task_stop = Arc::clone(&stop);
+        let task = tokio::spawn(async move {
+            run_until_resident_stop(&task_stop, std::future::pending::<()>()).await
+        });
+
+        stop.store(true, Ordering::Release);
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .expect("scoped future cancellation timeout")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stopped_scope_does_not_poll_a_ready_future() {
+        let stop = ResidentStopSignal::shared();
+        stop.store(true, Ordering::Release);
+
+        assert_eq!(run_until_resident_stop(&stop, async { 7 }).await, None);
     }
 }

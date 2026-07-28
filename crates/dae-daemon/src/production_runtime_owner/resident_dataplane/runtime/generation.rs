@@ -23,6 +23,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentGener
     id: u64,
     lifecycle: ResidentGenerationLifecycle,
     workload_stop: SharedResidentStopSignal,
+    flow_stop: SharedResidentStopSignal,
     udp_stop: SharedResidentStopSignal,
     udp_router_retained: AtomicBool,
     udp_dns_runtime_retained: AtomicBool,
@@ -34,6 +35,7 @@ impl std::fmt::Debug for ResidentGenerationDrainControl {
             .debug_struct("ResidentGenerationDrainControl")
             .field("id", &self.id)
             .field("stop_requested", &self.stop_is_requested())
+            .field("flow_stop_requested", &self.flow_stop_is_requested())
             .field("udp_stop_requested", &self.udp_stop_is_requested())
             .field("udp_router_retained", &self.udp_router_is_retained())
             .field(
@@ -50,6 +52,7 @@ impl ResidentGenerationDrainControl {
             id,
             lifecycle: ResidentGenerationLifecycle::default(),
             workload_stop,
+            flow_stop: ResidentStopSignal::shared(),
             udp_stop: ResidentStopSignal::shared(),
             udp_router_retained: AtomicBool::new(false),
             udp_dns_runtime_retained: AtomicBool::new(false),
@@ -80,6 +83,14 @@ impl ResidentGenerationDrainControl {
         self.udp_stop.load(Ordering::Acquire)
     }
 
+    pub(super) fn flow_stop_is_requested(&self) -> bool {
+        self.flow_stop.load(Ordering::Acquire)
+    }
+
+    pub(super) fn flow_stop_handle(&self) -> SharedResidentStopSignal {
+        Arc::clone(&self.flow_stop)
+    }
+
     pub(super) fn retire_workloads(&self) {
         self.lifecycle.request_stop();
         self.workload_stop.store(true, Ordering::Release);
@@ -87,6 +98,7 @@ impl ResidentGenerationDrainControl {
 
     pub(super) fn request_force_stop(&self) {
         self.retire_workloads();
+        self.flow_stop.store(true, Ordering::Release);
         self.udp_stop.store(true, Ordering::Release);
     }
 
@@ -273,5 +285,19 @@ mod tests {
             .expect("active generation slot must retain its publication sender");
         assert_eq!(*publication.borrow_and_update(), 2);
         assert!(Arc::ptr_eq(&previous, &first));
+    }
+
+    #[tokio::test]
+    async fn generation_force_stop_wakes_flow_waiters() {
+        let control = ResidentGenerationDrainControl::new(1, ResidentStopSignal::shared());
+        let mut flow_stop = control.flow_stop_handle().listener();
+
+        control.request_force_stop();
+
+        tokio::time::timeout(Duration::from_secs(1), flow_stop.cancelled())
+            .await
+            .expect("generation stop must wake active flows");
+        assert!(control.flow_stop_is_requested());
+        assert!(control.udp_stop_is_requested());
     }
 }
