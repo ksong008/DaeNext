@@ -148,6 +148,27 @@ fn resident_runtime_shutdown_aborts_uncooperative_shared_tasks() {
     assert_eq!(evidence["task_count_detached"], 0);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resident_runtime_shutdown_is_safe_on_an_external_runtime_worker() {
+    let mut owner = test_owner(5_002, "resident-runtime-nested-shutdown-test");
+    let stop = owner.stop_handle();
+    owner.spawn_async_task("cooperative-task", "runtime-lifecycle-test", async move {
+        stop.listener().cancelled().await;
+    });
+    owner.spawn_async_task("pending-task", "runtime-lifecycle-test", async move {
+        std::future::pending::<()>().await;
+    });
+
+    let evidence = owner.shutdown_with_grace(Duration::from_millis(25));
+
+    assert_eq!(evidence["status"], "pass");
+    assert_eq!(evidence["safetyStatus"], "pass");
+    assert_eq!(evidence["task_count_joined"], 1);
+    assert_eq!(evidence["task_count_timed_out"], 1);
+    assert_eq!(evidence["task_count_aborted"], 1);
+    assert_eq!(evidence["task_count_detached"], 0);
+}
+
 #[test]
 fn resident_runtime_propagates_forced_owned_cleanup_without_latching_failure() {
     let mut owner = test_owner(5_001, "resident-runtime-forced-owned-cleanup-test");
