@@ -2,6 +2,8 @@ use super::*;
 
 mod registry;
 use self::registry::*;
+mod activity;
+use self::activity::*;
 mod reclaim;
 use self::reclaim::ProductUiReclaim;
 pub(in crate::daed_product) use self::reclaim::ProductUiReclaimWorker;
@@ -21,9 +23,13 @@ pub(super) struct ProductUiRuntime {
     sessions_active: AtomicU64,
     sessions_peak: AtomicU64,
     requests_active: AtomicU64,
+    headerless_requests_active: AtomicU64,
     bytes_in_flight: AtomicU64,
     drain_epoch: AtomicU64,
     reclaim_drain_epoch: AtomicU64,
+    headerless_drain_epoch: AtomicU64,
+    reclaim_headerless_drain_epoch: AtomicU64,
+    headerless_reclaim_activity: Mutex<ProductUiHeaderlessReclaimActivity>,
     reclaim: Arc<ProductUiReclaim>,
 }
 
@@ -47,9 +53,13 @@ impl ProductUiRuntime {
             sessions_active: AtomicU64::new(0),
             sessions_peak: AtomicU64::new(0),
             requests_active: AtomicU64::new(0),
+            headerless_requests_active: AtomicU64::new(0),
             bytes_in_flight: AtomicU64::new(0),
             drain_epoch: AtomicU64::new(0),
             reclaim_drain_epoch: AtomicU64::new(0),
+            headerless_drain_epoch: AtomicU64::new(0),
+            reclaim_headerless_drain_epoch: AtomicU64::new(0),
+            headerless_reclaim_activity: Mutex::new(ProductUiHeaderlessReclaimActivity::default()),
             reclaim: Arc::new(ProductUiReclaim::default()),
         }
     }
@@ -96,26 +106,6 @@ impl ProductUiRuntime {
         }))
     }
 
-    pub(super) fn request_lease(
-        self: &Arc<Self>,
-        request: &HttpRequest,
-    ) -> Option<ProductUiRequestLease> {
-        let page_id = optional_page_id_from_request(request).ok().flatten()?;
-        let charged_bytes = request
-            .body
-            .len()
-            .saturating_add(page_id.len())
-            .try_into()
-            .unwrap_or(u64::MAX);
-        self.requests_active.fetch_add(1, Ordering::Relaxed);
-        self.bytes_in_flight
-            .fetch_add(charged_bytes, Ordering::Relaxed);
-        Some(ProductUiRequestLease {
-            runtime: Arc::clone(self),
-            charged_bytes,
-        })
-    }
-
     pub(super) fn sweep(&self) {
         self.sweep_at(Instant::now());
     }
@@ -131,6 +121,7 @@ impl ProductUiRuntime {
     ) {
         self.sweep();
         self.request_reclaim_if_drained(metrics);
+        self.request_reclaim_if_headerless_idle(metrics);
         worker.poll(self, metrics);
         if self.reclaim.take_owner_retry() {
             let drain_epoch = self.drain_epoch.load(Ordering::Acquire);
@@ -189,8 +180,11 @@ impl ProductUiRuntime {
             "sessionsActive": self.sessions_active.load(Ordering::Relaxed),
             "sessionsPeak": self.sessions_peak.load(Ordering::Relaxed),
             "requestsActive": self.requests_active.load(Ordering::Relaxed),
+            "headerlessRequestsActive": self.headerless_requests_active.load(Ordering::Relaxed),
             "bytesInFlight": self.bytes_in_flight.load(Ordering::Relaxed).to_string(),
             "drainEpoch": self.drain_epoch.load(Ordering::Relaxed),
+            "headerlessDrainEpoch": self.headerless_drain_epoch.load(Ordering::Relaxed),
+            "reclaimHeaderlessDrainEpoch": self.reclaim_headerless_drain_epoch.load(Ordering::Relaxed),
             "reclaim": self.reclaim.snapshot(),
         })
     }
@@ -224,23 +218,6 @@ fn page_id_from_request(request: &HttpRequest) -> io::Result<&str> {
     })
 }
 
-pub(super) struct ProductUiRequestLease {
-    runtime: Arc<ProductUiRuntime>,
-    charged_bytes: u64,
-}
-
-impl Drop for ProductUiRequestLease {
-    fn drop(&mut self) {
-        self.runtime.requests_active.fetch_sub(1, Ordering::Release);
-        let _ = self.runtime.bytes_in_flight.fetch_update(
-            Ordering::Release,
-            Ordering::Relaxed,
-            |bytes| Some(bytes.saturating_sub(self.charged_bytes)),
-        );
-        self.runtime.sweep();
-    }
-}
-
 pub(super) struct ProductUiStreamLease {
     runtime: Arc<ProductUiRuntime>,
     key: Option<ProductUiSessionKey>,
@@ -264,6 +241,16 @@ mod tests {
             path: "/api/ui/session".to_owned(),
             query: HashMap::new(),
             headers: HashMap::from([(PRODUCT_UI_PAGE_HEADER.to_owned(), page_id.to_owned())]),
+            body: Vec::new(),
+        }
+    }
+
+    fn headerless_request() -> HttpRequest {
+        HttpRequest {
+            method: "GET".to_owned(),
+            path: "/api/runtime/overview".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
             body: Vec::new(),
         }
     }
@@ -333,5 +320,29 @@ mod tests {
             reclaim.pointer("/last/detail/arenaPurgeScope"),
             Some(&json!("control-plane-only"))
         );
+    }
+
+    #[test]
+    fn headerless_control_requests_trigger_one_coalesced_idle_reclaim() {
+        let runtime = Arc::new(ProductUiRuntime::new(4, 2, Duration::from_secs(10)));
+        let metrics = ProductHttpMetrics::default();
+        let mut first = runtime.register_reclaim_worker();
+        let mut second = runtime.register_reclaim_worker();
+        let lease = runtime.request_lease(&headerless_request()).unwrap();
+        assert_eq!(runtime.snapshot()["headerlessRequestsActive"], json!(1));
+        drop(lease);
+        assert_eq!(runtime.snapshot()["headerlessDrainEpoch"], json!(1));
+        runtime
+            .headerless_reclaim_activity
+            .lock()
+            .unwrap()
+            .idle_since = Some(Instant::now() - PRODUCT_UI_HEADERLESS_RECLAIM_QUIET);
+
+        runtime.maintain(&metrics, &mut first);
+        runtime.maintain(&metrics, &mut second);
+
+        let snapshot = runtime.snapshot();
+        assert_eq!(snapshot["reclaimHeaderlessDrainEpoch"], json!(1));
+        assert_eq!(snapshot["reclaim"]["completedTotal"], json!(1));
     }
 }
