@@ -208,7 +208,7 @@ async fn run_proxy_dns_udp_actor(
     let pending_limit = runtime_config.pending_limit.max(1);
     let mut pending = HashMap::<u16, PendingProxyDnsUdpRequest>::new();
     let mut deadlines = VecDeque::<PendingProxyDnsDeadline>::new();
-    let mut id_allocator = UdpRequestIdAllocator::new(runtime_config.attempt_timeout);
+    let mut id_allocator = DnsRequestIdAllocator::new(runtime_config.attempt_timeout);
     // Protocol executors contain mutually exclusive transport state. Keep the selected
     // executor off the actor worker stack so adding one protocol variant cannot silently
     // raise the stack requirement of every DNS UDP worker.

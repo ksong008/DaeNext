@@ -6,7 +6,7 @@ use super::quic::{
     connect_dns_quic_endpoint_async,
 };
 use super::route::{
-    ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
+    ResidentDnsUpstreamRoutedTarget, race_dns_upstream_targets, resolved_upstream_targets,
     select_dns_upstream_targets,
 };
 use super::wire::{doh_request_target, restore_dns_response_id};
@@ -25,7 +25,7 @@ pub(super) async fn forward_dns_h3_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let (targets, mut failures) = select_dns_upstream_targets(
+    let (targets, failures) = select_dns_upstream_targets(
         plan,
         upstream,
         resolved_upstream_targets(upstream)
@@ -34,22 +34,18 @@ pub(super) async fn forward_dns_h3_async(
         L4Proto::Udp,
     )
     .map_err(ResidentDnsTransportError::message)?;
-    for remote in targets {
-        match forward_dns_h3_to_routed_target_async(upstream, remote, payload, forwarders, context)
-            .await
-        {
-            Ok(response) => return Ok(response),
-            Err(error) => {
-                if !error.allows_next_candidate() {
-                    return Err(error);
-                }
-                failures.push(error.to_string());
-            }
-        }
-    }
-    Err(ResidentDnsTransportError::message(
-        dns_upstream_targets_failed(upstream, "forward DNS H3 to", failures),
-    ))
+    race_dns_upstream_targets(
+        upstream,
+        "forward DNS H3 to",
+        targets,
+        failures,
+        forwarders.resources.upstream_candidate_race_width(),
+        |remote| async move {
+            forward_dns_h3_to_routed_target_async(upstream, remote, payload, forwarders, context)
+                .await
+        },
+    )
+    .await
 }
 
 async fn forward_dns_h3_to_routed_target_async(

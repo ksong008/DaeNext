@@ -31,6 +31,8 @@ const DNS_PRESSURE_UPSTREAM_TAG_ENV: &str = "DAENEXT_DNS_PRESSURE_UPSTREAM_TAG";
 const DNS_PRESSURE_UPSTREAM_SCHEME_ENV: &str = "DAENEXT_DNS_PRESSURE_UPSTREAM_SCHEME";
 const DNS_PRESSURE_RESPONSE_IP_ENV: &str = "DAENEXT_DNS_PRESSURE_RESPONSE_IP";
 const DNS_PRESSURE_RESPONSE_TTL_ENV: &str = "DAENEXT_DNS_PRESSURE_RESPONSE_TTL";
+const DNS_PRESSURE_DIRECT_SHARDS_ENV: &str = "DAENEXT_DNS_PRESSURE_DIRECT_SHARDS";
+const DNS_PRESSURE_KEY_SPACE_ENV: &str = "DAENEXT_DNS_PRESSURE_KEY_SPACE";
 const DNS_LIVE_PRESSURE_ENABLE_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_ENABLE";
 const DNS_LIVE_PRESSURE_TOTAL_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_TOTAL";
 const DNS_LIVE_PRESSURE_CONCURRENCY_ENV: &str = "DAENEXT_DNS_LIVE_PRESSURE_CONCURRENCY";
@@ -487,7 +489,7 @@ fn dns_upstream_candidates_keep_multiple_resolved_targets_generic() {
 }
 
 #[tokio::test]
-async fn tcp_udp_exhausts_udp_targets_before_starting_tcp_phase() {
+async fn tcp_udp_preserves_the_complete_udp_target_set_while_tcp_races() {
     let live = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
@@ -542,15 +544,64 @@ async fn tcp_udp_exhausts_udp_targets_before_starting_tcp_phase() {
 }
 
 #[tokio::test]
+async fn tcp_udp_tcp_response_does_not_wait_for_blackholed_udp() {
+    let tcp = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let target = tcp.local_addr().unwrap();
+    let _udp_blackhole = tokio::net::UdpSocket::bind(target).await.unwrap();
+    let tcp_server = tokio::spawn(async move {
+        let (mut stream, _) = tcp.accept().await.unwrap();
+        let request_len = stream.read_u16().await.unwrap() as usize;
+        let mut request = vec![0_u8; request_len];
+        stream.read_exact(&mut request).await.unwrap();
+        let response =
+            dns_pressure_response_for_query(&request, IpAddr::V4(Ipv4Addr::new(192, 0, 2, 47)), 60);
+        stream.write_u16(response.len() as u16).await.unwrap();
+        stream.write_all(&response).await.unwrap();
+    });
+    let upstream = parse_dns_upstream(
+        1,
+        "parallel",
+        &format!("tcp+udp://{target}"),
+        test_fallback_resolver(),
+        0,
+    )
+    .unwrap();
+    let started = time::Instant::now();
+
+    let response = transport::forward_dns_to_upstream_async(
+        &upstream,
+        QUERY,
+        &ResidentDnsPlan::asis(0),
+        &Arc::new(ResidentDnsForwarderCache::default()),
+        ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(&response[0..2], &QUERY[0..2]);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "TCP response waited for the blackholed UDP branch: {:?}",
+        started.elapsed()
+    );
+    tcp_server.await.unwrap();
+}
+
+#[tokio::test]
 async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
     let tcp = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
     let target = tcp.local_addr().unwrap();
     let udp = tokio::net::UdpSocket::bind(target).await.unwrap();
+    let (tcp_request_started, wait_for_tcp_request) = tokio::sync::oneshot::channel();
+    let (udp_truncated_sent, wait_for_udp_truncated) = tokio::sync::oneshot::channel();
     let udp_server = tokio::spawn(async move {
         let mut request = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
         let (read, peer) = udp.recv_from(&mut request).await.unwrap();
+        wait_for_tcp_request.await.unwrap();
         let mut response = dns_pressure_response_for_query(
             &request[..read],
             IpAddr::V4(Ipv4Addr::new(192, 0, 2, 45)),
@@ -558,12 +609,15 @@ async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
         );
         response[2] |= 0x02;
         udp.send_to(&response, peer).await.unwrap();
+        let _ = udp_truncated_sent.send(());
     });
     let tcp_server = tokio::spawn(async move {
         let (mut stream, _) = tcp.accept().await.unwrap();
         let request_len = stream.read_u16().await.unwrap() as usize;
         let mut request = vec![0_u8; request_len];
         stream.read_exact(&mut request).await.unwrap();
+        let _ = tcp_request_started.send(());
+        wait_for_udp_truncated.await.unwrap();
         let response =
             dns_pressure_response_for_query(&request, IpAddr::V4(Ipv4Addr::new(192, 0, 2, 46)), 60);
         stream.write_u16(response.len() as u16).await.unwrap();
@@ -578,17 +632,25 @@ async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
     )
     .unwrap();
 
-    let response = transport::forward_dns_to_upstream_async(
-        &upstream,
-        QUERY,
-        &ResidentDnsPlan::asis(0),
-        &Arc::new(ResidentDnsForwarderCache::default()),
-        ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
+    let response = time::timeout(
+        Duration::from_secs(2),
+        transport::forward_dns_to_upstream_async(
+            &upstream,
+            QUERY,
+            &ResidentDnsPlan::asis(0),
+            &Arc::new(ResidentDnsForwarderCache::default()),
+            ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
+        ),
     )
     .await
+    .expect("parallel TCP and UDP branches did not finish after the truncated UDP response")
     .unwrap();
-    udp_server.await.unwrap();
-    tcp_server.await.unwrap();
+    time::timeout(Duration::from_secs(2), async {
+        udp_server.await.unwrap();
+        tcp_server.await.unwrap();
+    })
+    .await
+    .expect("tcp+udp fixture servers did not finish");
     assert_eq!(&response[0..2], &QUERY[0..2]);
     assert_eq!(response[2] & 0x02, 0);
 }
@@ -1409,10 +1471,10 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
     let server_received = Arc::clone(&received);
     let response_ip = config.response_ip;
     let response_ttl = config.response_ttl;
-    let total = config.total;
+    let upstream_expected = config.key_space.min(config.total);
     let server = tokio::spawn(async move {
         let mut buf = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
-        while server_received.load(Ordering::Relaxed) < total {
+        while server_received.load(Ordering::Relaxed) < upstream_expected {
             let Ok((read, peer)) = upstream.recv_from(&mut buf).await else {
                 break;
             };
@@ -1439,7 +1501,14 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
     .replace("__UPSTREAM_TAG__", &config.upstream_tag)
     .replace("__UPSTREAM_SCHEME__", &config.upstream_scheme)
     .replace("__UPSTREAM_AUTHORITY__", &upstream_authority);
-    let plan = Arc::new(build_resident_dns_plan(&parse_config(&input), &test_geodata()).unwrap());
+    let mut plan = build_resident_dns_plan(&parse_config(&input), &test_geodata()).unwrap();
+    if let Some(direct_shards) = config.direct_shards {
+        Arc::get_mut(&mut plan.forwarders)
+            .expect("DNS pressure plan must exclusively own its forwarder cache")
+            .udp_runtime
+            .direct_shards = direct_shards;
+    }
+    let plan = Arc::new(plan);
     let semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency));
     let latencies = Arc::new(Mutex::new(Vec::with_capacity(config.total)));
     let failures = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1481,7 +1550,11 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
         let plan = Arc::clone(&plan);
         let latencies = Arc::clone(&latencies);
         let failures = Arc::clone(&failures);
-        let qname = dns_pressure_qname(&config.qname_prefix, index, &config.qname_suffix);
+        let qname = dns_pressure_qname(
+            &config.qname_prefix,
+            index % config.key_space,
+            &config.qname_suffix,
+        );
         let qtype = config.qtype;
         tasks.push(tokio::spawn(async move {
             let _permit = permit;
@@ -1511,7 +1584,7 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
         task.await.unwrap();
     }
     let elapsed = started.elapsed();
-    if received.load(Ordering::Relaxed) < config.total {
+    if received.load(Ordering::Relaxed) < upstream_expected {
         server.abort();
         let _ = server.await;
     } else {
@@ -1534,6 +1607,7 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
             / 100;
         latency_values[rank]
     };
+    let forwarder_metrics = plan.forwarders.metrics.snapshot();
     println!(
         "dns_pressure_result {}",
         serde_json::json!({
@@ -1543,12 +1617,24 @@ async fn resident_dns_pressure_uses_parameterized_mock_upstream() {
             "success": success,
             "failure": failure,
             "upstream_received": received.load(Ordering::Relaxed),
+            "upstream_expected": upstream_expected,
+            "key_space": config.key_space,
             "elapsed_ms": elapsed.as_millis(),
             "qps": success as f64 / elapsed.as_secs_f64(),
             "latency_us": {
                 "p50": percentile(50),
                 "p95": percentile(95),
                 "p99": percentile(99),
+            },
+            "dns_udp": {
+                "actors_opened": forwarder_metrics["dnsUdpActorsOpened"],
+                "actors_closed": forwarder_metrics["dnsUdpActorsClosed"],
+                "pending_current": forwarder_metrics["dnsUdpPendingCurrent"],
+                "pending_maximum": forwarder_metrics["dnsUdpPendingMaximum"],
+                "pending_rejected": forwarder_metrics["dnsUdpPendingRejected"],
+                "queue_wait_timeouts": forwarder_metrics["dnsUdpQueueWaitTimeouts"],
+                "id_exhausted": forwarder_metrics["dnsUdpIdExhausted"],
+                "retries": forwarder_metrics["dnsUdpRetries"],
             },
             "trace": trace,
             "first_errors": failure_values.into_iter().take(5).collect::<Vec<_>>(),
@@ -1708,6 +1794,8 @@ struct DnsPressureConfig {
     upstream_scheme: String,
     response_ip: IpAddr,
     response_ttl: u32,
+    direct_shards: Option<usize>,
+    key_space: usize,
 }
 
 struct DnsLivePressureConfig {
@@ -1754,6 +1842,18 @@ fn dns_pressure_config_from_env() -> Option<DnsPressureConfig> {
         response_ttl: dns_pressure_env(DNS_PRESSURE_RESPONSE_TTL_ENV)
             .parse()
             .unwrap(),
+        direct_shards: std::env::var(DNS_PRESSURE_DIRECT_SHARDS_ENV)
+            .ok()
+            .map(|value| value.parse::<usize>().unwrap().max(1)),
+        key_space: std::env::var(DNS_PRESSURE_KEY_SPACE_ENV)
+            .ok()
+            .map(|value| value.parse::<usize>().unwrap().max(1))
+            .unwrap_or_else(|| {
+                dns_pressure_env(DNS_PRESSURE_TOTAL_ENV)
+                    .parse::<usize>()
+                    .unwrap()
+                    .max(1)
+            }),
     })
 }
 
@@ -1920,7 +2020,7 @@ fn dns_pressure_response_for_query(query: &[u8], response_ip: IpAddr, ttl: u32) 
 }
 
 #[tokio::test]
-async fn resident_dns_inflight_lock_serializes_same_key() {
+async fn resident_dns_flight_broadcasts_one_response_without_serial_locking() {
     let cache = ResidentDnsRuntimeCache::default();
     let key = ResidentDnsResponseCacheKey::new(
         DnsCacheKey::new("example.com.", DNS_QTYPE_A, 1),
@@ -1928,14 +2028,162 @@ async fn resident_dns_inflight_lock_serializes_same_key() {
             original_dst: "127.0.0.1:53".parse().unwrap(),
         },
     );
-    let first = cache.lock_key(key.clone()).await.unwrap();
-    let second = cache.lock_key(key);
-    assert!(
-        time::timeout(Duration::from_millis(10), second)
-            .await
-            .is_err()
+    let mut leader = cache.begin_flight(key.clone()).unwrap();
+    let follower = cache.begin_flight(key).unwrap();
+    assert!(leader.is_leader());
+    assert!(!follower.is_leader());
+
+    let wait = follower.wait(
+        ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+        0xabcd,
     );
-    drop(first);
+    let response = [0x12, 0x34, 0x81, 0x80];
+    leader.publish(Ok(&response)).unwrap();
+    assert_eq!(wait.await.unwrap(), [0xab, 0xcd, 0x81, 0x80]);
+    assert_eq!(cache.inflight_len(), 0);
+}
+
+#[tokio::test]
+async fn resident_dns_same_key_burst_wakes_all_followers_with_their_request_ids() {
+    const FOLLOWERS: usize = 128;
+    let cache = ResidentDnsRuntimeCache::default();
+    let key = ResidentDnsResponseCacheKey::new(
+        DnsCacheKey::new("burst.example.", DNS_QTYPE_A, 1),
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "127.0.0.1:53".parse().unwrap(),
+        },
+    );
+    let mut leader = cache.begin_flight(key.clone()).unwrap();
+    let followers = (0..FOLLOWERS)
+        .map(|_| cache.begin_flight(key.clone()).unwrap())
+        .collect::<Vec<_>>();
+    assert!(leader.is_leader());
+    assert!(followers.iter().all(|follower| !follower.is_leader()));
+    assert_eq!(cache.inflight_len(), 1);
+
+    leader.publish(Ok(&[0x12, 0x34, 0x81, 0x80])).unwrap();
+    let waits = followers
+        .into_iter()
+        .enumerate()
+        .map(|(index, follower)| async move {
+            let request_id = u16::try_from(index + 1).unwrap();
+            let response = follower
+                .wait(
+                    ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+                    request_id,
+                )
+                .await
+                .unwrap();
+            assert_eq!(&response[0..2], &request_id.to_be_bytes());
+        });
+    futures_util::future::join_all(waits).await;
+    assert_eq!(cache.inflight_len(), 0);
+}
+
+#[test]
+fn resident_dns_unique_key_burst_uses_independent_bounded_entries() {
+    const FLIGHTS: usize = 64;
+    let cache = ResidentDnsRuntimeCache::with_flight_entry_limit(FLIGHTS);
+    let mut leaders = (0..FLIGHTS)
+        .map(|index| {
+            let key = ResidentDnsResponseCacheKey::new(
+                DnsCacheKey::new(format!("unique-{index}.example."), DNS_QTYPE_A, 1),
+                ResidentDnsResponseCacheScope::AsIs {
+                    original_dst: "127.0.0.1:53".parse().unwrap(),
+                },
+            );
+            cache.begin_flight(key).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(leaders.iter().all(|leader| leader.is_leader()));
+    assert_eq!(cache.inflight_len(), FLIGHTS);
+
+    for (index, leader) in leaders.iter_mut().enumerate() {
+        let id = u16::try_from(index).unwrap().to_be_bytes();
+        leader.publish(Ok(&[id[0], id[1], 0x81, 0x80])).unwrap();
+    }
+    assert_eq!(cache.inflight_len(), 0);
+}
+
+#[tokio::test]
+async fn resident_dns_flight_bounds_followers_and_retained_response_bytes() {
+    let cache = ResidentDnsRuntimeCache::with_flight_limits(2, 1, 4);
+    let key = ResidentDnsResponseCacheKey::new(
+        DnsCacheKey::new("bounded-flight.example.", DNS_QTYPE_A, 1),
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "127.0.0.1:53".parse().unwrap(),
+        },
+    );
+    let mut leader = cache.begin_flight(key.clone()).unwrap();
+    let follower = cache.begin_flight(key.clone()).unwrap();
+    let follower_error = cache.begin_flight(key).err().unwrap();
+    assert!(follower_error.contains("follower limit reached"));
+
+    leader
+        .publish(Ok(&[0x12, 0x34, 0x81, 0x80, 0, 0, 0, 0]))
+        .unwrap();
+    assert_eq!(cache.flight_retained_bytes(), 0);
+    let error = follower
+        .wait(
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+            0x7171,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.contains("retained response byte limit reached"));
+
+    let retained_key = ResidentDnsResponseCacheKey::new(
+        DnsCacheKey::new("retained-flight.example.", DNS_QTYPE_A, 1),
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "127.0.0.1:53".parse().unwrap(),
+        },
+    );
+    let mut retained_leader = cache.begin_flight(retained_key.clone()).unwrap();
+    let retained_follower = cache.begin_flight(retained_key).unwrap();
+    retained_leader
+        .publish(Ok(&[0x12, 0x34, 0x81, 0x80]))
+        .unwrap();
+    assert_eq!(cache.flight_retained_bytes(), 4);
+    assert_eq!(
+        retained_follower
+            .wait(
+                ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+                0x7272,
+            )
+            .await
+            .unwrap(),
+        [0x72, 0x72, 0x81, 0x80]
+    );
+    drop(retained_follower);
+    drop(retained_leader);
+    assert_eq!(cache.flight_retained_bytes(), 0);
+}
+
+#[test]
+fn resident_dns_flight_limit_detaches_new_leaders_without_capacity_failure() {
+    let cache = ResidentDnsRuntimeCache::with_flight_entry_limit(1);
+    let first_key = ResidentDnsResponseCacheKey::new(
+        DnsCacheKey::new("first.example.", DNS_QTYPE_A, 1),
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "127.0.0.1:53".parse().unwrap(),
+        },
+    );
+    let second_key = ResidentDnsResponseCacheKey::new(
+        DnsCacheKey::new("second.example.", DNS_QTYPE_A, 1),
+        ResidentDnsResponseCacheScope::AsIs {
+            original_dst: "127.0.0.1:53".parse().unwrap(),
+        },
+    );
+    let mut registered = cache.begin_flight(first_key).unwrap();
+    let mut detached = cache.begin_flight(second_key.clone()).unwrap();
+    let independent = cache.begin_flight(second_key).unwrap();
+
+    assert!(registered.is_leader());
+    assert!(detached.is_leader());
+    assert!(independent.is_leader());
+    assert_eq!(cache.inflight_len(), 1);
+    registered.publish(Ok(&[0, 1, 0x81, 0x80])).unwrap();
+    detached.publish(Ok(&[0, 2, 0x81, 0x80])).unwrap();
     assert_eq!(cache.inflight_len(), 0);
 }
 

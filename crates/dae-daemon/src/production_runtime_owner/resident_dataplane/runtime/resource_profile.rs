@@ -220,12 +220,46 @@ const HIGH_PERFORMANCE_DNS_UDP_FORWARDER_QUEUE_DEPTH: usize = 4_096;
 const LOW_MEMORY_DNS_UDP_FORWARDER_PENDING_LIMIT: usize = 256;
 const BALANCED_DNS_UDP_FORWARDER_PENDING_LIMIT: usize = 1_024;
 const HIGH_PERFORMANCE_DNS_UDP_FORWARDER_PENDING_LIMIT: usize = 4_096;
+const LOW_MEMORY_DNS_UDP_FORWARDER_INFLIGHT_WINDOW: usize = 32;
+const BALANCED_DNS_UDP_FORWARDER_INFLIGHT_WINDOW: usize = 64;
+const HIGH_PERFORMANCE_DNS_UDP_FORWARDER_INFLIGHT_WINDOW: usize = 256;
 const LOW_MEMORY_DNS_UDP_FORWARDER_ATTEMPTS: usize = 2;
 const BALANCED_DNS_UDP_FORWARDER_ATTEMPTS: usize = 3;
 const HIGH_PERFORMANCE_DNS_UDP_FORWARDER_ATTEMPTS: usize = 3;
+const LOW_MEMORY_DNS_UDP_SHARD_IDLE_SECONDS: u64 = 15;
+const BALANCED_DNS_UDP_SHARD_IDLE_SECONDS: u64 = 30;
+const HIGH_PERFORMANCE_DNS_UDP_SHARD_IDLE_SECONDS: u64 = 60;
 const LOW_MEMORY_DNS_PROXY_UDP_ACTORS: usize = 2;
 const BALANCED_DNS_PROXY_UDP_ACTORS: usize = 8;
 const HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS: usize = 16;
+const LOW_MEMORY_DNS_FLIGHT_ENTRY_LIMIT: usize = 1_024;
+const BALANCED_DNS_FLIGHT_ENTRY_LIMIT: usize = 4_096;
+const HIGH_PERFORMANCE_DNS_FLIGHT_ENTRY_LIMIT: usize = 16_384;
+const LOW_MEMORY_DNS_FLIGHT_FOLLOWERS_PER_ENTRY: usize = 512;
+const BALANCED_DNS_FLIGHT_FOLLOWERS_PER_ENTRY: usize = 4_096;
+const HIGH_PERFORMANCE_DNS_FLIGHT_FOLLOWERS_PER_ENTRY: usize = 16_384;
+const LOW_MEMORY_DNS_FLIGHT_RETAINED_BYTES: usize = 8 * 1024 * 1024;
+const BALANCED_DNS_FLIGHT_RETAINED_BYTES: usize = 32 * 1024 * 1024;
+const HIGH_PERFORMANCE_DNS_FLIGHT_RETAINED_BYTES: usize = 128 * 1024 * 1024;
+const DNS_UPSTREAM_CANDIDATE_RACE_WIDTH: usize = 2;
+const LOW_MEMORY_DNS_TCP_CONNECTIONS_PER_ROUTE: usize = 2;
+const BALANCED_DNS_TCP_CONNECTIONS_PER_ROUTE: usize = 8;
+const HIGH_PERFORMANCE_DNS_TCP_CONNECTIONS_PER_ROUTE: usize = 16;
+const LOW_MEMORY_DNS_TCP_REQUESTS_PER_CONNECTION: usize = 64;
+const BALANCED_DNS_TCP_REQUESTS_PER_CONNECTION: usize = 256;
+const HIGH_PERFORMANCE_DNS_TCP_REQUESTS_PER_CONNECTION: usize = 512;
+const LOW_MEMORY_DNS_BIND_UDP_INFLIGHT: usize = 256;
+const BALANCED_DNS_BIND_UDP_INFLIGHT: usize = 1_024;
+const HIGH_PERFORMANCE_DNS_BIND_UDP_INFLIGHT: usize = 4_096;
+const LOW_MEMORY_DNS_BIND_TCP_CONNECTIONS: usize = 64;
+const BALANCED_DNS_BIND_TCP_CONNECTIONS: usize = 256;
+const HIGH_PERFORMANCE_DNS_BIND_TCP_CONNECTIONS: usize = 1_024;
+const LOW_MEMORY_DNS_BIND_TCP_QUERIES: usize = 512;
+const BALANCED_DNS_BIND_TCP_QUERIES: usize = 4_096;
+const HIGH_PERFORMANCE_DNS_BIND_TCP_QUERIES: usize = 16_384;
+const LOW_MEMORY_DNS_BIND_TCP_QUERIES_PER_CONNECTION: usize = 64;
+const BALANCED_DNS_BIND_TCP_QUERIES_PER_CONNECTION: usize = 256;
+const HIGH_PERFORMANCE_DNS_BIND_TCP_QUERIES_PER_CONNECTION: usize = 512;
 const LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 60;
 const BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 30;
 const HIGH_PERFORMANCE_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 15;
@@ -246,6 +280,123 @@ pub(crate) struct ResidentRuntimeProfileSelection {
     host_memory_bytes: Option<u64>,
     cgroup_limit_bytes: Option<u64>,
     invalid_value: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentDnsResourceProfile {
+    flight_entry_limit: usize,
+    flight_followers_per_entry: usize,
+    flight_retained_bytes: usize,
+    upstream_candidate_race_width: usize,
+    tcp_connections_per_route: usize,
+    tcp_requests_per_connection: usize,
+    bind_udp_inflight: usize,
+    bind_tcp_connections: usize,
+    bind_tcp_queries: usize,
+    bind_tcp_queries_per_connection: usize,
+}
+
+impl ResidentDnsResourceProfile {
+    pub(crate) fn selected() -> Self {
+        Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+    }
+
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        match profile {
+            ResidentRuntimeProfile::LowMemory => Self {
+                flight_entry_limit: LOW_MEMORY_DNS_FLIGHT_ENTRY_LIMIT,
+                flight_followers_per_entry: LOW_MEMORY_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
+                flight_retained_bytes: LOW_MEMORY_DNS_FLIGHT_RETAINED_BYTES,
+                upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                tcp_connections_per_route: LOW_MEMORY_DNS_TCP_CONNECTIONS_PER_ROUTE,
+                tcp_requests_per_connection: LOW_MEMORY_DNS_TCP_REQUESTS_PER_CONNECTION,
+                bind_udp_inflight: LOW_MEMORY_DNS_BIND_UDP_INFLIGHT,
+                bind_tcp_connections: LOW_MEMORY_DNS_BIND_TCP_CONNECTIONS,
+                bind_tcp_queries: LOW_MEMORY_DNS_BIND_TCP_QUERIES,
+                bind_tcp_queries_per_connection: LOW_MEMORY_DNS_BIND_TCP_QUERIES_PER_CONNECTION,
+            },
+            ResidentRuntimeProfile::Balanced => Self {
+                flight_entry_limit: BALANCED_DNS_FLIGHT_ENTRY_LIMIT,
+                flight_followers_per_entry: BALANCED_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
+                flight_retained_bytes: BALANCED_DNS_FLIGHT_RETAINED_BYTES,
+                upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                tcp_connections_per_route: BALANCED_DNS_TCP_CONNECTIONS_PER_ROUTE,
+                tcp_requests_per_connection: BALANCED_DNS_TCP_REQUESTS_PER_CONNECTION,
+                bind_udp_inflight: BALANCED_DNS_BIND_UDP_INFLIGHT,
+                bind_tcp_connections: BALANCED_DNS_BIND_TCP_CONNECTIONS,
+                bind_tcp_queries: BALANCED_DNS_BIND_TCP_QUERIES,
+                bind_tcp_queries_per_connection: BALANCED_DNS_BIND_TCP_QUERIES_PER_CONNECTION,
+            },
+            ResidentRuntimeProfile::HighPerformance => Self {
+                flight_entry_limit: HIGH_PERFORMANCE_DNS_FLIGHT_ENTRY_LIMIT,
+                flight_followers_per_entry: HIGH_PERFORMANCE_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
+                flight_retained_bytes: HIGH_PERFORMANCE_DNS_FLIGHT_RETAINED_BYTES,
+                upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                tcp_connections_per_route: HIGH_PERFORMANCE_DNS_TCP_CONNECTIONS_PER_ROUTE,
+                tcp_requests_per_connection: HIGH_PERFORMANCE_DNS_TCP_REQUESTS_PER_CONNECTION,
+                bind_udp_inflight: HIGH_PERFORMANCE_DNS_BIND_UDP_INFLIGHT,
+                bind_tcp_connections: HIGH_PERFORMANCE_DNS_BIND_TCP_CONNECTIONS,
+                bind_tcp_queries: HIGH_PERFORMANCE_DNS_BIND_TCP_QUERIES,
+                bind_tcp_queries_per_connection:
+                    HIGH_PERFORMANCE_DNS_BIND_TCP_QUERIES_PER_CONNECTION,
+            },
+        }
+    }
+
+    pub(crate) const fn flight_entry_limit(self) -> usize {
+        self.flight_entry_limit
+    }
+
+    pub(crate) const fn flight_followers_per_entry(self) -> usize {
+        self.flight_followers_per_entry
+    }
+
+    pub(crate) const fn flight_retained_bytes(self) -> usize {
+        self.flight_retained_bytes
+    }
+
+    pub(crate) const fn upstream_candidate_race_width(self) -> usize {
+        self.upstream_candidate_race_width
+    }
+
+    pub(crate) const fn tcp_connections_per_route(self) -> usize {
+        self.tcp_connections_per_route
+    }
+
+    pub(crate) const fn tcp_requests_per_connection(self) -> usize {
+        self.tcp_requests_per_connection
+    }
+
+    pub(crate) const fn bind_udp_inflight(self) -> usize {
+        self.bind_udp_inflight
+    }
+
+    pub(crate) const fn bind_tcp_connections(self) -> usize {
+        self.bind_tcp_connections
+    }
+
+    pub(crate) const fn bind_tcp_queries(self) -> usize {
+        self.bind_tcp_queries
+    }
+
+    pub(crate) const fn bind_tcp_queries_per_connection(self) -> usize {
+        self.bind_tcp_queries_per_connection
+    }
+
+    pub(crate) fn json(self) -> Value {
+        json!({
+            "flightEntryLimit": self.flight_entry_limit,
+            "flightFollowersPerEntry": self.flight_followers_per_entry,
+            "flightRetainedBytes": self.flight_retained_bytes,
+            "upstreamCandidateRaceWidth": self.upstream_candidate_race_width,
+            "tcpConnectionsPerRoute": self.tcp_connections_per_route,
+            "tcpRequestsPerConnection": self.tcp_requests_per_connection,
+            "bindUdpInflight": self.bind_udp_inflight,
+            "bindTcpConnections": self.bind_tcp_connections,
+            "bindTcpQueries": self.bind_tcp_queries,
+            "bindTcpQueriesPerConnection": self.bind_tcp_queries_per_connection,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1290,12 +1441,28 @@ impl ResidentRuntimeProfile {
         }
     }
 
+    pub(crate) fn dns_udp_forwarder_inflight_window_default(self) -> usize {
+        match self {
+            Self::LowMemory => LOW_MEMORY_DNS_UDP_FORWARDER_INFLIGHT_WINDOW,
+            Self::Balanced => BALANCED_DNS_UDP_FORWARDER_INFLIGHT_WINDOW,
+            Self::HighPerformance => HIGH_PERFORMANCE_DNS_UDP_FORWARDER_INFLIGHT_WINDOW,
+        }
+    }
+
     pub(crate) fn dns_udp_forwarder_attempts_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_UDP_FORWARDER_ATTEMPTS,
             Self::Balanced => BALANCED_DNS_UDP_FORWARDER_ATTEMPTS,
             Self::HighPerformance => HIGH_PERFORMANCE_DNS_UDP_FORWARDER_ATTEMPTS,
         }
+    }
+
+    pub(crate) fn dns_udp_shard_idle_timeout(self) -> Duration {
+        Duration::from_secs(match self {
+            Self::LowMemory => LOW_MEMORY_DNS_UDP_SHARD_IDLE_SECONDS,
+            Self::Balanced => BALANCED_DNS_UDP_SHARD_IDLE_SECONDS,
+            Self::HighPerformance => HIGH_PERFORMANCE_DNS_UDP_SHARD_IDLE_SECONDS,
+        })
     }
 
     pub(crate) fn dns_proxy_udp_actors_default(self) -> usize {
@@ -1409,6 +1576,9 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsUdpForwarderPendingDefault": LOW_MEMORY_DNS_UDP_FORWARDER_PENDING_LIMIT,
                 "dnsUdpForwarderAttemptsDefault": LOW_MEMORY_DNS_UDP_FORWARDER_ATTEMPTS,
                 "dnsProxyUdpActorsDefault": LOW_MEMORY_DNS_PROXY_UDP_ACTORS,
+                "dnsParallelResources": ResidentDnsResourceProfile::from_runtime_profile(
+                    ResidentRuntimeProfile::LowMemory,
+                ).json(),
                 "datapathPostflightIntervalSecondsDefault": LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
             {
@@ -1455,6 +1625,9 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsUdpForwarderPendingDefault": BALANCED_DNS_UDP_FORWARDER_PENDING_LIMIT,
                 "dnsUdpForwarderAttemptsDefault": BALANCED_DNS_UDP_FORWARDER_ATTEMPTS,
                 "dnsProxyUdpActorsDefault": BALANCED_DNS_PROXY_UDP_ACTORS,
+                "dnsParallelResources": ResidentDnsResourceProfile::from_runtime_profile(
+                    ResidentRuntimeProfile::Balanced,
+                ).json(),
                 "datapathPostflightIntervalSecondsDefault": BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
             {
@@ -1501,6 +1674,9 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
                 "dnsUdpForwarderPendingDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_PENDING_LIMIT,
                 "dnsUdpForwarderAttemptsDefault": HIGH_PERFORMANCE_DNS_UDP_FORWARDER_ATTEMPTS,
                 "dnsProxyUdpActorsDefault": HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS,
+                "dnsParallelResources": ResidentDnsResourceProfile::from_runtime_profile(
+                    ResidentRuntimeProfile::HighPerformance,
+                ).json(),
                 "datapathPostflightIntervalSecondsDefault": HIGH_PERFORMANCE_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             },
         ],
@@ -1564,6 +1740,78 @@ fn parsed_profile_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resident_dns_parallel_resources_scale_monotonically_and_report_the_contract() {
+        let low =
+            ResidentDnsResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
+        let balanced =
+            ResidentDnsResourceProfile::from_runtime_profile(ResidentRuntimeProfile::Balanced);
+        let high = ResidentDnsResourceProfile::from_runtime_profile(
+            ResidentRuntimeProfile::HighPerformance,
+        );
+
+        assert!(low.flight_entry_limit() < balanced.flight_entry_limit());
+        assert!(balanced.flight_entry_limit() < high.flight_entry_limit());
+        assert!(low.flight_followers_per_entry() < balanced.flight_followers_per_entry());
+        assert!(balanced.flight_followers_per_entry() < high.flight_followers_per_entry());
+        assert!(low.flight_retained_bytes() < balanced.flight_retained_bytes());
+        assert!(balanced.flight_retained_bytes() < high.flight_retained_bytes());
+        assert_eq!(low.upstream_candidate_race_width(), 2);
+        assert_eq!(balanced.upstream_candidate_race_width(), 2);
+        assert_eq!(high.upstream_candidate_race_width(), 2);
+        assert!(low.tcp_connections_per_route() < balanced.tcp_connections_per_route());
+        assert!(balanced.tcp_connections_per_route() < high.tcp_connections_per_route());
+        assert!(low.tcp_requests_per_connection() < balanced.tcp_requests_per_connection());
+        assert!(balanced.tcp_requests_per_connection() < high.tcp_requests_per_connection());
+        assert!(low.bind_udp_inflight() < balanced.bind_udp_inflight());
+        assert!(balanced.bind_udp_inflight() < high.bind_udp_inflight());
+        assert!(low.bind_tcp_connections() < balanced.bind_tcp_connections());
+        assert!(balanced.bind_tcp_connections() < high.bind_tcp_connections());
+        assert!(low.bind_tcp_queries() < balanced.bind_tcp_queries());
+        assert!(balanced.bind_tcp_queries() < high.bind_tcp_queries());
+        assert!(low.bind_tcp_queries_per_connection() < balanced.bind_tcp_queries_per_connection());
+        assert!(
+            balanced.bind_tcp_queries_per_connection() < high.bind_tcp_queries_per_connection()
+        );
+
+        for resources in [low, balanced, high] {
+            let route_capacity = resources
+                .tcp_connections_per_route()
+                .checked_mul(resources.tcp_requests_per_connection())
+                .expect("DNS TCP route capacity must fit usize");
+            assert!(route_capacity >= resources.tcp_requests_per_connection());
+            assert!(resources.flight_followers_per_entry() > 0);
+            assert!(resources.flight_retained_bytes() > 0);
+            assert!(resources.upstream_candidate_race_width() <= 2);
+            assert!(resources.bind_tcp_queries_per_connection() <= resources.bind_tcp_queries());
+            let contract = resources.json();
+            assert_eq!(
+                contract["flightEntryLimit"],
+                json!(resources.flight_entry_limit())
+            );
+            assert_eq!(
+                contract["upstreamCandidateRaceWidth"],
+                json!(resources.upstream_candidate_race_width())
+            );
+            assert_eq!(
+                contract["flightFollowersPerEntry"],
+                json!(resources.flight_followers_per_entry())
+            );
+            assert_eq!(
+                contract["flightRetainedBytes"],
+                json!(resources.flight_retained_bytes())
+            );
+            assert_eq!(
+                contract["tcpConnectionsPerRoute"],
+                json!(resources.tcp_connections_per_route())
+            );
+            assert_eq!(
+                contract["tcpRequestsPerConnection"],
+                json!(resources.tcp_requests_per_connection())
+            );
+        }
+    }
 
     #[test]
     fn resident_runtime_profiles_bound_tcp_and_udp_resources() {

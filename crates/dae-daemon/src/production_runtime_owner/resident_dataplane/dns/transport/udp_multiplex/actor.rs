@@ -5,14 +5,18 @@ pub(super) async fn run_udp_multiplex_actor(
     socket: tokio::net::UdpSocket,
     mut receiver: tokio::sync::mpsc::Receiver<UdpMultiplexRequest>,
     mut stop: tokio::sync::oneshot::Receiver<()>,
+    cancellation_notify: Arc<tokio::sync::Notify>,
     config: UdpMultiplexActorConfig,
 ) -> bool {
     let mut pending = HashMap::<u16, PendingUdpRequest>::new();
-    let mut id_allocator = UdpRequestIdAllocator::new(config.attempt_timeout);
+    let mut id_allocator = DnsRequestIdAllocator::new(config.attempt_timeout);
     let mut deadlines = VecDeque::<PendingUdpDeadline>::new();
     let mut next_generation = 1_u64;
     let mut buf = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
     let mut fatal = false;
+    let mut idle_deadline = config
+        .idle_timeout
+        .map(|timeout| time::Instant::now() + timeout);
     loop {
         expire_pending_udp_requests(
             &mut pending,
@@ -46,6 +50,9 @@ pub(super) async fn run_udp_multiplex_actor(
             }
 
             received = socket.recv(&mut buf) => {
+                idle_deadline = config
+                    .idle_timeout
+                    .map(|timeout| time::Instant::now() + timeout);
                 match received {
                     Ok(read) => handle_udp_multiplex_response(
                         &mut pending,
@@ -71,7 +78,7 @@ pub(super) async fn run_udp_multiplex_actor(
                 }
             }
 
-            maybe_request = receiver.recv(), if pending.len() < config.pending_capacity => {
+            maybe_request = receiver.recv(), if pending.len() < config.inflight_window => {
                 let Some(request) = maybe_request else {
                     if pending.is_empty() {
                         break;
@@ -88,6 +95,20 @@ pub(super) async fn run_udp_multiplex_actor(
                     request,
                     &config,
                 ).await;
+                idle_deadline = config
+                    .idle_timeout
+                    .map(|timeout| time::Instant::now() + timeout);
+            }
+
+            _ = cancellation_notify.notified() => {
+                cancel_abandoned_udp_requests(
+                    &mut pending,
+                    &mut id_allocator,
+                    &config.metrics,
+                );
+                idle_deadline = config
+                    .idle_timeout
+                    .map(|timeout| time::Instant::now() + timeout);
             }
 
             _ = wait_for_udp_multiplex_deadline(cleanup_deadline) => {
@@ -97,6 +118,12 @@ pub(super) async fn run_udp_multiplex_actor(
                     &mut id_allocator,
                     &config.metrics,
                 );
+            }
+
+            _ = wait_for_udp_multiplex_deadline(idle_deadline),
+                if idle_deadline.is_some() && pending.is_empty() && receiver.is_empty() =>
+            {
+                break;
             }
         }
     }
@@ -120,7 +147,7 @@ async fn handle_udp_multiplex_request(
     target: SocketAddr,
     socket: &tokio::net::UdpSocket,
     pending: &mut HashMap<u16, PendingUdpRequest>,
-    id_allocator: &mut UdpRequestIdAllocator,
+    id_allocator: &mut DnsRequestIdAllocator,
     deadlines: &mut VecDeque<PendingUdpDeadline>,
     next_generation: &mut u64,
     mut request: UdpMultiplexRequest,
@@ -131,6 +158,12 @@ async fn handle_udp_multiplex_request(
         let _ = request
             .response
             .send(Err("DNS UDP multiplex pending queue is full".to_owned()));
+        return;
+    }
+    if request.deadline <= time::Instant::now() {
+        let _ = request.response.send(Err(
+            "DNS UDP multiplex request deadline expired before admission".to_owned(),
+        ));
         return;
     }
     let request_view = match DnsPacketView::parse(&request.payload) {
@@ -153,7 +186,9 @@ async fn handle_udp_multiplex_request(
         }
     };
     rewrite_dns_packet_id_in_place(&mut request.payload, upstream_id);
-    let deadline = time::Instant::now() + config.attempt_timeout;
+    let deadline = request
+        .deadline
+        .min(time::Instant::now() + config.attempt_timeout);
     let generation = *next_generation;
     *next_generation = (*next_generation).wrapping_add(1).max(1);
     pending.insert(
@@ -186,7 +221,7 @@ async fn handle_udp_multiplex_request(
 
 pub(super) fn handle_udp_multiplex_response(
     pending: &mut HashMap<u16, PendingUdpRequest>,
-    id_allocator: &mut UdpRequestIdAllocator,
+    id_allocator: &mut DnsRequestIdAllocator,
     response: &[u8],
     metrics: &ResidentDataplaneMetrics,
 ) {
@@ -266,7 +301,7 @@ fn validate_dns_udp_multiplex_response_for_request(
 pub(super) fn expire_pending_udp_requests(
     pending: &mut HashMap<u16, PendingUdpRequest>,
     deadlines: &mut VecDeque<PendingUdpDeadline>,
-    id_allocator: &mut UdpRequestIdAllocator,
+    id_allocator: &mut DnsRequestIdAllocator,
     metrics: &ResidentDataplaneMetrics,
 ) {
     let now = time::Instant::now();
@@ -293,9 +328,25 @@ pub(super) fn expire_pending_udp_requests(
     }
 }
 
+fn cancel_abandoned_udp_requests(
+    pending: &mut HashMap<u16, PendingUdpRequest>,
+    id_allocator: &mut DnsRequestIdAllocator,
+    metrics: &ResidentDataplaneMetrics,
+) {
+    let cancelled = pending
+        .iter()
+        .filter_map(|(id, request)| request.response.is_closed().then_some(*id))
+        .collect::<Vec<_>>();
+    for id in &cancelled {
+        pending.remove(id);
+        id_allocator.release(*id);
+    }
+    metrics.dns_udp_pending_removed(cancelled.len());
+}
+
 fn fail_pending_udp_requests(
     pending: &mut HashMap<u16, PendingUdpRequest>,
-    id_allocator: &mut UdpRequestIdAllocator,
+    id_allocator: &mut DnsRequestIdAllocator,
     error: String,
     metrics: &ResidentDataplaneMetrics,
 ) -> usize {

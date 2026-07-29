@@ -2,8 +2,8 @@ use super::super::*;
 use super::ResidentDnsTransportError;
 use super::plain::dns_transport_route_name;
 use super::route::{
-    ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
-    select_dns_upstream_targets,
+    ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, race_dns_upstream_targets,
+    resolved_upstream_targets, select_dns_upstream_targets,
 };
 use super::wire::{
     read_dns_tcp_message_async, resident_dns_quic_client_config, restore_dns_response_id,
@@ -273,7 +273,7 @@ pub(super) async fn forward_dns_quic_async(
             .map_err(ResidentDnsTransportError::message);
     }
 
-    let (targets, mut failures) = select_dns_upstream_targets(
+    let (targets, failures) = select_dns_upstream_targets(
         plan,
         upstream,
         resolved_upstream_targets(upstream)
@@ -282,24 +282,18 @@ pub(super) async fn forward_dns_quic_async(
         L4Proto::Udp,
     )
     .map_err(ResidentDnsTransportError::message)?;
-    for remote in targets {
-        match forward_dns_quic_to_routed_target_async(
-            upstream, remote, payload, forwarders, context,
-        )
-        .await
-        {
-            Ok(response) => return Ok(response),
-            Err(error) => {
-                if !error.allows_next_candidate() {
-                    return Err(error);
-                }
-                failures.push(error.to_string());
-            }
-        }
-    }
-    Err(ResidentDnsTransportError::message(
-        dns_upstream_targets_failed(upstream, "forward DNS QUIC to", failures),
-    ))
+    race_dns_upstream_targets(
+        upstream,
+        "forward DNS QUIC to",
+        targets,
+        failures,
+        forwarders.resources.upstream_candidate_race_width(),
+        |remote| async move {
+            forward_dns_quic_to_routed_target_async(upstream, remote, payload, forwarders, context)
+                .await
+        },
+    )
+    .await
 }
 
 async fn forward_dns_quic_to_routed_target_async(

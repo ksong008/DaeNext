@@ -17,7 +17,7 @@ fn test_attempt_timeout() -> Duration {
 
 #[test]
 fn udp_request_id_allocator_enforces_capacity_and_releases_ids() {
-    let mut allocator = UdpRequestIdAllocator::default();
+    let mut allocator = DnsRequestIdAllocator::default();
     let now = time::Instant::now();
     let first = allocator.allocate_at(1, now).unwrap();
     assert!(allocator.allocate_at(1, now).is_err());
@@ -40,7 +40,7 @@ fn udp_request_id_allocator_enforces_capacity_and_releases_ids() {
 
 #[test]
 fn udp_deadline_cleanup_ignores_stale_generation_for_reused_id() {
-    let mut allocator = UdpRequestIdAllocator::default();
+    let mut allocator = DnsRequestIdAllocator::default();
     let id = allocator.allocate(test_pending_capacity()).unwrap();
     let mut pending = HashMap::new();
     let mut deadlines = VecDeque::new();
@@ -112,7 +112,7 @@ fn udp_multiplex_validation_rejects_question_mismatch() {
 
 #[tokio::test]
 async fn mismatched_late_response_does_not_remove_reused_pending_id() {
-    let mut allocator = UdpRequestIdAllocator::default();
+    let mut allocator = DnsRequestIdAllocator::default();
     let upstream_id = allocator.allocate(test_pending_capacity()).unwrap();
     let original_id = 0x4141;
     let expected_query =
@@ -232,6 +232,7 @@ async fn udp_multiplex_queue_saturation_fails_with_a_bounded_wait_and_counter() 
     runtime.pending_limit = 1;
     runtime.attempts = 1;
     runtime.attempt_timeout = Duration::from_secs(5);
+    let attempt_timeout = runtime.attempt_timeout;
     let metrics = test_metrics();
     let executor = Arc::new(ResidentDnsUdpActorExecutor::new(
         runtime,
@@ -254,6 +255,7 @@ async fn udp_multiplex_queue_saturation_fails_with_a_bounded_wait_and_counter() 
         .sender
         .send(UdpMultiplexRequest {
             payload: second_query,
+            deadline: time::Instant::now() + attempt_timeout,
             _payload_admission: second_admission,
             response: second_response,
         })
@@ -273,6 +275,36 @@ async fn udp_multiplex_queue_saturation_fails_with_a_bounded_wait_and_counter() 
     assert_eq!(report["status"], "pass");
     assert!(first.await.unwrap().is_err());
     assert!(second_receiver.await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn udp_multiplex_caller_cancellation_releases_pending_without_waiting_for_timeout() {
+    let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let target = upstream.local_addr().unwrap();
+    let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    runtime.attempt_timeout = Duration::from_secs(5);
+    let metrics = test_metrics();
+    let handle = open_udp_multiplex_handle_with_config(target, 0, &runtime, Arc::clone(&metrics))
+        .await
+        .unwrap();
+    let query = build_dns_query_packet(0x7201, "cancelled.example", DNS_QTYPE_A).unwrap();
+    let exchange_handle = handle.clone();
+    let exchange = tokio::spawn(async move { exchange_handle.exchange_once(&query).await });
+    let mut received = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+    upstream.recv_from(&mut received).await.unwrap();
+    assert_eq!(metrics.snapshot()["dnsUdpPendingCurrent"], 1);
+
+    exchange.abort();
+    assert!(exchange.await.unwrap_err().is_cancelled());
+    time::timeout(Duration::from_millis(200), async {
+        while metrics.snapshot()["dnsUdpPendingCurrent"] != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled DNS UDP request remained pending until its network timeout");
 }
 
 fn dns_a_response_for_query(query: &[u8], address: [u8; 4]) -> Vec<u8> {

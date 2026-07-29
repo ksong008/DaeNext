@@ -1,6 +1,7 @@
 // DNS listener tasks keep bind sockets, routing, shutdown, and metrics handles explicit.
 #![allow(clippy::too_many_arguments)]
 
+use std::collections::BTreeSet;
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener, UdpSocket};
 
@@ -12,9 +13,9 @@ use tokio::sync::Semaphore;
 use tokio::time;
 
 use super::dns::{
-    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
-    build_dns_server_failure_response, handle_resident_dns_local_trace_async,
-    read_dns_tcp_payload_async, write_dns_tcp_payload_async,
+    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsQueryResult, ResidentDnsTraceSummary,
+    ResidentDnsTransportTrace, build_dns_server_failure_response,
+    handle_resident_dns_local_trace_async, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
 #[cfg(test)]
 use super::dns::{
@@ -25,8 +26,6 @@ use super::events::{ResidentEventKind, ResidentEventMetadata, append_event_with_
 use super::*;
 
 const DNS_BIND_READ_LIMIT: usize = DNS_MAX_UDP_MESSAGE_SIZE;
-const DNS_BIND_UDP_MAX_INFLIGHT: usize = 128;
-const DNS_BIND_TCP_MAX_INFLIGHT: usize = 128;
 const DNS_BIND_TCP_IO_TIMEOUT: std::time::Duration = RESIDENT_UDP_RESPONSE_TIMEOUT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,6 +131,7 @@ pub(super) async fn run_resident_dns_bind_listener_async(
     event_lock: Arc<Mutex<()>>,
 ) {
     let configured = listener.configured.clone();
+    let resources = ResidentDnsResourceProfile::selected();
     let mut tasks = tokio::task::JoinSet::new();
     if let Some(socket) = listener.udp_socket.take() {
         let local_addr = listener.udp_local_addr.expect("udp local addr was read");
@@ -145,6 +145,7 @@ pub(super) async fn run_resident_dns_bind_listener_async(
                     Arc::clone(&stop),
                     event_file.clone(),
                     Arc::clone(&event_lock),
+                    resources,
                 ));
             }
             Err(err) => append_event(
@@ -172,6 +173,7 @@ pub(super) async fn run_resident_dns_bind_listener_async(
                     Arc::clone(&stop),
                     event_file.clone(),
                     Arc::clone(&event_lock),
+                    resources,
                 ));
             }
             Err(err) => append_event(
@@ -230,6 +232,7 @@ async fn run_resident_dns_udp_bind_listener_async(
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
+    resources: ResidentDnsResourceProfile,
 ) {
     append_event(
         &event_file,
@@ -240,11 +243,12 @@ async fn run_resident_dns_udp_bind_listener_async(
             "local_addr": local_addr.to_string(),
             "network": "udp",
             "handler": "resident-dns-udp",
-            "max_inflight": DNS_BIND_UDP_MAX_INFLIGHT,
+            "max_inflight": resources.bind_udp_inflight(),
+            "resources": resources.json(),
         }),
     );
     let socket = Arc::new(socket);
-    let semaphore = Arc::new(Semaphore::new(DNS_BIND_UDP_MAX_INFLIGHT));
+    let semaphore = Arc::new(Semaphore::new(resources.bind_udp_inflight()));
     let mut tasks = tokio::task::JoinSet::new();
     let mut buf = vec![0_u8; DNS_BIND_READ_LIMIT];
     while !stop.load(Ordering::Relaxed) {
@@ -292,7 +296,7 @@ async fn run_resident_dns_udp_bind_listener_async(
                                 "local_addr": local_addr.to_string(),
                                 "peer": peer.to_string(),
                                 "network": "udp",
-                                "max_inflight": DNS_BIND_UDP_MAX_INFLIGHT,
+                                "max_inflight": resources.bind_udp_inflight(),
                             }),
                         );
                         continue;
@@ -483,6 +487,7 @@ async fn run_resident_dns_tcp_bind_listener_async(
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
+    resources: ResidentDnsResourceProfile,
 ) {
     append_event(
         &event_file,
@@ -493,10 +498,14 @@ async fn run_resident_dns_tcp_bind_listener_async(
             "local_addr": local_addr.to_string(),
             "network": "tcp",
             "handler": "resident-dns-tcp",
-            "max_inflight": DNS_BIND_TCP_MAX_INFLIGHT,
+            "max_inflight": resources.bind_tcp_connections(),
+            "max_query_inflight": resources.bind_tcp_queries(),
+            "max_query_inflight_per_connection": resources.bind_tcp_queries_per_connection(),
+            "resources": resources.json(),
         }),
     );
-    let semaphore = Arc::new(Semaphore::new(DNS_BIND_TCP_MAX_INFLIGHT));
+    let semaphore = Arc::new(Semaphore::new(resources.bind_tcp_connections()));
+    let query_semaphore = Arc::new(Semaphore::new(resources.bind_tcp_queries()));
     let mut tasks = tokio::task::JoinSet::new();
     let mut stop_listener = stop.listener();
     while !stop.load(Ordering::Relaxed) {
@@ -535,7 +544,7 @@ async fn run_resident_dns_tcp_bind_listener_async(
                                 "local_addr": local_addr.to_string(),
                                 "peer": peer.to_string(),
                                 "network": "tcp",
-                                "max_inflight": DNS_BIND_TCP_MAX_INFLIGHT,
+                                "max_inflight": resources.bind_tcp_connections(),
                             }),
                         );
                         drop(stream);
@@ -549,6 +558,7 @@ async fn run_resident_dns_tcp_bind_listener_async(
                 drop(generation);
                 let task_event_file = event_file.clone();
                 let task_event_lock = Arc::clone(&event_lock);
+                let query_semaphore = Arc::clone(&query_semaphore);
                 tasks.spawn(async move {
                     let _ = run_until_resident_stop(
                         &flow_stop,
@@ -559,8 +569,10 @@ async fn run_resident_dns_tcp_bind_listener_async(
                             dns,
                             metrics,
                             Arc::clone(&flow_stop),
+                            query_semaphore,
                             task_event_file,
                             task_event_lock,
+                            resources,
                             permit,
                         ),
                     )
@@ -587,49 +599,221 @@ async fn run_resident_dns_tcp_bind_listener_async(
 }
 
 async fn handle_resident_dns_tcp_bind_connection_async(
-    mut stream: TokioTcpStream,
+    stream: TokioTcpStream,
     peer: SocketAddr,
     local_addr: SocketAddr,
     dns: Arc<ResidentDnsPlan>,
     metrics: Arc<ResidentDataplaneMetrics>,
     stop: SharedResidentStopSignal,
+    query_semaphore: Arc<Semaphore>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
+    resources: ResidentDnsResourceProfile,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
+    let (mut reader, writer) = stream.into_split();
+    let (response_tx, response_rx) =
+        tokio::sync::mpsc::channel(resources.bind_tcp_queries_per_connection());
+    let mut writer_task = tokio::spawn(run_resident_dns_tcp_bind_writer_async(
+        writer,
+        response_rx,
+        peer,
+        local_addr,
+        Arc::clone(&metrics),
+        event_file.clone(),
+        Arc::clone(&event_lock),
+    ));
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut accepting = true;
+    let mut abort_pending = false;
+    let mut writer_finished = false;
+    let mut stop_listener = stop.listener();
+    let outstanding_ids = Arc::new(Mutex::new(BTreeSet::new()));
+
     loop {
-        if stop.load(Ordering::Relaxed) {
-            return;
+        if !accepting && tasks.is_empty() {
+            break;
         }
-        let request = match read_dns_tcp_payload_bind_timeout_async(&mut stream).await {
-            Ok(Some(request)) => request,
-            Ok(None) => return,
-            Err(err) => {
-                append_event(
-                    &event_file,
-                    &event_lock,
-                    json!({
-                        "event": "dns_bind_receive_failed",
-                        "local_addr": local_addr.to_string(),
-                        "peer": peer.to_string(),
-                        "network": "tcp",
-                        "error": err,
-                    }),
-                );
-                return;
+        tokio::select! {
+            _ = stop_listener.cancelled() => {
+                abort_pending = true;
+                break;
             }
+            writer_result = &mut writer_task => {
+                writer_finished = true;
+                abort_pending = true;
+                if let Ok(Err(error)) = writer_result {
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({
+                            "event": "dns_bind_response_send_failed",
+                            "local_addr": local_addr.to_string(),
+                            "peer": peer.to_string(),
+                            "network": "tcp",
+                            "error": error,
+                        }),
+                    );
+                }
+                break;
+            }
+            Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+            received = read_dns_tcp_payload_bind_timeout_async(&mut reader),
+                if accepting && tasks.len() < resources.bind_tcp_queries_per_connection() =>
+            {
+                let request = match received {
+                    Ok(Some(request)) => request,
+                    Ok(None) => {
+                        accepting = false;
+                        continue;
+                    }
+                    Err(error) => {
+                        append_event(
+                            &event_file,
+                            &event_lock,
+                            json!({
+                                "event": "dns_bind_receive_failed",
+                                "local_addr": local_addr.to_string(),
+                                "peer": peer.to_string(),
+                                "network": "tcp",
+                                "error": error,
+                            }),
+                        );
+                        abort_pending = true;
+                        break;
+                    }
+                };
+                metrics.add_upload(request.len());
+                let request_id_guard = match ResidentDnsTcpRequestIdGuard::claim(
+                    &request,
+                    Arc::clone(&outstanding_ids),
+                ) {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        let response_tx = response_tx.clone();
+                        tasks.spawn(async move {
+                            let _ = response_tx
+                                .send(ResidentDnsTcpBindResponse {
+                                    request,
+                                    result: Err(error),
+                                    _request_id_guard: None,
+                                })
+                                .await;
+                        });
+                        continue;
+                    }
+                };
+                let permit = {
+                    let mut admission_stop = stop.listener();
+                    tokio::select! {
+                        permit = Arc::clone(&query_semaphore).acquire_owned() => match permit {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                abort_pending = true;
+                                break;
+                            }
+                        },
+                        _ = admission_stop.cancelled() => {
+                            abort_pending = true;
+                            break;
+                        }
+                    }
+                };
+                let dns = Arc::clone(&dns);
+                let response_tx = response_tx.clone();
+                tasks.spawn(async move {
+                    let _permit = permit;
+                    let result =
+                        handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
+                    let _ = response_tx
+                        .send(ResidentDnsTcpBindResponse {
+                            request,
+                            result,
+                            _request_id_guard: request_id_guard,
+                        })
+                        .await;
+                });
+            }
+        }
+    }
+
+    if abort_pending {
+        tasks.abort_all();
+    }
+    while tasks.join_next().await.is_some() {}
+    drop(response_tx);
+    if !writer_finished {
+        let _ = time::timeout(DNS_BIND_TCP_IO_TIMEOUT, &mut writer_task).await;
+        if !writer_task.is_finished() {
+            writer_task.abort();
+            let _ = writer_task.await;
+        }
+    }
+}
+
+struct ResidentDnsTcpBindResponse {
+    request: Vec<u8>,
+    result: Result<ResidentDnsQueryResult, String>,
+    _request_id_guard: Option<ResidentDnsTcpRequestIdGuard>,
+}
+
+struct ResidentDnsTcpRequestIdGuard {
+    id: u16,
+    outstanding_ids: Arc<Mutex<BTreeSet<u16>>>,
+}
+
+impl ResidentDnsTcpRequestIdGuard {
+    fn claim(
+        request: &[u8],
+        outstanding_ids: Arc<Mutex<BTreeSet<u16>>>,
+    ) -> Result<Option<Self>, String> {
+        let Some(id) = request
+            .get(0..2)
+            .map(|id| u16::from_be_bytes([id[0], id[1]]))
+        else {
+            return Ok(None);
         };
-        metrics.add_upload(request.len());
-        let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
-        match result {
+        let mut active = outstanding_ids
+            .lock()
+            .map_err(|_| "resident DNS TCP outstanding request ID lock poisoned".to_owned())?;
+        if !active.insert(id) {
+            return Err(format!(
+                "resident DNS TCP client reused outstanding request ID {id}"
+            ));
+        }
+        drop(active);
+        Ok(Some(Self {
+            id,
+            outstanding_ids,
+        }))
+    }
+}
+
+impl Drop for ResidentDnsTcpRequestIdGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.outstanding_ids.lock() {
+            active.remove(&self.id);
+        }
+    }
+}
+
+async fn run_resident_dns_tcp_bind_writer_async(
+    mut writer: tokio::net::tcp::OwnedWriteHalf,
+    mut responses: tokio::sync::mpsc::Receiver<ResidentDnsTcpBindResponse>,
+    peer: SocketAddr,
+    local_addr: SocketAddr,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+) -> Result<(), String> {
+    while let Some(response) = responses.recv().await {
+        match response.result {
             Ok(result) => {
-                let response = result.response;
-                let response_len = response.len();
-                if let Err(err) =
-                    write_dns_tcp_payload_bind_timeout_async(&mut stream, &response).await
+                let response_len = result.response.len();
+                if let Err(error) =
+                    write_dns_tcp_payload_bind_timeout_async(&mut writer, &result.response).await
                 {
-                    let err = err.to_string();
                     append_event_with_metadata(
                         &event_file,
                         &event_lock,
@@ -640,28 +824,15 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                                 peer,
                                 network: "tcp",
                                 handler: "resident-dns-tcp",
-                                request_bytes: request.len(),
+                                request_bytes: response.request.len(),
                                 response_bytes: response_len,
                                 sent_bytes: None,
-                                send_error: Some(&err),
+                                send_error: Some(&error),
                                 trace: &result.trace,
                             })
                         },
                     );
-                    append_event(
-                        &event_file,
-                        &event_lock,
-                        json!({
-                            "event": "dns_bind_response_send_failed",
-                            "local_addr": local_addr.to_string(),
-                            "peer": peer.to_string(),
-                            "network": "tcp",
-                            "request_bytes": request.len(),
-                            "response_bytes": response_len,
-                            "error": err,
-                        }),
-                    );
-                    return;
+                    return Err(error);
                 }
                 metrics.add_download(response_len);
                 append_event_with_metadata(
@@ -674,7 +845,7 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                             peer,
                             network: "tcp",
                             handler: "resident-dns-tcp",
-                            request_bytes: request.len(),
+                            request_bytes: response.request.len(),
                             response_bytes: response_len,
                             sent_bytes: Some(response_len + 2),
                             send_error: None,
@@ -690,20 +861,20 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                         "local_addr": local_addr.to_string(),
                         "peer": peer.to_string(),
                         "network": "tcp",
-                        "request_bytes": request.len(),
+                        "request_bytes": response.request.len(),
                         "response_bytes": response_len,
                         "sent_bytes": response_len + 2,
                         "handler": "resident-dns-tcp",
                     }),
                 );
             }
-            Err(err) => {
-                let _ = write_resident_dns_tcp_bind_failure_response(
-                    &mut stream,
-                    &request,
+            Err(error) => {
+                write_resident_dns_tcp_bind_failure_response(
+                    &mut writer,
+                    &response.request,
                     metrics.as_ref(),
                 )
-                .await;
+                .await?;
                 append_event(
                     &event_file,
                     &event_lock,
@@ -712,17 +883,18 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                         "local_addr": local_addr.to_string(),
                         "peer": peer.to_string(),
                         "network": "tcp",
-                        "request_bytes": request.len(),
-                        "error": err,
+                        "request_bytes": response.request.len(),
+                        "error": error,
                     }),
                 );
             }
         }
     }
+    Ok(())
 }
 
 async fn write_resident_dns_tcp_bind_failure_response(
-    stream: &mut TokioTcpStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     request: &[u8],
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<(), String> {
@@ -735,7 +907,7 @@ async fn write_resident_dns_tcp_bind_failure_response(
 }
 
 async fn read_dns_tcp_payload_bind_timeout_async(
-    stream: &mut TokioTcpStream,
+    stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<Option<Vec<u8>>, String> {
     read_dns_tcp_payload_with_timeout_async(stream, DNS_BIND_TCP_IO_TIMEOUT).await
 }
@@ -753,7 +925,7 @@ where
 }
 
 async fn write_dns_tcp_payload_bind_timeout_async(
-    stream: &mut TokioTcpStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     payload: &[u8],
 ) -> Result<(), String> {
     write_dns_tcp_payload_with_timeout_async(stream, payload, DNS_BIND_TCP_IO_TIMEOUT).await
@@ -890,6 +1062,8 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
 
+    use crate::production_runtime_owner::resident_dataplane::dns::build_resident_dns_plan;
+    use crate::production_runtime_owner::resident_routing::ResidentGeodataStore;
     use dae_dns::{
         DNS_DEFAULT_PORT, DNS_FLAG_RESPONSE, DNS_HEADER_LEN, DNS_RCODE_MASK, DNS_RCODE_SERVFAIL,
         DnsPacketView,
@@ -1080,6 +1254,26 @@ mod tests {
         assert!(dns_bind_failure_response(&[]).is_none());
     }
 
+    #[test]
+    fn dns_bind_tcp_rejects_a_duplicate_outstanding_request_id_until_release() {
+        let outstanding_ids = Arc::new(Mutex::new(BTreeSet::new()));
+        let query = dns_query_for_test(0x5151, "duplicate.example");
+        let first = ResidentDnsTcpRequestIdGuard::claim(&query, Arc::clone(&outstanding_ids))
+            .unwrap()
+            .unwrap();
+        let error = ResidentDnsTcpRequestIdGuard::claim(&query, Arc::clone(&outstanding_ids))
+            .err()
+            .expect("duplicate outstanding DNS TCP request ID was admitted");
+        assert!(error.contains(&format!("reused outstanding request ID {}", 0x5151_u16)));
+
+        drop(first);
+        assert!(
+            ResidentDnsTcpRequestIdGuard::claim(&query, outstanding_ids)
+                .unwrap()
+                .is_some()
+        );
+    }
+
     #[tokio::test]
     async fn dns_bind_tcp_read_timeout_closes_slow_client() {
         let (_client, mut server) = tokio::io::duplex(64);
@@ -1101,5 +1295,138 @@ mod tests {
                 .unwrap_err();
 
         assert!(err.contains("write timeout"));
+    }
+
+    #[tokio::test]
+    async fn dns_bind_tcp_pipeline_does_not_serialize_a_later_query() {
+        let upstream_listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let upstream_addr = upstream_listener.local_addr().unwrap();
+        let upstream_server = tokio::spawn(async move {
+            let (mut stream, _) = upstream_listener.accept().await.unwrap();
+            let first = read_dns_tcp_payload_async(&mut stream)
+                .await
+                .unwrap()
+                .unwrap();
+            let second = read_dns_tcp_payload_async(&mut stream)
+                .await
+                .unwrap()
+                .unwrap();
+            let fast = if dns_packet_id_for_test(&first) == 0x2222 {
+                first
+            } else {
+                second
+            };
+            let response = dns_a_response_for_test(&fast, [192, 0, 2, 80]);
+            write_dns_tcp_payload_async(&mut stream, &response)
+                .await
+                .unwrap();
+            time::sleep(Duration::from_secs(2)).await;
+        });
+        let input = format!(
+            r#"
+            global {{}}
+            routing {{}}
+            dns {{
+              upstream {{ primary: 'tcp://{upstream_addr}' }}
+              routing {{ request {{ fallback: primary }} }}
+            }}
+            "#
+        );
+        let sections = dae_config::parser::parse_config(&input).unwrap();
+        let config = dae_config::schema::build_config(&sections).unwrap();
+        let geodata = ResidentGeodataStore::new(Vec::<PathBuf>::new());
+        let dns = Arc::new(build_resident_dns_plan(&config, &geodata).unwrap());
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let local_addr = listener.local_addr().unwrap();
+        let mut client = TokioTcpStream::connect(local_addr).await.unwrap();
+        let (server_stream, peer) = listener.accept().await.unwrap();
+        let stop = ResidentStopSignal::shared();
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let permit = Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap();
+        let event_file = std::env::temp_dir().join(format!(
+            "daed-dns-bind-pipeline-{}.jsonl",
+            std::process::id()
+        ));
+        let handler_stop = Arc::clone(&stop);
+        let handler = tokio::spawn(handle_resident_dns_tcp_bind_connection_async(
+            server_stream,
+            peer,
+            local_addr,
+            dns,
+            metrics,
+            handler_stop,
+            Arc::new(Semaphore::new(16)),
+            event_file.clone(),
+            Arc::new(Mutex::new(())),
+            ResidentDnsResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory),
+            permit,
+        ));
+        let slow = dns_query_for_test(0x1111, "slow.example");
+        let fast = dns_query_for_test(0x2222, "fast.example");
+        write_dns_tcp_payload_async(&mut client, &slow)
+            .await
+            .unwrap();
+        write_dns_tcp_payload_async(&mut client, &fast)
+            .await
+            .unwrap();
+        let response = time::timeout(
+            Duration::from_secs(1),
+            read_dns_tcp_payload_async(&mut client),
+        )
+        .await
+        .expect("later DNS query was serialized behind a blackholed query")
+        .unwrap()
+        .unwrap();
+        assert_eq!(dns_packet_id_for_test(&response), 0x2222);
+        stop.store(true, Ordering::Relaxed);
+        time::timeout(Duration::from_secs(1), handler)
+            .await
+            .unwrap()
+            .unwrap();
+        upstream_server.abort();
+        let _ = std::fs::remove_file(event_file);
+    }
+
+    fn dns_packet_id_for_test(packet: &[u8]) -> u16 {
+        u16::from_be_bytes([packet[0], packet[1]])
+    }
+
+    fn dns_query_for_test(id: u16, domain: &str) -> Vec<u8> {
+        let mut query = Vec::new();
+        query.extend_from_slice(&id.to_be_bytes());
+        query.extend_from_slice(&0x0100_u16.to_be_bytes());
+        query.extend_from_slice(&1_u16.to_be_bytes());
+        query.extend_from_slice(&[0_u8; 6]);
+        for label in domain.split('.') {
+            query.push(label.len() as u8);
+            query.extend_from_slice(label.as_bytes());
+        }
+        query.push(0);
+        query.extend_from_slice(&1_u16.to_be_bytes());
+        query.extend_from_slice(&1_u16.to_be_bytes());
+        query
+    }
+
+    fn dns_a_response_for_test(query: &[u8], address: [u8; 4]) -> Vec<u8> {
+        let view = DnsPacketView::parse(query).unwrap();
+        let mut response = Vec::new();
+        response.extend_from_slice(&query[0..2]);
+        response.extend_from_slice(&0x8180_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&query[12..view.answer_offset()]);
+        response.extend_from_slice(&0xc00c_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&60_u32.to_be_bytes());
+        response.extend_from_slice(&4_u16.to_be_bytes());
+        response.extend_from_slice(&address);
+        response
     }
 }

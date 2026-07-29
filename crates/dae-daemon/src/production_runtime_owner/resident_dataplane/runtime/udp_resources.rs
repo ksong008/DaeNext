@@ -23,7 +23,9 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) dns_fast_path_queue_depth: usize,
     pub(crate) dns_udp_forwarder_queue_depth: usize,
     pub(crate) dns_udp_forwarder_pending_limit: usize,
+    pub(crate) dns_udp_forwarder_inflight_window: usize,
     pub(crate) dns_udp_forwarder_attempts: usize,
+    pub(crate) dns_udp_shard_idle_timeout: Duration,
     pub(crate) dns_proxy_udp_actor_limit: usize,
     pub(crate) shutdown_timeout: Duration,
 }
@@ -37,8 +39,11 @@ pub(crate) struct ResidentDnsUdpRuntimeConfig {
     pub(crate) worker_stack_bytes: usize,
     pub(crate) queue_depth: usize,
     pub(crate) pending_limit: usize,
+    pub(crate) inflight_window: usize,
     pub(crate) attempts: usize,
     pub(crate) attempt_timeout: Duration,
+    pub(crate) shard_idle_timeout: Duration,
+    pub(crate) actor_idle_timeout: Option<Duration>,
     pub(crate) shutdown_timeout: Duration,
     pub(crate) payload_admission: ResidentUdpPayloadAdmission,
 }
@@ -95,7 +100,10 @@ impl ResidentUdpRuntimeConfig {
                 .value()
                 .max(1)
                 .min(u16::MAX as usize + 1),
+            dns_udp_forwarder_inflight_window: runtime_profile
+                .dns_udp_forwarder_inflight_window_default(),
             dns_udp_forwarder_attempts: resources.dns_udp_forwarder_attempts.value().max(1),
+            dns_udp_shard_idle_timeout: runtime_profile.dns_udp_shard_idle_timeout(),
             dns_proxy_udp_actor_limit: resources.dns_proxy_udp_actors.value().max(1),
             shutdown_timeout: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
         }
@@ -137,8 +145,14 @@ impl ResidentUdpRuntimeConfig {
                 .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
             queue_depth: self.dns_udp_forwarder_queue_depth,
             pending_limit: self.dns_udp_forwarder_pending_limit,
+            inflight_window: self
+                .dns_udp_forwarder_inflight_window
+                .min(self.dns_udp_forwarder_pending_limit)
+                .max(1),
             attempts: self.dns_udp_forwarder_attempts,
             attempt_timeout: resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts),
+            shard_idle_timeout: self.dns_udp_shard_idle_timeout,
+            actor_idle_timeout: None,
             shutdown_timeout: self.shutdown_timeout,
             payload_admission: self.payload_admission.clone(),
         }
@@ -192,8 +206,10 @@ impl ResidentUdpRuntimeConfig {
                 "workerStackBytes": self.worker_stack_bytes,
                 "queueDepth": self.dns_udp_forwarder_queue_depth,
                 "pendingLimit": self.dns_udp_forwarder_pending_limit,
+                "inflightWindow": self.dns_udp_forwarder_inflight_window,
                 "attempts": self.dns_udp_forwarder_attempts,
                 "attemptTimeoutMs": resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts).as_millis(),
+                "shardIdleTimeoutMs": dns_udp.shard_idle_timeout.as_millis(),
             },
             "deadlines": {
                 "sessionIdleMs": self.session_idle_timeout.as_millis(),
@@ -224,10 +240,13 @@ impl ResidentDnsUdpRuntimeConfig {
                 .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
             queue_depth: profile.dns_udp_forwarder_queue_depth_default(),
             pending_limit: profile.dns_udp_forwarder_pending_limit_default(),
+            inflight_window: profile.dns_udp_forwarder_inflight_window_default(),
             attempts: profile.dns_udp_forwarder_attempts_default(),
             attempt_timeout: resident_dns_udp_attempt_timeout(
                 profile.dns_udp_forwarder_attempts_default(),
             ),
+            shard_idle_timeout: profile.dns_udp_shard_idle_timeout(),
+            actor_idle_timeout: None,
             shutdown_timeout: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
             payload_admission: ResidentUdpPayloadAdmission::new(
                 0,
@@ -243,6 +262,9 @@ impl ResidentDnsUdpRuntimeConfig {
         partition.queue_depth = partitioned_resource(self.queue_depth, actor_index, actor_count);
         partition.pending_limit =
             partitioned_resource(self.pending_limit, actor_index, actor_count);
+        partition.inflight_window =
+            partitioned_resource(self.inflight_window, actor_index, actor_count)
+                .min(partition.pending_limit);
         partition
     }
 }
@@ -306,7 +328,9 @@ mod tests {
             dns_fast_path_queue_depth: 1_024,
             dns_udp_forwarder_queue_depth: 1_024,
             dns_udp_forwarder_pending_limit: 1_024,
+            dns_udp_forwarder_inflight_window: 64,
             dns_udp_forwarder_attempts: 3,
+            dns_udp_shard_idle_timeout: Duration::from_secs(30),
             dns_proxy_udp_actor_limit: 8,
             shutdown_timeout: RESIDENT_UDP_RESPONSE_TIMEOUT,
         };
@@ -410,7 +434,9 @@ mod tests {
             dns_fast_path_queue_depth: 64,
             dns_udp_forwarder_queue_depth: 80,
             dns_udp_forwarder_pending_limit: 72,
+            dns_udp_forwarder_inflight_window: 24,
             dns_udp_forwarder_attempts: 4,
+            dns_udp_shard_idle_timeout: Duration::from_secs(30),
             dns_proxy_udp_actor_limit: 6,
             shutdown_timeout: Duration::from_millis(900),
         };
@@ -425,6 +451,7 @@ mod tests {
         );
         assert_eq!(dns.queue_depth, 80);
         assert_eq!(dns.pending_limit, 72);
+        assert_eq!(dns.inflight_window, 24);
         assert_eq!(dns.attempts, 4);
         assert_eq!(dns.attempt_timeout, Duration::from_millis(1_600));
     }
@@ -439,6 +466,7 @@ mod tests {
         let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
         runtime.queue_depth = 10;
         runtime.pending_limit = 7;
+        runtime.inflight_window = 5;
         let partitions = (0..3)
             .map(|index| runtime.actor_partition(index, 3))
             .collect::<Vec<_>>();
@@ -455,6 +483,13 @@ mod tests {
                 .map(|item| item.pending_limit)
                 .sum::<usize>(),
             7
+        );
+        assert_eq!(
+            partitions
+                .iter()
+                .map(|item| item.inflight_window)
+                .sum::<usize>(),
+            5
         );
     }
 }

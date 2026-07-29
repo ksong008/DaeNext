@@ -2,8 +2,9 @@ use super::*;
 use crate::production_runtime_owner::resident_dataplane::{
     ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
     dns::{
-        ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
-        ResidentDnsTransportOwnerObservation, ResidentDnsUdpActorExecutor, UdpRequestIdAllocator,
+        DnsRequestIdAllocator, ProxyDnsRequestContext, ProxyDnsRequestError,
+        ProxyDnsRequestFailure, ProxyDnsRequestStage, ResidentDnsTransportOwnerObservation,
+        ResidentDnsUdpActorExecutor,
     },
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};

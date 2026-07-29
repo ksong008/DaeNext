@@ -1,6 +1,7 @@
 use dae_dns::DnsPacketView;
 
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwarder::actor::transaction::ProxyDnsRequestRelease;
 use crate::production_runtime_owner::resident_dataplane::udp::{
     UdpFixedTargetPayload, UdpFixedTargetValidation, UdpResponseDropReason,
 };
@@ -8,7 +9,7 @@ use crate::production_runtime_owner::resident_dataplane::udp::{
 pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwarder::actor) fn handle_proxy_dns_udp_response(
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
     deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
-    id_allocator: &mut UdpRequestIdAllocator,
+    id_allocator: &mut DnsRequestIdAllocator,
     expected_source: SocketAddr,
     mut response: UdpExchangeResult,
     metrics: &Arc<ResidentDataplaneMetrics>,
@@ -52,7 +53,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwa
     let response_view = match DnsPacketView::parse(&payload) {
         Ok(response_view) => response_view,
         Err(error) => {
-            let Some(mut request) = pending.remove(&response_id) else {
+            let Some(request) = pending.remove(&response_id) else {
                 return Ok(());
             };
             remove_proxy_dns_udp_deadline(deadlines, response_id, request.generation);
@@ -62,16 +63,14 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwa
                 ProxyDnsRequestFailure::Protocol,
                 format!("parse proxied DNS UDP response: {error}"),
             );
-            if request.response.send(Err(error)).is_err() {
-                request.bytes.mark_abandoned();
-            }
+            request.deliver(Err(error), ProxyDnsRequestRelease::Completed);
             return Ok(());
         }
     };
     if !proxy_dns_udp_response_matches(request, &response_view) {
         return Ok(());
     }
-    let Some(mut request) = pending.remove(&response_id) else {
+    let Some(request) = pending.remove(&response_id) else {
         return Ok(());
     };
     remove_proxy_dns_udp_deadline(deadlines, response_id, request.generation);
@@ -87,9 +86,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwa
                     error.requested, error.current, error.limit
                 ),
             ));
-            if request.response.send(result).is_err() {
-                request.bytes.mark_abandoned();
-            }
+            request.deliver(result, ProxyDnsRequestRelease::Completed);
             return Ok(());
         }
     };
@@ -99,16 +96,12 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwa
             ProxyDnsRequestFailure::Protocol,
             "proxied DNS UDP response is too short to restore request id",
         ));
-        if request.response.send(result).is_err() {
-            request.bytes.mark_abandoned();
-        }
+        request.deliver(result, ProxyDnsRequestRelease::Completed);
         return Ok(());
     };
     id_bytes.copy_from_slice(&request.original_id.to_be_bytes());
     let restored = ProxyDnsResponseBytes::new(payload, response_permit, Arc::clone(metrics));
-    if request.response.send(Ok(restored)).is_err() {
-        request.bytes.mark_abandoned();
-    }
+    request.deliver(Ok(restored), ProxyDnsRequestRelease::Completed);
     Ok(())
 }
 

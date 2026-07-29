@@ -5,7 +5,7 @@ pub(crate) const RESIDENT_TCP_FAILED_HANDLER_JOIN_GRACE: Duration = Duration::fr
 mod dns;
 
 pub(crate) use self::dns::{
-    exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_dns_tcp_stream_async,
+    exchange_resident_proxy_dns_tcp_stream_async, run_resident_proxy_dns_tcp_connection_async,
 };
 
 struct ResidentProxyTcpHandlerGuard {
