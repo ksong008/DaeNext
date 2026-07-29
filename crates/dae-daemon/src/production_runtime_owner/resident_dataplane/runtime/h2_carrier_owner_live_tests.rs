@@ -606,6 +606,13 @@ fn h2_goaway_drains_the_old_physical_before_the_next_acquisition_rebuilds() {
                 .await
                 .unwrap();
             assert_ne!(first_instance, second.physical_instance_id());
+            time::timeout(Duration::from_secs(2), async {
+                while server.tls_handshakes.load(Ordering::Relaxed) != 2 {
+                    time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("rebuilt H2 physical did not finish the server-side TLS handshake");
             assert_eq!(server.tcp_connections.load(Ordering::Relaxed), 2);
             assert_eq!(server.tls_handshakes.load(Ordering::Relaxed), 2);
             assert_eq!(owner.metrics_snapshot()["cumulativeBuilds"], 2);
