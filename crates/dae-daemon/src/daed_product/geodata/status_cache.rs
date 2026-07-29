@@ -3,6 +3,8 @@ use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+const GEODATA_VERSION_IDENTITY_MAX_BYTES: u64 = 128;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum GeodataFileIdentity {
     Missing,
@@ -17,6 +19,7 @@ enum GeodataFileIdentity {
         changed_seconds: i64,
         #[cfg(unix)]
         changed_nanoseconds: i64,
+        content: Option<Box<[u8]>>,
     },
 }
 
@@ -56,19 +59,25 @@ impl GeodataStatusCacheEntry {
 impl GeodataResourceIdentity {
     pub(super) fn capture(dir: &Path, kind: GeodataKind) -> io::Result<Self> {
         Ok(Self {
-            data: GeodataFileIdentity::capture(&dir.join(kind.file_name()))?,
-            version: GeodataFileIdentity::capture(&dir.join(kind.version_file_name()))?,
+            data: GeodataFileIdentity::capture(&dir.join(kind.file_name()), false)?,
+            version: GeodataFileIdentity::capture(&dir.join(kind.version_file_name()), true)?,
         })
     }
 }
 
 impl GeodataFileIdentity {
-    fn capture(path: &Path) -> io::Result<Self> {
+    fn capture(path: &Path, include_bounded_content: bool) -> io::Result<Self> {
         let metadata = match fs::metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::Missing),
             Err(error) => return Err(error),
         };
+        let content =
+            if include_bounded_content && metadata.len() <= GEODATA_VERSION_IDENTITY_MAX_BYTES {
+                Some(fs::read(path)?.into_boxed_slice())
+            } else {
+                None
+            };
         Ok(Self::Present {
             len: metadata.len(),
             modified: metadata.modified().ok(),
@@ -80,6 +89,7 @@ impl GeodataFileIdentity {
             changed_seconds: metadata.ctime(),
             #[cfg(unix)]
             changed_nanoseconds: metadata.ctime_nsec(),
+            content,
         })
     }
 }
