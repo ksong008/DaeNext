@@ -35,6 +35,8 @@ pub(super) struct UdpSessionSharedContext {
     pub(super) tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     pub(super) juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     pub(super) anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+    pub(super) session_idle_timeout: Duration,
+    pub(super) proxy_session_idle_timeout: Duration,
     pub(super) response_buffer_idle_timeout: Duration,
     pub(super) actor_stop: SharedResidentStopSignal,
 }
@@ -83,7 +85,7 @@ async fn run_udp_session_actor(
     let mut stop_reason = "queue-closed".to_owned();
     let mut executor: Option<UdpSessionExecutor> = None;
     let mut session_proxy: Option<ResidentProxyBinding> = None;
-    let idle_timeout = key.idle_timeout();
+    let idle_timeout = key.idle_timeout(context.proxy_session_idle_timeout);
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
     let mut stop_listener = context.actor_stop.listener();

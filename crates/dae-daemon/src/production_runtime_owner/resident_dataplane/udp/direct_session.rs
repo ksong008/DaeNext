@@ -46,11 +46,11 @@ impl UdpDirectSessionKey {
         self.mark
     }
 
-    pub(super) fn idle_timeout(&self) -> Duration {
+    pub(super) fn idle_timeout(&self, session_idle_timeout: Duration) -> Duration {
         if self.original_destination.port() == dae_dns::DNS_DEFAULT_PORT {
             RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT
         } else {
-            RESIDENT_UDP_SESSION_IDLE_TIMEOUT
+            session_idle_timeout
         }
     }
 
@@ -155,7 +155,7 @@ async fn run_udp_direct_session_actor(
     let mut packets = 0_u64;
     let mut stop_reason = "queue-closed".to_owned();
     let mut session: Option<DirectUdpSession> = None;
-    let idle_timeout = key.idle_timeout();
+    let idle_timeout = key.idle_timeout(context.session_idle_timeout);
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
     let mut stop_listener = context.actor_stop.listener();

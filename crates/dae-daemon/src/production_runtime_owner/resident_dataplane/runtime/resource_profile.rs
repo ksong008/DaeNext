@@ -27,6 +27,12 @@ const HIGH_PERFORMANCE_UDP_RUNTIME_SHARDS_MAX: usize = 8;
 const LOW_MEMORY_UDP_DISPATCH_QUEUE_DEPTH: usize = 128;
 const BALANCED_UDP_DISPATCH_QUEUE_DEPTH: usize = 512;
 const HIGH_PERFORMANCE_UDP_DISPATCH_QUEUE_DEPTH: usize = 2_048;
+const LOW_MEMORY_UDP_SESSION_IDLE_SECONDS: u64 = 60;
+const BALANCED_UDP_SESSION_IDLE_SECONDS: u64 = 120;
+const HIGH_PERFORMANCE_UDP_SESSION_IDLE_SECONDS: u64 = 300;
+const PROXY_UDP_SESSION_IDLE_SECONDS_MIN: u64 = 120;
+pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX: Duration =
+    Duration::from_secs(HIGH_PERFORMANCE_UDP_SESSION_IDLE_SECONDS);
 const LOW_MEMORY_UDP_REPLY_SOCKET_IDLE_SECONDS: u64 = 60;
 const BALANCED_UDP_REPLY_SOCKET_IDLE_SECONDS: u64 = 180;
 const HIGH_PERFORMANCE_UDP_REPLY_SOCKET_IDLE_SECONDS: u64 = 300;
@@ -1199,6 +1205,19 @@ impl ResidentRuntimeProfile {
         }
     }
 
+    pub(crate) const fn udp_session_idle_timeout(self) -> Duration {
+        Duration::from_secs(match self {
+            Self::LowMemory => LOW_MEMORY_UDP_SESSION_IDLE_SECONDS,
+            Self::Balanced => BALANCED_UDP_SESSION_IDLE_SECONDS,
+            Self::HighPerformance => HIGH_PERFORMANCE_UDP_SESSION_IDLE_SECONDS,
+        })
+    }
+
+    pub(crate) fn udp_proxy_session_idle_timeout(self) -> Duration {
+        self.udp_session_idle_timeout()
+            .max(Duration::from_secs(PROXY_UDP_SESSION_IDLE_SECONDS_MIN))
+    }
+
     pub(crate) fn udp_reply_socket_idle_timeout(self) -> Duration {
         Duration::from_secs(match self {
             Self::LowMemory => LOW_MEMORY_UDP_REPLY_SOCKET_IDLE_SECONDS,
@@ -1707,6 +1726,35 @@ mod tests {
         assert!(
             ResidentRuntimeProfile::Balanced.udp_session_soft_watermark_default()
                 < ResidentRuntimeProfile::HighPerformance.udp_session_soft_watermark_default()
+        );
+    }
+
+    #[test]
+    fn udp_session_idle_lifecycle_scales_without_shortening_proxy_sessions_too_far() {
+        let low = ResidentRuntimeProfile::LowMemory;
+        let balanced = ResidentRuntimeProfile::Balanced;
+        let high = ResidentRuntimeProfile::HighPerformance;
+
+        assert_eq!(low.udp_session_idle_timeout(), Duration::from_secs(60));
+        assert_eq!(
+            balanced.udp_session_idle_timeout(),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            high.udp_session_idle_timeout(),
+            RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX
+        );
+        assert_eq!(
+            low.udp_proxy_session_idle_timeout(),
+            balanced.udp_proxy_session_idle_timeout()
+        );
+        assert_eq!(
+            balanced.udp_proxy_session_idle_timeout(),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            high.udp_proxy_session_idle_timeout(),
+            RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX
         );
     }
 

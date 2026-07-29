@@ -57,6 +57,8 @@ use super::super::udp_io::{
     UDP_RECV_DEFAULT_CAPACITY, UdpOriginalDstPacket, UdpPayloadPool,
     try_recv_udp_with_original_dst_from_pool,
 };
+#[cfg(test)]
+use super::RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX;
 use super::client::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name,
     open_async_resident_tls_client_with_binding, open_proxy_tcp_stream_with_binding,
@@ -97,11 +99,10 @@ use super::tcp::{
 use super::vision::{VisionUnpadder, vision_padding_block};
 use super::{
     RESIDENT_IDLE_SLEEP, RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE,
-    RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT, RESIDENT_UDP_RESPONSE_TIMEOUT,
-    RESIDENT_UDP_SESSION_IDLE_TIMEOUT, ResidentDataplaneMetrics, ResidentHealthResuscitationHandle,
-    ResidentUdpRuntimeConfig, VISION_COMMAND_CONTINUE, VLESS_RESPONSE_VERSION, XUDP_COMMAND_KEEP,
-    XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
-    apply_resident_udp_socket_buffer_tuning, resident_socket_addr_display,
+    RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics,
+    ResidentHealthResuscitationHandle, ResidentUdpRuntimeConfig, VISION_COMMAND_CONTINUE,
+    VLESS_RESPONSE_VERSION, XUDP_COMMAND_KEEP, XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP,
+    XUDP_OPTION_DATA, apply_resident_udp_socket_buffer_tuning, resident_socket_addr_display,
     resident_udp_network_name,
 };
 

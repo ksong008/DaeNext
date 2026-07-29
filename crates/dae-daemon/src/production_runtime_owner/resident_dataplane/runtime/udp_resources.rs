@@ -7,6 +7,8 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) session_admission_limit: Option<usize>,
     pub(crate) session_soft_watermark: usize,
     pub(crate) session_queue_depth: usize,
+    pub(crate) session_idle_timeout: Duration,
+    pub(crate) proxy_session_idle_timeout: Duration,
     pub(crate) runtime_shards: usize,
     pub(crate) runtime_worker_threads: usize,
     pub(crate) worker_stack_bytes: usize,
@@ -60,12 +62,15 @@ impl ResidentUdpRuntimeConfig {
             .udp_dispatch_queue_depth
             .value()
             .max(runtime_shards);
+        let runtime_profile = resources.runtime_profile.profile;
         Self {
             generation,
-            profile: resources.runtime_profile.profile.name(),
+            profile: runtime_profile.name(),
             session_admission_limit,
             session_soft_watermark,
             session_queue_depth,
+            session_idle_timeout: runtime_profile.udp_session_idle_timeout(),
+            proxy_session_idle_timeout: runtime_profile.udp_proxy_session_idle_timeout(),
             runtime_shards,
             runtime_worker_threads,
             worker_stack_bytes: resources.tcp_flow_stack_bytes.value(),
@@ -191,7 +196,8 @@ impl ResidentUdpRuntimeConfig {
                 "attemptTimeoutMs": resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts).as_millis(),
             },
             "deadlines": {
-                "sessionIdleMs": RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_millis(),
+                "sessionIdleMs": self.session_idle_timeout.as_millis(),
+                "proxySessionIdleMs": self.proxy_session_idle_timeout.as_millis(),
                 "dnsSessionIdleMs": RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT.as_millis(),
                 "requestMs": RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis(),
                 "shutdownMs": self.shutdown_timeout.as_millis(),
@@ -284,6 +290,8 @@ mod tests {
             session_admission_limit: None,
             session_soft_watermark: 512,
             session_queue_depth: 128,
+            session_idle_timeout: Duration::from_secs(120),
+            proxy_session_idle_timeout: Duration::from_secs(120),
             runtime_shards: 4,
             runtime_worker_threads: 3,
             worker_stack_bytes: 512 * 1024,
@@ -325,6 +333,7 @@ mod tests {
 
         assert_eq!(runtime.session_admission_limit, None);
         assert!(runtime.session_soft_watermark >= 1);
+        assert!(runtime.proxy_session_idle_timeout >= runtime.session_idle_timeout);
         assert_eq!(
             runtime.reply_socket_cache_capacity,
             runtime.session_soft_watermark
@@ -385,6 +394,8 @@ mod tests {
             session_admission_limit: Some(64),
             session_soft_watermark: 64,
             session_queue_depth: 16,
+            session_idle_timeout: Duration::from_secs(120),
+            proxy_session_idle_timeout: Duration::from_secs(120),
             runtime_shards: 3,
             runtime_worker_threads: 2,
             worker_stack_bytes: 768 * 1024,

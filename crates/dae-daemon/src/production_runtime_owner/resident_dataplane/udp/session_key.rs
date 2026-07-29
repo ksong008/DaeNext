@@ -144,10 +144,10 @@ impl UdpSessionKey {
         self.original_destination
     }
 
-    pub(super) fn idle_timeout(&self) -> Duration {
+    pub(super) fn idle_timeout(&self, session_idle_timeout: Duration) -> Duration {
         match self.packet_semantics {
             UdpPacketSemantics::Dns => RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT,
-            _ => RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+            _ => session_idle_timeout,
         }
     }
 }
