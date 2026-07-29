@@ -7,6 +7,7 @@ mod health_forwarder;
 mod plain;
 mod quic;
 mod route;
+mod tcp_multiplex;
 mod tcp_udp;
 #[cfg(test)]
 mod test_support;
@@ -24,6 +25,7 @@ pub(super) use route::{
     dns_upstream_candidates_for_l4protos, select_dns_upstream_candidates,
     select_dns_upstream_targets,
 };
+pub(in crate::production_runtime_owner::resident_dataplane::dns) use tcp_multiplex::ResidentDnsTcpMultiplexHandle;
 use tcp_udp::forward_dns_tcp_udp_async;
 use tls_https::{forward_dns_https_async, forward_dns_tls_async};
 #[cfg(test)]

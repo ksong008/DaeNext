@@ -4,6 +4,7 @@ use super::*;
 use crate::production_runtime_owner::resident_dataplane::dns::{
     ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
+use crate::production_runtime_owner::resident_dataplane::udp::proxy_dns_forwarder::actor::transaction::ProxyDnsRequestRelease;
 
 #[cfg(test)]
 mod tests;
@@ -37,7 +38,7 @@ pub(super) fn remove_proxy_dns_udp_deadline(
 pub(super) fn expire_proxy_dns_udp_requests(
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
     deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
-    id_allocator: &mut UdpRequestIdAllocator,
+    id_allocator: &mut DnsRequestIdAllocator,
 ) {
     let abandoned = pending
         .iter()
@@ -76,12 +77,12 @@ pub(super) fn expire_proxy_dns_udp_requests(
             break;
         }
         deadlines.pop_front();
-        if let Some(mut request) = pending.remove(&deadline.id) {
+        if let Some(request) = pending.remove(&deadline.id) {
             id_allocator.release(deadline.id);
-            request.bytes.mark_expired();
-            let _ = request.response.send(Err(ProxyDnsRequestError::deadline(
-                ProxyDnsRequestStage::Read,
-            )));
+            request.deliver(
+                Err(ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Read)),
+                ProxyDnsRequestRelease::Expired,
+            );
         }
     }
 }
@@ -89,26 +90,28 @@ pub(super) fn expire_proxy_dns_udp_requests(
 pub(super) fn fail_proxy_dns_udp_requests(
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
     deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
-    id_allocator: &mut UdpRequestIdAllocator,
+    id_allocator: &mut DnsRequestIdAllocator,
     error: ProxyDnsRequestError,
 ) -> usize {
     let pending = std::mem::take(pending);
     let failed = pending.len();
-    for (id, mut request) in pending {
+    for (id, request) in pending {
         remove_proxy_dns_udp_deadline(deadlines, id, request.generation);
         id_allocator.release(id);
-        if request.response.is_closed() {
+        let release = if request.response.is_closed() {
             if request
                 .context
                 .ensure(ProxyDnsRequestStage::Cleanup)
                 .is_err()
             {
-                request.bytes.mark_expired();
+                ProxyDnsRequestRelease::Expired
             } else {
-                request.bytes.mark_abandoned();
+                ProxyDnsRequestRelease::Abandoned
             }
-        }
-        let _ = request.response.send(Err(error.clone()));
+        } else {
+            ProxyDnsRequestRelease::Completed
+        };
+        request.deliver(Err(error.clone()), release);
     }
     deadlines.clear();
     failed
@@ -122,7 +125,9 @@ pub(super) fn fail_queued_proxy_dns_udp_requests(
     while let Ok(mut request) = receiver.try_recv() {
         failed = failed.saturating_add(1);
         request.bytes.mark_rejected();
-        let _ = request.response.send(Err(ProxyDnsRequestError::new(
+        let response = request.response;
+        drop(request.bytes);
+        let _ = response.send(Err(ProxyDnsRequestError::new(
             ProxyDnsRequestStage::Cleanup,
             ProxyDnsRequestFailure::Network,
             error,

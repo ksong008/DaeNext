@@ -3,32 +3,32 @@ use std::time::Duration;
 
 use super::*;
 
-const DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS: usize = u64::BITS as usize;
-const DNS_UDP_REQUEST_ID_BITMAP_WORDS: usize =
-    DNS_UDP_REQUEST_ID_SPACE / DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS;
+const DNS_REQUEST_ID_BITMAP_WORD_BITS: usize = u64::BITS as usize;
+const DNS_REQUEST_ID_BITMAP_WORDS: usize =
+    DNS_UDP_REQUEST_ID_SPACE / DNS_REQUEST_ID_BITMAP_WORD_BITS;
 
-pub(in crate::production_runtime_owner::resident_dataplane) struct UdpRequestIdAllocator {
-    occupied: [u64; DNS_UDP_REQUEST_ID_BITMAP_WORDS],
-    quarantined: [u64; DNS_UDP_REQUEST_ID_BITMAP_WORDS],
+pub(in crate::production_runtime_owner::resident_dataplane) struct DnsRequestIdAllocator {
+    occupied: [u64; DNS_REQUEST_ID_BITMAP_WORDS],
+    quarantined: [u64; DNS_REQUEST_ID_BITMAP_WORDS],
     quarantine_deadlines: VecDeque<(u16, time::Instant)>,
     pub(super) next_id: u16,
     in_use: usize,
     quarantine_duration: Duration,
 }
 
-impl Default for UdpRequestIdAllocator {
+impl Default for DnsRequestIdAllocator {
     fn default() -> Self {
         Self::new(ResidentDnsUdpRuntimeConfig::standalone().attempt_timeout)
     }
 }
 
-impl UdpRequestIdAllocator {
+impl DnsRequestIdAllocator {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         quarantine_duration: Duration,
     ) -> Self {
         Self {
-            occupied: [0_u64; DNS_UDP_REQUEST_ID_BITMAP_WORDS],
-            quarantined: [0_u64; DNS_UDP_REQUEST_ID_BITMAP_WORDS],
+            occupied: [0_u64; DNS_REQUEST_ID_BITMAP_WORDS],
+            quarantined: [0_u64; DNS_REQUEST_ID_BITMAP_WORDS],
             quarantine_deadlines: VecDeque::new(),
             next_id: 0,
             in_use: 0,
@@ -51,10 +51,10 @@ impl UdpRequestIdAllocator {
         self.reap_quarantine(now);
         let capacity = capacity.min(DNS_UDP_REQUEST_ID_SPACE);
         if self.in_use >= capacity {
-            return Err("DNS UDP multiplex pending queue is full".to_owned());
+            return Err("DNS multiplex pending request limit is reached".to_owned());
         }
         if self.in_use.saturating_add(self.quarantine_deadlines.len()) >= DNS_UDP_REQUEST_ID_SPACE {
-            return Err("DNS UDP multiplex request id space is quarantined".to_owned());
+            return Err("DNS multiplex request id space is quarantined".to_owned());
         }
         for _ in 0..DNS_UDP_REQUEST_ID_SPACE {
             let candidate = self.next_id;
@@ -66,7 +66,7 @@ impl UdpRequestIdAllocator {
             self.in_use += 1;
             return Ok(candidate);
         }
-        Err("DNS UDP multiplex request id space is exhausted".to_owned())
+        Err("DNS multiplex request id space is exhausted".to_owned())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn release(&mut self, id: u16) {
@@ -85,12 +85,12 @@ impl UdpRequestIdAllocator {
     }
 
     pub(super) fn is_occupied(&self, id: u16) -> bool {
-        let (word, bit) = dns_udp_request_id_bitmap_slot(id);
+        let (word, bit) = dns_request_id_bitmap_slot(id);
         self.occupied[word] & (1_u64 << bit) != 0
     }
 
     fn set_occupied(&mut self, id: u16, occupied: bool) {
-        let (word, bit) = dns_udp_request_id_bitmap_slot(id);
+        let (word, bit) = dns_request_id_bitmap_slot(id);
         let mask = 1_u64 << bit;
         if occupied {
             self.occupied[word] |= mask;
@@ -104,12 +104,12 @@ impl UdpRequestIdAllocator {
     }
 
     pub(super) fn is_quarantined(&self, id: u16) -> bool {
-        let (word, bit) = dns_udp_request_id_bitmap_slot(id);
+        let (word, bit) = dns_request_id_bitmap_slot(id);
         self.quarantined[word] & (1_u64 << bit) != 0
     }
 
     fn set_quarantined(&mut self, id: u16, quarantined: bool) {
-        let (word, bit) = dns_udp_request_id_bitmap_slot(id);
+        let (word, bit) = dns_request_id_bitmap_slot(id);
         let mask = 1_u64 << bit;
         if quarantined {
             self.quarantined[word] |= mask;
@@ -132,10 +132,10 @@ impl UdpRequestIdAllocator {
     }
 }
 
-fn dns_udp_request_id_bitmap_slot(id: u16) -> (usize, usize) {
+fn dns_request_id_bitmap_slot(id: u16) -> (usize, usize) {
     let index = id as usize;
     (
-        index / DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS,
-        index % DNS_UDP_REQUEST_ID_BITMAP_WORD_BITS,
+        index / DNS_REQUEST_ID_BITMAP_WORD_BITS,
+        index % DNS_REQUEST_ID_BITMAP_WORD_BITS,
     )
 }

@@ -127,6 +127,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Arc<ResidentDnsUdpActorExecutor>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) udp_runtime:
         ResidentDnsUdpRuntimeConfig,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) resources:
+        ResidentDnsResourceProfile,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) metrics:
         Arc<ResidentDataplaneMetrics>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) hysteria2_owner_registry:
@@ -155,6 +157,7 @@ impl Default for ResidentDnsForwarderCache {
                 Arc::clone(&metrics),
             )),
             udp_runtime,
+            resources: ResidentDnsResourceProfile::selected(),
             metrics,
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
@@ -179,6 +182,7 @@ impl ResidentDnsForwarderCache {
                 Arc::clone(&metrics),
             )),
             udp_runtime,
+            resources: ResidentDnsResourceProfile::selected(),
             metrics,
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
@@ -207,14 +211,6 @@ impl ResidentDnsForwarderCache {
         cache.anytls_owner_registry = transport_owners.anytls();
         cache.health_runtime = Some(runtime);
         cache
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn hysteria2_owner_registry(
-        &self,
-    ) -> Result<Hysteria2OwnerRegistryHandle, String> {
-        self.hysteria2_owner_registry.clone().ok_or_else(|| {
-            "Hysteria2 transport owner registry is unavailable for proxied DNS".to_owned()
-        })
     }
 }
 
@@ -704,6 +700,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) handle:
         AsyncMutex<Option<ResidentDnsUdpMultiplexHandle>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) opened:
+        std::sync::atomic::AtomicBool,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) inflight:
+        std::sync::atomic::AtomicUsize,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTcpForwarder {
@@ -712,9 +712,32 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) upstream: ResidentDnsUpstream,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) idle:
-        AsyncMutex<Vec<TokioTcpStream>>,
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Semaphore,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) connection_kind:
+        ResidentDnsTcpConnectionKind,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) connection_limit: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) request_limit: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) connections:
+        AsyncMutex<Vec<ResidentDnsTcpMultiplexConnection>>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: AsyncMutex<()>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) closing:
+        std::sync::atomic::AtomicBool,
+}
+
+#[derive(Clone)]
+pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsTcpConnectionKind {
+    Direct,
+    Proxy {
+        binding: ResidentProxyBinding,
+        owners: ResidentTransportOwnerRegistries,
+    },
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTcpMultiplexConnection
+{
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) handle:
+        ResidentDnsTcpMultiplexHandle,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) task:
+        tokio::task::JoinHandle<Result<(), String>>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTlsForwarder {

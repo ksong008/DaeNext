@@ -26,12 +26,13 @@ use self::actor::{
     validate_and_restore_udp_multiplex_response,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use self::executor::ResidentDnsUdpActorExecutor;
-pub(in crate::production_runtime_owner::resident_dataplane) use self::id_allocator::UdpRequestIdAllocator;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::id_allocator::DnsRequestIdAllocator;
 
 #[derive(Clone)]
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsUdpMultiplexHandle
 {
     sender: tokio::sync::mpsc::Sender<UdpMultiplexRequest>,
+    cancellation_notify: Arc<tokio::sync::Notify>,
     metrics: Arc<ResidentDataplaneMetrics>,
     payload_admission: ResidentUdpPayloadAdmission,
     _lifecycle: Arc<ResidentDnsUdpActorLifecycle>,
@@ -134,16 +135,21 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDnsUd
 struct UdpMultiplexActorConfig {
     queue_capacity: usize,
     pending_capacity: usize,
+    inflight_window: usize,
     attempt_timeout: Duration,
+    idle_timeout: Option<Duration>,
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
 impl UdpMultiplexActorConfig {
     fn new(runtime: &ResidentDnsUdpRuntimeConfig, metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+        let pending_capacity = runtime.pending_limit.clamp(1, DNS_UDP_REQUEST_ID_SPACE);
         Self {
             queue_capacity: runtime.queue_depth.max(1),
-            pending_capacity: runtime.pending_limit.clamp(1, DNS_UDP_REQUEST_ID_SPACE),
+            pending_capacity,
+            inflight_window: runtime.inflight_window.clamp(1, pending_capacity),
             attempt_timeout: runtime.attempt_timeout,
+            idle_timeout: runtime.actor_idle_timeout,
             metrics,
         }
     }
@@ -151,8 +157,22 @@ impl UdpMultiplexActorConfig {
 
 struct UdpMultiplexRequest {
     payload: Vec<u8>,
+    deadline: time::Instant,
     _payload_admission: ResidentUdpPayloadPermit,
     response: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+}
+
+struct UdpMultiplexCancellationGuard {
+    notify: Arc<tokio::sync::Notify>,
+    armed: bool,
+}
+
+impl Drop for UdpMultiplexCancellationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.notify.notify_one();
+        }
+    }
 }
 
 struct PendingUdpRequest {
@@ -216,6 +236,8 @@ fn start_udp_multiplex_actor(
 ) -> ResidentDnsUdpActorRegistration<ResidentDnsUdpMultiplexHandle> {
     let config = UdpMultiplexActorConfig::new(runtime, Arc::clone(&metrics));
     let (sender, receiver) = tokio::sync::mpsc::channel(config.queue_capacity);
+    let cancellation_notify = Arc::new(tokio::sync::Notify::new());
+    let actor_cancellation_notify = Arc::clone(&cancellation_notify);
     let (lifecycle, stop_receiver) = ResidentDnsUdpActorLifecycle::new();
     let completion = ResidentDnsUdpActorCompletion::new();
     metrics.dns_udp_actor_opened();
@@ -225,13 +247,22 @@ fn start_udp_multiplex_actor(
             metrics: task_metrics,
             fatal: false,
         };
-        let fatal = run_udp_multiplex_actor(target, socket, receiver, stop_receiver, config).await;
+        let fatal = run_udp_multiplex_actor(
+            target,
+            socket,
+            receiver,
+            stop_receiver,
+            actor_cancellation_notify,
+            config,
+        )
+        .await;
         metric_guard.fatal = fatal;
         fatal
     });
     ResidentDnsUdpActorRegistration {
         handle: ResidentDnsUdpMultiplexHandle {
             sender,
+            cancellation_notify,
             metrics,
             payload_admission: runtime.payload_admission.clone(),
             _lifecycle: Arc::clone(&lifecycle),
@@ -280,9 +311,19 @@ impl ResidentDnsUdpMultiplexHandle {
         ))
     }
 
+    #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn exchange_once(
         &self,
         payload: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        self.exchange_once_until(payload, time::Instant::now() + self.attempt_timeout)
+            .await
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn exchange_once_until(
+        &self,
+        payload: &[u8],
+        request_deadline: time::Instant,
     ) -> Result<Vec<u8>, String> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let payload_admission = self.payload_admission.try_acquire(payload.len()).map_err(
@@ -293,10 +334,12 @@ impl ResidentDnsUdpMultiplexHandle {
                 )
             },
         )?;
-        let queued = time::timeout(
-            self.attempt_timeout,
+        let attempt_deadline = request_deadline.min(time::Instant::now() + self.attempt_timeout);
+        let queued = time::timeout_at(
+            attempt_deadline,
             self.sender.send(UdpMultiplexRequest {
                 payload: payload.to_vec(),
+                deadline: attempt_deadline,
                 _payload_admission: payload_admission,
                 response: response_tx,
             }),
@@ -310,8 +353,15 @@ impl ResidentDnsUdpMultiplexHandle {
                 return Err("DNS UDP multiplex request queue wait timeout".to_owned());
             }
         }
-        time::timeout(self.attempt_timeout, response_rx)
-            .await
+        let mut cancellation = UdpMultiplexCancellationGuard {
+            notify: Arc::clone(&self.cancellation_notify),
+            armed: true,
+        };
+        let result = time::timeout_at(attempt_deadline, response_rx).await;
+        if result.is_ok() {
+            cancellation.armed = false;
+        }
+        result
             .map_err(|_| "DNS UDP multiplex exchange timeout".to_owned())?
             .map_err(|_| "DNS UDP multiplex actor dropped response".to_owned())?
     }

@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
+use super::{
+    ProxyDnsRequestContext, ProxyDnsRequestStage, ResidentDnsUpstream, ResidentDnsUpstreamScheme,
+    unix_now,
+};
 use dae_dns::cache::DNS_CACHE_MAX_ENTRIES;
 use dae_dns::{DnsCacheEntry, DnsCacheKey, DnsCacheStats, DnsPacketView};
-use tokio::sync::OwnedMutexGuard;
-
-use super::{ResidentDnsUpstream, ResidentDnsUpstreamScheme, unix_now};
 
 mod reload;
 pub(super) use self::reload::ResidentDnsRuntimeCacheSnapshot;
@@ -15,10 +19,28 @@ use self::deadline_index::{ResidentDnsCacheDeadline, ResidentDnsCacheDeadlineInd
 
 const DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS: i64 = 60;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct ResidentDnsRuntimeCache {
     state: Mutex<ResidentDnsRuntimeCacheState>,
-    inflight: Mutex<BTreeMap<ResidentDnsResponseCacheKey, Arc<tokio::sync::Mutex<()>>>>,
+    inflight: Mutex<BTreeMap<ResidentDnsResponseCacheKey, Arc<ResidentDnsFlightState>>>,
+    flight_entry_limit: usize,
+    flight_follower_limit: usize,
+    flight_retained_budget: Arc<ResidentDnsFlightRetainedBudget>,
+}
+
+impl Default for ResidentDnsRuntimeCache {
+    fn default() -> Self {
+        let resources = super::ResidentDnsResourceProfile::selected();
+        Self {
+            state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
+            inflight: Mutex::new(BTreeMap::new()),
+            flight_entry_limit: resources.flight_entry_limit(),
+            flight_follower_limit: resources.flight_followers_per_entry(),
+            flight_retained_budget: Arc::new(ResidentDnsFlightRetainedBudget::new(
+                resources.flight_retained_bytes(),
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -86,34 +108,158 @@ impl ResidentDnsResponseCacheScope {
     }
 }
 
-pub(super) struct ResidentDnsInflightGuard<'a> {
+#[derive(Debug)]
+struct ResidentDnsFlightState {
+    outcome: Mutex<Option<Arc<ResidentDnsFlightOutcome>>>,
+    notify: tokio::sync::Notify,
+    followers: AtomicUsize,
+}
+
+impl ResidentDnsFlightState {
+    fn new() -> Self {
+        Self {
+            outcome: Mutex::new(None),
+            notify: tokio::sync::Notify::new(),
+            followers: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResidentDnsFlightOutcome {
+    result: Result<Arc<[u8]>, Arc<str>>,
+    _retained: Option<ResidentDnsFlightRetainedLease>,
+}
+
+#[derive(Debug)]
+struct ResidentDnsFlightRetainedBudget {
+    current: AtomicUsize,
+    limit: usize,
+}
+
+impl ResidentDnsFlightRetainedBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            current: AtomicUsize::new(0),
+            limit: limit.max(1),
+        }
+    }
+
+    fn try_reserve(self: &Arc<Self>, bytes: usize) -> Option<ResidentDnsFlightRetainedLease> {
+        let bytes = bytes.max(1);
+        self.current
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(bytes)
+                    .filter(|next| *next <= self.limit)
+            })
+            .ok()?;
+        Some(ResidentDnsFlightRetainedLease {
+            budget: Arc::clone(self),
+            bytes,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ResidentDnsFlightRetainedLease {
+    budget: Arc<ResidentDnsFlightRetainedBudget>,
+    bytes: usize,
+}
+
+impl Drop for ResidentDnsFlightRetainedLease {
+    fn drop(&mut self) {
+        let _ = self
+            .budget
+            .current
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(current.saturating_sub(self.bytes))
+            });
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResidentDnsFlightRole {
+    Leader,
+    DetachedLeader,
+    Follower,
+}
+
+pub(super) struct ResidentDnsFlightPermit<'a> {
     cache: &'a ResidentDnsRuntimeCache,
     key: ResidentDnsResponseCacheKey,
-    lock: Arc<tokio::sync::Mutex<()>>,
-    _guard: OwnedMutexGuard<()>,
+    state: Arc<ResidentDnsFlightState>,
+    role: ResidentDnsFlightRole,
+    published: bool,
 }
 
 impl ResidentDnsRuntimeCache {
-    pub(super) async fn lock_key(
+    #[cfg(test)]
+    pub(super) fn with_flight_entry_limit(flight_entry_limit: usize) -> Self {
+        let resources = super::ResidentDnsResourceProfile::selected();
+        Self::with_flight_limits(
+            flight_entry_limit,
+            resources.flight_followers_per_entry(),
+            resources.flight_retained_bytes(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_flight_limits(
+        flight_entry_limit: usize,
+        flight_follower_limit: usize,
+        flight_retained_bytes: usize,
+    ) -> Self {
+        Self {
+            state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
+            inflight: Mutex::new(BTreeMap::new()),
+            flight_entry_limit: flight_entry_limit.max(1),
+            flight_follower_limit: flight_follower_limit.max(1),
+            flight_retained_budget: Arc::new(ResidentDnsFlightRetainedBudget::new(
+                flight_retained_bytes,
+            )),
+        }
+    }
+
+    pub(super) fn begin_flight(
         &self,
         key: ResidentDnsResponseCacheKey,
-    ) -> Result<ResidentDnsInflightGuard<'_>, String> {
-        let lock = {
-            let mut inflight = self
-                .inflight
-                .lock()
-                .map_err(|_| "resident DNS inflight lock poisoned".to_owned())?;
-            inflight
-                .entry(key.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
+    ) -> Result<ResidentDnsFlightPermit<'_>, String> {
+        let mut inflight = self
+            .inflight
+            .lock()
+            .map_err(|_| "resident DNS inflight lock poisoned".to_owned())?;
+        let (state, role) = match inflight.get(&key) {
+            Some(state) => {
+                state
+                    .followers
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |followers| {
+                        (followers < self.flight_follower_limit).then_some(followers + 1)
+                    })
+                    .map_err(|_| {
+                        format!(
+                            "resident DNS flight follower limit reached: limit={}",
+                            self.flight_follower_limit
+                        )
+                    })?;
+                (Arc::clone(state), ResidentDnsFlightRole::Follower)
+            }
+            None => {
+                let state = Arc::new(ResidentDnsFlightState::new());
+                if inflight.len() >= self.flight_entry_limit {
+                    (state, ResidentDnsFlightRole::DetachedLeader)
+                } else {
+                    inflight.insert(key.clone(), Arc::clone(&state));
+                    (state, ResidentDnsFlightRole::Leader)
+                }
+            }
         };
-        let guard = Arc::clone(&lock).lock_owned().await;
-        Ok(ResidentDnsInflightGuard {
+        Ok(ResidentDnsFlightPermit {
             cache: self,
             key,
-            lock,
-            _guard: guard,
+            state,
+            role,
+            published: false,
         })
     }
 
@@ -202,6 +348,11 @@ impl ResidentDnsRuntimeCache {
             .lock()
             .map(|inflight| inflight.len())
             .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub(super) fn flight_retained_bytes(&self) -> usize {
+        self.flight_retained_budget.current.load(Ordering::Acquire)
     }
 
     #[cfg(test)]
@@ -328,17 +479,146 @@ fn remove_cache_entry(
     Some(stored.entry)
 }
 
-impl Drop for ResidentDnsInflightGuard<'_> {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.lock) != 3 {
+impl ResidentDnsFlightPermit<'_> {
+    pub(super) fn is_leader(&self) -> bool {
+        matches!(
+            self.role,
+            ResidentDnsFlightRole::Leader | ResidentDnsFlightRole::DetachedLeader
+        )
+    }
+
+    pub(super) async fn wait(
+        &self,
+        context: ProxyDnsRequestContext,
+        request_id: u16,
+    ) -> Result<Vec<u8>, String> {
+        if self.is_leader() {
+            return Err("resident DNS flight leader cannot wait for itself".to_owned());
+        }
+        loop {
+            let notified = self.state.notify.notified();
+            if let Some(outcome) = self.outcome()? {
+                return restore_flight_response_id(outcome, request_id);
+            }
+            context
+                .run(
+                    ProxyDnsRequestStage::Queued,
+                    super::ProxyDnsRequestFailure::Cancelled,
+                    async {
+                        notified.await;
+                        Ok::<(), std::convert::Infallible>(())
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    pub(super) fn publish(&mut self, result: Result<&[u8], &str>) -> Result<(), String> {
+        if !self.is_leader() {
+            return Err("resident DNS flight follower cannot publish".to_owned());
+        }
+        let result = result.map(Arc::<[u8]>::from).map_err(Arc::<str>::from);
+        let retained_bytes = match &result {
+            Ok(response) => response.len(),
+            Err(error) => error.len(),
+        };
+        let (result, retained) = match self
+            .cache
+            .flight_retained_budget
+            .try_reserve(retained_bytes)
+        {
+            Some(retained) => (result, Some(retained)),
+            None => (
+                Err(Arc::<str>::from(
+                    "resident DNS flight retained response byte limit reached",
+                )),
+                None,
+            ),
+        };
+        let outcome = Arc::new(ResidentDnsFlightOutcome {
+            result,
+            _retained: retained,
+        });
+        self.publish_outcome(outcome)
+    }
+
+    fn outcome(&self) -> Result<Option<Arc<ResidentDnsFlightOutcome>>, String> {
+        self.state
+            .outcome
+            .lock()
+            .map(|outcome| outcome.clone())
+            .map_err(|_| "resident DNS flight outcome lock poisoned".to_owned())
+    }
+
+    fn publish_outcome(&mut self, outcome: Arc<ResidentDnsFlightOutcome>) -> Result<(), String> {
+        {
+            let mut current = self
+                .state
+                .outcome
+                .lock()
+                .map_err(|_| "resident DNS flight outcome lock poisoned".to_owned())?;
+            if current.is_some() {
+                return Err("resident DNS flight outcome was already published".to_owned());
+            }
+            *current = Some(outcome);
+        }
+        self.published = true;
+        self.state.notify.notify_waiters();
+        self.remove_registry_entry();
+        Ok(())
+    }
+
+    fn remove_registry_entry(&self) {
+        if self.role == ResidentDnsFlightRole::DetachedLeader {
             return;
         }
         if let Ok(mut inflight) = self.cache.inflight.lock()
             && inflight
                 .get(&self.key)
-                .is_some_and(|current| Arc::ptr_eq(current, &self.lock))
+                .is_some_and(|current| Arc::ptr_eq(current, &self.state))
         {
             inflight.remove(&self.key);
         }
+    }
+}
+
+fn restore_flight_response_id(
+    outcome: Arc<ResidentDnsFlightOutcome>,
+    request_id: u16,
+) -> Result<Vec<u8>, String> {
+    let response = outcome.result.as_ref().map_err(|error| error.to_string())?;
+    if response.len() < 2 {
+        return Err("resident DNS flight response is too short to restore request id".to_owned());
+    }
+    let mut response = response.to_vec();
+    response[0..2].copy_from_slice(&request_id.to_be_bytes());
+    Ok(response)
+}
+
+impl Drop for ResidentDnsFlightPermit<'_> {
+    fn drop(&mut self) {
+        if self.role == ResidentDnsFlightRole::Follower {
+            let _ = self.state.followers.fetch_update(
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |followers| Some(followers.saturating_sub(1)),
+            );
+        }
+        if !self.is_leader() || self.published {
+            return;
+        }
+        if let Ok(mut outcome) = self.state.outcome.lock()
+            && outcome.is_none()
+        {
+            *outcome = Some(Arc::new(ResidentDnsFlightOutcome {
+                result: Err(Arc::<str>::from(
+                    "resident DNS flight leader ended before publishing a result",
+                )),
+                _retained: None,
+            }));
+        }
+        self.state.notify.notify_waiters();
+        self.remove_registry_entry();
     }
 }

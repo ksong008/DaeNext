@@ -1,4 +1,6 @@
 use super::super::*;
+use super::ResidentDnsTransportError;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 
 pub(super) async fn resolved_upstream_targets(
     upstream: &ResidentDnsUpstream,
@@ -199,6 +201,45 @@ pub(super) fn dns_upstream_targets_failed(
     )
 }
 
+pub(super) async fn race_dns_upstream_targets<F, Fut>(
+    upstream: &ResidentDnsUpstream,
+    operation: &str,
+    targets: Vec<ResidentDnsUpstreamRoutedTarget>,
+    mut failures: Vec<String>,
+    width: usize,
+    attempt: F,
+) -> Result<Vec<u8>, ResidentDnsTransportError>
+where
+    F: Fn(ResidentDnsUpstreamRoutedTarget) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, ResidentDnsTransportError>>,
+{
+    let mut remaining = targets.into_iter();
+    let mut attempts = FuturesUnordered::new();
+    for _ in 0..width.max(1) {
+        let Some(target) = remaining.next() else {
+            break;
+        };
+        attempts.push(attempt(target));
+    }
+    while let Some(result) = attempts.next().await {
+        match result {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                if !error.allows_next_candidate() {
+                    return Err(error);
+                }
+                failures.push(error.to_string());
+            }
+        }
+        if let Some(target) = remaining.next() {
+            attempts.push(attempt(target));
+        }
+    }
+    Err(ResidentDnsTransportError::message(
+        dns_upstream_targets_failed(upstream, operation, failures),
+    ))
+}
+
 fn dns_upstream_proxy_network_type(target: SocketAddr, l4proto: L4Proto) -> NetworkType {
     match (l4proto, target.is_ipv6()) {
         (L4Proto::Tcp, false) => NetworkType::TCP4,
@@ -211,6 +252,7 @@ fn dns_upstream_proxy_network_type(target: SocketAddr, l4proto: L4Proto) -> Netw
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn route_candidate(
         order: usize,
@@ -237,6 +279,24 @@ mod tests {
 
     fn dns_upstream_target_v6() -> SocketAddr {
         SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), DNS_DEFAULT_PORT)
+    }
+
+    fn test_upstream() -> ResidentDnsUpstream {
+        ResidentDnsUpstream {
+            index: 0,
+            tag: "candidate-race".to_owned(),
+            target: ResidentDnsUpstreamTarget {
+                authority: "candidate-race.invalid:53".to_owned(),
+                host: "candidate-race.invalid".to_owned(),
+                port: DNS_DEFAULT_PORT,
+                literal_addr: None,
+                fallback_resolver: dns_upstream_target_v4(),
+                resolver_mark: 0,
+                resolved_addrs: Arc::default(),
+            },
+            scheme: ResidentDnsUpstreamScheme::Udp,
+            path: String::new(),
+        }
     }
 
     #[test]
@@ -336,5 +396,47 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 0]
         );
+    }
+
+    #[tokio::test]
+    async fn upstream_candidate_race_does_not_wait_for_an_earlier_blackhole() {
+        let blackhole = dns_upstream_target_v4();
+        let healthy = dns_upstream_target_v6();
+        let targets = vec![
+            ResidentDnsUpstreamRoutedTarget {
+                target: blackhole,
+                l4proto: L4Proto::Udp,
+                selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+            },
+            ResidentDnsUpstreamRoutedTarget {
+                target: healthy,
+                l4proto: L4Proto::Udp,
+                selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+            },
+        ];
+        let upstream = test_upstream();
+        let response = time::timeout(
+            Duration::from_millis(100),
+            race_dns_upstream_targets(
+                &upstream,
+                "race DNS fixture",
+                targets,
+                Vec::new(),
+                2,
+                move |target| async move {
+                    if target.target == blackhole {
+                        std::future::pending::<Result<Vec<u8>, ResidentDnsTransportError>>().await
+                    } else {
+                        time::sleep(Duration::from_millis(5)).await;
+                        Ok(vec![0x12, 0x34, 0x81, 0x80])
+                    }
+                },
+            ),
+        )
+        .await
+        .expect("healthy DNS candidate waited for an earlier blackhole")
+        .unwrap();
+
+        assert_eq!(response, vec![0x12, 0x34, 0x81, 0x80]);
     }
 }

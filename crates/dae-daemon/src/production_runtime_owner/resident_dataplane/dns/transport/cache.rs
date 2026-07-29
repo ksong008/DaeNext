@@ -343,6 +343,8 @@ impl ResidentDnsForwarderCache {
                     shards: (0..shard_count)
                         .map(|_| ResidentDnsUdpForwarderShard {
                             handle: AsyncMutex::new(None),
+                            opened: std::sync::atomic::AtomicBool::new(false),
+                            inflight: std::sync::atomic::AtomicUsize::new(0),
                         })
                         .collect(),
                     runtime_config: self.udp_runtime.clone(),
@@ -425,6 +427,22 @@ impl ResidentDnsForwarderCache {
             key,
             "TCP",
             || {
+                let connection_kind = match selection {
+                    ResidentDnsUpstreamSelection::Direct { .. } => {
+                        ResidentDnsTcpConnectionKind::Direct
+                    }
+                    ResidentDnsUpstreamSelection::Proxy { binding } => {
+                        ResidentDnsTcpConnectionKind::Proxy {
+                            binding: binding.clone(),
+                            owners: ResidentTransportOwnerRegistries::new(
+                                self.hysteria2_owner_registry.clone(),
+                                self.tuic_owner_registry.clone(),
+                                self.juicity_owner_registry.clone(),
+                            )
+                            .with_anytls(self.anytls_owner_registry.clone()),
+                        }
+                    }
+                };
                 Ok(Arc::new(ResidentDnsTcpForwarder {
                     owner_observation: ResidentDnsTransportOwnerObservation::new(
                         Arc::clone(&self.metrics),
@@ -433,8 +451,12 @@ impl ResidentDnsForwarderCache {
                     upstream: upstream.clone(),
                     target,
                     mark,
-                    idle: AsyncMutex::new(Vec::new()),
-                    permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
+                    connection_kind,
+                    connection_limit: self.resources.tcp_connections_per_route(),
+                    request_limit: self.resources.tcp_requests_per_connection(),
+                    connections: AsyncMutex::new(Vec::new()),
+                    open_lock: AsyncMutex::new(()),
+                    closing: std::sync::atomic::AtomicBool::new(false),
                 }))
             },
             |kind| match kind {
@@ -706,22 +728,36 @@ async fn shutdown_dns_tcp_forwarder(
     forwarder: Arc<ResidentDnsTcpForwarder>,
     deadline: time::Instant,
 ) -> Value {
-    forwarder.permits.close();
-    let idle_cleared = match time::timeout_at(deadline, forwarder.idle.lock()).await {
-        Ok(mut idle) => {
-            idle.clear();
-            true
+    forwarder
+        .closing
+        .store(true, std::sync::atomic::Ordering::Release);
+    let (connections_locked, mut connections) =
+        match time::timeout_at(deadline, forwarder.connections.lock()).await {
+            Ok(mut connections) => (true, std::mem::take(&mut *connections)),
+            Err(_) => (false, Vec::new()),
+        };
+    for connection in &connections {
+        connection.handle.close();
+    }
+    let connection_count = connections.len();
+    let mut connections_joined = 0_usize;
+    for connection in &mut connections {
+        if time::timeout_at(deadline, &mut connection.task)
+            .await
+            .is_ok()
+        {
+            connections_joined += 1;
+        } else {
+            connection.task.abort();
+            let _ = (&mut connection.task).await;
         }
-        Err(_) => false,
-    };
-    let streams_released =
-        wait_for_dns_forwarder_permits(&forwarder.permits, DNS_STREAM_POOL_MAX_STREAMS, deadline)
-            .await;
+    }
     json!({
-        "status": if idle_cleared && streams_released { "pass" } else { "fail" },
+        "status": if connections_locked && connections_joined == connection_count { "pass" } else { "fail" },
         "transport": "tcp",
-        "idleCleared": idle_cleared,
-        "streamsReleased": streams_released,
+        "connectionsLocked": connections_locked,
+        "connections": connection_count,
+        "connectionsJoined": connections_joined,
     })
 }
 
@@ -1013,8 +1049,12 @@ mod tests {
                 upstream: upstream.clone(),
                 target,
                 mark: 0,
-                idle: AsyncMutex::new(Vec::new()),
-                permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
+                connection_kind: ResidentDnsTcpConnectionKind::Direct,
+                connection_limit: cache.resources.tcp_connections_per_route(),
+                request_limit: cache.resources.tcp_requests_per_connection(),
+                connections: AsyncMutex::new(Vec::new()),
+                open_lock: AsyncMutex::new(()),
+                closing: std::sync::atomic::AtomicBool::new(false),
             }))
         };
         let extract = |kind: &ResidentDnsForwarderEntryKind| match kind {
@@ -1378,8 +1418,8 @@ mod tests {
                 &selection,
             )
             .unwrap();
-        let first_idle = first.idle.lock().await;
-        let second_idle = second.idle.lock().await;
+        let first_connections = first.connections.lock().await;
+        let second_connections = second.connections.lock().await;
         let started = std::time::Instant::now();
 
         let report = cache
@@ -1392,9 +1432,9 @@ mod tests {
         let forwarders = report["forwarders"].as_array().unwrap();
         assert_eq!(forwarders.len(), 2);
         assert!(forwarders.iter().all(|forwarder| {
-            forwarder["status"] == "fail" && forwarder["idleCleared"] == false
+            forwarder["status"] == "fail" && forwarder["connectionsLocked"] == false
         }));
-        drop(second_idle);
-        drop(first_idle);
+        drop(second_connections);
+        drop(first_connections);
     }
 }

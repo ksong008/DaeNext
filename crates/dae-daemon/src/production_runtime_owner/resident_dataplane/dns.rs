@@ -51,7 +51,7 @@ use super::tcp::{
     scope_quic_endpoint_observation, set_socket_mark,
 };
 use super::tcp::{
-    exchange_resident_proxy_dns_tcp_async, exchange_resident_proxy_dns_tcp_stream_async,
+    exchange_resident_proxy_dns_tcp_stream_async, run_resident_proxy_dns_tcp_connection_async,
 };
 use super::udp::{
     ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
@@ -59,8 +59,9 @@ use super::udp::{
 use super::{
     AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
     RESIDENT_IDLE_SLEEP, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT,
-    ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries,
-    TuicOwnerRegistryHandle, apply_resident_udp_socket_buffer_tuning,
+    ResidentDataplaneMetrics, ResidentDnsResourceProfile, ResidentDnsUdpRuntimeConfig,
+    ResidentTransportOwnerRegistries, TuicOwnerRegistryHandle,
+    apply_resident_udp_socket_buffer_tuning,
 };
 use super::{ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl};
 
@@ -119,11 +120,12 @@ use self::trace_summary::{
 #[cfg(test)]
 use self::transport::parse_doh_http_response;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::transport::udp_multiplex::{
-    ResidentDnsUdpActorCompletion, ResidentDnsUdpActorExecutor, ResidentDnsUdpActorLifecycle,
-    ResidentDnsUdpActorRegistration, UdpRequestIdAllocator,
+    DnsRequestIdAllocator, ResidentDnsUdpActorCompletion, ResidentDnsUdpActorExecutor,
+    ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
 };
 use self::transport::{
-    forward_dns_tcp_asis_async, forward_dns_to_upstream_async, forward_dns_udp_async,
+    ResidentDnsTcpMultiplexHandle, forward_dns_tcp_asis_async, forward_dns_to_upstream_async,
+    forward_dns_udp_async,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use self::upstream_model::ResidentDnsTransportOwnerObservation;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_model::{
@@ -133,9 +135,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstr
     ResidentDnsH3Forwarder, ResidentDnsHealthForwarderClose, ResidentDnsHealthForwarderLease,
     ResidentDnsHttpsForwarder, ResidentDnsProxyH3Forwarder, ResidentDnsProxyQuicForwarder,
     ResidentDnsQuicForwarder, ResidentDnsRequestAction, ResidentDnsResponseAction,
-    ResidentDnsRetiredForwarder, ResidentDnsTcpForwarder, ResidentDnsTlsForwarder,
-    ResidentDnsUdpForwarder, ResidentDnsUdpForwarderShard, ResidentDnsUpstream,
-    ResidentDnsUpstreamScheme, ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
+    ResidentDnsRetiredForwarder, ResidentDnsTcpConnectionKind, ResidentDnsTcpForwarder,
+    ResidentDnsTcpMultiplexConnection, ResidentDnsTlsForwarder, ResidentDnsUdpForwarder,
+    ResidentDnsUdpForwarderShard, ResidentDnsUpstream, ResidentDnsUpstreamScheme,
+    ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
 };
 pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_router::ResidentDnsUpstreamSelection;
@@ -188,8 +191,12 @@ pub(super) const DNS_TRANSPORT_OUTCOME_ERROR: &str = "error";
 async fn acquire_dns_permit<'a>(
     semaphore: &'a Semaphore,
     context: &'static str,
+    request: ProxyDnsRequestContext,
 ) -> Result<tokio::sync::SemaphorePermit<'a>, String> {
-    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, semaphore.acquire())
+    request
+        .ensure(ProxyDnsRequestStage::Queued)
+        .map_err(|error| error.to_string())?;
+    time::timeout_at(request.deadline(), semaphore.acquire())
         .await
         .map_err(|_| format!("{context} concurrency wait timeout"))?
         .map_err(|_| format!("{context} concurrency limiter is closed"))
@@ -759,21 +766,19 @@ async fn handle_resident_dns_request_without_preference(
     {
         return Ok(cached_response);
     }
-    let _inflight = plan.cache.lock_key(cache_key.clone()).await?;
-    if plan
-        .cache
-        .lookup_response_into(&cache_key, request, false, &mut cached_response)?
-    {
-        return Ok(cached_response);
-    }
     let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
-    match action {
+    let mut flight = plan.cache.begin_flight(cache_key.clone())?;
+    if !flight.is_leader() {
+        return flight.wait(context, request.id()).await;
+    }
+    let result = match action {
         ResidentDnsRequestAction::AsIs => {
             let response = forward_dns_asis_async(
                 original_dst,
                 payload,
                 plan.mark,
                 asis_transport.expect("asis transport checked before forwarding"),
+                context,
             )
             .await?;
             validate_dns_response_for_request(request, &response, true)?;
@@ -809,7 +814,9 @@ async fn handle_resident_dns_request_without_preference(
             )
             .await
         }
-    }
+    };
+    flight.publish(result.as_ref().map(Vec::as_slice).map_err(String::as_str))?;
+    result
 }
 
 async fn handle_resident_dns_request_without_preference_trace(
@@ -851,20 +858,18 @@ async fn handle_resident_dns_request_without_preference_trace(
         trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
         return Ok(trace.finish(cached_response, DNS_TRACE_REASON_CACHE_HIT));
     }
-    let _inflight = plan.cache.lock_key(cache_key.clone()).await?;
-    if plan
-        .cache
-        .lookup_response_into(&cache_key, request, false, &mut cached_response)?
-    {
+    let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
+    let mut flight = plan.cache.begin_flight(cache_key.clone())?;
+    if !flight.is_leader() {
+        let response = flight.wait(context, request.id()).await?;
         trace.add_cache_elapsed(cache_started);
         trace.cache = DNS_TRACE_CACHE_LOCKED_HIT.to_owned();
         trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
-        return Ok(trace.finish(cached_response, DNS_TRACE_REASON_CACHE_LOCKED_HIT));
+        return Ok(trace.finish(response, DNS_TRACE_REASON_CACHE_LOCKED_HIT));
     }
     trace.add_cache_elapsed(cache_started);
     trace.cache = DNS_TRACE_CACHE_MISS.to_owned();
-    let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
-    match action {
+    let result = match action {
         ResidentDnsRequestAction::AsIs => {
             trace.push_asis_attempt();
             let response = forward_dns_asis_async(
@@ -872,6 +877,7 @@ async fn handle_resident_dns_request_without_preference_trace(
                 payload,
                 plan.mark,
                 asis_transport.expect("asis transport checked before forwarding"),
+                context,
             )
             .await?;
             validate_dns_response_for_request(request, &response, true)?;
@@ -917,7 +923,14 @@ async fn handle_resident_dns_request_without_preference_trace(
             )
             .await
         }
-    }
+    };
+    flight.publish(
+        result
+            .as_ref()
+            .map(|result| result.response.as_slice())
+            .map_err(String::as_str),
+    )?;
+    result
 }
 
 async fn forward_dns_asis_async(
@@ -925,14 +938,21 @@ async fn forward_dns_asis_async(
     payload: &[u8],
     mark: u32,
     transport: ResidentDnsAsisTransport,
+    context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, String> {
     match transport {
-        ResidentDnsAsisTransport::Udp => forward_dns_udp_async(original_dst, payload, mark)
-            .await
-            .map_err(|err| format!("forward DNS UDP asis to {original_dst}: {err}")),
-        ResidentDnsAsisTransport::Tcp => forward_dns_tcp_asis_async(original_dst, payload, mark)
-            .await
-            .map_err(|err| format!("forward DNS TCP asis to {original_dst}: {err}")),
+        ResidentDnsAsisTransport::Udp => time::timeout_at(
+            context.deadline(),
+            forward_dns_udp_async(original_dst, payload, mark),
+        )
+        .await
+        .map_err(|_| "DNS UDP asis absolute deadline expired".to_owned())?
+        .map_err(|err| format!("forward DNS UDP asis to {original_dst}: {err}")),
+        ResidentDnsAsisTransport::Tcp => {
+            forward_dns_tcp_asis_async(original_dst, payload, mark, context)
+                .await
+                .map_err(|err| format!("forward DNS TCP asis to {original_dst}: {err}"))
+        }
     }
 }
 

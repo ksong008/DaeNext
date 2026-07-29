@@ -129,6 +129,119 @@ impl Drop for Socks5UdpRelay {
     }
 }
 
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Socks5TcpRelay {
+    address: SocketAddr,
+    connections: Arc<AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Socks5TcpRelay {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn start() -> Self {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let connection_counter = Arc::clone(&connections);
+        let task = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let Ok((stream, _)) = accepted else {
+                            break;
+                        };
+                        connection_counter.fetch_add(1, Ordering::AcqRel);
+                        connections.spawn(serve_socks5_tcp_connection(stream));
+                    }
+                    completed = connections.join_next(), if !connections.is_empty() => {
+                        if completed.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        Self {
+            address,
+            connections,
+            task,
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn address(
+        &self,
+    ) -> SocketAddr {
+        self.address
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn connections(
+        &self,
+    ) -> usize {
+        self.connections.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for Socks5TcpRelay {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn serve_socks5_tcp_connection(mut client: tokio::net::TcpStream) {
+    let mut greeting = [0_u8; 2];
+    if client.read_exact(&mut greeting).await.is_err() || greeting[0] != 5 {
+        return;
+    }
+    let mut methods = vec![0_u8; greeting[1] as usize];
+    if client.read_exact(&mut methods).await.is_err() || client.write_all(&[5, 0]).await.is_err() {
+        return;
+    }
+    let mut header = [0_u8; 3];
+    if client.read_exact(&mut header).await.is_err() || header != [5, 1, 0] {
+        return;
+    }
+    let mut encoded_target = Vec::new();
+    let mut address_type = [0_u8; 1];
+    if client.read_exact(&mut address_type).await.is_err() {
+        return;
+    }
+    encoded_target.push(address_type[0]);
+    let tail_length = match address_type[0] {
+        1 => 6,
+        4 => 18,
+        3 => {
+            let mut length = [0_u8; 1];
+            if client.read_exact(&mut length).await.is_err() {
+                return;
+            }
+            encoded_target.push(length[0]);
+            length[0] as usize + 2
+        }
+        _ => return,
+    };
+    let mut tail = vec![0_u8; tail_length];
+    if client.read_exact(&mut tail).await.is_err() {
+        return;
+    }
+    encoded_target.extend_from_slice(&tail);
+    let Ok((target, _)) = dae_outbound::socks5::Socks5Address::decode(&encoded_target) else {
+        return;
+    };
+    let Ok(mut upstream) = tokio::net::TcpStream::connect(target.authority()).await else {
+        let _ = client.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+        return;
+    };
+    if client
+        .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+}
+
 async fn serve_socks5_udp_control(mut stream: tokio::net::TcpStream, relay_address: SocketAddr) {
     let mut greeting = [0_u8; 2];
     if stream.read_exact(&mut greeting).await.is_err() || greeting[0] != 5 {

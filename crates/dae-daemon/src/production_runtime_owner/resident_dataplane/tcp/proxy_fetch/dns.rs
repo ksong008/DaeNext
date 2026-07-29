@@ -1,7 +1,7 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::production_runtime_owner::resident_dataplane::dns::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
-    exchange_proxy_dns_framed_stream,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -19,47 +19,16 @@ where
     F: FnOnce(TokioTcpStream) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<u8>, ProxyDnsRequestError>>,
 {
-    let listener = bind_proxy_dns_loopback_listener(context).await?;
-    context.ensure(ProxyDnsRequestStage::OwnerAcquire)?;
-    let listen_addr = listener.local_addr().map_err(|error| {
-        ProxyDnsRequestError::new(
-            ProxyDnsRequestStage::OwnerAcquire,
-            ProxyDnsRequestFailure::Network,
-            format!("read resident proxy TCP listener address: {error}"),
-        )
-    })?;
-    let client = context
-        .run(
-            ProxyDnsRequestStage::OwnerAcquire,
-            ProxyDnsRequestFailure::Network,
-            TokioTcpStream::connect(listen_addr),
-        )
-        .await?;
-    let (accepted, peer) = context
-        .run(
-            ProxyDnsRequestStage::OwnerAcquire,
-            ProxyDnsRequestFailure::Network,
-            listener.accept(),
-        )
-        .await?;
-    context.ensure(ProxyDnsRequestStage::OwnerAcquire)?;
-    let mut handler = start_resident_proxy_tcp_handler(
+    let (client, mut handler) = open_resident_proxy_dns_tcp_stream_async(
         binding,
         target,
         dial_ip,
         sniff_payload,
         sniff_domain,
-        accepted,
-        peer,
-        listen_addr,
-        owners.hysteria2(),
-        owners.tuic(),
-        owners.juicity(),
-        owners.anytls(),
-        Some(dae_runtime_control::AbsoluteDeadline::at(
-            context.deadline().into_std(),
-        )),
-    );
+        context,
+        owners,
+    )
+    .await?;
 
     let response_result = exchange(client).await;
     handler.stop();
@@ -92,27 +61,110 @@ where
     }
 }
 
-pub(crate) async fn exchange_resident_proxy_dns_tcp_async(
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_resident_proxy_dns_tcp_connection_async<F, Fut>(
     binding: ResidentProxyBinding,
     target: &str,
-    payload: &[u8],
-    response_limit: usize,
+    dial_ip: bool,
+    sniff_payload: Vec<u8>,
+    sniff_domain: String,
     context: ProxyDnsRequestContext,
     owners: ResidentTransportOwnerRegistries,
-) -> Result<Vec<u8>, ProxyDnsRequestError> {
-    exchange_resident_proxy_dns_tcp_stream_async(
+    run: F,
+) -> Result<(), ProxyDnsRequestError>
+where
+    F: FnOnce(TokioTcpStream) -> Fut,
+    Fut: std::future::Future<Output = Result<(), ProxyDnsRequestError>>,
+{
+    let (client, mut handler) = open_resident_proxy_dns_tcp_stream_async(
         binding,
         target,
-        true,
-        Vec::new(),
-        String::new(),
+        dial_ip,
+        sniff_payload,
+        sniff_domain,
         context,
         owners,
-        |client| async move {
-            exchange_proxy_dns_tcp_loopback(client, payload, response_limit, context).await
-        },
     )
-    .await
+    .await?;
+    let run_result = run(client).await;
+    handler.stop();
+    let cleanup_deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    let handler_result =
+        join_proxy_dns_handler(handler.handle_mut(), cleanup_deadline, run_result.is_err()).await;
+    match run_result {
+        Ok(()) => handler_result.map(|_| ()).map_err(|error| {
+            ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Cleanup,
+                ProxyDnsRequestFailure::Network,
+                error,
+            )
+        }),
+        Err(run_error) => {
+            let handler_detail = match handler_result {
+                Ok(event) => format!("handler_event={}", sanitize_probe_event(event)),
+                Err(error) => format!("handler_error={error}"),
+            };
+            Err(ProxyDnsRequestError::new(
+                run_error.stage(),
+                run_error.failure(),
+                format!("{run_error}; {handler_detail}"),
+            ))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn open_resident_proxy_dns_tcp_stream_async(
+    binding: ResidentProxyBinding,
+    target: &str,
+    dial_ip: bool,
+    sniff_payload: Vec<u8>,
+    sniff_domain: String,
+    context: ProxyDnsRequestContext,
+    owners: ResidentTransportOwnerRegistries,
+) -> Result<(TokioTcpStream, ResidentProxyTcpHandlerGuard), ProxyDnsRequestError> {
+    let listener = bind_proxy_dns_loopback_listener(context).await?;
+    context.ensure(ProxyDnsRequestStage::OwnerAcquire)?;
+    let listen_addr = listener.local_addr().map_err(|error| {
+        ProxyDnsRequestError::new(
+            ProxyDnsRequestStage::OwnerAcquire,
+            ProxyDnsRequestFailure::Network,
+            format!("read resident proxy TCP listener address: {error}"),
+        )
+    })?;
+    let client = context
+        .run(
+            ProxyDnsRequestStage::OwnerAcquire,
+            ProxyDnsRequestFailure::Network,
+            TokioTcpStream::connect(listen_addr),
+        )
+        .await?;
+    let (accepted, peer) = context
+        .run(
+            ProxyDnsRequestStage::OwnerAcquire,
+            ProxyDnsRequestFailure::Network,
+            listener.accept(),
+        )
+        .await?;
+    context.ensure(ProxyDnsRequestStage::OwnerAcquire)?;
+    let handler = start_resident_proxy_tcp_handler(
+        binding,
+        target,
+        dial_ip,
+        sniff_payload,
+        sniff_domain,
+        accepted,
+        peer,
+        listen_addr,
+        owners.hysteria2(),
+        owners.tuic(),
+        owners.juicity(),
+        owners.anytls(),
+        Some(dae_runtime_control::AbsoluteDeadline::at(
+            context.deadline().into_std(),
+        )),
+    );
+    Ok((client, handler))
 }
 
 async fn bind_proxy_dns_loopback_listener(
@@ -172,16 +224,4 @@ async fn join_proxy_dns_handler(
             Err("join resident TCP handler: absolute deadline expired".to_owned())
         }
     }
-}
-
-async fn exchange_proxy_dns_tcp_loopback(
-    mut stream: TokioTcpStream,
-    payload: &[u8],
-    response_limit: usize,
-    context: ProxyDnsRequestContext,
-) -> Result<Vec<u8>, ProxyDnsRequestError> {
-    let response =
-        exchange_proxy_dns_framed_stream(&mut stream, payload, response_limit, context).await?;
-    let _ = time::timeout_at(context.deadline(), stream.shutdown()).await;
-    Ok(response)
 }

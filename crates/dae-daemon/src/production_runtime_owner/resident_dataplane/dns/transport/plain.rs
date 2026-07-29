@@ -1,7 +1,7 @@
 use super::super::*;
 use super::ResidentDnsTransportError;
 use super::route::{
-    ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, resolved_upstream_targets,
+    ResidentDnsUpstreamRoutedTarget, race_dns_upstream_targets, resolved_upstream_targets,
     select_dns_upstream_targets,
 };
 use super::udp_multiplex::ResidentDnsUdpMultiplexHandle;
@@ -16,7 +16,7 @@ pub(super) async fn forward_dns_udp_upstream_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let (targets, mut failures) = select_dns_upstream_targets(
+    let (targets, failures) = select_dns_upstream_targets(
         plan,
         upstream,
         resolved_upstream_targets(upstream)
@@ -25,22 +25,18 @@ pub(super) async fn forward_dns_udp_upstream_async(
         L4Proto::Udp,
     )
     .map_err(ResidentDnsTransportError::message)?;
-    for target in targets {
-        match forward_dns_udp_to_routed_target_async(upstream, target, payload, forwarders, context)
-            .await
-        {
-            Ok(response) => return Ok(response),
-            Err(error) => {
-                if !error.allows_next_candidate() {
-                    return Err(error);
-                }
-                failures.push(error.to_string());
-            }
-        }
-    }
-    Err(ResidentDnsTransportError::message(
-        dns_upstream_targets_failed(upstream, "forward DNS UDP to", failures),
-    ))
+    race_dns_upstream_targets(
+        upstream,
+        "forward DNS UDP to",
+        targets,
+        failures,
+        forwarders.resources.upstream_candidate_race_width(),
+        |target| async move {
+            forward_dns_udp_to_routed_target_async(upstream, target, payload, forwarders, context)
+                .await
+        },
+    )
+    .await
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn forward_dns_udp_async(
@@ -147,7 +143,7 @@ pub(super) async fn forward_dns_tcp_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let (targets, mut failures) = select_dns_upstream_targets(
+    let (targets, failures) = select_dns_upstream_targets(
         plan,
         upstream,
         resolved_upstream_targets(upstream)
@@ -156,22 +152,18 @@ pub(super) async fn forward_dns_tcp_async(
         L4Proto::Tcp,
     )
     .map_err(ResidentDnsTransportError::message)?;
-    for target in targets {
-        match forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders, context)
-            .await
-        {
-            Ok(response) => return Ok(response),
-            Err(error) => {
-                if !error.allows_next_candidate() {
-                    return Err(error);
-                }
-                failures.push(error.to_string());
-            }
-        }
-    }
-    Err(ResidentDnsTransportError::message(
-        dns_upstream_targets_failed(upstream, "forward DNS TCP to", failures),
-    ))
+    race_dns_upstream_targets(
+        upstream,
+        "forward DNS TCP to",
+        targets,
+        failures,
+        forwarders.resources.upstream_candidate_race_width(),
+        |target| async move {
+            forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders, context)
+                .await
+        },
+    )
+    .await
 }
 
 pub(super) async fn forward_dns_udp_to_routed_target_async(
@@ -190,7 +182,7 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
                 .udp_forwarder(upstream, remote, *mark, &target.selection)
                 .map_err(ResidentDnsTransportError::message)?;
             forwarder
-                .exchange(payload)
+                .exchange(payload, context)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
@@ -223,16 +215,49 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
     result
 }
 
+struct ResidentDnsUdpShardLease<'a> {
+    shard: &'a ResidentDnsUdpForwarderShard,
+}
+
+impl<'a> ResidentDnsUdpShardLease<'a> {
+    fn new(shard: &'a ResidentDnsUdpForwarderShard) -> Self {
+        shard
+            .inflight
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self { shard }
+    }
+}
+
+impl Drop for ResidentDnsUdpShardLease<'_> {
+    fn drop(&mut self) {
+        let _ = self.shard.inflight.fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |inflight| Some(inflight.saturating_sub(1)),
+        );
+    }
+}
+
 impl ResidentDnsUdpForwarder {
-    async fn exchange(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
-        let shard_index = self.next_shard_index();
+    async fn exchange(
+        &self,
+        payload: &[u8],
+        context: ProxyDnsRequestContext,
+    ) -> Result<Vec<u8>, String> {
+        let (shard_index, _shard_lease) = self.acquire_shard();
         let mut failures = Vec::new();
         for attempt in 0..self.runtime_config.attempts {
+            context
+                .ensure(ProxyDnsRequestStage::Pending)
+                .map_err(|error| error.to_string())?;
             let handle = self.handle(shard_index).await?;
             if attempt > 0 {
                 handle.record_retry();
             }
-            match handle.exchange_once(payload).await {
+            match handle
+                .exchange_once_until(payload, context.deadline())
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(err) => {
                     failures.push(err);
@@ -249,13 +274,93 @@ impl ResidentDnsUdpForwarder {
         ))
     }
 
-    fn next_shard_index(&self) -> usize {
-        if self.shards.len() <= 1 {
-            return 0;
-        }
-        self.next_shard
+    fn acquire_shard(&self) -> (usize, ResidentDnsUdpShardLease<'_>) {
+        self.refresh_closed_shards();
+        let shard_count = self.shards.len().max(1);
+        let start = self
+            .next_shard
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            % self.shards.len()
+            % shard_count;
+        loop {
+            let mut least_loaded = None::<(usize, usize)>;
+            let mut unopened = None;
+            for offset in 0..shard_count {
+                let index = (start + offset) % shard_count;
+                let shard = &self.shards[index];
+                if shard.opened.load(std::sync::atomic::Ordering::Acquire) {
+                    let inflight = shard.inflight.load(std::sync::atomic::Ordering::Acquire);
+                    if least_loaded.is_none_or(|(_, load)| inflight < load) {
+                        least_loaded = Some((index, inflight));
+                    }
+                } else if unopened.is_none() {
+                    unopened = Some(index);
+                }
+            }
+
+            let index = match least_loaded {
+                Some((index, 0)) => index,
+                Some((index, _)) => match unopened {
+                    Some(unopened_index) => {
+                        let shard = &self.shards[unopened_index];
+                        if shard
+                            .opened
+                            .compare_exchange(
+                                false,
+                                true,
+                                std::sync::atomic::Ordering::AcqRel,
+                                std::sync::atomic::Ordering::Acquire,
+                            )
+                            .is_ok()
+                        {
+                            unopened_index
+                        } else {
+                            continue;
+                        }
+                    }
+                    None => index,
+                },
+                None => {
+                    let index = unopened.unwrap_or(0);
+                    let shard = &self.shards[index];
+                    if shard
+                        .opened
+                        .compare_exchange(
+                            false,
+                            true,
+                            std::sync::atomic::Ordering::AcqRel,
+                            std::sync::atomic::Ordering::Acquire,
+                        )
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    index
+                }
+            };
+            let shard = &self.shards[index];
+            return (index, ResidentDnsUdpShardLease::new(shard));
+        }
+    }
+
+    fn refresh_closed_shards(&self) {
+        for shard in &self.shards {
+            if !shard.opened.load(std::sync::atomic::Ordering::Acquire)
+                || shard.inflight.load(std::sync::atomic::Ordering::Acquire) != 0
+            {
+                continue;
+            }
+            let Ok(handle) = shard.handle.try_lock() else {
+                continue;
+            };
+            if handle
+                .as_ref()
+                .is_none_or(ResidentDnsUdpMultiplexHandle::is_closed)
+            {
+                shard
+                    .opened
+                    .store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
     }
 
     async fn handle(&self, shard_index: usize) -> Result<ResidentDnsUdpMultiplexHandle, String> {
@@ -271,14 +376,28 @@ impl ResidentDnsUdpForwarder {
             .as_ref()
             .is_none_or(ResidentDnsUdpMultiplexHandle::is_closed)
         {
-            let actor_config = self
+            let mut actor_config = self
                 .runtime_config
                 .actor_partition(shard_index, self.shards.len());
-            *handle = Some(
-                self.executor
-                    .open_handle_with_config(self.target, self.mark, actor_config)
-                    .await?,
-            );
+            actor_config.actor_idle_timeout =
+                (shard_index > 0).then_some(self.runtime_config.shard_idle_timeout);
+            let opened = match self
+                .executor
+                .open_handle_with_config(self.target, self.mark, actor_config)
+                .await
+            {
+                Ok(opened) => opened,
+                Err(error) => {
+                    shard
+                        .opened
+                        .store(false, std::sync::atomic::Ordering::Release);
+                    return Err(error);
+                }
+            };
+            shard
+                .opened
+                .store(true, std::sync::atomic::Ordering::Release);
+            *handle = Some(opened);
             if replacing_closed && let Some(opened) = handle.as_ref() {
                 opened.record_recreated();
             }
@@ -306,6 +425,9 @@ impl ResidentDnsUdpForwarder {
             .is_some_and(ResidentDnsUdpMultiplexHandle::is_closed)
         {
             *handle = None;
+            shard
+                .opened
+                .store(false, std::sync::atomic::Ordering::Release);
         }
     }
 }
@@ -326,30 +448,20 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
                 .tcp_forwarder(upstream, remote, *mark, &target.selection)
                 .map_err(ResidentDnsTransportError::message)?;
             forwarder
-                .exchange(payload)
+                .exchange(payload, context)
                 .await
                 .map_err(|err| format!("{remote}: {err}"))
                 .map_err(ResidentDnsTransportError::message)
         }
-        ResidentDnsUpstreamSelection::Proxy { binding } => forward_dns_tcp_to_proxy_async(
-            upstream,
-            remote,
-            payload,
-            binding.clone(),
-            ResidentTransportOwnerRegistries::new(
-                Some(
-                    forwarders
-                        .hysteria2_owner_registry()
-                        .map_err(ResidentDnsTransportError::message)?,
-                ),
-                forwarders.tuic_owner_registry.clone(),
-                forwarders.juicity_owner_registry.clone(),
-            )
-            .with_anytls(forwarders.anytls_owner_registry.clone()),
-            context,
-        )
-        .await
-        .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote))),
+        ResidentDnsUpstreamSelection::Proxy { .. } => {
+            let forwarder = forwarders
+                .tcp_forwarder(upstream, remote, 0, &target.selection)
+                .map_err(ResidentDnsTransportError::message)?;
+            forwarder
+                .exchange(payload, context)
+                .await
+                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote)))
+        }
     };
     record_dns_transport_trace(ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
@@ -364,52 +476,209 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
 }
 
 impl ResidentDnsTcpForwarder {
-    async fn exchange(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
-        match self.exchange_once(payload, true).await {
-            Ok(response) => Ok(response),
-            Err(first_err) => self
-                .exchange_once(payload, false)
+    async fn exchange(
+        &self,
+        payload: &[u8],
+        context: ProxyDnsRequestContext,
+    ) -> Result<Vec<u8>, ProxyDnsRequestError> {
+        let mut first_error = None;
+        for _ in 0..2 {
+            context.ensure(ProxyDnsRequestStage::Retry)?;
+            let connection = self.connection(context).await?;
+            match connection.exchange(payload, context).await {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    first_error.get_or_insert_with(|| error.clone());
+                    if error.failure() == ProxyDnsRequestFailure::Capacity {
+                        connection.wait_for_capacity(context).await?;
+                    } else {
+                        self.reap_closed_connections(context).await?;
+                    }
+                }
+            }
+        }
+        Err(first_error.unwrap_or_else(|| {
+            ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Retry,
+                ProxyDnsRequestFailure::Protocol,
+                "DNS TCP multiplex retry ended without a recorded failure",
+            )
+        }))
+    }
+
+    async fn connection(
+        &self,
+        context: ProxyDnsRequestContext,
+    ) -> Result<ResidentDnsTcpMultiplexHandle, ProxyDnsRequestError> {
+        loop {
+            if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::OwnerAcquire,
+                    ProxyDnsRequestFailure::Cancelled,
+                    "DNS TCP multiplex forwarder is closing",
+                ));
+            }
+            self.reap_closed_connections(context).await?;
+            if let Some(handle) = self.select_connection(true).await {
+                return Ok(handle);
+            }
+            let open_guard = context
+                .run(
+                    ProxyDnsRequestStage::OwnerAcquire,
+                    ProxyDnsRequestFailure::Cancelled,
+                    async { Ok::<_, std::convert::Infallible>(self.open_lock.lock().await) },
+                )
+                .await?;
+            if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::OwnerAcquire,
+                    ProxyDnsRequestFailure::Cancelled,
+                    "DNS TCP multiplex forwarder is closing",
+                ));
+            }
+            self.reap_closed_connections(context).await?;
+            if let Some(handle) = self.select_connection(true).await {
+                return Ok(handle);
+            }
+            let active_connections = self
+                .connections
+                .lock()
                 .await
-                .map_err(|retry_err| {
-                    format!("DNS TCP pooled forwarder retry failed after {first_err}: {retry_err}")
-                }),
+                .iter()
+                .filter(|connection| !connection.handle.is_closed())
+                .count();
+            if active_connections < self.connection_limit {
+                let connection = self.open_connection(context).await?;
+                let handle = connection.handle.clone();
+                self.connections.lock().await.push(connection);
+                return Ok(handle);
+            }
+            let waiting = self.select_connection(false).await.ok_or_else(|| {
+                ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::OwnerAcquire,
+                    ProxyDnsRequestFailure::Network,
+                    "DNS TCP multiplex pool has no live connection",
+                )
+            })?;
+            drop(open_guard);
+            waiting.wait_for_capacity(context).await?;
         }
     }
 
-    async fn exchange_once(&self, payload: &[u8], use_idle: bool) -> Result<Vec<u8>, String> {
-        let _permit = acquire_dns_permit(&self.permits, "DNS TCP stream pool").await?;
-        let mut stream = if use_idle {
-            match self.idle.lock().await.pop() {
-                Some(stream) => stream,
-                None => open_dns_tcp_stream_async(&self.upstream, self.target, self.mark).await?,
+    async fn open_connection(
+        &self,
+        context: ProxyDnsRequestContext,
+    ) -> Result<ResidentDnsTcpMultiplexConnection, ProxyDnsRequestError> {
+        let (handle, registration) = ResidentDnsTcpMultiplexHandle::new(self.request_limit);
+        let task = match &self.connection_kind {
+            ResidentDnsTcpConnectionKind::Direct => {
+                let stream = open_dns_tcp_stream_with_context_async(
+                    &self.upstream,
+                    self.target,
+                    self.mark,
+                    context,
+                )
+                .await
+                .map_err(|error| {
+                    ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Connect,
+                        ProxyDnsRequestFailure::Network,
+                        error,
+                    )
+                })?;
+                tokio::spawn(registration.run(stream))
             }
-        } else {
-            open_dns_tcp_stream_async(&self.upstream, self.target, self.mark).await?
+            ResidentDnsTcpConnectionKind::Proxy { binding, owners } => {
+                let binding = binding.clone();
+                let owners = owners.clone();
+                let target = self.target.to_string();
+                tokio::spawn(async move {
+                    run_resident_proxy_dns_tcp_connection_async(
+                        binding,
+                        &target,
+                        true,
+                        Vec::new(),
+                        String::new(),
+                        context,
+                        owners,
+                        |stream| async move {
+                            registration.run(stream).await.map_err(|error| {
+                                ProxyDnsRequestError::new(
+                                    ProxyDnsRequestStage::Read,
+                                    ProxyDnsRequestFailure::Network,
+                                    error,
+                                )
+                            })
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())
+                })
+            }
         };
-        let result = time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            forward_dns_framed_stream_async(&mut stream, payload),
-        )
-        .await
-        .map_err(|_| "DNS TCP exchange timeout".to_owned())?
-        .map_err(|err| {
-            format!(
-                "forward DNS over TCP to upstream {} {}: {err}",
-                self.upstream.tag, self.upstream.target.authority
-            )
-        });
-        if result.is_ok() {
-            return_tcp_stream_to_pool(&self.idle, stream).await;
+        Ok(ResidentDnsTcpMultiplexConnection { handle, task })
+    }
+
+    async fn select_connection(
+        &self,
+        require_capacity: bool,
+    ) -> Option<ResidentDnsTcpMultiplexHandle> {
+        self.connections
+            .lock()
+            .await
+            .iter()
+            .filter(|connection| !connection.handle.is_closed())
+            .filter(|connection| !require_capacity || connection.handle.has_capacity())
+            .min_by_key(|connection| connection.handle.pending())
+            .map(|connection| connection.handle.clone())
+    }
+
+    async fn reap_closed_connections(
+        &self,
+        context: ProxyDnsRequestContext,
+    ) -> Result<(), ProxyDnsRequestError> {
+        let mut retired = {
+            let mut connections = self.connections.lock().await;
+            let mut active = Vec::with_capacity(connections.len());
+            let mut retired = Vec::new();
+            for connection in std::mem::take(&mut *connections) {
+                if connection.handle.is_closed() {
+                    retired.push(connection);
+                } else {
+                    active.push(connection);
+                }
+            }
+            *connections = active;
+            retired
+        };
+        for connection in &mut retired {
+            if time::timeout_at(context.deadline(), &mut connection.task)
+                .await
+                .is_err()
+            {
+                connection.task.abort();
+                let _ = (&mut connection.task).await;
+            }
         }
-        result
+        Ok(())
     }
 }
 
-async fn return_tcp_stream_to_pool(pool: &AsyncMutex<Vec<TokioTcpStream>>, stream: TokioTcpStream) {
-    let mut idle = pool.lock().await;
-    if idle.len() < DNS_STREAM_POOL_MAX_IDLE {
-        idle.push(stream);
-    }
+pub(super) async fn open_dns_tcp_stream_with_context_async(
+    upstream: &ResidentDnsUpstream,
+    target: SocketAddr,
+    mark: u32,
+    context: ProxyDnsRequestContext,
+) -> Result<TokioTcpStream, String> {
+    context
+        .ensure(ProxyDnsRequestStage::Connect)
+        .map_err(|error| error.to_string())?;
+    time::timeout_at(
+        context.deadline(),
+        open_dns_tcp_stream_async(upstream, target, mark),
+    )
+    .await
+    .map_err(|_| "DNS TCP connect absolute deadline expired".to_owned())?
 }
 
 pub(super) fn dns_transport_route_name(selection: &ResidentDnsUpstreamSelection) -> &'static str {
@@ -423,47 +692,28 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn forwar
     target: SocketAddr,
     payload: &[u8],
     mark: u32,
+    context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, String> {
-    let connected = open_direct_tcp_connection_async(target.to_string(), mark, false)
-        .await
-        .map_err(|err| format!("connect DNS TCP asis {target}: {err}"))?;
+    let connected = time::timeout_at(
+        context.deadline(),
+        open_direct_tcp_connection_async(target.to_string(), mark, false),
+    )
+    .await
+    .map_err(|_| "DNS TCP asis connect absolute deadline expired".to_owned())?
+    .map_err(|err| format!("connect DNS TCP asis {target}: {err}"))?;
     let mut stream = TokioTcpStream::from_std(connected.stream)
         .map_err(|err| format!("adopt DNS TCP asis stream: {err}"))?;
-    time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
+    time::timeout_at(
+        context.deadline(),
         forward_dns_framed_stream_async(&mut stream, payload),
     )
     .await
     .map_err(|_| "DNS TCP asis exchange timeout".to_owned())?
 }
 
-async fn forward_dns_tcp_to_proxy_async(
-    upstream: &ResidentDnsUpstream,
-    target: SocketAddr,
-    payload: &[u8],
-    binding: ResidentProxyBinding,
-    owners: ResidentTransportOwnerRegistries,
-    context: ProxyDnsRequestContext,
-) -> Result<Vec<u8>, ProxyDnsRequestError> {
-    exchange_resident_proxy_dns_tcp_async(
-        binding,
-        &target.to_string(),
-        payload,
-        DNS_TCP_MESSAGE_READ_LIMIT,
-        context,
-        owners,
-    )
-    .await
-    .map_err(|error| {
-        error.with_context(format_args!(
-            "forward DNS over proxied TCP to upstream {} {} via {}",
-            upstream.tag, upstream.target.authority, target,
-        ))
-    })
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::{Socks5TcpRelay, dns_proxy_binding, socks5_dns_proxy};
     use super::*;
     use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     use std::time::Duration;
@@ -612,6 +862,8 @@ mod tests {
             executor: Arc::clone(&executor),
             shards: vec![ResidentDnsUdpForwarderShard {
                 handle: AsyncMutex::new(None),
+                opened: std::sync::atomic::AtomicBool::new(false),
+                inflight: std::sync::atomic::AtomicUsize::new(0),
             }],
             runtime_config: runtime.clone(),
         };
@@ -633,7 +885,13 @@ mod tests {
             let response = dns_a_response_for_query(&request[..read], [192, 0, 2, 44]);
             upstream.send_to(&response, peer).await.unwrap();
         });
-        let response = forwarder.exchange(&query).await.unwrap();
+        let response = forwarder
+            .exchange(
+                &query,
+                ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(&response[0..2], &0x6161_u16.to_be_bytes());
         server.await.unwrap();
@@ -642,6 +900,96 @@ mod tests {
         assert_eq!(snapshot["dnsUdpForwarderRecreated"], 1);
         let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
         assert_eq!(executor.shutdown(deadline).await["status"], "pass");
+    }
+
+    #[tokio::test]
+    async fn direct_dns_udp_shards_expand_under_concurrency_and_release_idle_excess() {
+        let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut packets = Vec::new();
+            let mut buffer = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+            for _ in 0..2 {
+                let (read, peer) = upstream.recv_from(&mut buffer).await.unwrap();
+                packets.push((buffer[..read].to_vec(), peer));
+            }
+            for (index, (query, peer)) in packets.into_iter().rev().enumerate() {
+                let response = dns_a_response_for_query(&query, [192, 0, 2, 110 + index as u8]);
+                upstream.send_to(&response, peer).await.unwrap();
+            }
+        });
+        let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+        runtime.direct_shards = 2;
+        runtime.attempts = 1;
+        runtime.shard_idle_timeout = Duration::from_millis(20);
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+            runtime.clone(),
+            Arc::clone(&metrics),
+        ));
+        let forwarder = ResidentDnsUdpForwarder {
+            owner_observation: ResidentDnsTransportOwnerObservation::new(
+                Arc::clone(&metrics),
+                std::mem::size_of::<ResidentDnsUdpForwarder>(),
+            ),
+            target,
+            mark: 0,
+            next_shard: std::sync::atomic::AtomicUsize::new(0),
+            executor: Arc::clone(&executor),
+            shards: (0..2)
+                .map(|_| ResidentDnsUdpForwarderShard {
+                    handle: AsyncMutex::new(None),
+                    opened: std::sync::atomic::AtomicBool::new(false),
+                    inflight: std::sync::atomic::AtomicUsize::new(0),
+                })
+                .collect(),
+            runtime_config: runtime,
+        };
+        let first = build_dns_query_packet(0x7401, "first-udp-shard.example", DNS_QTYPE_A).unwrap();
+        let second =
+            build_dns_query_packet(0x7402, "second-udp-shard.example", DNS_QTYPE_A).unwrap();
+        let context = ProxyDnsRequestContext::from_timeout(Duration::from_secs(1));
+        let (first_response, second_response) = tokio::join!(
+            forwarder.exchange(&first, context),
+            forwarder.exchange(&second, context),
+        );
+        assert_eq!(&first_response.unwrap()[0..2], &0x7401_u16.to_be_bytes());
+        assert_eq!(&second_response.unwrap()[0..2], &0x7402_u16.to_be_bytes());
+        server.await.unwrap();
+        assert!(
+            forwarder
+                .shards
+                .iter()
+                .all(|shard| shard.opened.load(std::sync::atomic::Ordering::Acquire))
+        );
+        assert_eq!(metrics.snapshot()["dnsUdpActorsOpened"], 2);
+
+        time::timeout(Duration::from_millis(200), async {
+            while metrics.snapshot()["dnsUdpActorsClosed"] == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("idle excess DNS UDP shard did not close");
+        forwarder.refresh_closed_shards();
+        assert!(
+            forwarder.shards[0]
+                .opened
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        assert!(
+            !forwarder.shards[1]
+                .opened
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        assert_eq!(
+            executor
+                .shutdown(time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+                .await["status"],
+            "pass"
+        );
     }
 
     fn dns_a_response_for_query(query: &[u8], address: [u8; 4]) -> Vec<u8> {
@@ -681,11 +1029,12 @@ mod tests {
             let len = u16::from_be_bytes(len) as usize;
             let mut payload = vec![0_u8; len];
             stream.read_exact(&mut payload).await.unwrap();
+            let response = dns_a_response_for_query(&payload, [192, 0, 2, 60]);
             stream
-                .write_all(&(payload.len() as u16).to_be_bytes())
+                .write_all(&(response.len() as u16).to_be_bytes())
                 .await
                 .unwrap();
-            stream.write_all(&payload).await.unwrap();
+            stream.write_all(&response).await.unwrap();
         });
 
         let upstream = ResidentDnsUpstream {
@@ -711,9 +1060,10 @@ mod tests {
 
         let plan = ResidentDnsPlan::asis(0);
         let forwarders = Arc::new(ResidentDnsForwarderCache::default());
+        let query = build_dns_query_packet(0x6060, "next-target.example", DNS_QTYPE_A).unwrap();
         let response = forward_dns_tcp_async(
             &upstream,
-            b"fixture-query",
+            &query,
             &plan,
             &forwarders,
             ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
@@ -721,7 +1071,293 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(response, b"fixture-query");
+        assert_eq!(&response[0..2], &0x6060_u16.to_be_bytes());
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxied_dns_tcp_reuses_one_pipeline_for_out_of_order_responses() {
+        let upstream_listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = upstream_listener.local_addr().unwrap();
+        let upstream_server = tokio::spawn(async move {
+            let (mut stream, _) = upstream_listener.accept().await.unwrap();
+            let warm = read_dns_tcp_payload_async(&mut stream)
+                .await
+                .unwrap()
+                .unwrap();
+            let warm_response = dns_a_response_for_query(&warm, [192, 0, 2, 70]);
+            write_dns_tcp_payload_async(&mut stream, &warm_response)
+                .await
+                .unwrap();
+            let first = read_dns_tcp_payload_async(&mut stream)
+                .await
+                .unwrap()
+                .unwrap();
+            let second = read_dns_tcp_payload_async(&mut stream)
+                .await
+                .unwrap()
+                .unwrap();
+            let second_response = dns_a_response_for_query(&second, [192, 0, 2, 72]);
+            let first_response = dns_a_response_for_query(&first, [192, 0, 2, 71]);
+            write_dns_tcp_payload_async(&mut stream, &second_response)
+                .await
+                .unwrap();
+            write_dns_tcp_payload_async(&mut stream, &first_response)
+                .await
+                .unwrap();
+        });
+        let relay = Socks5TcpRelay::start().await;
+        let upstream = ResidentDnsUpstream {
+            index: 0,
+            tag: "proxied-pipeline".to_owned(),
+            target: ResidentDnsUpstreamTarget {
+                authority: target.to_string(),
+                host: target.ip().to_string(),
+                port: target.port(),
+                literal_addr: Some(target),
+                fallback_resolver: "127.0.0.1:53".parse().unwrap(),
+                resolver_mark: 0,
+                resolved_addrs: Arc::default(),
+            },
+            scheme: ResidentDnsUpstreamScheme::Tcp,
+            path: String::new(),
+        };
+        let binding = dns_proxy_binding(socks5_dns_proxy(relay.address()), 1);
+        let selection = ResidentDnsUpstreamSelection::Proxy { binding };
+        let cache = Arc::new(ResidentDnsForwarderCache::default());
+        let forwarder = cache
+            .tcp_forwarder(&upstream, target, 0, &selection)
+            .unwrap();
+        let warm = build_dns_query_packet(0x7000, "warm.example", DNS_QTYPE_A).unwrap();
+        let warm_response = forwarder
+            .exchange(
+                &warm,
+                ProxyDnsRequestContext::from_timeout(Duration::from_secs(2)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(&warm_response[0..2], &0x7000_u16.to_be_bytes());
+
+        let first = build_dns_query_packet(0x7100, "first.example", DNS_QTYPE_A).unwrap();
+        let second = build_dns_query_packet(0x7200, "second.example", DNS_QTYPE_A).unwrap();
+        let first_exchange = forwarder.exchange(
+            &first,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(2)),
+        );
+        let second_exchange = forwarder.exchange(
+            &second,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(2)),
+        );
+        let (first_response, second_response) = tokio::join!(first_exchange, second_exchange);
+        assert_eq!(&first_response.unwrap()[0..2], &0x7100_u16.to_be_bytes());
+        assert_eq!(&second_response.unwrap()[0..2], &0x7200_u16.to_be_bytes());
+        upstream_server.await.unwrap();
+        assert_eq!(relay.connections(), 1);
+        let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+        assert_eq!(cache.shutdown(deadline).await["status"], "pass");
+    }
+
+    #[tokio::test]
+    async fn proxied_dns_tcp_pool_expands_before_waiting_on_a_full_pipeline() {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = listener.local_addr().unwrap();
+        let response_barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let server_barrier = Arc::clone(&response_barrier);
+        let server = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            for index in 0..2_u8 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let response_barrier = Arc::clone(&server_barrier);
+                connections.spawn(async move {
+                    let query = read_dns_tcp_payload_async(&mut stream)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    response_barrier.wait().await;
+                    let response = dns_a_response_for_query(&query, [192, 0, 2, 100 + index]);
+                    write_dns_tcp_payload_async(&mut stream, &response)
+                        .await
+                        .unwrap();
+                });
+            }
+            server_barrier.wait().await;
+            while connections.join_next().await.is_some() {}
+        });
+        let relay = Socks5TcpRelay::start().await;
+        let upstream = ResidentDnsUpstream {
+            index: 0,
+            tag: "proxied-pool".to_owned(),
+            target: ResidentDnsUpstreamTarget {
+                authority: target.to_string(),
+                host: target.ip().to_string(),
+                port: target.port(),
+                literal_addr: Some(target),
+                fallback_resolver: "127.0.0.1:53".parse().unwrap(),
+                resolver_mark: 0,
+                resolved_addrs: Arc::default(),
+            },
+            scheme: ResidentDnsUpstreamScheme::Tcp,
+            path: String::new(),
+        };
+        let forwarder = Arc::new(ResidentDnsTcpForwarder {
+            owner_observation: ResidentDnsTransportOwnerObservation::new(
+                Arc::new(ResidentDataplaneMetrics::default()),
+                std::mem::size_of::<ResidentDnsTcpForwarder>(),
+            ),
+            upstream,
+            target,
+            mark: 0,
+            connection_kind: ResidentDnsTcpConnectionKind::Proxy {
+                binding: dns_proxy_binding(socks5_dns_proxy(relay.address()), 1),
+                owners: ResidentTransportOwnerRegistries::default(),
+            },
+            connection_limit: 2,
+            request_limit: 1,
+            connections: AsyncMutex::new(Vec::new()),
+            open_lock: AsyncMutex::new(()),
+            closing: std::sync::atomic::AtomicBool::new(false),
+        });
+        let first =
+            build_dns_query_packet(0x7301, "first-proxy-pool.example", DNS_QTYPE_A).unwrap();
+        let first_forwarder = Arc::clone(&forwarder);
+        let first_exchange = tokio::spawn(async move {
+            first_forwarder
+                .exchange(
+                    &first,
+                    ProxyDnsRequestContext::from_timeout(Duration::from_secs(2)),
+                )
+                .await
+        });
+        time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ready = forwarder
+                    .connections
+                    .lock()
+                    .await
+                    .first()
+                    .is_some_and(|connection| connection.handle.pending() == 1);
+                if ready {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first proxied DNS TCP pipeline did not reach capacity");
+        let second =
+            build_dns_query_packet(0x7302, "second-proxy-pool.example", DNS_QTYPE_A).unwrap();
+        let second_response = forwarder
+            .exchange(
+                &second,
+                ProxyDnsRequestContext::from_timeout(Duration::from_secs(2)),
+            )
+            .await
+            .unwrap();
+        let first_response = first_exchange.await.unwrap().unwrap();
+        assert_eq!(&first_response[0..2], &0x7301_u16.to_be_bytes());
+        assert_eq!(&second_response[0..2], &0x7302_u16.to_be_bytes());
+        server.await.unwrap();
+        assert_eq!(relay.connections(), 2);
+
+        forwarder
+            .closing
+            .store(true, std::sync::atomic::Ordering::Release);
+        let mut connections = std::mem::take(&mut *forwarder.connections.lock().await);
+        for connection in &connections {
+            connection.handle.close();
+        }
+        for connection in &mut connections {
+            let _ = time::timeout(Duration::from_secs(1), &mut connection.task)
+                .await
+                .expect("proxied DNS TCP pipeline did not join after close")
+                .expect("proxied DNS TCP pipeline task panicked");
+            assert_eq!(connection.handle.pending(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_dns_tcp_pool_expands_before_waiting_on_a_full_connection() {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let target = listener.local_addr().unwrap();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let accepted_count = Arc::clone(&accepted);
+        let response_barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let server_barrier = Arc::clone(&response_barrier);
+        let server = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                accepted_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                let response_barrier = Arc::clone(&server_barrier);
+                connections.spawn(async move {
+                    let query = read_dns_tcp_payload_async(&mut stream)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    response_barrier.wait().await;
+                    let response = dns_a_response_for_query(&query, [192, 0, 2, 90]);
+                    write_dns_tcp_payload_async(&mut stream, &response)
+                        .await
+                        .unwrap();
+                });
+            }
+            server_barrier.wait().await;
+            while connections.join_next().await.is_some() {}
+        });
+        let upstream = ResidentDnsUpstream {
+            index: 0,
+            tag: "direct-pool".to_owned(),
+            target: ResidentDnsUpstreamTarget {
+                authority: target.to_string(),
+                host: target.ip().to_string(),
+                port: target.port(),
+                literal_addr: Some(target),
+                fallback_resolver: "127.0.0.1:53".parse().unwrap(),
+                resolver_mark: 0,
+                resolved_addrs: Arc::default(),
+            },
+            scheme: ResidentDnsUpstreamScheme::Tcp,
+            path: String::new(),
+        };
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let forwarder = ResidentDnsTcpForwarder {
+            owner_observation: ResidentDnsTransportOwnerObservation::new(
+                metrics,
+                std::mem::size_of::<ResidentDnsTcpForwarder>(),
+            ),
+            upstream,
+            target,
+            mark: 0,
+            connection_kind: ResidentDnsTcpConnectionKind::Direct,
+            connection_limit: 2,
+            request_limit: 1,
+            connections: AsyncMutex::new(Vec::new()),
+            open_lock: AsyncMutex::new(()),
+            closing: std::sync::atomic::AtomicBool::new(false),
+        };
+        let first = build_dns_query_packet(0x8100, "first-pool.example", DNS_QTYPE_A).unwrap();
+        let second = build_dns_query_packet(0x8200, "second-pool.example", DNS_QTYPE_A).unwrap();
+        let first_exchange = forwarder.exchange(
+            &first,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(2)),
+        );
+        let second_exchange = forwarder.exchange(
+            &second,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(2)),
+        );
+        let (first_response, second_response) = tokio::join!(first_exchange, second_exchange);
+        assert_eq!(&first_response.unwrap()[0..2], &0x8100_u16.to_be_bytes());
+        assert_eq!(&second_response.unwrap()[0..2], &0x8200_u16.to_be_bytes());
+        server.await.unwrap();
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::Acquire), 2);
+        for connection in forwarder.connections.lock().await.iter() {
+            connection.handle.close();
+        }
     }
 }
