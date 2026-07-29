@@ -5,11 +5,11 @@ const BALANCED_MAXIMUM_RETIRED_GENERATIONS: usize = 2;
 const HIGH_PERFORMANCE_MAXIMUM_RETIRED_GENERATIONS: usize = 4;
 
 const LOW_MEMORY_GENERATION_MAXIMUM_AGE_SECONDS: u64 =
-    RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_secs() * 3;
+    RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX.as_secs() * 3;
 const BALANCED_GENERATION_MAXIMUM_AGE_SECONDS: u64 =
-    RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_secs() * 6;
+    RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX.as_secs() * 6;
 const HIGH_PERFORMANCE_GENERATION_MAXIMUM_AGE_SECONDS: u64 =
-    RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_secs() * 12;
+    RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX.as_secs() * 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ResidentGenerationDrainPolicy {
@@ -68,7 +68,7 @@ mod tests {
         ] {
             let policy = ResidentGenerationDrainPolicy::from_runtime_profile(profile);
             assert!(policy.maximum_age >= RESIDENT_TCP_IDLE_TIMEOUT);
-            assert!(policy.maximum_age >= RESIDENT_UDP_SESSION_IDLE_TIMEOUT);
+            assert!(policy.maximum_age >= profile.udp_proxy_session_idle_timeout());
             assert!(policy.maximum_retired > 0);
         }
     }

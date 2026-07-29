@@ -37,6 +37,22 @@ impl ResidentUdpPinnedRoute {
         matches!(self, Self::ResidentDns)
     }
 
+    pub(super) fn follows_active_generation(&self) -> bool {
+        matches!(self, Self::ResidentDns)
+    }
+
+    pub(super) fn idle_timeout(
+        &self,
+        session_idle_timeout: Duration,
+        proxy_session_idle_timeout: Duration,
+    ) -> Duration {
+        match self {
+            Self::ResidentDns => RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT,
+            Self::Proxy { .. } => proxy_session_idle_timeout,
+            Self::Direct { .. } | Self::Block { .. } => session_idle_timeout,
+        }
+    }
+
     pub(super) fn dispatch(
         &self,
         packet: UdpOriginalDstPacket,

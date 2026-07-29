@@ -95,26 +95,97 @@ fn udp_generation_pin_is_fixed_by_peer_and_original_destination_until_expiry() {
         key,
         UdpGenerationPin {
             generation: 7,
-            expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+            expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX,
             route: None,
         },
     );
 
-    assert_eq!(pinned_udp_generation(&pins, key, now), Some(7));
     assert_eq!(
-        pinned_udp_generation(
+        udp_generation_pin_for_packet(&pins, key, now, 7).map(|pin| pin.generation),
+        Some(7)
+    );
+    assert!(
+        udp_generation_pin_for_packet(
             &pins,
             UdpGenerationPinKey {
                 peer,
                 original_dst: other_destination,
             },
             now,
-        ),
-        None
+            7,
+        )
+        .is_none()
     );
+    assert!(
+        udp_generation_pin_for_packet(&pins, key, now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX, 7,)
+            .is_none()
+    );
+}
+
+#[test]
+fn resident_dns_pin_follows_the_active_generation_after_reload() {
+    let key = UdpGenerationPinKey {
+        peer: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000),
+        original_dst: SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 53),
+    };
+    let now = Instant::now();
+    let mut pins = HashMap::new();
+    pins.insert(
+        key,
+        UdpGenerationPin {
+            generation: 7,
+            expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX,
+            route: Some(ResidentUdpPinnedRoute::ResidentDns),
+        },
+    );
+
+    let current = udp_generation_pin_for_packet(&pins, key, now, 7);
+    assert_eq!(current.map(|pin| pin.generation), Some(7));
+    assert!(matches!(
+        current.and_then(|pin| pin.route.as_ref()),
+        Some(ResidentUdpPinnedRoute::ResidentDns)
+    ));
+
+    let reloaded = udp_generation_pin_for_packet(&pins, key, now, 8);
+    assert!(reloaded.is_none());
     assert_eq!(
-        pinned_udp_generation(&pins, key, now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT),
-        None
+        udp_generation_choice(reloaded.map(|pin| pin.generation), 8, |_| false),
+        UdpGenerationChoice::Available(8)
+    );
+}
+
+#[test]
+fn ordinary_udp_pin_remains_fail_closed_when_its_generation_is_unavailable() {
+    let key = UdpGenerationPinKey {
+        peer: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000),
+        original_dst: SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443),
+    };
+    let now = Instant::now();
+    let mut pins = HashMap::new();
+    pins.insert(
+        key,
+        UdpGenerationPin {
+            generation: 7,
+            expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX,
+            route: Some(ResidentUdpPinnedRoute::Direct {
+                route: ResidentUdpRouteSelection {
+                    initial_outbound: OUTBOUND_DIRECT,
+                    final_outbound: OUTBOUND_DIRECT,
+                    final_mark: 0,
+                    userspace_route_executed: false,
+                    userspace_route_must: false,
+                },
+                sniffed_domain: None,
+                dscp: 0,
+            }),
+        },
+    );
+
+    let pinned = udp_generation_pin_for_packet(&pins, key, now, 8);
+    assert_eq!(pinned.map(|pin| pin.generation), Some(7));
+    assert_eq!(
+        udp_generation_choice(pinned.map(|pin| pin.generation), 8, |_| false),
+        UdpGenerationChoice::PinUnavailable
     );
 }
 
@@ -147,7 +218,7 @@ fn retired_udp_generation_keeps_only_resources_required_by_its_bound_pins() {
         key,
         UdpGenerationPin {
             generation: 7,
-            expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+            expires_at: now + RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX,
             route: None,
         },
     );
@@ -192,6 +263,33 @@ fn retired_udp_generation_keeps_only_resources_required_by_its_bound_pins() {
 }
 
 #[test]
+fn pinned_route_idle_timeout_preserves_dns_and_direct_lifecycle_classes() {
+    let session_idle_timeout = Duration::from_secs(60);
+    let proxy_session_idle_timeout = Duration::from_secs(120);
+    assert_eq!(
+        ResidentUdpPinnedRoute::ResidentDns
+            .idle_timeout(session_idle_timeout, proxy_session_idle_timeout),
+        RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT
+    );
+
+    let direct = ResidentUdpPinnedRoute::Direct {
+        route: ResidentUdpRouteSelection {
+            initial_outbound: OUTBOUND_DIRECT,
+            final_outbound: OUTBOUND_DIRECT,
+            final_mark: 0,
+            userspace_route_executed: false,
+            userspace_route_must: false,
+        },
+        sniffed_domain: None,
+        dscp: 0,
+    };
+    assert_eq!(
+        direct.idle_timeout(session_idle_timeout, proxy_session_idle_timeout),
+        session_idle_timeout
+    );
+}
+
+#[test]
 fn retired_unbound_udp_pin_lasts_only_while_rollback_or_sniffing_can_use_it() {
     assert!(udp_generation_pin_is_required(true, false, true, false));
     assert!(udp_generation_pin_is_required(false, true, true, false));
@@ -222,7 +320,10 @@ fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
         value["sourceContract"]["compatibilityMode"],
         "strict-fixed-target"
     );
-    assert_eq!(key.idle_timeout(), RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT);
+    assert_eq!(
+        key.idle_timeout(RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX),
+        RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT
+    );
 }
 
 #[test]
@@ -260,8 +361,9 @@ fn udp_session_key_separates_packet_semantics() {
         UdpSessionKey::new(&socks, peer, original_dst)
     );
     assert_eq!(
-        UdpSessionKey::new(&vless, peer, original_dst).idle_timeout(),
-        RESIDENT_UDP_SESSION_IDLE_TIMEOUT
+        UdpSessionKey::new(&vless, peer, original_dst)
+            .idle_timeout(RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX),
+        RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX
     );
 }
 

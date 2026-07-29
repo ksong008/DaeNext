@@ -3,7 +3,6 @@ pub(crate) const VLESS_RESPONSE_VERSION: u8 = 0;
 pub(crate) const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
 pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT: Duration = Duration::from_millis(100);
-pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
     Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
 pub(crate) const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -107,6 +106,7 @@ pub(crate) fn next_resident_runtime_generation() -> u64 {
 }
 
 pub(crate) fn resident_runtime_defaults_contract() -> Value {
+    let runtime_profile = ResidentRuntimeProfileSelection::selected().profile;
     json!({
         "runtimeProfile": resident_runtime_profile_contract(),
         "tcpFlow": {
@@ -164,8 +164,10 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "min": RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MIN,
                 "max": RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MAX,
             },
-            "idleTimeoutSeconds": RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_secs(),
+            "idleTimeoutSeconds": runtime_profile.udp_session_idle_timeout().as_secs(),
+            "proxyIdleTimeoutSeconds": runtime_profile.udp_proxy_session_idle_timeout().as_secs(),
             "dnsIdleTimeoutSeconds": RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT.as_secs(),
+            "idleTimeoutPolicy": "runtime profile with a longer floor for proxy-backed sessions",
             "model": "resident UDP session manager keyed by graph id, outbound, peer, original destination, and packet semantics",
         },
         "dnsFastPath": {

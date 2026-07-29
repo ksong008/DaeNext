@@ -96,6 +96,8 @@ impl ResidentUdpSessionShardPool {
             tuic_owner_registry,
             juicity_owner_registry,
             anytls_owner_registry,
+            session_idle_timeout: runtime_config.session_idle_timeout,
+            proxy_session_idle_timeout: runtime_config.proxy_session_idle_timeout,
             response_buffer_idle_timeout: runtime_config.direct_response_buffer_idle_timeout,
             actor_stop: Arc::clone(&actor_stop),
         });
