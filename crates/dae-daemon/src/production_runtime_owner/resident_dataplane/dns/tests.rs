@@ -489,7 +489,53 @@ fn dns_upstream_candidates_keep_multiple_resolved_targets_generic() {
 }
 
 #[tokio::test]
-async fn tcp_udp_preserves_the_complete_udp_target_set_while_tcp_races() {
+async fn tcp_udp_fast_udp_response_does_not_admit_a_tcp_request() {
+    let tcp = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let target = tcp.local_addr().unwrap();
+    let udp = tokio::net::UdpSocket::bind(target).await.unwrap();
+    let udp_server = tokio::spawn(async move {
+        let mut request = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+        let (read, peer) = udp.recv_from(&mut request).await.unwrap();
+        let response = dns_pressure_response_for_query(
+            &request[..read],
+            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 43)),
+            60,
+        );
+        udp.send_to(&response, peer).await.unwrap();
+    });
+    let tcp_server = tokio::spawn(async move {
+        time::timeout(Duration::from_millis(150), tcp.accept())
+            .await
+            .is_ok()
+    });
+    let upstream = parse_dns_upstream(
+        1,
+        "udp-lead",
+        &format!("tcp+udp://{target}"),
+        test_fallback_resolver(),
+        0,
+    )
+    .unwrap();
+
+    let response = transport::forward_dns_to_upstream_async(
+        &upstream,
+        QUERY,
+        &ResidentDnsPlan::asis(0),
+        &Arc::new(ResidentDnsForwarderCache::default()),
+        ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(&response[0..2], &QUERY[0..2]);
+    udp_server.await.unwrap();
+    assert!(!tcp_server.await.unwrap(), "fast UDP admitted TCP work");
+}
+
+#[tokio::test]
+async fn tcp_udp_preserves_the_complete_udp_target_set_during_the_udp_lead() {
     let live = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
@@ -582,6 +628,11 @@ async fn tcp_udp_tcp_response_does_not_wait_for_blackholed_udp() {
 
     assert_eq!(&response[0..2], &QUERY[0..2]);
     assert!(
+        started.elapsed() >= Duration::from_millis(20),
+        "TCP started without the UDP hedge lead: {:?}",
+        started.elapsed()
+    );
+    assert!(
         started.elapsed() < Duration::from_secs(1),
         "TCP response waited for the blackholed UDP branch: {:?}",
         started.elapsed()
@@ -596,12 +647,15 @@ async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
         .unwrap();
     let target = tcp.local_addr().unwrap();
     let udp = tokio::net::UdpSocket::bind(target).await.unwrap();
-    let (tcp_request_started, wait_for_tcp_request) = tokio::sync::oneshot::channel();
+    let (tcp_request_started, mut wait_for_tcp_request) = tokio::sync::oneshot::channel();
     let (udp_truncated_sent, wait_for_udp_truncated) = tokio::sync::oneshot::channel();
     let udp_server = tokio::spawn(async move {
         let mut request = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
         let (read, peer) = udp.recv_from(&mut request).await.unwrap();
-        wait_for_tcp_request.await.unwrap();
+        let tcp_started_before_truncated =
+            time::timeout(Duration::from_millis(20), &mut wait_for_tcp_request)
+                .await
+                .is_ok();
         let mut response = dns_pressure_response_for_query(
             &request[..read],
             IpAddr::V4(Ipv4Addr::new(192, 0, 2, 45)),
@@ -610,6 +664,7 @@ async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
         response[2] |= 0x02;
         udp.send_to(&response, peer).await.unwrap();
         let _ = udp_truncated_sent.send(());
+        tcp_started_before_truncated
     });
     let tcp_server = tokio::spawn(async move {
         let (mut stream, _) = tcp.accept().await.unwrap();
@@ -645,12 +700,17 @@ async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
     .await
     .expect("parallel TCP and UDP branches did not finish after the truncated UDP response")
     .unwrap();
-    time::timeout(Duration::from_secs(2), async {
-        udp_server.await.unwrap();
+    let tcp_started_before_truncated = time::timeout(Duration::from_secs(2), async {
+        let tcp_started_before_truncated = udp_server.await.unwrap();
         tcp_server.await.unwrap();
+        tcp_started_before_truncated
     })
     .await
     .expect("tcp+udp fixture servers did not finish");
+    assert!(
+        !tcp_started_before_truncated,
+        "TCP was admitted before the UDP truncated response"
+    );
     assert_eq!(&response[0..2], &QUERY[0..2]);
     assert_eq!(response[2] & 0x02, 0);
 }
