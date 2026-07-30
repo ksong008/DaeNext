@@ -16,6 +16,54 @@ pub(crate) struct ResidentProxyCandidatePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) execution_identity: String,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
     pub(in crate::production_runtime_owner::resident_dataplane) binding: ResidentProxyBinding,
+    pub(super) data_udp_observation: Arc<ResidentDataUdpObservation>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ResidentDataUdpObservation {
+    last_recorded_unix: [AtomicI64; 2],
+}
+
+impl ResidentDataUdpObservation {
+    fn should_publish(&self, network_type: NetworkType, checked_at_unix: i64) -> bool {
+        let index = match network_type {
+            NetworkType::DATA_UDP4 => 0,
+            NetworkType::DATA_UDP6 => 1,
+            _ => return false,
+        };
+        let recorded = &self.last_recorded_unix[index];
+        let mut previous = recorded.load(Ordering::Relaxed);
+        while checked_at_unix > previous {
+            match recorded.compare_exchange_weak(
+                previous,
+                checked_at_unix,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(observed) => previous = observed,
+            }
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod data_udp_observation_tests {
+    use super::*;
+
+    #[test]
+    fn successful_data_udp_observations_publish_once_per_family_and_second() {
+        let observation = ResidentDataUdpObservation::default();
+
+        assert!(!observation.should_publish(NetworkType::TCP4, 1));
+        assert!(observation.should_publish(NetworkType::DATA_UDP4, 10));
+        assert!(!observation.should_publish(NetworkType::DATA_UDP4, 10));
+        assert!(!observation.should_publish(NetworkType::DATA_UDP4, 9));
+        assert!(observation.should_publish(NetworkType::DATA_UDP6, 10));
+        assert!(!observation.should_publish(NetworkType::DATA_UDP6, 10));
+        assert!(observation.should_publish(NetworkType::DATA_UDP4, 11));
+    }
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) type ResidentProxyGroupHandle =
@@ -28,8 +76,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) type SharedResidentP
 #[derive(Clone)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDataUdpAvailabilityHandle
 {
-    selector: std::sync::Weak<Mutex<DialerGroup>>,
+    selector: std::sync::Weak<std::sync::RwLock<DialerGroup>>,
     health_bootstrap: ResidentGroupHealthBootstrap,
+    observation: Arc<ResidentDataUdpObservation>,
     candidate_index: usize,
     enabled: bool,
 }
@@ -40,11 +89,15 @@ impl ResidentDataUdpAvailabilityHandle {
         network_type: NetworkType,
         checked_at_unix: i64,
     ) {
-        if !self.enabled {
+        if !self.enabled
+            || !self
+                .observation
+                .should_publish(network_type, checked_at_unix)
+        {
             return;
         }
         if let Some(selector) = self.selector.upgrade()
-            && let Ok(mut selector) = selector.lock()
+            && let Ok(mut selector) = selector.write()
         {
             selector.record_available_traffic(self.candidate_index, network_type, checked_at_unix);
         }
@@ -251,7 +304,8 @@ pub(crate) struct ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) matched_candidate_count: usize,
     pub(in crate::production_runtime_owner::resident_dataplane) candidates:
         Vec<ResidentProxyCandidatePlan>,
-    pub(in crate::production_runtime_owner::resident_dataplane) selector: Arc<Mutex<DialerGroup>>,
+    pub(in crate::production_runtime_owner::resident_dataplane) selector:
+        Arc<std::sync::RwLock<DialerGroup>>,
     pub(in crate::production_runtime_owner::resident_dataplane) check_interval: Duration,
     pub(in crate::production_runtime_owner::resident_dataplane) probe_profile:
         Arc<ResidentProbeProfile>,
@@ -393,7 +447,7 @@ impl ResidentProxyGroupPlan {
         }
         let network_types = self.tcp_check_network_types();
         self.selector
-            .lock()
+            .read()
             .ok()
             .map(|selector| {
                 network_types.iter().all(|network_type| {
@@ -413,7 +467,7 @@ impl ResidentProxyGroupPlan {
             return true;
         }
         self.selector
-            .lock()
+            .read()
             .map(|selector| selector.has_alive_state())
             .unwrap_or(false)
     }
@@ -500,7 +554,7 @@ impl ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn latency_snapshots(
         &self,
     ) -> Vec<ResidentProxyLatencySnapshot> {
-        let Ok(selector) = self.selector.lock() else {
+        let Ok(selector) = self.selector.read() else {
             return Vec::new();
         };
         let network_types = self.tcp_check_network_types();
@@ -553,7 +607,7 @@ impl ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn health_state_snapshots(
         &self,
     ) -> Vec<ResidentProxyLatencySnapshot> {
-        let Ok(selector) = self.selector.lock() else {
+        let Ok(selector) = self.selector.read() else {
             return Vec::new();
         };
         let network_types = [
@@ -725,6 +779,7 @@ impl ResidentProxyGroupPlan {
         Ok(ResidentDataUdpAvailabilityHandle {
             selector: Arc::downgrade(&self.selector),
             health_bootstrap: self.health_bootstrap.clone(),
+            observation: Arc::clone(&self.candidates[candidate_index].data_udp_observation),
             candidate_index,
             enabled: self.group_policy.needs_alive_state(),
         })
@@ -835,7 +890,7 @@ impl ResidentProxyGroupPlan {
             | ResidentGroupPolicyPlan::Random => {
                 let selected = self
                     .selector
-                    .lock()
+                    .read()
                     .map_err(|_| {
                         resident_proxy_selection_error(
                             format!(
@@ -892,7 +947,7 @@ impl ResidentProxyGroupPlan {
             ));
         };
         self.selector
-            .lock()
+            .write()
             .map_err(|_| {
                 format!(
                     "resident dataplane group {} selector lock is poisoned",
@@ -921,7 +976,7 @@ impl ResidentProxyGroupPlan {
                 self.group_name
             ));
         };
-        let mut selector = self.selector.lock().map_err(|_| {
+        let mut selector = self.selector.write().map_err(|_| {
             format!(
                 "resident dataplane group {} selector lock is poisoned",
                 self.group_name
@@ -978,7 +1033,7 @@ impl ResidentProxyGroupPlan {
         if indexes.is_empty() {
             return Ok(0);
         }
-        let mut selector = self.selector.lock().map_err(|_| {
+        let mut selector = self.selector.write().map_err(|_| {
             format!(
                 "resident dataplane group {} selector lock is poisoned",
                 self.group_name
@@ -1107,7 +1162,7 @@ impl ResidentProxyGroupPlan {
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
         };
-        let mut selector = self.selector.lock().map_err(|_| {
+        let mut selector = self.selector.write().map_err(|_| {
             format!(
                 "resident dataplane group {} selector lock is poisoned",
                 self.group_name
@@ -1158,6 +1213,7 @@ impl ResidentProxyGroupPlan {
             redacted_link_source: redacted_link_source(&proxy.node_tag),
             binding: ResidentProxyBinding::configuration(Arc::new(proxy))
                 .expect("materialized fixed test proxy binding"),
+            data_udp_observation: Arc::new(ResidentDataUdpObservation::default()),
         }];
         let probe_profile = Arc::new(ResidentProbeProfile::new(
             ResidentTcpCheckPlan {
@@ -1198,7 +1254,7 @@ impl ResidentProxyGroupPlan {
             group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },
             matched_candidate_count: 1,
             candidates,
-            selector: Arc::new(Mutex::new(DialerGroup::new(
+            selector: Arc::new(std::sync::RwLock::new(DialerGroup::new(
                 "test",
                 vec![Dialer::new("test", "")],
                 vec![Annotation::default()],

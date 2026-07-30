@@ -149,7 +149,7 @@ fn apply_random_group_selection(group: &plan::ResidentProxyGroupPlan, snapshot: 
     let network_types = runtime_group_tcp_network_types(group);
     let alive_count = group
         .selector
-        .lock()
+        .read()
         .ok()
         .and_then(|selector| first_alive_count(&selector, &network_types));
     snapshot["aliveCandidateCount"] = alive_count.map_or(Value::Null, |count| json!(count));
@@ -158,7 +158,7 @@ fn apply_random_group_selection(group: &plan::ResidentProxyGroupPlan, snapshot: 
 
 fn apply_min_group_selection(group: &plan::ResidentProxyGroupPlan, snapshot: &mut Value) {
     let network_types = runtime_group_tcp_network_types(group);
-    let Ok(selector) = group.selector.lock() else {
+    let Ok(selector) = group.selector.read() else {
         return;
     };
     let selected = first_min_selected_candidate(group, &selector, &network_types);

@@ -327,6 +327,7 @@ pub(crate) fn resident_proxy_plans(
                 redacted_link_source: redacted_link_source(&link),
                 link,
                 binding: ResidentProxyBinding::configuration(Arc::new(proxy))?,
+                data_udp_observation: Arc::new(ResidentDataUdpObservation::default()),
             });
         }
         if candidates.is_empty() {
@@ -352,7 +353,7 @@ pub(crate) fn resident_proxy_plans(
             group_name: group.name.clone(),
             group_policy,
             matched_candidate_count,
-            selector: Arc::new(Mutex::new(selector)),
+            selector: Arc::new(std::sync::RwLock::new(selector)),
             candidates,
             check_interval: group_check_interval(config, group),
             probe_profile,

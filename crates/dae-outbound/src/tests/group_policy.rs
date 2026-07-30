@@ -410,6 +410,46 @@ fn lazy_state_and_alive_sets_match_golden_fixtures() {
 }
 
 #[test]
+fn random_alive_index_tracks_swap_removal_and_reinsertion() {
+    let dialers = vec![
+        Dialer::new("a", ""),
+        Dialer::new("b", ""),
+        Dialer::new("c", ""),
+        Dialer::new("d", ""),
+    ];
+    let mut alive = AliveDialerSet::new(
+        NetworkType::TCP4,
+        SelectionPolicy::Random,
+        &dialers,
+        &vec![Annotation::default(); dialers.len()],
+        0,
+        true,
+    );
+
+    alive.set_alive(1, false);
+    alive.set_alive(3, false);
+    assert_eq!(alive.alive_count(), 2);
+    let mut indexes = alive.alive_indexes();
+    indexes.sort_unstable();
+    assert_eq!(indexes, [0, 2]);
+    for _ in 0..32 {
+        assert!(matches!(alive.get_rand(), Some(0 | 2)));
+    }
+
+    alive.set_alive(1, true);
+    alive.set_alive(2, false);
+    let mut indexes = alive.alive_indexes();
+    indexes.sort_unstable();
+    assert_eq!(indexes, [0, 1]);
+    assert_eq!(alive.alive_count(), 2);
+
+    alive.set_alive(0, false);
+    alive.set_alive(1, false);
+    assert_eq!(alive.get_rand(), None);
+    assert!(alive.alive_indexes().is_empty());
+}
+
+#[test]
 fn direct_link_parser_group_override_and_connectivity_match_golden_fixtures() {
     let direct = fixture("outbound/direct/injected_resolver.json");
     for case in direct["cases"].as_array().unwrap() {

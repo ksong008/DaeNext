@@ -70,7 +70,7 @@ impl DialerGroup {
     }
 
     pub fn select(
-        &mut self,
+        &self,
         network_type: NetworkType,
         strict_ip_version: bool,
     ) -> Result<SelectedDialer, OutboundError> {
@@ -182,7 +182,7 @@ impl DialerGroup {
     }
 
     fn select_with_policy(
-        &mut self,
+        &self,
         network_type: NetworkType,
         policy: SelectionPolicy,
     ) -> Result<SelectedDialer, OutboundError> {
@@ -208,8 +208,8 @@ impl DialerGroup {
                 {
                     let Some(alive_set) = self
                         .alive_sets
-                        .get_mut(candidate_network_type.collection_index())
-                        .and_then(Option::as_mut)
+                        .get(candidate_network_type.collection_index())
+                        .and_then(Option::as_ref)
                     else {
                         continue;
                     };
