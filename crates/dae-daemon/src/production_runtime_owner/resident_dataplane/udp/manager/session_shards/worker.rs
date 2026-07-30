@@ -26,6 +26,8 @@ pub(super) async fn run_resident_udp_session_shard(
         mpsc::channel::<UdpSessionCleanup<UdpSessionKey>>(context.cleanup_queue_depth);
     let (direct_cleanup_tx, mut direct_cleanup_rx) =
         mpsc::channel::<UdpSessionCleanup<UdpDirectSessionKey>>(context.cleanup_queue_depth);
+    let mut retired_sessions = UdpSessionReaper::new(context.cleanup_queue_depth);
+    let mut retired_joined = 0_usize;
     let mut next_actor_id = 0_u64;
 
     let shutdown_deadline = loop {
@@ -35,13 +37,28 @@ pub(super) async fn run_resident_udp_session_shard(
                 receiver.close();
                 break deadline.unwrap_or_else(|_| time::Instant::now());
             }
-            Some(cleanup) = proxy_cleanup_rx.recv() => {
-                retire_proxy_session_if_current(cleanup, &mut proxy_sessions, &context).await;
+            completion = retired_sessions.join_next(), if !retired_sessions.is_empty() => {
+                if completion == Some(true) {
+                    context.metrics.udp_session_actor_panicked();
+                } else if completion == Some(false) {
+                    retired_joined = retired_joined.saturating_add(1);
+                }
             }
-            Some(cleanup) = direct_cleanup_rx.recv() => {
-                retire_direct_session_if_current(cleanup, &mut direct_sessions, &context).await;
+            Some(cleanup) = proxy_cleanup_rx.recv(), if retired_sessions.has_capacity() => {
+                retire_proxy_session_if_current(
+                    cleanup,
+                    &mut proxy_sessions,
+                    &mut retired_sessions,
+                );
             }
-            packet = receiver.recv() => {
+            Some(cleanup) = direct_cleanup_rx.recv(), if retired_sessions.has_capacity() => {
+                retire_direct_session_if_current(
+                    cleanup,
+                    &mut direct_sessions,
+                    &mut retired_sessions,
+                );
+            }
+            packet = receiver.recv(), if retired_sessions.has_capacity() => {
                 let Some(packet) = packet else {
                     break time::Instant::now();
                 };
@@ -51,6 +68,7 @@ pub(super) async fn run_resident_udp_session_shard(
                         &context,
                         &proxy_cleanup_tx,
                         &mut proxy_sessions,
+                        &mut retired_sessions,
                         &mut next_actor_id,
                     ).await,
                     ResidentUdpShardPacket::Direct(packet) => handle_direct_shard_packet(
@@ -58,6 +76,7 @@ pub(super) async fn run_resident_udp_session_shard(
                         &context,
                         &direct_cleanup_tx,
                         &mut direct_sessions,
+                        &mut retired_sessions,
                         &mut next_actor_id,
                     ).await,
                 }
@@ -71,17 +90,17 @@ pub(super) async fn run_resident_udp_session_shard(
     drop(proxy_cleanup_tx);
     drop(direct_cleanup_tx);
 
-    let mut tasks = Vec::with_capacity(proxy_sessions.len() + direct_sessions.len());
     for (_, entry) in proxy_sessions.drain() {
         drop(entry.session.sender);
-        tasks.push(entry.session.handle);
+        retired_sessions.retire_for_shutdown(entry.session.handle);
     }
     for (_, entry) in direct_sessions.drain() {
         drop(entry.session.sender);
-        tasks.push(entry.session.handle);
+        retired_sessions.retire_for_shutdown(entry.session.handle);
     }
-    let (joined, panicked, timed_out) =
-        join_udp_tasks_until_deadline(&mut tasks, shutdown_deadline).await;
+    let (joined, panicked, timed_out) = retired_sessions
+        .join_until_deadline(shutdown_deadline)
+        .await;
     if timed_out > 0 {
         context.metrics.udp_session_shutdown_deadline_hit();
     }
@@ -92,6 +111,7 @@ pub(super) async fn run_resident_udp_session_shard(
         "shardIndex": shard_index,
         "status": if panicked == 0 && timed_out == 0 { "pass" } else { "fail" },
         "joined": joined,
+        "retiredJoinedDuringRuntime": retired_joined,
         "panicked": panicked,
         "timedOut": timed_out,
     })
@@ -141,6 +161,7 @@ async fn handle_proxy_shard_packet(
     context: &ResidentUdpSessionShardContext,
     cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
+    retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
 ) {
     let route_event = admit_event(ResidentEventMetadata::new(
@@ -166,6 +187,7 @@ async fn handle_proxy_shard_packet(
         context,
         cleanup_tx,
         sessions,
+        retired_sessions,
         next_actor_id,
     )
     .await;
@@ -186,6 +208,7 @@ async fn handle_direct_shard_packet(
     context: &ResidentUdpSessionShardContext,
     cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
+    retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
 ) {
     let route_event = admit_event(ResidentEventMetadata::new(
@@ -210,6 +233,7 @@ async fn handle_direct_shard_packet(
         context,
         cleanup_tx,
         sessions,
+        retired_sessions,
         next_actor_id,
     )
     .await;
@@ -231,6 +255,7 @@ async fn dispatch_proxy_packet(
     context: &ResidentUdpSessionShardContext,
     cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
+    retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
 ) -> UdpSessionDispatchOutcome {
     for attempt in 0..2 {
@@ -257,7 +282,7 @@ async fn dispatch_proxy_packet(
             }
             UdpSessionSend::Closed(returned) => {
                 managed = returned;
-                retire_proxy_session(&key, sessions, context).await;
+                retire_proxy_session(&key, sessions, retired_sessions);
                 if attempt == 0 {
                     context.metrics.udp_session_stale_recreated();
                 }
@@ -273,6 +298,7 @@ async fn dispatch_direct_packet(
     context: &ResidentUdpSessionShardContext,
     cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
+    retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
 ) -> UdpSessionDispatchOutcome {
     for attempt in 0..2 {
@@ -299,7 +325,7 @@ async fn dispatch_direct_packet(
             }
             UdpSessionSend::Closed(returned) => {
                 managed = returned;
-                retire_direct_session(&key, sessions, context).await;
+                retire_direct_session(&key, sessions, retired_sessions);
                 if attempt == 0 {
                     context.metrics.udp_session_stale_recreated();
                 }
@@ -396,53 +422,53 @@ fn cleanup_matches_actor(current_actor_id: u64, cleanup_actor_id: u64) -> bool {
     current_actor_id == cleanup_actor_id
 }
 
-async fn retire_proxy_session_if_current(
+fn retire_proxy_session_if_current(
     cleanup: UdpSessionCleanup<UdpSessionKey>,
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
-    context: &ResidentUdpSessionShardContext,
+    retired_sessions: &mut UdpSessionReaper,
 ) {
     if sessions
         .get(&cleanup.key)
         .is_some_and(|entry| cleanup_matches_actor(entry.actor_id, cleanup.actor_id))
     {
-        retire_proxy_session(&cleanup.key, sessions, context).await;
+        retire_proxy_session(&cleanup.key, sessions, retired_sessions);
     }
 }
 
-async fn retire_direct_session_if_current(
+fn retire_direct_session_if_current(
     cleanup: UdpSessionCleanup<UdpDirectSessionKey>,
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
-    context: &ResidentUdpSessionShardContext,
+    retired_sessions: &mut UdpSessionReaper,
 ) {
     if sessions
         .get(&cleanup.key)
         .is_some_and(|entry| cleanup_matches_actor(entry.actor_id, cleanup.actor_id))
     {
-        retire_direct_session(&cleanup.key, sessions, context).await;
+        retire_direct_session(&cleanup.key, sessions, retired_sessions);
     }
 }
 
-async fn retire_proxy_session(
+fn retire_proxy_session(
     key: &UdpSessionKey,
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
-    context: &ResidentUdpSessionShardContext,
+    retired_sessions: &mut UdpSessionReaper,
 ) {
-    if let Some(entry) = sessions.remove(key)
-        && entry.session.handle.await.is_err()
-    {
-        context.metrics.udp_session_actor_panicked();
+    if let Some(entry) = sessions.remove(key) {
+        retired_sessions
+            .retire(entry.session.handle)
+            .expect("UDP session reaper capacity is reserved before packet dispatch");
     }
 }
 
-async fn retire_direct_session(
+fn retire_direct_session(
     key: &UdpDirectSessionKey,
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
-    context: &ResidentUdpSessionShardContext,
+    retired_sessions: &mut UdpSessionReaper,
 ) {
-    if let Some(entry) = sessions.remove(key)
-        && entry.session.handle.await.is_err()
-    {
-        context.metrics.udp_session_actor_panicked();
+    if let Some(entry) = sessions.remove(key) {
+        retired_sessions
+            .retire(entry.session.handle)
+            .expect("UDP session reaper capacity is reserved before packet dispatch");
     }
 }
 

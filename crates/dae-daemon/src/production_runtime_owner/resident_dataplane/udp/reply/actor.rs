@@ -60,7 +60,7 @@ struct UdpReplyRequest {
 
 #[derive(Clone)]
 pub(in super::super) struct UdpReplyHandle {
-    sender: mpsc::Sender<UdpReplyRequest>,
+    senders: Arc<Vec<mpsc::Sender<UdpReplyRequest>>>,
     closing: Arc<AtomicBool>,
     metrics: Arc<ResidentDataplaneMetrics>,
     payload_admission: ResidentUdpPayloadAdmission,
@@ -82,10 +82,11 @@ impl UdpReplyHandle {
             .map_err(UdpReplyError::PayloadLimit)?;
         let deadline = time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT;
         let (response, receiver) = oneshot::channel();
-        let permit = match self.sender.try_reserve() {
+        let sender = self.sender_for(original_dst, peer);
+        let permit = match sender.try_reserve() {
             Ok(permit) => permit,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                match time::timeout_at(deadline, self.sender.reserve()).await {
+                match time::timeout_at(deadline, sender.reserve()).await {
                     Ok(Ok(permit)) => permit,
                     Ok(Err(_)) => return Err(UdpReplyError::DispatcherClosed),
                     Err(_) => {
@@ -138,7 +139,7 @@ impl UdpReplyHandle {
         } else {
             0
         };
-        self.sender
+        self.sender_for(original_dst, peer)
             .try_send(UdpReplyRequest {
                 original_dst,
                 peer,
@@ -159,45 +160,110 @@ impl UdpReplyHandle {
         self.metrics.udp_reply_queued();
         Ok(())
     }
+
+    fn sender_for(
+        &self,
+        original_dst: SocketAddr,
+        peer: SocketAddr,
+    ) -> &mpsc::Sender<UdpReplyRequest> {
+        &self.senders[stable_udp_reply_shard(original_dst, peer, self.senders.len())]
+    }
+}
+
+fn stable_udp_reply_shard(original_dst: SocketAddr, peer: SocketAddr, shard_count: usize) -> usize {
+    (stable_udp_reply_hash(original_dst, peer) as usize) % shard_count.max(1)
+}
+
+fn stable_udp_reply_hash(original_dst: SocketAddr, peer: SocketAddr) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for address in [original_dst, peer] {
+        match address.ip() {
+            std::net::IpAddr::V4(ip) => {
+                hash = stable_udp_reply_hash_bytes(hash, &[4]);
+                hash = stable_udp_reply_hash_bytes(hash, &ip.octets());
+            }
+            std::net::IpAddr::V6(ip) => {
+                hash = stable_udp_reply_hash_bytes(hash, &[6]);
+                hash = stable_udp_reply_hash_bytes(hash, &ip.octets());
+            }
+        }
+        hash = stable_udp_reply_hash_bytes(hash, &address.port().to_be_bytes());
+    }
+    hash
+}
+
+fn stable_udp_reply_hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn partitioned_udp_reply_capacity(total: usize, shard_index: usize, shard_count: usize) -> usize {
+    let total = total.max(1);
+    let shard_count = shard_count.max(1).min(total);
+    let shard_index = shard_index.min(shard_count - 1);
+    let base = total / shard_count;
+    let remainder = total % shard_count;
+    base + usize::from(shard_index < remainder)
 }
 
 pub(in super::super) struct UdpReplyDispatcher {
     handle: UdpReplyHandle,
-    stop: Option<oneshot::Sender<()>>,
-    task: JoinHandle<usize>,
+    stops: Vec<oneshot::Sender<()>>,
+    tasks: Vec<JoinHandle<usize>>,
 }
 
 impl UdpReplyDispatcher {
     pub(in super::super) fn start(
+        shard_count: usize,
         queue_depth: usize,
         socket_cache_capacity: usize,
         socket_idle_timeout: Duration,
         payload_admission: ResidentUdpPayloadAdmission,
         metrics: Arc<ResidentDataplaneMetrics>,
     ) -> Self {
-        let (sender, receiver) = mpsc::channel(queue_depth.max(1));
-        let (stop, stop_receiver) = oneshot::channel();
+        let queue_depth = queue_depth.max(1);
+        let socket_cache_capacity = socket_cache_capacity.max(1);
+        let shard_count = shard_count
+            .max(1)
+            .min(queue_depth)
+            .min(socket_cache_capacity);
         let closing = Arc::new(AtomicBool::new(false));
-        let task_metrics = Arc::clone(&metrics);
-        let task = tokio::spawn(async move {
-            run_udp_reply_actor(
-                receiver,
-                stop_receiver,
-                socket_cache_capacity.max(1),
-                socket_idle_timeout,
-                task_metrics,
-            )
-            .await
-        });
+        let mut senders = Vec::with_capacity(shard_count);
+        let mut stops = Vec::with_capacity(shard_count);
+        let mut tasks = Vec::with_capacity(shard_count);
+        for shard_index in 0..shard_count {
+            let shard_queue_depth =
+                partitioned_udp_reply_capacity(queue_depth, shard_index, shard_count);
+            let shard_cache_capacity =
+                partitioned_udp_reply_capacity(socket_cache_capacity, shard_index, shard_count);
+            let (sender, receiver) = mpsc::channel(shard_queue_depth);
+            let (stop, stop_receiver) = oneshot::channel();
+            let task_metrics = Arc::clone(&metrics);
+            tasks.push(tokio::spawn(async move {
+                run_udp_reply_actor(
+                    receiver,
+                    stop_receiver,
+                    shard_cache_capacity,
+                    socket_idle_timeout,
+                    task_metrics,
+                )
+                .await
+            }));
+            senders.push(sender);
+            stops.push(stop);
+        }
         Self {
             handle: UdpReplyHandle {
-                sender,
+                senders: Arc::new(senders),
                 closing,
                 metrics,
                 payload_admission,
             },
-            stop: Some(stop),
-            task,
+            stops,
+            tasks,
         }
     }
 
@@ -207,25 +273,56 @@ impl UdpReplyDispatcher {
 
     pub(in super::super) async fn shutdown(mut self, deadline: time::Instant) -> Value {
         self.handle.closing.store(true, Ordering::Release);
-        if let Some(stop) = self.stop.take() {
+        for stop in self.stops.drain(..) {
             let _ = stop.send(());
         }
-        let shutdown = shutdown_resident_owned_task(&mut self.task, deadline).await;
-        let status = shutdown.status();
-        let safety_status = shutdown.safety_status();
-        let graceful = shutdown.graceful();
-        let completion_mode = shutdown.completion_mode();
+        let task_count = self.tasks.len();
+        let mut closed_sockets = 0_usize;
+        let mut joined = 0_usize;
+        let mut forced = 0_usize;
+        let mut cancelled = 0_usize;
+        let mut panicked = 0_usize;
+        let mut errors = Vec::new();
+        let mut completed_safely = true;
+        let mut graceful = true;
+        for task in &mut self.tasks {
+            let shutdown = shutdown_resident_owned_task(task, deadline).await;
+            completed_safely &= shutdown.status() == "pass";
+            graceful &= shutdown.graceful();
+            closed_sockets = closed_sockets.saturating_add(shutdown.output.unwrap_or(0));
+            joined += usize::from(shutdown.joined);
+            forced += usize::from(shutdown.forced);
+            cancelled += usize::from(shutdown.cancelled);
+            panicked += usize::from(shutdown.panicked);
+            if let Some(error) = shutdown.error {
+                errors.push(error);
+            }
+        }
+        let completion_mode = if !completed_safely {
+            "incomplete"
+        } else if forced != 0 {
+            "forced-bounded"
+        } else {
+            "graceful"
+        };
+        let first_error = errors.first().cloned();
         json!({
-            "status": status,
-            "safetyStatus": safety_status,
+            "status": if completed_safely { "pass" } else { "fail" },
+            "safetyStatus": if completed_safely { "pass" } else { "fail" },
             "graceful": graceful,
             "completionMode": completion_mode,
-            "closedSockets": shutdown.output,
-            "taskJoined": shutdown.joined,
-            "taskForced": shutdown.forced,
-            "taskCancelled": shutdown.cancelled,
-            "taskPanicked": shutdown.panicked,
-            "joinError": shutdown.error,
+            "closedSockets": closed_sockets,
+            "taskJoined": joined == task_count,
+            "taskForced": forced != 0,
+            "taskCancelled": cancelled != 0,
+            "taskPanicked": panicked != 0,
+            "joinError": first_error,
+            "taskCount": task_count,
+            "tasksJoined": joined,
+            "tasksForced": forced,
+            "tasksCancelled": cancelled,
+            "tasksPanicked": panicked,
+            "joinErrors": errors,
         })
     }
 }
@@ -285,6 +382,7 @@ mod tests {
         let dispatcher = UdpReplyDispatcher::start(
             2,
             2,
+            2,
             Duration::from_secs(1),
             ResidentUdpPayloadAdmission::new(1, 1024),
             metrics,
@@ -301,6 +399,7 @@ mod tests {
     async fn reply_dispatcher_preserves_joined_ownership_at_expired_deadline() {
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
         let dispatcher = UdpReplyDispatcher::start(
+            2,
             2,
             2,
             Duration::from_secs(1),
@@ -325,7 +424,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(1);
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
         let handle = UdpReplyHandle {
-            sender,
+            senders: Arc::new(vec![sender]),
             closing: Arc::new(AtomicBool::new(false)),
             metrics: Arc::clone(&metrics),
             payload_admission: ResidentUdpPayloadAdmission::new(1, 1024),
@@ -333,8 +432,7 @@ mod tests {
         let target: SocketAddr = "127.0.0.1:53".parse().unwrap();
         let peer: SocketAddr = "127.0.0.1:10000".parse().unwrap();
         let (response, _response_rx) = oneshot::channel();
-        handle
-            .sender
+        handle.senders[0]
             .try_send(UdpReplyRequest {
                 original_dst: target,
                 peer,
@@ -383,7 +481,7 @@ mod tests {
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
         let payload_admission = ResidentUdpPayloadAdmission::new(1, 1024);
         let handle = UdpReplyHandle {
-            sender,
+            senders: Arc::new(vec![sender]),
             closing: Arc::new(AtomicBool::new(false)),
             metrics,
             payload_admission: payload_admission.clone(),
@@ -399,6 +497,103 @@ mod tests {
         assert!(request.response.is_none());
         assert_eq!(request.download_bytes_on_success, 3);
         drop(request);
+        assert_eq!(payload_admission.current(), 0);
+    }
+
+    #[test]
+    fn reply_shard_hash_is_stable_and_separates_address_families() {
+        let ipv4_target: SocketAddr = "127.0.0.1:53".parse().unwrap();
+        let ipv4_peer: SocketAddr = "127.0.0.1:10000".parse().unwrap();
+        let ipv6_target: SocketAddr = "[::ffff:127.0.0.1]:53".parse().unwrap();
+        let ipv6_peer: SocketAddr = "[::ffff:127.0.0.1]:10000".parse().unwrap();
+
+        assert_eq!(
+            stable_udp_reply_shard(ipv4_target, ipv4_peer, 2),
+            stable_udp_reply_shard(ipv4_target, ipv4_peer, 2)
+        );
+        assert_ne!(
+            stable_udp_reply_hash(ipv4_target, ipv4_peer),
+            stable_udp_reply_hash(ipv6_target, ipv6_peer)
+        );
+    }
+
+    #[test]
+    fn reply_shard_partitions_preserve_total_queue_and_cache_capacity() {
+        for total in [1, 2, 3, 7, 512] {
+            for requested_shards in [1, 2, 4] {
+                let shard_count = requested_shards.min(total);
+                let partitioned_total = (0..shard_count)
+                    .map(|index| partitioned_udp_reply_capacity(total, index, requested_shards))
+                    .sum::<usize>();
+                assert_eq!(partitioned_total, total);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn blocked_reply_shard_does_not_delay_an_independent_shard() {
+        let (first_sender, mut first_receiver) = mpsc::channel(1);
+        let (second_sender, mut second_receiver) = mpsc::channel(1);
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let payload_admission = ResidentUdpPayloadAdmission::new(1, 1024);
+        let handle = UdpReplyHandle {
+            senders: Arc::new(vec![first_sender, second_sender]),
+            closing: Arc::new(AtomicBool::new(false)),
+            metrics,
+            payload_admission: payload_admission.clone(),
+        };
+        let target: SocketAddr = "127.0.0.1:53".parse().unwrap();
+        let peers = (10_000..=u16::MAX)
+            .map(|port| SocketAddr::from(([127, 0, 0, 1], port)))
+            .fold([None, None], |mut selected, peer| {
+                let shard = stable_udp_reply_shard(target, peer, 2);
+                if selected[shard].is_none() {
+                    selected[shard] = Some(peer);
+                }
+                selected
+            });
+        let first_peer = peers[0].expect("a tuple must hash to the first shard");
+        let second_peer = peers[1].expect("a tuple must hash to the second shard");
+        let occupied_payload = payload_admission.try_acquire(1).unwrap();
+        handle.senders[0]
+            .try_send(UdpReplyRequest {
+                original_dst: target,
+                peer: first_peer,
+                payload: vec![1],
+                _payload_admission: occupied_payload,
+                deadline: time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT,
+                response: None,
+                download_bytes_on_success: 0,
+            })
+            .unwrap();
+
+        let blocked_handle = handle.clone();
+        let blocked =
+            tokio::spawn(async move { blocked_handle.send(target, first_peer, vec![2]).await });
+        tokio::task::yield_now().await;
+        assert!(!blocked.is_finished());
+
+        let progressing_handle = handle.clone();
+        let progressing =
+            tokio::spawn(
+                async move { progressing_handle.send(target, second_peer, vec![3]).await },
+            );
+        let mut second_request = second_receiver.recv().await.unwrap();
+        second_request
+            .response
+            .take()
+            .unwrap()
+            .send(Ok(()))
+            .unwrap();
+        drop(second_request);
+        progressing.await.unwrap().unwrap();
+        assert!(!blocked.is_finished());
+
+        drop(first_receiver.recv().await.unwrap());
+        let mut first_request = first_receiver.recv().await.unwrap();
+        first_request.response.take().unwrap().send(Ok(())).unwrap();
+        drop(first_request);
+        blocked.await.unwrap().unwrap();
         assert_eq!(payload_admission.current(), 0);
     }
 }

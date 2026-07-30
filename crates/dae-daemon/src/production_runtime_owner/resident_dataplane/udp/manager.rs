@@ -161,6 +161,7 @@ impl ResidentUdpGenerationRuntime {
         let plan = &generation.udp;
         let config = plan.runtime_config.clone();
         let reply_dispatcher = UdpReplyDispatcher::start(
+            config.reply_shards(),
             config.reply_queue_depth,
             config.reply_socket_cache_capacity,
             config.reply_socket_idle_timeout,
