@@ -99,94 +99,80 @@ fn append_anytls_owner_event_fields(
 }
 
 pub(crate) async fn relay_tcp_over_anytls_async(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     logical: &mut AnyTlsLogicalStreamLease,
     stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
-    let mut stats = DirectTcpRelayStats::default();
-    let mut inbound_closed = false;
-    let mut proxy_closed = false;
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut proxy_buf = [0_u8; 16 * 1024];
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    let local_close_drain_deadline = resident_relay_idle_deadline(ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT);
-    tokio::pin!(idle_deadline);
-    tokio::pin!(local_close_drain_deadline);
-    let mut local_close_drain_active = false;
-
-    loop {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
-                match read {
-                    Ok(0) => {
-                        inbound_closed = true;
-                        let _ = logical.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        reset_resident_relay_idle_deadline(
-                            local_close_drain_deadline.as_mut(),
-                            ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT,
-                        );
-                        local_close_drain_active = true;
-                    }
-                    Ok(read) => {
-                        logical.write_all(&inbound_buf[..read]).await.map_err(|error| {
-                            format!("write client payload to AnyTLS logical stream: {error}")
-                        })?;
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
-                        let _ = logical.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        reset_resident_relay_idle_deadline(
-                            local_close_drain_deadline.as_mut(),
-                            ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT,
-                        );
-                        local_close_drain_active = true;
-                    }
-                    Err(err) => return Err(format!("read inbound TCP for AnyTLS relay: {err}")),
+    let (progress, activity) = resident_duplex_progress();
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
+    let (logical_read, logical_write) = tokio::io::split(&mut *logical);
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        let mut logical_write = logical_write;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match inbound_read.read(&mut buffer).await {
+                Ok(0) => {
+                    let _ = logical_write.shutdown().await;
+                    return Ok(());
                 }
-            }
-            read = logical.read(&mut proxy_buf), if !proxy_closed => {
-                match read {
-                    Ok(0) => {
-                        proxy_closed = true;
-                        let _ = inbound.shutdown().await;
-                    }
-                    Ok(read) => {
-                        if let Err(err) = inbound.write_all(&proxy_buf[..read]).await {
-                            if is_graceful_stream_close_error(&err) {
-                                break;
-                            }
-                            return Err(format!("write AnyTLS payload to client: {err}"));
-                        }
-                        stats.direct_to_client += read;
-                        metrics.add_download(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        proxy_closed = true;
-                        let _ = inbound.shutdown().await;
-                    }
-                    Err(err) => return Err(format!("read AnyTLS logical response: {err}")),
+                Ok(read) => read,
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    let _ = logical_write.shutdown().await;
+                    return Ok(());
                 }
-            }
-            _ = &mut local_close_drain_deadline, if local_close_drain_active => break,
-            _ = &mut idle_deadline => {
-                return Err("resident AnyTLS relay idle timeout".to_owned());
-            }
+                Err(err) => return Err(format!("read inbound TCP for AnyTLS relay: {err}")),
+            };
+            logical_write
+                .write_all(&buffer[..read])
+                .await
+                .map_err(|error| {
+                    format!("write client payload to AnyTLS logical stream: {error}")
+                })?;
+            upload_progress.record_upload(read);
+            metrics.add_upload(read);
         }
-
-        if proxy_closed {
-            break;
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut inbound_write = inbound_write;
+        let mut logical_read = logical_read;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match logical_read.read(&mut buffer).await {
+                Ok(0) => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Ok(read) => read,
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Err(err) => return Err(format!("read AnyTLS logical response: {err}")),
+            };
+            if let Err(err) = inbound_write.write_all(&buffer[..read]).await {
+                if is_graceful_stream_close_error(&err) {
+                    return Ok(());
+                }
+                return Err(format!("write AnyTLS payload to client: {err}"));
+            }
+            download_progress.record_download(read);
+            metrics.add_download(read);
         }
-    }
-    Ok(stats)
+    };
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        "resident AnyTLS relay idle timeout",
+        Some(ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT),
+    )
+    .await
 }
 
 pub(crate) async fn read_anytls_frame(

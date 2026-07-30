@@ -1,87 +1,120 @@
+use std::collections::VecDeque;
+
 use super::*;
 
-// Vision uplink state is intentionally explicit across padding, UUID, and TLS tracking.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn drain_vision_uplink_async(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VisionUplinkWriteMode {
+    PlainOverlay,
+    DirectPass,
+}
+
+#[derive(Debug)]
+pub(crate) struct VisionUplinkWrite {
+    pub(crate) mode: VisionUplinkWriteMode,
+    pub(crate) payload: Vec<u8>,
+}
+
+fn queue_vision_write(
+    writes: &mut VecDeque<VisionUplinkWrite>,
+    mode: VisionUplinkWriteMode,
+    payload: Vec<u8>,
+) {
+    if !payload.is_empty() {
+        writes.push_back(VisionUplinkWrite { mode, payload });
+    }
+}
+
+pub(crate) fn queue_vision_uplink(
     pending: &mut Vec<u8>,
-    client: &mut AsyncVlessTlsClient,
-    stop: &ResidentStopSignal,
+    writes: &mut VecDeque<VisionUplinkWrite>,
     user_uuid: [u8; 16],
     uuid_sent: &mut bool,
     first_block: &mut bool,
-    mode: &mut VisionUplinkMode,
+    state: &mut VisionUplinkState,
     tls_state: &mut VisionInnerTlsState,
 ) -> Result<(), String> {
-    if write_pending_after_vision_mode_async(pending, client, stop, *mode).await? {
-        return Ok(());
+    match *state {
+        VisionUplinkState::PlainOverlay => {
+            queue_vision_write(
+                writes,
+                VisionUplinkWriteMode::PlainOverlay,
+                std::mem::take(pending),
+            );
+            return Ok(());
+        }
+        VisionUplinkState::DirectPass => {
+            queue_vision_write(
+                writes,
+                VisionUplinkWriteMode::DirectPass,
+                std::mem::take(pending),
+            );
+            return Ok(());
+        }
+        VisionUplinkState::Padding => {}
     }
 
-    if *mode == VisionUplinkMode::Padding && *first_block && !pending.is_empty() {
+    if *first_block && !pending.is_empty() {
         let payload = std::mem::take(pending);
         tls_state.observe_client_payload(&payload)?;
         let long_padding = looks_like_tls_record_start(&payload);
-        let block = vision_padding_block(
-            &payload,
-            VISION_COMMAND_CONTINUE,
-            user_uuid,
-            uuid_sent,
-            long_padding,
+        queue_vision_write(
+            writes,
+            VisionUplinkWriteMode::PlainOverlay,
+            vision_padding_block(
+                &payload,
+                VISION_COMMAND_CONTINUE,
+                user_uuid,
+                uuid_sent,
+                long_padding,
+            ),
         );
-        client
-            .write_plain_all(
-                &block,
-                &format!(
-                    "write VLESS Vision uplink {} block",
-                    vision_command_name(VISION_COMMAND_CONTINUE)
-                ),
-            )
-            .await?;
         *first_block = false;
         return Ok(());
     }
 
-    while !pending.is_empty() && *mode == VisionUplinkMode::Padding {
+    while !pending.is_empty() && *state == VisionUplinkState::Padding {
         if !should_continue_vision_tls_filtering(pending, tls_state) {
             let payload = std::mem::take(pending);
-            let block =
-                vision_padding_block(&payload, VISION_COMMAND_END, user_uuid, uuid_sent, false);
-            client
-                .write_plain_all(
-                    &block,
-                    &format!(
-                        "write VLESS Vision uplink {} block",
-                        vision_command_name(VISION_COMMAND_END)
-                    ),
-                )
-                .await?;
-            *mode = VisionUplinkMode::PlainOverlay;
+            queue_vision_write(
+                writes,
+                VisionUplinkWriteMode::PlainOverlay,
+                vision_padding_block(&payload, VISION_COMMAND_END, user_uuid, uuid_sent, false),
+            );
+            *state = VisionUplinkState::PlainOverlay;
             return Ok(());
         }
         let Some((record_type, record_len)) = peek_complete_tls_record(pending)? else {
             return Ok(());
         };
-        let command = match vision_uplink_command(record_type, tls_state) {
-            Some(command) => command,
-            None => return Ok(()),
+        let Some(command) = vision_uplink_command(record_type, tls_state) else {
+            return Ok(());
         };
         let record = take_vec_prefix(pending, record_len);
         tls_state.observe_client_payload(&record)?;
-        let block = vision_padding_block(&record, command, user_uuid, uuid_sent, true);
-        client
-            .write_plain_all(
-                &block,
-                &format!(
-                    "write VLESS Vision uplink {} block",
-                    vision_command_name(command)
-                ),
-            )
-            .await?;
+        queue_vision_write(
+            writes,
+            VisionUplinkWriteMode::PlainOverlay,
+            vision_padding_block(&record, command, user_uuid, uuid_sent, true),
+        );
         match command {
-            VISION_COMMAND_END => *mode = VisionUplinkMode::PlainOverlay,
-            VISION_COMMAND_DIRECT => *mode = VisionUplinkMode::Direct,
+            VISION_COMMAND_END => *state = VisionUplinkState::PlainOverlay,
+            VISION_COMMAND_DIRECT => *state = VisionUplinkState::DirectPass,
             _ => {}
         }
     }
-    let _ = write_pending_after_vision_mode_async(pending, client, stop, *mode).await?;
+
+    match *state {
+        VisionUplinkState::Padding => {}
+        VisionUplinkState::PlainOverlay => queue_vision_write(
+            writes,
+            VisionUplinkWriteMode::PlainOverlay,
+            std::mem::take(pending),
+        ),
+        VisionUplinkState::DirectPass => queue_vision_write(
+            writes,
+            VisionUplinkWriteMode::DirectPass,
+            std::mem::take(pending),
+        ),
+    }
     Ok(())
 }

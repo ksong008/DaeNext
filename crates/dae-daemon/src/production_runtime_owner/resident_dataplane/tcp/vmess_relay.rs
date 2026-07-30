@@ -1,6 +1,6 @@
 use super::*;
 mod response_buffer;
-use self::response_buffer::*;
+pub(super) use self::response_buffer::*;
 mod transport;
 use self::transport::*;
 mod vmess_aead;

@@ -10,9 +10,13 @@ use super::super::RESIDENT_CONNECT_TIMEOUT;
 use super::super::client::AsyncVlessTlsClient;
 
 mod async_payload;
+mod duplex_control;
 mod framing;
-pub(super) use async_payload::AsyncWebSocketControlWriter;
-pub(crate) use async_payload::{AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState};
+pub(crate) use async_payload::{
+    AsyncWebSocketPayloadChannelReader, AsyncWebSocketPayloadChannelState,
+    AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState,
+};
+pub(crate) use duplex_control::*;
 pub(crate) use framing::RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES;
 pub(crate) use framing::WebSocketBinaryFrameDecoder;
 
@@ -156,19 +160,4 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn write_webso
     let frame = websocket_client_binary_frame_with_random_mask(payload)
         .map_err(|err| format!("{label}: {err}"))?;
     client.write_plain_all(&frame, label).await
-}
-
-pub(crate) async fn write_websocket_control_responses_over_resident_tls_async(
-    client: &mut AsyncVlessTlsClient,
-    decoder: &mut WebSocketBinaryFrameDecoder,
-    label: &str,
-) -> Result<(), String> {
-    let responses = decoder.take_control_responses();
-    if responses.is_empty() {
-        return Ok(());
-    }
-    for response in responses {
-        client.write_plain_all_buffered(&response, label).await?;
-    }
-    client.flush_plain(label).await
 }

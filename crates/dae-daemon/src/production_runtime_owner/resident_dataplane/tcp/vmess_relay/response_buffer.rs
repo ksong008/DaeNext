@@ -2,14 +2,16 @@ use super::*;
 
 const RESIDENT_VMESS_RESPONSE_BUFFER_LIMIT: usize = 128 * 1024;
 
-pub(super) struct VmessAeadResponseBuffer {
+pub(in crate::production_runtime_owner::resident_dataplane::tcp) struct VmessAeadResponseBuffer {
     request: dae_outbound::vmess::VMessAeadTcpRequest,
     reader: Option<dae_outbound::vmess::VMessAeadTcpResponseReader>,
     bytes: Vec<u8>,
 }
 
 impl VmessAeadResponseBuffer {
-    pub(super) fn new(request: dae_outbound::vmess::VMessAeadTcpRequest) -> Self {
+    pub(in crate::production_runtime_owner::resident_dataplane::tcp) fn new(
+        request: dae_outbound::vmess::VMessAeadTcpRequest,
+    ) -> Self {
         Self {
             request,
             reader: None,
@@ -17,11 +19,16 @@ impl VmessAeadResponseBuffer {
         }
     }
 
-    pub(super) fn response_header_received(&self) -> bool {
+    pub(in crate::production_runtime_owner::resident_dataplane::tcp) fn response_header_received(
+        &self,
+    ) -> bool {
         self.reader.is_some()
     }
 
-    pub(super) fn push(&mut self, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    pub(in crate::production_runtime_owner::resident_dataplane::tcp) fn push(
+        &mut self,
+        input: &[u8],
+    ) -> Result<Vec<Vec<u8>>, String> {
         let buffered = self.bytes.len().saturating_add(input.len());
         if buffered > RESIDENT_VMESS_RESPONSE_BUFFER_LIMIT {
             return Err(format!(

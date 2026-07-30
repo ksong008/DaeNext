@@ -1,8 +1,8 @@
 use super::*;
 
 use crate::production_runtime_owner::resident_dataplane::{
-    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, authority_from_host_port,
-    resolve_socket_addr_candidates, try_socket_addr_candidates,
+    QuicCandidateRaceResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+    authority_from_host_port, resolve_socket_addr_candidates,
 };
 
 use std::fmt;
@@ -26,75 +26,78 @@ pub(crate) async fn relay_tcp_over_quic_stream_async(
     stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
-    let mut stats = DirectTcpRelayStats::default();
-    let mut inbound_closed = false;
-    let mut proxy_closed = false;
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut proxy_buf = [0_u8; 16 * 1024];
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    tokio::pin!(idle_deadline);
+    let (progress, activity) = resident_duplex_progress();
+    let (inbound_read, inbound_write) = inbound.split();
+    let upload = relay_quic_stream_upload(inbound_read, send, progress.clone(), metrics);
+    let download = relay_quic_stream_download(recv, inbound_write, progress.clone(), metrics);
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        "resident QUIC stream relay idle timeout",
+        None,
+    )
+    .await
+}
 
-    while !stop.load(Ordering::Relaxed) {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
-                match read {
-                    Ok(0) => {
-                        inbound_closed = true;
-                        let _ = send.finish();
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Ok(read) => {
-                        send.write_all(&inbound_buf[..read])
-                            .await
-                            .map_err(|err| format!("write client payload to QUIC stream: {err}"))?;
-                        send.flush()
-                            .await
-                            .map_err(|err| format!("flush QUIC stream: {err}"))?;
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
-                        let _ = send.finish();
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) => return Err(format!("read inbound TCP for QUIC stream relay: {err}")),
-                }
+async fn relay_quic_stream_upload(
+    mut inbound: tokio::net::tcp::ReadHalf<'_>,
+    send: &mut quinn::SendStream,
+    progress: ResidentDuplexProgress,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<(), String> {
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = match inbound.read(&mut buffer).await {
+            Ok(0) => {
+                let _ = send.finish();
+                return Ok(());
             }
-            read = recv.read(&mut proxy_buf), if !proxy_closed => {
-                match read {
-                    Ok(None) => {
-                        proxy_closed = true;
-                        let _ = inbound.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Ok(Some(read)) => {
-                        if let Err(err) = inbound.write_all(&proxy_buf[..read]).await {
-                            if is_graceful_stream_close_error(&err) {
-                                break;
-                            }
-                            return Err(format!("write QUIC stream payload to client: {err}"));
-                        }
-                        stats.direct_to_client += read;
-                        metrics.add_download(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) => return Err(format!("read QUIC stream payload: {err}")),
-                }
+            Ok(read) => read,
+            Err(err) if is_graceful_stream_close_error(&err) => {
+                let _ = send.finish();
+                return Ok(());
             }
-            _ = &mut idle_deadline => {
-                return Err("resident QUIC stream relay idle timeout".to_owned());
-            }
-        }
-
-        if proxy_closed {
-            break;
-        }
+            Err(err) => return Err(format!("read inbound TCP for QUIC stream relay: {err}")),
+        };
+        send.write_all(&buffer[..read])
+            .await
+            .map_err(|err| format!("write client payload to QUIC stream: {err}"))?;
+        send.flush()
+            .await
+            .map_err(|err| format!("flush QUIC stream: {err}"))?;
+        progress.record_upload(read);
+        metrics.add_upload(read);
     }
-    Ok(stats)
+}
+
+async fn relay_quic_stream_download(
+    recv: &mut quinn::RecvStream,
+    mut inbound: tokio::net::tcp::WriteHalf<'_>,
+    progress: ResidentDuplexProgress,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<(), String> {
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let Some(read) = recv
+            .read(&mut buffer)
+            .await
+            .map_err(|err| format!("read QUIC stream payload: {err}"))?
+        else {
+            let _ = inbound.shutdown().await;
+            return Ok(());
+        };
+        if let Err(err) = inbound.write_all(&buffer[..read]).await {
+            if is_graceful_stream_close_error(&err) {
+                return Ok(());
+            }
+            return Err(format!("write QUIC stream payload to client: {err}"));
+        }
+        progress.record_download(read);
+        metrics.add_download(read);
+    }
 }
 
 pub(crate) fn open_marked_quic_endpoint_for_remote(
@@ -493,45 +496,175 @@ where
     ) -> Result<ObservedQuicEndpoint, String>,
 {
     let cancellation = OwnerCancellationSignal::new();
-    let (remote, (endpoint, connection)) =
-        try_socket_addr_candidates(candidates, context, |remote| {
-            let endpoint = endpoint_for_remote(remote, deadline, &cancellation);
+    race_quic_candidates(
+        candidates,
+        deadline,
+        &cancellation,
+        QuicCandidateRaceResourceProfile::selected(),
+        |remote, attempt_deadline, attempt_cancellation| {
+            let endpoint = endpoint_for_remote(remote, attempt_deadline, &attempt_cancellation);
             let server_name = server_name.to_owned();
             async move {
-                let endpoint = endpoint?;
-                let connecting = match endpoint.connect(remote, &server_name) {
-                    Ok(connecting) => connecting,
-                    Err(err) => {
-                        endpoint.mark_failed();
-                        endpoint.close(0_u32.into(), b"resolved candidate connect failed");
-                        wait_quic_endpoint_idle_after_close(&endpoint).await;
-                        return Err(format!("start QUIC connect: {err}"));
-                    }
-                };
-                let remaining = deadline.remaining_at(Instant::now()).ok_or_else(|| {
-                    endpoint.mark_failed();
-                    "QUIC connect deadline elapsed".to_owned()
-                })?;
-                match time::timeout(remaining, connecting).await {
-                    Ok(Ok(connection)) => Ok((endpoint, connection)),
-                    Ok(Err(err)) => {
-                        endpoint.mark_failed();
-                        endpoint.close(0_u32.into(), b"resolved candidate connect failed");
-                        wait_quic_endpoint_idle_after_close(&endpoint).await;
-                        Err(format!("await QUIC connect: {err}"))
-                    }
-                    Err(_) => {
-                        endpoint.mark_failed();
-                        endpoint.close(0_u32.into(), b"resolved candidate connect timeout");
-                        wait_quic_endpoint_idle_after_close(&endpoint).await;
-                        Err("QUIC connect timeout".to_owned())
-                    }
+                let endpoint = endpoint.map_err(QuicCandidateAttemptFailure::Retryable)?;
+                connect_quic_candidate_async(
+                    remote,
+                    endpoint,
+                    &server_name,
+                    attempt_deadline,
+                    attempt_cancellation,
+                )
+                .await
+            }
+        },
+    )
+    .await
+    .map_err(|failure| format_quic_candidate_race_failure(context, failure))
+}
+
+struct QuicCandidateEndpointGuard {
+    endpoint: Option<ObservedQuicEndpoint>,
+}
+
+impl QuicCandidateEndpointGuard {
+    fn new(endpoint: ObservedQuicEndpoint) -> Self {
+        Self {
+            endpoint: Some(endpoint),
+        }
+    }
+
+    fn endpoint(&self) -> &ObservedQuicEndpoint {
+        self.endpoint
+            .as_ref()
+            .expect("QUIC candidate guard owns its endpoint")
+    }
+
+    fn into_endpoint(mut self) -> ObservedQuicEndpoint {
+        self.endpoint
+            .take()
+            .expect("QUIC candidate guard owns its endpoint")
+    }
+
+    async fn close(mut self, reason: &'static [u8]) {
+        if let Some(endpoint) = self.endpoint.take() {
+            endpoint.mark_failed();
+            endpoint.close(0_u32.into(), reason);
+            wait_quic_endpoint_idle_after_close(&endpoint).await;
+        }
+    }
+}
+
+impl Drop for QuicCandidateEndpointGuard {
+    fn drop(&mut self) {
+        if let Some(endpoint) = self.endpoint.take() {
+            endpoint.mark_failed();
+            endpoint.close(0_u32.into(), b"QUIC candidate attempt dropped");
+        }
+    }
+}
+
+async fn connect_quic_candidate_async(
+    remote: SocketAddr,
+    endpoint: ObservedQuicEndpoint,
+    server_name: &str,
+    deadline: AbsoluteDeadline,
+    cancellation: OwnerCancellationSignal,
+) -> Result<
+    (SocketAddr, ObservedQuicEndpoint, quinn::Connection),
+    QuicCandidateAttemptFailure<String>,
+> {
+    let guard = QuicCandidateEndpointGuard::new(endpoint);
+    let connecting = match guard.endpoint().connect(remote, server_name) {
+        Ok(connecting) => connecting,
+        Err(err) => {
+            guard.close(b"resolved candidate connect failed").await;
+            return Err(QuicCandidateAttemptFailure::Retryable(format!(
+                "start QUIC connect: {err}"
+            )));
+        }
+    };
+    let Some(remaining) = deadline.remaining_at(Instant::now()) else {
+        guard.close(b"resolved candidate connect deadline").await;
+        return Err(QuicCandidateAttemptFailure::Retryable(
+            "QUIC connect deadline elapsed".to_owned(),
+        ));
+    };
+    tokio::select! {
+        result = time::timeout(remaining, connecting) => {
+            match result {
+                Ok(Ok(connection)) => Ok((remote, guard.into_endpoint(), connection)),
+                Ok(Err(err)) => {
+                    guard.close(b"resolved candidate connect failed").await;
+                    Err(QuicCandidateAttemptFailure::Retryable(format!("await QUIC connect: {err}")))
+                }
+                Err(_) => {
+                    guard.close(b"resolved candidate connect timeout").await;
+                    Err(QuicCandidateAttemptFailure::Retryable("QUIC connect timeout".to_owned()))
                 }
             }
-        })
-        .await
-        .map_err(|err| err.to_string())?;
-    Ok((remote, endpoint, connection))
+        }
+        _ = cancellation.cancelled() => {
+            guard.close(b"resolved candidate connect cancelled").await;
+            Err(QuicCandidateAttemptFailure::Retryable("QUIC candidate connect cancelled".to_owned()))
+        }
+    }
+}
+
+fn format_quic_candidate_race_failure(
+    context: &str,
+    failure: QuicCandidateRaceFailure<String>,
+) -> String {
+    match failure {
+        QuicCandidateRaceFailure::Empty => {
+            format!("{context}: no resolved address candidates")
+        }
+        QuicCandidateRaceFailure::Exhausted {
+            candidate_count,
+            failures,
+        } => format_quic_candidate_failures(
+            context,
+            "failed",
+            candidate_count,
+            candidate_count,
+            failures,
+        ),
+        QuicCandidateRaceFailure::Deadline {
+            candidate_count,
+            started_count,
+            failures,
+        } => format_quic_candidate_failures(
+            context,
+            "deadline elapsed",
+            candidate_count,
+            started_count,
+            failures,
+        ),
+        QuicCandidateRaceFailure::Cancelled(reason) => {
+            format!("{context}: resolved address candidate race was cancelled: {reason:?}")
+        }
+        QuicCandidateRaceFailure::Terminal { candidate, error } => {
+            format!("{context}: terminal candidate {candidate} failure: {error}")
+        }
+    }
+}
+
+fn format_quic_candidate_failures(
+    context: &str,
+    outcome: &str,
+    candidate_count: usize,
+    started_count: usize,
+    failures: Vec<(SocketAddr, String)>,
+) -> String {
+    let mut message = format!(
+        "{context}: resolved address candidate race {outcome} after starting {started_count} of {candidate_count} candidates"
+    );
+    for (candidate, detail) in &failures {
+        message.push_str(&format!("; {candidate}: {detail}"));
+    }
+    let omitted = candidate_count.saturating_sub(failures.len());
+    if omitted > 0 {
+        message.push_str(&format!("; {omitted} candidate details omitted"));
+    }
+    message
 }
 
 pub(crate) struct Hysteria2ConnectionFailure {
@@ -544,13 +677,6 @@ impl Hysteria2ConnectionFailure {
         Self {
             failure,
             endpoint: None,
-        }
-    }
-
-    fn with_endpoint(failure: Hysteria2Failure, endpoint: ObservedQuicEndpoint) -> Self {
-        Self {
-            failure,
-            endpoint: Some(endpoint),
         }
     }
 
@@ -570,130 +696,151 @@ pub(crate) async fn connect_hysteria2_quic_endpoint_candidates_async<F, Fut>(
 ) -> Result<(SocketAddr, ObservedQuicEndpoint, quinn::Connection), Hysteria2ConnectionFailure>
 where
     F: FnMut(SocketAddr, AbsoluteDeadline, OwnerCancellationSignal) -> Fut,
-    Fut: Future<Output = Result<ObservedQuicEndpoint, Hysteria2Failure>>,
+    Fut: Future<Output = Result<ObservedQuicEndpoint, Hysteria2Failure>> + Send,
 {
-    if candidates.is_empty() {
-        return Err(Hysteria2ConnectionFailure::without_endpoint(
-            Hysteria2Failure::new(
-                Hysteria2FailureClass::NetworkAddress,
-                "hysteria2-resolve",
-                "Hysteria2 server resolved to no usable address",
-            ),
-        ));
-    }
-
     if let Err(reason) = cancellation.check() {
         return Err(Hysteria2ConnectionFailure::without_endpoint(
             hysteria2_cancellation_failure(reason),
         ));
     }
-    let mut first_retryable_failure = None;
-    for (candidate_index, &remote) in candidates.iter().enumerate() {
-        let endpoint = match endpoint_for_remote(remote, deadline, cancellation.clone()).await {
-            Ok(endpoint) => endpoint,
-            Err(failure) => {
-                if failure.allows_candidate_retry() {
-                    first_retryable_failure.get_or_insert(failure);
-                    continue;
-                }
-                return Err(Hysteria2ConnectionFailure::without_endpoint(failure));
-            }
-        };
-        let connecting = match endpoint.connect(remote, server_name) {
-            Ok(connecting) => connecting,
-            Err(error) => {
-                let failure = classify_hysteria2_connect_start_error(&error);
-                endpoint.mark_failed();
-                endpoint.close(0_u32.into(), b"Hysteria2 candidate connect failed");
-                if failure.allows_candidate_retry() {
-                    wait_quic_endpoint_idle_after_close(&endpoint).await;
-                    first_retryable_failure.get_or_insert(failure);
-                    continue;
-                }
-                return Err(Hysteria2ConnectionFailure::with_endpoint(failure, endpoint));
-            }
-        };
-        let Some(remaining) = deadline.remaining_at(Instant::now()) else {
-            endpoint.mark_failed();
-            endpoint.close(0_u32.into(), b"Hysteria2 connect deadline elapsed");
-            return Err(Hysteria2ConnectionFailure::with_endpoint(
-                Hysteria2Failure::new(
-                    Hysteria2FailureClass::Deadline,
-                    "hysteria2-connect-deadline",
-                    "Hysteria2 QUIC connect deadline elapsed",
-                ),
-                endpoint,
-            ));
-        };
-        let remaining_attempts = candidates.len() - candidate_index;
-        let attempt_divisor = u32::try_from(remaining_attempts).unwrap_or(u32::MAX);
-        let attempt_timeout = remaining.checked_div(attempt_divisor).unwrap_or(remaining);
-        let connect_result = tokio::select! {
-            result = time::timeout(attempt_timeout, connecting) => result,
-            reason = cancellation.cancelled() => {
-                endpoint.mark_failed();
-                endpoint.close(0_u32.into(), b"Hysteria2 connect cancelled");
-                return Err(Hysteria2ConnectionFailure::with_endpoint(
-                    hysteria2_cancellation_failure(reason),
+    race_quic_candidates(
+        candidates,
+        deadline,
+        cancellation,
+        QuicCandidateRaceResourceProfile::selected(),
+        |remote, attempt_deadline, attempt_cancellation| {
+            let endpoint =
+                endpoint_for_remote(remote, attempt_deadline, attempt_cancellation.clone());
+            let server_name = server_name.to_owned();
+            async move {
+                let endpoint = endpoint.await.map_err(|failure| {
+                    if failure.allows_candidate_retry() {
+                        QuicCandidateAttemptFailure::Retryable(failure)
+                    } else {
+                        QuicCandidateAttemptFailure::Terminal(failure)
+                    }
+                })?;
+                connect_hysteria2_quic_candidate_async(
+                    remote,
                     endpoint,
-                ));
-            }
-        };
-        match connect_result {
-            Ok(Ok(connection)) => return Ok((remote, endpoint, connection)),
-            Ok(Err(error)) => {
-                let failure = classify_hysteria2_connection_error(
-                    &error,
+                    &server_name,
                     has_certificate_pin,
                     requires_webpki,
-                );
-                endpoint.mark_failed();
-                endpoint.close(0_u32.into(), b"Hysteria2 candidate handshake failed");
-                if failure.allows_candidate_retry() {
-                    wait_quic_endpoint_idle_after_close(&endpoint).await;
-                    first_retryable_failure.get_or_insert(failure);
-                    continue;
-                }
-                return Err(Hysteria2ConnectionFailure::with_endpoint(failure, endpoint));
+                    attempt_deadline,
+                    attempt_cancellation,
+                )
+                .await
             }
-            Err(_) => {
-                endpoint.mark_failed();
-                endpoint.close(0_u32.into(), b"Hysteria2 candidate connect timeout");
-                let failure = Hysteria2Failure::new(
-                    Hysteria2FailureClass::NetworkPort,
-                    "hysteria2-connect-port-timeout",
-                    "Hysteria2 QUIC handshake did not reach the selected server port",
-                );
-                if candidate_index + 1 < candidates.len()
-                    && deadline.check_at(Instant::now()).is_ok()
-                {
-                    wait_quic_endpoint_idle_after_close(&endpoint).await;
-                    first_retryable_failure.get_or_insert(failure);
-                    continue;
+        },
+    )
+    .await
+    .map_err(hysteria2_candidate_race_failure)
+}
+
+async fn connect_hysteria2_quic_candidate_async(
+    remote: SocketAddr,
+    endpoint: ObservedQuicEndpoint,
+    server_name: &str,
+    has_certificate_pin: bool,
+    requires_webpki: bool,
+    deadline: AbsoluteDeadline,
+    cancellation: OwnerCancellationSignal,
+) -> Result<
+    (SocketAddr, ObservedQuicEndpoint, quinn::Connection),
+    QuicCandidateAttemptFailure<Hysteria2Failure>,
+> {
+    let guard = QuicCandidateEndpointGuard::new(endpoint);
+    let connecting = match guard.endpoint().connect(remote, server_name) {
+        Ok(connecting) => connecting,
+        Err(error) => {
+            let failure = classify_hysteria2_connect_start_error(&error);
+            guard.close(b"Hysteria2 candidate connect failed").await;
+            return Err(hysteria2_candidate_attempt_failure(failure));
+        }
+    };
+    let Some(remaining) = deadline.remaining_at(Instant::now()) else {
+        guard.close(b"Hysteria2 candidate deadline elapsed").await;
+        return Err(QuicCandidateAttemptFailure::Retryable(
+            hysteria2_candidate_connect_timeout(),
+        ));
+    };
+    tokio::select! {
+        result = time::timeout(remaining, connecting) => {
+            match result {
+                Ok(Ok(connection)) => Ok((remote, guard.into_endpoint(), connection)),
+                Ok(Err(error)) => {
+                    let failure = classify_hysteria2_connection_error(
+                        &error,
+                        has_certificate_pin,
+                        requires_webpki,
+                    );
+                    guard.close(b"Hysteria2 candidate handshake failed").await;
+                    Err(hysteria2_candidate_attempt_failure(failure))
                 }
-                let failure = if deadline.check_at(Instant::now()).is_err() {
-                    Hysteria2Failure::new(
-                        Hysteria2FailureClass::Deadline,
-                        "hysteria2-connect-deadline",
-                        "Hysteria2 QUIC connect deadline elapsed",
-                    )
-                } else {
-                    failure
-                };
-                return Err(Hysteria2ConnectionFailure::with_endpoint(failure, endpoint));
+                Err(_) => {
+                    guard.close(b"Hysteria2 candidate connect timeout").await;
+                    Err(QuicCandidateAttemptFailure::Retryable(
+                        hysteria2_candidate_connect_timeout(),
+                    ))
+                }
             }
         }
+        reason = cancellation.cancelled() => {
+            guard.close(b"Hysteria2 candidate connect cancelled").await;
+            Err(QuicCandidateAttemptFailure::Terminal(
+                hysteria2_cancellation_failure(reason),
+            ))
+        }
     }
+}
 
-    Err(Hysteria2ConnectionFailure::without_endpoint(
-        first_retryable_failure.unwrap_or_else(|| {
-            Hysteria2Failure::new(
-                Hysteria2FailureClass::NetworkAddress,
-                "hysteria2-connect-candidates",
-                "Hysteria2 has no usable network address candidate",
-            )
-        }),
-    ))
+fn hysteria2_candidate_attempt_failure(
+    failure: Hysteria2Failure,
+) -> QuicCandidateAttemptFailure<Hysteria2Failure> {
+    if failure.allows_candidate_retry() {
+        QuicCandidateAttemptFailure::Retryable(failure)
+    } else {
+        QuicCandidateAttemptFailure::Terminal(failure)
+    }
+}
+
+fn hysteria2_candidate_connect_timeout() -> Hysteria2Failure {
+    Hysteria2Failure::new(
+        Hysteria2FailureClass::NetworkPort,
+        "hysteria2-connect-port-timeout",
+        "Hysteria2 QUIC handshake did not reach the selected server port",
+    )
+}
+
+fn hysteria2_candidate_race_failure(
+    failure: QuicCandidateRaceFailure<Hysteria2Failure>,
+) -> Hysteria2ConnectionFailure {
+    let failure = match failure {
+        QuicCandidateRaceFailure::Empty => Hysteria2Failure::new(
+            Hysteria2FailureClass::NetworkAddress,
+            "hysteria2-resolve",
+            "Hysteria2 server resolved to no usable address",
+        ),
+        QuicCandidateRaceFailure::Exhausted { failures, .. } => failures
+            .into_iter()
+            .next()
+            .map(|(_, failure)| failure)
+            .unwrap_or_else(|| {
+                Hysteria2Failure::new(
+                    Hysteria2FailureClass::NetworkAddress,
+                    "hysteria2-connect-candidates",
+                    "Hysteria2 has no usable network address candidate",
+                )
+            }),
+        QuicCandidateRaceFailure::Deadline { .. } => Hysteria2Failure::new(
+            Hysteria2FailureClass::Deadline,
+            "hysteria2-connect-deadline",
+            "Hysteria2 QUIC connect deadline elapsed",
+        ),
+        QuicCandidateRaceFailure::Cancelled(reason) => hysteria2_cancellation_failure(reason),
+        QuicCandidateRaceFailure::Terminal { error, .. } => error,
+    };
+    Hysteria2ConnectionFailure::without_endpoint(failure)
 }
 
 fn hysteria2_cancellation_failure(

@@ -1,5 +1,121 @@
 use super::*;
 impl AsyncVlessTlsClient {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_plain_read(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_read(cx, buf)
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_read(cx, buf)
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_plain_write(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_write(cx, buf)
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_write(cx, buf)
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_plain_flush(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_flush(cx)
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_flush(cx)
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_plain_shutdown(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_shutdown(cx)
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_shutdown(cx)
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_raw_read(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let raw =
+            match &mut self.engine {
+                AsyncVlessTlsEngine::Rustls { tls }
+                | AsyncVlessTlsEngine::RealityRustls { tls } => tls.get_mut().0.raw_mut(),
+                AsyncVlessTlsEngine::Boring { tls }
+                | AsyncVlessTlsEngine::RealityBoring { tls } => tls.get_mut().raw_mut(),
+            };
+        Pin::new(raw).poll_read(cx, buf)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_raw_write(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let raw =
+            match &mut self.engine {
+                AsyncVlessTlsEngine::Rustls { tls }
+                | AsyncVlessTlsEngine::RealityRustls { tls } => tls.get_mut().0.raw_mut(),
+                AsyncVlessTlsEngine::Boring { tls }
+                | AsyncVlessTlsEngine::RealityBoring { tls } => tls.get_mut().raw_mut(),
+            };
+        Pin::new(raw).poll_write(cx, buf)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_raw_flush(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let raw =
+            match &mut self.engine {
+                AsyncVlessTlsEngine::Rustls { tls }
+                | AsyncVlessTlsEngine::RealityRustls { tls } => tls.get_mut().0.raw_mut(),
+                AsyncVlessTlsEngine::Boring { tls }
+                | AsyncVlessTlsEngine::RealityBoring { tls } => tls.get_mut().raw_mut(),
+            };
+        Pin::new(raw).poll_flush(cx)
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_raw_shutdown(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let raw =
+            match &mut self.engine {
+                AsyncVlessTlsEngine::Rustls { tls }
+                | AsyncVlessTlsEngine::RealityRustls { tls } => tls.get_mut().0.raw_mut(),
+                AsyncVlessTlsEngine::Boring { tls }
+                | AsyncVlessTlsEngine::RealityBoring { tls } => tls.get_mut().raw_mut(),
+            };
+        Pin::new(raw).poll_shutdown(cx)
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn negotiated_alpn(
         &self,
     ) -> Option<&[u8]> {
@@ -69,48 +185,6 @@ impl AsyncVlessTlsClient {
         }
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) async fn raw_read(
-        &mut self,
-        buf: &mut [u8],
-    ) -> std::io::Result<usize> {
-        match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                tls.get_mut().0.read(buf).await
-            }
-            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                tls.get_mut().read(buf).await
-            }
-        }
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) async fn raw_write_all(
-        &mut self,
-        payload: &[u8],
-        label: &str,
-    ) -> Result<(), String> {
-        match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                let raw = tls.get_mut().0;
-                let raw = raw.raw_mut();
-                raw.write_all(payload)
-                    .await
-                    .map_err(|err| format!("{label}: {err}"))?;
-                raw.flush()
-                    .await
-                    .map_err(|err| format!("flush {label}: {err}"))
-            }
-            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                let raw = tls.get_mut().raw_mut();
-                raw.write_all(payload)
-                    .await
-                    .map_err(|err| format!("{label}: {err}"))?;
-                raw.flush()
-                    .await
-                    .map_err(|err| format!("flush {label}: {err}"))
-            }
-        }
-    }
-
     pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown(&mut self) {
         match &mut self.engine {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
@@ -129,14 +203,7 @@ impl AsyncRead for AsyncVlessTlsClient {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                Pin::new(tls).poll_read(cx, buf)
-            }
-            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                Pin::new(tls).poll_read(cx, buf)
-            }
-        }
+        self.poll_plain_read(cx, buf)
     }
 }
 
@@ -146,35 +213,14 @@ impl AsyncWrite for AsyncVlessTlsClient {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                Pin::new(tls).poll_write(cx, buf)
-            }
-            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                Pin::new(tls).poll_write(cx, buf)
-            }
-        }
+        self.poll_plain_write(cx, buf)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                Pin::new(tls).poll_flush(cx)
-            }
-            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                Pin::new(tls).poll_flush(cx)
-            }
-        }
+        self.poll_plain_flush(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                Pin::new(tls).poll_shutdown(cx)
-            }
-            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                Pin::new(tls).poll_shutdown(cx)
-            }
-        }
+        self.poll_plain_shutdown(cx)
     }
 }
