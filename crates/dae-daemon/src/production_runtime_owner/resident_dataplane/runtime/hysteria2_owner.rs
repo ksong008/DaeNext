@@ -891,11 +891,6 @@ impl Hysteria2SharedTransport {
             .close(0_u32.into(), b"resident hysteria2 owner draining");
         self.endpoint.clone()
     }
-
-    async fn close(&self) {
-        let endpoint = self.begin_close();
-        wait_quic_endpoint_idle_after_close(&endpoint).await;
-    }
 }
 
 impl Drop for Hysteria2SharedTransport {
@@ -1030,11 +1025,6 @@ struct Hysteria2QuiescentOwnerCell {
 }
 
 enum Hysteria2TransportEvent {
-    Datagram {
-        key: Hysteria2OwnerKey,
-        instance_id: u64,
-        message: Result<Hysteria2UdpMessage, ()>,
-    },
     Closed {
         key: Hysteria2OwnerKey,
         instance_id: u64,
@@ -1468,6 +1458,7 @@ async fn run_hysteria2_owner_registry(
     let mut ownership_reconciler =
         Hysteria2RegistryOwnershipReconciler::new(Arc::clone(&metrics), Arc::clone(&index));
     let mut tasks = JoinSet::new();
+    let mut retirements = JoinSet::new();
     let mut owners = HashMap::<Hysteria2OwnerKey, Hysteria2OwnedTransport>::new();
     let mut stop_listener = stop.listener();
     loop {
@@ -1497,20 +1488,27 @@ async fn run_hysteria2_owner_registry(
                         if let Some(owner) = completion.owner {
                             let connection = owner.shared.connection.clone();
                             let instance_id = owner.shared.instance_id;
+                            let udp_sessions = Arc::clone(&owner.shared.udp_sessions);
+                            let reader_metrics = Arc::clone(&metrics);
                             let previous = owners.insert(completion.key, owner);
                             metrics.owner_opened();
                             if let Some(previous) = previous {
-                                previous.cell.begin_drain(OwnerDrainReason::Fault);
-                                metrics.owner_closed();
-                                previous.shared.close().await;
-                                previous.cell.close();
+                                enqueue_hysteria2_retirement(
+                                    &mut retirements,
+                                    previous,
+                                    Arc::clone(&metrics),
+                                    resources.owner_limit(),
+                                )
+                                .await;
                             }
                             tasks.spawn(async move {
                                 Hysteria2RegistryTaskCompletion::Transport(
-                                    wait_hysteria2_transport_event(
+                                    run_hysteria2_transport_reader(
                                         completion.key,
                                         instance_id,
                                         connection,
+                                        udp_sessions,
+                                        reader_metrics,
                                     )
                                     .await,
                                 )
@@ -1524,32 +1522,6 @@ async fn run_hysteria2_owner_registry(
                                 &quiescent_cell.cell,
                                 quiescent_cell.revision,
                             );
-                        }
-                    }
-                    Some(Ok(Hysteria2RegistryTaskCompletion::Transport(
-                        Hysteria2TransportEvent::Datagram {
-                            key,
-                            instance_id,
-                            message,
-                        },
-                    ))) => {
-                        if let Some(owner) = owners.get(&key)
-                            && owner.shared.instance_id == instance_id
-                        {
-                            match message {
-                                Ok(message) => owner.shared.udp_sessions.dispatch(message),
-                                Err(()) => {
-                                    metrics
-                                        .malformed_udp_datagrams
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
-                            let connection = owner.shared.connection.clone();
-                            tasks.spawn(async move {
-                                Hysteria2RegistryTaskCompletion::Transport(
-                                    wait_hysteria2_transport_event(key, instance_id, connection).await,
-                                )
-                            });
                         }
                     }
                     Some(Ok(Hysteria2RegistryTaskCompletion::Transport(
@@ -1571,14 +1543,20 @@ async fn run_hysteria2_owner_registry(
                                     index.cells.remove(&key);
                                 }
                             }
-                            owner.cell.begin_drain(OwnerDrainReason::Fault);
-                            metrics.owner_closed();
-                            owner.shared.close().await;
-                            owner.cell.close();
+                            enqueue_hysteria2_retirement(
+                                &mut retirements,
+                                owner,
+                                Arc::clone(&metrics),
+                                resources.owner_limit(),
+                            )
+                            .await;
                         }
                     }
                     Some(Err(_)) | None => {}
                 }
+            }
+            retired = retirements.join_next(), if !retirements.is_empty() => {
+                let _ = retired;
             }
         }
     }
@@ -1605,6 +1583,7 @@ async fn run_hysteria2_owner_registry(
     for cell in cells {
         cell.close();
     }
+    while retirements.join_next().await.is_some() {}
     let drain_guard = Hysteria2EndpointDrainGuard::new(Arc::clone(&metrics), endpoints.len());
     let drain_started = time::Instant::now();
     let (peer_close_deadline, resource_release_deadline) =
@@ -1619,19 +1598,42 @@ async fn run_hysteria2_owner_registry(
     ownership_reconciler.finish_shutdown();
 }
 
-async fn wait_hysteria2_transport_event(
+async fn enqueue_hysteria2_retirement(
+    retirements: &mut JoinSet<()>,
+    owner: Hysteria2OwnedTransport,
+    metrics: Arc<Hysteria2OwnerRegistryMetrics>,
+    limit: usize,
+) {
+    while retirements.len() >= limit.max(1) {
+        let _ = retirements.join_next().await;
+    }
+    owner.cell.begin_drain(OwnerDrainReason::Fault);
+    retirements.spawn(async move {
+        let endpoint = owner.shared.begin_close();
+        let _ = wait_quic_endpoint_idle_after_close(&endpoint).await;
+        owner.cell.close();
+        metrics.owner_closed();
+    });
+}
+
+async fn run_hysteria2_transport_reader(
     key: Hysteria2OwnerKey,
     instance_id: u64,
     connection: quinn::Connection,
+    udp_sessions: Arc<Hysteria2UdpSessionManager>,
+    metrics: Arc<Hysteria2OwnerRegistryMetrics>,
 ) -> Hysteria2TransportEvent {
-    match connection.read_datagram().await {
-        Ok(datagram) => Hysteria2TransportEvent::Datagram {
-            key,
-            instance_id,
-            message: decode_hysteria2_udp_message(&datagram).map_err(|_| ()),
-        },
-        Err(_) => Hysteria2TransportEvent::Closed { key, instance_id },
+    while let Ok(datagram) = connection.read_datagram().await {
+        match decode_hysteria2_udp_message(&datagram) {
+            Ok(message) => udp_sessions.dispatch(message),
+            Err(_) => {
+                metrics
+                    .malformed_udp_datagrams
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
+    Hysteria2TransportEvent::Closed { key, instance_id }
 }
 
 async fn run_hysteria2_owner_build(
