@@ -16,15 +16,30 @@ pub(super) async fn forward_dns_tcp_udp_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let resolved_targets = resolved_upstream_targets(upstream)
+    let resolved = resolved_upstream_targets(upstream)
         .await
         .map_err(ResidentDnsTransportError::message)?;
     let udp_selection =
-        select_dns_upstream_targets(plan, upstream, resolved_targets.clone(), L4Proto::Udp);
-    let tcp_selection = select_dns_upstream_targets(plan, upstream, resolved_targets, L4Proto::Tcp);
+        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Udp);
+    let tcp_selection =
+        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Tcp);
 
-    let udp = forward_dns_udp_branch_async(upstream, payload, udp_selection, forwarders, context);
-    let tcp = forward_dns_tcp_branch_async(upstream, payload, tcp_selection, forwarders, context);
+    let udp = forward_dns_udp_branch_async(
+        upstream,
+        &resolved,
+        payload,
+        udp_selection,
+        forwarders,
+        context,
+    );
+    let tcp = forward_dns_tcp_branch_async(
+        upstream,
+        &resolved,
+        payload,
+        tcp_selection,
+        forwarders,
+        context,
+    );
     tokio::pin!(udp);
     tokio::pin!(tcp);
 
@@ -48,6 +63,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
 
 async fn forward_dns_udp_branch_async(
     upstream: &ResidentDnsUpstream,
+    resolved: &ResidentDnsResolvedTargetSnapshot,
     payload: &[u8],
     selection: Result<(Vec<ResidentDnsUpstreamRoutedTarget>, Vec<String>), String>,
     forwarders: &Arc<ResidentDnsForwarderCache>,
@@ -64,6 +80,7 @@ async fn forward_dns_udp_branch_async(
     }
     race_dns_upstream_targets(
         upstream,
+        resolved,
         "forward DNS tcp+udp UDP branch to",
         targets,
         failures,
@@ -88,6 +105,7 @@ async fn forward_dns_udp_branch_async(
 
 async fn forward_dns_tcp_branch_async(
     upstream: &ResidentDnsUpstream,
+    resolved: &ResidentDnsResolvedTargetSnapshot,
     payload: &[u8],
     selection: Result<(Vec<ResidentDnsUpstreamRoutedTarget>, Vec<String>), String>,
     forwarders: &Arc<ResidentDnsForwarderCache>,
@@ -104,6 +122,7 @@ async fn forward_dns_tcp_branch_async(
     }
     race_dns_upstream_targets(
         upstream,
+        resolved,
         "forward DNS tcp+udp TCP branch to",
         targets,
         failures,

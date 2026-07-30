@@ -9,8 +9,14 @@ use tokio::sync::Notify;
 
 mod h2_recovery;
 mod target_cache;
+mod target_refresh;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use h2_recovery::ResidentDnsH2Recovery;
 use target_cache::ResidentDnsResolvedTargetCache;
+pub(in crate::production_runtime_owner::resident_dataplane::dns) use target_cache::ResidentDnsResolvedTargetSnapshot;
+pub(in crate::production_runtime_owner::resident_dataplane::dns) use target_refresh::{
+    ResidentDnsTargetRefreshHandle, ResidentDnsTargetRefreshOwner,
+    ResidentDnsTargetRefreshOwnerTask,
+};
 
 #[derive(Clone, Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsRequestAction {
@@ -85,23 +91,71 @@ impl ResidentDnsUpstreamTarget {
 
     pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn resolve_addrs(
         &self,
-    ) -> Result<Vec<SocketAddr>, String> {
+    ) -> Result<ResidentDnsResolvedTargetSnapshot, String> {
         if let Some(addr) = self.literal_addr {
-            return Ok(vec![addr]);
+            return Ok(ResidentDnsResolvedTargetSnapshot::literal(addr));
         }
+        let host = self.host.clone();
+        let port = self.port;
+        let fallback_resolver = self.fallback_resolver;
+        let resolver_mark = self.resolver_mark;
         self.resolved_addrs
-            .resolve(|refresh_interval| async move {
+            .resolve(move |refresh_interval| async move {
                 resolve_host_addrs_with_configured_fallback_dns_ttl(
-                    &self.host,
-                    self.port,
-                    self.fallback_resolver,
-                    self.resolver_mark,
+                    &host,
+                    port,
+                    fallback_resolver,
+                    resolver_mark,
                     "resolve DNS upstream",
                     refresh_interval,
                 )
                 .await
             })
             .await
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn refresh_after_stale_failure(
+        &self,
+        snapshot: &ResidentDnsResolvedTargetSnapshot,
+    ) -> Result<(), String> {
+        if self.literal_addr.is_some() || !snapshot.is_stale() {
+            return Ok(());
+        }
+        let host = self.host.clone();
+        let port = self.port;
+        let fallback_resolver = self.fallback_resolver;
+        let resolver_mark = self.resolver_mark;
+        self.resolved_addrs
+            .refresh_after_stale_failure(snapshot, move |refresh_interval| async move {
+                resolve_host_addrs_with_configured_fallback_dns_ttl(
+                    &host,
+                    port,
+                    fallback_resolver,
+                    resolver_mark,
+                    "refresh DNS upstream after stale address failure",
+                    refresh_interval,
+                )
+                .await
+            })
+            .await
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn install_target_refresh(
+        &self,
+        handle: ResidentDnsTargetRefreshHandle,
+    ) {
+        self.resolved_addrs.install_refresh_handle(handle);
+    }
+}
+
+impl ResidentDnsUpstreams {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn install_target_refresh(
+        &self,
+        handle: ResidentDnsTargetRefreshHandle,
+    ) {
+        for upstream in self.by_tag.values() {
+            upstream.target.install_target_refresh(handle.clone());
+        }
     }
 }
 

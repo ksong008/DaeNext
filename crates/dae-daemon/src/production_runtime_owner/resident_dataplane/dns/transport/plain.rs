@@ -16,17 +16,15 @@ pub(super) async fn forward_dns_udp_upstream_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let (targets, failures) = select_dns_upstream_targets(
-        plan,
-        upstream,
-        resolved_upstream_targets(upstream)
-            .await
-            .map_err(ResidentDnsTransportError::message)?,
-        L4Proto::Udp,
-    )
-    .map_err(ResidentDnsTransportError::message)?;
+    let resolved = resolved_upstream_targets(upstream)
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
+    let (targets, failures) =
+        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Udp)
+            .map_err(ResidentDnsTransportError::message)?;
     race_dns_upstream_targets(
         upstream,
+        &resolved,
         "forward DNS UDP to",
         targets,
         failures,
@@ -143,17 +141,15 @@ pub(super) async fn forward_dns_tcp_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let (targets, failures) = select_dns_upstream_targets(
-        plan,
-        upstream,
-        resolved_upstream_targets(upstream)
-            .await
-            .map_err(ResidentDnsTransportError::message)?,
-        L4Proto::Tcp,
-    )
-    .map_err(ResidentDnsTransportError::message)?;
+    let resolved = resolved_upstream_targets(upstream)
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
+    let (targets, failures) =
+        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Tcp)
+            .map_err(ResidentDnsTransportError::message)?;
     race_dns_upstream_targets(
         upstream,
+        &resolved,
         "forward DNS TCP to",
         targets,
         failures,
@@ -450,8 +446,7 @@ pub(super) async fn forward_dns_tcp_to_routed_target_async(
             forwarder
                 .exchange(payload, context)
                 .await
-                .map_err(|err| format!("{remote}: {err}"))
-                .map_err(ResidentDnsTransportError::message)
+                .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote)))
         }
         ResidentDnsUpstreamSelection::Proxy { .. } => {
             let forwarder = forwarders
@@ -578,14 +573,7 @@ impl ResidentDnsTcpForwarder {
                     self.mark,
                     context,
                 )
-                .await
-                .map_err(|error| {
-                    ProxyDnsRequestError::new(
-                        ProxyDnsRequestStage::Connect,
-                        ProxyDnsRequestFailure::Network,
-                        error,
-                    )
-                })?;
+                .await?;
                 tokio::spawn(registration.run(stream))
             }
             ResidentDnsTcpConnectionKind::Proxy { binding, owners } => {
@@ -669,16 +657,21 @@ pub(super) async fn open_dns_tcp_stream_with_context_async(
     target: SocketAddr,
     mark: u32,
     context: ProxyDnsRequestContext,
-) -> Result<TokioTcpStream, String> {
-    context
-        .ensure(ProxyDnsRequestStage::Connect)
-        .map_err(|error| error.to_string())?;
+) -> Result<TokioTcpStream, ProxyDnsRequestError> {
+    context.ensure(ProxyDnsRequestStage::Connect)?;
     time::timeout_at(
         context.deadline(),
         open_dns_tcp_stream_async(upstream, target, mark),
     )
     .await
-    .map_err(|_| "DNS TCP connect absolute deadline expired".to_owned())?
+    .map_err(|_| ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Connect))?
+    .map_err(|error| {
+        ProxyDnsRequestError::new(
+            ProxyDnsRequestStage::Connect,
+            ProxyDnsRequestFailure::Network,
+            error,
+        )
+    })
 }
 
 pub(super) fn dns_transport_route_name(selection: &ResidentDnsUpstreamSelection) -> &'static str {
@@ -717,6 +710,58 @@ mod tests {
     use super::*;
     use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     use std::time::Duration;
+
+    fn direct_tcp_test_upstream(target: SocketAddr) -> ResidentDnsUpstream {
+        ResidentDnsUpstream {
+            index: 0,
+            tag: "direct-connect-classification".to_owned(),
+            target: ResidentDnsUpstreamTarget::new(
+                target.to_string(),
+                target.ip().to_string(),
+                target.port(),
+                Some(target),
+                target,
+                0,
+                Duration::from_secs(60),
+            ),
+            scheme: ResidentDnsUpstreamScheme::Tcp,
+            path: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_tcp_refusal_is_a_typed_target_connect_failure() {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let target = listener.local_addr().unwrap();
+        drop(listener);
+        let error = open_dns_tcp_stream_with_context_async(
+            &direct_tcp_test_upstream(target),
+            target,
+            0,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.stage(), ProxyDnsRequestStage::Connect);
+        assert_eq!(error.failure(), ProxyDnsRequestFailure::Network);
+    }
+
+    #[tokio::test]
+    async fn direct_tcp_connect_deadline_is_typed_before_socket_work() {
+        let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DNS_DEFAULT_PORT);
+        let error = open_dns_tcp_stream_with_context_async(
+            &direct_tcp_test_upstream(target),
+            target,
+            0,
+            ProxyDnsRequestContext::from_timeout(Duration::ZERO),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.stage(), ProxyDnsRequestStage::Connect);
+        assert_eq!(error.failure(), ProxyDnsRequestFailure::Deadline);
+    }
 
     #[tokio::test]
     async fn forward_dns_udp_retries_after_timeout() {

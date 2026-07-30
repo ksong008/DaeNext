@@ -24,17 +24,15 @@ pub(super) async fn forward_dns_tls_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let (targets, failures) = select_dns_upstream_targets(
-        plan,
-        upstream,
-        resolved_upstream_targets(upstream)
-            .await
-            .map_err(ResidentDnsTransportError::message)?,
-        L4Proto::Tcp,
-    )
-    .map_err(ResidentDnsTransportError::message)?;
+    let resolved = resolved_upstream_targets(upstream)
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
+    let (targets, failures) =
+        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Tcp)
+            .map_err(ResidentDnsTransportError::message)?;
     race_dns_upstream_targets(
         upstream,
+        &resolved,
         "forward DNS TLS to",
         targets,
         failures,
@@ -62,11 +60,7 @@ async fn forward_dns_tls_to_routed_target_async(
             let forwarder = forwarders
                 .tls_forwarder(upstream, remote, *mark, &target.selection)
                 .map_err(ResidentDnsTransportError::message)?;
-            forwarder
-                .exchange(payload, context)
-                .await
-                .map_err(|err| format!("{remote}: {err}"))
-                .map_err(ResidentDnsTransportError::message)
+            forwarder.exchange(payload, context).await
         }
         ResidentDnsUpstreamSelection::Proxy { binding } => forward_dns_tls_to_proxy_async(
             upstream,
@@ -101,15 +95,17 @@ impl ResidentDnsTlsForwarder {
         &self,
         payload: &[u8],
         context: ProxyDnsRequestContext,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, ResidentDnsTransportError> {
         match self.exchange_once(payload, true, context).await {
             Ok(response) => Ok(response),
             Err(first_err) => {
                 self.exchange_once(payload, false, context)
                     .await
                     .map_err(|retry_err| {
-                        format!(
-                            "DNS TLS pooled forwarder retry failed after {first_err}: {retry_err}"
+                        ResidentDnsTransportError::combined_attempts(
+                            "DNS TLS pooled forwarder retry",
+                            first_err,
+                            retry_err,
                         )
                     })
             }
@@ -121,8 +117,10 @@ impl ResidentDnsTlsForwarder {
         payload: &[u8],
         use_idle: bool,
         context: ProxyDnsRequestContext,
-    ) -> Result<Vec<u8>, String> {
-        let _permit = acquire_dns_permit(&self.permits, "DNS TLS stream pool", context).await?;
+    ) -> Result<Vec<u8>, ResidentDnsTransportError> {
+        let _permit = acquire_dns_permit(&self.permits, "DNS TLS stream pool", context)
+            .await
+            .map_err(ResidentDnsTransportError::message)?;
         let mut stream = if use_idle {
             match self.idle.lock().await.pop() {
                 Some(stream) => stream,
@@ -133,8 +131,11 @@ impl ResidentDnsTlsForwarder {
                         self.mark,
                         context,
                     )
-                    .await?;
-                    open_dns_tls_stream_async(&self.upstream, stream, context).await?
+                    .await
+                    .map_err(ResidentDnsTransportError::proxy)?;
+                    open_dns_tls_stream_async(&self.upstream, stream, context)
+                        .await
+                        .map_err(ResidentDnsTransportError::message)?
                 }
             }
         } else {
@@ -144,20 +145,23 @@ impl ResidentDnsTlsForwarder {
                 self.mark,
                 context,
             )
-            .await?;
-            open_dns_tls_stream_async(&self.upstream, stream, context).await?
+            .await
+            .map_err(ResidentDnsTransportError::proxy)?;
+            open_dns_tls_stream_async(&self.upstream, stream, context)
+                .await
+                .map_err(ResidentDnsTransportError::message)?
         };
         let result = time::timeout_at(
             context.deadline(),
             forward_dns_framed_stream_async(&mut stream, payload),
         )
         .await
-        .map_err(|_| "DNS TLS exchange timeout".to_owned())?
+        .map_err(|_| ResidentDnsTransportError::message("DNS TLS exchange timeout"))?
         .map_err(|err| {
-            format!(
+            ResidentDnsTransportError::message(format!(
                 "forward DNS over TLS to upstream {} {}: {err}",
                 self.upstream.tag, self.upstream.target.authority
-            )
+            ))
         });
         if result.is_ok() {
             return_tls_stream_to_pool(&self.idle, stream).await;
@@ -208,17 +212,15 @@ pub(super) async fn forward_dns_https_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let (targets, failures) = select_dns_upstream_targets(
-        plan,
-        upstream,
-        resolved_upstream_targets(upstream)
-            .await
-            .map_err(ResidentDnsTransportError::message)?,
-        L4Proto::Tcp,
-    )
-    .map_err(ResidentDnsTransportError::message)?;
+    let resolved = resolved_upstream_targets(upstream)
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
+    let (targets, failures) =
+        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Tcp)
+            .map_err(ResidentDnsTransportError::message)?;
     race_dns_upstream_targets(
         upstream,
+        &resolved,
         "forward DNS HTTPS to",
         targets,
         failures,
@@ -246,11 +248,7 @@ async fn forward_dns_https_to_routed_target_async(
             let forwarder = forwarders
                 .https_forwarder(upstream, remote, *mark, &target.selection)
                 .map_err(ResidentDnsTransportError::message)?;
-            forwarder
-                .exchange(payload, context)
-                .await
-                .map_err(|err| format!("{remote}: {err}"))
-                .map_err(ResidentDnsTransportError::message)
+            forwarder.exchange(payload, context).await
         }
         ResidentDnsUpstreamSelection::Proxy { binding } => forward_dns_https_to_proxy_async(
             upstream,
@@ -285,7 +283,7 @@ impl ResidentDnsHttpsForwarder {
         &self,
         payload: &[u8],
         context: ProxyDnsRequestContext,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, ResidentDnsTransportError> {
         let mut h2_error = None;
         if self.h2_retry_ready() {
             match self.exchange_h2(payload, context).await {
@@ -298,11 +296,11 @@ impl ResidentDnsHttpsForwarder {
         self.exchange_http1(payload, context)
             .await
             .map_err(|http1_err| match h2_error {
-                Some(h2_err) => {
-                    format!(
-                        "DNS HTTPS HTTP/2 failed ({h2_err}); HTTP/1.1 fallback failed: {http1_err}"
-                    )
-                }
+                Some(h2_err) => ResidentDnsTransportError::combined_attempts(
+                    "DNS HTTPS HTTP/2 and HTTP/1.1 fallback",
+                    h2_err,
+                    http1_err,
+                ),
                 None => http1_err,
             })
     }
@@ -311,18 +309,19 @@ impl ResidentDnsHttpsForwarder {
         &self,
         payload: &[u8],
         context: ProxyDnsRequestContext,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, ResidentDnsTransportError> {
         match self.exchange_http1_once(payload, true, context).await {
             Ok(response) => Ok(response),
-            Err(first_err) => {
-                self.exchange_http1_once(payload, false, context)
-                    .await
-                    .map_err(|retry_err| {
-                        format!(
-                            "DNS HTTPS HTTP/1.1 pooled forwarder retry failed after {first_err}: {retry_err}"
-                        )
-                    })
-            }
+            Err(first_err) => self
+                .exchange_http1_once(payload, false, context)
+                .await
+                .map_err(|retry_err| {
+                    ResidentDnsTransportError::combined_attempts(
+                        "DNS HTTPS HTTP/1.1 pooled forwarder retry",
+                        first_err,
+                        retry_err,
+                    )
+                }),
         }
     }
 
@@ -331,13 +330,14 @@ impl ResidentDnsHttpsForwarder {
         payload: &[u8],
         use_idle: bool,
         context: ProxyDnsRequestContext,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, ResidentDnsTransportError> {
         let _permit = acquire_dns_permit(
             &self.http1_permits,
             "DNS HTTPS HTTP/1.1 stream pool",
             context,
         )
-        .await?;
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
         let mut stream = if use_idle {
             match self.http1_idle.lock().await.pop() {
                 Some(stream) => stream,
@@ -348,8 +348,11 @@ impl ResidentDnsHttpsForwarder {
                         self.mark,
                         context,
                     )
-                    .await?;
-                    open_dns_https_tls_stream_async(&self.upstream, stream, context).await?
+                    .await
+                    .map_err(ResidentDnsTransportError::proxy)?;
+                    open_dns_https_tls_stream_async(&self.upstream, stream, context)
+                        .await
+                        .map_err(ResidentDnsTransportError::message)?
                 }
             }
         } else {
@@ -359,15 +362,21 @@ impl ResidentDnsHttpsForwarder {
                 self.mark,
                 context,
             )
-            .await?;
-            open_dns_https_tls_stream_async(&self.upstream, stream, context).await?
+            .await
+            .map_err(ResidentDnsTransportError::proxy)?;
+            open_dns_https_tls_stream_async(&self.upstream, stream, context)
+                .await
+                .map_err(ResidentDnsTransportError::message)?
         };
         let result = time::timeout_at(
             context.deadline(),
             forward_dns_https_over_reusable_stream_async(&self.upstream, &mut stream, payload),
         )
         .await
-        .map_err(|_| "DNS HTTPS HTTP/1.1 absolute deadline expired".to_owned())?;
+        .map_err(|_| {
+            ResidentDnsTransportError::message("DNS HTTPS HTTP/1.1 absolute deadline expired")
+        })?
+        .map_err(ResidentDnsTransportError::message);
         if result.is_ok() {
             return_tls_stream_to_pool(&self.http1_idle, stream).await;
         }
@@ -378,12 +387,14 @@ impl ResidentDnsHttpsForwarder {
         &self,
         payload: &[u8],
         context: ProxyDnsRequestContext,
-    ) -> Result<Vec<u8>, String> {
-        let _permit =
-            acquire_dns_permit(&self.h2_permits, "DNS HTTPS HTTP/2 stream pool", context).await?;
+    ) -> Result<Vec<u8>, ResidentDnsTransportError> {
+        let _permit = acquire_dns_permit(&self.h2_permits, "DNS HTTPS HTTP/2 stream pool", context)
+            .await
+            .map_err(ResidentDnsTransportError::message)?;
         let mut sender = self.h2_sender(context).await?;
-        let result =
-            forward_dns_https_over_h2_async(&self.upstream, payload, &mut sender, context).await;
+        let result = forward_dns_https_over_h2_async(&self.upstream, payload, &mut sender, context)
+            .await
+            .map_err(ResidentDnsTransportError::message);
         if result.is_err() {
             self.invalidate_h2().await;
         }
@@ -393,7 +404,7 @@ impl ResidentDnsHttpsForwarder {
     async fn h2_sender(
         &self,
         context: ProxyDnsRequestContext,
-    ) -> Result<h2::client::SendRequest<Bytes>, String> {
+    ) -> Result<h2::client::SendRequest<Bytes>, ResidentDnsTransportError> {
         {
             let h2 = self.h2.lock().await;
             if let Some(forwarder) = h2.as_ref() {
@@ -401,11 +412,17 @@ impl ResidentDnsHttpsForwarder {
             }
         }
         if !self.h2_retry_ready() {
-            return Err("DNS HTTPS HTTP/2 retry cooldown is active".to_owned());
+            return Err(ResidentDnsTransportError::message(
+                "DNS HTTPS HTTP/2 retry cooldown is active",
+            ));
         }
         let _open_guard = time::timeout_at(context.deadline(), self.h2_open_lock.lock())
             .await
-            .map_err(|_| "DNS HTTPS HTTP/2 open lock absolute deadline expired".to_owned())?;
+            .map_err(|_| {
+                ResidentDnsTransportError::message(
+                    "DNS HTTPS HTTP/2 open lock absolute deadline expired",
+                )
+            })?;
         {
             let h2 = self.h2.lock().await;
             if let Some(forwarder) = h2.as_ref() {
@@ -413,7 +430,9 @@ impl ResidentDnsHttpsForwarder {
             }
         }
         if !self.h2_retry_ready() {
-            return Err("DNS HTTPS HTTP/2 retry cooldown is active".to_owned());
+            return Err(ResidentDnsTransportError::message(
+                "DNS HTTPS HTTP/2 retry cooldown is active",
+            ));
         }
         match open_dns_https_h2_forwarder_async(&self.upstream, self.target, self.mark, context)
             .await
@@ -492,17 +511,21 @@ async fn open_dns_https_h2_forwarder_async(
     target: SocketAddr,
     mark: u32,
     context: ProxyDnsRequestContext,
-) -> Result<ResidentDnsH2Forwarder, String> {
-    let stream = open_dns_tcp_stream_with_context_async(upstream, target, mark, context).await?;
-    let tls = open_dns_https_h2_tls_stream_async(upstream, stream, context).await?;
+) -> Result<ResidentDnsH2Forwarder, ResidentDnsTransportError> {
+    let stream = open_dns_tcp_stream_with_context_async(upstream, target, mark, context)
+        .await
+        .map_err(ResidentDnsTransportError::proxy)?;
+    let tls = open_dns_https_h2_tls_stream_async(upstream, stream, context)
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
     let (sender, connection) = time::timeout_at(context.deadline(), h2::client::handshake(tls))
         .await
-        .map_err(|_| "DNS HTTPS HTTP/2 handshake timeout".to_owned())?
+        .map_err(|_| ResidentDnsTransportError::message("DNS HTTPS HTTP/2 handshake timeout"))?
         .map_err(|err| {
-            format!(
+            ResidentDnsTransportError::message(format!(
                 "create DNS HTTPS HTTP/2 client for upstream {} {}: {err}",
                 upstream.tag, upstream.target.authority
-            )
+            ))
         })?;
     let driver_task = tokio::spawn(async move {
         let _ = connection.await;
