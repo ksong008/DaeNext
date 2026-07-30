@@ -25,17 +25,15 @@ pub(super) async fn forward_dns_h3_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let (targets, failures) = select_dns_upstream_targets(
-        plan,
-        upstream,
-        resolved_upstream_targets(upstream)
-            .await
-            .map_err(ResidentDnsTransportError::message)?,
-        L4Proto::Udp,
-    )
-    .map_err(ResidentDnsTransportError::message)?;
+    let resolved = resolved_upstream_targets(upstream)
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
+    let (targets, failures) =
+        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Udp)
+            .map_err(ResidentDnsTransportError::message)?;
     race_dns_upstream_targets(
         upstream,
+        &resolved,
         "forward DNS H3 to",
         targets,
         failures,

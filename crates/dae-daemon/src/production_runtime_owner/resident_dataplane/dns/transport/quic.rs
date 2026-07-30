@@ -127,7 +127,8 @@ async fn open_cached_dns_quic_connection(
                 resolved_upstream_targets(&upstream),
             )
             .await
-            .map_err(|error| error.to_string())?,
+            .map_err(|error| error.to_string())?
+            .to_vec(),
     };
     for remote in remotes {
         let open_context = configured_dns_quic_endpoint_context(
@@ -273,17 +274,15 @@ pub(super) async fn forward_dns_quic_async(
             .map_err(ResidentDnsTransportError::message);
     }
 
-    let (targets, failures) = select_dns_upstream_targets(
-        plan,
-        upstream,
-        resolved_upstream_targets(upstream)
-            .await
-            .map_err(ResidentDnsTransportError::message)?,
-        L4Proto::Udp,
-    )
-    .map_err(ResidentDnsTransportError::message)?;
+    let resolved = resolved_upstream_targets(upstream)
+        .await
+        .map_err(ResidentDnsTransportError::message)?;
+    let (targets, failures) =
+        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Udp)
+            .map_err(ResidentDnsTransportError::message)?;
     race_dns_upstream_targets(
         upstream,
+        &resolved,
         "forward DNS QUIC to",
         targets,
         failures,

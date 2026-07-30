@@ -229,6 +229,9 @@ pub(super) fn build_resident_dataplane_generation(
         owner.juicity_owner_registry(),
         owner.anytls_owner_registry(),
     )?;
+    if let Some(task) = dns.take_target_refresh_owner_task(Arc::clone(&generation_stop))? {
+        owner.spawn_generation_async_task("dns-target-refresh-owner", "dns-target-refresh", task);
+    }
     let generation = Arc::new(ResidentDataplaneGeneration {
         id: generation_id,
         reload_generation,

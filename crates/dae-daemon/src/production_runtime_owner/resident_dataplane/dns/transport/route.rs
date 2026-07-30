@@ -4,7 +4,7 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 
 pub(super) async fn resolved_upstream_targets(
     upstream: &ResidentDnsUpstream,
-) -> Result<Vec<SocketAddr>, String> {
+) -> Result<ResidentDnsResolvedTargetSnapshot, String> {
     upstream.target.resolve_addrs().await
 }
 
@@ -203,6 +203,7 @@ pub(super) fn dns_upstream_targets_failed(
 
 pub(super) async fn race_dns_upstream_targets<F, Fut>(
     upstream: &ResidentDnsUpstream,
+    resolved: &ResidentDnsResolvedTargetSnapshot,
     operation: &str,
     targets: Vec<ResidentDnsUpstreamRoutedTarget>,
     mut failures: Vec<String>,
@@ -215,6 +216,8 @@ where
 {
     let mut remaining = targets.into_iter();
     let mut attempts = FuturesUnordered::new();
+    let mut attempted = 0_usize;
+    let mut every_attempt_invalidates_stale = true;
     for _ in 0..width.max(1) {
         let Some(target) = remaining.next() else {
             break;
@@ -228,12 +231,17 @@ where
                 if !error.allows_next_candidate() {
                     return Err(error);
                 }
+                attempted += 1;
+                every_attempt_invalidates_stale &= error.invalidates_stale_target();
                 failures.push(error.to_string());
             }
         }
         if let Some(target) = remaining.next() {
             attempts.push(attempt(target));
         }
+    }
+    if attempted > 0 && every_attempt_invalidates_stale && resolved.is_stale() {
+        let _ = upstream.target.refresh_after_stale_failure(resolved).await;
     }
     Err(ResidentDnsTransportError::message(
         dns_upstream_targets_failed(upstream, operation, failures),
@@ -415,10 +423,12 @@ mod tests {
             },
         ];
         let upstream = test_upstream();
+        let resolved = ResidentDnsResolvedTargetSnapshot::literal(blackhole);
         let response = time::timeout(
             Duration::from_millis(100),
             race_dns_upstream_targets(
                 &upstream,
+                &resolved,
                 "race DNS fixture",
                 targets,
                 Vec::new(),

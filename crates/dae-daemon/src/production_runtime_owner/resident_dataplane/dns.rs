@@ -60,7 +60,7 @@ use super::{
     AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
     RESIDENT_IDLE_SLEEP, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT,
     ResidentDataplaneMetrics, ResidentDnsResourceProfile, ResidentDnsUdpRuntimeConfig,
-    ResidentTransportOwnerRegistries, TuicOwnerRegistryHandle,
+    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
     apply_resident_udp_socket_buffer_tuning,
 };
 use super::{ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl};
@@ -134,8 +134,9 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstr
     ResidentDnsForwarderTransport, ResidentDnsH2Forwarder, ResidentDnsH2Recovery,
     ResidentDnsH3Forwarder, ResidentDnsHealthForwarderClose, ResidentDnsHealthForwarderLease,
     ResidentDnsHttpsForwarder, ResidentDnsProxyH3Forwarder, ResidentDnsProxyQuicForwarder,
-    ResidentDnsQuicForwarder, ResidentDnsRequestAction, ResidentDnsResponseAction,
-    ResidentDnsRetiredForwarder, ResidentDnsTcpConnectionKind, ResidentDnsTcpForwarder,
+    ResidentDnsQuicForwarder, ResidentDnsRequestAction, ResidentDnsResolvedTargetSnapshot,
+    ResidentDnsResponseAction, ResidentDnsRetiredForwarder, ResidentDnsTargetRefreshOwner,
+    ResidentDnsTargetRefreshOwnerTask, ResidentDnsTcpConnectionKind, ResidentDnsTcpForwarder,
     ResidentDnsTcpMultiplexConnection, ResidentDnsTlsForwarder, ResidentDnsUdpForwarder,
     ResidentDnsUdpForwarderShard, ResidentDnsUpstream, ResidentDnsUpstreamScheme,
     ResidentDnsUpstreamTarget, ResidentDnsUpstreams,
@@ -218,6 +219,7 @@ pub(super) struct ResidentDnsPlan {
     ipversion_preference_registry: Arc<ResidentDnsIpversionPreferenceRegistry>,
     mark: u32,
     upstream_router: Option<Arc<ResidentDnsUpstreamRouter>>,
+    target_refresh_owner: Option<Arc<ResidentDnsTargetRefreshOwner>>,
 }
 
 #[derive(Clone, Debug)]
@@ -246,6 +248,7 @@ impl ResidentDnsPlan {
             ),
             mark,
             upstream_router: None,
+            target_refresh_owner: None,
         }
     }
 
@@ -283,6 +286,16 @@ impl ResidentDnsPlan {
 
     pub(super) async fn shutdown_forwarders(&self, deadline: time::Instant) -> Value {
         self.forwarders.shutdown(deadline).await
+    }
+
+    pub(super) fn take_target_refresh_owner_task(
+        &self,
+        stop: SharedResidentStopSignal,
+    ) -> Result<Option<ResidentDnsTargetRefreshOwnerTask>, String> {
+        match self.target_refresh_owner.as_ref() {
+            Some(owner) => owner.take_task(stop),
+            None => Ok(None),
+        }
     }
 
     pub(super) async fn probe_proxy_dns_udp_health(
@@ -390,6 +403,9 @@ pub(super) fn build_resident_dns_plan(
 ) -> Result<ResidentDnsPlan, String> {
     let so_mark_from_dae = effective_so_mark_from_dae(config.global.so_mark_from_dae);
     let upstreams = parse_dns_upstreams(config)?;
+    let (target_refresh_owner, target_refresh_handle) =
+        ResidentDnsTargetRefreshOwner::new(ResidentDnsResourceProfile::selected());
+    upstreams.install_target_refresh(target_refresh_handle);
     let fixed_domain_ttl = parse_fixed_domain_ttl(&config.dns.fixed_domain_ttl)?;
     let ipversion_prefer = parse_ipversion_prefer(config.dns.ipversion_prefer)?;
     let request_default_action =
@@ -413,6 +429,7 @@ pub(super) fn build_resident_dns_plan(
         ipversion_preference_registry: Arc::new(ResidentDnsIpversionPreferenceRegistry::default()),
         mark: so_mark_from_dae,
         upstream_router: None,
+        target_refresh_owner: Some(target_refresh_owner),
     })
 }
 
