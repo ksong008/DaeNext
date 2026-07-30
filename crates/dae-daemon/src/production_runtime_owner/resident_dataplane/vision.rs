@@ -1,7 +1,3 @@
-use std::sync::atomic::Ordering;
-
-use super::ResidentStopSignal;
-use super::client::AsyncVlessTlsClient;
 use super::{
     TLS_RECORD_HEADER_LEN, TLS_RECORD_MAX_PAYLOAD_LEN, VISION_COMMAND_CONTINUE,
     VISION_COMMAND_DIRECT, VISION_COMMAND_END,
