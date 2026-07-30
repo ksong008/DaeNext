@@ -5,7 +5,6 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct AnyTlsPa
     owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     logical: Option<AnyTlsLogicalStreamLease>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
-    opened: bool,
     tls_underlay: Option<&'static str>,
     response_plaintext: Vec<u8>,
     fixed_target: UdpSessionFixedTarget,
@@ -21,7 +20,6 @@ impl AnyTlsPacketStreamSession {
             owner_registry,
             logical: None,
             owner_deadline: None,
-            opened: false,
             tls_underlay: None,
             response_plaintext: Vec::new(),
             fixed_target: UdpSessionFixedTarget::default(),
@@ -40,7 +38,11 @@ impl AnyTlsPacketStreamSession {
     ) -> Result<UdpExchangeResult, String> {
         self.fixed_target
             .bind(original_dst, "AnyTLS UDP packet stream")?;
-        if self.logical.is_none() {
+        let opening_logical_stream = self.logical.is_none();
+        if opening_logical_stream {
+            let initial_payload =
+                anytls_link::packet_first_write(&original_dst.to_string(), payload)
+                    .map_err(|err| format!("build AnyTLS UDP first packet write: {err}"))?;
             let stream_target = anytls_link::udp_stream_target(&original_dst.to_string())
                 .map_err(|err| format!("build AnyTLS UDP stream target: {err}"))?;
             let owner_registry = self.owner_registry.as_ref().ok_or_else(|| {
@@ -53,26 +55,27 @@ impl AnyTlsPacketStreamSession {
                 )
             });
             let logical = owner_registry
-                .acquire(self.binding.clone(), stream_target, deadline)
+                .acquire_with_initial_payload(
+                    self.binding.clone(),
+                    stream_target,
+                    initial_payload,
+                    deadline,
+                )
                 .await?;
             self.tls_underlay = Some(logical.tls_underlay());
             self.logical = Some(logical);
         }
-        let packet = if self.opened {
-            anytls_link::packet_next_write(payload)
-        } else {
-            anytls_link::packet_first_write(&original_dst.to_string(), payload)
-                .map_err(|err| format!("build AnyTLS UDP first packet write: {err}"))?
-        };
-        let logical = self
-            .logical
-            .as_mut()
-            .ok_or_else(|| "AnyTLS logical packet stream is not initialized".to_owned())?;
-        time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, logical.write_all(&packet))
-            .await
-            .map_err(|_| "write AnyTLS UDP logical packet timeout".to_owned())?
-            .map_err(|error| format!("write AnyTLS UDP logical packet: {error}"))?;
-        self.opened = true;
+        if !opening_logical_stream {
+            let packet = anytls_link::packet_next_write(payload);
+            let logical = self
+                .logical
+                .as_mut()
+                .ok_or_else(|| "AnyTLS logical packet stream is not initialized".to_owned())?;
+            time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, logical.write_all(&packet))
+                .await
+                .map_err(|_| "write AnyTLS UDP logical packet timeout".to_owned())?
+                .map_err(|error| format!("write AnyTLS UDP logical packet: {error}"))?;
+        }
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
         }

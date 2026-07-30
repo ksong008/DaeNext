@@ -354,8 +354,30 @@ struct AnyTlsAcquireCommand {
     key: AnyTlsOwnerKey,
     binding: ResidentProxyBinding,
     target: String,
+    initial_payload: Option<AnyTlsInitialPayload>,
     deadline: AbsoluteDeadline,
     response: oneshot::Sender<Result<AnyTlsLogicalStreamLease, AnyTlsAcquireFailure>>,
+}
+
+#[derive(Clone)]
+struct AnyTlsInitialPayload(Arc<[u8]>);
+
+impl AnyTlsInitialPayload {
+    fn new(payload: Vec<u8>, resources: AnyTlsOwnerResourceProfile) -> Result<Self, String> {
+        let maximum = resources.logical_buffer_bytes().min(u16::MAX as usize);
+        if payload.len() > maximum {
+            return Err(format!(
+                "AnyTLS initial logical payload exceeds the bounded frame budget: {} > {} bytes",
+                payload.len(),
+                maximum
+            ));
+        }
+        Ok(Self(payload.into()))
+    }
+
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
 }
 
 enum AnyTlsOwnerCommand {
@@ -365,6 +387,7 @@ enum AnyTlsOwnerCommand {
 enum AnyTlsPhysicalCommand {
     Open {
         target: String,
+        initial_payload: Option<AnyTlsInitialPayload>,
         deadline: AbsoluteDeadline,
         response: oneshot::Sender<Result<AnyTlsLogicalStreamLease, AnyTlsAcquireFailure>>,
     },
@@ -408,6 +431,28 @@ impl AnyTlsOwnerRegistryHandle {
         target: String,
         deadline: AbsoluteDeadline,
     ) -> Result<AnyTlsLogicalStreamLease, String> {
+        self.acquire_inner(binding, target, None, deadline).await
+    }
+
+    pub(crate) async fn acquire_with_initial_payload(
+        &self,
+        binding: ResidentProxyBinding,
+        target: String,
+        initial_payload: Vec<u8>,
+        deadline: AbsoluteDeadline,
+    ) -> Result<AnyTlsLogicalStreamLease, String> {
+        let initial_payload = AnyTlsInitialPayload::new(initial_payload, self.resources)?;
+        self.acquire_inner(binding, target, Some(initial_payload), deadline)
+            .await
+    }
+
+    async fn acquire_inner(
+        &self,
+        binding: ResidentProxyBinding,
+        target: String,
+        initial_payload: Option<AnyTlsInitialPayload>,
+        deadline: AbsoluteDeadline,
+    ) -> Result<AnyTlsLogicalStreamLease, String> {
         let key = AnyTlsOwnerKey::for_binding(&binding);
         if key.generation != self.generation {
             return Err(format!(
@@ -431,6 +476,7 @@ impl AnyTlsOwnerRegistryHandle {
                 key,
                 binding: binding.clone(),
                 target: target.clone(),
+                initial_payload: initial_payload.clone(),
                 deadline,
                 response,
             });
@@ -1050,6 +1096,7 @@ fn admit_anytls_acquire(
         drop(index_guard);
         if let Err(error) = sender.try_send(AnyTlsPhysicalCommand::Open {
             target: command.target,
+            initial_payload: command.initial_payload,
             deadline: command.deadline,
             response: command.response,
         }) && let AnyTlsPhysicalCommand::Open { response, .. } = error.into_inner()
@@ -1240,6 +1287,7 @@ async fn run_anytls_physical(
         &mut allocator,
         &mut padding,
         initial.target,
+        initial.initial_payload,
         initial.deadline,
         false,
         instance_id,
@@ -1303,7 +1351,7 @@ async fn run_anytls_physical(
             &metrics,
         )
         .await;
-        let Some((target, deadline, response)) = next else {
+        let Some((target, initial_payload, deadline, response)) = next else {
             break;
         };
         let opened = open_anytls_logical_stream(
@@ -1311,6 +1359,7 @@ async fn run_anytls_physical(
             &mut allocator,
             &mut padding,
             target,
+            initial_payload,
             deadline,
             true,
             instance_id,
@@ -1388,6 +1437,7 @@ async fn open_anytls_logical_stream(
     allocator: &mut AnyTlsSidAllocator,
     padding: &mut AnyTlsPhysicalPadding,
     target: String,
+    initial_payload: Option<AnyTlsInitialPayload>,
     deadline: AbsoluteDeadline,
     reused: bool,
     instance_id: u64,
@@ -1432,12 +1482,35 @@ async fn open_anytls_logical_stream(
         deadline,
     )
     .await?;
-    wait_anytls_synack_until(
+    if let Some(initial_payload) = initial_payload.as_ref() {
+        write_anytls_frame_until(
+            padding,
+            client,
+            anytls_contract::CMD_PSH,
+            sid,
+            initial_payload.as_ref(),
+            "write AnyTLS initial logical payload",
+            deadline,
+        )
+        .await?;
+    }
+    let pending_response = wait_anytls_synack_until(
         client, sid, allocator, padding, resources, deadline, &metrics,
     )
     .await?;
     let charged_buffer_bytes = resources.logical_buffer_bytes().saturating_mul(2);
-    let (caller, owner) = tokio::io::duplex(resources.logical_buffer_bytes());
+    let (caller, mut owner) = tokio::io::duplex(resources.logical_buffer_bytes());
+    if !pending_response.is_empty() {
+        let remaining = deadline.remaining_at(Instant::now()).ok_or_else(|| {
+            "buffer AnyTLS response received before SYNACK deadline elapsed".to_owned()
+        })?;
+        time::timeout(remaining, owner.write_all(&pending_response))
+            .await
+            .map_err(|_| {
+                "buffer AnyTLS response received before SYNACK deadline elapsed".to_owned()
+            })?
+            .map_err(|error| format!("buffer AnyTLS response received before SYNACK: {error}"))?;
+    }
     metrics.logical_opened(charged_buffer_bytes);
     Ok((
         AnyTlsLogicalStreamLease {
@@ -1476,7 +1549,8 @@ async fn wait_anytls_synack_until(
     resources: AnyTlsOwnerResourceProfile,
     deadline: AbsoluteDeadline,
     metrics: &AnyTlsOwnerMetrics,
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
+    let mut pending_response = Vec::new();
     loop {
         let remaining = deadline
             .remaining_at(Instant::now())
@@ -1486,7 +1560,7 @@ async fn wait_anytls_synack_until(
             .map_err(|_| "wait AnyTLS SYNACK absolute deadline elapsed".to_owned())??;
         match frame.cmd {
             anytls_contract::CMD_SYNACK if frame.sid == sid && frame.data.is_empty() => {
-                return Ok(());
+                return Ok(pending_response);
             }
             anytls_contract::CMD_SYNACK if frame.sid == sid => {
                 return Err(format!(
@@ -1525,6 +1599,20 @@ async fn wait_anytls_synack_until(
                     "AnyTLS alert before SYNACK: {} bytes",
                     frame.data.len()
                 ));
+            }
+            anytls_contract::CMD_PSH if frame.sid == sid => {
+                let next_len = pending_response.len().saturating_add(frame.data.len());
+                if next_len > resources.logical_buffer_bytes() {
+                    return Err(format!(
+                        "AnyTLS response before SYNACK exceeds the logical buffer budget: {} > {} bytes",
+                        next_len,
+                        resources.logical_buffer_bytes()
+                    ));
+                }
+                pending_response.extend_from_slice(&frame.data);
+            }
+            anytls_contract::CMD_FIN if frame.sid == sid => {
+                return Err("AnyTLS logical stream closed before SYNACK".to_owned());
             }
             anytls_contract::CMD_PSH | anytls_contract::CMD_FIN => {
                 metrics.unknown_frames.fetch_add(1, Ordering::Relaxed);
@@ -1646,6 +1734,7 @@ async fn wait_anytls_idle_command(
     metrics: &AnyTlsOwnerMetrics,
 ) -> Option<(
     String,
+    Option<AnyTlsInitialPayload>,
     AbsoluteDeadline,
     oneshot::Sender<Result<AnyTlsLogicalStreamLease, AnyTlsAcquireFailure>>,
 )> {
@@ -1653,7 +1742,12 @@ async fn wait_anytls_idle_command(
     loop {
         tokio::select! {
             command = commands.recv() => match command {
-                Some(AnyTlsPhysicalCommand::Open { target, deadline, response }) => {
+                Some(AnyTlsPhysicalCommand::Open {
+                    target,
+                    initial_payload,
+                    deadline,
+                    response,
+                }) => {
                     if idle_since.elapsed() >= resources.idle_probe_threshold() {
                         metrics.cumulative_idle_probes.fetch_add(1, Ordering::Relaxed);
                         if probe_anytls_idle_session(
@@ -1673,7 +1767,7 @@ async fn wait_anytls_idle_command(
                             return None;
                         }
                     }
-                    return Some((target, deadline, response));
+                    return Some((target, initial_payload, deadline, response));
                 }
                 Some(AnyTlsPhysicalCommand::Close) | None => return None,
             },

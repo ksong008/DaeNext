@@ -27,6 +27,7 @@ struct AnyTlsServerObservation {
     heartbeats: AtomicUsize,
     logical_settings: Mutex<Vec<(u64, u32)>>,
     logical_setting_payloads: Mutex<Vec<Vec<u8>>>,
+    logical_application_payloads: Mutex<Vec<(u64, u32, Vec<u8>)>>,
     connection_senders: Mutex<HashMap<u64, mpsc::UnboundedSender<AnyTlsServerCommand>>>,
     latest_connection_id: AtomicU64,
 }
@@ -76,8 +77,22 @@ struct AnyTlsTestServer {
     task: tokio::task::JoinHandle<()>,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum AnyTlsTestSynackPolicy {
+    AfterTarget,
+    AfterFirstPayloadWithEarlyResponse,
+}
+
 impl AnyTlsTestServer {
     async fn start(respond_to_heartbeats: bool) -> Self {
+        Self::start_with_synack_policy(respond_to_heartbeats, AnyTlsTestSynackPolicy::AfterTarget)
+            .await
+    }
+
+    async fn start_with_synack_policy(
+        respond_to_heartbeats: bool,
+        synack_policy: AnyTlsTestSynackPolicy,
+    ) -> Self {
         let listener =
             tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
                 .await
@@ -109,6 +124,7 @@ impl AnyTlsTestServer {
                                 stream,
                                 observation,
                                 respond_to_heartbeats,
+                                synack_policy,
                             )
                             .await;
                         });
@@ -161,12 +177,14 @@ struct AnyTlsTestFrame {
 struct AnyTlsTestStreamState {
     target: Option<String>,
     application_writes: usize,
+    synack_sent: bool,
 }
 
 async fn run_anytls_test_connection<S>(
     mut stream: S,
     observation: Arc<AnyTlsServerObservation>,
     respond_to_heartbeats: Arc<AtomicBool>,
+    synack_policy: AnyTlsTestSynackPolicy,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -231,20 +249,31 @@ async fn run_anytls_test_connection<S>(
                             let target = Socks5Address::decode(&frame.data)
                                 .map(|(target, _)| target.authority())
                                 .unwrap_or_default();
+                            let delay_synack = synack_policy
+                                == AnyTlsTestSynackPolicy::AfterFirstPayloadWithEarlyResponse
+                                && target.starts_with(anytls_contract::UDP_MAGIC_DOMAIN);
                             state.target = Some(target);
-                            if write_anytls_test_frame(
-                                &mut stream,
-                                anytls_contract::CMD_SYNACK,
-                                frame.sid,
-                                &[],
-                            )
-                            .await
-                            .is_err()
-                            {
-                                break;
+                            if !delay_synack {
+                                if write_anytls_test_frame(
+                                    &mut stream,
+                                    anytls_contract::CMD_SYNACK,
+                                    frame.sid,
+                                    &[],
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    break;
+                                }
+                                state.synack_sent = true;
                             }
                         } else {
                             let response = anytls_test_application_response(state, &frame.data);
+                            observation
+                                .logical_application_payloads
+                                .lock()
+                                .unwrap()
+                                .push((connection_id, frame.sid, frame.data.clone()));
                             state.application_writes = state.application_writes.saturating_add(1);
                             if write_anytls_test_frame(
                                 &mut stream,
@@ -256,6 +285,20 @@ async fn run_anytls_test_connection<S>(
                             .is_err()
                             {
                                 break;
+                            }
+                            if !state.synack_sent {
+                                if write_anytls_test_frame(
+                                    &mut stream,
+                                    anytls_contract::CMD_SYNACK,
+                                    frame.sid,
+                                    &[],
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    break;
+                                }
+                                state.synack_sent = true;
                             }
                         }
                     }
@@ -590,6 +633,88 @@ fn anytls_owner_reuses_one_auth_across_caller_runtimes_and_drops_late_sid_frames
                     .unwrap_or(0)
                     >= 1
             );
+
+            stop_anytls_owner_registry(stop, owner_thread).await;
+            assert_anytls_owner_resources_released(&registry);
+            server.stop().await;
+        });
+}
+
+#[test]
+fn anytls_udp_sends_one_bounded_initial_payload_before_synack_and_preserves_early_response() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let server = AnyTlsTestServer::start_with_synack_policy(
+                true,
+                AnyTlsTestSynackPolicy::AfterFirstPayloadWithEarlyResponse,
+            )
+            .await;
+            let generation = 9_103;
+            let proxy = anytls_proxy(server.addr, generation);
+            let stop = ResidentStopSignal::shared();
+            let resources = anytls_owner_resources(
+                Duration::from_secs(5),
+                Duration::from_secs(2),
+                Duration::from_millis(100),
+            );
+            let (registry, owner_thread) = start_anytls_owner_registry_with_resources(
+                generation,
+                Arc::clone(&stop),
+                RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+                resources,
+            )
+            .unwrap();
+
+            let udp_target: SocketAddr = "192.0.2.53:5353".parse().unwrap();
+            let udp_payload = b"udp-before-synack";
+            let udp = super::udp::exercise_anytls_udp_stream_session(
+                proxy.clone(),
+                registry.clone(),
+                udp_target,
+                udp_payload,
+                anytls_owner_deadline(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(udp.payload, udp_payload);
+            assert!(!udp.reused);
+
+            let application_payloads = server
+                .observation
+                .logical_application_payloads
+                .lock()
+                .unwrap()
+                .clone();
+            assert_eq!(application_payloads.len(), 1);
+            assert_eq!(application_payloads[0].0, 1);
+            assert_eq!(application_payloads[0].1, udp.sid);
+            let decoded =
+                dae_outbound::anytls::decode_packet_first_write(&application_payloads[0].2)
+                    .unwrap();
+            assert_eq!(
+                decoded.target.as_deref(),
+                Some(udp_target.to_string().as_str())
+            );
+            assert_eq!(decoded.payload, udp_payload);
+
+            wait_until(|| registry.metrics_snapshot()["idlePhysicalSessions"] == 1).await;
+            let mut tcp = registry
+                .acquire(
+                    proxy.clone(),
+                    TEST_TARGET.to_owned(),
+                    anytls_owner_deadline(),
+                )
+                .await
+                .unwrap();
+            assert!(tcp.reused());
+            assert_eq!(tcp.physical_instance_id(), udp.physical_instance_id);
+            assert_echo(&mut tcp, b"tcp-after-udp").await;
+            tcp.shutdown().await.unwrap();
+            drop(tcp);
 
             stop_anytls_owner_registry(stop, owner_thread).await;
             assert_anytls_owner_resources_released(&registry);
