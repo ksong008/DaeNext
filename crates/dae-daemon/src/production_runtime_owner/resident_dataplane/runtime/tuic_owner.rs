@@ -720,11 +720,6 @@ impl TuicSharedTransport {
             .close(0_u32.into(), b"resident tuic owner draining");
         self.endpoint.clone()
     }
-
-    async fn close(&self) {
-        let endpoint = self.begin_close();
-        wait_quic_endpoint_idle_after_close(&endpoint).await;
-    }
 }
 
 impl Drop for TuicSharedTransport {
@@ -854,19 +849,8 @@ struct TuicBuildCompletion {
 }
 
 enum TuicTransportEvent {
-    Datagram {
-        key: TuicOwnerKey,
-        instance_id: u64,
-        packet: Result<TuicUdpPacket, ()>,
-    },
-    Closed {
-        key: TuicOwnerKey,
-        instance_id: u64,
-    },
-    ControlStopped {
-        key: TuicOwnerKey,
-        instance_id: u64,
-    },
+    Closed { key: TuicOwnerKey, instance_id: u64 },
+    ControlStopped { key: TuicOwnerKey, instance_id: u64 },
 }
 
 enum TuicRegistryTaskCompletion {
@@ -1160,6 +1144,7 @@ async fn run_tuic_owner_registry(
     let mut ownership_reconciler =
         TuicRegistryOwnershipReconciler::new(Arc::clone(&metrics), Arc::clone(&index));
     let mut tasks = JoinSet::new();
+    let mut retirements = JoinSet::new();
     let mut owners = HashMap::<TuicOwnerKey, TuicOwnedTransport>::new();
     let mut stop_listener = stop.listener();
     loop {
@@ -1182,6 +1167,8 @@ async fn run_tuic_owner_registry(
                         if let Some(mut owner) = completion.owner {
                             let connection = owner.shared.connection.clone();
                             let instance_id = owner.shared.instance_id;
+                            let udp_associations = Arc::clone(&owner.shared.udp_associations);
+                            let reader_metrics = Arc::clone(&metrics);
                             let control_receiver = owner
                                 .control_receiver
                                 .take()
@@ -1192,18 +1179,23 @@ async fn run_tuic_owner_registry(
                             let previous = owners.insert(completion.key, owner);
                             metrics.owner_opened();
                             if let Some(previous) = previous {
-                                previous.cell.begin_drain(OwnerDrainReason::Fault);
-                                metrics.owner_closed();
-                                previous.shared.close().await;
-                                previous.cell.close();
+                                enqueue_tuic_retirement(
+                                    &mut retirements,
+                                    previous,
+                                    Arc::clone(&metrics),
+                                    resources.owner_limit(),
+                                )
+                                .await;
                             }
                             let read_connection = connection.clone();
                             tasks.spawn(async move {
                                 TuicRegistryTaskCompletion::Transport(
-                                    wait_tuic_transport_event(
+                                    run_tuic_transport_reader(
                                         completion.key,
                                         instance_id,
                                         read_connection,
+                                        udp_associations,
+                                        reader_metrics,
                                     )
                                     .await,
                                 )
@@ -1227,35 +1219,18 @@ async fn run_tuic_owner_registry(
                         }
                     }
                     Some(Ok(TuicRegistryTaskCompletion::Transport(
-                        TuicTransportEvent::Datagram {
-                            key,
-                            instance_id,
-                            packet,
-                        },
-                    ))) => {
-                        if let Some(owner) = owners.get(&key)
-                            && owner.shared.instance_id == instance_id
-                        {
-                            match packet {
-                                Ok(packet) => owner.shared.udp_associations.dispatch(packet),
-                                Err(()) => {
-                                    metrics
-                                        .malformed_udp_datagrams
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
-                            let connection = owner.shared.connection.clone();
-                            tasks.spawn(async move {
-                                TuicRegistryTaskCompletion::Transport(
-                                    wait_tuic_transport_event(key, instance_id, connection).await,
-                                )
-                            });
-                        }
-                    }
-                    Some(Ok(TuicRegistryTaskCompletion::Transport(
                         TuicTransportEvent::Closed { key, instance_id },
                     ))) => {
-                        retire_tuic_owner(&mut owners, &index, &metrics, key, instance_id).await;
+                        retire_tuic_owner(
+                            &mut owners,
+                            &index,
+                            &metrics,
+                            &mut retirements,
+                            resources.owner_limit(),
+                            key,
+                            instance_id,
+                        )
+                        .await;
                     }
                     Some(Ok(TuicRegistryTaskCompletion::Transport(
                         TuicTransportEvent::ControlStopped { key, instance_id },
@@ -1267,11 +1242,23 @@ async fn run_tuic_owner_registry(
                                     && !owner.shared.udp_associations.is_closed()
                             });
                         if unexpected {
-                            retire_tuic_owner(&mut owners, &index, &metrics, key, instance_id).await;
+                            retire_tuic_owner(
+                                &mut owners,
+                                &index,
+                                &metrics,
+                                &mut retirements,
+                                resources.owner_limit(),
+                                key,
+                                instance_id,
+                            )
+                            .await;
                         }
                     }
                     Some(Err(_)) | None => {}
                 }
+            }
+            retired = retirements.join_next(), if !retirements.is_empty() => {
+                let _ = retired;
             }
         }
     }
@@ -1298,6 +1285,7 @@ async fn run_tuic_owner_registry(
     for cell in cells {
         cell.close();
     }
+    while retirements.join_next().await.is_some() {}
     let drain_guard = TuicEndpointDrainGuard::new(Arc::clone(&metrics), endpoints.len());
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     let report = wait_quic_endpoints_idle_until(endpoints, deadline).await;
@@ -1309,6 +1297,8 @@ async fn retire_tuic_owner(
     owners: &mut HashMap<TuicOwnerKey, TuicOwnedTransport>,
     index: &Arc<Mutex<TuicOwnerIndex>>,
     metrics: &Arc<TuicOwnerRegistryMetrics>,
+    retirements: &mut JoinSet<()>,
+    retirement_limit: usize,
     key: TuicOwnerKey,
     instance_id: u64,
 ) {
@@ -1331,25 +1321,45 @@ async fn retire_tuic_owner(
             index.cells.remove(&key);
         }
     }
-    owner.cell.begin_drain(OwnerDrainReason::Fault);
-    metrics.owner_closed();
-    owner.shared.close().await;
-    owner.cell.close();
+    enqueue_tuic_retirement(retirements, owner, Arc::clone(metrics), retirement_limit).await;
 }
 
-async fn wait_tuic_transport_event(
+async fn enqueue_tuic_retirement(
+    retirements: &mut JoinSet<()>,
+    owner: TuicOwnedTransport,
+    metrics: Arc<TuicOwnerRegistryMetrics>,
+    limit: usize,
+) {
+    while retirements.len() >= limit.max(1) {
+        let _ = retirements.join_next().await;
+    }
+    owner.cell.begin_drain(OwnerDrainReason::Fault);
+    retirements.spawn(async move {
+        let endpoint = owner.shared.begin_close();
+        let _ = wait_quic_endpoint_idle_after_close(&endpoint).await;
+        owner.cell.close();
+        metrics.owner_closed();
+    });
+}
+
+async fn run_tuic_transport_reader(
     key: TuicOwnerKey,
     instance_id: u64,
     connection: quinn::Connection,
+    udp_associations: Arc<TuicAssociationManager>,
+    metrics: Arc<TuicOwnerRegistryMetrics>,
 ) -> TuicTransportEvent {
-    match connection.read_datagram().await {
-        Ok(datagram) => TuicTransportEvent::Datagram {
-            key,
-            instance_id,
-            packet: decode_tuic_udp_packet(&datagram).map_err(|_| ()),
-        },
-        Err(_) => TuicTransportEvent::Closed { key, instance_id },
+    while let Ok(datagram) = connection.read_datagram().await {
+        match decode_tuic_udp_packet(&datagram) {
+            Ok(packet) => udp_associations.dispatch(packet),
+            Err(_) => {
+                metrics
+                    .malformed_udp_datagrams
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
+    TuicTransportEvent::Closed { key, instance_id }
 }
 
 async fn run_tuic_control_writer(
