@@ -10,6 +10,8 @@ pub struct AliveDialerSet {
     pub latency_state_allocated: bool,
     pub latency_offset_allocated: bool,
     alive: Vec<bool>,
+    alive_indices: Vec<usize>,
+    alive_positions: Vec<Option<usize>>,
     latencies_ms: Vec<Option<i64>>,
     latency_offsets_ms: Vec<i64>,
     min_index: Option<usize>,
@@ -38,12 +40,24 @@ impl AliveDialerSet {
         } else {
             None
         };
+        let alive_indices = if set_alive {
+            (0..dialers.len()).collect()
+        } else {
+            Vec::new()
+        };
+        let alive_positions = if set_alive {
+            (0..dialers.len()).map(Some).collect()
+        } else {
+            vec![None; dialers.len()]
+        };
         Self {
             network_type,
             policy,
             latency_state_allocated,
             latency_offset_allocated,
             alive: vec![set_alive; dialers.len()],
+            alive_indices,
+            alive_positions,
             latencies_ms: vec![None; dialers.len()],
             latency_offsets_ms,
             min_index,
@@ -56,7 +70,7 @@ impl AliveDialerSet {
         if index >= self.alive.len() {
             return;
         }
-        self.alive[index] = alive;
+        self.update_alive_index(index, alive);
 
         let raw_latency = match self.policy {
             SelectionPolicy::MinLastLatency => dialers[index]
@@ -107,22 +121,9 @@ impl AliveDialerSet {
         }
     }
 
-    pub fn get_rand(&mut self) -> Option<usize> {
-        let alive_count = self.alive_count();
-        if alive_count == 0 {
-            return None;
-        }
-        let mut selected_alive = fastrand::usize(..alive_count);
-        for (index, alive) in self.alive.iter().enumerate() {
-            if !*alive {
-                continue;
-            }
-            if selected_alive == 0 {
-                return Some(index);
-            }
-            selected_alive -= 1;
-        }
-        None
+    pub fn get_rand(&self) -> Option<usize> {
+        (!self.alive_indices.is_empty())
+            .then(|| self.alive_indices[fastrand::usize(..self.alive_indices.len())])
     }
 
     pub fn get_min_latency(&self) -> Option<(usize, i64)> {
@@ -131,7 +132,7 @@ impl AliveDialerSet {
 
     pub fn set_alive(&mut self, index: usize, alive: bool) {
         if index < self.alive.len() {
-            self.alive[index] = alive;
+            self.update_alive_index(index, alive);
             if !alive && self.min_index == Some(index) {
                 self.min_index = None;
                 self.recalc_min();
@@ -140,15 +141,11 @@ impl AliveDialerSet {
     }
 
     pub fn alive_count(&self) -> usize {
-        self.alive.iter().filter(|alive| **alive).count()
+        self.alive_indices.len()
     }
 
     pub fn alive_indexes(&self) -> Vec<usize> {
-        self.alive
-            .iter()
-            .enumerate()
-            .filter_map(|(index, alive)| (*alive).then_some(index))
-            .collect()
+        self.alive_indices.clone()
     }
 
     pub fn latency_offset(&self, index: usize) -> i64 {
@@ -163,6 +160,25 @@ impl AliveDialerSet {
             .iter()
             .filter(|offset| **offset != 0)
             .count()
+    }
+
+    fn update_alive_index(&mut self, index: usize, alive: bool) {
+        if self.alive[index] == alive {
+            return;
+        }
+        self.alive[index] = alive;
+        if alive {
+            self.alive_positions[index] = Some(self.alive_indices.len());
+            self.alive_indices.push(index);
+            return;
+        }
+        let Some(position) = self.alive_positions[index].take() else {
+            return;
+        };
+        self.alive_indices.swap_remove(position);
+        if let Some(swapped) = self.alive_indices.get(position).copied() {
+            self.alive_positions[swapped] = Some(position);
+        }
     }
 
     fn recalc_min(&mut self) {
