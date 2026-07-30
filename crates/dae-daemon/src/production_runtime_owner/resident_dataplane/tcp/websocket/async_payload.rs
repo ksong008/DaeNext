@@ -4,6 +4,7 @@ use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use super::duplex_control::{WebSocketControlPollSender, WebSocketControlSender};
 use super::framing::WebSocketBinaryFrameDecoder;
 
 #[derive(Default)]
@@ -42,6 +43,83 @@ where
 
         loop {
             match state.control.poll_flush(&mut *client, cx) {
+                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                Poll::Pending => return Poll::Pending,
+            }
+            if state.pending.drain_to_read_buf(out) || out.remaining() == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            if state.decoder.is_closed() {
+                return Poll::Ready(Ok(()));
+            }
+
+            let mut buf = [0_u8; 8192];
+            let mut read_buf = ReadBuf::new(&mut buf);
+            match Pin::new(&mut *client).poll_read(cx, &mut read_buf) {
+                Poll::Ready(Ok(())) => {
+                    let read = read_buf.filled();
+                    if read.is_empty() {
+                        return Poll::Ready(Ok(()));
+                    }
+                    let frames = state.decoder.push(read).map_err(std::io::Error::other)?;
+                    for frame in frames {
+                        state.pending.extend_from_slice(&frame);
+                    }
+                    state.control.queue_from(&mut state.decoder);
+                }
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+pub(crate) struct AsyncWebSocketPayloadChannelState {
+    decoder: WebSocketBinaryFrameDecoder,
+    pending: CursorByteBuffer,
+    control: WebSocketControlPollSender,
+}
+
+impl AsyncWebSocketPayloadChannelState {
+    pub(crate) fn new(control: WebSocketControlSender) -> Self {
+        Self {
+            decoder: WebSocketBinaryFrameDecoder::default(),
+            pending: CursorByteBuffer::default(),
+            control: WebSocketControlPollSender::new(control),
+        }
+    }
+}
+
+pub(crate) struct AsyncWebSocketPayloadChannelReader<'a, 'b, R> {
+    client: &'a mut R,
+    state: &'b mut AsyncWebSocketPayloadChannelState,
+}
+
+impl<'a, 'b, R> AsyncWebSocketPayloadChannelReader<'a, 'b, R>
+where
+    R: AsyncRead + Unpin,
+{
+    pub(crate) fn new(client: &'a mut R, state: &'b mut AsyncWebSocketPayloadChannelState) -> Self {
+        Self { client, state }
+    }
+}
+
+impl<R> AsyncRead for AsyncWebSocketPayloadChannelReader<'_, '_, R>
+where
+    R: AsyncRead + Unpin,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        out: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let client = &mut *this.client;
+        let state = &mut *this.state;
+
+        loop {
+            match state.control.poll_flush(cx) {
                 Poll::Ready(Ok(())) => {}
                 Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
                 Poll::Pending => return Poll::Pending,

@@ -113,10 +113,10 @@ impl VisionInnerTlsState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum VisionUplinkMode {
+pub(crate) enum VisionUplinkState {
     Padding,
     PlainOverlay,
-    Direct,
+    DirectPass,
 }
 
 #[cfg(test)]

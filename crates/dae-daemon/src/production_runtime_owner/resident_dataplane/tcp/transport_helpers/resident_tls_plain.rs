@@ -6,134 +6,135 @@ pub(in crate::production_runtime_owner::resident_dataplane::tcp) const TLS_PLAIN
     Duration::from_millis(1);
 
 pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     client: &mut AsyncResidentTlsClient,
     stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
-    let mut stats = DirectTcpRelayStats::default();
-    let mut inbound_closed = false;
-    let mut proxy_closed = false;
-    let mut pending_client_flush_bytes = 0_usize;
-    let mut pending_client_flush_deadline = None;
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut proxy_buf = [0_u8; 16 * 1024];
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    tokio::pin!(idle_deadline);
-
-    while !stop.load(Ordering::Relaxed) {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
-                match read {
-                    Ok(0) => {
-                        flush_pending_tls_plain(
-                            client,
-                            &mut pending_client_flush_bytes,
-                            &mut pending_client_flush_deadline,
-                        )
-                        .await?;
-                        inbound_closed = true;
-                        client.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Ok(read) => {
-                        client
-                            .write_plain_all_buffered(&inbound_buf[..read], "write client payload to proxy TLS")
-                            .await?;
-                        note_pending_tls_plain_flush(
-                            &mut pending_client_flush_bytes,
-                            &mut pending_client_flush_deadline,
-                            read,
-                        );
-                        if pending_client_flush_bytes >= TLS_PLAIN_RELAY_FLUSH_BYTES {
-                            flush_pending_tls_plain(
-                                client,
-                                &mut pending_client_flush_bytes,
-                                &mut pending_client_flush_deadline,
-                            )
-                            .await?;
+    let (progress, activity) = resident_duplex_progress();
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
+    let (client_read, client_write) = tokio::io::split(&mut *client);
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        let mut client_write = client_write;
+        let mut buffer = [0_u8; 16 * 1024];
+        let mut pending_flush_bytes = 0_usize;
+        let mut pending_flush_deadline = None;
+        loop {
+            tokio::select! {
+                read = inbound_read.read(&mut buffer) => {
+                    let read = match read {
+                        Ok(0) => {
+                            flush_tls_plain_write_half(
+                                &mut client_write,
+                                &mut pending_flush_bytes,
+                                &mut pending_flush_deadline,
+                            ).await?;
+                            let _ = client_write.shutdown().await;
+                            return Ok(());
                         }
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+                        Ok(read) => read,
+                        Err(err) if is_graceful_stream_close_error(&err) => {
+                            flush_tls_plain_write_half(
+                                &mut client_write,
+                                &mut pending_flush_bytes,
+                                &mut pending_flush_deadline,
+                            ).await?;
+                            let _ = client_write.shutdown().await;
+                            return Ok(());
+                        }
+                        Err(err) => return Err(format!("read inbound TCP for proxy TLS relay: {err}")),
+                    };
+                    client_write
+                        .write_all(&buffer[..read])
+                        .await
+                        .map_err(|err| format!("write client payload to proxy TLS: {err}"))?;
+                    note_pending_tls_plain_flush(
+                        &mut pending_flush_bytes,
+                        &mut pending_flush_deadline,
+                        read,
+                    );
+                    if pending_flush_bytes >= TLS_PLAIN_RELAY_FLUSH_BYTES {
+                        flush_tls_plain_write_half(
+                            &mut client_write,
+                            &mut pending_flush_bytes,
+                            &mut pending_flush_deadline,
+                        ).await?;
                     }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        flush_pending_tls_plain(
-                            client,
-                            &mut pending_client_flush_bytes,
-                            &mut pending_client_flush_deadline,
-                        )
-                        .await?;
-                        inbound_closed = true;
-                        client.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) => return Err(format!("read inbound TCP for proxy TLS relay: {err}")),
+                    upload_progress.record_upload(read);
+                    metrics.add_upload(read);
+                }
+                _ = time::sleep_until(tls_plain_flush_deadline(pending_flush_deadline)), if pending_flush_deadline.is_some() => {
+                    flush_tls_plain_write_half(
+                        &mut client_write,
+                        &mut pending_flush_bytes,
+                        &mut pending_flush_deadline,
+                    ).await?;
                 }
             }
-            read = client.read_plain(&mut proxy_buf), if !proxy_closed => {
-                match read {
-                    Ok(0) => {
-                        proxy_closed = true;
-                        let _ = inbound.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Ok(read) => {
-                        if let Err(err) = inbound.write_all(&proxy_buf[..read]).await {
-                            if is_graceful_stream_close_error(&err) {
-                                break;
-                            }
-                            return Err(format!("write proxy TLS payload to client: {err}"));
-                        }
-                        stats.direct_to_client += read;
-                        metrics.add_download(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_tls_plain_close_error(&err) => {
-                        proxy_closed = true;
-                        let _ = inbound.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) => return Err(format!("read proxy TLS plaintext: {err}")),
+        }
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut inbound_write = inbound_write;
+        let mut client_read = client_read;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match client_read.read(&mut buffer).await {
+                Ok(0) => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
                 }
+                Ok(read) => read,
+                Err(err) if is_graceful_tls_plain_close_error(&err) => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Err(err) => return Err(format!("read proxy TLS plaintext: {err}")),
+            };
+            if let Err(err) = inbound_write.write_all(&buffer[..read]).await {
+                if is_graceful_stream_close_error(&err) {
+                    return Ok(());
+                }
+                return Err(format!("write proxy TLS payload to client: {err}"));
             }
-            _ = time::sleep_until(tls_plain_flush_deadline(pending_client_flush_deadline)), if pending_client_flush_deadline.is_some() => {
-                flush_pending_tls_plain(
-                    client,
-                    &mut pending_client_flush_bytes,
-                    &mut pending_client_flush_deadline,
-                )
-                .await?;
-                reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-            }
-            _ = &mut idle_deadline => {
-                return Err("resident proxy TLS relay idle timeout".to_owned());
-            }
+            download_progress.record_download(read);
+            metrics.add_download(read);
         }
-
-        if proxy_closed {
-            break;
-        }
-    }
-    Ok(stats)
+    };
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        "resident proxy TLS relay idle timeout",
+        None,
+    )
+    .await
 }
 
-pub(in crate::production_runtime_owner::resident_dataplane::tcp) async fn flush_pending_tls_plain(
-    client: &mut AsyncResidentTlsClient,
-    pending_client_flush_bytes: &mut usize,
-    pending_client_flush_deadline: &mut Option<Instant>,
-) -> Result<(), String> {
-    if *pending_client_flush_bytes == 0 {
-        *pending_client_flush_deadline = None;
+pub(in crate::production_runtime_owner::resident_dataplane::tcp) async fn flush_tls_plain_write_half<
+    W,
+>(
+    writer: &mut W,
+    pending_bytes: &mut usize,
+    deadline: &mut Option<Instant>,
+) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    if *pending_bytes == 0 {
+        *deadline = None;
         return Ok(());
     }
-    client
-        .flush_plain("write client payload to proxy TLS")
-        .await?;
-    *pending_client_flush_bytes = 0;
-    *pending_client_flush_deadline = None;
+    writer
+        .flush()
+        .await
+        .map_err(|err| format!("flush write client payload to proxy TLS: {err}"))?;
+    *pending_bytes = 0;
+    *deadline = None;
     Ok(())
 }
 

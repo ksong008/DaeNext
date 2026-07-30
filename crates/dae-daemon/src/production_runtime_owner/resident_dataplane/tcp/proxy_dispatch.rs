@@ -11,6 +11,8 @@ mod quic_handlers;
 pub(super) use self::quic_handlers::*;
 mod quic_connections;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::quic_connections::*;
+mod quic_candidate_race;
+pub(crate) use self::quic_candidate_race::*;
 mod quic_endpoint;
 pub(crate) use self::quic_endpoint::*;
 mod quic_helpers;

@@ -174,7 +174,7 @@ mod transport_identity;
 #[cfg(test)]
 pub(crate) use self::h2_carrier_owner::start_h2_carrier_generation_owner;
 pub(crate) use self::h2_carrier_owner::{
-    H2CarrierGenerationOwnerHandle, H2CarrierLease, acquire_h2_carrier,
+    H2CarrierGenerationOwnerHandle, H2CarrierLease, H2CarrierResponseFuture, acquire_h2_carrier,
     start_h2_carrier_generation_owner_on,
 };
 #[cfg(test)]

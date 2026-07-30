@@ -606,6 +606,45 @@ async fn async_websocket_payload_reader_writes_pong_and_delivers_binary_data() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_control_channel_backpressures_reader_at_capacity() {
+    let (mut client, mut server) = tokio::io::duplex(1024);
+    server
+        .write_all(&[
+            0x89, 0x03, b'o', b'n', b'e', 0x89, 0x03, b't', b'w', b'o', 0x82, 0x04, b'd', b'a',
+            b't', b'a',
+        ])
+        .await
+        .unwrap();
+    let (control_tx, mut control_rx) = tokio::sync::mpsc::channel(1);
+    let mut state = AsyncWebSocketPayloadChannelState::new(control_tx);
+    let mut reader = AsyncWebSocketPayloadChannelReader::new(&mut client, &mut state);
+    let mut payload = [0_u8; 4];
+
+    assert!(
+        time::timeout(Duration::from_millis(20), reader.read_exact(&mut payload))
+            .await
+            .is_err(),
+        "reader consumed data while the bounded control channel was full"
+    );
+    let first = control_rx.recv().await.expect("first queued pong");
+    assert_eq!(
+        decode_client_websocket_control_frame(&first),
+        (10, b"one".to_vec())
+    );
+
+    time::timeout(Duration::from_secs(1), reader.read_exact(&mut payload))
+        .await
+        .expect("reader did not resume after control capacity became available")
+        .unwrap();
+    assert_eq!(&payload, b"data");
+    let second = control_rx.recv().await.expect("second queued pong");
+    assert_eq!(
+        decode_client_websocket_control_frame(&second),
+        (10, b"two".to_vec())
+    );
+}
+
 fn decode_client_websocket_control_frame(frame: &[u8]) -> (u8, Vec<u8>) {
     assert!(frame.len() >= 6);
     assert_ne!(frame[0] & 0x80, 0);

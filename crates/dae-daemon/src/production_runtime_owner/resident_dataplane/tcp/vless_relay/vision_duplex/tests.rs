@@ -1,0 +1,434 @@
+use std::collections::VecDeque;
+use std::io;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
+
+use crate::production_runtime_owner::resident_dataplane::vision::vision_padding_block;
+use crate::production_runtime_owner::resident_dataplane::{
+    VISION_COMMAND_DIRECT, VISION_COMMAND_END,
+};
+
+use super::*;
+
+#[derive(Default)]
+struct ScriptedInbound {
+    reads: VecDeque<Vec<u8>>,
+    read_closed: bool,
+    block_writes: bool,
+    write_chunk_limit: Option<usize>,
+    writes: Vec<u8>,
+}
+
+impl AsyncRead for ScriptedInbound {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let Some(mut payload) = self.reads.pop_front() else {
+            return if self.read_closed {
+                Poll::Ready(Ok(()))
+            } else {
+                Poll::Pending
+            };
+        };
+        let read = payload.len().min(buf.remaining());
+        buf.put_slice(&payload[..read]);
+        if read < payload.len() {
+            payload.drain(..read);
+            self.reads.push_front(payload);
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for ScriptedInbound {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        payload: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.block_writes {
+            return Poll::Pending;
+        }
+        let written = self
+            .write_chunk_limit
+            .unwrap_or(payload.len())
+            .min(payload.len());
+        self.writes.extend_from_slice(&payload[..written]);
+        Poll::Ready(Ok(written))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProxyPollEvent {
+    PlainWrite,
+    PlainFlush,
+    RawWrite,
+    RawFlush,
+}
+
+#[derive(Default)]
+struct ScriptedProxy {
+    plain_reads: VecDeque<Vec<u8>>,
+    raw_reads: VecDeque<Vec<u8>>,
+    plain_read_closed: bool,
+    raw_read_closed: bool,
+    plain_read_error: Option<io::ErrorKind>,
+    block_plain_writes: bool,
+    block_raw_writes: bool,
+    plain_writes: Vec<u8>,
+    raw_writes: Vec<u8>,
+    raw_read_polls: usize,
+    events: Vec<ProxyPollEvent>,
+}
+
+impl ScriptedProxy {
+    fn poll_scripted_read(
+        reads: &mut VecDeque<Vec<u8>>,
+        closed: bool,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let Some(mut payload) = reads.pop_front() else {
+            return if closed {
+                Poll::Ready(Ok(()))
+            } else {
+                Poll::Pending
+            };
+        };
+        let read = payload.len().min(buf.remaining());
+        buf.put_slice(&payload[..read]);
+        if read < payload.len() {
+            payload.drain(..read);
+            reads.push_front(payload);
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl VisionProxyIo for ScriptedProxy {
+    fn poll_vision_plain_read(
+        &mut self,
+        _cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if let Some(kind) = self.plain_read_error.take() {
+            return Poll::Ready(Err(io::Error::from(kind)));
+        }
+        Self::poll_scripted_read(&mut self.plain_reads, self.plain_read_closed, buf)
+    }
+
+    fn poll_vision_plain_write(
+        &mut self,
+        _cx: &mut Context<'_>,
+        payload: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.block_plain_writes {
+            return Poll::Pending;
+        }
+        self.events.push(ProxyPollEvent::PlainWrite);
+        self.plain_writes.extend_from_slice(payload);
+        Poll::Ready(Ok(payload.len()))
+    }
+
+    fn poll_vision_plain_flush(&mut self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.events.push(ProxyPollEvent::PlainFlush);
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_vision_plain_shutdown(&mut self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_vision_raw_read(
+        &mut self,
+        _cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.raw_read_polls += 1;
+        Self::poll_scripted_read(&mut self.raw_reads, self.raw_read_closed, buf)
+    }
+
+    fn poll_vision_raw_write(
+        &mut self,
+        _cx: &mut Context<'_>,
+        payload: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.block_raw_writes {
+            return Poll::Pending;
+        }
+        self.events.push(ProxyPollEvent::RawWrite);
+        self.raw_writes.extend_from_slice(payload);
+        Poll::Ready(Ok(payload.len()))
+    }
+
+    fn poll_vision_raw_flush(&mut self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.events.push(ProxyPollEvent::RawFlush);
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_vision_raw_shutdown(&mut self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+fn vision_response(user_uuid: [u8; 16], command: u8, payload: &[u8]) -> Vec<u8> {
+    let mut uuid_sent = false;
+    let mut response = vec![VLESS_RESPONSE_VERSION, 0];
+    response.extend_from_slice(&vision_padding_block(
+        payload,
+        command,
+        user_uuid,
+        &mut uuid_sent,
+        false,
+    ));
+    response
+}
+
+fn poll_driver(
+    driver: &mut VisionDuplexDriver,
+    inbound: &mut ScriptedInbound,
+    proxy: &mut ScriptedProxy,
+    metrics: &ResidentDataplaneMetrics,
+) -> Poll<Result<VisionDriverEvent, String>> {
+    let mut cx = Context::from_waker(Waker::noop());
+    driver.poll_cycle(&mut cx, inbound, proxy, metrics)
+}
+
+#[test]
+fn proxy_upload_backpressure_does_not_block_vision_download() {
+    let user_uuid = [0x31; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, b"blocked upload".to_vec()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        block_plain_writes: true,
+        plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_END, b"download")]),
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+
+    assert!(matches!(
+        poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics),
+        Poll::Ready(Ok(VisionDriverEvent::Progress))
+    ));
+    assert!(proxy.plain_writes.is_empty());
+    assert!(matches!(
+        poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics),
+        Poll::Ready(Ok(VisionDriverEvent::Progress))
+    ));
+    assert_eq!(inbound.writes, b"download");
+    assert!(proxy.plain_writes.is_empty());
+}
+
+#[test]
+fn blocked_inbound_download_does_not_block_vision_upload() {
+    let user_uuid = [0x42; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, b"first".to_vec()).unwrap();
+    let mut inbound = ScriptedInbound {
+        reads: VecDeque::from([b"second".to_vec()]),
+        block_writes: true,
+        ..ScriptedInbound::default()
+    };
+    let mut proxy = ScriptedProxy {
+        plain_reads: VecDeque::from([vision_response(
+            user_uuid,
+            VISION_COMMAND_END,
+            b"blocked download",
+        )]),
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+
+    for _ in 0..8 {
+        let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    }
+
+    assert!(inbound.writes.is_empty());
+    assert!(
+        proxy
+            .plain_writes
+            .windows(b"first".len())
+            .any(|window| window == b"first")
+    );
+    assert!(
+        proxy
+            .plain_writes
+            .windows(b"second".len())
+            .any(|window| window == b"second")
+    );
+    assert_eq!(driver.stats().client_to_proxy, b"firstsecond".len());
+    assert_eq!(driver.uplink_state(), VisionUplinkState::PlainOverlay);
+}
+
+#[test]
+fn downlink_direct_switch_does_not_force_uplink_direct() {
+    let user_uuid = [0x53; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_DIRECT, b"framed")]),
+        raw_reads: VecDeque::from([b"raw".to_vec()]),
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+
+    for _ in 0..4 {
+        let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    }
+
+    assert!(driver.downlink_direct());
+    assert_eq!(driver.uplink_state(), VisionUplinkState::Padding);
+    assert!(proxy.raw_read_polls > 0);
+    assert_eq!(inbound.writes, b"framedraw");
+}
+
+#[test]
+fn uplink_direct_flushes_overlay_command_before_raw_tail() {
+    let user_uuid = [0x64; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound {
+        reads: VecDeque::from([b"first".to_vec()]),
+        ..ScriptedInbound::default()
+    };
+    let mut proxy = ScriptedProxy::default();
+    let metrics = ResidentDataplaneMetrics::default();
+
+    for _ in 0..4 {
+        let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    }
+    driver.force_uplink_decision(VisionTlsDecision::Direct);
+    inbound
+        .reads
+        .push_back([&[23, 3, 3, 0, 1, 0xaa][..], &b"tail"[..]].concat());
+
+    for _ in 0..10 {
+        let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    }
+
+    assert_eq!(driver.uplink_state(), VisionUplinkState::DirectPass);
+    assert_eq!(proxy.raw_writes, b"tail");
+    let last_plain_flush = proxy
+        .events
+        .iter()
+        .rposition(|event| *event == ProxyPollEvent::PlainFlush)
+        .unwrap();
+    let first_raw_write = proxy
+        .events
+        .iter()
+        .position(|event| *event == ProxyPollEvent::RawWrite)
+        .unwrap();
+    assert!(last_plain_flush < first_raw_write);
+}
+
+#[test]
+fn partial_tls_record_stays_bounded_and_is_not_forwarded_early() {
+    let user_uuid = [0x75; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, b"first".to_vec()).unwrap();
+    let mut inbound = ScriptedInbound {
+        reads: VecDeque::from([vec![23, 3, 3, 0, 5, 0xaa]]),
+        ..ScriptedInbound::default()
+    };
+    let mut proxy = ScriptedProxy::default();
+    let metrics = ResidentDataplaneMetrics::default();
+
+    driver.force_client_tls_filter_active();
+    for _ in 0..6 {
+        let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    }
+
+    assert_eq!(driver.pending_uplink_input_len(), 6);
+    assert!(!proxy.raw_writes.contains(&0xaa));
+}
+
+#[test]
+fn inbound_half_close_keeps_vision_download_alive() {
+    let user_uuid = [0x86; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound {
+        read_closed: true,
+        ..ScriptedInbound::default()
+    };
+    let mut proxy = ScriptedProxy::default();
+    let metrics = ResidentDataplaneMetrics::default();
+
+    assert!(matches!(
+        poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics),
+        Poll::Ready(Ok(VisionDriverEvent::Progress))
+    ));
+    assert!(driver.inbound_closed());
+
+    proxy.plain_reads.push_back(vision_response(
+        user_uuid,
+        VISION_COMMAND_END,
+        b"after half close",
+    ));
+    for _ in 0..3 {
+        let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    }
+
+    assert_eq!(inbound.writes, b"after half close");
+    assert_eq!(driver.stats().proxy_to_client, b"after half close".len());
+}
+
+#[test]
+fn remote_reset_preserves_partial_stats_in_terminal_error() {
+    let user_uuid = [0x97; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, b"counted".to_vec()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        plain_read_error: Some(io::ErrorKind::ConnectionReset),
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+
+    let result = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+
+    assert!(matches!(result, Poll::Ready(Err(error)) if error.contains("proxy response")));
+    assert_eq!(driver.stats().client_to_proxy, b"counted".len());
+    assert_eq!(driver.stats().proxy_to_client, 0);
+}
+
+#[test]
+fn download_stats_commit_once_after_the_complete_payload_write() {
+    let user_uuid = [0xa7; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound {
+        write_chunk_limit: Some(3),
+        ..ScriptedInbound::default()
+    };
+    let mut proxy = ScriptedProxy {
+        plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_END, b"seven77")]),
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+
+    let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    assert_eq!(driver.stats().proxy_to_client, 0);
+    let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    assert_eq!(driver.stats().proxy_to_client, 0);
+    let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+
+    assert_eq!(inbound.writes, b"seven77");
+    assert_eq!(driver.stats().proxy_to_client, b"seven77".len());
+}
+
+#[test]
+fn initial_vision_payload_rejects_unbounded_retention() {
+    let error = VisionDuplexDriver::new(
+        [0xa8; 16],
+        vec![0; VISION_PENDING_UPLINK_LIMIT.saturating_add(1)],
+    )
+    .err()
+    .expect("oversized initial payload must fail");
+
+    assert!(error.contains("did not form complete TLS records"));
+}

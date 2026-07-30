@@ -1,7 +1,8 @@
+use super::super::websocket::AsyncWebSocketPayloadChannelState;
 use super::*;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     client: &mut AsyncResidentTlsClient,
     stop: SharedResidentStopSignal,
     target: &str,
@@ -42,115 +43,129 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
     )
     .await?;
 
-    let mut stats = DirectTcpRelayStats::default();
+    let (progress, activity) = resident_duplex_progress();
     if !initial_payload.is_empty() {
-        stats.client_to_direct += initial_payload.len();
+        progress.record_upload(initial_payload.len());
         metrics.add_upload(initial_payload.len());
     }
     drop((first_plain, encrypted_initial, mux_payload, initial_payload));
 
-    let mut mux_state = AsyncV2rayPluginMuxPayloadState::default();
-    let mut download_decoder = None;
-    let mut inbound_closed = false;
-    let mut proxy_closed = false;
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    tokio::pin!(idle_deadline);
-
-    loop {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
-                match inbound_read {
-                    Ok(0) => {
-                        inbound_closed = true;
-                        let end_frame = mux_end_frame(mux_id);
-                        let _ = write_websocket_binary_frame_over_resident_tls_async(
-                            client,
-                            &end_frame,
-                            "write Shadowsocks v2ray-plugin mux end frame",
-                        )
-                        .await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Ok(read) => {
-                        let encrypted = upload_encoder
-                            .encrypt_chunk(&inbound_buf[..read])
-                            .map_err(|err| format!("encrypt Shadowsocks v2ray-plugin upload chunk: {err}"))?;
-                        let mux_frame = mux_data_frame(mux_id, &encrypted)
-                            .map_err(|err| format!("build Shadowsocks v2ray-plugin upload mux frame: {err}"))?;
-                        write_websocket_binary_frame_over_resident_tls_async(
-                            client,
-                            &mux_frame,
-                            "write Shadowsocks v2ray-plugin upload frame",
-                        )
-                        .await?;
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
-                        let end_frame = mux_end_frame(mux_id);
-                        let _ = write_websocket_binary_frame_over_resident_tls_async(
-                            client,
-                            &end_frame,
-                            "write Shadowsocks v2ray-plugin mux end frame",
-                        )
-                        .await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) => {
-                        return Err(format!("read inbound TCP for Shadowsocks v2ray-plugin upload: {err}"));
-                    }
+    let (control_tx, mut control_rx) = websocket_control_channel();
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
+    let (client_read, client_write) = tokio::io::split(&mut *client);
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        let mut client_write = client_write;
+        let mut inbound_buf = [0_u8; 16 * 1024];
+        loop {
+            tokio::select! {
+                biased;
+                control = control_rx.recv() => {
+                    let Some(control) = control else {
+                        return Ok(());
+                    };
+                    write_websocket_control_response(
+                        &mut client_write,
+                        control,
+                        "Shadowsocks v2ray-plugin websocket",
+                    ).await?;
+                }
+                inbound_read = inbound_read.read(&mut inbound_buf) => {
+                    let read = match inbound_read {
+                        Ok(0) => {
+                            let end_frame = mux_end_frame(mux_id);
+                            write_websocket_binary_frame_to_async_stream(
+                                &mut client_write,
+                                &end_frame,
+                                "write Shadowsocks v2ray-plugin mux end frame",
+                            ).await?;
+                            return Ok(());
+                        }
+                        Ok(read) => read,
+                        Err(err) if is_graceful_stream_close_error(&err) => {
+                            let end_frame = mux_end_frame(mux_id);
+                            write_websocket_binary_frame_to_async_stream(
+                                &mut client_write,
+                                &end_frame,
+                                "write Shadowsocks v2ray-plugin mux end frame",
+                            ).await?;
+                            return Ok(());
+                        }
+                        Err(err) => return Err(format!(
+                            "read inbound TCP for Shadowsocks v2ray-plugin upload: {err}"
+                        )),
+                    };
+                    let encrypted = upload_encoder
+                        .encrypt_chunk(&inbound_buf[..read])
+                        .map_err(|err| format!(
+                            "encrypt Shadowsocks v2ray-plugin upload chunk: {err}"
+                        ))?;
+                    let mux_frame = mux_data_frame(mux_id, &encrypted).map_err(|err| {
+                        format!("build Shadowsocks v2ray-plugin upload mux frame: {err}")
+                    })?;
+                    write_websocket_binary_frame_to_async_stream(
+                        &mut client_write,
+                        &mux_frame,
+                        "write Shadowsocks v2ray-plugin upload frame",
+                    ).await?;
+                    upload_progress.record_upload(read);
+                    metrics.add_upload(read);
                 }
             }
-            proxy_chunk = read_shadowsocks_aead_chunk_from_v2ray_plugin_mux(
-                client,
+        }
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut client_read = client_read;
+        let mut inbound_write = inbound_write;
+        let mut mux_state = AsyncV2rayPluginMuxPayloadState::new(control_tx);
+        let mut download_decoder = None;
+        loop {
+            match read_shadowsocks_aead_chunk_from_v2ray_plugin_mux(
+                &mut client_read,
                 &mut mux_state,
                 mux_id,
                 &mut download_decoder,
                 cipher,
                 password,
                 salt_len,
-            ), if !proxy_closed => {
-                match proxy_chunk {
-                    Ok(plain) => {
-                        if !plain.is_empty() {
-                            inbound
-                                .write_all(&plain)
-                                .await
-                                .map_err(|err| format!("write Shadowsocks v2ray-plugin response to inbound: {err}"))?;
-                            stats.direct_to_client += plain.len();
-                            metrics.add_download(plain.len());
-                        }
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) => {
-                        if is_graceful_shadowsocks_response_message(&err) {
-                            proxy_closed = true;
-                            let _ = inbound.shutdown().await;
-                        } else {
-                            return Err(err);
-                        }
+            )
+            .await
+            {
+                Ok(plain) => {
+                    if !plain.is_empty() {
+                        inbound_write.write_all(&plain).await.map_err(|err| {
+                            format!("write Shadowsocks v2ray-plugin response to inbound: {err}")
+                        })?;
+                        download_progress.record_download(plain.len());
+                        metrics.add_download(plain.len());
                     }
                 }
-            }
-            _ = &mut idle_deadline => {
-                return Err("resident Shadowsocks v2ray-plugin relay idle timeout".to_owned());
+                Err(err) if is_graceful_shadowsocks_response_message(&err) => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
             }
         }
-        if proxy_closed {
-            break;
-        }
-    }
-    Ok(stats)
+    };
+
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        "resident Shadowsocks v2ray-plugin relay idle timeout",
+        Some(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT),
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     client: &mut AsyncResidentTlsClient,
     stop: SharedResidentStopSignal,
     target: &str,
@@ -182,114 +197,108 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
     )
     .await?;
 
-    let mut stats = DirectTcpRelayStats::default();
+    let (progress, activity) = resident_duplex_progress();
     if !initial_payload.is_empty() {
-        stats.client_to_direct += initial_payload.len();
+        progress.record_upload(initial_payload.len());
         metrics.add_upload(initial_payload.len());
     }
     drop((request, encrypted_initial, initial_payload));
 
-    let mut ws_state = AsyncWebSocketPayloadState::default();
-    let mut download_decoder = None;
-    let mut inbound_closed = false;
-    let mut proxy_closed = false;
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    let close_drain_deadline =
-        resident_relay_idle_deadline(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT);
-    tokio::pin!(idle_deadline);
-    tokio::pin!(close_drain_deadline);
-    let mut close_drain_active = false;
-
-    loop {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
-                match inbound_read {
-                    Ok(0) => {
-                        inbound_closed = true;
-                        client.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        reset_resident_relay_idle_deadline(
-                            close_drain_deadline.as_mut(),
-                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                        );
-                        close_drain_active = true;
-                    }
-                    Ok(read) => {
-                        let encrypted = upload_encoder
-                            .encrypt_chunk(&inbound_buf[..read])
-                            .map_err(|err| format!("encrypt Trojan inner Shadowsocks upload chunk: {err}"))?;
-                        write_websocket_binary_frame_over_resident_tls_async(
-                            client,
-                            &encrypted,
-                            "write Trojan inner Shadowsocks upload frame",
-                        )
-                        .await?;
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
-                        client.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        reset_resident_relay_idle_deadline(
-                            close_drain_deadline.as_mut(),
-                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                        );
-                        close_drain_active = true;
-                    }
-                    Err(err) => {
-                        return Err(format!("read inbound TCP for Trojan inner Shadowsocks upload: {err}"));
-                    }
+    let (control_tx, mut control_rx) = websocket_control_channel();
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
+    let (client_read, client_write) = tokio::io::split(&mut *client);
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        let mut client_write = client_write;
+        let mut inbound_buf = [0_u8; 16 * 1024];
+        loop {
+            tokio::select! {
+                biased;
+                control = control_rx.recv() => {
+                    let Some(control) = control else {
+                        return Ok(());
+                    };
+                    write_websocket_control_response(
+                        &mut client_write,
+                        control,
+                        "Trojan inner Shadowsocks websocket",
+                    ).await?;
+                }
+                inbound_read = inbound_read.read(&mut inbound_buf) => {
+                    let read = match inbound_read {
+                        Ok(0) => {
+                            let _ = client_write.shutdown().await;
+                            return Ok(());
+                        }
+                        Ok(read) => read,
+                        Err(err) if is_graceful_stream_close_error(&err) => {
+                            let _ = client_write.shutdown().await;
+                            return Ok(());
+                        }
+                        Err(err) => return Err(format!(
+                            "read inbound TCP for Trojan inner Shadowsocks upload: {err}"
+                        )),
+                    };
+                    let encrypted = upload_encoder
+                        .encrypt_chunk(&inbound_buf[..read])
+                        .map_err(|err| format!(
+                            "encrypt Trojan inner Shadowsocks upload chunk: {err}"
+                        ))?;
+                    write_websocket_binary_frame_to_async_stream(
+                        &mut client_write,
+                        &encrypted,
+                        "write Trojan inner Shadowsocks upload frame",
+                    ).await?;
+                    upload_progress.record_upload(read);
+                    metrics.add_upload(read);
                 }
             }
-            proxy_chunk = read_shadowsocks_aead_chunk_from_websocket_tls(
-                client,
+        }
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut client_read = client_read;
+        let mut inbound_write = inbound_write;
+        let mut ws_state = AsyncWebSocketPayloadChannelState::new(control_tx);
+        let mut download_decoder = None;
+        loop {
+            match read_shadowsocks_aead_chunk_from_websocket_tls(
+                &mut client_read,
                 &mut ws_state,
                 &mut download_decoder,
                 inner_cipher,
                 inner_password,
                 spec.salt_len,
-            ), if !proxy_closed => {
-                match proxy_chunk {
-                    Ok(plain) => {
-                        if !plain.is_empty() {
-                            inbound
-                                .write_all(&plain)
-                                .await
-                                .map_err(|err| format!("write Trojan inner Shadowsocks response to inbound: {err}"))?;
-                            stats.direct_to_client += plain.len();
-                            metrics.add_download(plain.len());
-                        }
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        if close_drain_active {
-                            reset_resident_relay_idle_deadline(
-                                close_drain_deadline.as_mut(),
-                                RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        if is_graceful_shadowsocks_response_message(&err) {
-                            proxy_closed = true;
-                            let _ = inbound.shutdown().await;
-                        } else {
-                            return Err(err);
-                        }
+            )
+            .await
+            {
+                Ok(plain) => {
+                    if !plain.is_empty() {
+                        inbound_write.write_all(&plain).await.map_err(|err| {
+                            format!("write Trojan inner Shadowsocks response to inbound: {err}")
+                        })?;
+                        download_progress.record_download(plain.len());
+                        metrics.add_download(plain.len());
                     }
                 }
-            }
-            _ = &mut close_drain_deadline, if close_drain_active => break,
-            _ = &mut idle_deadline => {
-                return Err("resident Trojan inner Shadowsocks relay idle timeout".to_owned());
+                Err(err) if is_graceful_shadowsocks_response_message(&err) => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
             }
         }
-        if proxy_closed {
-            break;
-        }
-    }
-    Ok(stats)
+    };
+
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        "resident Trojan inner Shadowsocks relay idle timeout",
+        Some(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT),
+    )
+    .await
 }

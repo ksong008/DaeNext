@@ -696,11 +696,13 @@ fn h2_carrier_bounds_pending_opens_with_peer_stream_capacity() {
                 Ok(Ok(_)) => panic!("peer stream capacity admitted a second pending open"),
                 Ok(Err(error)) => panic!("peer stream capacity wait failed: {error}"),
             }
+            assert_eq!(owner.metrics_snapshot()["activePendingOpens"], 1);
             first_stream.send_data(Bytes::new(), true).unwrap();
             server.release_response();
             let second_response = second_response.await.unwrap();
             assert_eq!(second_response.status(), http::StatusCode::OK);
             let _second_body = second_response.into_body();
+            assert_eq!(owner.metrics_snapshot()["activePendingOpens"], 0);
             server.release_response();
             let request = http::Request::builder()
                 .method(http::Method::POST)

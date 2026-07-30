@@ -1,82 +1,83 @@
 use super::*;
 pub(crate) async fn relay_tcp_over_grpc_h2(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     send_stream: &mut h2::SendStream<Bytes>,
     response: &mut GrpcH2Response,
     stop: SharedResidentStopSignal,
-    mut stats: DirectTcpRelayStats,
+    stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
     strip_vless_response_header: bool,
 ) -> Result<DirectTcpRelayStats, String> {
-    let mut inbound_closed = false;
-    let mut response_closed = false;
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut response_buf = GrpcHunkReadBuffer::default();
-    let mut vless_response_stripper =
-        strip_vless_response_header.then(VlessResponseStripper::default);
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    tokio::pin!(idle_deadline);
-
-    loop {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
-                match read {
-                    Ok(0) => {
-                        inbound_closed = true;
-                        send_h2_data(send_stream, Bytes::new(), true).await?;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Ok(read) => {
-                        send_grpc_hunk(send_stream, &inbound_buf[..read], false).await?;
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
-                        send_h2_data(send_stream, Bytes::new(), true).await?;
-                    }
-                    Err(err) => return Err(format!("read inbound TCP for gRPC relay: {err}")),
-                }
-            }
-            data = response.next_data(), if !response_closed => {
-                match data {
-                    Ok(Some(bytes)) => {
-                        response_buf.extend_from_slice(&bytes);
-                        while let Some(payload) = response_buf.pop_payload()? {
-                            let payload = if let Some(stripper) = vless_response_stripper.as_mut() {
-                                stripper.consume(&payload)?
-                            } else {
-                                payload
-                            };
-                            if !payload.is_empty() {
-                                inbound
-                                    .write_all(&payload)
-                                    .await
-                                    .map_err(|err| format!("write gRPC response to inbound: {err}"))?;
-                                stats.direct_to_client += payload.len();
-                                metrics.add_download(payload.len());
-                            }
-                        }
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) => return Err(err),
-                    Ok(None) => {
-                        response_closed = true;
-                        if !response_buf.is_empty() {
-                            return Err("gRPC response stream ended with partial hunk".to_owned());
-                        }
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                }
-            }
-            _ = &mut idle_deadline => break,
-        }
-        if inbound_closed && response_closed {
-            break;
-        }
+    let (progress, activity) = resident_duplex_progress();
+    if stats.client_to_direct != 0 {
+        progress.record_upload(stats.client_to_direct);
     }
-    Ok(stats)
+    if stats.direct_to_client != 0 {
+        progress.record_download(stats.direct_to_client);
+    }
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match inbound_read.read(&mut buffer).await {
+                Ok(0) => {
+                    send_h2_data(send_stream, Bytes::new(), true).await?;
+                    return Ok(());
+                }
+                Ok(read) => read,
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    send_h2_data(send_stream, Bytes::new(), true).await?;
+                    return Ok(());
+                }
+                Err(err) => return Err(format!("read inbound TCP for gRPC relay: {err}")),
+            };
+            send_grpc_hunk(send_stream, &buffer[..read], false).await?;
+            upload_progress.record_upload(read);
+            metrics.add_upload(read);
+        }
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut inbound_write = inbound_write;
+        let mut response_buf = GrpcHunkReadBuffer::default();
+        let mut vless_response_stripper =
+            strip_vless_response_header.then(VlessResponseStripper::default);
+        loop {
+            let Some(bytes) = response.next_data().await? else {
+                if !response_buf.is_empty() {
+                    return Err("gRPC response stream ended with partial hunk".to_owned());
+                }
+                let _ = inbound_write.shutdown().await;
+                return Ok(());
+            };
+            response_buf.extend_from_slice(&bytes);
+            while let Some(payload) = response_buf.pop_payload()? {
+                let payload = if let Some(stripper) = vless_response_stripper.as_mut() {
+                    stripper.consume(&payload)?
+                } else {
+                    payload
+                };
+                if !payload.is_empty() {
+                    inbound_write
+                        .write_all(&payload)
+                        .await
+                        .map_err(|err| format!("write gRPC response to inbound: {err}"))?;
+                    download_progress.record_download(payload.len());
+                    metrics.add_download(payload.len());
+                }
+            }
+        }
+    };
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        "resident gRPC relay idle timeout",
+        None,
+    )
+    .await
 }

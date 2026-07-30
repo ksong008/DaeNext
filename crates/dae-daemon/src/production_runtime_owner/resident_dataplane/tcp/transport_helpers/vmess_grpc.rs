@@ -117,24 +117,6 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     Ok(stats)
 }
 
-pub(crate) fn collect_vmess_grpc_decrypted(
-    decrypted_rx: &mut tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
-    decode_error: &mut Option<String>,
-) -> (Vec<Vec<u8>>, bool) {
-    let mut chunks = Vec::new();
-    loop {
-        match decrypted_rx.try_recv() {
-            Ok(Ok(plain)) => chunks.push(plain),
-            Ok(Err(err)) => {
-                *decode_error = Some(err);
-                return (chunks, false);
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return (chunks, false),
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return (chunks, true),
-        }
-    }
-}
-
 pub(crate) async fn write_vmess_decrypted_chunk(
     inbound: &mut (impl AsyncWrite + Unpin),
     stats: &mut DirectTcpRelayStats,

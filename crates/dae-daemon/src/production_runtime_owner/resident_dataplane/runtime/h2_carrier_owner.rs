@@ -110,12 +110,15 @@ struct H2CarrierMetrics {
     active_logical: AtomicUsize,
     high_water_logical: AtomicUsize,
     active_builds: AtomicUsize,
+    active_pending_opens: AtomicUsize,
+    high_water_pending_opens: AtomicUsize,
     cumulative_builds: AtomicU64,
     cumulative_build_failures: AtomicU64,
     cumulative_reuses: AtomicU64,
     cumulative_invalidations: AtomicU64,
     owner_limit_rejections: AtomicU64,
     physical_limit_rejections: AtomicU64,
+    pending_open_limit_rejections: AtomicU64,
     shutdown_timed_out: AtomicBool,
 }
 
@@ -160,7 +163,9 @@ struct H2CarrierManagerState {
     last_failure: Option<String>,
     instance_id: u64,
     instance_acquisitions: u64,
-    sender: Option<Arc<tokio::sync::Mutex<h2::client::SendRequest<Bytes>>>>,
+    sender: Option<h2::client::SendRequest<Bytes>>,
+    pending_open_admission: Option<Arc<tokio::sync::Semaphore>>,
+    request_gate: Option<Arc<tokio::sync::Semaphore>>,
     tls_underlay: &'static str,
 }
 
@@ -173,6 +178,8 @@ impl Default for H2CarrierManagerState {
             instance_id: 0,
             instance_acquisitions: 0,
             sender: None,
+            pending_open_admission: None,
+            request_gate: None,
             tls_underlay: "standard-tls",
         }
     }
@@ -259,12 +266,15 @@ impl H2CarrierGenerationOwnerHandle {
             "activeLogicalStreams": self.owner.metrics.active_logical.load(Ordering::Relaxed),
             "highWaterLogicalStreams": self.owner.metrics.high_water_logical.load(Ordering::Relaxed),
             "activeBuilds": self.owner.metrics.active_builds.load(Ordering::Relaxed),
+            "activePendingOpens": self.owner.metrics.active_pending_opens.load(Ordering::Relaxed),
+            "highWaterPendingOpens": self.owner.metrics.high_water_pending_opens.load(Ordering::Relaxed),
             "cumulativeBuilds": self.owner.metrics.cumulative_builds.load(Ordering::Relaxed),
             "cumulativeBuildFailures": self.owner.metrics.cumulative_build_failures.load(Ordering::Relaxed),
             "cumulativeReuses": self.owner.metrics.cumulative_reuses.load(Ordering::Relaxed),
             "cumulativeInvalidations": self.owner.metrics.cumulative_invalidations.load(Ordering::Relaxed),
             "ownerLimitRejections": self.owner.metrics.owner_limit_rejections.load(Ordering::Relaxed),
             "physicalLimitRejections": self.owner.metrics.physical_limit_rejections.load(Ordering::Relaxed),
+            "pendingOpenLimitRejections": self.owner.metrics.pending_open_limit_rejections.load(Ordering::Relaxed),
             "ownerStateBytesLowerBound": owner_state_bytes_lower_bound,
             "admissionEnforced": true,
             "shutdownTimedOut": self.owner.metrics.shutdown_timed_out.load(Ordering::Relaxed),
@@ -274,13 +284,17 @@ impl H2CarrierGenerationOwnerHandle {
                 "reusablePhysicalConnectionsPerOwner": 1,
                 "drainingConnectionsCountTowardPhysicalBudget": true,
                 "logicalConcurrencySource": "peer-http2-settings",
+                "pendingOpensPerPhysical": self.owner.resources.pending_open_limit(),
+                "pendingOpenQueueing": false,
             },
         })
     }
 }
 
 pub(crate) struct H2CarrierLease {
-    sender: Arc<tokio::sync::Mutex<h2::client::SendRequest<Bytes>>>,
+    sender: h2::client::SendRequest<Bytes>,
+    pending_open_admission: Arc<tokio::sync::Semaphore>,
+    request_gate: Arc<tokio::sync::Semaphore>,
     key: H2CarrierKey,
     instance_id: u64,
     tls_underlay: &'static str,
@@ -295,13 +309,10 @@ impl H2CarrierLease {
         end_of_stream: bool,
         deadline: AbsoluteDeadline,
         context: &str,
-    ) -> Result<(h2::client::ResponseFuture, h2::SendStream<Bytes>), String> {
-        let remaining = deadline
-            .remaining_at(Instant::now())
-            .ok_or_else(|| format!("{context} HTTP/2 stream-capacity deadline elapsed"))?;
-        let mut sender = time::timeout(remaining, self.sender.lock())
-            .await
-            .map_err(|_| format!("{context} HTTP/2 stream-capacity deadline elapsed"))?;
+    ) -> Result<(H2CarrierResponseFuture, h2::SendStream<Bytes>), String> {
+        let pending_open =
+            try_acquire_h2_pending_open(&self.pending_open_admission, &self.metrics, context)?;
+        let mut sender = self.sender.clone();
         let remaining = deadline
             .remaining_at(Instant::now())
             .ok_or_else(|| format!("{context} HTTP/2 stream-capacity deadline elapsed"))?;
@@ -315,12 +326,29 @@ impl H2CarrierLease {
                 return Err(format!("{context} HTTP/2 stream-capacity deadline elapsed"));
             }
         }
-        sender
-            .send_request(request, end_of_stream)
-            .map_err(|error| {
-                self.invalidate();
-                format!("send {context} HTTP/2 request headers: {error}")
-            })
+        let remaining = deadline
+            .remaining_at(Instant::now())
+            .ok_or_else(|| format!("{context} HTTP/2 stream-capacity deadline elapsed"))?;
+        let request_permit =
+            time::timeout(remaining, Arc::clone(&self.request_gate).acquire_owned())
+                .await
+                .map_err(|_| format!("{context} HTTP/2 stream-capacity deadline elapsed"))?
+                .map_err(|_| format!("{context} HTTP/2 request gate is closed"))?;
+        let (response, send_stream) =
+            sender
+                .send_request(request, end_of_stream)
+                .map_err(|error| {
+                    self.invalidate();
+                    format!("send {context} HTTP/2 request headers: {error}")
+                })?;
+        Ok((
+            H2CarrierResponseFuture {
+                response: Box::pin(response),
+                request_permit: Some(request_permit),
+                pending_open: Some(pending_open),
+            },
+            send_stream,
+        ))
     }
 
     pub(crate) fn tls_underlay(&self) -> &'static str {
@@ -334,7 +362,7 @@ impl H2CarrierLease {
 
     #[cfg(test)]
     pub(crate) async fn current_max_send_streams(&self) -> usize {
-        self.sender.lock().await.current_max_send_streams()
+        self.sender.current_max_send_streams()
     }
 
     pub(crate) fn invalidate(&self) {
@@ -347,6 +375,57 @@ impl H2CarrierLease {
         runtime.spawn(async move {
             invalidate_h2_carrier(&owner, key, instance_id).await;
         });
+    }
+}
+
+struct H2PendingOpenPermit {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    metrics: Arc<H2CarrierMetrics>,
+}
+
+fn try_acquire_h2_pending_open(
+    admission: &Arc<tokio::sync::Semaphore>,
+    metrics: &Arc<H2CarrierMetrics>,
+    context: &str,
+) -> Result<H2PendingOpenPermit, String> {
+    let permit = Arc::clone(admission).try_acquire_owned().map_err(|_| {
+        metrics
+            .pending_open_limit_rejections
+            .fetch_add(1, Ordering::Relaxed);
+        format!("{context} HTTP/2 pending-open capacity is full")
+    })?;
+    let current = metrics.active_pending_opens.fetch_add(1, Ordering::Relaxed) + 1;
+    H2CarrierMetrics::update_high_water(&metrics.high_water_pending_opens, current);
+    Ok(H2PendingOpenPermit {
+        _permit: permit,
+        metrics: Arc::clone(metrics),
+    })
+}
+
+pub(crate) struct H2CarrierResponseFuture {
+    response: Pin<Box<h2::client::ResponseFuture>>,
+    request_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    pending_open: Option<H2PendingOpenPermit>,
+}
+
+impl std::future::Future for H2CarrierResponseFuture {
+    type Output = Result<http::Response<h2::RecvStream>, h2::Error>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = self.response.as_mut().poll(context);
+        if result.is_ready() {
+            self.request_permit.take();
+            self.pending_open.take();
+        }
+        result
+    }
+}
+
+impl Drop for H2PendingOpenPermit {
+    fn drop(&mut self) {
+        self.metrics
+            .active_pending_opens
+            .fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -627,7 +706,11 @@ pub(crate) async fn acquire_h2_carrier(
         notified.as_mut().enable();
         {
             let mut state = manager.state.lock().await;
-            if let Some(sender) = state.sender.clone() {
+            if let (Some(sender), Some(pending_open_admission), Some(request_gate)) = (
+                state.sender.clone(),
+                state.pending_open_admission.clone(),
+                state.request_gate.clone(),
+            ) {
                 owner.metrics.logical_opened();
                 if state.instance_acquisitions != 0 {
                     owner
@@ -638,6 +721,8 @@ pub(crate) async fn acquire_h2_carrier(
                 state.instance_acquisitions = state.instance_acquisitions.saturating_add(1);
                 return Ok(H2CarrierLease {
                     sender,
+                    pending_open_admission,
+                    request_gate,
                     key,
                     instance_id: state.instance_id,
                     tls_underlay: state.tls_underlay,
@@ -749,7 +834,7 @@ async fn complete_h2_carrier_build(
     let mut state = manager.state.lock().await;
     if state.opening_build != Some(build_id) {
         drop(state);
-        if let Ok((instance_id, _, _, _)) = result {
+        if let Ok((instance_id, _, _, _, _, _)) = result {
             abort_h2_driver(&owner, instance_id);
         }
         manager.changed.notify_waiters();
@@ -757,17 +842,24 @@ async fn complete_h2_carrier_build(
     }
     state.opening_build = None;
     match result {
-        Ok((instance_id, sender, tls_underlay, driver_start))
-            if !owner.closing.load(Ordering::Acquire) =>
-        {
+        Ok((
+            instance_id,
+            sender,
+            pending_open_admission,
+            request_gate,
+            tls_underlay,
+            driver_start,
+        )) if !owner.closing.load(Ordering::Acquire) => {
             state.instance_id = instance_id;
             state.instance_acquisitions = 0;
             state.sender = Some(sender);
+            state.pending_open_admission = Some(pending_open_admission);
+            state.request_gate = Some(request_gate);
             state.tls_underlay = tls_underlay;
             state.last_failure = None;
             let _ = driver_start.send(());
         }
-        Ok((instance_id, _, _, _)) => {
+        Ok((instance_id, _, _, _, _, _)) => {
             abort_h2_driver(&owner, instance_id);
             state.failure_revision = state.failure_revision.wrapping_add(1).max(1);
             state.last_failure = Some(format!(
@@ -797,7 +889,9 @@ async fn build_h2_carrier(
 ) -> Result<
     (
         u64,
-        Arc<tokio::sync::Mutex<h2::client::SendRequest<Bytes>>>,
+        h2::client::SendRequest<Bytes>,
+        Arc<tokio::sync::Semaphore>,
+        Arc<tokio::sync::Semaphore>,
         &'static str,
         tokio::sync::oneshot::Sender<()>,
     ),
@@ -848,6 +942,10 @@ async fn build_h2_carrier(
         .await
         .map_err(|_| "HTTP/2 carrier handshake deadline elapsed".to_owned())?
         .map_err(|error| format!("HTTP/2 carrier client handshake: {error}"))?;
+    let pending_open_admission = Arc::new(tokio::sync::Semaphore::new(
+        owner.resources.pending_open_limit(),
+    ));
+    let request_gate = Arc::new(tokio::sync::Semaphore::new(1));
     let mut drivers = owner
         .drivers
         .lock()
@@ -880,6 +978,8 @@ async fn build_h2_carrier(
         let mut state = completion_manager.state.lock().await;
         if state.instance_id == instance_id {
             state.sender = None;
+            state.pending_open_admission = None;
+            state.request_gate = None;
             state.instance_acquisitions = 0;
         }
         drop(state);
@@ -889,7 +989,9 @@ async fn build_h2_carrier(
     drivers.insert(instance_id, driver.abort_handle());
     Ok((
         instance_id,
-        Arc::new(tokio::sync::Mutex::new(sender)),
+        sender,
+        pending_open_admission,
+        request_gate,
         tls_underlay,
         driver_start,
     ))
@@ -921,6 +1023,8 @@ async fn invalidate_h2_carrier(
     };
     let mut state = manager.state.lock().await;
     if state.instance_id == instance_id && state.sender.take().is_some() {
+        state.pending_open_admission = None;
+        state.request_gate = None;
         state.instance_acquisitions = 0;
         owner
             .metrics
@@ -954,6 +1058,8 @@ async fn cleanup_h2_carrier_owner(owner: &Arc<H2CarrierGenerationOwner>) {
         for manager in managers {
             let mut state = manager.state.lock().await;
             state.sender = None;
+            state.pending_open_admission = None;
+            state.request_gate = None;
             state.instance_acquisitions = 0;
             state.opening_build = None;
             drop(state);
@@ -987,6 +1093,8 @@ async fn cleanup_h2_carrier_owner(owner: &Arc<H2CarrierGenerationOwner>) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn h2_carrier_source_keeps_physical_construction_inside_the_owner() {
         let owner = include_str!("h2_carrier_owner.rs");
@@ -1001,5 +1109,34 @@ mod tests {
         assert!(production.contains("h2::client::handshake(client)"));
         assert!(!grpc_production.contains("h2::client::handshake(client)"));
         assert!(!body.contains("h2::client::handshake(client)"));
+    }
+
+    #[test]
+    fn pending_open_admission_is_bounded_and_releases_on_cancellation() {
+        let admission = Arc::new(tokio::sync::Semaphore::new(2));
+        let metrics = Arc::new(H2CarrierMetrics::default());
+        let first = try_acquire_h2_pending_open(&admission, &metrics, "first").unwrap();
+        let second = try_acquire_h2_pending_open(&admission, &metrics, "second").unwrap();
+
+        let error = match try_acquire_h2_pending_open(&admission, &metrics, "third") {
+            Ok(_) => panic!("pending-open admission exceeded its configured capacity"),
+            Err(error) => error,
+        };
+        assert!(error.contains("pending-open capacity is full"));
+        assert_eq!(metrics.active_pending_opens.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.high_water_pending_opens.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            metrics
+                .pending_open_limit_rejections
+                .load(Ordering::Relaxed),
+            1
+        );
+
+        drop(first);
+        assert_eq!(metrics.active_pending_opens.load(Ordering::Relaxed), 1);
+        let replacement = try_acquire_h2_pending_open(&admission, &metrics, "replacement").unwrap();
+        drop((second, replacement));
+        assert_eq!(metrics.active_pending_opens.load(Ordering::Relaxed), 0);
+        assert_eq!(admission.available_permits(), 2);
     }
 }

@@ -96,92 +96,92 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
 }
 
 pub(crate) async fn relay_tcp_shadowsocksr_stream_async(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     proxy: &mut TokioTcpStream,
     stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
     encoder: &mut ShadowsocksRStreamEncoder,
     decoder: &mut ShadowsocksRStreamDecoder,
 ) -> Result<DirectTcpRelayStats, String> {
-    let mut stats = DirectTcpRelayStats::default();
-    let mut inbound_closed = false;
-    let mut proxy_closed = false;
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut proxy_buf = [0_u8; 16 * 1024];
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    tokio::pin!(idle_deadline);
-
-    loop {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
-                match inbound_read {
-                    Ok(0) => {
-                        inbound_closed = true;
-                        let _ = proxy.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Ok(read) => {
-                        let encoded = encoder
-                            .encode(&inbound_buf[..read])
-                            .map_err(|err| format!("encode ShadowsocksR upload payload: {err}"))?;
-                        proxy
-                            .write_all(&encoded)
-                            .await
-                            .map_err(|err| format!("write ShadowsocksR upload payload: {err}"))?;
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
-                        let _ = proxy.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) => return Err(format!("read inbound TCP for ShadowsocksR relay: {err}")),
+    let (progress, activity) = resident_duplex_progress();
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
+    let (proxy_read, proxy_write) = proxy.split();
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        let mut proxy_write = proxy_write;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match inbound_read.read(&mut buffer).await {
+                Ok(0) => {
+                    let _ = proxy_write.shutdown().await;
+                    return Ok(());
+                }
+                Ok(read) => read,
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    let _ = proxy_write.shutdown().await;
+                    return Ok(());
+                }
+                Err(err) => {
+                    return Err(format!("read inbound TCP for ShadowsocksR relay: {err}"));
+                }
+            };
+            let encoded = encoder
+                .encode(&buffer[..read])
+                .map_err(|err| format!("encode ShadowsocksR upload payload: {err}"))?;
+            proxy_write
+                .write_all(&encoded)
+                .await
+                .map_err(|err| format!("write ShadowsocksR upload payload: {err}"))?;
+            upload_progress.record_upload(read);
+            metrics.add_upload(read);
+        }
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut inbound_write = inbound_write;
+        let mut proxy_read = proxy_read;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match proxy_read.read(&mut buffer).await {
+                Ok(0) => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Ok(read) => read,
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Err(err) => return Err(format!("read ShadowsocksR proxy TCP: {err}")),
+            };
+            let decoded = decoder
+                .decode(&buffer[..read])
+                .map_err(|err| format!("decode ShadowsocksR download payload: {err}"))?;
+            if decoded.is_empty() {
+                continue;
+            }
+            match inbound_write.write_all(&decoded).await {
+                Ok(()) => {}
+                Err(err) if is_graceful_stream_close_error(&err) => return Ok(()),
+                Err(err) => {
+                    return Err(format!(
+                        "write ShadowsocksR download payload to client: {err}"
+                    ));
                 }
             }
-            proxy_read = proxy.read(&mut proxy_buf), if !proxy_closed => {
-                match proxy_read {
-                    Ok(0) => {
-                        proxy_closed = true;
-                        let _ = inbound.shutdown().await;
-                    }
-                    Ok(read) => {
-                        let decoded = decoder
-                            .decode(&proxy_buf[..read])
-                            .map_err(|err| format!("decode ShadowsocksR download payload: {err}"))?;
-                        if !decoded.is_empty() {
-                            match inbound.write_all(&decoded).await {
-                                Ok(()) => {}
-                                Err(err) if is_graceful_stream_close_error(&err) => break,
-                                Err(err) => {
-                                    return Err(format!(
-                                        "write ShadowsocksR download payload to client: {err}"
-                                    ));
-                                }
-                            }
-                            stats.direct_to_client += decoded.len();
-                            metrics.add_download(decoded.len());
-                        }
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        proxy_closed = true;
-                        let _ = inbound.shutdown().await;
-                    }
-                    Err(err) => return Err(format!("read ShadowsocksR proxy TCP: {err}")),
-                }
-            }
-            _ = &mut idle_deadline => {
-                return Err("resident ShadowsocksR relay idle timeout".to_owned());
-            }
+            download_progress.record_download(decoded.len());
+            metrics.add_download(decoded.len());
         }
-
-        if proxy_closed {
-            break;
-        }
-    }
-    Ok(stats)
+    };
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        "resident ShadowsocksR relay idle timeout",
+        None,
+    )
+    .await
 }

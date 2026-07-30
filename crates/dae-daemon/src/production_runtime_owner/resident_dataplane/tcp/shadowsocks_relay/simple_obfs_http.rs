@@ -1,7 +1,7 @@
 use super::*;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_http_async(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     proxy: &mut TokioTcpStream,
     stop: SharedResidentStopSignal,
     target: &str,
@@ -54,7 +54,8 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_http_async(
         initial_payload,
     ));
 
-    let mut proxy_reader = AsyncPrefixTcpReader::new(response_leftover, proxy);
+    let (mut proxy_read, mut proxy_write) = proxy.split();
+    let mut proxy_reader = AsyncPrefixTcpReader::new(response_leftover, &mut proxy_read);
     let mut server_salt = vec![0_u8; salt_len];
     proxy_reader
         .read_exact(&mut server_salt)
@@ -62,94 +63,76 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_http_async(
         .map_err(|err| format!("read Shadowsocks simple-obfs server salt: {err}"))?;
     let mut decoder = AeadStreamCodec::new(cipher, password, &server_salt)
         .map_err(|err| format!("create Shadowsocks simple-obfs response decoder: {err}"))?;
-    let mut inbound_closed = false;
+    let (progress, activity) = resident_duplex_progress();
+    if stats.client_to_direct != 0 {
+        progress.record_upload(stats.client_to_direct);
+    }
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
     let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    let close_drain_deadline =
-        resident_relay_idle_deadline(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT);
-    tokio::pin!(idle_deadline);
-    tokio::pin!(close_drain_deadline);
-    let mut close_drain_active = false;
-
-    loop {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
-                match inbound_read {
-                    Ok(0) => {
-                        inbound_closed = true;
-                        let _ = proxy_reader.stream.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        reset_resident_relay_idle_deadline(
-                            close_drain_deadline.as_mut(),
-                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                        );
-                        close_drain_active = true;
-                    }
-                    Ok(read) => {
-                        let encrypted = encoder
-                            .encrypt_chunk(&inbound_buf[..read])
-                            .map_err(|err| format!("encrypt Shadowsocks simple-obfs upload chunk: {err}"))?;
-                        proxy_reader
-                            .stream
-                            .write_all(&encrypted)
-                            .await
-                            .map_err(|err| format!("write Shadowsocks simple-obfs upload chunk: {err}"))?;
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
-                        let _ = proxy_reader.stream.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        reset_resident_relay_idle_deadline(
-                            close_drain_deadline.as_mut(),
-                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                        );
-                        close_drain_active = true;
-                    }
-                    Err(err) => {
-                        return Err(format!(
-                            "read inbound TCP for Shadowsocks simple-obfs upload: {err}"
-                        ));
-                    }
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        loop {
+            let read = match inbound_read.read(&mut inbound_buf).await {
+                Ok(0) => {
+                    let _ = proxy_write.shutdown().await;
+                    return Ok(());
                 }
-            }
-            proxy_chunk = read_encrypted_chunk_from_async_stream(&mut proxy_reader, &mut decoder) => {
-                match proxy_chunk {
-                    Ok(plain) => {
-                        if !plain.is_empty() {
-                            inbound
-                                .write_all(&plain)
-                                .await
-                                .map_err(|err| format!("write Shadowsocks simple-obfs response: {err}"))?;
-                            stats.direct_to_client += plain.len();
-                            metrics.add_download(plain.len());
-                        }
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        if close_drain_active {
-                            reset_resident_relay_idle_deadline(
-                                close_drain_deadline.as_mut(),
-                                RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        let message = err.to_string();
-                        if is_graceful_shadowsocks_response_message(&message) {
-                            break;
-                        }
-                        return Err(format!("read Shadowsocks simple-obfs response: {message}"));
-                    }
+                Ok(read) => read,
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    let _ = proxy_write.shutdown().await;
+                    return Ok(());
                 }
-            }
-            _ = &mut close_drain_deadline, if close_drain_active => break,
-            _ = &mut idle_deadline => {
-                return Err("resident Shadowsocks simple-obfs relay idle timeout".to_owned());
+                Err(err) => {
+                    return Err(format!(
+                        "read inbound TCP for Shadowsocks simple-obfs upload: {err}"
+                    ));
+                }
+            };
+            let encrypted = encoder
+                .encrypt_chunk(&inbound_buf[..read])
+                .map_err(|err| format!("encrypt Shadowsocks simple-obfs upload chunk: {err}"))?;
+            proxy_write
+                .write_all(&encrypted)
+                .await
+                .map_err(|err| format!("write Shadowsocks simple-obfs upload chunk: {err}"))?;
+            upload_progress.record_upload(read);
+            metrics.add_upload(read);
+        }
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut inbound_write = inbound_write;
+        loop {
+            match read_encrypted_chunk_from_async_stream(&mut proxy_reader, &mut decoder).await {
+                Ok(plain) => {
+                    if !plain.is_empty() {
+                        inbound_write.write_all(&plain).await.map_err(|err| {
+                            format!("write Shadowsocks simple-obfs response: {err}")
+                        })?;
+                        metrics.add_download(plain.len());
+                    }
+                    download_progress.record_download(plain.len());
+                }
+                Err(err) => {
+                    let message = err.to_string();
+                    if is_graceful_shadowsocks_response_message(&message) {
+                        let _ = inbound_write.shutdown().await;
+                        return Ok(());
+                    }
+                    return Err(format!("read Shadowsocks simple-obfs response: {message}"));
+                }
             }
         }
-    }
-    Ok(stats)
+    };
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        "resident Shadowsocks simple-obfs relay idle timeout",
+        Some(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT),
+    )
+    .await
 }

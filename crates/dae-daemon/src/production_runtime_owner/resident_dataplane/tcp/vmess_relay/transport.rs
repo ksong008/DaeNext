@@ -1,203 +1,238 @@
 use super::*;
 
-pub(super) trait VmessRelayTransport {
-    fn label(&self) -> &'static str;
-
-    async fn read_payload(&mut self, buf: &mut [u8]) -> std::io::Result<usize>;
-
-    async fn write_payload(&mut self, payload: &[u8]) -> Result<(), String>;
-
-    async fn shutdown(&mut self);
-}
-
-pub(super) struct VmessRawTransport<'a, S> {
-    stream: &'a mut S,
-    label: &'static str,
-}
-
-impl<'a, S> VmessRawTransport<'a, S> {
-    pub(super) fn new(stream: &'a mut S, label: &'static str) -> Self {
-        Self { stream, label }
-    }
-}
-
-impl<S> VmessRelayTransport for VmessRawTransport<'_, S>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    fn label(&self) -> &'static str {
-        self.label
-    }
-
-    async fn read_payload(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.stream.read(buf).await
-    }
-
-    async fn write_payload(&mut self, payload: &[u8]) -> Result<(), String> {
-        self.stream
-            .write_all(payload)
-            .await
-            .map_err(|err| format!("write {} upload chunk: {err}", self.label))?;
-        self.stream
-            .flush()
-            .await
-            .map_err(|err| format!("flush {} upload chunk: {err}", self.label))
-    }
-
-    async fn shutdown(&mut self) {
-        let _ = self.stream.shutdown().await;
-    }
-}
-
-pub(super) struct VmessWebSocketTransport<'a, S> {
-    stream: &'a mut S,
-    state: AsyncWebSocketPayloadState,
-    label: &'static str,
-}
-
-impl<'a, S> VmessWebSocketTransport<'a, S> {
-    pub(super) fn new(stream: &'a mut S, label: &'static str) -> Self {
-        Self {
-            stream,
-            state: AsyncWebSocketPayloadState::default(),
-            label,
-        }
-    }
-}
-
-impl<S> VmessRelayTransport for VmessWebSocketTransport<'_, S>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    fn label(&self) -> &'static str {
-        self.label
-    }
-
-    async fn read_payload(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut reader = AsyncWebSocketPayloadReader::new(self.stream, &mut self.state);
-        reader.read(buf).await
-    }
-
-    async fn write_payload(&mut self, payload: &[u8]) -> Result<(), String> {
-        write_websocket_binary_frame_to_async_stream(
-            self.stream,
-            payload,
-            "write VMess WebSocket upload frame",
-        )
-        .await?;
-        self.stream
-            .flush()
-            .await
-            .map_err(|err| format!("flush {} upload frame: {err}", self.label))
-    }
-
-    async fn shutdown(&mut self) {
-        let _ = self.stream.shutdown().await;
-    }
-}
-
-pub(super) async fn relay_tcp_over_vmess_transport_async(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
-    mut transport: impl VmessRelayTransport,
+pub(super) async fn relay_tcp_over_vmess_stream_async(
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
+    proxy: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     stop: SharedResidentStopSignal,
     session: VMessAeadTcpClientSessionStart,
-    mut stats: DirectTcpRelayStats,
+    stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
+    label: &'static str,
+    idle_error: &'static str,
 ) -> Result<DirectTcpRelayStats, String> {
-    let label = transport.label();
+    let (progress, activity) = resident_duplex_progress();
+    if stats.client_to_direct != 0 {
+        progress.record_upload(stats.client_to_direct);
+    }
+    if stats.direct_to_client != 0 {
+        progress.record_download(stats.direct_to_client);
+    }
     let mut upload_codec = session.upload;
     let mut response = VmessAeadResponseBuffer::new(session.request);
-    let mut inbound_closed = false;
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut response_buf = [0_u8; 16 * 1024];
-    let mut stop_listener = stop.listener();
-    let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
-    let close_drain_deadline =
-        resident_relay_idle_deadline(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT);
-    tokio::pin!(idle_deadline);
-    tokio::pin!(close_drain_deadline);
-    let mut close_drain_active = false;
-
-    loop {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
-                match inbound_read {
-                    Ok(0) => {
-                        inbound_closed = true;
-                        transport.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        reset_resident_relay_idle_deadline(
-                            close_drain_deadline.as_mut(),
-                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                        );
-                        close_drain_active = true;
-                    }
-                    Ok(read) => {
-                        let encrypted = upload_codec
-                            .seal_chunk(&inbound_buf[..read])
-                            .map_err(|err| format!("encode {label} upload chunk: {err}"))?;
-                        transport.write_payload(&encrypted).await?;
-                        stats.client_to_direct += read;
-                        metrics.add_upload(read);
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                    }
-                    Err(err) if is_graceful_stream_close_error(&err) => {
-                        inbound_closed = true;
-                        transport.shutdown().await;
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        reset_resident_relay_idle_deadline(
-                            close_drain_deadline.as_mut(),
-                            RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                        );
-                        close_drain_active = true;
-                    }
-                    Err(err) => return Err(format!("read inbound TCP for {label} upload: {err}")),
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
+    let (proxy_read, proxy_write) = tokio::io::split(&mut *proxy);
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        let mut proxy_write = proxy_write;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match inbound_read.read(&mut buffer).await {
+                Ok(0) => {
+                    let _ = proxy_write.shutdown().await;
+                    return Ok(());
                 }
-            }
-            response_read = transport.read_payload(&mut response_buf) => {
-                match response_read {
-                    Ok(0) if response.response_header_received() => break,
-                    Ok(0) => return Err(format!("{label} closed before the response header")),
-                    Ok(read) => {
-                        let chunks = response.push(&response_buf[..read])?;
-                        for plain in chunks {
-                            if plain.is_empty() {
-                                continue;
-                            }
-                            inbound
-                                .write_all(&plain)
-                                .await
-                                .map_err(|err| format!("write {label} response to inbound: {err}"))?;
-                            stats.direct_to_client += plain.len();
-                            metrics.add_download(plain.len());
-                        }
-                        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
-                        if close_drain_active {
-                            reset_resident_relay_idle_deadline(
-                                close_drain_deadline.as_mut(),
-                                RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        let message = err.to_string();
-                        if response.response_header_received()
-                            && is_graceful_vmess_response_message(&message)
-                        {
-                            break;
-                        }
-                        return Err(format!("read {label} response: {message}"));
-                    }
+                Ok(read) => read,
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    let _ = proxy_write.shutdown().await;
+                    return Ok(());
                 }
-            }
-            _ = &mut close_drain_deadline, if close_drain_active => break,
-            _ = &mut idle_deadline => {
-                return Err(format!("resident {label} relay idle timeout"));
+                Err(err) => return Err(format!("read inbound TCP for {label} upload: {err}")),
+            };
+            let encrypted = upload_codec
+                .seal_chunk(&buffer[..read])
+                .map_err(|err| format!("encode {label} upload chunk: {err}"))?;
+            proxy_write
+                .write_all(&encrypted)
+                .await
+                .map_err(|err| format!("write {label} upload chunk: {err}"))?;
+            proxy_write
+                .flush()
+                .await
+                .map_err(|err| format!("flush {label} upload chunk: {err}"))?;
+            upload_progress.record_upload(read);
+            metrics.add_upload(read);
+        }
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut inbound_write = inbound_write;
+        let mut proxy_read = proxy_read;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match proxy_read.read(&mut buffer).await {
+                Ok(0) if response.response_header_received() => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Ok(0) => return Err(format!("{label} closed before the response header")),
+                Ok(read) => read,
+                Err(err) => {
+                    let message = err.to_string();
+                    if response.response_header_received()
+                        && is_graceful_vmess_response_message(&message)
+                    {
+                        let _ = inbound_write.shutdown().await;
+                        return Ok(());
+                    }
+                    return Err(format!("read {label} response: {message}"));
+                }
+            };
+            let chunks = response.push(&buffer[..read])?;
+            for plain in chunks {
+                if plain.is_empty() {
+                    continue;
+                }
+                inbound_write
+                    .write_all(&plain)
+                    .await
+                    .map_err(|err| format!("write {label} response to inbound: {err}"))?;
+                download_progress.record_download(plain.len());
+                metrics.add_download(plain.len());
             }
         }
+    };
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        idle_error,
+        Some(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT),
+    )
+    .await
+}
+
+pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
+    proxy: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
+    stop: SharedResidentStopSignal,
+    session: VMessAeadTcpClientSessionStart,
+    stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+    label: &'static str,
+    idle_error: &'static str,
+) -> Result<DirectTcpRelayStats, String> {
+    let (progress, activity) = resident_duplex_progress();
+    if stats.client_to_direct != 0 {
+        progress.record_upload(stats.client_to_direct);
     }
-    Ok(stats)
+    if stats.direct_to_client != 0 {
+        progress.record_download(stats.direct_to_client);
+    }
+    let mut upload_codec = session.upload;
+    let mut response = VmessAeadResponseBuffer::new(session.request);
+    let (control_tx, mut control_rx) = websocket_control_channel();
+    let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
+    let (proxy_read, proxy_write) = tokio::io::split(&mut *proxy);
+    let upload_progress = progress.clone();
+    let upload = async move {
+        let mut inbound_read = inbound_read;
+        let mut proxy_write = proxy_write;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            tokio::select! {
+                biased;
+                control = control_rx.recv() => {
+                    let Some(control) = control else {
+                        return Ok(());
+                    };
+                    write_websocket_control_response(&mut proxy_write, control, label).await?;
+                }
+                read = inbound_read.read(&mut buffer) => {
+                    let read = match read {
+                        Ok(0) => {
+                            let _ = proxy_write.shutdown().await;
+                            return Ok(());
+                        }
+                        Ok(read) => read,
+                        Err(err) if is_graceful_stream_close_error(&err) => {
+                            let _ = proxy_write.shutdown().await;
+                            return Ok(());
+                        }
+                        Err(err) => return Err(format!("read inbound TCP for {label} upload: {err}")),
+                    };
+                    let encrypted = upload_codec
+                        .seal_chunk(&buffer[..read])
+                        .map_err(|err| format!("encode {label} upload chunk: {err}"))?;
+                    write_websocket_binary_frame_to_async_stream(
+                        &mut proxy_write,
+                        &encrypted,
+                        "write VMess WebSocket upload frame",
+                    )
+                    .await?;
+                    proxy_write
+                        .flush()
+                        .await
+                        .map_err(|err| format!("flush {label} upload frame: {err}"))?;
+                    upload_progress.record_upload(read);
+                    metrics.add_upload(read);
+                }
+            }
+        }
+    };
+    let download_progress = progress.clone();
+    let download = async move {
+        let mut inbound_write = inbound_write;
+        let mut proxy_read = proxy_read;
+        let mut decoder = WebSocketBinaryFrameDecoder::default();
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = match proxy_read.read(&mut buffer).await {
+                Ok(0) if response.response_header_received() => {
+                    let _ = inbound_write.shutdown().await;
+                    return Ok(());
+                }
+                Ok(0) => return Err(format!("{label} closed before the response header")),
+                Ok(read) => read,
+                Err(err) => {
+                    let message = err.to_string();
+                    if response.response_header_received()
+                        && is_graceful_vmess_response_message(&message)
+                    {
+                        let _ = inbound_write.shutdown().await;
+                        return Ok(());
+                    }
+                    return Err(format!("read {label} response: {message}"));
+                }
+            };
+            let frames = decoder
+                .push(&buffer[..read])
+                .map_err(|err| format!("decode {label} response frame: {err}"))?;
+            queue_websocket_control_responses(&mut decoder, &control_tx, label).await?;
+            for frame in frames {
+                for plain in response.push(&frame)? {
+                    if plain.is_empty() {
+                        continue;
+                    }
+                    inbound_write
+                        .write_all(&plain)
+                        .await
+                        .map_err(|err| format!("write {label} response to inbound: {err}"))?;
+                    download_progress.record_download(plain.len());
+                    metrics.add_download(plain.len());
+                }
+            }
+            if decoder.is_closed() {
+                if !response.response_header_received() {
+                    return Err(format!("{label} closed before the response header"));
+                }
+                let _ = inbound_write.shutdown().await;
+                return Ok(());
+            }
+        }
+    };
+    run_resident_duplex_relay(
+        Box::pin(upload),
+        Box::pin(download),
+        stop,
+        &progress,
+        activity,
+        idle_error,
+        Some(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT),
+    )
+    .await
 }
 
 #[cfg(test)]

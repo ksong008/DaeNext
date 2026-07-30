@@ -1,7 +1,9 @@
 use super::*;
 
 pub(crate) struct GrpcH2Response {
-    response: Option<h2::client::ResponseFuture>,
+    response: Option<
+        Pin<Box<dyn Future<Output = Result<http::Response<h2::RecvStream>, h2::Error>> + Send>>,
+    >,
     recv_stream: Option<h2::RecvStream>,
     header_deadline: Pin<Box<time::Sleep>>,
     grpc_status_seen: bool,
@@ -9,9 +11,12 @@ pub(crate) struct GrpcH2Response {
 }
 
 impl GrpcH2Response {
-    fn new(response: h2::client::ResponseFuture) -> Self {
+    fn new<F>(response: F) -> Self
+    where
+        F: Future<Output = Result<http::Response<h2::RecvStream>, h2::Error>> + Send + 'static,
+    {
         Self {
-            response: Some(response),
+            response: Some(Box::pin(response)),
             recv_stream: None,
             header_deadline: Box::pin(time::sleep(RESIDENT_CONNECT_TIMEOUT)),
             grpc_status_seen: false,

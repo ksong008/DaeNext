@@ -87,7 +87,7 @@ async fn relay_vmess_http_header_connection_async<S>(
     tls_underlay: Option<&'static str>,
 ) -> Result<Value, String>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin + Send,
 {
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,

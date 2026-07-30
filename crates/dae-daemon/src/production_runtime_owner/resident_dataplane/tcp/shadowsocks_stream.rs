@@ -8,34 +8,39 @@ use dae_outbound::shared_transport::mux::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
-use super::super::client::AsyncResidentTlsClient;
 use super::websocket::{
-    AsyncWebSocketControlWriter, AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState,
-    WebSocketBinaryFrameDecoder,
+    AsyncWebSocketPayloadChannelReader, AsyncWebSocketPayloadChannelState,
+    WebSocketBinaryFrameDecoder, WebSocketControlPollSender, WebSocketControlSender,
 };
 
-pub(super) async fn read_shadowsocks_aead_chunk_from_websocket_tls(
-    client: &mut AsyncResidentTlsClient,
-    state: &mut AsyncWebSocketPayloadState,
+pub(super) async fn read_shadowsocks_aead_chunk_from_websocket_tls<R>(
+    client: &mut R,
+    state: &mut AsyncWebSocketPayloadChannelState,
     decoder: &mut Option<AeadStreamCodec>,
     cipher: &str,
     password: &str,
     salt_len: usize,
-) -> Result<Vec<u8>, String> {
-    let mut reader = AsyncWebSocketPayloadReader::new(client, state);
+) -> Result<Vec<u8>, String>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut reader = AsyncWebSocketPayloadChannelReader::new(client, state);
     read_shadowsocks_aead_chunk_from_async_reader(&mut reader, decoder, cipher, password, salt_len)
         .await
 }
 
-pub(super) async fn read_shadowsocks_aead_chunk_from_v2ray_plugin_mux(
-    client: &mut AsyncResidentTlsClient,
+pub(super) async fn read_shadowsocks_aead_chunk_from_v2ray_plugin_mux<R>(
+    client: &mut R,
     state: &mut AsyncV2rayPluginMuxPayloadState,
     mux_id: [u8; 2],
     decoder: &mut Option<AeadStreamCodec>,
     cipher: &str,
     password: &str,
     salt_len: usize,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, String>
+where
+    R: AsyncRead + Unpin,
+{
     let mut reader = AsyncV2rayPluginMuxPayloadReader::new(client, state, mux_id);
     read_shadowsocks_aead_chunk_from_async_reader(&mut reader, decoder, cipher, password, salt_len)
         .await
@@ -70,24 +75,35 @@ where
         .map_err(|err| format!("read Shadowsocks response chunk: {err}"))
 }
 
-#[derive(Default)]
 pub(super) struct AsyncV2rayPluginMuxPayloadState {
     ws_decoder: WebSocketBinaryFrameDecoder,
     mux_bytes: CursorByteBuffer,
     pending_payload: CursorByteBuffer,
-    control: AsyncWebSocketControlWriter,
+    control: WebSocketControlPollSender,
     closed: bool,
 }
 
-struct AsyncV2rayPluginMuxPayloadReader<'a, 'b> {
-    client: &'a mut AsyncResidentTlsClient,
+impl AsyncV2rayPluginMuxPayloadState {
+    pub(super) fn new(control: WebSocketControlSender) -> Self {
+        Self {
+            ws_decoder: WebSocketBinaryFrameDecoder::default(),
+            mux_bytes: CursorByteBuffer::default(),
+            pending_payload: CursorByteBuffer::default(),
+            control: WebSocketControlPollSender::new(control),
+            closed: false,
+        }
+    }
+}
+
+struct AsyncV2rayPluginMuxPayloadReader<'a, 'b, R> {
+    client: &'a mut R,
     state: &'b mut AsyncV2rayPluginMuxPayloadState,
     mux_id: [u8; 2],
 }
 
-impl<'a, 'b> AsyncV2rayPluginMuxPayloadReader<'a, 'b> {
+impl<'a, 'b, R> AsyncV2rayPluginMuxPayloadReader<'a, 'b, R> {
     fn new(
-        client: &'a mut AsyncResidentTlsClient,
+        client: &'a mut R,
         state: &'b mut AsyncV2rayPluginMuxPayloadState,
         mux_id: [u8; 2],
     ) -> Self {
@@ -99,7 +115,10 @@ impl<'a, 'b> AsyncV2rayPluginMuxPayloadReader<'a, 'b> {
     }
 }
 
-impl AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_> {
+impl<R> AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_, R>
+where
+    R: AsyncRead + Unpin,
+{
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -111,7 +130,7 @@ impl AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_> {
         let state = &mut *this.state;
 
         loop {
-            match state.control.poll_flush(&mut *client, cx) {
+            match state.control.poll_flush(cx) {
                 Poll::Ready(Ok(())) => {}
                 Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
                 Poll::Pending => return Poll::Pending,

@@ -1,13 +1,4 @@
 use super::*;
-pub(crate) fn vision_command_name(command: u8) -> &'static str {
-    match command {
-        VISION_COMMAND_CONTINUE => "continue",
-        VISION_COMMAND_END => "end",
-        VISION_COMMAND_DIRECT => "direct",
-        _ => "unknown",
-    }
-}
-
 pub(crate) fn vision_uplink_command(
     record_type: u8,
     tls_state: &VisionInnerTlsState,
