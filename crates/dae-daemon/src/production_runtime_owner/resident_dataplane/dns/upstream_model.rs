@@ -1,3 +1,4 @@
+use super::transport::tcp_udp::ResidentDnsTcpUdpHedgeRegistry;
 use super::transport::udp_multiplex::{ResidentDnsUdpActorExecutor, ResidentDnsUdpMultiplexHandle};
 use super::*;
 use std::sync::{
@@ -183,6 +184,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         ResidentDnsUdpRuntimeConfig,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) resources:
         ResidentDnsResourceProfile,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) tcp_udp_hedges:
+        ResidentDnsTcpUdpHedgeRegistry,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) metrics:
         Arc<ResidentDataplaneMetrics>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) hysteria2_owner_registry:
@@ -212,6 +215,7 @@ impl Default for ResidentDnsForwarderCache {
             )),
             udp_runtime,
             resources: ResidentDnsResourceProfile::selected(),
+            tcp_udp_hedges: ResidentDnsTcpUdpHedgeRegistry::default(),
             metrics,
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,
@@ -237,6 +241,7 @@ impl ResidentDnsForwarderCache {
             )),
             udp_runtime,
             resources: ResidentDnsResourceProfile::selected(),
+            tcp_udp_hedges: ResidentDnsTcpUdpHedgeRegistry::default(),
             metrics,
             hysteria2_owner_registry: None,
             tuic_owner_registry: None,

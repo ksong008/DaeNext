@@ -252,6 +252,16 @@ const LOW_MEMORY_DNS_FLIGHT_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 const BALANCED_DNS_FLIGHT_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 const HIGH_PERFORMANCE_DNS_FLIGHT_RETAINED_BYTES: usize = 128 * 1024 * 1024;
 const DNS_UPSTREAM_CANDIDATE_RACE_WIDTH: usize = 2;
+const LOW_MEMORY_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 75;
+const LOW_MEMORY_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 30;
+const LOW_MEMORY_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 125;
+const BALANCED_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 50;
+const BALANCED_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 20;
+const BALANCED_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 100;
+const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 25;
+const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 10;
+const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 75;
+const DNS_TCP_UDP_HEDGE_LEARNING_SAMPLES: u32 = 16;
 const LOW_MEMORY_DNS_TARGET_REFRESH_CONCURRENCY: usize = 1;
 const BALANCED_DNS_TARGET_REFRESH_CONCURRENCY: usize = 2;
 const HIGH_PERFORMANCE_DNS_TARGET_REFRESH_CONCURRENCY: usize = 4;
@@ -373,6 +383,7 @@ pub(crate) struct ResidentDnsResourceProfile {
     flight_followers_per_entry: usize,
     flight_retained_bytes: usize,
     upstream_candidate_race_width: usize,
+    tcp_udp_hedge: ResidentDnsTcpUdpHedgeProfile,
     target_refresh_concurrency: usize,
     target_refresh_queue_depth: usize,
     tcp_connections_per_route: usize,
@@ -381,6 +392,67 @@ pub(crate) struct ResidentDnsResourceProfile {
     bind_tcp_connections: usize,
     bind_tcp_queries: usize,
     bind_tcp_queries_per_connection: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentDnsTcpUdpHedgeProfile {
+    initial_delay: Duration,
+    minimum_delay: Duration,
+    maximum_delay: Duration,
+    learning_samples: u32,
+}
+
+impl ResidentDnsTcpUdpHedgeProfile {
+    const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        let (initial_milliseconds, minimum_milliseconds, maximum_milliseconds) = match profile {
+            ResidentRuntimeProfile::LowMemory => (
+                LOW_MEMORY_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS,
+                LOW_MEMORY_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS,
+                LOW_MEMORY_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS,
+            ),
+            ResidentRuntimeProfile::Balanced => (
+                BALANCED_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS,
+                BALANCED_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS,
+                BALANCED_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS,
+            ),
+            ResidentRuntimeProfile::HighPerformance => (
+                HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS,
+                HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS,
+                HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS,
+            ),
+        };
+        Self {
+            initial_delay: Duration::from_millis(initial_milliseconds),
+            minimum_delay: Duration::from_millis(minimum_milliseconds),
+            maximum_delay: Duration::from_millis(maximum_milliseconds),
+            learning_samples: DNS_TCP_UDP_HEDGE_LEARNING_SAMPLES,
+        }
+    }
+
+    pub(crate) const fn initial_delay(self) -> Duration {
+        self.initial_delay
+    }
+
+    pub(crate) const fn minimum_delay(self) -> Duration {
+        self.minimum_delay
+    }
+
+    pub(crate) const fn maximum_delay(self) -> Duration {
+        self.maximum_delay
+    }
+
+    pub(crate) const fn learning_samples(self) -> u32 {
+        self.learning_samples
+    }
+
+    fn json(self) -> Value {
+        json!({
+            "initialMs": self.initial_delay.as_millis(),
+            "minimumMs": self.minimum_delay.as_millis(),
+            "maximumMs": self.maximum_delay.as_millis(),
+            "learningSamples": self.learning_samples,
+        })
+    }
 }
 
 impl ResidentDnsResourceProfile {
@@ -395,6 +467,7 @@ impl ResidentDnsResourceProfile {
                 flight_followers_per_entry: LOW_MEMORY_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: LOW_MEMORY_DNS_FLIGHT_RETAINED_BYTES,
                 upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                tcp_udp_hedge: ResidentDnsTcpUdpHedgeProfile::from_runtime_profile(profile),
                 target_refresh_concurrency: LOW_MEMORY_DNS_TARGET_REFRESH_CONCURRENCY,
                 target_refresh_queue_depth: LOW_MEMORY_DNS_TARGET_REFRESH_QUEUE_DEPTH,
                 tcp_connections_per_route: LOW_MEMORY_DNS_TCP_CONNECTIONS_PER_ROUTE,
@@ -409,6 +482,7 @@ impl ResidentDnsResourceProfile {
                 flight_followers_per_entry: BALANCED_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: BALANCED_DNS_FLIGHT_RETAINED_BYTES,
                 upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                tcp_udp_hedge: ResidentDnsTcpUdpHedgeProfile::from_runtime_profile(profile),
                 target_refresh_concurrency: BALANCED_DNS_TARGET_REFRESH_CONCURRENCY,
                 target_refresh_queue_depth: BALANCED_DNS_TARGET_REFRESH_QUEUE_DEPTH,
                 tcp_connections_per_route: BALANCED_DNS_TCP_CONNECTIONS_PER_ROUTE,
@@ -423,6 +497,7 @@ impl ResidentDnsResourceProfile {
                 flight_followers_per_entry: HIGH_PERFORMANCE_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: HIGH_PERFORMANCE_DNS_FLIGHT_RETAINED_BYTES,
                 upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                tcp_udp_hedge: ResidentDnsTcpUdpHedgeProfile::from_runtime_profile(profile),
                 target_refresh_concurrency: HIGH_PERFORMANCE_DNS_TARGET_REFRESH_CONCURRENCY,
                 target_refresh_queue_depth: HIGH_PERFORMANCE_DNS_TARGET_REFRESH_QUEUE_DEPTH,
                 tcp_connections_per_route: HIGH_PERFORMANCE_DNS_TCP_CONNECTIONS_PER_ROUTE,
@@ -450,6 +525,10 @@ impl ResidentDnsResourceProfile {
 
     pub(crate) const fn upstream_candidate_race_width(self) -> usize {
         self.upstream_candidate_race_width
+    }
+
+    pub(crate) const fn tcp_udp_hedge(self) -> ResidentDnsTcpUdpHedgeProfile {
+        self.tcp_udp_hedge
     }
 
     pub(crate) const fn target_refresh_concurrency(self) -> usize {
@@ -490,6 +569,7 @@ impl ResidentDnsResourceProfile {
             "flightFollowersPerEntry": self.flight_followers_per_entry,
             "flightRetainedBytes": self.flight_retained_bytes,
             "upstreamCandidateRaceWidth": self.upstream_candidate_race_width,
+            "tcpUdpHedge": self.tcp_udp_hedge.json(),
             "targetRefreshConcurrency": self.target_refresh_concurrency,
             "targetRefreshQueueDepth": self.target_refresh_queue_depth,
             "tcpConnectionsPerRoute": self.tcp_connections_per_route,
@@ -2196,5 +2276,30 @@ mod tests {
         assert!(high.frame_bytes() <= usize::from(u16::MAX));
         assert!(low.idle_timeout() < balanced.idle_timeout());
         assert!(balanced.idle_timeout() < high.idle_timeout());
+    }
+
+    #[test]
+    fn dns_tcp_udp_hedge_profiles_trade_duplicate_work_for_tail_latency() {
+        let low =
+            ResidentDnsResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory)
+                .tcp_udp_hedge();
+        let balanced =
+            ResidentDnsResourceProfile::from_runtime_profile(ResidentRuntimeProfile::Balanced)
+                .tcp_udp_hedge();
+        let high = ResidentDnsResourceProfile::from_runtime_profile(
+            ResidentRuntimeProfile::HighPerformance,
+        )
+        .tcp_udp_hedge();
+
+        assert_eq!(balanced.initial_delay(), Duration::from_millis(50));
+        assert_eq!(balanced.minimum_delay(), Duration::from_millis(20));
+        assert_eq!(balanced.maximum_delay(), Duration::from_millis(100));
+        assert_eq!(balanced.learning_samples(), 16);
+        assert!(low.initial_delay() > balanced.initial_delay());
+        assert!(balanced.initial_delay() > high.initial_delay());
+        assert!(low.minimum_delay() > balanced.minimum_delay());
+        assert!(balanced.minimum_delay() > high.minimum_delay());
+        assert!(low.maximum_delay() > balanced.maximum_delay());
+        assert!(balanced.maximum_delay() > high.maximum_delay());
     }
 }

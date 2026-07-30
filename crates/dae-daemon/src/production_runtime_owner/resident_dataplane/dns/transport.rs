@@ -8,7 +8,7 @@ mod plain;
 mod quic;
 mod route;
 mod tcp_multiplex;
-mod tcp_udp;
+pub(in crate::production_runtime_owner::resident_dataplane::dns) mod tcp_udp;
 #[cfg(test)]
 mod test_support;
 mod tls_https;
