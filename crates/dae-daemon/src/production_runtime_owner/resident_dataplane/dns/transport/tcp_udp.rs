@@ -9,6 +9,9 @@ use super::route::{
 };
 use super::wire::dns_response_truncated;
 
+mod hedge;
+pub(in crate::production_runtime_owner::resident_dataplane::dns) use hedge::ResidentDnsTcpUdpHedgeRegistry;
+
 pub(super) async fn forward_dns_tcp_udp_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
@@ -21,9 +24,14 @@ pub(super) async fn forward_dns_tcp_udp_async(
         .map_err(ResidentDnsTransportError::message)?;
     let udp_selection =
         select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Udp);
-    let tcp_selection =
-        select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Tcp);
+    let select_tcp_targets =
+        || select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Tcp);
 
+    let hedge_profile = forwarders.resources.tcp_udp_hedge();
+    let hedge_delay = forwarders
+        .tcp_udp_hedges
+        .delay(upstream.index, hedge_profile);
+    let udp_started = time::Instant::now();
     let udp = forward_dns_udp_branch_async(
         upstream,
         &resolved,
@@ -32,30 +40,90 @@ pub(super) async fn forward_dns_tcp_udp_async(
         forwarders,
         context,
     );
+    tokio::pin!(udp);
+
+    let udp_lead_error = if hedge_delay.is_zero() {
+        None
+    } else {
+        let hedge = time::sleep(hedge_delay);
+        tokio::pin!(hedge);
+        tokio::select! {
+            biased;
+            udp_result = &mut udp => match udp_result {
+                Ok(response) => {
+                    forwarders.tcp_udp_hedges.record_udp_success(
+                        upstream.index,
+                        udp_started.elapsed(),
+                        hedge_profile,
+                    );
+                    return Ok(response);
+                }
+                Err(udp_error) => Some(udp_error),
+            },
+            _ = &mut hedge => None,
+        }
+    };
+
+    if let Some(udp_error) = udp_lead_error {
+        forwarders.tcp_udp_hedges.record_udp_failure(upstream.index);
+        return match forward_dns_tcp_branch_async(
+            upstream,
+            &resolved,
+            payload,
+            select_tcp_targets(),
+            forwarders,
+            context,
+        )
+        .await
+        {
+            Ok(response) => Ok(response),
+            Err(tcp_error) => Err(combined_tcp_udp_error(upstream, udp_error, tcp_error)),
+        };
+    }
+
     let tcp = forward_dns_tcp_branch_async(
         upstream,
         &resolved,
         payload,
-        tcp_selection,
+        select_tcp_targets(),
         forwarders,
         context,
     );
-    tokio::pin!(udp);
     tokio::pin!(tcp);
 
     tokio::select! {
         udp_result = &mut udp => match udp_result {
-            Ok(response) => Ok(response),
-            Err(udp_error) => match tcp.await {
-                Ok(response) => Ok(response),
-                Err(tcp_error) => Err(combined_tcp_udp_error(upstream, udp_error, tcp_error)),
-            },
+            Ok(response) => {
+                forwarders.tcp_udp_hedges.record_udp_success(
+                    upstream.index,
+                    udp_started.elapsed(),
+                    hedge_profile,
+                );
+                Ok(response)
+            }
+            Err(udp_error) => {
+                forwarders.tcp_udp_hedges.record_udp_failure(upstream.index);
+                match tcp.await {
+                    Ok(response) => Ok(response),
+                    Err(tcp_error) => Err(combined_tcp_udp_error(upstream, udp_error, tcp_error)),
+                }
+            }
         },
         tcp_result = &mut tcp => match tcp_result {
             Ok(response) => Ok(response),
             Err(tcp_error) => match udp.await {
-                Ok(response) => Ok(response),
-                Err(udp_error) => Err(combined_tcp_udp_error(upstream, udp_error, tcp_error)),
+                Ok(response) => {
+                    forwarders.tcp_udp_hedges.record_udp_success(
+                        upstream.index,
+                        udp_started.elapsed(),
+                        hedge_profile,
+                    );
+                    Ok(response)
+                }
+                Err(udp_error) => {
+                    forwarders.tcp_udp_hedges.record_udp_failure(upstream.index);
+                    Err(combined_tcp_udp_error(upstream, udp_error, tcp_error))
+                }
             },
         },
     }
