@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
@@ -127,31 +126,19 @@ impl VmessAeadUdpOverTcpSession {
         )
         .map_err(|err| format!("start VMess AEAD UDP-over-TCP session: {err}"))?;
         let mut underlay = open_vmess_underlay(self.wrapper, binding, &start.first_write).await?;
-        let echoed = if underlay.is_grpc() {
-            start_vmess_grpc_decoder(&mut underlay, start.request.clone())?;
-            read_vmess_grpc_payload(&mut underlay).await?
+        if underlay.is_grpc() {
+            start_vmess_grpc_response_reader(&mut underlay, start.request.clone())?;
         } else {
             self.response = None;
             self.response_plaintext.clear();
-            self.request = Some(start.request);
-            self.upload = Some(start.upload);
-            self.underlay = Some(underlay);
-            if let Some(response) = self.poll_response().await? {
-                return Ok(response);
-            }
-            return Ok(self.pending_response_result());
-        };
-        let (session_executor, underlay_reuse, tls_underlay) = underlay.evidence_fields();
+        }
         self.underlay = Some(underlay);
         self.upload = Some(start.upload);
         self.request = Some(start.request);
-        Ok(vmess_udp_session_result(
-            echoed,
-            session_executor,
-            underlay_reuse,
-            tls_underlay,
-            self.fixed_target,
-        ))
+        if let Some(response) = self.poll_response().await? {
+            return Ok(response);
+        }
+        Ok(self.pending_response_result())
     }
 
     async fn exchange_next(&mut self, payload: &[u8]) -> Result<UdpExchangeResult, String> {
@@ -161,38 +148,17 @@ impl VmessAeadUdpOverTcpSession {
             .ok_or_else(|| "VMess AEAD UDP-over-TCP upload codec is not initialized".to_owned())?
             .seal_chunk(payload)
             .map_err(|err| format!("seal VMess AEAD UDP-over-TCP session packet: {err}"))?;
-        let is_grpc = {
+        {
             let underlay = self
                 .underlay
                 .as_mut()
                 .ok_or_else(|| "VMess AEAD UDP-over-TCP underlay is not initialized".to_owned())?;
             write_vmess_wrapped_bytes(underlay, &chunk).await?;
-            underlay.is_grpc()
-        };
-        let echoed = if is_grpc {
-            let underlay = self
-                .underlay
-                .as_mut()
-                .ok_or_else(|| "VMess AEAD UDP-over-TCP underlay is not initialized".to_owned())?;
-            read_vmess_grpc_payload(underlay).await?
-        } else {
-            if let Some(response) = self.poll_response().await? {
-                return Ok(response);
-            }
-            return Ok(self.pending_response_result());
-        };
-        let (session_executor, underlay_reuse, tls_underlay) = self
-            .underlay
-            .as_ref()
-            .ok_or_else(|| "VMess AEAD UDP-over-TCP underlay is not initialized".to_owned())?
-            .evidence_fields();
-        Ok(vmess_udp_session_result(
-            echoed,
-            session_executor,
-            underlay_reuse,
-            tls_underlay,
-            self.fixed_target,
-        ))
+        }
+        if let Some(response) = self.poll_response().await? {
+            return Ok(response);
+        }
+        Ok(self.pending_response_result())
     }
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
@@ -217,11 +183,9 @@ impl VmessAeadUdpOverTcpSession {
             return Ok(None);
         };
         if underlay.is_grpc() {
-            return if mode.waits_for_readiness() {
-                std::future::pending().await
-            } else {
-                Ok(None)
-            };
+            return read_vmess_grpc_payload(underlay, mode)
+                .await
+                .map(|payload| payload.map(|payload| self.response_result(payload)));
         }
         let mut buf = [0_u8; 8192];
         let Some(read) = read_vmess_underlay_plaintext(underlay, &mut buf, mode).await? else {
@@ -427,14 +391,10 @@ async fn open_vmess_underlay(
             let tls_underlay = carrier_lease.tls_underlay();
             Ok(VmessAeadUdpUnderlay::GrpcTls {
                 send_stream,
-                response,
+                response: Some(response),
                 _carrier_lease: carrier_lease,
-                encrypted_writer: None,
-                decrypted_rx: None,
-                decoder: None,
-                response_buf: GrpcHunkReadBuffer::default(),
-                pending_plain: VecDeque::new(),
-                decode_error: None,
+                response_rx: None,
+                response_reader: None,
                 tls_underlay,
             })
         }
@@ -533,14 +493,10 @@ enum VmessAeadUdpUnderlay {
     },
     GrpcTls {
         send_stream: h2::SendStream<Bytes>,
-        response: GrpcH2Response,
+        response: Option<GrpcH2Response>,
         _carrier_lease: H2CarrierLease,
-        encrypted_writer: Option<tokio::io::DuplexStream>,
-        decrypted_rx: Option<tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
-        decoder: Option<tokio::task::JoinHandle<Result<(), String>>>,
-        response_buf: GrpcHunkReadBuffer,
-        pending_plain: VecDeque<Vec<u8>>,
-        decode_error: Option<String>,
+        response_rx: Option<tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
+        response_reader: Option<tokio::task::JoinHandle<()>>,
         tls_underlay: &'static str,
     },
 }
@@ -616,17 +572,15 @@ impl VmessAeadUdpUnderlay {
             }
             Self::GrpcTls {
                 send_stream,
-                encrypted_writer,
-                decoder,
+                response_rx,
+                response_reader,
                 ..
             } => {
                 let _ = send_h2_data(send_stream, Bytes::new(), true).await;
-                if let Some(writer) = encrypted_writer.as_mut() {
-                    let _ = writer.shutdown().await;
-                }
-                encrypted_writer.take();
-                if let Some(decoder) = decoder.take() {
-                    let _ = decoder.await;
+                response_rx.take();
+                if let Some(reader) = response_reader.take() {
+                    reader.abort();
+                    let _ = reader.await;
                 }
             }
         }
@@ -784,113 +738,102 @@ where
     .map_err(|_| format!("{label} timeout"))?
 }
 
-async fn read_vmess_grpc_payload(underlay: &mut VmessAeadUdpUnderlay) -> Result<Vec<u8>, String> {
-    let VmessAeadUdpUnderlay::GrpcTls {
-        response,
-        encrypted_writer,
-        decrypted_rx,
-        decoder: _,
-        response_buf,
-        pending_plain,
-        decode_error,
-        ..
-    } = underlay
-    else {
+async fn read_vmess_grpc_payload(
+    underlay: &mut VmessAeadUdpUnderlay,
+    mode: UdpStreamReadMode,
+) -> Result<Option<Vec<u8>>, String> {
+    let VmessAeadUdpUnderlay::GrpcTls { response_rx, .. } = underlay else {
         return Err("VMess gRPC payload reader received non-gRPC underlay".to_owned());
     };
-    if decrypted_rx.is_none() {
-        return Err("VMess gRPC decoder is not initialized".to_owned());
-    }
-    if encrypted_writer.is_none() {
-        return Err("VMess gRPC encrypted response writer is not initialized".to_owned());
-    }
-    let response_deadline = time::sleep(RESIDENT_UDP_RESPONSE_TIMEOUT);
-    tokio::pin!(response_deadline);
-    loop {
-        if let Some(payload) = pending_plain.pop_front() {
-            return Ok(payload);
+    let response_rx = response_rx
+        .as_mut()
+        .ok_or_else(|| "VMess gRPC response reader is not initialized".to_owned())?;
+    receive_vmess_grpc_payload(response_rx, mode).await
+}
+
+async fn receive_vmess_grpc_payload(
+    receiver: &mut tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
+    mode: UdpStreamReadMode,
+) -> Result<Option<Vec<u8>>, String> {
+    let received = if mode.waits_for_readiness() {
+        receiver.recv().await
+    } else {
+        match receiver.try_recv() {
+            Ok(received) => Some(received),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(None),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
         }
-        let disconnected = {
-            let rx = decrypted_rx
-                .as_mut()
-                .ok_or_else(|| "VMess gRPC decoder is not initialized".to_owned())?;
-            let (chunks, disconnected) = collect_vmess_grpc_decrypted(rx, decode_error);
-            pending_plain.extend(chunks);
-            disconnected
-        };
-        if let Some(err) = decode_error.take() {
-            return Err(err);
-        }
-        if let Some(payload) = pending_plain.pop_front() {
-            return Ok(payload);
-        }
-        if disconnected {
-            return Err("VMess gRPC response decoder disconnected".to_owned());
-        }
-        let decrypted = decrypted_rx
-            .as_mut()
-            .ok_or_else(|| "VMess gRPC decoder is not initialized".to_owned())?;
-        tokio::select! {
-            data = response.next_data() => match data {
-            Ok(Some(bytes)) => {
-                response_buf.extend_from_slice(&bytes);
-                while let Some(payload) = response_buf.pop_payload()? {
-                    if !payload.is_empty() {
-                        let writer = encrypted_writer.as_mut().ok_or_else(|| {
-                            "VMess gRPC encrypted response writer is not initialized".to_owned()
-                        })?;
-                        writer.write_all(&payload).await.map_err(|err| {
-                            format!("write VMess gRPC encrypted UDP response to decoder: {err}")
-                        })?;
-                        writer.flush().await.map_err(|err| {
-                            format!("flush VMess gRPC encrypted UDP response to decoder: {err}")
-                        })?;
-                    }
-                }
-            }
-            Err(err) => return Err(err),
-            Ok(None) => {
-                if let Some(writer) = encrypted_writer.as_mut() {
-                    let _ = writer.shutdown().await;
-                }
-                return Err("VMess gRPC response stream closed".to_owned());
-            }
-            },
-            decoded = decrypted.recv() => match decoded {
-                Some(Ok(payload)) => return Ok(payload),
-                Some(Err(err)) => return Err(err),
-                None => return Err("VMess gRPC response decoder disconnected".to_owned()),
-            },
-            _ = &mut response_deadline => {
-                return Err("read VMess gRPC UDP response timeout".to_owned());
-            }
-        }
+    };
+    match received {
+        Some(Ok(payload)) => Ok(Some(payload)),
+        Some(Err(err)) => Err(err),
+        None => Err("VMess gRPC response reader disconnected".to_owned()),
     }
 }
 
-fn start_vmess_grpc_decoder(
+fn start_vmess_grpc_response_reader(
     underlay: &mut VmessAeadUdpUnderlay,
     request: vmess::VMessAeadTcpRequest,
 ) -> Result<(), String> {
     let VmessAeadUdpUnderlay::GrpcTls {
-        encrypted_writer,
-        decrypted_rx,
-        decoder,
+        response,
+        response_rx,
+        response_reader,
         ..
     } = underlay
     else {
-        return Err("VMess gRPC decoder received non-gRPC underlay".to_owned());
+        return Err("VMess gRPC response reader received non-gRPC underlay".to_owned());
     };
-    let (writer, reader) = tokio::io::duplex(64 * 1024);
+    let response = response
+        .take()
+        .ok_or_else(|| "VMess gRPC response stream is not available".to_owned())?;
     let (tx, rx) = tokio::sync::mpsc::channel(16);
-    let decoder_handle =
-        tokio::spawn(
-            async move { decode_vmess_grpc_response_stream_async(reader, request, tx).await },
-        );
-    *encrypted_writer = Some(writer);
-    *decrypted_rx = Some(rx);
-    *decoder = Some(decoder_handle);
+    *response_rx = Some(rx);
+    *response_reader = Some(tokio::spawn(async move {
+        run_vmess_grpc_response_reader(response, request, tx).await;
+    }));
     Ok(())
+}
+
+async fn run_vmess_grpc_response_reader(
+    mut response: GrpcH2Response,
+    request: vmess::VMessAeadTcpRequest,
+    tx: tokio::sync::mpsc::Sender<Result<Vec<u8>, String>>,
+) {
+    let mut hunk_buffer = GrpcHunkReadBuffer::default();
+    let mut encrypted = Vec::new();
+    let mut decoder = None;
+    let result: Result<(), String> = async {
+        loop {
+            let bytes = response
+                .next_data()
+                .await?
+                .ok_or_else(|| "VMess gRPC response stream closed".to_owned())?;
+            hunk_buffer.extend_from_slice(&bytes);
+            while let Some(payload) = hunk_buffer.pop_payload()? {
+                encrypted.extend_from_slice(&payload);
+                if decoder.is_none() {
+                    decoder = vmess::aead_tcp_response_reader_from_buffer(&mut encrypted, &request)
+                        .map_err(|err| format!("read VMess gRPC UDP response header: {err}"))?;
+                }
+                let Some(reader) = decoder.as_mut() else {
+                    continue;
+                };
+                while let Some(payload) = reader
+                    .try_read_chunk_from_buffer(&mut encrypted)
+                    .map_err(|err| format!("read VMess gRPC UDP response packet: {err}"))?
+                {
+                    tx.send(Ok(payload))
+                        .await
+                        .map_err(|_| "VMess gRPC response consumer stopped".to_owned())?;
+                }
+            }
+        }
+    }
+    .await;
+    if let Err(err) = result {
+        let _ = tx.send(Err(err)).await;
+    }
 }
 
 fn vmess_udp_session_result(
@@ -926,6 +869,49 @@ fn vmess_udp_pending_session_result(
 #[cfg(test)]
 mod fixed_target_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn grpc_ready_only_response_read_does_not_wait_for_a_packet() {
+        let (_tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let result = time::timeout(
+            Duration::from_millis(50),
+            receive_vmess_grpc_payload(&mut rx, UdpStreamReadMode::ReadyOnly),
+        )
+        .await
+        .expect("ready-only VMess gRPC read must complete immediately")
+        .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn grpc_waiting_response_read_receives_later_packet() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let send = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            tx.send(Ok(b"response".to_vec())).await.unwrap();
+        });
+        let result = time::timeout(
+            Duration::from_secs(1),
+            receive_vmess_grpc_payload(&mut rx, UdpStreamReadMode::Wait),
+        )
+        .await
+        .expect("waiting VMess gRPC read must receive the independently produced packet")
+        .unwrap();
+        send.await.unwrap();
+        assert_eq!(result.as_deref(), Some(b"response".as_slice()));
+    }
+
+    #[tokio::test]
+    async fn grpc_response_reader_preserves_typed_failure() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        tx.send(Err("fixture response failure".to_owned()))
+            .await
+            .unwrap();
+        let err = receive_vmess_grpc_payload(&mut rx, UdpStreamReadMode::Wait)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "fixture response failure");
+    }
 
     #[test]
     fn vmess_udp_response_uses_its_bound_target() {
