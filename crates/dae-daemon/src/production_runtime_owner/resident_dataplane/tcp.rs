@@ -14,7 +14,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use super::{
-    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease, H2CarrierResponseFuture,
     Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle,
     ResidentStopSignal, ResidentTaskSetShutdown, ResidentTransportOwnerRegistries,
     SharedResidentStopSignal, TuicOwnerRegistryHandle, acquire_h2_carrier, acquire_meek_transport,
@@ -108,8 +108,11 @@ use super::plan::{
 use super::probe::resident_tcp_probe_tls_config;
 #[cfg(test)]
 use super::probe::{resident_tcp_probe_http_request, resident_tcp_probe_status_ok};
+#[cfg(test)]
+use super::vision::VisionTlsDecision;
 use super::vision::{
-    VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,
+    VisionInnerTlsState, VisionUnpadder, VisionUplinkState, VisionUplinkWrite,
+    VisionUplinkWriteMode, queue_vision_uplink,
 };
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
@@ -140,13 +143,16 @@ use shadowsocks_stream::{
     AsyncV2rayPluginMuxPayloadState, read_shadowsocks_aead_chunk_from_v2ray_plugin_mux,
     read_shadowsocks_aead_chunk_from_websocket_tls,
 };
+#[cfg(test)]
+pub(crate) use websocket::{AsyncWebSocketPayloadChannelReader, AsyncWebSocketPayloadChannelState};
 pub(crate) use websocket::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES,
 };
 use websocket::{
     WebSocketBinaryFrameDecoder, httpupgrade_handshake_over_async_stream,
+    queue_websocket_control_responses, websocket_control_channel,
     websocket_handshake_over_async_stream, write_websocket_binary_frame_to_async_stream,
-    write_websocket_control_responses_over_resident_tls_async,
+    write_websocket_control_response,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use websocket::{
     httpupgrade_handshake_over_resident_tls_async, websocket_handshake_over_resident_tls_async,
@@ -163,6 +169,8 @@ mod accept_loop;
 pub(super) use self::accept_loop::*;
 mod admission;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::admission::ResidentTcpAdmission;
+mod duplex_relay;
+pub(super) use self::duplex_relay::*;
 mod executor;
 pub(super) use self::executor::*;
 mod vless_handlers;
@@ -191,8 +199,7 @@ pub(crate) use self::transport_helpers::{
     GrpcH2Response, GrpcHunkReadBuffer, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
     XhttpStreamUploadClient, XhttpUploadClient, XhttpXmuxClearReport,
     XhttpXmuxGenerationOwnerHandle, close_xhttp_download_client, close_xhttp_stream_upload_client,
-    close_xhttp_upload_client, collect_vmess_grpc_decrypted,
-    decode_vmess_grpc_response_stream_async, open_grpc_h2_stream, open_h2_body_stream,
+    close_xhttp_upload_client, open_grpc_h2_stream, open_h2_body_stream,
     open_h2_body_stream_with_deferred_response, open_xhttp_packet_up_parts,
     open_xhttp_stream_parts, poll_xhttp_download_data, read_xhttp_download_data,
     relay_tcp_over_deferred_h2_body, relay_tcp_over_grpc_h2,
