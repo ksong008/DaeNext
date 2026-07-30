@@ -15,6 +15,9 @@ const HIGH_PERFORMANCE_TCP_RUNTIME_WORKERS_MAX: usize = 8;
 const LOW_MEMORY_TCP_CONNECTION_LIMIT: usize = 256;
 const BALANCED_TCP_CONNECTION_LIMIT: usize = 1_024;
 const HIGH_PERFORMANCE_TCP_CONNECTION_LIMIT: usize = 4_096;
+const LOW_MEMORY_WEBSOCKET_CONTROL_QUEUE_DEPTH: usize = 2;
+const BALANCED_WEBSOCKET_CONTROL_QUEUE_DEPTH: usize = 4;
+const HIGH_PERFORMANCE_WEBSOCKET_CONTROL_QUEUE_DEPTH: usize = 8;
 const LOW_MEMORY_UDP_SESSION_SOFT_WATERMARK: usize = 128;
 const BALANCED_UDP_SESSION_SOFT_WATERMARK: usize = 512;
 const HIGH_PERFORMANCE_UDP_SESSION_SOFT_WATERMARK: usize = 1_024;
@@ -48,6 +51,10 @@ const HIGH_PERFORMANCE_QUIC_ENDPOINT_LIMIT: usize = 128;
 const LOW_MEMORY_QUIC_ENDPOINT_CHARGED_BYTES: usize = 16 * 1024 * 1024;
 const BALANCED_QUIC_ENDPOINT_CHARGED_BYTES: usize = 64 * 1024 * 1024;
 const HIGH_PERFORMANCE_QUIC_ENDPOINT_CHARGED_BYTES: usize = 256 * 1024 * 1024;
+const QUIC_CANDIDATE_RACE_WIDTH: usize = 2;
+const LOW_MEMORY_QUIC_CANDIDATE_STAGGER_MILLISECONDS: u64 = 250;
+const BALANCED_QUIC_CANDIDATE_STAGGER_MILLISECONDS: u64 = 225;
+const HIGH_PERFORMANCE_QUIC_CANDIDATE_STAGGER_MILLISECONDS: u64 = 200;
 const LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_PACKETS: usize = 16;
 const BALANCED_QUIC_UDP_FRAGMENT_PENDING_PACKETS: usize = 64;
 const HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_PACKETS: usize = 256;
@@ -137,6 +144,9 @@ const ANYTLS_SID_QUARANTINE_TTL_SECONDS: u64 = 10;
 const LOW_MEMORY_H2_CARRIER_OWNER_LIMIT: usize = 8;
 const BALANCED_H2_CARRIER_OWNER_LIMIT: usize = 32;
 const HIGH_PERFORMANCE_H2_CARRIER_OWNER_LIMIT: usize = 128;
+const LOW_MEMORY_H2_PENDING_OPEN_LIMIT: usize = 64;
+const BALANCED_H2_PENDING_OPEN_LIMIT: usize = 256;
+const HIGH_PERFORMANCE_H2_PENDING_OPEN_LIMIT: usize = 1_024;
 const LOW_MEMORY_MEEK_RESPONSE_HEADER_BYTES: usize = 8 * 1024;
 const BALANCED_MEEK_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const HIGH_PERFORMANCE_MEEK_RESPONSE_HEADER_BYTES: usize = 32 * 1024;
@@ -242,6 +252,12 @@ const LOW_MEMORY_DNS_FLIGHT_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 const BALANCED_DNS_FLIGHT_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 const HIGH_PERFORMANCE_DNS_FLIGHT_RETAINED_BYTES: usize = 128 * 1024 * 1024;
 const DNS_UPSTREAM_CANDIDATE_RACE_WIDTH: usize = 2;
+const LOW_MEMORY_DNS_TARGET_REFRESH_CONCURRENCY: usize = 1;
+const BALANCED_DNS_TARGET_REFRESH_CONCURRENCY: usize = 2;
+const HIGH_PERFORMANCE_DNS_TARGET_REFRESH_CONCURRENCY: usize = 4;
+const LOW_MEMORY_DNS_TARGET_REFRESH_QUEUE_DEPTH: usize = 16;
+const BALANCED_DNS_TARGET_REFRESH_QUEUE_DEPTH: usize = 64;
+const HIGH_PERFORMANCE_DNS_TARGET_REFRESH_QUEUE_DEPTH: usize = 128;
 const LOW_MEMORY_DNS_TCP_CONNECTIONS_PER_ROUTE: usize = 2;
 const BALANCED_DNS_TCP_CONNECTIONS_PER_ROUTE: usize = 8;
 const HIGH_PERFORMANCE_DNS_TCP_CONNECTIONS_PER_ROUTE: usize = 16;
@@ -283,11 +299,82 @@ pub(crate) struct ResidentRuntimeProfileSelection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QuicCandidateRaceResourceProfile {
+    max_in_flight: usize,
+    stagger: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TcpRelayResourceProfile {
+    websocket_control_queue_depth: usize,
+}
+
+impl TcpRelayResourceProfile {
+    pub(crate) fn selected() -> Self {
+        Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+    }
+
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        Self {
+            websocket_control_queue_depth: match profile {
+                ResidentRuntimeProfile::LowMemory => LOW_MEMORY_WEBSOCKET_CONTROL_QUEUE_DEPTH,
+                ResidentRuntimeProfile::Balanced => BALANCED_WEBSOCKET_CONTROL_QUEUE_DEPTH,
+                ResidentRuntimeProfile::HighPerformance => {
+                    HIGH_PERFORMANCE_WEBSOCKET_CONTROL_QUEUE_DEPTH
+                }
+            },
+        }
+    }
+
+    pub(crate) const fn websocket_control_queue_depth(self) -> usize {
+        self.websocket_control_queue_depth
+    }
+}
+
+impl QuicCandidateRaceResourceProfile {
+    pub(crate) fn selected() -> Self {
+        Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
+    }
+
+    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+        let stagger_milliseconds = match profile {
+            ResidentRuntimeProfile::LowMemory => LOW_MEMORY_QUIC_CANDIDATE_STAGGER_MILLISECONDS,
+            ResidentRuntimeProfile::Balanced => BALANCED_QUIC_CANDIDATE_STAGGER_MILLISECONDS,
+            ResidentRuntimeProfile::HighPerformance => {
+                HIGH_PERFORMANCE_QUIC_CANDIDATE_STAGGER_MILLISECONDS
+            }
+        };
+        Self {
+            max_in_flight: QUIC_CANDIDATE_RACE_WIDTH,
+            stagger: Duration::from_millis(stagger_milliseconds),
+        }
+    }
+
+    pub(crate) const fn max_in_flight(self) -> usize {
+        self.max_in_flight
+    }
+
+    pub(crate) const fn stagger(self) -> Duration {
+        self.stagger
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(max_in_flight: usize, stagger: Duration) -> Self {
+        Self {
+            max_in_flight,
+            stagger,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentDnsResourceProfile {
     flight_entry_limit: usize,
     flight_followers_per_entry: usize,
     flight_retained_bytes: usize,
     upstream_candidate_race_width: usize,
+    target_refresh_concurrency: usize,
+    target_refresh_queue_depth: usize,
     tcp_connections_per_route: usize,
     tcp_requests_per_connection: usize,
     bind_udp_inflight: usize,
@@ -308,6 +395,8 @@ impl ResidentDnsResourceProfile {
                 flight_followers_per_entry: LOW_MEMORY_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: LOW_MEMORY_DNS_FLIGHT_RETAINED_BYTES,
                 upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                target_refresh_concurrency: LOW_MEMORY_DNS_TARGET_REFRESH_CONCURRENCY,
+                target_refresh_queue_depth: LOW_MEMORY_DNS_TARGET_REFRESH_QUEUE_DEPTH,
                 tcp_connections_per_route: LOW_MEMORY_DNS_TCP_CONNECTIONS_PER_ROUTE,
                 tcp_requests_per_connection: LOW_MEMORY_DNS_TCP_REQUESTS_PER_CONNECTION,
                 bind_udp_inflight: LOW_MEMORY_DNS_BIND_UDP_INFLIGHT,
@@ -320,6 +409,8 @@ impl ResidentDnsResourceProfile {
                 flight_followers_per_entry: BALANCED_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: BALANCED_DNS_FLIGHT_RETAINED_BYTES,
                 upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                target_refresh_concurrency: BALANCED_DNS_TARGET_REFRESH_CONCURRENCY,
+                target_refresh_queue_depth: BALANCED_DNS_TARGET_REFRESH_QUEUE_DEPTH,
                 tcp_connections_per_route: BALANCED_DNS_TCP_CONNECTIONS_PER_ROUTE,
                 tcp_requests_per_connection: BALANCED_DNS_TCP_REQUESTS_PER_CONNECTION,
                 bind_udp_inflight: BALANCED_DNS_BIND_UDP_INFLIGHT,
@@ -332,6 +423,8 @@ impl ResidentDnsResourceProfile {
                 flight_followers_per_entry: HIGH_PERFORMANCE_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: HIGH_PERFORMANCE_DNS_FLIGHT_RETAINED_BYTES,
                 upstream_candidate_race_width: DNS_UPSTREAM_CANDIDATE_RACE_WIDTH,
+                target_refresh_concurrency: HIGH_PERFORMANCE_DNS_TARGET_REFRESH_CONCURRENCY,
+                target_refresh_queue_depth: HIGH_PERFORMANCE_DNS_TARGET_REFRESH_QUEUE_DEPTH,
                 tcp_connections_per_route: HIGH_PERFORMANCE_DNS_TCP_CONNECTIONS_PER_ROUTE,
                 tcp_requests_per_connection: HIGH_PERFORMANCE_DNS_TCP_REQUESTS_PER_CONNECTION,
                 bind_udp_inflight: HIGH_PERFORMANCE_DNS_BIND_UDP_INFLIGHT,
@@ -357,6 +450,14 @@ impl ResidentDnsResourceProfile {
 
     pub(crate) const fn upstream_candidate_race_width(self) -> usize {
         self.upstream_candidate_race_width
+    }
+
+    pub(crate) const fn target_refresh_concurrency(self) -> usize {
+        self.target_refresh_concurrency
+    }
+
+    pub(crate) const fn target_refresh_queue_depth(self) -> usize {
+        self.target_refresh_queue_depth
     }
 
     pub(crate) const fn tcp_connections_per_route(self) -> usize {
@@ -389,6 +490,8 @@ impl ResidentDnsResourceProfile {
             "flightFollowersPerEntry": self.flight_followers_per_entry,
             "flightRetainedBytes": self.flight_retained_bytes,
             "upstreamCandidateRaceWidth": self.upstream_candidate_race_width,
+            "targetRefreshConcurrency": self.target_refresh_concurrency,
+            "targetRefreshQueueDepth": self.target_refresh_queue_depth,
             "tcpConnectionsPerRoute": self.tcp_connections_per_route,
             "tcpRequestsPerConnection": self.tcp_requests_per_connection,
             "bindUdpInflight": self.bind_udp_inflight,
@@ -470,6 +573,7 @@ pub(crate) struct AnyTlsOwnerResourceProfile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct H2CarrierOwnerResourceProfile {
     owner_limit: usize,
+    pending_open_limit: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -723,12 +827,24 @@ impl MeekTransportResourceProfile {
 
 impl H2CarrierOwnerResourceProfile {
     pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
-        let owner_limit = match profile {
-            ResidentRuntimeProfile::LowMemory => LOW_MEMORY_H2_CARRIER_OWNER_LIMIT,
-            ResidentRuntimeProfile::Balanced => BALANCED_H2_CARRIER_OWNER_LIMIT,
-            ResidentRuntimeProfile::HighPerformance => HIGH_PERFORMANCE_H2_CARRIER_OWNER_LIMIT,
+        let (owner_limit, pending_open_limit) = match profile {
+            ResidentRuntimeProfile::LowMemory => (
+                LOW_MEMORY_H2_CARRIER_OWNER_LIMIT,
+                LOW_MEMORY_H2_PENDING_OPEN_LIMIT,
+            ),
+            ResidentRuntimeProfile::Balanced => (
+                BALANCED_H2_CARRIER_OWNER_LIMIT,
+                BALANCED_H2_PENDING_OPEN_LIMIT,
+            ),
+            ResidentRuntimeProfile::HighPerformance => (
+                HIGH_PERFORMANCE_H2_CARRIER_OWNER_LIMIT,
+                HIGH_PERFORMANCE_H2_PENDING_OPEN_LIMIT,
+            ),
         };
-        Self { owner_limit }
+        Self {
+            owner_limit,
+            pending_open_limit,
+        }
     }
 
     pub(crate) fn selected() -> Self {
@@ -745,6 +861,10 @@ impl H2CarrierOwnerResourceProfile {
 
     pub(crate) const fn physical_connection_limit(self) -> usize {
         self.owner_limit
+    }
+
+    pub(crate) const fn pending_open_limit(self) -> usize {
+        self.pending_open_limit
     }
 }
 
