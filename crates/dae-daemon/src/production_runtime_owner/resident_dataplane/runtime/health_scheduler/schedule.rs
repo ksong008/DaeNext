@@ -1,5 +1,7 @@
 use super::*;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use std::hash::{Hash, Hasher};
+use std::pin::Pin;
 use tokio::sync::{mpsc::Receiver, watch};
 
 pub(super) const RESIDENT_HEALTH_INITIAL_JITTER_CEILING: Duration = Duration::from_secs(5);
@@ -163,38 +165,56 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) {
+    type ResuscitationRound =
+        Pin<Box<dyn std::future::Future<Output = HealthCheckRoundStatus> + Send + 'static>>;
+    let maximum_active_rounds = concurrency.max(1);
+    let mut active = FuturesUnordered::<ResuscitationRound>::new();
+    let mut receiver_closed = false;
     loop {
-        let request = tokio::select! {
-            _ = wait_for_resident_health_stop(&mut stop_rx) => return,
-            request = receiver.recv() => match request {
-                Some(request) => request,
-                None => return,
-            },
-        };
-        let Some(group) = proxy_groups.get(&request.outbound).cloned() else {
-            continue;
-        };
-        if !group.try_begin_resuscitation(request.network_type) {
-            continue;
-        }
-        if run_resident_health_round(
-            group,
-            Arc::clone(&stop),
-            Arc::clone(&metrics),
-            concurrency,
-            Arc::clone(&candidate_admission),
-            Arc::clone(&dns),
-            ResidentTransportOwnerRegistries::new(
-                hysteria2_owner_registry.clone(),
-                tuic_owner_registry.clone(),
-                juicity_owner_registry.clone(),
-            )
-            .with_anytls(anytls_owner_registry.clone()),
-        )
-        .await
-        .is_cancelled()
-        {
+        if receiver_closed && active.is_empty() {
             return;
+        }
+        tokio::select! {
+            _ = wait_for_resident_health_stop(&mut stop_rx) => return,
+            status = active.next(), if !active.is_empty() => {
+                if status.is_some_and(HealthCheckRoundStatus::is_cancelled) {
+                    return;
+                }
+            }
+            request = receiver.recv(), if !receiver_closed && active.len() < maximum_active_rounds => {
+                let Some(request) = request else {
+                    receiver_closed = true;
+                    continue;
+                };
+                let Some(group) = proxy_groups.get(&request.outbound).cloned() else {
+                    continue;
+                };
+                if !group.try_begin_resuscitation(request.network_type) {
+                    continue;
+                }
+                let stop = Arc::clone(&stop);
+                let metrics = Arc::clone(&metrics);
+                let candidate_admission = Arc::clone(&candidate_admission);
+                let dns = Arc::clone(&dns);
+                let owners = ResidentTransportOwnerRegistries::new(
+                    hysteria2_owner_registry.clone(),
+                    tuic_owner_registry.clone(),
+                    juicity_owner_registry.clone(),
+                )
+                .with_anytls(anytls_owner_registry.clone());
+                active.push(Box::pin(async move {
+                    run_resident_health_round(
+                        group,
+                        stop,
+                        metrics,
+                        concurrency,
+                        candidate_admission,
+                        dns,
+                        owners,
+                    )
+                    .await
+                }));
+            }
         }
     }
 }

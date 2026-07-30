@@ -105,7 +105,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_health_s
             .max(per_group_candidate_concurrency)
             .max(1),
         "resuscitationQueueDepth": RESIDENT_HEALTH_RESUSCITATION_QUEUE_DEPTH,
-        "roundAdmission": "one static schedule task per materialized group; one sequential bounded resuscitation consumer",
+        "roundAdmission": "one static schedule task per materialized group; bounded continuous resuscitation rounds",
         "stopSignal": "one atomic monitor with watch broadcast; no per-group idle polling timer",
         "selectorState": "shared Arc<ResidentProxyGroupPlan>",
     })

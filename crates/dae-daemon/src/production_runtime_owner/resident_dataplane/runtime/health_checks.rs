@@ -1,6 +1,7 @@
 use super::tcp::{QuicEndpointCallerClass, scope_quic_endpoint_observation};
 use super::*;
 use crate::allocator::{AllocatorReclaimReason, allocator_request_reclaim};
+use futures_util::{StreamExt, stream::FuturesUnordered};
 
 #[path = "health_checks/family.rs"]
 mod family;
@@ -68,30 +69,16 @@ async fn run_resident_group_health_checks_concurrent_async(
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
     }
-    if concurrency <= 1 {
-        return run_resident_group_health_checks_until_stopped(
-            &group,
-            candidates,
-            stop,
-            candidate_admission,
-            dns,
-            owners,
-        )
-        .await;
-    }
-    for chunk in candidates.chunks(concurrency.max(1)) {
-        if stop.load(Ordering::Relaxed) {
-            return HealthCheckRoundStatus::Cancelled;
-        }
-        let mut handles = Vec::new();
-        for candidate in chunk {
-            let candidate = candidate.clone();
+    run_bounded_health_futures_continuously(
+        candidates.iter().cloned(),
+        concurrency,
+        move |candidate| {
             let group = Arc::clone(&group);
             let stop = Arc::clone(&stop);
             let candidate_admission = Arc::clone(&candidate_admission);
             let dns = Arc::clone(&dns);
             let owners = owners.clone();
-            handles.push(tokio::spawn(async move {
+            async move {
                 run_resident_candidate_health_check_until_stopped(
                     &group,
                     &candidate,
@@ -101,12 +88,36 @@ async fn run_resident_group_health_checks_concurrent_async(
                     owners,
                 )
                 .await
-            }));
-        }
-        for handle in handles {
-            if matches!(handle.await, Ok(HealthCheckRoundStatus::Cancelled)) {
-                return HealthCheckRoundStatus::Cancelled;
             }
+        },
+    )
+    .await
+}
+
+async fn run_bounded_health_futures_continuously<I, F, Fut>(
+    mut pending: I,
+    concurrency: usize,
+    mut run: F,
+) -> HealthCheckRoundStatus
+where
+    I: Iterator,
+    F: FnMut(I::Item) -> Fut,
+    Fut: std::future::Future<Output = HealthCheckRoundStatus>,
+{
+    let concurrency = concurrency.max(1);
+    let mut active = FuturesUnordered::new();
+    while active.len() < concurrency {
+        let Some(item) = pending.next() else {
+            break;
+        };
+        active.push(run(item));
+    }
+    while let Some(status) = active.next().await {
+        if status.is_cancelled() {
+            return HealthCheckRoundStatus::Cancelled;
+        }
+        if let Some(item) = pending.next() {
+            active.push(run(item));
         }
     }
     HealthCheckRoundStatus::Completed
@@ -131,6 +142,7 @@ pub(crate) async fn run_resident_group_health_checks_async(
     .await;
 }
 
+#[cfg(test)]
 async fn run_resident_group_health_checks_until_stopped(
     group: &plan::ResidentProxyGroupPlan,
     candidates: &[plan::ResidentProxyProbePlan],
@@ -652,6 +664,37 @@ pub(crate) fn unix_now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn continuous_health_refill_does_not_wait_for_the_slowest_active_candidate() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum_active = Arc::new(AtomicUsize::new(0));
+        let completion_order = Arc::new(Mutex::new(Vec::new()));
+
+        let status = run_bounded_health_futures_continuously(0..3, 2, |candidate| {
+            let active = Arc::clone(&active);
+            let maximum_active = Arc::clone(&maximum_active);
+            let completion_order = Arc::clone(&completion_order);
+            async move {
+                let current = active.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+                maximum_active.fetch_max(current, Ordering::Relaxed);
+                let delay = if candidate == 0 {
+                    Duration::from_millis(40)
+                } else {
+                    Duration::from_millis(5)
+                };
+                tokio::time::sleep(delay).await;
+                completion_order.lock().unwrap().push(candidate);
+                active.fetch_sub(1, Ordering::Relaxed);
+                HealthCheckRoundStatus::Completed
+            }
+        })
+        .await;
+
+        assert_eq!(status, HealthCheckRoundStatus::Completed);
+        assert_eq!(maximum_active.load(Ordering::Relaxed), 2);
+        assert_eq!(*completion_order.lock().unwrap(), vec![1, 2, 0]);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn global_health_candidate_admission_bounds_waiting_probe_execution() {
