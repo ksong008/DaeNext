@@ -8,9 +8,11 @@ use crate::production_runtime_owner::resident_dataplane::ResidentStopSignal;
 use super::*;
 
 mod dispatch;
+mod reaper;
 mod shutdown;
 mod worker;
 
+use self::reaper::UdpSessionReaper;
 use self::shutdown::join_udp_tasks_until_deadline;
 use self::worker::run_resident_udp_session_shard;
 

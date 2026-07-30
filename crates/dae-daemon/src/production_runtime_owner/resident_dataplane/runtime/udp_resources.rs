@@ -1,5 +1,7 @@
 use super::*;
 
+const RESIDENT_UDP_REPLY_SHARDS_MAX: usize = 2;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) generation: u64,
@@ -125,6 +127,14 @@ impl ResidentUdpRuntimeConfig {
         self.session_soft_watermark.max(1)
     }
 
+    pub(crate) fn reply_shards(&self) -> usize {
+        self.runtime_shards
+            .min(RESIDENT_UDP_REPLY_SHARDS_MAX)
+            .min(self.reply_queue_depth)
+            .min(self.reply_socket_cache_capacity)
+            .max(1)
+    }
+
     pub(crate) fn dns_udp_runtime_config(&self) -> ResidentDnsUdpRuntimeConfig {
         let direct_shards = self
             .runtime_shards
@@ -185,7 +195,8 @@ impl ResidentUdpRuntimeConfig {
                 "affinity": "stable-session-hash",
             },
             "transparentReply": {
-                "owner": "resident-udp-reply-actor",
+                "owner": "resident-udp-reply-shards",
+                "shards": self.reply_shards(),
                 "queueDepth": self.reply_queue_depth,
                 "socketCacheCapacity": self.reply_socket_cache_capacity,
                 "socketIdleTimeoutMs": self.reply_socket_idle_timeout.as_millis(),
