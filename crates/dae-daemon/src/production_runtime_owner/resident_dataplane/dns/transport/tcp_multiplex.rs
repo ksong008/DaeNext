@@ -53,18 +53,43 @@ struct ResidentDnsTcpWrite {
     payload: Vec<u8>,
 }
 
+enum ResidentDnsTcpRead {
+    Response(Vec<u8>),
+    Closed,
+    Failed(String),
+}
+
 struct ResidentDnsTcpCancellationGuard {
     token: u64,
     commands: tokio::sync::mpsc::Sender<ResidentDnsTcpMultiplexCommand>,
+    lifecycle: Arc<ResidentDnsTcpMultiplexLifecycle>,
+    armed: bool,
+}
+
+struct ResidentDnsTcpReservationGuard {
+    lifecycle: Arc<ResidentDnsTcpMultiplexLifecycle>,
+    active: Arc<AtomicUsize>,
     armed: bool,
 }
 
 impl Drop for ResidentDnsTcpCancellationGuard {
     fn drop(&mut self) {
+        if self.armed
+            && matches!(
+                self.commands
+                    .try_send(ResidentDnsTcpMultiplexCommand::Cancel(self.token)),
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+            )
+        {
+            self.lifecycle.notify.notify_one();
+        }
+    }
+}
+
+impl Drop for ResidentDnsTcpReservationGuard {
+    fn drop(&mut self) {
         if self.armed {
-            let _ = self
-                .commands
-                .try_send(ResidentDnsTcpMultiplexCommand::Cancel(self.token));
+            release_resident_dns_tcp_slot(self.lifecycle.as_ref(), self.active.as_ref());
         }
     }
 }
@@ -119,14 +144,20 @@ impl ResidentDnsTcpMultiplexHandle {
             ));
         }
         self.reserve_slot()?;
+        let mut reservation = ResidentDnsTcpReservationGuard {
+            lifecycle: Arc::clone(&self.lifecycle),
+            active: Arc::clone(&self.active),
+            armed: true,
+        };
         let token = self.next_token.fetch_add(1, Ordering::Relaxed);
         let (response, response_receiver) = tokio::sync::oneshot::channel();
         let mut cancellation = ResidentDnsTcpCancellationGuard {
             token,
             commands: self.commands.clone(),
+            lifecycle: Arc::clone(&self.lifecycle),
             armed: false,
         };
-        if let Err(error) = context
+        context
             .run(
                 ProxyDnsRequestStage::Queued,
                 ProxyDnsRequestFailure::Capacity,
@@ -139,11 +170,8 @@ impl ResidentDnsTcpMultiplexHandle {
                     },
                 )),
             )
-            .await
-        {
-            release_resident_dns_tcp_slot(&self.lifecycle, &self.active);
-            return Err(error);
-        }
+            .await?;
+        reservation.armed = false;
         cancellation.armed = true;
         let result = context
             .run(
@@ -238,10 +266,14 @@ impl ResidentDnsTcpMultiplexRegistration {
 }
 
 async fn run_resident_dns_tcp_multiplex_actor(
-    mut reader: tokio::net::tcp::OwnedReadHalf,
+    reader: tokio::net::tcp::OwnedReadHalf,
     writer: tokio::net::tcp::OwnedWriteHalf,
     mut registration: ResidentDnsTcpMultiplexRegistration,
 ) -> Result<(), String> {
+    // Framed reads use read_exact internally and are not cancellation-safe. Keep the
+    // socket in one reader task and pass only complete frames through a bounded queue.
+    let (responses, mut response_receiver) = tokio::sync::mpsc::channel(registration.capacity);
+    let reader_task = tokio::spawn(run_resident_dns_tcp_reader(reader, responses));
     let (writes, write_receiver) = tokio::sync::mpsc::channel(registration.capacity);
     let mut writer_task = tokio::spawn(run_resident_dns_tcp_writer(writer, write_receiver));
     let mut pending = HashMap::<u16, ResidentDnsTcpPendingRequest>::new();
@@ -257,7 +289,15 @@ async fn run_resident_dns_tcp_multiplex_actor(
         }
         let next_deadline = deadlines.peek().map(|entry| entry.0.0);
         tokio::select! {
-            _ = registration.lifecycle.notify.notified() => {}
+            _ = registration.lifecycle.notify.notified() => {
+                discard_cancelled_resident_dns_tcp_requests(
+                    &mut pending,
+                    &mut tokens,
+                    &mut allocator,
+                    &registration.lifecycle,
+                    &registration.active,
+                );
+            }
             writer_result = &mut writer_task => {
                 writer_finished = true;
                 break match writer_result {
@@ -265,6 +305,30 @@ async fn run_resident_dns_tcp_multiplex_actor(
                     Ok(Err(error)) => Err(error),
                     Err(error) => Err(format!("join DNS TCP multiplex writer: {error}")),
                 };
+            }
+            response = response_receiver.recv() => {
+                match response {
+                    Some(ResidentDnsTcpRead::Response(response)) => {
+                        dispatch_resident_dns_tcp_response(
+                            response,
+                            &mut pending,
+                            &mut tokens,
+                            &mut allocator,
+                            &registration.lifecycle,
+                            &registration.active,
+                        );
+                    }
+                    Some(ResidentDnsTcpRead::Closed)
+                        if registration.active.load(Ordering::Acquire) == 0 =>
+                    {
+                        break Ok(());
+                    }
+                    Some(ResidentDnsTcpRead::Closed) => {
+                        break Err("DNS TCP multiplex upstream closed the stream".to_owned());
+                    }
+                    Some(ResidentDnsTcpRead::Failed(error)) => break Err(error),
+                    None => break Err("DNS TCP multiplex reader stopped".to_owned()),
+                }
             }
             command = registration.commands.recv(),
                 if pending.len() < registration.capacity && writes.capacity() > 0 =>
@@ -300,20 +364,6 @@ async fn run_resident_dns_tcp_multiplex_actor(
                     }
                 }
             }
-            response = read_dns_tcp_payload_async(&mut reader) => {
-                match response {
-                    Ok(Some(response)) => dispatch_resident_dns_tcp_response(
-                        response,
-                        &mut pending,
-                        &mut tokens,
-                        &mut allocator,
-                        &registration.lifecycle,
-                        &registration.active,
-                    ),
-                    Ok(None) => break Err("DNS TCP multiplex upstream closed the stream".to_owned()),
-                    Err(error) => break Err(format!("read DNS TCP multiplex response: {error}")),
-                }
-            }
             _ = time::sleep_until(next_deadline.unwrap_or_else(time::Instant::now)),
                 if next_deadline.is_some() =>
             {
@@ -335,6 +385,11 @@ async fn run_resident_dns_tcp_multiplex_actor(
         .closing
         .store(true, Ordering::Release);
     registration.lifecycle.notify.notify_waiters();
+    response_receiver.close();
+    if !reader_task.is_finished() {
+        reader_task.abort();
+    }
+    let _ = reader_task.await;
     drop(writes);
     if !writer_finished && !writer_task.is_finished() {
         writer_task.abort();
@@ -361,6 +416,28 @@ async fn run_resident_dns_tcp_multiplex_actor(
     result
 }
 
+async fn run_resident_dns_tcp_reader(
+    mut reader: tokio::net::tcp::OwnedReadHalf,
+    responses: tokio::sync::mpsc::Sender<ResidentDnsTcpRead>,
+) {
+    loop {
+        let response = match read_dns_tcp_payload_async(&mut reader).await {
+            Ok(Some(response)) => ResidentDnsTcpRead::Response(response),
+            Ok(None) => ResidentDnsTcpRead::Closed,
+            Err(error) => {
+                ResidentDnsTcpRead::Failed(format!("read DNS TCP multiplex response: {error}"))
+            }
+        };
+        let terminal = matches!(
+            response,
+            ResidentDnsTcpRead::Closed | ResidentDnsTcpRead::Failed(_)
+        );
+        if responses.send(response).await.is_err() || terminal {
+            return;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn admit_resident_dns_tcp_request(
     request: ResidentDnsTcpMultiplexRequest,
@@ -374,6 +451,10 @@ fn admit_resident_dns_tcp_request(
     lifecycle: &ResidentDnsTcpMultiplexLifecycle,
     active_count: &AtomicUsize,
 ) {
+    if request.response.is_closed() {
+        release_resident_dns_tcp_slot(lifecycle, active_count);
+        return;
+    }
     if request.deadline <= time::Instant::now() {
         let _ = request.response.send(Err(ProxyDnsRequestError::deadline(
             ProxyDnsRequestStage::Pending,
@@ -446,6 +527,27 @@ fn admit_resident_dns_tcp_request(
             response: request.response,
         },
     );
+}
+
+fn discard_cancelled_resident_dns_tcp_requests(
+    pending: &mut HashMap<u16, ResidentDnsTcpPendingRequest>,
+    tokens: &mut HashMap<u64, u16>,
+    allocator: &mut super::udp_multiplex::DnsRequestIdAllocator,
+    lifecycle: &ResidentDnsTcpMultiplexLifecycle,
+    active_count: &AtomicUsize,
+) {
+    let cancelled = pending
+        .iter()
+        .filter_map(|(id, request)| request.response.is_closed().then_some(*id))
+        .collect::<Vec<_>>();
+    for id in cancelled {
+        let Some(request) = pending.remove(&id) else {
+            continue;
+        };
+        tokens.remove(&request.token);
+        allocator.release(id);
+        release_resident_dns_tcp_slot(lifecycle, active_count);
+    }
 }
 
 async fn run_resident_dns_tcp_writer(
@@ -807,3 +909,7 @@ mod tests {
         stream.write_all(&response).await.unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "tcp_multiplex/stress_tests.rs"]
+mod stress_tests;
