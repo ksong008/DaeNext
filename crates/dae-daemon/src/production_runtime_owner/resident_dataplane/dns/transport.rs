@@ -1,3 +1,5 @@
+use std::{future::Future, pin::Pin};
+
 use super::*;
 
 mod cache;
@@ -31,34 +33,37 @@ use tls_https::{forward_dns_https_async, forward_dns_tls_async};
 #[cfg(test)]
 pub(super) use wire::parse_doh_http_response;
 
-pub(super) async fn forward_dns_to_upstream_async(
-    upstream: &ResidentDnsUpstream,
-    payload: &[u8],
-    plan: &ResidentDnsPlan,
-    forwarders: &Arc<ResidentDnsForwarderCache>,
+type ResidentDnsUpstreamExchangeFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<u8>, ResidentDnsTransportError>> + Send + 'a>>;
+
+pub(super) fn forward_dns_to_upstream_async<'a>(
+    upstream: &'a ResidentDnsUpstream,
+    payload: &'a [u8],
+    plan: &'a ResidentDnsPlan,
+    forwarders: &'a Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
-) -> Result<Vec<u8>, ResidentDnsTransportError> {
+) -> ResidentDnsUpstreamExchangeFuture<'a> {
     match upstream.scheme {
-        ResidentDnsUpstreamScheme::Udp => {
-            forward_dns_udp_upstream_async(upstream, payload, plan, forwarders, context).await
-        }
-        ResidentDnsUpstreamScheme::Tcp => {
-            forward_dns_tcp_async(upstream, payload, plan, forwarders, context).await
-        }
-        ResidentDnsUpstreamScheme::TcpUdp => {
-            forward_dns_tcp_udp_async(upstream, payload, plan, forwarders, context).await
-        }
-        ResidentDnsUpstreamScheme::Tls => {
-            forward_dns_tls_async(upstream, payload, plan, forwarders, context).await
-        }
-        ResidentDnsUpstreamScheme::Https => {
-            forward_dns_https_async(upstream, payload, plan, forwarders, context).await
-        }
-        ResidentDnsUpstreamScheme::Quic => {
-            forward_dns_quic_async(upstream, payload, plan, forwarders, context).await
-        }
-        ResidentDnsUpstreamScheme::Http3 => {
-            forward_dns_h3_async(upstream, payload, plan, forwarders, context).await
-        }
+        ResidentDnsUpstreamScheme::Udp => Box::pin(forward_dns_udp_upstream_async(
+            upstream, payload, plan, forwarders, context,
+        )),
+        ResidentDnsUpstreamScheme::Tcp => Box::pin(forward_dns_tcp_async(
+            upstream, payload, plan, forwarders, context,
+        )),
+        ResidentDnsUpstreamScheme::TcpUdp => Box::pin(forward_dns_tcp_udp_async(
+            upstream, payload, plan, forwarders, context,
+        )),
+        ResidentDnsUpstreamScheme::Tls => Box::pin(forward_dns_tls_async(
+            upstream, payload, plan, forwarders, context,
+        )),
+        ResidentDnsUpstreamScheme::Https => Box::pin(forward_dns_https_async(
+            upstream, payload, plan, forwarders, context,
+        )),
+        ResidentDnsUpstreamScheme::Quic => Box::pin(forward_dns_quic_async(
+            upstream, payload, plan, forwarders, context,
+        )),
+        ResidentDnsUpstreamScheme::Http3 => Box::pin(forward_dns_h3_async(
+            upstream, payload, plan, forwarders, context,
+        )),
     }
 }
