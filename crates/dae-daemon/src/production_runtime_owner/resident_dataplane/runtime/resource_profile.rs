@@ -252,15 +252,15 @@ const LOW_MEMORY_DNS_FLIGHT_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 const BALANCED_DNS_FLIGHT_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 const HIGH_PERFORMANCE_DNS_FLIGHT_RETAINED_BYTES: usize = 128 * 1024 * 1024;
 const DNS_UPSTREAM_CANDIDATE_RACE_WIDTH: usize = 2;
-const LOW_MEMORY_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 75;
-const LOW_MEMORY_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 30;
-const LOW_MEMORY_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 125;
-const BALANCED_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 50;
-const BALANCED_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 20;
-const BALANCED_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 100;
-const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 25;
-const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 10;
-const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 75;
+const LOW_MEMORY_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 500;
+const LOW_MEMORY_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 400;
+const LOW_MEMORY_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 500;
+const BALANCED_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 400;
+const BALANCED_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 300;
+const BALANCED_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 500;
+const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_INITIAL_MILLISECONDS: u64 = 300;
+const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_MINIMUM_MILLISECONDS: u64 = 300;
+const HIGH_PERFORMANCE_DNS_TCP_UDP_HEDGE_MAXIMUM_MILLISECONDS: u64 = 500;
 const DNS_TCP_UDP_HEDGE_LEARNING_SAMPLES: u32 = 16;
 const LOW_MEMORY_DNS_TARGET_REFRESH_CONCURRENCY: usize = 1;
 const BALANCED_DNS_TARGET_REFRESH_CONCURRENCY: usize = 2;
@@ -2307,15 +2307,21 @@ mod tests {
         )
         .tcp_udp_hedge();
 
-        assert_eq!(balanced.initial_delay(), Duration::from_millis(50));
-        assert_eq!(balanced.minimum_delay(), Duration::from_millis(20));
-        assert_eq!(balanced.maximum_delay(), Duration::from_millis(100));
+        assert_eq!(low.initial_delay(), Duration::from_millis(500));
+        assert_eq!(low.minimum_delay(), Duration::from_millis(400));
+        assert_eq!(low.maximum_delay(), Duration::from_millis(500));
+        assert_eq!(balanced.initial_delay(), Duration::from_millis(400));
+        assert_eq!(balanced.minimum_delay(), Duration::from_millis(300));
+        assert_eq!(balanced.maximum_delay(), Duration::from_millis(500));
+        assert_eq!(high.initial_delay(), Duration::from_millis(300));
+        assert_eq!(high.minimum_delay(), Duration::from_millis(300));
+        assert_eq!(high.maximum_delay(), Duration::from_millis(500));
         assert_eq!(balanced.learning_samples(), 16);
         assert!(low.initial_delay() > balanced.initial_delay());
         assert!(balanced.initial_delay() > high.initial_delay());
         assert!(low.minimum_delay() > balanced.minimum_delay());
-        assert!(balanced.minimum_delay() > high.minimum_delay());
-        assert!(low.maximum_delay() > balanced.maximum_delay());
-        assert!(balanced.maximum_delay() > high.maximum_delay());
+        assert_eq!(balanced.minimum_delay(), high.minimum_delay());
+        assert_eq!(low.maximum_delay(), balanced.maximum_delay());
+        assert_eq!(balanced.maximum_delay(), high.maximum_delay());
     }
 }

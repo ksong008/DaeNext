@@ -181,11 +181,11 @@ mod tests {
         let registry = ResidentDnsTcpUdpHedgeRegistry::default();
         let profile = balanced_profile();
 
-        assert_eq!(registry.delay(7, profile), Duration::from_millis(50));
+        assert_eq!(registry.delay(7, profile), Duration::from_millis(400));
         for _ in 0..profile.learning_samples() {
             registry.record_udp_success(7, Duration::from_millis(10), profile);
         }
-        assert_eq!(registry.delay(7, profile), Duration::from_millis(20));
+        assert_eq!(registry.delay(7, profile), Duration::from_millis(300));
     }
 
     #[test]
@@ -193,11 +193,11 @@ mod tests {
         let registry = ResidentDnsTcpUdpHedgeRegistry::default();
         let profile = balanced_profile();
 
-        for sample_millis in [35, 40, 45, 50].into_iter().cycle().take(32) {
+        for sample_millis in [320, 350, 380, 410].into_iter().cycle().take(32) {
             registry.record_udp_success(11, Duration::from_millis(sample_millis), profile);
         }
         let delay = registry.delay(11, profile);
-        assert!(delay >= Duration::from_millis(40), "{delay:?}");
+        assert!(delay >= Duration::from_millis(350), "{delay:?}");
         assert!(delay <= profile.maximum_delay(), "{delay:?}");
     }
 
@@ -207,12 +207,12 @@ mod tests {
         let profile = balanced_profile();
 
         for _ in 0..profile.learning_samples() {
-            registry.record_udp_success(19, Duration::from_millis(40), profile);
+            registry.record_udp_success(19, Duration::from_millis(350), profile);
         }
         registry.record_udp_success(19, Duration::from_secs(2), profile);
         registry.record_udp_success(19, Duration::from_secs(2), profile);
         assert_eq!(registry.delay(19, profile), Duration::ZERO);
         assert_eq!(registry.delay(19, profile), profile.minimum_delay());
-        assert!(registry.delay(19, profile) >= Duration::from_millis(40));
+        assert!(registry.delay(19, profile) >= Duration::from_millis(350));
     }
 }
