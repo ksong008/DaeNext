@@ -872,13 +872,36 @@ fn select_vless_mux_physical(
 ) -> Option<(Arc<VlessMuxPhysicalHandle>, VlessMuxLogicalPermit)> {
     let mut physical = pool.physical.lock().ok()?;
     physical.retain(|candidate| !candidate.closed.load(Ordering::Acquire));
-    physical.sort_by_key(|candidate| candidate.active_logical.load(Ordering::Relaxed));
-    for candidate in physical.iter() {
+    loop {
+        let candidate = Arc::clone(least_loaded_vless_mux_physical(
+            &physical,
+            owner.resources.logical_streams_per_physical(),
+        )?);
         if let Some(permit) = candidate.reserve_logical(owner) {
-            return Some((Arc::clone(candidate), permit));
+            return Some((candidate, permit));
         }
     }
-    None
+}
+
+fn least_loaded_vless_mux_physical(
+    physical: &[Arc<VlessMuxPhysicalHandle>],
+    logical_stream_limit: usize,
+) -> Option<&Arc<VlessMuxPhysicalHandle>> {
+    let mut selected = None;
+    let mut least_active = usize::MAX;
+    for candidate in physical {
+        if candidate.closed.load(Ordering::Acquire) || !candidate.accepting.load(Ordering::Acquire)
+        {
+            continue;
+        }
+        let active = candidate.active_logical.load(Ordering::Relaxed);
+        if active >= logical_stream_limit || active >= least_active {
+            continue;
+        }
+        selected = Some(candidate);
+        least_active = active;
+    }
+    selected
 }
 
 fn try_reserve_vless_mux_physical(
@@ -1726,6 +1749,52 @@ async fn cleanup_vless_mux_owner(owner: &Arc<VlessMuxGenerationOwner>) {
 mod tests {
     use super::*;
 
+    fn selection_test_physical(
+        instance_id: u64,
+        active_logical: usize,
+        accepting: bool,
+        closed: bool,
+    ) -> Arc<VlessMuxPhysicalHandle> {
+        let (sender, _receiver) = mpsc::channel(1);
+        Arc::new(VlessMuxPhysicalHandle {
+            instance_id,
+            sender,
+            active_logical: AtomicUsize::new(active_logical),
+            cumulative_logical: AtomicUsize::new(active_logical),
+            accepting: AtomicBool::new(accepting),
+            closed: AtomicBool::new(closed),
+            idle: AtomicBool::new(active_logical == 0),
+            idle_since: Mutex::new(Instant::now()),
+            abort: OnceLock::new(),
+            metrics: Arc::new(VlessMuxOwnerMetrics::default()),
+        })
+    }
+
+    #[test]
+    fn vless_mux_linear_selection_is_stable_and_skips_ineligible_physical() {
+        let first = selection_test_physical(1, 2, true, false);
+        let stable_tie = selection_test_physical(2, 1, true, false);
+        let later_tie = selection_test_physical(3, 1, true, false);
+        let closed = selection_test_physical(4, 0, true, true);
+        let retired = selection_test_physical(5, 0, false, false);
+        let saturated = selection_test_physical(6, 4, true, false);
+        let physical = vec![
+            Arc::clone(&first),
+            Arc::clone(&stable_tie),
+            later_tie,
+            closed,
+            retired,
+            saturated,
+        ];
+
+        let selected = least_loaded_vless_mux_physical(&physical, 4).unwrap();
+        assert_eq!(selected.instance_id, stable_tie.instance_id);
+        assert_eq!(
+            least_loaded_vless_mux_physical(&physical, 1).map(|selected| selected.instance_id),
+            None
+        );
+    }
+
     #[test]
     fn vless_mux_sid_allocator_skips_active_and_quarantined_ids() {
         let resources =
@@ -1769,5 +1838,6 @@ mod tests {
         assert!(!connection.contains("resident_mux_stream_id"));
         assert!(!connection.contains("relay_tcp_over_vless_mux_tls_async"));
         assert!(!probe.contains("target.port().to_be_bytes"));
+        assert!(!production.contains("physical.sort_by_key"));
     }
 }
