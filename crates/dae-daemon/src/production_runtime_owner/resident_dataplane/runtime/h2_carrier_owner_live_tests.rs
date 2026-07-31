@@ -19,6 +19,7 @@ struct H2TestServer {
     address: SocketAddr,
     tcp_connections: Arc<AtomicUsize>,
     tls_handshakes: Arc<AtomicUsize>,
+    accepted_requests: Arc<AtomicUsize>,
     handshake_gate: Option<Arc<Semaphore>>,
     response_gate: Option<Arc<Semaphore>>,
     stop: SharedResidentStopSignal,
@@ -52,11 +53,13 @@ impl H2TestServer {
         let address = listener.local_addr().unwrap();
         let tcp_connections = Arc::new(AtomicUsize::new(0));
         let tls_handshakes = Arc::new(AtomicUsize::new(0));
+        let accepted_requests = Arc::new(AtomicUsize::new(0));
         let handshake_gate = gate_handshake.then(|| Arc::new(Semaphore::new(0)));
         let response_gate = max_concurrent_streams.map(|_| Arc::new(Semaphore::new(0)));
         let stop = ResidentStopSignal::shared();
         let task_tcp_connections = Arc::clone(&tcp_connections);
         let task_tls_handshakes = Arc::clone(&tls_handshakes);
+        let task_accepted_requests = Arc::clone(&accepted_requests);
         let task_gate = handshake_gate.clone();
         let task_response_gate = response_gate.clone();
         let task_stop = Arc::clone(&stop);
@@ -74,6 +77,7 @@ impl H2TestServer {
                         task_tcp_connections.fetch_add(1, Ordering::Relaxed);
                         let connection_acceptor = acceptor.clone();
                         let connection_handshakes = Arc::clone(&task_tls_handshakes);
+                        let connection_accepted_requests = Arc::clone(&task_accepted_requests);
                         let connection_gate = task_gate.clone();
                         let connection_response_gate = task_response_gate.clone();
                         connections.spawn(async move {
@@ -92,6 +96,7 @@ impl H2TestServer {
                                 max_concurrent_streams,
                                 connection_response_gate,
                                 goaway_after_first_request,
+                                connection_accepted_requests,
                             )
                             .await;
                         });
@@ -108,6 +113,7 @@ impl H2TestServer {
             address,
             tcp_connections,
             tls_handshakes,
+            accepted_requests,
             handshake_gate,
             response_gate,
             stop,
@@ -140,6 +146,7 @@ async fn serve_h2_connection<T>(
     max_concurrent_streams: Option<u32>,
     response_gate: Option<Arc<Semaphore>>,
     goaway_after_first_request: bool,
+    accepted_requests: Arc<AtomicUsize>,
 ) where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -154,14 +161,15 @@ async fn serve_h2_connection<T>(
         return;
     };
     let mut responses = tokio::task::JoinSet::new();
-    let mut accepted_requests = 0_u64;
+    let mut accepted_requests_on_connection = 0_u64;
     while let Some(accepted) = connection.accept().await {
         let Ok((request, mut respond)) = accepted else {
             break;
         };
         let response_gate = response_gate.clone();
-        accepted_requests = accepted_requests.saturating_add(1);
-        if goaway_after_first_request && accepted_requests == 1 {
+        accepted_requests.fetch_add(1, Ordering::Relaxed);
+        accepted_requests_on_connection = accepted_requests_on_connection.saturating_add(1);
+        if goaway_after_first_request && accepted_requests_on_connection == 1 {
             connection.graceful_shutdown();
         }
         responses.spawn(async move {
@@ -625,7 +633,7 @@ fn h2_goaway_drains_the_old_physical_before_the_next_acquisition_rebuilds() {
 }
 
 #[test]
-fn h2_carrier_bounds_pending_opens_with_peer_stream_capacity() {
+fn h2_peer_stream_capacity_does_not_require_request_gate_serialization() {
     tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
@@ -671,50 +679,54 @@ fn h2_carrier_bounds_pending_opens_with_peer_stream_capacity() {
                 .uri("https://localhost/second")
                 .body(())
                 .unwrap();
-            let (second_response, _) = second
-                .open_request(
+            let (second_response, _) = time::timeout(
+                Duration::from_millis(100),
+                second.open_request(
                     second_request,
                     true,
                     h2_owner_deadline(),
                     "second owner test",
-                )
-                .await
-                .unwrap();
+                ),
+            )
+            .await
+            .expect("second logical open waited for response headers")
+            .unwrap();
             let third_request = http::Request::builder()
                 .method(http::Method::POST)
                 .uri("https://localhost/third")
                 .body(())
                 .unwrap();
-            let capacity_wait = time::timeout(Duration::from_millis(100), async {
-                third
-                    .open_request(third_request, true, h2_owner_deadline(), "third owner test")
-                    .await
-            })
-            .await;
-            match capacity_wait {
-                Err(_) => {}
-                Ok(Ok(_)) => panic!("peer stream capacity admitted a second pending open"),
-                Ok(Err(error)) => panic!("peer stream capacity wait failed: {error}"),
-            }
-            assert_eq!(owner.metrics_snapshot()["activePendingOpens"], 1);
+            let (third_response, _) = time::timeout(
+                Duration::from_millis(100),
+                third.open_request(third_request, true, h2_owner_deadline(), "third owner test"),
+            )
+            .await
+            .expect("third logical open waited for response headers")
+            .unwrap();
+            assert_eq!(owner.metrics_snapshot()["activePendingOpens"], 2);
+            time::sleep(Duration::from_millis(25)).await;
+            assert_eq!(server.accepted_requests.load(Ordering::Relaxed), 1);
             first_stream.send_data(Bytes::new(), true).unwrap();
             server.release_response();
-            let second_response = second_response.await.unwrap();
-            assert_eq!(second_response.status(), http::StatusCode::OK);
-            let _second_body = second_response.into_body();
-            assert_eq!(owner.metrics_snapshot()["activePendingOpens"], 0);
-            server.release_response();
-            let request = http::Request::builder()
-                .method(http::Method::POST)
-                .uri("https://localhost/third")
-                .body(())
-                .unwrap();
-            let (response, _) = third
-                .open_request(request, true, h2_owner_deadline(), "third owner test")
+            let second_response = time::timeout(Duration::from_secs(2), second_response)
                 .await
+                .unwrap()
                 .unwrap();
-            assert_eq!(response.await.unwrap().status(), http::StatusCode::OK);
+            assert_eq!(second_response.status(), http::StatusCode::OK);
+            assert_eq!(owner.metrics_snapshot()["activePendingOpens"], 1);
+            let mut second_body = second_response.into_body();
             server.release_response();
+            while second_body.data().await.transpose().unwrap().is_some() {}
+            let third_response = time::timeout(Duration::from_secs(2), third_response)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(third_response.status(), http::StatusCode::OK);
+            assert_eq!(owner.metrics_snapshot()["activePendingOpens"], 0);
+            let mut third_body = third_response.into_body();
+            server.release_response();
+            while third_body.data().await.transpose().unwrap().is_some() {}
+            assert_eq!(server.accepted_requests.load(Ordering::Relaxed), 3);
             assert_eq!(server.tcp_connections.load(Ordering::Relaxed), 1);
             assert_eq!(owner.metrics_snapshot()["highWaterPhysicalConnections"], 1);
             drop(first);
