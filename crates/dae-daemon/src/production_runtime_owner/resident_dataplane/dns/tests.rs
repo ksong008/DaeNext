@@ -1283,6 +1283,50 @@ fn resident_dns_response_cache_is_scoped_by_upstream_identity() {
 }
 
 #[test]
+fn resident_dns_response_cache_serves_concurrent_readers_and_accounts_hits() {
+    const READERS: usize = 8;
+    const LOOKUPS_PER_READER: usize = 256;
+
+    let cache = ResidentDnsRuntimeCache::default();
+    let request = DnsPacketView::parse(QUERY).unwrap();
+    let response = a_response([203, 0, 113, 43]);
+    let now = unix_now();
+    let cache_plan = build_response_cache_plan_from_packet(now, &response, None)
+        .unwrap()
+        .unwrap();
+    let key = test_asis_cache_key(&request);
+    cache
+        .insert_response(now, key.with_base(cache_plan.key), cache_plan.entry)
+        .unwrap();
+
+    std::thread::scope(|scope| {
+        for _ in 0..READERS {
+            scope.spawn(|| {
+                let request = DnsPacketView::parse(QUERY).unwrap();
+                let mut cached_response = Vec::new();
+                for _ in 0..LOOKUPS_PER_READER {
+                    assert!(
+                        cache
+                            .lookup_response_into(&key, &request, false, &mut cached_response)
+                            .unwrap()
+                    );
+                    assert_eq!(&cached_response[..2], &QUERY[..2]);
+                    assert_eq!(
+                        &cached_response[cached_response.len() - 4..],
+                        &[203, 0, 113, 43]
+                    );
+                }
+            });
+        }
+    });
+
+    assert_eq!(
+        cache.stats().hit_total,
+        (READERS * LOOKUPS_PER_READER) as u64
+    );
+}
+
+#[test]
 fn resident_dns_response_cache_reload_snapshot_restores_live_entries() {
     let cache = ResidentDnsRuntimeCache::default();
     let request = DnsPacketView::parse(QUERY).unwrap();
