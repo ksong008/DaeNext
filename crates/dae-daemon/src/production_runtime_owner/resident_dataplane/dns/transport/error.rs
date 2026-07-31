@@ -1,4 +1,5 @@
 use std::fmt;
+use std::net::SocketAddr;
 
 use super::{ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage};
 
@@ -6,6 +7,7 @@ use super::{ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage};
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsTransportError {
     Message(String),
     TargetConnect(String),
+    UdpTruncated(SocketAddr),
     Proxy(ProxyDnsRequestError),
 }
 
@@ -16,6 +18,10 @@ impl ResidentDnsTransportError {
 
     pub(super) fn proxy(error: ProxyDnsRequestError) -> Self {
         Self::Proxy(error)
+    }
+
+    pub(super) fn udp_truncated(target: SocketAddr) -> Self {
+        Self::UdpTruncated(target)
     }
 
     pub(super) fn combined_attempts(context: &str, first: Self, retry: Self) -> Self {
@@ -33,6 +39,7 @@ impl ResidentDnsTransportError {
         match self {
             Self::Message(_) => true,
             Self::TargetConnect(_) => true,
+            Self::UdpTruncated(_) => true,
             Self::Proxy(error) => match (error.stage(), error.failure()) {
                 (ProxyDnsRequestStage::Cleanup, _) => false,
                 (_, ProxyDnsRequestFailure::Network) => true,
@@ -46,6 +53,7 @@ impl ResidentDnsTransportError {
         match self {
             Self::Message(_) => false,
             Self::TargetConnect(_) => true,
+            Self::UdpTruncated(_) => false,
             Self::Proxy(error) => {
                 error.stage() == ProxyDnsRequestStage::Connect
                     && matches!(
@@ -55,12 +63,17 @@ impl ResidentDnsTransportError {
             }
         }
     }
+
+    pub(super) const fn is_udp_truncated(&self) -> bool {
+        matches!(self, Self::UdpTruncated(_))
+    }
 }
 
 impl fmt::Display for ResidentDnsTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Message(error) | Self::TargetConnect(error) => formatter.write_str(error),
+            Self::UdpTruncated(target) => write!(formatter, "{target} UDP response truncated"),
             Self::Proxy(error) => error.fmt(formatter),
         }
     }
@@ -122,6 +135,11 @@ mod tests {
         ));
         assert!(connect_network.invalidates_stale_target());
         assert!(!ResidentDnsTransportError::message("connect timeout").invalidates_stale_target());
+        let truncated = ResidentDnsTransportError::udp_truncated("127.0.0.1:53".parse().unwrap());
+        assert!(truncated.allows_next_candidate());
+        assert!(!truncated.invalidates_stale_target());
+        assert!(truncated.is_udp_truncated());
+        assert_eq!(truncated.to_string(), "127.0.0.1:53 UDP response truncated");
 
         let combined_connect = ResidentDnsTransportError::combined_attempts(
             "fixture retry",
