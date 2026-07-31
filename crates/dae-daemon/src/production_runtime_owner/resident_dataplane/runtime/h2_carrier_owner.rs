@@ -341,10 +341,10 @@ impl H2CarrierLease {
                     self.invalidate();
                     format!("send {context} HTTP/2 request headers: {error}")
                 })?;
+        drop(request_permit);
         Ok((
             H2CarrierResponseFuture {
                 response: Box::pin(response),
-                request_permit: Some(request_permit),
                 pending_open: Some(pending_open),
             },
             send_stream,
@@ -404,7 +404,6 @@ fn try_acquire_h2_pending_open(
 
 pub(crate) struct H2CarrierResponseFuture {
     response: Pin<Box<h2::client::ResponseFuture>>,
-    request_permit: Option<tokio::sync::OwnedSemaphorePermit>,
     pending_open: Option<H2PendingOpenPermit>,
 }
 
@@ -414,7 +413,6 @@ impl std::future::Future for H2CarrierResponseFuture {
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let result = self.response.as_mut().poll(context);
         if result.is_ready() {
-            self.request_permit.take();
             self.pending_open.take();
         }
         result
@@ -1138,5 +1136,84 @@ mod tests {
         drop((second, replacement));
         assert_eq!(metrics.active_pending_opens.load(Ordering::Relaxed), 0);
         assert_eq!(admission.available_permits(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_gate_releases_before_response_headers_are_ready() {
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (both_requests_tx, both_requests_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let mut connection = h2::server::handshake(server_io).await.unwrap();
+            let (_, mut first_respond) = connection.accept().await.unwrap().unwrap();
+            let (_, mut second_respond) = connection.accept().await.unwrap().unwrap();
+            let _ = both_requests_tx.send(());
+            let response = || {
+                http::Response::builder()
+                    .status(200)
+                    .version(http::Version::HTTP_2)
+                    .body(())
+                    .unwrap()
+            };
+            first_respond.send_response(response(), true).unwrap();
+            second_respond.send_response(response(), true).unwrap();
+            let _ = time::timeout(std::time::Duration::from_millis(200), connection.accept()).await;
+        });
+        let (sender, connection) = h2::client::handshake(client_io).await.unwrap();
+        let client_task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let pending_open_admission = Arc::new(tokio::sync::Semaphore::new(2));
+        let request_gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let metrics = Arc::new(H2CarrierMetrics::default());
+        let lease = H2CarrierLease {
+            sender,
+            pending_open_admission: Arc::clone(&pending_open_admission),
+            request_gate: Arc::clone(&request_gate),
+            key: H2CarrierKey {
+                generation: OwnerGeneration::new(91),
+                digest: [0; 32],
+            },
+            instance_id: 1,
+            tls_underlay: "test",
+            owner: Weak::new(),
+            metrics: Arc::clone(&metrics),
+        };
+        let request = |path: &str| {
+            http::Request::builder()
+                .method(http::Method::POST)
+                .version(http::Version::HTTP_2)
+                .uri(format!("https://h2.fixture.invalid/{path}"))
+                .body(())
+                .unwrap()
+        };
+        let deadline =
+            || AbsoluteDeadline::from_now(Instant::now(), std::time::Duration::from_millis(500));
+
+        let (first_response, _) = lease
+            .open_request(request("first"), true, deadline(), "first")
+            .await
+            .unwrap();
+        let (second_response, _) = time::timeout(
+            std::time::Duration::from_millis(200),
+            lease.open_request(request("second"), true, deadline(), "second"),
+        )
+        .await
+        .expect("second request waited for the first response headers")
+        .unwrap();
+        assert_eq!(request_gate.available_permits(), 1);
+        assert_eq!(metrics.active_pending_opens.load(Ordering::Relaxed), 2);
+        time::timeout(std::time::Duration::from_millis(200), both_requests_rx)
+            .await
+            .expect("server did not receive both requests")
+            .expect("server dropped request observation");
+        first_response.await.unwrap();
+        second_response.await.unwrap();
+        assert_eq!(metrics.active_pending_opens.load(Ordering::Relaxed), 0);
+        assert_eq!(pending_open_admission.available_permits(), 2);
+
+        client_task.abort();
+        let _ = client_task.await;
+        server_task.abort();
+        let _ = server_task.await;
     }
 }
