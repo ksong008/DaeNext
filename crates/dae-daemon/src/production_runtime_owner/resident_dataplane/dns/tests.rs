@@ -628,7 +628,7 @@ async fn tcp_udp_tcp_response_does_not_wait_for_blackholed_udp() {
 
     assert_eq!(&response[0..2], &QUERY[0..2]);
     assert!(
-        started.elapsed() >= Duration::from_millis(20),
+        started.elapsed() >= Duration::from_millis(300),
         "TCP started without the UDP hedge lead: {:?}",
         started.elapsed()
     );
