@@ -75,22 +75,25 @@ pub(crate) fn start_resident_dataplane_workers(
             );
         }
     };
-    let dns_bind_listener = match prepare_resident_dns_bind_listener(&config.dns.bind) {
-        Ok(listener) => listener,
-        Err(err) => {
-            return (
-                json!({
-                    "status": "fail",
-                    "enabled": true,
-                    "error": err,
-                    "event_file": Value::Null,
-                    "event_file_status": "disabled",
-                    "event_log": "product-log-sink",
-                }),
-                None,
-            );
-        }
-    };
+    let dns_resources =
+        ResidentDnsResourceProfile::from_runtime_profile(resource_config.runtime_profile.profile);
+    let dns_bind_listener =
+        match prepare_resident_dns_bind_listener(&config.dns.bind, dns_resources) {
+            Ok(listener) => listener,
+            Err(err) => {
+                return (
+                    json!({
+                        "status": "fail",
+                        "enabled": true,
+                        "error": err,
+                        "event_file": Value::Null,
+                        "event_file_status": "disabled",
+                        "event_log": "product-log-sink",
+                    }),
+                    None,
+                );
+            }
+        };
     let dns_bind_listener_report = dns_bind_listener
         .as_ref()
         .map(ResidentDnsBindListener::report)
@@ -229,6 +232,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let dns_generation = active_generation.clone();
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
+        let executor_worker_threads = owner.data_plane_worker_threads();
         owner.spawn_async_task("dns-bind-listener", "dns-bind-listener", async move {
             run_resident_dns_bind_listener_async(
                 dns_bind_listener,
@@ -236,6 +240,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 stop,
                 event_file,
                 event_lock,
+                executor_worker_threads,
             )
             .await
         });

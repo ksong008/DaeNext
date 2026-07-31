@@ -4,6 +4,7 @@ use super::{ResidentEventLogDecision, current_unix, event_log_decision};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentEventKind {
+    DnsBindQueryFinished,
     DnsPathChosen,
     TcpRouteChosen,
     UdpDnsPacketFinished,
@@ -14,6 +15,7 @@ pub(crate) enum ResidentEventKind {
 impl ResidentEventKind {
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            Self::DnsBindQueryFinished => "dns_bind_query_finished",
             Self::DnsPathChosen => "dns_path_chosen",
             Self::TcpRouteChosen => "tcp_route_chosen",
             Self::UdpDnsPacketFinished => "udp_dns_packet_finished",
@@ -28,7 +30,9 @@ impl ResidentEventKind {
             Self::UdpDnsPacketFinished | Self::UdpPacketFinished => {
                 ResidentEventLifecycleClass::Packet
             }
-            Self::DnsPathChosen | Self::UdpRouteChosen => ResidentEventLifecycleClass::Debug,
+            Self::DnsBindQueryFinished | Self::DnsPathChosen | Self::UdpRouteChosen => {
+                ResidentEventLifecycleClass::Debug
+            }
         }
     }
 
