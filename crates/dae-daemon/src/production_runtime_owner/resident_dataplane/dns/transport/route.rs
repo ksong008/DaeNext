@@ -214,10 +214,12 @@ where
     F: Fn(ResidentDnsUpstreamRoutedTarget) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<u8>, ResidentDnsTransportError>>,
 {
+    let preserve_single_truncated_error = targets.len() == 1 && failures.is_empty();
     let mut remaining = targets.into_iter();
     let mut attempts = FuturesUnordered::new();
     let mut attempted = 0_usize;
     let mut every_attempt_invalidates_stale = true;
+    let mut single_truncated_error = None;
     for _ in 0..width.max(1) {
         let Some(target) = remaining.next() else {
             break;
@@ -233,7 +235,11 @@ where
                 }
                 attempted += 1;
                 every_attempt_invalidates_stale &= error.invalidates_stale_target();
-                failures.push(error.to_string());
+                if preserve_single_truncated_error && error.is_udp_truncated() {
+                    single_truncated_error = Some(error);
+                } else {
+                    failures.push(error.to_string());
+                }
             }
         }
         if let Some(target) = remaining.next() {
@@ -242,6 +248,9 @@ where
     }
     if attempted > 0 && every_attempt_invalidates_stale && resolved.is_stale() {
         let _ = upstream.target.refresh_after_stale_failure(resolved).await;
+    }
+    if let Some(error) = single_truncated_error {
+        return Err(error);
     }
     Err(ResidentDnsTransportError::message(
         dns_upstream_targets_failed(upstream, operation, failures),

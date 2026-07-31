@@ -154,15 +154,13 @@ async fn forward_dns_udp_branch_async(
         failures,
         forwarders.resources.upstream_candidate_race_width(),
         |target| async move {
-            let target_text = target.target.to_string();
+            let remote = target.target;
             let response = forward_dns_udp_to_routed_target_async(
                 upstream, target, payload, forwarders, context,
             )
             .await?;
             if dns_response_truncated(&response) {
-                Err(ResidentDnsTransportError::message(format!(
-                    "{target_text} UDP response truncated"
-                )))
+                Err(ResidentDnsTransportError::udp_truncated(remote))
             } else {
                 Ok(response)
             }
