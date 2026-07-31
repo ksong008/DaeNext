@@ -1,3 +1,5 @@
+use std::io::IoSlice;
+
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::DNS_TCP_MESSAGE_READ_LIMIT;
@@ -40,14 +42,31 @@ where
 {
     let len = u16::try_from(payload.len())
         .map_err(|_| format!("DNS TCP response exceeds frame limit: {}", payload.len()))?;
-    stream
-        .write_all(&len.to_be_bytes())
+    let length = len.to_be_bytes();
+    let slices = [IoSlice::new(&length), IoSlice::new(payload)];
+    let written = stream
+        .write_vectored(&slices)
         .await
-        .map_err(|err| format!("write DNS TCP response length: {err}"))?;
-    stream
-        .write_all(payload)
-        .await
-        .map_err(|err| format!("write DNS TCP response payload: {err}"))?;
+        .map_err(|err| format!("write DNS TCP response frame: {err}"))?;
+    if written == 0 {
+        return Err("write DNS TCP response frame returned zero bytes".to_owned());
+    }
+    let frame_len = length.len().saturating_add(payload.len());
+    if written < length.len() {
+        stream
+            .write_all(&length[written..])
+            .await
+            .map_err(|err| format!("write DNS TCP response length remainder: {err}"))?;
+        stream
+            .write_all(payload)
+            .await
+            .map_err(|err| format!("write DNS TCP response payload: {err}"))?;
+    } else if written < frame_len {
+        stream
+            .write_all(&payload[written - length.len()..])
+            .await
+            .map_err(|err| format!("write DNS TCP response payload remainder: {err}"))?;
+    }
     stream
         .flush()
         .await
