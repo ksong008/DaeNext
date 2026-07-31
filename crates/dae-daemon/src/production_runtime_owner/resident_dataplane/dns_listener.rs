@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener, UdpSocket};
+use std::os::fd::AsRawFd;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{
@@ -25,6 +26,12 @@ use super::dns::{
 use super::events::{ResidentEventKind, ResidentEventMetadata, append_event_with_metadata};
 use super::*;
 
+#[path = "dns_listener/tcp_admission.rs"]
+mod tcp_admission;
+use tcp_admission::{ResidentDnsTcpBindAdmission, accept_resident_dns_tcp_bind_connection_async};
+#[path = "dns_listener/udp_dispatcher.rs"]
+mod udp_dispatcher;
+use udp_dispatcher::{ResidentDnsUdpBindDispatcher, ResidentDnsUdpBindJob};
 const DNS_BIND_READ_LIMIT: usize = DNS_MAX_UDP_MESSAGE_SIZE;
 const DNS_BIND_TCP_IO_TIMEOUT: std::time::Duration = RESIDENT_UDP_RESPONSE_TIMEOUT;
 
@@ -53,6 +60,8 @@ pub(super) struct ResidentDnsBindListener {
     endpoint: ResidentDnsBindEndpoint,
     udp_local_addr: Option<SocketAddr>,
     tcp_local_addr: Option<SocketAddr>,
+    tcp_listen_backlog: Option<usize>,
+    resources: ResidentDnsResourceProfile,
 }
 
 impl ResidentDnsBindListener {
@@ -63,6 +72,7 @@ impl ResidentDnsBindListener {
             "configured": self.configured,
             "udp_local_addr": self.udp_local_addr.map(|addr| addr.to_string()),
             "tcp_local_addr": self.tcp_local_addr.map(|addr| addr.to_string()),
+            "tcp_listen_backlog": self.tcp_listen_backlog,
             "status": "pass",
         })
     }
@@ -79,6 +89,7 @@ pub(super) fn disabled_dns_bind_listener_report() -> Value {
 
 pub(super) fn prepare_resident_dns_bind_listener(
     bind: &str,
+    resources: ResidentDnsResourceProfile,
 ) -> Result<Option<ResidentDnsBindListener>, String> {
     let Some(endpoint) = parse_resident_dns_bind_endpoint(bind)? else {
         return Ok(None);
@@ -96,6 +107,7 @@ pub(super) fn prepare_resident_dns_bind_listener(
     let tcp_listener = if endpoint.tcp {
         let listener = StdTcpListener::bind(endpoint.addr)
             .map_err(|err| format!("bind resident DNS TCP listener {}: {err}", endpoint.addr))?;
+        set_resident_dns_tcp_listener_backlog(&listener, resources.bind_tcp_listen_backlog())?;
         listener
             .set_nonblocking(true)
             .map_err(|err| format!("set resident DNS TCP listener nonblocking: {err}"))?;
@@ -120,7 +132,28 @@ pub(super) fn prepare_resident_dns_bind_listener(
         endpoint,
         udp_local_addr,
         tcp_local_addr,
+        tcp_listen_backlog: endpoint.tcp.then(|| resources.bind_tcp_listen_backlog()),
+        resources,
     }))
+}
+
+fn set_resident_dns_tcp_listener_backlog(
+    listener: &StdTcpListener,
+    requested: usize,
+) -> Result<(), String> {
+    let backlog = i32::try_from(requested)
+        .map_err(|_| format!("resident DNS TCP listen backlog exceeds i32: {requested}"))?;
+    // SAFETY: the listener owns a valid listening socket for the duration of the call;
+    // listen does not take ownership of the descriptor. Linux permits updating the
+    // backlog of an existing listening socket, and still caps it by net.core.somaxconn.
+    let status = unsafe { libc::listen(listener.as_raw_fd(), backlog) };
+    if status < 0 {
+        return Err(format!(
+            "set resident DNS TCP listen backlog to {requested}: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
 }
 
 pub(super) async fn run_resident_dns_bind_listener_async(
@@ -129,9 +162,10 @@ pub(super) async fn run_resident_dns_bind_listener_async(
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
+    executor_worker_threads: usize,
 ) {
     let configured = listener.configured.clone();
-    let resources = ResidentDnsResourceProfile::selected();
+    let resources = listener.resources;
     let mut tasks = tokio::task::JoinSet::new();
     if let Some(socket) = listener.udp_socket.take() {
         let local_addr = listener.udp_local_addr.expect("udp local addr was read");
@@ -146,6 +180,7 @@ pub(super) async fn run_resident_dns_bind_listener_async(
                     event_file.clone(),
                     Arc::clone(&event_lock),
                     resources,
+                    executor_worker_threads,
                 ));
             }
             Err(err) => append_event(
@@ -233,7 +268,11 @@ async fn run_resident_dns_udp_bind_listener_async(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     resources: ResidentDnsResourceProfile,
+    executor_worker_threads: usize,
 ) {
+    let dispatcher_shards = executor_worker_threads
+        .max(1)
+        .min(resources.bind_udp_inflight());
     append_event(
         &event_file,
         &event_lock,
@@ -244,16 +283,23 @@ async fn run_resident_dns_udp_bind_listener_async(
             "network": "udp",
             "handler": "resident-dns-udp",
             "max_inflight": resources.bind_udp_inflight(),
+            "dispatcher_shards": dispatcher_shards,
             "resources": resources.json(),
         }),
     );
     let socket = Arc::new(socket);
     let semaphore = Arc::new(Semaphore::new(resources.bind_udp_inflight()));
-    let mut tasks = tokio::task::JoinSet::new();
+    let mut dispatcher = ResidentDnsUdpBindDispatcher::start(
+        Arc::clone(&socket),
+        local_addr,
+        event_file.clone(),
+        Arc::clone(&event_lock),
+        dispatcher_shards,
+        resources.bind_udp_inflight(),
+    );
     let mut buf = vec![0_u8; DNS_BIND_READ_LIMIT];
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
-            Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
             received = socket.recv_from(&mut buf) => {
                 let (read, peer) = match received {
                     Ok(received) => received,
@@ -307,32 +353,41 @@ async fn run_resident_dns_udp_bind_listener_async(
                 let metrics = Arc::clone(&generation.metrics);
                 let flow_stop = generation.drain_control.flow_stop_handle();
                 drop(generation);
-                let task_socket = Arc::clone(&socket);
-                let task_event_file = event_file.clone();
-                let task_event_lock = Arc::clone(&event_lock);
-                tasks.spawn(async move {
-                    let _ = run_until_resident_stop(
-                        &flow_stop,
-                        handle_resident_dns_udp_bind_packet_async(
-                            task_socket,
-                            local_addr,
-                            peer,
-                            dns,
-                            metrics,
-                            request,
-                            task_event_file,
-                            task_event_lock,
-                            permit,
-                        ),
-                    )
-                    .await;
-                });
+                let job = ResidentDnsUdpBindJob {
+                    peer,
+                    dns,
+                    metrics,
+                    request,
+                    flow_stop,
+                    permit,
+                };
+                if let Err(job) = dispatcher.try_dispatch(job) {
+                    job.metrics.add_upload(job.request.len());
+                    let _ = send_resident_dns_udp_bind_failure_response(
+                        &socket,
+                        job.peer,
+                        &job.request,
+                        job.metrics.as_ref(),
+                    ).await;
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({
+                            "event": "dns_bind_dispatch_unavailable",
+                            "local_addr": local_addr.to_string(),
+                            "peer": job.peer.to_string(),
+                            "network": "udp",
+                            "dispatcher_shards": dispatcher.shard_count(),
+                        }),
+                    );
+                }
             }
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {}
         }
     }
-    let shutdown =
-        shutdown_resident_task_set(&mut tasks, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE).await;
+    let shutdown = dispatcher
+        .shutdown(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+        .await;
     append_event(
         &event_file,
         &event_lock,
@@ -340,6 +395,7 @@ async fn run_resident_dns_udp_bind_listener_async(
             "event": "dns_bind_listener_stopped",
             "local_addr": local_addr.to_string(),
             "network": "udp",
+            "dispatcherShards": dispatcher_shards,
             "tasksJoined": shutdown.joined,
             "tasksCancelled": shutdown.cancelled,
             "tasksPanicked": shutdown.panicked,
@@ -387,19 +443,22 @@ async fn handle_resident_dns_udp_bind_packet_async(
                             })
                         },
                     );
-                    append_event(
+                    append_event_with_metadata(
                         &event_file,
                         &event_lock,
-                        json!({
-                            "event": "dns_bind_query_finished",
-                            "local_addr": local_addr.to_string(),
-                            "peer": peer.to_string(),
-                            "network": "udp",
-                            "request_bytes": request.len(),
-                            "response_bytes": response_len,
-                            "sent_bytes": sent,
-                            "handler": "resident-dns-udp",
-                        }),
+                        ResidentEventMetadata::new(ResidentEventKind::DnsBindQueryFinished),
+                        || {
+                            json!({
+                                "event": "dns_bind_query_finished",
+                                "local_addr": local_addr.to_string(),
+                                "peer": peer.to_string(),
+                                "network": "udp",
+                                "request_bytes": request.len(),
+                                "response_bytes": response_len,
+                                "sent_bytes": sent,
+                                "handler": "resident-dns-udp",
+                            })
+                        },
                     );
                 }
                 Err(err) => {
@@ -507,79 +566,89 @@ async fn run_resident_dns_tcp_bind_listener_async(
     let semaphore = Arc::new(Semaphore::new(resources.bind_tcp_connections()));
     let query_semaphore = Arc::new(Semaphore::new(resources.bind_tcp_queries()));
     let mut tasks = tokio::task::JoinSet::new();
-    let mut stop_listener = stop.listener();
+    let mut admission_wait_active = false;
     while !stop.load(Ordering::Relaxed) {
-        tokio::select! {
-            _ = stop_listener.cancelled() => break,
-            _ = tasks.join_next(), if !tasks.is_empty() => {}
-            accepted = listener.accept() => {
-                let (stream, peer) = match accepted {
-                    Ok(accepted) => accepted,
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
-                    Err(err) => {
-                        if !stop.load(Ordering::Relaxed) {
-                            append_event(
-                                &event_file,
-                                &event_lock,
-                                json!({
-                                    "event": "dns_bind_accept_failed",
-                                    "local_addr": local_addr.to_string(),
-                                    "network": "tcp",
-                                    "error": err.to_string(),
-                                }),
-                            );
-                        }
-                        continue;
-                    }
-                };
-                let generation = active_generation.load();
-                let permit = match Arc::clone(&semaphore).try_acquire_owned() {
-                    Ok(permit) => permit,
-                    Err(tokio::sync::TryAcquireError::NoPermits) => {
-                        append_event(
-                            &event_file,
-                            &event_lock,
-                            json!({
-                                "event": "dns_bind_overloaded",
-                                "local_addr": local_addr.to_string(),
-                                "peer": peer.to_string(),
-                                "network": "tcp",
-                                "max_inflight": resources.bind_tcp_connections(),
-                            }),
-                        );
-                        drop(stream);
-                        continue;
-                    }
-                    Err(tokio::sync::TryAcquireError::Closed) => break,
-                };
-                let dns = Arc::clone(&generation.dns);
-                let metrics = Arc::clone(&generation.metrics);
-                let flow_stop = generation.drain_control.flow_stop_handle();
-                drop(generation);
-                let task_event_file = event_file.clone();
-                let task_event_lock = Arc::clone(&event_lock);
-                let query_semaphore = Arc::clone(&query_semaphore);
-                tasks.spawn(async move {
-                    let _ = run_until_resident_stop(
-                        &flow_stop,
-                        handle_resident_dns_tcp_bind_connection_async(
-                            stream,
-                            peer,
-                            local_addr,
-                            dns,
-                            metrics,
-                            Arc::clone(&flow_stop),
-                            query_semaphore,
-                            task_event_file,
-                            task_event_lock,
-                            resources,
-                            permit,
-                        ),
-                    )
-                    .await;
-                });
+        let admission = accept_resident_dns_tcp_bind_connection_async(
+            &listener,
+            &semaphore,
+            &mut tasks,
+            &stop,
+            || {
+                if admission_wait_active {
+                    return;
+                }
+                admission_wait_active = true;
+                append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({
+                        "event": "dns_bind_admission_wait",
+                        "local_addr": local_addr.to_string(),
+                        "network": "tcp",
+                        "mode": "kernel-listen-backlog",
+                        "max_inflight": resources.bind_tcp_connections(),
+                    }),
+                );
+            },
+        )
+        .await;
+        let ResidentDnsTcpBindAdmission::Accepted {
+            stream,
+            peer,
+            permit,
+            waited,
+        } = (match admission {
+            Ok(admission) => admission,
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) => {
+                if !stop.load(Ordering::Relaxed) {
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({
+                            "event": "dns_bind_accept_failed",
+                            "local_addr": local_addr.to_string(),
+                            "network": "tcp",
+                            "error": err.to_string(),
+                        }),
+                    );
+                }
+                continue;
             }
+        })
+        else {
+            break;
+        };
+        if !waited {
+            admission_wait_active = false;
         }
+        let generation = active_generation.load();
+        let dns = Arc::clone(&generation.dns);
+        let metrics = Arc::clone(&generation.metrics);
+        let flow_stop = generation.drain_control.flow_stop_handle();
+        drop(generation);
+        let task_event_file = event_file.clone();
+        let task_event_lock = Arc::clone(&event_lock);
+        let query_semaphore = Arc::clone(&query_semaphore);
+        tasks.spawn(async move {
+            let _ = run_until_resident_stop(
+                &flow_stop,
+                handle_resident_dns_tcp_bind_connection_async(
+                    stream,
+                    peer,
+                    local_addr,
+                    dns,
+                    metrics,
+                    Arc::clone(&flow_stop),
+                    query_semaphore,
+                    task_event_file,
+                    task_event_lock,
+                    resources,
+                    permit,
+                ),
+            )
+            .await;
+        });
     }
     let shutdown =
         shutdown_resident_task_set(&mut tasks, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE).await;
@@ -853,19 +922,22 @@ async fn run_resident_dns_tcp_bind_writer_async(
                         })
                     },
                 );
-                append_event(
+                append_event_with_metadata(
                     &event_file,
                     &event_lock,
-                    json!({
-                        "event": "dns_bind_query_finished",
-                        "local_addr": local_addr.to_string(),
-                        "peer": peer.to_string(),
-                        "network": "tcp",
-                        "request_bytes": response.request.len(),
-                        "response_bytes": response_len,
-                        "sent_bytes": response_len + 2,
-                        "handler": "resident-dns-tcp",
-                    }),
+                    ResidentEventMetadata::new(ResidentEventKind::DnsBindQueryFinished),
+                    || {
+                        json!({
+                            "event": "dns_bind_query_finished",
+                            "local_addr": local_addr.to_string(),
+                            "peer": peer.to_string(),
+                            "network": "tcp",
+                            "request_bytes": response.request.len(),
+                            "response_bytes": response_len,
+                            "sent_bytes": response_len + 2,
+                            "handler": "resident-dns-tcp",
+                        })
+                    },
                 );
             }
             Err(error) => {

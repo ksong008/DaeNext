@@ -278,8 +278,9 @@ const LOW_MEMORY_DNS_BIND_UDP_INFLIGHT: usize = 256;
 const BALANCED_DNS_BIND_UDP_INFLIGHT: usize = 1_024;
 const HIGH_PERFORMANCE_DNS_BIND_UDP_INFLIGHT: usize = 4_096;
 const LOW_MEMORY_DNS_BIND_TCP_CONNECTIONS: usize = 64;
-const BALANCED_DNS_BIND_TCP_CONNECTIONS: usize = 256;
+const BALANCED_DNS_BIND_TCP_CONNECTIONS: usize = 512;
 const HIGH_PERFORMANCE_DNS_BIND_TCP_CONNECTIONS: usize = 1_024;
+const DNS_BIND_TCP_LISTEN_BACKLOG_FLOOR: usize = 128;
 const LOW_MEMORY_DNS_BIND_TCP_QUERIES: usize = 512;
 const BALANCED_DNS_BIND_TCP_QUERIES: usize = 4_096;
 const HIGH_PERFORMANCE_DNS_BIND_TCP_QUERIES: usize = 16_384;
@@ -555,6 +556,14 @@ impl ResidentDnsResourceProfile {
         self.bind_tcp_connections
     }
 
+    pub(crate) const fn bind_tcp_listen_backlog(self) -> usize {
+        if self.bind_tcp_connections < DNS_BIND_TCP_LISTEN_BACKLOG_FLOOR {
+            DNS_BIND_TCP_LISTEN_BACKLOG_FLOOR
+        } else {
+            self.bind_tcp_connections
+        }
+    }
+
     pub(crate) const fn bind_tcp_queries(self) -> usize {
         self.bind_tcp_queries
     }
@@ -576,6 +585,7 @@ impl ResidentDnsResourceProfile {
             "tcpRequestsPerConnection": self.tcp_requests_per_connection,
             "bindUdpInflight": self.bind_udp_inflight,
             "bindTcpConnections": self.bind_tcp_connections,
+            "bindTcpListenBacklog": self.bind_tcp_listen_backlog(),
             "bindTcpQueries": self.bind_tcp_queries,
             "bindTcpQueriesPerConnection": self.bind_tcp_queries_per_connection,
         })
@@ -1966,6 +1976,12 @@ mod tests {
         assert!(balanced.tcp_requests_per_connection() < high.tcp_requests_per_connection());
         assert!(low.bind_udp_inflight() < balanced.bind_udp_inflight());
         assert!(balanced.bind_udp_inflight() < high.bind_udp_inflight());
+        assert_eq!(low.bind_tcp_connections(), 64);
+        assert_eq!(balanced.bind_tcp_connections(), 512);
+        assert_eq!(high.bind_tcp_connections(), 1_024);
+        assert_eq!(low.bind_tcp_listen_backlog(), 128);
+        assert_eq!(balanced.bind_tcp_listen_backlog(), 512);
+        assert_eq!(high.bind_tcp_listen_backlog(), 1_024);
         assert!(low.bind_tcp_connections() < balanced.bind_tcp_connections());
         assert!(balanced.bind_tcp_connections() < high.bind_tcp_connections());
         assert!(low.bind_tcp_queries() < balanced.bind_tcp_queries());
