@@ -2,6 +2,7 @@ use base64::Engine;
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, TcpListener, UdpSocket};
+use std::os::fd::AsRawFd;
 use std::thread;
 use std::time::Duration;
 
@@ -235,6 +236,8 @@ fn tcp_direct_connect_records_socket_contract() {
     let (listener, listener_report) = bind_loopback_tcp_listener(false).unwrap();
     assert!(!listener_report.requested_mptcp);
     assert_eq!(listener_report.socket_protocol, libc::IPPROTO_TCP);
+    let default_keep_count = tcp_i32_option(&listener, libc::IPPROTO_TCP, libc::TCP_KEEPCNT);
+    let default_user_timeout = tcp_i32_option(&listener, libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT);
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
         let (mut conn, _) = listener.accept().unwrap();
@@ -262,6 +265,31 @@ fn tcp_direct_connect_records_socket_contract() {
     assert_eq!(conn.report.socket_protocol, libc::IPPROTO_TCP);
     assert!(conn.report.so_mark_applied);
     assert_eq!(conn.report.peer_addr, format!("127.0.0.1:{port}"));
+    assert_default_tcp_liveness_policy(&conn.stream, default_keep_count, default_user_timeout);
+    handle.join().unwrap();
+}
+
+#[test]
+fn tcp_direct_mptcp_attempt_and_tcp_fallback_preserve_liveness_policy() {
+    let (listener, _) = bind_loopback_tcp_listener(false).unwrap();
+    let default_keep_count = tcp_i32_option(&listener, libc::IPPROTO_TCP, libc::TCP_KEEPCNT);
+    let default_user_timeout = tcp_i32_option(&listener, libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT);
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || listener.accept().unwrap());
+
+    let conn = magic_tcp_connect(
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
+        &TcpDirectDialOptions {
+            mark: 0,
+            mptcp: true,
+            timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+
+    assert!(conn.report.mptcp_socket_attempted);
+    assert_default_tcp_liveness_policy(&conn.stream, default_keep_count, default_user_timeout);
+    drop(conn);
     handle.join().unwrap();
 }
 
@@ -309,6 +337,8 @@ fn tcp_direct_connect_supports_ipv6_loopback_when_available() {
         Ok(listener) => listener,
         Err(_) => return,
     };
+    let default_keep_count = tcp_i32_option(&listener, libc::IPPROTO_TCP, libc::TCP_KEEPCNT);
+    let default_user_timeout = tcp_i32_option(&listener, libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT);
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
         let (mut conn, _) = listener.accept().unwrap();
@@ -332,6 +362,7 @@ fn tcp_direct_connect_supports_ipv6_loopback_when_available() {
     conn.stream.read_exact(&mut ack).unwrap();
     assert_eq!(&ack, b"fixture-ipv6-ok");
     assert_eq!(conn.report.peer_addr, format!("[::1]:{port}"));
+    assert_default_tcp_liveness_policy(&conn.stream, default_keep_count, default_user_timeout);
     handle.join().unwrap();
 }
 
@@ -371,4 +402,49 @@ fn udp_direct_packet_conn_supports_ipv6_loopback_when_available() {
 
 fn load(path: &str) -> Value {
     dae_golden::load_json(path).unwrap()
+}
+
+fn tcp_i32_option(socket: &impl AsRawFd, level: i32, option: i32) -> i32 {
+    let mut value = 0_i32;
+    let mut len = std::mem::size_of::<i32>() as libc::socklen_t;
+    let status = unsafe {
+        libc::getsockopt(
+            socket.as_raw_fd(),
+            level,
+            option,
+            (&mut value as *mut i32).cast::<libc::c_void>(),
+            &mut len as *mut libc::socklen_t,
+        )
+    };
+    assert_eq!(status, 0, "getsockopt({option}) failed");
+    value
+}
+
+fn assert_default_tcp_liveness_policy(
+    stream: &impl AsRawFd,
+    default_keep_count: i32,
+    default_user_timeout: i32,
+) {
+    assert_eq!(
+        tcp_i32_option(stream, libc::SOL_SOCKET, libc::SO_KEEPALIVE),
+        1
+    );
+    assert_eq!(
+        tcp_i32_option(stream, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE),
+        crate::tcp_liveness::DEFAULT_TCP_LIVENESS_POLICY.keepalive_idle_seconds()
+    );
+    assert_eq!(
+        tcp_i32_option(stream, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL),
+        crate::tcp_liveness::DEFAULT_TCP_LIVENESS_POLICY.keepalive_interval_seconds()
+    );
+    assert_eq!(
+        tcp_i32_option(stream, libc::IPPROTO_TCP, libc::TCP_KEEPCNT),
+        default_keep_count,
+        "TCP_KEEPCNT must remain at the kernel default"
+    );
+    assert_eq!(
+        tcp_i32_option(stream, libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT),
+        default_user_timeout,
+        "TCP_USER_TIMEOUT must remain at the kernel default"
+    );
 }
