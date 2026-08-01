@@ -150,7 +150,10 @@ impl UdpSessionExecutor {
             Self::VmessAead(session) => session.poll_response().await.map(|response| {
                 response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
             }),
-            Self::Dns | Self::Juicity(_) | Self::FailClosed { .. } => Ok(None),
+            Self::Juicity(session) => session.poll_response().await.map(|response| {
+                response.map(|response| (ResidentEventKind::UdpPacketFinished, response))
+            }),
+            Self::Dns | Self::FailClosed { .. } => Ok(None),
         }
     }
 }
