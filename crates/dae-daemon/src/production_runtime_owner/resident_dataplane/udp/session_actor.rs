@@ -88,6 +88,9 @@ async fn run_udp_session_actor(
     let idle_timeout = key.idle_timeout(context.proxy_session_idle_timeout);
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
+    let response_buffer_timer = time::sleep(context.response_buffer_idle_timeout);
+    tokio::pin!(response_buffer_timer);
+    let mut response_buffer_timer_armed = false;
     let mut stop_listener = context.actor_stop.listener();
     'session: loop {
         tokio::select! {
@@ -101,9 +104,8 @@ async fn run_udp_session_actor(
                     Some(managed) => managed,
                     None => break,
                 };
-                idle_timer
-                    .as_mut()
-                    .reset(time::Instant::now() + idle_timeout);
+                let activity_at = time::Instant::now();
+                idle_timer.as_mut().reset(activity_at + idle_timeout);
                 packets += 1;
                 if executor.is_none() {
                     let mut selected_executor = if managed.force_proxy_packet {
@@ -202,6 +204,16 @@ async fn run_udp_session_actor(
                         }
                     }
                 }
+                if !response_buffer_timer_armed
+                    && executor
+                        .as_ref()
+                        .is_some_and(UdpSessionExecutor::has_response_buffer)
+                {
+                    response_buffer_timer
+                        .as_mut()
+                        .reset(activity_at + context.response_buffer_idle_timeout);
+                    response_buffer_timer_armed = true;
+                }
             }
             response = wait_and_record_udp_session_response(
                 &key,
@@ -213,6 +225,22 @@ async fn run_udp_session_actor(
                     stop_reason = err;
                     break;
                 }
+                if !response_buffer_timer_armed
+                    && executor
+                        .as_ref()
+                        .is_some_and(UdpSessionExecutor::has_response_buffer)
+                {
+                    response_buffer_timer.as_mut().reset(
+                        time::Instant::now() + context.response_buffer_idle_timeout,
+                    );
+                    response_buffer_timer_armed = true;
+                }
+            }
+            _ = &mut response_buffer_timer, if response_buffer_timer_armed => {
+                if let Some(executor) = executor.as_mut() {
+                    executor.reclaim_response_buffer();
+                }
+                response_buffer_timer_armed = false;
             }
             _ = &mut idle_timer => {
                 stop_reason = "idle-timeout".to_owned();

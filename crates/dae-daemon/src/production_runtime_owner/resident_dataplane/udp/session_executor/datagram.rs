@@ -11,6 +11,7 @@ pub(super) struct DatagramRelay {
     remote_candidates: Vec<SocketAddr>,
     selected_index: usize,
     response_buf: Vec<u8>,
+    response_buffer_reclaimed: bool,
 }
 
 impl DatagramRelay {
@@ -96,18 +97,10 @@ impl DatagramRelay {
         if self.response_buf.len() < UDP_DATAGRAM_RESPONSE_CAPACITY {
             self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
         }
+        self.response_buffer_reclaimed = false;
         match socket.try_recv_from(&mut self.response_buf) {
             Ok((read, _)) => Ok(Some(self.response_buf[..read].to_vec())),
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    std::io::ErrorKind::WouldBlock
-                        | std::io::ErrorKind::Interrupted
-                        | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                Ok(None)
-            }
+            Err(err) if response_receive_is_pending(&err) => Ok(None),
             Err(err) => Err(format!("receive {label} UDP datagram: {err}")),
         }
     }
@@ -116,6 +109,12 @@ impl DatagramRelay {
         let Some(socket) = self.socket.as_ref() else {
             return Err(format!("{label} UDP relay socket is not initialized"));
         };
+        if self.response_buffer_reclaimed {
+            socket
+                .readable()
+                .await
+                .map_err(|err| format!("await {label} UDP response readiness: {err}"))?;
+        }
         if self.response_buf.len() < UDP_DATAGRAM_RESPONSE_CAPACITY {
             self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
         }
@@ -123,7 +122,21 @@ impl DatagramRelay {
             .recv_from(&mut self.response_buf)
             .await
             .map_err(|err| format!("receive {label} UDP datagram: {err}"))?;
+        self.response_buffer_reclaimed = false;
         Ok(self.response_buf[..read].to_vec())
+    }
+
+    pub(super) fn has_response_buffer(&self) -> bool {
+        self.response_buf.capacity() != 0
+    }
+
+    pub(super) fn reclaim_response_buffer(&mut self) -> bool {
+        if !self.has_response_buffer() {
+            return false;
+        }
+        self.response_buf = Vec::new();
+        self.response_buffer_reclaimed = true;
+        true
     }
 
     async fn ensure_open(&mut self, binding: &ResidentProxyBinding) -> Result<(), String> {
@@ -183,6 +196,15 @@ impl DatagramRelay {
         self.socket = Some(socket);
         Ok(())
     }
+}
+
+fn response_receive_is_pending(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::TimedOut
+    )
 }
 
 pub(super) async fn open_marked_tokio_udp_socket(
