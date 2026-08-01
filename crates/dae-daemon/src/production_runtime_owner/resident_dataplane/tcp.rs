@@ -196,11 +196,11 @@ mod transport_helpers;
 pub(crate) use self::transport_helpers::shutdown_xhttp_xmux_generation_owner;
 use self::transport_helpers::*;
 pub(crate) use self::transport_helpers::{
-    GrpcH2Response, GrpcHunkReadBuffer, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
-    XhttpStreamUploadClient, XhttpUploadClient, XhttpXmuxClearReport,
-    XhttpXmuxGenerationOwnerHandle, close_xhttp_download_client, close_xhttp_stream_upload_client,
-    close_xhttp_upload_client, open_grpc_h2_stream, open_h2_body_stream,
-    open_h2_body_stream_with_deferred_response, open_xhttp_packet_up_parts,
+    GrpcH2Response, GrpcHunkReadBuffer, XhttpDownloadClient, XhttpPacketUpParts,
+    XhttpPacketUpPipeline, XhttpStreamParts, XhttpStreamUploadClient, XhttpUploadClient,
+    XhttpXmuxClearReport, XhttpXmuxGenerationOwnerHandle, close_xhttp_download_client,
+    close_xhttp_stream_upload_client, close_xhttp_upload_client, open_grpc_h2_stream,
+    open_h2_body_stream, open_h2_body_stream_with_deferred_response, open_xhttp_packet_up_parts,
     open_xhttp_stream_parts, poll_xhttp_download_data, read_xhttp_download_data,
     relay_tcp_over_deferred_h2_body, relay_tcp_over_grpc_h2,
     relay_tcp_over_resident_tls_plain_async, relay_tcp_over_vmess_grpc_h2,

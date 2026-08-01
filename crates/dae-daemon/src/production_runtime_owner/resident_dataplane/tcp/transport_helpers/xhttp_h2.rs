@@ -3,6 +3,10 @@
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+use std::future::Future;
+use std::pin::Pin;
+
+type XhttpPacketUpCompletion = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'static>>;
 
 mod resolved_endpoint;
 use self::resolved_endpoint::XhttpResolvedEndpoint;
@@ -31,6 +35,9 @@ pub(crate) use self::client_io::{
     poll_xhttp_download_data, read_xhttp_download_data, send_xhttp_packet_up_request,
     send_xhttp_stream_data,
 };
+
+mod packet_up_pipeline;
+pub(crate) use self::packet_up_pipeline::XhttpPacketUpPipeline;
 
 mod relay;
 pub(crate) use self::relay::{relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream};

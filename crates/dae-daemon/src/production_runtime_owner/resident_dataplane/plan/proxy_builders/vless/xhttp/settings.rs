@@ -234,6 +234,18 @@ fn validate_resident_xhttp_settings_static(
     field: &str,
     node_tag: &str,
 ) -> Result<(), String> {
+    if let Some((from, to)) = settings.sc_max_each_post_bytes
+        && (from <= 0 || to <= 0)
+    {
+        return Err(format!(
+            "resident dataplane vless xHTTP {field}.scMaxEachPostBytes must be greater than 0 for node {node_tag}"
+        ));
+    }
+    if settings.sc_max_buffered_posts < 0 {
+        return Err(format!(
+            "resident dataplane vless xHTTP {field}.scMaxBufferedPosts rejects negative values for node {node_tag}"
+        ));
+    }
     if settings.server_max_header_bytes < 0 {
         return Err(format!(
             "resident dataplane vless xHTTP {field}.serverMaxHeaderBytes rejects negative values for node {node_tag}"

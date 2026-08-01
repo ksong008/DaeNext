@@ -59,14 +59,19 @@ pub(crate) async fn send_h2_data(
 
 pub(crate) async fn send_h2_data_with_context(
     send_stream: &mut h2::SendStream<Bytes>,
-    data: Bytes,
+    mut data: Bytes,
     end_stream: bool,
     context: &str,
 ) -> Result<(), String> {
-    let required = data.len();
-    if required > 0 {
-        send_stream.reserve_capacity(required);
-        while send_stream.capacity() < required {
+    if data.is_empty() {
+        return send_stream
+            .send_data(data, end_stream)
+            .map_err(|err| format!("send {context} data: {err}"));
+    }
+
+    while !data.is_empty() {
+        while send_stream.capacity() == 0 {
+            send_stream.reserve_capacity(data.len());
             let Some(capacity) = time::timeout(
                 RESIDENT_CONNECT_TIMEOUT,
                 poll_fn(|cx| send_stream.poll_capacity(cx)),
@@ -80,10 +85,16 @@ pub(crate) async fn send_h2_data_with_context(
             };
             capacity.map_err(|err| format!("reserve {context} send capacity: {err}"))?;
         }
+
+        let chunk_len = send_stream.capacity().min(data.len());
+        let chunk = data.split_to(chunk_len);
+        let chunk_ends_stream = end_stream && data.is_empty();
+        send_stream
+            .send_data(chunk, chunk_ends_stream)
+            .map_err(|err| format!("send {context} data: {err}"))?;
     }
-    send_stream
-        .send_data(data, end_stream)
-        .map_err(|err| format!("send {context} data: {err}"))
+
+    Ok(())
 }
 
 #[derive(Default)]

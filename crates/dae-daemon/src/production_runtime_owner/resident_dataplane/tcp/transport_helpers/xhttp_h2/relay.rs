@@ -1,8 +1,7 @@
-use super::client_io::{
-    read_xhttp_download_data, send_xhttp_packet_up_request, send_xhttp_stream_data,
-};
+use super::client_io::{read_xhttp_download_data, send_xhttp_stream_data};
 use super::*;
 use bytes::{Bytes, BytesMut};
+use futures_util::FutureExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const XHTTP_UPLOAD_READ_CHUNK: usize = 16 * 1024;
@@ -28,19 +27,20 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
     let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
     let upload_progress = progress.clone();
     let upload_direction = async move {
-        let mut inbound_read = inbound_read;
-        let mut buffer = BytesMut::with_capacity(XHTTP_UPLOAD_READ_CHUNK);
+        let mut pipeline = XhttpPacketUpPipeline::for_upload(upload);
+        let mut inbound = XhttpUploadChunkReader::new(inbound_read);
         loop {
-            match read_xhttp_upload_chunk(&mut inbound_read, &mut buffer).await {
-                Ok(None) => return Ok(()),
+            match inbound.read_chunk(pipeline.max_post_bytes()).await {
+                Ok(None) => return pipeline.finish().await,
                 Ok(Some(chunk)) => {
                     let read = chunk.len();
-                    send_xhttp_packet_up_request(upload, session_id, seq, chunk).await?;
-                    seq = seq.saturating_add(1);
+                    pipeline.send(upload, session_id, &mut seq, chunk).await?;
                     upload_progress.record_upload(read);
                     metrics.add_upload(read);
                 }
-                Err(err) if is_graceful_stream_close_error(&err) => return Ok(()),
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    return pipeline.finish().await;
+                }
                 Err(err) => return Err(format!("read inbound TCP for xHTTP relay: {err}")),
             }
         }
@@ -99,7 +99,7 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
         let mut inbound_read = inbound_read;
         let mut buffer = BytesMut::with_capacity(XHTTP_UPLOAD_READ_CHUNK);
         loop {
-            match read_xhttp_upload_chunk(&mut inbound_read, &mut buffer).await {
+            match read_xhttp_stream_upload_chunk(&mut inbound_read, &mut buffer).await {
                 Ok(None) => {
                     send_xhttp_stream_data(upload, Bytes::new(), true).await?;
                     return Ok(());
@@ -152,7 +152,7 @@ pub(crate) async fn relay_tcp_over_xhttp_stream(
     .await
 }
 
-async fn read_xhttp_upload_chunk(
+async fn read_xhttp_stream_upload_chunk(
     inbound: &mut (impl AsyncRead + Unpin),
     buffer: &mut BytesMut,
 ) -> std::io::Result<Option<Bytes>> {
@@ -163,3 +163,68 @@ async fn read_xhttp_upload_chunk(
     }
     Ok(Some(buffer.split_to(read).freeze()))
 }
+
+struct XhttpUploadChunkReader<R> {
+    inbound: R,
+    buffer: BytesMut,
+    terminal_error: Option<std::io::Error>,
+    eof: bool,
+}
+
+impl<R> XhttpUploadChunkReader<R>
+where
+    R: AsyncRead + Unpin,
+{
+    fn new(inbound: R) -> Self {
+        Self {
+            inbound,
+            buffer: BytesMut::with_capacity(XHTTP_UPLOAD_READ_CHUNK),
+            terminal_error: None,
+            eof: false,
+        }
+    }
+
+    async fn read_chunk(&mut self, max_chunk_bytes: usize) -> std::io::Result<Option<Bytes>> {
+        let max_chunk_bytes = max_chunk_bytes.max(1);
+        if self.buffer.is_empty() {
+            if let Some(error) = self.terminal_error.take() {
+                return Err(error);
+            }
+            if self.eof {
+                return Ok(None);
+            }
+            self.reserve_read_capacity(max_chunk_bytes);
+            let read = self.inbound.read_buf(&mut self.buffer).await?;
+            if read == 0 {
+                self.eof = true;
+                return Ok(None);
+            }
+        }
+
+        self.coalesce_ready_data(max_chunk_bytes);
+        let take = self.buffer.len().min(max_chunk_bytes);
+        Ok(Some(self.buffer.split_to(take).freeze()))
+    }
+
+    fn coalesce_ready_data(&mut self, max_chunk_bytes: usize) {
+        while self.buffer.len() < max_chunk_bytes && self.terminal_error.is_none() && !self.eof {
+            self.reserve_read_capacity(max_chunk_bytes);
+            match self.inbound.read_buf(&mut self.buffer).now_or_never() {
+                Some(Ok(0)) => self.eof = true,
+                Some(Ok(_)) => {}
+                Some(Err(error)) => self.terminal_error = Some(error),
+                None => break,
+            }
+        }
+    }
+
+    fn reserve_read_capacity(&mut self, max_chunk_bytes: usize) {
+        let remaining = max_chunk_bytes.saturating_sub(self.buffer.len());
+        self.buffer
+            .reserve(remaining.clamp(1, XHTTP_UPLOAD_READ_CHUNK));
+    }
+}
+
+#[cfg(test)]
+#[path = "relay/tests.rs"]
+mod tests;

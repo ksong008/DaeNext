@@ -153,6 +153,25 @@ pub(super) async fn send_xhttp_h2_packet_up_request(
     seq: u64,
     payload: Bytes,
 ) -> Result<(), String> {
+    begin_xhttp_h2_packet_up_request(sender, endpoint, session_id, seq, payload)
+        .await?
+        .await
+}
+
+pub(super) async fn begin_xhttp_h2_packet_up_request(
+    sender: &mut h2::client::SendRequest<Bytes>,
+    endpoint: &impl ResidentXhttpEndpointView,
+    session_id: &str,
+    seq: u64,
+    payload: Bytes,
+) -> Result<XhttpPacketUpCompletion, String> {
+    time::timeout(
+        RESIDENT_CONNECT_TIMEOUT,
+        std::future::poll_fn(|cx| sender.poll_ready(cx)),
+    )
+    .await
+    .map_err(|_| "xHTTP HTTP/2 packet-up request readiness timeout".to_owned())?
+    .map_err(|err| format!("prepare xHTTP HTTP/2 packet-up request: {err}"))?;
     let (request, body) = xhttp_h2_packet_up_request(endpoint, session_id, seq, payload)?;
     let end_stream = body.is_none();
     let (response, mut send_stream) = sender
@@ -161,17 +180,19 @@ pub(super) async fn send_xhttp_h2_packet_up_request(
     if let Some(body) = body {
         send_h2_data_with_context(&mut send_stream, body, true, "xHTTP HTTP/2 packet-up").await?;
     }
-    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
-        .await
-        .map_err(|_| "xHTTP HTTP/2 packet-up response headers timeout".to_owned())?
-        .map_err(|err| format!("read xHTTP HTTP/2 packet-up response headers: {err}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "xHTTP HTTP/2 packet-up response status {}",
-            response.status()
-        ));
-    }
-    drain_xhttp_h2_response_body(response.into_body()).await
+    Ok(Box::pin(async move {
+        let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
+            .await
+            .map_err(|_| "xHTTP HTTP/2 packet-up response headers timeout".to_owned())?
+            .map_err(|err| format!("read xHTTP HTTP/2 packet-up response headers: {err}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "xHTTP HTTP/2 packet-up response status {}",
+                response.status()
+            ));
+        }
+        drain_xhttp_h2_response_body(response.into_body()).await
+    }))
 }
 
 pub(super) async fn refresh_xhttp_h2_packet_up_client_if_needed(
@@ -218,3 +239,7 @@ pub(crate) async fn drain_xhttp_h2_response_body(mut body: h2::RecvStream) -> Re
             .map_err(|err| format!("release xHTTP HTTP/2 packet-up response capacity: {err}"))?;
     }
 }
+
+#[cfg(test)]
+#[path = "h2_transport/tests.rs"]
+mod tests;

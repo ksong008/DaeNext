@@ -86,14 +86,13 @@ use super::plan::{
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcH2Response, GrpcHunkReadBuffer,
     QuicEndpointCallerClass, VmessHttpHeaderStream, XhttpDownloadClient, XhttpPacketUpParts,
-    XhttpStreamParts, XhttpStreamUploadClient, XhttpUploadClient, close_xhttp_download_client,
-    close_xhttp_stream_upload_client, close_xhttp_upload_client,
+    XhttpPacketUpPipeline, XhttpStreamParts, XhttpStreamUploadClient, XhttpUploadClient,
+    close_xhttp_download_client, close_xhttp_stream_upload_client, close_xhttp_upload_client,
     httpupgrade_handshake_over_resident_tls_async, inherit_quic_endpoint_observation,
     open_grpc_h2_stream, open_h2_body_stream, open_vmess_http_header_stream,
     open_xhttp_packet_up_parts, open_xhttp_stream_parts, poll_xhttp_download_data,
     read_xhttp_download_data, send_grpc_hunk, send_h2_data, send_h2_data_with_context,
-    send_xhttp_packet_up_request, send_xhttp_stream_data, set_socket_mark,
-    websocket_handshake_over_resident_tls_async,
+    send_xhttp_stream_data, set_socket_mark, websocket_handshake_over_resident_tls_async,
     write_websocket_binary_frame_over_resident_tls_async,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};

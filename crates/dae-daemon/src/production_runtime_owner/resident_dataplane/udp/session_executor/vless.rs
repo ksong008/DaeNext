@@ -188,6 +188,7 @@ impl VlessXudpStreamSession {
 #[derive(Default)]
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXhttpH2UdpSession {
     packet_upload: Option<XhttpUploadClient>,
+    packet_pipeline: Option<XhttpPacketUpPipeline>,
     stream_upload: Option<XhttpStreamUploadClient>,
     download: Option<XhttpDownloadClient>,
     session_id: Option<String>,
@@ -263,6 +264,7 @@ impl VlessXhttpH2UdpSession {
                     upload_http_version,
                     ..
                 } = open_xhttp_packet_up_parts(binding, proxy.mptcp).await?;
+                self.packet_pipeline = Some(XhttpPacketUpPipeline::for_upload(&upload));
                 self.packet_upload = Some(upload);
                 self.download = Some(download);
                 self.session_id = Some(session_id);
@@ -306,7 +308,13 @@ impl VlessXhttpH2UdpSession {
                 .session_id
                 .as_deref()
                 .ok_or_else(|| "VLESS xHTTP UDP session id is not initialized".to_owned())?;
-            send_xhttp_packet_up_request(upload, session_id, self.seq, payload).await?;
+            let pipeline = self.packet_pipeline.as_mut().ok_or_else(|| {
+                "VLESS xHTTP UDP packet-up pipeline is not initialized".to_owned()
+            })?;
+            pipeline
+                .send(upload, session_id, &mut self.seq, payload)
+                .await?;
+            return Ok(());
         } else if let Some(upload) = self.stream_upload.as_mut() {
             send_xhttp_stream_data(upload, payload, false).await?;
         } else {
@@ -328,18 +336,50 @@ impl VlessXhttpH2UdpSession {
         &mut self,
         mode: UdpStreamReadMode,
     ) -> Result<Option<UdpExchangeResult>, String> {
+        if let Some(pipeline) = self.packet_pipeline.as_mut() {
+            pipeline.poll_ready()?;
+        }
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
         }
         if self.download.is_none() && mode.waits_for_readiness() {
             return std::future::pending().await;
         }
-        let Some(download) = self.download.as_mut() else {
-            return Ok(None);
-        };
         let data = if mode.waits_for_readiness() {
-            read_xhttp_download_data(download).await?
+            loop {
+                let completion_in_flight = self
+                    .packet_pipeline
+                    .as_ref()
+                    .is_some_and(XhttpPacketUpPipeline::has_in_flight);
+                if !completion_in_flight {
+                    let Some(download) = self.download.as_mut() else {
+                        return std::future::pending().await;
+                    };
+                    break read_xhttp_download_data(download).await?;
+                }
+                let (pipeline, download) = (&mut self.packet_pipeline, &mut self.download);
+                let pipeline = pipeline
+                    .as_mut()
+                    .ok_or_else(|| "VLESS xHTTP UDP packet-up pipeline disappeared".to_owned())?;
+                let Some(download) = download.as_mut() else {
+                    pipeline.wait_one().await?;
+                    continue;
+                };
+                let data = tokio::select! {
+                    completion = pipeline.wait_one() => {
+                        completion?;
+                        None
+                    }
+                    data = read_xhttp_download_data(download) => Some(data),
+                };
+                if let Some(data) = data {
+                    break data?;
+                }
+            }
         } else {
+            let Some(download) = self.download.as_mut() else {
+                return Ok(None);
+            };
             poll_xhttp_download_data(download).await?
         };
         match data {
@@ -356,6 +396,7 @@ impl VlessXhttpH2UdpSession {
     }
 
     pub(super) async fn shutdown(&mut self) {
+        self.packet_pipeline.take();
         if let Some(download) = self.download.take() {
             close_xhttp_download_client(download).await;
         }
@@ -564,3 +605,7 @@ mod fixed_target_tests {
         assert_response_is_bound(xhttp.response_result(b"xhttp".to_vec()), target);
     }
 }
+
+#[cfg(test)]
+#[path = "vless/packet_up_tests.rs"]
+mod packet_up_tests;
