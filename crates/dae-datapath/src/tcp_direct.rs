@@ -4,6 +4,8 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::time::Duration;
 
+use crate::tcp_liveness::apply_tcp_liveness_policy;
+
 const IPPROTO_MPTCP: libc::c_int = 262;
 const SOL_MPTCP: libc::c_int = 284;
 const MPTCP_INFO: libc::c_int = 1;
@@ -142,7 +144,7 @@ pub fn tcp_direct_connect_start(
 ) -> io::Result<TcpDirectConnectAttempt> {
     let family = socket_family(target);
     let (fd, mptcp_socket_created, _) =
-        open_tcp_socket_with_flags(family, use_mptcp, libc::SOCK_NONBLOCK)?;
+        open_outbound_tcp_socket_with_flags(family, use_mptcp, libc::SOCK_NONBLOCK)?;
     if opts.mark != 0 {
         set_so_mark(fd.as_raw_fd(), opts.mark)?;
     }
@@ -176,7 +178,7 @@ fn connect_with_protocol(
     use_mptcp: bool,
 ) -> io::Result<TcpDirectConnection> {
     let (fd, mptcp_socket_created, tcp_socket_retry_used) =
-        open_tcp_socket(socket_family(target), use_mptcp)?;
+        open_outbound_tcp_socket_with_flags(socket_family(target), use_mptcp, 0)?;
     set_timeouts(fd.as_raw_fd(), opts.timeout)?;
     if opts.mark != 0 {
         set_so_mark(fd.as_raw_fd(), opts.mark)?;
@@ -224,6 +226,17 @@ fn open_tcp_socket_with_flags(
     }
     open_socket_with_flags(family, libc::IPPROTO_TCP, socket_flags)
         .map(|fd| (fd, false, requested_mptcp))
+}
+
+fn open_outbound_tcp_socket_with_flags(
+    family: libc::c_int,
+    requested_mptcp: bool,
+    socket_flags: libc::c_int,
+) -> io::Result<(OwnedFd, bool, bool)> {
+    let (fd, mptcp_socket_created, tcp_socket_retry_used) =
+        open_tcp_socket_with_flags(family, requested_mptcp, socket_flags)?;
+    let fd = apply_tcp_liveness_policy(fd)?;
+    Ok((fd, mptcp_socket_created, tcp_socket_retry_used))
 }
 
 fn open_socket(protocol: libc::c_int) -> io::Result<OwnedFd> {
