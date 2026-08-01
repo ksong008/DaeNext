@@ -19,7 +19,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn build_juicity_str
 pub(super) async fn read_juicity_stream_packet_response(
     recv: &mut quinn::RecvStream,
     response: &mut Vec<u8>,
-) -> Result<JuicityStreamPacketFrame, String> {
+    mode: UdpStreamReadMode,
+) -> Result<Option<JuicityStreamPacketFrame>, String> {
     const READ_CHUNK_BYTES: usize = 4 * 1024;
     const RESPONSE_BUFFER_LIMIT: usize = JUICITY_STREAM_PACKET_MAX_FRAME_LEN + READ_CHUNK_BYTES;
     let mut buf = [0_u8; READ_CHUNK_BYTES];
@@ -27,7 +28,7 @@ pub(super) async fn read_juicity_stream_packet_response(
         match decode_stream_packet_frame_prefix(response) {
             Ok(Some((frame, consumed))) => {
                 response.drain(..consumed);
-                return Ok(frame);
+                return Ok(Some(frame));
             }
             Ok(None) => {}
             Err(err) => return Err(format!("decode Juicity UDP stream packet: {err}")),
@@ -38,21 +39,16 @@ pub(super) async fn read_juicity_stream_packet_response(
             ));
         }
         let read_limit = (RESPONSE_BUFFER_LIMIT - response.len()).min(buf.len());
-        match recv
-            .read(&mut buf[..read_limit])
-            .await
-            .map_err(|err| format!("read Juicity UDP stream response: {err}"))?
+        match read_udp_stream_once(
+            recv,
+            &mut buf[..read_limit],
+            mode,
+            "read Juicity UDP stream response",
+        )
+        .await?
         {
-            Some(0) => {
-                return Err("Juicity UDP stream returned an empty read".to_owned());
-            }
             Some(read) => response.extend_from_slice(&buf[..read]),
-            None => {
-                return Err(
-                    "Juicity UDP stream closed before a complete packet frame was decoded"
-                        .to_owned(),
-                );
-            }
+            None => return Ok(None),
         }
     }
 }

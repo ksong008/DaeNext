@@ -29,6 +29,7 @@ struct JuicityServerObservation {
     tcp_streams: AtomicUsize,
     udp_streams: AtomicUsize,
     udp_packets: AtomicUsize,
+    udp_packets_before_first_response: AtomicUsize,
     last_connection_id: AtomicU64,
     current_connection: Mutex<Option<quinn::Connection>>,
 }
@@ -42,14 +43,23 @@ struct JuicityTestServer {
 
 impl JuicityTestServer {
     async fn start() -> Self {
-        Self::start_with_auth_rejection(false).await
+        Self::start_with_response_policy(false, 1, false).await
     }
 
     async fn start_rejecting_auth() -> Self {
-        Self::start_with_auth_rejection(true).await
+        Self::start_with_response_policy(true, 1, false).await
     }
 
-    async fn start_with_auth_rejection(reject_auth: bool) -> Self {
+    async fn start_buffering_udp_responses(batch_size: usize, reverse_batch: bool) -> Self {
+        assert!(batch_size > 0);
+        Self::start_with_response_policy(false, batch_size, reverse_batch).await
+    }
+
+    async fn start_with_response_policy(
+        reject_auth: bool,
+        udp_response_batch_size: usize,
+        reverse_udp_response_batch: bool,
+    ) -> Self {
         let endpoint = quinn::Endpoint::server(
             juicity_server_config(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -81,6 +91,8 @@ impl JuicityTestServer {
                                     connection,
                                     observation,
                                     reject_auth,
+                                    udp_response_batch_size,
+                                    reverse_udp_response_batch,
                                 )
                                 .await;
                             }
@@ -120,6 +132,8 @@ async fn run_juicity_server_connection(
     connection: quinn::Connection,
     observation: Arc<JuicityServerObservation>,
     reject_auth: bool,
+    udp_response_batch_size: usize,
+    reverse_udp_response_batch: bool,
 ) {
     let mut stream_tasks = tokio::task::JoinSet::new();
     loop {
@@ -148,7 +162,14 @@ async fn run_juicity_server_connection(
                 Ok((send, recv)) => {
                     let observation = Arc::clone(&observation);
                     stream_tasks.spawn(async move {
-                        handle_juicity_bidirectional_stream(send, recv, observation).await;
+                        handle_juicity_bidirectional_stream(
+                            send,
+                            recv,
+                            observation,
+                            udp_response_batch_size,
+                            reverse_udp_response_batch,
+                        )
+                        .await;
                     });
                 }
                 Err(_) => break,
@@ -169,6 +190,8 @@ async fn handle_juicity_bidirectional_stream(
     mut send: quinn::SendStream,
     mut recv: quinn::RecvStream,
     observation: Arc<JuicityServerObservation>,
+    udp_response_batch_size: usize,
+    reverse_udp_response_batch: bool,
 ) {
     let Ok(network) = recv.read_u8().await else {
         return;
@@ -192,6 +215,7 @@ async fn handle_juicity_bidirectional_stream(
                 return;
             }
             observation.udp_streams.fetch_add(1, Ordering::Relaxed);
+            let mut pending_responses = Vec::with_capacity(udp_response_batch_size);
             loop {
                 let Ok(metadata) = read_juicity_address(&mut recv).await else {
                     break;
@@ -203,11 +227,20 @@ async fn handle_juicity_bidirectional_stream(
                 if recv.read_exact(&mut payload).await.is_err() {
                     break;
                 }
-                observation.udp_packets.fetch_add(1, Ordering::Relaxed);
-                if send.write_all(&metadata).await.is_err()
-                    || send.write_all(&payload_len.to_be_bytes()).await.is_err()
-                    || send.write_all(&payload).await.is_err()
-                    || send.flush().await.is_err()
+                let observed = observation.udp_packets.fetch_add(1, Ordering::Relaxed) + 1;
+                pending_responses.push((metadata, payload));
+                if pending_responses.len() < udp_response_batch_size {
+                    continue;
+                }
+                let _ = observation
+                    .udp_packets_before_first_response
+                    .compare_exchange(0, observed, Ordering::Relaxed, Ordering::Relaxed);
+                if !write_juicity_udp_response_batch(
+                    &mut send,
+                    &mut pending_responses,
+                    reverse_udp_response_batch,
+                )
+                .await
                 {
                     break;
                 }
@@ -215,6 +248,28 @@ async fn handle_juicity_bidirectional_stream(
         }
         _ => {}
     }
+}
+
+async fn write_juicity_udp_response_batch(
+    send: &mut quinn::SendStream,
+    pending: &mut Vec<(Vec<u8>, Vec<u8>)>,
+    reverse: bool,
+) -> bool {
+    if reverse {
+        pending.reverse();
+    }
+    for (metadata, payload) in pending.drain(..) {
+        if send.write_all(&metadata).await.is_err()
+            || send
+                .write_all(&(payload.len() as u16).to_be_bytes())
+                .await
+                .is_err()
+            || send.write_all(&payload).await.is_err()
+        {
+            return false;
+        }
+    }
+    send.flush().await.is_ok()
 }
 
 async fn read_juicity_address(reader: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
@@ -338,6 +393,9 @@ fn assert_juicity_owner_resources_released(registry: &JuicityOwnerRegistryHandle
     assert_eq!(endpoint["endpointDriverTasks"]["live"], 0);
     assert_eq!(endpoint["chargedBytes"]["total"], 0);
 }
+
+#[path = "juicity_owner_live_tests/stream_packet.rs"]
+mod stream_packet;
 
 #[test]
 fn juicity_owner_reuses_auth_and_persistent_udp_streams_across_runtimes() {

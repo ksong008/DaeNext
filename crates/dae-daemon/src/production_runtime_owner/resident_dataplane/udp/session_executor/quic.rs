@@ -574,33 +574,48 @@ impl JuicityQuicStreamPacketSession {
             }
         }
         self.first_packet = false;
-        let remaining = deadline
-            .remaining_at(Instant::now())
-            .ok_or_else(|| "read Juicity UDP stream response deadline elapsed".to_owned())?;
-        let recv = self
-            .recv
-            .as_mut()
-            .ok_or_else(|| "Juicity UDP stream reader is not initialized".to_owned())?;
-        let response = match time::timeout(
-            remaining,
-            read_juicity_stream_packet_response(recv, &mut self.response_buffer),
-        )
-        .await
-        {
-            Ok(Ok(response)) => response,
-            Ok(Err(err)) => {
-                self.reset_stream();
-                return Err(err);
-            }
-            Err(_) => {
-                self.reset_stream();
-                return Err("read Juicity UDP stream response deadline elapsed".to_owned());
-            }
+        Ok(self.pending_response_result())
+    }
+
+    pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        self.read_response(UdpStreamReadMode::ReadyOnly).await
+    }
+
+    pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        if self.recv.is_none() {
+            return Err("Juicity UDP stream reader is not initialized".to_owned());
+        }
+        self.read_response(UdpStreamReadMode::Wait).await
+    }
+
+    async fn read_response(
+        &mut self,
+        mode: UdpStreamReadMode,
+    ) -> Result<Option<UdpExchangeResult>, String> {
+        let response = {
+            let Some(recv) = self.recv.as_mut() else {
+                return Ok(None);
+            };
+            read_juicity_stream_packet_response(recv, &mut self.response_buffer, mode).await
         };
-        Ok(juicity_udp_response_result(
-            response.target,
-            response.payload,
-        ))
+        match response {
+            Ok(Some(response)) => Ok(Some(juicity_udp_response_result(
+                response.target,
+                response.payload,
+            ))),
+            Ok(None) => Ok(None),
+            Err(err) => {
+                self.reset_stream();
+                Err(err)
+            }
+        }
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("quic-udp-stream-packet")
+            .with_quic_underlay("quinn-h3")
+            .with_session_executor("tokio-quic-stream-packet-session")
+            .with_underlay_reuse("quic-endpoint-connection-and-auth-stream-reused")
     }
 
     async fn ensure_open(
@@ -670,7 +685,18 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn exercise_ju
     let mut session = JuicityQuicStreamPacketSession::new(binding, Some(registry));
     let mut responses = Vec::with_capacity(payloads.len());
     for payload in payloads {
-        let mut response = session.exchange(&exchange_binding, target, payload).await?;
+        let response = session.exchange(&exchange_binding, target, payload).await?;
+        if response.reply_forwarded {
+            return Err(
+                "Juicity stream write unexpectedly produced a synchronous reply".to_owned(),
+            );
+        }
+    }
+    for _ in payloads {
+        let mut response = session
+            .wait_response()
+            .await?
+            .ok_or_else(|| "Juicity stream response reader returned no frame".to_owned())?;
         let expectation = response.fixed_target_expectation(target);
         let payload = response
             .take_fixed_target_payload(expectation)
