@@ -39,6 +39,14 @@ impl Socks5UdpAssociateSession {
         self.decode_response(&response)
     }
 
+    pub(super) fn has_response_buffer(&self) -> bool {
+        self.relay.has_response_buffer()
+    }
+
+    pub(super) fn reclaim_response_buffer(&mut self) -> bool {
+        self.relay.reclaim_response_buffer()
+    }
+
     fn decode_response(&self, response: &[u8]) -> Result<UdpExchangeResult, String> {
         let decoded = udp_packet::unwrap(response)
             .map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;

@@ -41,6 +41,28 @@ impl UdpSessionExecutor {
         }
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn has_response_buffer(
+        &self,
+    ) -> bool {
+        match self {
+            Self::ShadowsocksAead(session) => session.has_response_buffer(),
+            Self::Shadowsocks2022(session) => session.has_response_buffer(),
+            Self::Socks5(session) => session.has_response_buffer(),
+            _ => false,
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) fn reclaim_response_buffer(
+        &mut self,
+    ) -> bool {
+        match self {
+            Self::ShadowsocksAead(session) => session.reclaim_response_buffer(),
+            Self::Shadowsocks2022(session) => session.reclaim_response_buffer(),
+            Self::Socks5(session) => session.reclaim_response_buffer(),
+            _ => false,
+        }
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::production_runtime_owner::resident_dataplane::udp) fn runtime_disposition(
         &self,
