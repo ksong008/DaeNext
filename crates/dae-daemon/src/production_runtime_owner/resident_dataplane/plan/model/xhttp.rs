@@ -617,4 +617,15 @@ mod tests {
         assert!(normalized.physical_connection_limit > 0);
         assert_eq!(normalized.max_concurrency, Some((1, 1)));
     }
+
+    #[test]
+    fn official_packet_up_defaults_preserve_xray_scheduler_bounds() {
+        let settings = ResidentXhttpSettingsPlan::official_default();
+        assert_eq!(
+            settings.normalized_sc_max_each_post_bytes(),
+            (1_000_000, 1_000_000)
+        );
+        assert_eq!(settings.normalized_sc_min_posts_interval_ms(), (30, 30));
+        assert_eq!(settings.normalized_sc_max_buffered_posts(), 30);
+    }
 }

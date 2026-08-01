@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 pub(crate) struct XhttpH1ChunkedWriter {
     writer: XhttpH1ChunkedWriterInner,
@@ -100,8 +100,31 @@ pub(super) async fn send_xhttp_h1_packet_up_request(
     seq: u64,
     payload: Bytes,
 ) -> Result<(), String> {
-    let mut client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
+    begin_xhttp_h1_packet_up_request(binding, endpoint, mptcp, session_id, seq, payload)
+        .await?
+        .await
+}
+
+pub(super) async fn begin_xhttp_h1_packet_up_request(
+    binding: &ResidentProxyBinding,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mptcp: bool,
+    session_id: &str,
+    seq: u64,
+    payload: Bytes,
+) -> Result<XhttpPacketUpCompletion, String> {
+    let client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
     let request = xhttp_h1_packet_up_request_bytes(endpoint, session_id, seq, payload)?;
+    begin_xhttp_h1_packet_up_request_on_client(client, request).await
+}
+
+async fn begin_xhttp_h1_packet_up_request_on_client<T>(
+    mut client: T,
+    request: Vec<u8>,
+) -> Result<XhttpPacketUpCompletion, String>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     time::timeout(RESIDENT_CONNECT_TIMEOUT, client.write_all(&request))
         .await
         .map_err(|_| "xHTTP HTTP/1.1 packet-up request timeout".to_owned())?
@@ -110,15 +133,17 @@ pub(super) async fn send_xhttp_h1_packet_up_request(
         .await
         .map_err(|_| "flush xHTTP HTTP/1.1 packet-up request timeout".to_owned())?
         .map_err(|err| format!("flush xHTTP HTTP/1.1 packet-up request: {err}"))?;
-    let response = read_xhttp_h1_response_head(&mut client, "packet-up").await?;
-    if !(200..300).contains(&response.status) {
-        return Err(format!(
-            "xHTTP HTTP/1.1 packet-up response status {}",
-            response.status
-        ));
-    }
-    let _ = client.shutdown().await;
-    Ok(())
+    Ok(Box::pin(async move {
+        let response = read_xhttp_h1_response_head(&mut client, "packet-up").await?;
+        if !(200..300).contains(&response.status) {
+            return Err(format!(
+                "xHTTP HTTP/1.1 packet-up response status {}",
+                response.status
+            ));
+        }
+        let _ = client.shutdown().await;
+        Ok(())
+    }))
 }
 
 pub(super) struct XhttpH1ResponseHead {
@@ -447,3 +472,7 @@ impl XhttpH1DownloadBody {
         self.buffer.drain(..len).collect()
     }
 }
+
+#[cfg(test)]
+#[path = "h1/tests.rs"]
+mod tests;

@@ -455,6 +455,19 @@ pub(crate) async fn send_xhttp_h3_packet_up_request(
     payload: Bytes,
     xmux_request: Option<&XhttpXmuxRequestHandle>,
 ) -> Result<(), String> {
+    begin_xhttp_h3_packet_up_request(client, endpoint, session_id, seq, payload, xmux_request)
+        .await?
+        .await
+}
+
+pub(crate) async fn begin_xhttp_h3_packet_up_request(
+    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    endpoint: &impl ResidentXhttpEndpointView,
+    session_id: &str,
+    seq: u64,
+    payload: Bytes,
+    xmux_request: Option<&XhttpXmuxRequestHandle>,
+) -> Result<XhttpPacketUpCompletion, String> {
     let (request, body) = xhttp_h3_packet_up_request(endpoint, session_id, seq, payload)?;
     let stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
         .await
@@ -479,20 +492,23 @@ pub(crate) async fn send_xhttp_h3_packet_up_request(
             note_xhttp_h3_request_error(&err, xmux_request);
             format!("finish xHTTP H3 packet-up body: {err:?}")
         })?;
-    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
-        .await
-        .map_err(|_| "xHTTP H3 packet-up response timeout".to_owned())?
-        .map_err(|err| {
-            note_xhttp_h3_request_error(&err, xmux_request);
-            format!("recv xHTTP H3 packet-up response: {err:?}")
-        })?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "xHTTP H3 packet-up response status {}",
-            response.status()
-        ));
-    }
-    drain_xhttp_h3_response_body(stream, xmux_request).await
+    let xmux_request = xmux_request.cloned();
+    Ok(Box::pin(async move {
+        let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
+            .await
+            .map_err(|_| "xHTTP H3 packet-up response timeout".to_owned())?
+            .map_err(|err| {
+                note_xhttp_h3_request_error(&err, xmux_request.as_ref());
+                format!("recv xHTTP H3 packet-up response: {err:?}")
+            })?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "xHTTP H3 packet-up response status {}",
+                response.status()
+            ));
+        }
+        drain_xhttp_h3_response_body(stream, xmux_request.as_ref()).await
+    }))
 }
 
 pub(super) async fn refresh_xhttp_h3_packet_up_client_if_needed(
@@ -568,6 +584,9 @@ mod request_error_tests {
 
 #[cfg(test)]
 mod owner_live_tests;
+
+#[cfg(test)]
+mod packet_up_tests;
 
 fn build_xhttp_h3_client_config(
     endpoint: &ResidentXhttpEndpointPlan,

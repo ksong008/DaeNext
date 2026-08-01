@@ -1381,6 +1381,16 @@ pub(super) fn resident_dataplane_plan_rejects_remaining_invalid_vless_xhttp_shap
             vless_xhttp_parser_fixture_url("packet-up", "spdy/3.1", ""),
             "rejected ALPN",
         ),
+        (
+            "xhttp_non_positive_max_post",
+            vless_xhttp_parser_fixture_url("packet-up", "h2", r#"{"scMaxEachPostBytes":0}"#),
+            "scMaxEachPostBytes must be greater than 0",
+        ),
+        (
+            "xhttp_negative_buffered_posts",
+            vless_xhttp_parser_fixture_url("packet-up", "h2", r#"{"scMaxBufferedPosts":-1}"#),
+            "scMaxBufferedPosts rejects negative values",
+        ),
     ] {
         let err =
             build_resident_proxy_plan_for_node(&config, "proxy".to_owned(), tag.to_owned(), link)

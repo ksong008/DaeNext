@@ -1,10 +1,11 @@
-use super::h1::send_xhttp_h1_packet_up_request;
+use super::h1::{begin_xhttp_h1_packet_up_request, send_xhttp_h1_packet_up_request};
 use super::h2_transport::{
-    refresh_xhttp_h2_packet_up_client_if_needed, send_xhttp_h2_packet_up_request,
+    begin_xhttp_h2_packet_up_request, refresh_xhttp_h2_packet_up_client_if_needed,
+    send_xhttp_h2_packet_up_request,
 };
 use super::h3_transport::{
-    note_xhttp_h3_stream_error, refresh_xhttp_h3_packet_up_client_if_needed,
-    send_xhttp_h3_packet_up_request,
+    begin_xhttp_h3_packet_up_request, note_xhttp_h3_stream_error,
+    refresh_xhttp_h3_packet_up_client_if_needed, send_xhttp_h3_packet_up_request,
 };
 use super::*;
 use bytes::{Buf, Bytes};
@@ -72,6 +73,90 @@ pub(crate) async fn send_xhttp_packet_up_request(
             )
             .await
         }
+    }
+}
+
+pub(super) async fn begin_xhttp_packet_up_request(
+    upload: &mut XhttpUploadClient,
+    session_id: &str,
+    seq: u64,
+    payload: Bytes,
+) -> Result<XhttpPacketUpCompletion, String> {
+    match upload {
+        XhttpUploadClient::H1 {
+            binding,
+            endpoint,
+            mptcp,
+        } => {
+            begin_xhttp_h1_packet_up_request(binding, endpoint, *mptcp, session_id, seq, payload)
+                .await
+        }
+        XhttpUploadClient::H2 {
+            binding,
+            endpoint,
+            mptcp,
+            sender,
+            connection_task,
+            xmux_request,
+            ..
+        } => {
+            refresh_xhttp_h2_packet_up_client_if_needed(
+                binding,
+                endpoint,
+                *mptcp,
+                sender,
+                connection_task,
+                xmux_request,
+            )
+            .await?;
+            begin_xhttp_h2_packet_up_request(sender, endpoint, session_id, seq, payload).await
+        }
+        XhttpUploadClient::H3 {
+            binding,
+            endpoint,
+            client,
+            connection,
+            xmux_request,
+            ..
+        } => {
+            refresh_xhttp_h3_packet_up_client_if_needed(
+                binding,
+                endpoint,
+                client,
+                connection,
+                xmux_request,
+            )
+            .await?;
+            begin_xhttp_h3_packet_up_request(
+                client,
+                endpoint,
+                session_id,
+                seq,
+                payload,
+                xmux_request.as_ref(),
+            )
+            .await
+        }
+    }
+}
+
+pub(super) fn xhttp_packet_up_client_requires_refresh(upload: &XhttpUploadClient) -> bool {
+    match upload {
+        XhttpUploadClient::H2 {
+            xmux_request: Some(request),
+            ..
+        }
+        | XhttpUploadClient::H3 {
+            xmux_request: Some(request),
+            ..
+        } => !request.use_for_packet_up_post(),
+        XhttpUploadClient::H1 { .. }
+        | XhttpUploadClient::H2 {
+            xmux_request: None, ..
+        }
+        | XhttpUploadClient::H3 {
+            xmux_request: None, ..
+        } => false,
     }
 }
 
