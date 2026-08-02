@@ -175,13 +175,15 @@ pub(in crate::daed_product) fn apply_prepared_runtime_reload(
     })
 }
 
-pub(in crate::daed_product) fn coordinate_runtime_reload_without_reclaim(
+pub(in crate::daed_product) fn coordinate_runtime_reload_inner(
     runtime: &ProductRuntimeManager,
     state: &Path,
     config_dir: Option<&Path>,
     intent: RuntimeApplyIntent,
     latency_seed: &[Value],
+    reclaim_reason: AllocatorReclaimReason,
 ) -> Result<AppliedRuntimeReload, CoordinatedRuntimeReloadError> {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Publication);
     let request = runtime.begin_reconcile(intent);
     request.set_phase("reread-desired-state");
     let (plan, modified) =
@@ -293,7 +295,13 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_without_reclaim(
     )
     .map_err(CoordinatedRuntimeReloadError::Apply);
     match result {
-        Ok(applied) => {
+        Ok(mut applied) => {
+            if applied.applied {
+                applied.allocator_reclaim = allocator_request_reclaim_for_publication(
+                    reclaim_reason,
+                    runtime.allocator_publication_id(),
+                );
+            }
             permit.finish("succeeded");
             lead.finish(Ok(applied))
         }
@@ -312,17 +320,14 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
     latency_seed: &[Value],
     reclaim_reason: AllocatorReclaimReason,
 ) -> Result<AppliedRuntimeReload, CoordinatedRuntimeReloadError> {
-    let mut applied = coordinate_runtime_reload_without_reclaim(
+    coordinate_runtime_reload_inner(
         runtime,
         state,
         config_dir,
         intent,
         latency_seed,
-    )?;
-    if applied.applied {
-        applied.allocator_reclaim = allocator_reclaim(reclaim_reason);
-    }
-    Ok(applied)
+        reclaim_reason,
+    )
 }
 
 fn elapsed_nanos(started: Instant) -> u64 {

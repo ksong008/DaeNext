@@ -18,7 +18,13 @@ pub(super) fn cleanup_runtime_instance_with_reclaim(
     reason: AllocatorReclaimReason,
 ) -> Option<Value> {
     let mut cleanup_report = cleanup_runtime_instance(runtime);
-    let reclaim = allocator_reclaim(reason);
+    allocator_request_reclaim(reason);
+    let reclaim = json!({
+        "reason": reason.as_str(),
+        "status": "requested",
+        "scope": "global",
+        "execution": "deferred-coordinator-evaluation",
+    });
     match cleanup_report.as_mut() {
         Some(Value::Object(map)) => {
             map.insert("allocatorReclaim".to_owned(), reclaim);
@@ -52,12 +58,14 @@ pub(super) fn spawn_background_replacement_cleanup(
     cleanup_epoch: u64,
     runtime: Option<ProductRuntimeInstance>,
 ) {
-    spawn_background_cleanup_with_reason(
-        inner,
-        cleanup_epoch,
-        runtime,
-        AllocatorReclaimReason::ReloadCompleted,
-    );
+    let _ = thread::spawn(move || {
+        let cleanup_report = cleanup_runtime_instance(runtime);
+        if let Ok(mut inner) = inner.lock()
+            && inner.cleanup.epoch == cleanup_epoch
+        {
+            inner.cleanup.finish(cleanup_report);
+        }
+    });
 }
 
 fn spawn_background_cleanup_with_reason(

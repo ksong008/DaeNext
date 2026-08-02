@@ -50,15 +50,16 @@ pub(in crate::daed_product) fn api_runtime_reload(
     let latency_seed =
         stored_successful_node_latency_seed_snapshots(&app.state).unwrap_or_default();
     let reload_app = app.clone();
-    let mut applied = match app.control_runtime.execute_to_completion(
+    let applied = match app.control_runtime.execute_to_completion(
         ProductControlTaskKind::RuntimeLifecycle,
         move |_cancellation| async move {
-            coordinate_runtime_reload_without_reclaim(
+            coordinate_runtime_reload_inner(
                 &reload_app.runtime,
                 &reload_app.state,
                 Some(&reload_app.config_dir),
                 RuntimeApplyIntent::ApiReload,
                 &latency_seed,
+                AllocatorReclaimReason::ReloadCompleted,
             )
         },
     ) {
@@ -92,9 +93,6 @@ pub(in crate::daed_product) fn api_runtime_reload(
             return HttpResponse::json(503, json!({"error": err.to_string()}));
         }
     };
-    if applied.applied {
-        applied.allocator_reclaim = allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);
-    }
     let mut fields = BTreeMap::new();
     fields.insert("source".to_owned(), "api".to_owned());
     fields.insert("dry".to_owned(), "false".to_owned());

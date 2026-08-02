@@ -44,7 +44,6 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         ) {
             Ok(report) => {
                 drop(report);
-                let _ = allocator_reclaim(AllocatorReclaimReason::StartupControlBuilt);
             }
             Err(err) => {
                 record_startup_runtime_restore_failure(&options.config_dir, &options.state, &err);

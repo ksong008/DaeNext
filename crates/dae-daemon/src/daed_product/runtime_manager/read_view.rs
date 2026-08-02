@@ -18,6 +18,7 @@ pub(super) struct ProductRuntimeReadSnapshot {
     runtime_started_at: Option<String>,
     last_error: Option<String>,
     reload_count: u64,
+    allocator_publication_id: u64,
     stop_count: u64,
     last_report: Option<Arc<Value>>,
     cleanup: RuntimeCleanupState,
@@ -52,6 +53,7 @@ impl ProductRuntimeReadSnapshot {
             runtime_started_at: state.runtime_started_at.clone(),
             last_error: state.last_error.clone(),
             reload_count: state.reload_count,
+            allocator_publication_id: state.allocator_publication_id,
             stop_count: state.stop_count,
             last_report: state.last_report.clone(),
             cleanup: state.cleanup.clone(),
@@ -75,6 +77,10 @@ impl ProductRuntimeReadSnapshot {
                     map.insert("startedAt".to_owned(), json!(self.runtime_started_at));
                     map.insert("lastError".to_owned(), json!(self.last_error));
                     map.insert("reloadCount".to_owned(), json!(self.reload_count));
+                    map.insert(
+                        "allocatorPublicationId".to_owned(),
+                        json!(self.allocator_publication_id),
+                    );
                     map.insert("stopCount".to_owned(), json!(self.stop_count));
                     map.insert("lastReport".to_owned(), json!(self.last_report.as_deref()));
                     map.insert("cleanup".to_owned(), self.cleanup.summary());
@@ -102,6 +108,7 @@ impl ProductRuntimeReadSnapshot {
                 "lastTransitionAt": self.last_transition_at,
                 "lastError": self.last_error,
                 "reloadCount": self.reload_count,
+                "allocatorPublicationId": self.allocator_publication_id,
                 "stopCount": self.stop_count,
                 "lastReport": self.last_report.as_deref(),
                 "cleanup": self.cleanup.summary(),
@@ -128,6 +135,7 @@ impl ProductRuntimeReadSnapshot {
                 "lastTransitionAt": self.last_transition_at,
                 "lastError": self.last_error,
                 "reloadCount": self.reload_count,
+                "allocatorPublicationId": self.allocator_publication_id,
                 "stopCount": self.stop_count,
                 "lastReport": self.last_report.as_deref(),
                 "cleanup": self.cleanup.summary(),

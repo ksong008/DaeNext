@@ -1,5 +1,7 @@
 use super::*;
 
+static NEXT_ALLOCATOR_PUBLICATION_ID: AtomicU64 = AtomicU64::new(1);
+
 pub(in crate::daed_product) mod activation_identity;
 mod apply_state;
 mod cleanup;
@@ -72,6 +74,7 @@ pub(super) struct ProductRuntimeState {
     pub(super) runtime_started_at: Option<String>,
     pub(super) last_report: Option<Arc<Value>>,
     pub(super) reload_count: u64,
+    pub(super) allocator_publication_id: u64,
     pub(super) stop_count: u64,
     pub(super) lifecycle_epoch: u64,
     pub(super) traffic_carry: RuntimeTrafficCarry,
@@ -494,6 +497,11 @@ fn process_baseline_after_physical_start(
     Arc::new(baseline)
 }
 
+fn record_runtime_publication(state: &mut ProductRuntimeState) {
+    state.reload_count = state.reload_count.saturating_add(1);
+    state.allocator_publication_id = NEXT_ALLOCATOR_PUBLICATION_ID.fetch_add(1, Ordering::Relaxed);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn publish_resident_runtime_generation(
     lifecycle: &Arc<Mutex<()>>,
@@ -537,7 +545,7 @@ fn publish_resident_runtime_generation(
     state.config = Some(config);
     state.config_content = config_content;
     state.transition_identity = desired_identity;
-    state.reload_count = state.reload_count.saturating_add(1);
+    record_runtime_publication(&mut state);
     state.last_error = None;
     state.last_transition_at = Some(now_text());
     let report = json!({
@@ -546,6 +554,7 @@ fn publish_resident_runtime_generation(
         "source": source,
         "transition": RuntimeTransitionClass::GenerationSwap.name(),
         "publication": publication,
+        "allocatorPublicationId": state.allocator_publication_id,
     });
     state.last_report = Some(Arc::new(report.clone()));
     Ok(RuntimeStartOutcome { report })
@@ -575,7 +584,7 @@ fn publish_runtime_metadata_transition(
     state.config = Some(config);
     state.config_content = config_content;
     state.transition_identity = desired_identity;
-    state.reload_count = state.reload_count.saturating_add(1);
+    record_runtime_publication(&mut state);
     state.last_error = None;
     state.last_transition_at = Some(now_text());
     let report = json!({
@@ -586,6 +595,7 @@ fn publish_runtime_metadata_transition(
         "generationPublished": false,
         "physicalRuntimeReused": true,
         "processRestartPending": transition == RuntimeTransitionClass::ProcessRestart,
+        "allocatorPublicationId": state.allocator_publication_id,
     });
     state.last_report = Some(Arc::new(report.clone()));
     Ok(RuntimeStartOutcome { report })
@@ -708,7 +718,7 @@ fn replace_prepared_product_runtime_with_config_content(
                 drop(inner);
                 drop(runtime);
                 if previous_runtime_was_running {
-                    let _ = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
+                    allocator_request_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
                 }
                 return Err(
                     "product runtime reload was superseded by a newer lifecycle operation"
@@ -727,7 +737,13 @@ fn replace_prepared_product_runtime_with_config_content(
                     .as_deref()
                     .expect("committed runtime config is present"),
             ));
-            inner.reload_count += 1;
+            record_runtime_publication(&mut inner);
+            if let Value::Object(report) = &mut report {
+                report.insert(
+                    "allocatorPublicationId".to_owned(),
+                    json!(inner.allocator_publication_id),
+                );
+            }
             inner.last_error = None;
             inner.cleanup.last_start_blocker = None;
             inner.last_transition_at = Some(transition_at.clone());
@@ -767,7 +783,7 @@ fn replace_prepared_product_runtime_with_config_content(
                 drop(inner);
                 drop(restored_runtime);
                 if previous_runtime_was_running {
-                    let _ = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
+                    allocator_request_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
                 }
                 return Err(format!(
                     "{start_err}\nrestore skipped because product runtime reload was superseded by a newer lifecycle operation"
@@ -821,7 +837,7 @@ fn replace_prepared_product_runtime_with_config_content(
             inner.last_error = Some(message.clone());
             drop(inner);
             if previous_runtime_was_running {
-                let _ = allocator_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
+                allocator_request_reclaim(AllocatorReclaimReason::ReloadFailedAfterCleanup);
             }
             Err(message)
         }
@@ -875,6 +891,13 @@ impl ProductRuntimeManager {
         RuntimeOverviewDeltaState {
             reload_count: inner.reload_count,
         }
+    }
+
+    pub(super) fn allocator_publication_id(&self) -> u64 {
+        self.inner
+            .lock()
+            .map(|inner| inner.allocator_publication_id)
+            .unwrap_or(u64::MAX)
     }
 
     pub(super) fn group_selector_snapshot_map(&self) -> BTreeMap<String, Value> {
