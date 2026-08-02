@@ -155,12 +155,11 @@ impl ResidentDataplaneRuntime {
             "ownership": "udp-session-manager",
             "cleanup": "reply dispatcher stopped and joined with UDP manager",
         }));
-        let tls_caches = client::clear_resident_tls_config_caches();
         steps.push(json!({
-            "name": "clear-resident-tls-config-caches",
+            "name": "preserve-process-wide-tls-config-caches",
             "status": "pass",
-            "rustlsEntries": tls_caches.rustls,
-            "boringEntries": tls_caches.boring,
+            "ownership": "process-wide-bounded-cache",
+            "cleanup": "bounded caches are reused across runtime generations",
         }));
     }
 
