@@ -7,17 +7,26 @@ use crate::allocator::{
 #[path = "idle_reclaim/adaptive.rs"]
 mod adaptive;
 use self::adaptive::*;
-#[path = "idle_reclaim/capacity.rs"]
-mod capacity;
-use self::capacity::*;
+#[path = "idle_reclaim/activity.rs"]
+mod activity;
+use self::activity::*;
 #[path = "idle_reclaim/pressure.rs"]
 mod pressure;
 use self::pressure::*;
 
 const ALLOCATOR_IDLE_RECLAIM_MONITOR_STACK_BYTES: usize = 256 * 1024;
-const ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL: Duration = Duration::from_secs(1);
+const ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL: Duration = Duration::from_secs(5);
 const ALLOCATOR_IDLE_RECLAIM_DEFERRED_SETTLE_INTERVAL: Duration = Duration::from_secs(5);
 const ALLOCATOR_IDLE_RECLAIM_DEFERRED_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const ALLOCATOR_IDLE_RECLAIM_HEAVY_TASK_QUIET: Duration = Duration::from_secs(10);
+const ALLOCATOR_IDLE_RECLAIM_POST_BURST_QUIET: Duration = Duration::from_secs(30);
+const ALLOCATOR_IDLE_RECLAIM_POST_BURST_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_POST_BURST_THRESHOLD_PERCENT: u64 = 20;
+const ALLOCATOR_IDLE_RECLAIM_POST_BURST_PRESSURE_BYTES: u64 = 4 * 1024 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_DYNAMIC_PRESSURE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_ELEVATED_PRESSURE_MIN_BYTES: u64 = 2 * 1024 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_MAX_PACKET_QPS: u64 = 128;
+const ALLOCATOR_IDLE_RECLAIM_MAX_REQUEST_QPS: u64 = 128;
 
 #[derive(Clone, Copy, Debug)]
 struct AllocatorIdleReclaimPolicy {
@@ -90,11 +99,13 @@ impl AllocatorIdleReclaimPolicy {
             ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN,
             ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MAX,
         );
-        let pressure = allocator_idle_reclaim_pressure_threshold(
-            configured_pressure_threshold_bytes,
-            configured_pressure_source,
-            crate::production_runtime_owner::effective_process_memory_capacity(),
-        );
+        let pressure_capacity =
+            crate::production_runtime_owner::effective_process_memory_capacity();
+        let pressure_source = if configured_pressure_source == "default" {
+            "application-live-working-set"
+        } else {
+            configured_pressure_source
+        };
         let (max_traffic_rate_bytes_per_second, max_rate_source) = effective_u64(
             ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
             global
@@ -108,16 +119,16 @@ impl AllocatorIdleReclaimPolicy {
             sample_interval: Duration::from_secs(sample_interval_seconds),
             min_interval: Duration::from_secs(min_interval_seconds),
             low_traffic_duration: Duration::from_secs(low_traffic_seconds),
-            pressure_threshold_bytes: pressure.bytes,
+            pressure_threshold_bytes: configured_pressure_threshold_bytes,
             max_traffic_rate_bytes_per_second,
-            pressure_capacity_bytes: pressure.capacity_bytes,
-            pressure_capacity_source: pressure.capacity_source,
+            pressure_capacity_bytes: pressure_capacity.map(|capacity| capacity.bytes()),
+            pressure_capacity_source: pressure_capacity.map(|capacity| capacity.source()),
             sources: AllocatorIdleReclaimPolicySources {
                 enabled: enabled_source,
                 sample_interval: sample_interval_source,
                 min_interval: min_interval_source,
                 low_traffic_duration: low_traffic_source,
-                pressure_threshold_bytes: pressure.source,
+                pressure_threshold_bytes: pressure_source,
                 max_traffic_rate_bytes_per_second: max_rate_source,
             },
         }
@@ -126,17 +137,23 @@ impl AllocatorIdleReclaimPolicy {
     fn json(self) -> Value {
         json!({
             "enabled": self.enabled,
-            "idleDetection": "traffic-rate-only",
+            "idleDetection": "traffic-rate-plus-busy-leases-and-allocator-state",
+            "stateMachine": ["hot", "cooling", "cold", "pressure"],
             "sampleIntervalSeconds": self.sample_interval.as_secs(),
             "minIntervalSeconds": self.min_interval.as_secs(),
             "lowTrafficSeconds": self.low_traffic_duration.as_secs(),
             "pressureThresholdBytes": self.pressure_threshold_bytes.to_string(),
             "pressureCapacityBytes": self.pressure_capacity_bytes.map(|value| value.to_string()),
             "pressureCapacitySource": self.pressure_capacity_source,
-            "pressureMetric": "allocator-resident-minus-active",
+            "pressureMetric": "maximum-of-arena-dirty-plus-muzzy-pages-and-worker-tcache",
             "retainedMetric": "diagnostic-virtual-address-space",
             "maxTrafficRateBytesPerSecond": self.max_traffic_rate_bytes_per_second.to_string(),
+            "maxPacketQps": ALLOCATOR_IDLE_RECLAIM_MAX_PACKET_QPS,
+            "maxRequestQps": ALLOCATOR_IDLE_RECLAIM_MAX_REQUEST_QPS,
             "sessionCountGate": false,
+            "monitorFallbackWakeSeconds": ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL.as_secs(),
+            "heavyTaskQuietSeconds": ALLOCATOR_IDLE_RECLAIM_HEAVY_TASK_QUIET.as_secs(),
+            "postBurstQuietSeconds": ALLOCATOR_IDLE_RECLAIM_POST_BURST_QUIET.as_secs(),
             "deferredSettleSeconds": ALLOCATOR_IDLE_RECLAIM_DEFERRED_SETTLE_INTERVAL.as_secs(),
             "sources": {
                 "enabled": self.sources.enabled,
@@ -158,8 +175,14 @@ struct AllocatorIdleReclaimState {
     low_traffic_since: Option<Instant>,
     low_yield_streak: u8,
     last_released_bytes: Option<u64>,
+    last_reclaim_high_yield: bool,
     last_cgroup_high_events: Option<u64>,
     cgroup_high_event_latched: bool,
+    previous_busy_count: u64,
+    previous_busy_completion_count: u64,
+    heavy_task_quiet_since: Option<Instant>,
+    allocated_high_water: u64,
+    post_burst_quiet_since: Option<Instant>,
     last_report: Value,
 }
 
@@ -167,6 +190,12 @@ struct AllocatorIdleReclaimState {
 struct AllocatorIdleTrafficSample {
     upload_total_counter: u64,
     download_total_counter: u64,
+    packet_total_counter: u64,
+    request_total_counter: u64,
+    queue_depth: u64,
+    inflight_work: u64,
+    active_tcp: u64,
+    active_udp: u64,
     observed_at: Instant,
 }
 
@@ -176,13 +205,41 @@ struct AllocatorIdleObservation {
     active_udp: u64,
     upload_total_counter: u64,
     download_total_counter: u64,
+    packet_total_counter: u64,
+    request_total_counter: u64,
+    queue_depth: u64,
+    inflight_work: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AllocatorIdleTrafficRate {
     bytes_per_second: u64,
+    packets_per_second: u64,
+    requests_per_second: u64,
+    queue_depth: u64,
+    queue_growing: bool,
+    inflight_work: u64,
+    inflight_growing: bool,
+    active_count_growing: bool,
     window: Duration,
     window_started_at: Instant,
+}
+
+impl AllocatorIdleTrafficRate {
+    fn json(self) -> Value {
+        json!({
+            "bytesPerSecond": self.bytes_per_second.to_string(),
+            "packetsPerSecond": self.packets_per_second,
+            "requestsPerSecond": self.requests_per_second,
+            "queueDepth": self.queue_depth,
+            "queueGrowing": self.queue_growing,
+            "inflightWork": self.inflight_work,
+            "inflightGrowing": self.inflight_growing,
+            "activeCountGrowing": self.active_count_growing,
+            "windowMillis": self.window.as_millis().to_string(),
+            "source": "resident_dataplane_typed_activity_delta",
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +249,11 @@ struct AllocatorLowTrafficWindow {
 }
 
 static ALLOCATOR_IDLE_RECLAIM_STATE: OnceLock<Mutex<AllocatorIdleReclaimState>> = OnceLock::new();
+static ALLOCATOR_IDLE_RECLAIM_EVALUATION_TOTAL: AtomicU64 = AtomicU64::new(0);
+static ALLOCATOR_IDLE_RECLAIM_EXECUTED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static ALLOCATOR_IDLE_RECLAIM_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static ALLOCATOR_IDLE_RECLAIM_MERGED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static ALLOCATOR_IDLE_RECLAIM_FAILED_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 struct AllocatorIdleReclaimStartedGuard;
 
@@ -277,12 +339,18 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
                             .then_some(now + ALLOCATOR_IDLE_RECLAIM_DEFERRED_RETRY_INTERVAL);
                     }
                 }
-                if app
-                    .shutdown
-                    .wait_timeout(ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL)
-                {
+                if app.shutdown.is_requested() {
                     break;
                 }
+                let wake_epoch = allocator_reclaim_request_wake_epoch();
+                let now = Instant::now();
+                let deferred_wait = next_deferred_evaluation
+                    .map(|deadline| deadline.saturating_duration_since(now))
+                    .unwrap_or(ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL);
+                allocator_wait_for_reclaim_request_since(
+                    wake_epoch,
+                    deferred_wait.min(ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL),
+                );
             }
         });
     let join = match join {
@@ -313,6 +381,13 @@ pub(crate) fn allocator_idle_reclaim_snapshot_json(app: &AppState) -> Value {
         .unwrap_or_else(|| json!({"status": "unavailable"}));
     json!({
         "policy": policy.json(),
+        "evaluations": {
+            "total": ALLOCATOR_IDLE_RECLAIM_EVALUATION_TOTAL.load(Ordering::Relaxed),
+            "executed": ALLOCATOR_IDLE_RECLAIM_EXECUTED_TOTAL.load(Ordering::Relaxed),
+            "skipped": ALLOCATOR_IDLE_RECLAIM_SKIPPED_TOTAL.load(Ordering::Relaxed),
+            "merged": ALLOCATOR_IDLE_RECLAIM_MERGED_TOTAL.load(Ordering::Relaxed),
+            "failed": ALLOCATOR_IDLE_RECLAIM_FAILED_TOTAL.load(Ordering::Relaxed),
+        },
         "last": last_report,
     })
 }
@@ -323,11 +398,31 @@ fn allocator_idle_reclaim_tick(
     admit_deferred_requests: bool,
 ) {
     let report = evaluate_allocator_idle_reclaim(app, policy, admit_deferred_requests);
+    record_idle_reclaim_evaluation(&report);
     if let Ok(mut state) = ALLOCATOR_IDLE_RECLAIM_STATE
         .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
         .lock()
     {
         state.last_report = report;
+    }
+}
+
+fn record_idle_reclaim_evaluation(report: &Value) {
+    ALLOCATOR_IDLE_RECLAIM_EVALUATION_TOTAL.fetch_add(1, Ordering::Relaxed);
+    match report.get("status").and_then(Value::as_str) {
+        Some("reclaimed") => {
+            ALLOCATOR_IDLE_RECLAIM_EXECUTED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        Some("skipped") => {
+            ALLOCATOR_IDLE_RECLAIM_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        Some("merged_pending" | "subsumed") => {
+            ALLOCATOR_IDLE_RECLAIM_MERGED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        Some("failed") | None => {
+            ALLOCATOR_IDLE_RECLAIM_FAILED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        Some(_) => {}
     }
 }
 
@@ -340,7 +435,11 @@ fn evaluate_allocator_idle_reclaim(
         reset_idle_reclaim_observation();
         clear_cgroup_reclaim_pressure_latch();
         let deferred = if admit_deferred_requests {
-            allocator_take_reclaim_requests()
+            let batch = allocator_take_reclaim_requests();
+            if !batch.is_empty() {
+                allocator_record_trailing_reclaim_evaluation();
+            }
+            batch
         } else {
             AllocatorReclaimRequestBatch::default()
         };
@@ -353,6 +452,64 @@ fn evaluate_allocator_idle_reclaim(
     let retired_generation_release_pending = deferred_pending
         && allocator_pending_reclaim_reason(AllocatorReclaimReason::RetiredGenerationReleased);
     let cgroup_pressure = observe_cgroup_reclaim_pressure();
+    let busy_count = allocator_reclaim_busy_count();
+    let busy_completion_count = allocator_reclaim_busy_completion_count();
+    let busy_quiet_required = if cgroup_pressure.level.is_urgent() {
+        Duration::from_secs(5)
+    } else {
+        ALLOCATOR_IDLE_RECLAIM_HEAVY_TASK_QUIET
+    };
+    let busy_quiet =
+        idle_reclaim_busy_quiet_window(now, busy_count, busy_completion_count, busy_quiet_required);
+    if busy_count > 0 {
+        reset_idle_reclaim_low_traffic_window();
+        return json!({
+            "status": "skipped",
+            "state": "hot",
+            "reason": "reclaim_busy_lease_active",
+            "busyLeaseCount": busy_count,
+            "cgroupPressure": cgroup_pressure.json(),
+        });
+    }
+    if !busy_quiet.ready {
+        return json!({
+            "status": "skipped",
+            "state": "cooling",
+            "reason": "heavy_task_quiet_window",
+            "busyLeaseCount": busy_count,
+            "quietElapsedMillis": busy_quiet.elapsed.as_millis().to_string(),
+            "quietRequiredMillis": busy_quiet_required.as_millis().to_string(),
+            "cgroupPressure": cgroup_pressure.json(),
+        });
+    }
+    if deferred_pending
+        && allocator_pending_reclaim_scope() == Some(AllocatorReclaimScope::ControlPlane)
+    {
+        let deferred = allocator_take_reclaim_requests();
+        allocator_record_trailing_reclaim_evaluation();
+        let reclaim_reason = deferred
+            .primary_reason()
+            .unwrap_or(AllocatorReclaimReason::ControlPlaneIdle);
+        let reclaim = allocator_reclaim_control_plane(reclaim_reason);
+        let reclaim_status = reclaim.get("status").and_then(Value::as_str);
+        let evaluation_status = match reclaim_status {
+            Some("pass" | "partial") => "reclaimed",
+            Some("subsumed") => "subsumed",
+            _ => "failed",
+        };
+        if evaluation_status == "failed" {
+            allocator_restore_reclaim_requests(&deferred);
+        }
+        return json!({
+            "status": evaluation_status,
+            "state": "cold",
+            "reason": reclaim_reason.as_str(),
+            "scope": AllocatorReclaimScope::ControlPlane.as_str(),
+            "deferred": deferred.json(),
+            "reclaim": reclaim,
+            "cgroupPressure": cgroup_pressure.json(),
+        });
+    }
     let Some(observation) = idle_reclaim_observation(app) else {
         reset_idle_reclaim_observation();
         return json!({"status": "skipped", "reason": "runtime_metrics_unavailable"});
@@ -360,17 +517,29 @@ fn evaluate_allocator_idle_reclaim(
     let Some(traffic_rate) = idle_reclaim_traffic_rate(now, observation) else {
         return json!({"status": "skipped", "reason": "traffic_sample_warming_up"});
     };
-    if traffic_rate.bytes_per_second > policy.max_traffic_rate_bytes_per_second
-        && !cgroup_pressure.urgent
-        && !retired_generation_release_pending
-    {
+    let activity_hot = traffic_rate.bytes_per_second > policy.max_traffic_rate_bytes_per_second
+        || traffic_rate.packets_per_second > ALLOCATOR_IDLE_RECLAIM_MAX_PACKET_QPS
+        || traffic_rate.requests_per_second > ALLOCATOR_IDLE_RECLAIM_MAX_REQUEST_QPS
+        || traffic_rate.queue_growing
+        || traffic_rate.inflight_growing
+        || traffic_rate.active_count_growing;
+    if activity_hot && !cgroup_pressure.level.is_urgent() {
         reset_idle_reclaim_low_traffic_window();
         return json!({
             "status": "skipped",
+            "state": "hot",
             "reason": "traffic_active",
             "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
-            "trafficRateSource": "resident_dataplane_total_counter_delta",
+            "packetRatePerSecond": traffic_rate.packets_per_second,
+            "requestRatePerSecond": traffic_rate.requests_per_second,
+            "queueDepth": traffic_rate.queue_depth,
+            "queueGrowing": traffic_rate.queue_growing,
+            "inflightWork": traffic_rate.inflight_work,
+            "inflightGrowing": traffic_rate.inflight_growing,
+            "activeCountGrowing": traffic_rate.active_count_growing,
+            "trafficRateSource": "resident_dataplane_typed_activity_delta",
             "trafficRateWindowMillis": traffic_rate.window.as_millis().to_string(),
+            "activity": traffic_rate.json(),
             "maxTrafficRateBytesPerSecond": policy.max_traffic_rate_bytes_per_second.to_string(),
             "activeTcpConnections": observation.active_tcp,
             "activeUdpSessions": observation.active_udp,
@@ -381,9 +550,11 @@ fn evaluate_allocator_idle_reclaim(
     }
     let low_traffic =
         idle_reclaim_low_traffic_window(now, traffic_rate, policy.low_traffic_duration);
-    if !deferred_pending && !cgroup_pressure.urgent && !low_traffic.ready {
+    let known_heavy_task_finished = deferred_pending && !retired_generation_release_pending;
+    if !known_heavy_task_finished && !cgroup_pressure.level.is_urgent() && !low_traffic.ready {
         return json!({
             "status": "skipped",
+            "state": "cooling",
             "reason": "low_traffic_window_warming_up",
             "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
             "trafficRateSource": "resident_dataplane_total_counter_delta",
@@ -393,16 +564,19 @@ fn evaluate_allocator_idle_reclaim(
             "activeTcpConnections": observation.active_tcp,
             "activeUdpSessions": observation.active_udp,
             "cgroupPressure": cgroup_pressure.json(),
+            "activity": traffic_rate.json(),
         });
     }
-    let adaptive_min_interval = idle_reclaim_effective_min_interval(policy.min_interval);
-    let effective_min_interval = if retired_generation_release_pending {
-        Duration::ZERO
-    } else if cgroup_pressure.urgent {
-        adaptive_min_interval.min(policy.sample_interval)
-    } else {
-        adaptive_min_interval
-    };
+    let adaptive_min_interval = idle_reclaim_effective_min_interval(
+        policy.min_interval,
+        policy.sources.min_interval == "default",
+    );
+    let effective_min_interval =
+        if cgroup_pressure.level.is_emergency() && cgroup_pressure.high_event_increased {
+            Duration::ZERO
+        } else {
+            adaptive_min_interval
+        };
     if let Some(wait_remaining) = idle_reclaim_wait_remaining(now, effective_min_interval) {
         return json!({
             "status": "skipped",
@@ -417,36 +591,64 @@ fn evaluate_allocator_idle_reclaim(
             "deferredReclaimWaiting": deferred_waiting,
             "effectiveMinIntervalMillis": effective_min_interval.as_millis().to_string(),
             "cgroupPressure": cgroup_pressure.json(),
+            "activity": traffic_rate.json(),
         });
     }
 
     let Some(stats) = allocator_stats_snapshot() else {
         return json!({"status": "skipped", "reason": "allocator_stats_unavailable"});
     };
-    let page_pressure = stats.idle_reclaim_pressure_bytes();
+    let page_pressure =
+        allocator_reclaimable_page_bytes().unwrap_or_else(|| stats.idle_reclaim_pressure_bytes());
     let cache_pressure = stats.cache_reclaim_pressure_bytes();
     let pressure = page_pressure.max(cache_pressure);
-    let effective_pressure_threshold = if cgroup_pressure.urgent {
-        (policy.pressure_threshold_bytes / 4).max(ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN)
-    } else {
-        policy.pressure_threshold_bytes
-    };
-    if pressure < effective_pressure_threshold && !retired_generation_release_pending {
+    let (post_burst, post_burst_quiet) = idle_reclaim_post_burst_quiet_window(
+        now,
+        stats.allocated,
+        ALLOCATOR_IDLE_RECLAIM_POST_BURST_QUIET,
+    );
+    if post_burst && !post_burst_quiet.ready && !cgroup_pressure.level.is_urgent() {
+        return json!({
+            "status": "skipped",
+            "state": "cooling",
+            "reason": "post_burst_quiet_window",
+            "quietElapsedMillis": post_burst_quiet.elapsed.as_millis().to_string(),
+            "quietRequiredMillis": ALLOCATOR_IDLE_RECLAIM_POST_BURST_QUIET.as_millis().to_string(),
+            "allocatorApplicationLiveExcludingTcacheBytes": stats.application_live_excluding_tcache().to_string(),
+            "allocatorRetainedBytes": stats.retained.to_string(),
+            "cgroupPressure": cgroup_pressure.json(),
+            "activity": traffic_rate.json(),
+        });
+    }
+    let effective_pressure_threshold = idle_reclaim_pressure_threshold(
+        policy.pressure_threshold_bytes,
+        policy.sources.pressure_threshold_bytes,
+        stats.application_live_excluding_tcache(),
+        cgroup_pressure.level,
+        post_burst,
+    );
+    if pressure < effective_pressure_threshold {
         let deferred = if deferred_pending {
-            allocator_take_reclaim_requests()
+            let batch = allocator_take_reclaim_requests();
+            allocator_record_trailing_reclaim_evaluation();
+            batch
         } else {
             AllocatorReclaimRequestBatch::default()
         };
+        reset_idle_reclaim_allocated_high_water(stats.allocated);
         clear_cgroup_reclaim_pressure_latch();
         return json!({
             "status": "skipped",
+            "state": if cgroup_pressure.level.is_elevated() { "pressure" } else { "cold" },
             "reason": "pressure_below_threshold",
             "pressureBytes": pressure.to_string(),
             "pressureMetric": "maximum-of-page-and-worker-cache-pressure",
             "pressureThresholdBytes": effective_pressure_threshold.to_string(),
-            "allocatorResidentMinusActiveBytes": page_pressure.to_string(),
+            "allocatorReclaimablePageBytes": page_pressure.to_string(),
             "allocatorMergedTcacheBytes": cache_pressure.to_string(),
+            "allocatorApplicationLiveExcludingTcacheBytes": stats.application_live_excluding_tcache().to_string(),
             "allocatorRetainedBytes": stats.retained.to_string(),
+            "postBurst": post_burst,
             "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
             "trafficRateSource": "resident_dataplane_total_counter_delta",
             "lowTrafficElapsedMillis": low_traffic.elapsed.as_millis().to_string(),
@@ -455,29 +657,51 @@ fn evaluate_allocator_idle_reclaim(
             "deferred": deferred.json(),
             "effectiveMinIntervalMillis": effective_min_interval.as_millis().to_string(),
             "cgroupPressure": cgroup_pressure.json(),
+            "activity": traffic_rate.json(),
         });
     }
 
     let deferred = if deferred_pending {
-        allocator_take_reclaim_requests()
+        let batch = allocator_take_reclaim_requests();
+        allocator_record_trailing_reclaim_evaluation();
+        batch
     } else {
         AllocatorReclaimRequestBatch::default()
     };
     let reclaim_reason = deferred
         .primary_reason()
         .unwrap_or(AllocatorReclaimReason::IdleMemoryPressure);
-    record_idle_reclaim_attempt(now);
     let reclaim = allocator_reclaim(reclaim_reason);
-    let adaptive = record_idle_reclaim_outcome(&reclaim, policy.pressure_threshold_bytes);
-    clear_cgroup_reclaim_pressure_latch();
+    let reclaim_status = reclaim.get("status").and_then(Value::as_str);
+    let merged_pending = reclaim_status == Some("merged_pending");
+    let reclaim_executed = matches!(reclaim_status, Some("pass" | "partial"));
+    if !reclaim_executed {
+        allocator_restore_reclaim_requests(&deferred);
+    } else {
+        allocator_record_publication_reclaim(&deferred);
+        record_idle_reclaim_attempt(now);
+        reset_idle_reclaim_allocated_high_water(stats.allocated);
+        clear_cgroup_reclaim_pressure_latch();
+    }
+    let adaptive = record_idle_reclaim_outcome(&reclaim, effective_pressure_threshold);
     json!({
-        "status": "reclaimed",
+        "status": if merged_pending {
+            "merged_pending"
+        } else if reclaim_executed {
+            "reclaimed"
+        } else {
+            "failed"
+        },
+        "state": if cgroup_pressure.level.is_elevated() { "pressure" } else { "cold" },
         "reason": reclaim_reason.as_str(),
+        "scope": deferred.scope().as_str(),
         "pressureBytes": pressure.to_string(),
         "pressureMetric": "maximum-of-page-and-worker-cache-pressure",
-        "allocatorResidentMinusActiveBytes": page_pressure.to_string(),
+        "allocatorReclaimablePageBytes": page_pressure.to_string(),
         "allocatorMergedTcacheBytes": cache_pressure.to_string(),
+        "allocatorApplicationLiveExcludingTcacheBytes": stats.application_live_excluding_tcache().to_string(),
         "allocatorRetainedBytes": stats.retained.to_string(),
+        "postBurst": post_burst,
         "trafficRateBytesPerSecond": traffic_rate.bytes_per_second.to_string(),
         "trafficRateSource": "resident_dataplane_total_counter_delta",
         "lowTrafficElapsedMillis": low_traffic.elapsed.as_millis().to_string(),
@@ -486,6 +710,7 @@ fn evaluate_allocator_idle_reclaim(
         "deferred": deferred.json(),
         "effectiveMinIntervalMillis": effective_min_interval.as_millis().to_string(),
         "cgroupPressure": cgroup_pressure.json(),
+        "activity": traffic_rate.json(),
         "adaptive": adaptive,
         "reclaim": reclaim,
     })
@@ -511,6 +736,10 @@ fn idle_reclaim_observation(app: &AppState) -> Option<AllocatorIdleObservation> 
         active_udp: counters.active_udp_sessions,
         upload_total_counter: counters.upload_total,
         download_total_counter: counters.download_total,
+        packet_total_counter: counters.packet_total,
+        request_total_counter: counters.request_total,
+        queue_depth: counters.queue_depth,
+        inflight_work: counters.inflight_work,
     })
 }
 
@@ -562,6 +791,12 @@ fn idle_reclaim_traffic_rate_from_state(
     let previous = state.last_sample.replace(AllocatorIdleTrafficSample {
         upload_total_counter: observation.upload_total_counter,
         download_total_counter: observation.download_total_counter,
+        packet_total_counter: observation.packet_total_counter,
+        request_total_counter: observation.request_total_counter,
+        queue_depth: observation.queue_depth,
+        inflight_work: observation.inflight_work,
+        active_tcp: observation.active_tcp,
+        active_udp: observation.active_udp,
         observed_at: now,
     });
     let Some(previous) = previous else {
@@ -582,6 +817,8 @@ fn idle_reclaim_traffic_rate_from_samples(
 ) -> Option<AllocatorIdleTrafficRate> {
     if observation.upload_total_counter < previous.upload_total_counter
         || observation.download_total_counter < previous.download_total_counter
+        || observation.packet_total_counter < previous.packet_total_counter
+        || observation.request_total_counter < previous.request_total_counter
     {
         return None;
     }
@@ -598,8 +835,22 @@ fn idle_reclaim_traffic_rate_from_samples(
                 .download_total_counter
                 .saturating_sub(previous.download_total_counter),
         );
+    let packets = observation
+        .packet_total_counter
+        .saturating_sub(previous.packet_total_counter);
+    let requests = observation
+        .request_total_counter
+        .saturating_sub(previous.request_total_counter);
     Some(AllocatorIdleTrafficRate {
         bytes_per_second: (bytes as f64 / elapsed) as u64,
+        packets_per_second: (packets as f64 / elapsed) as u64,
+        requests_per_second: (requests as f64 / elapsed) as u64,
+        queue_depth: observation.queue_depth,
+        queue_growing: observation.queue_depth > previous.queue_depth,
+        inflight_work: observation.inflight_work,
+        inflight_growing: observation.inflight_work > previous.inflight_work,
+        active_count_growing: observation.active_tcp > previous.active_tcp
+            || observation.active_udp > previous.active_udp,
         window,
         window_started_at: previous.observed_at,
     })
@@ -690,8 +941,14 @@ fn default_idle_reclaim_state() -> AllocatorIdleReclaimState {
         low_traffic_since: None,
         low_yield_streak: 0,
         last_released_bytes: None,
+        last_reclaim_high_yield: false,
         last_cgroup_high_events: None,
         cgroup_high_event_latched: false,
+        previous_busy_count: 0,
+        previous_busy_completion_count: allocator_reclaim_busy_completion_count(),
+        heavy_task_quiet_since: None,
+        allocated_high_water: 0,
+        post_burst_quiet_since: None,
         last_report: json!({"status": "not_started"}),
     }
 }
@@ -753,6 +1010,12 @@ mod tests {
         let previous = AllocatorIdleTrafficSample {
             upload_total_counter: 1_000_000,
             download_total_counter: 2_000_000,
+            packet_total_counter: 100,
+            request_total_counter: 200,
+            queue_depth: 0,
+            inflight_work: 0,
+            active_tcp: 7,
+            active_udp: 0,
             observed_at: previous_at,
         };
         let observation = AllocatorIdleObservation {
@@ -760,6 +1023,10 @@ mod tests {
             active_udp: 0,
             upload_total_counter: 1_010_000,
             download_total_counter: 2_030_000,
+            packet_total_counter: 120,
+            request_total_counter: 240,
+            queue_depth: 0,
+            inflight_work: 0,
         };
 
         let rate = idle_reclaim_traffic_rate_from_samples(
@@ -770,7 +1037,50 @@ mod tests {
 
         let rate = rate.unwrap();
         assert_eq!(rate.bytes_per_second, 20_000);
+        assert_eq!(rate.packets_per_second, 10);
+        assert_eq!(rate.requests_per_second, 20);
+        assert!(rate.active_count_growing);
         assert_eq!(rate.window, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn idle_reclaim_activity_detects_small_packet_qps_and_growing_queues() {
+        let observed_at = Instant::now();
+        let previous = AllocatorIdleTrafficSample {
+            upload_total_counter: 1_000,
+            download_total_counter: 2_000,
+            packet_total_counter: 10,
+            request_total_counter: 20,
+            queue_depth: 0,
+            inflight_work: 1,
+            active_tcp: 4,
+            active_udp: 2,
+            observed_at,
+        };
+        let observation = AllocatorIdleObservation {
+            active_tcp: 4,
+            active_udp: 2,
+            upload_total_counter: 1_100,
+            download_total_counter: 2_100,
+            packet_total_counter: 210,
+            request_total_counter: 220,
+            queue_depth: 3,
+            inflight_work: 2,
+        };
+
+        let rate = idle_reclaim_traffic_rate_from_samples(
+            previous,
+            observed_at + Duration::from_secs(1),
+            observation,
+        )
+        .unwrap();
+
+        assert_eq!(rate.bytes_per_second, 200);
+        assert_eq!(rate.packets_per_second, 200);
+        assert_eq!(rate.requests_per_second, 200);
+        assert!(rate.queue_growing);
+        assert!(rate.inflight_growing);
+        assert!(!rate.active_count_growing);
     }
 
     #[test]
@@ -779,6 +1089,12 @@ mod tests {
         let previous = AllocatorIdleTrafficSample {
             upload_total_counter: 1_000_000,
             download_total_counter: 2_000_000,
+            packet_total_counter: 1_000,
+            request_total_counter: 2_000,
+            queue_depth: 0,
+            inflight_work: 0,
+            active_tcp: 0,
+            active_udp: 0,
             observed_at: previous_at,
         };
         let observation = AllocatorIdleObservation {
@@ -786,6 +1102,10 @@ mod tests {
             active_udp: 0,
             upload_total_counter: 100,
             download_total_counter: 200,
+            packet_total_counter: 100,
+            request_total_counter: 200,
+            queue_depth: 0,
+            inflight_work: 0,
         };
 
         assert_eq!(
@@ -805,6 +1125,12 @@ mod tests {
         state.last_sample = Some(AllocatorIdleTrafficSample {
             upload_total_counter: 1_000_000,
             download_total_counter: 2_000_000,
+            packet_total_counter: 1_000,
+            request_total_counter: 2_000,
+            queue_depth: 0,
+            inflight_work: 0,
+            active_tcp: 0,
+            active_udp: 0,
             observed_at: previous_at,
         });
         state.low_traffic_since = Some(previous_at - Duration::from_secs(300));
@@ -817,6 +1143,10 @@ mod tests {
                 active_udp: 0,
                 upload_total_counter: 100,
                 download_total_counter: 200,
+                packet_total_counter: 100,
+                request_total_counter: 200,
+                queue_depth: 0,
+                inflight_work: 0,
             },
         );
 
@@ -830,6 +1160,12 @@ mod tests {
         let previous = AllocatorIdleTrafficSample {
             upload_total_counter: 1_000_000,
             download_total_counter: 2_000_000,
+            packet_total_counter: 1_000,
+            request_total_counter: 2_000,
+            queue_depth: 0,
+            inflight_work: 0,
+            active_tcp: 0,
+            active_udp: 0,
             observed_at: previous_at + Duration::from_secs(10),
         };
         let observation = AllocatorIdleObservation {
@@ -837,6 +1173,10 @@ mod tests {
             active_udp: 0,
             upload_total_counter: 1_000_100,
             download_total_counter: 2_000_200,
+            packet_total_counter: 1_001,
+            request_total_counter: 2_001,
+            queue_depth: 0,
+            inflight_work: 0,
         };
 
         assert_eq!(
@@ -907,6 +1247,13 @@ mod tests {
         let started_at = Instant::now();
         let rate = AllocatorIdleTrafficRate {
             bytes_per_second: 16,
+            packets_per_second: 0,
+            requests_per_second: 0,
+            queue_depth: 0,
+            queue_growing: false,
+            inflight_work: 0,
+            inflight_growing: false,
+            active_count_growing: false,
             window: Duration::from_secs(60),
             window_started_at: started_at,
         };
@@ -936,6 +1283,13 @@ mod tests {
         let now = Instant::now();
         let rate = AllocatorIdleTrafficRate {
             bytes_per_second: 0,
+            packets_per_second: 0,
+            requests_per_second: 0,
+            queue_depth: 0,
+            queue_growing: false,
+            inflight_work: 0,
+            inflight_growing: false,
+            active_count_growing: false,
             window: Duration::from_secs(60),
             window_started_at: now - Duration::from_secs(60),
         };

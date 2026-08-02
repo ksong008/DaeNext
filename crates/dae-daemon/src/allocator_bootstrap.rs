@@ -49,7 +49,7 @@ fn jemalloc_bootstrap_decision(
 ) -> JemallocBootstrapDecision {
     if effective_configuration
         .as_ref()
-        .is_some_and(|configuration| !configuration.is_empty())
+        .is_some_and(|configuration| jemalloc_configuration_is_valid(configuration))
     {
         return JemallocBootstrapDecision {
             source: JemallocConfigurationSource::EffectiveEnvironment,
@@ -60,6 +60,46 @@ fn jemalloc_bootstrap_decision(
         source: JemallocConfigurationSource::AdaptiveDefault,
         restart_configuration: Some(jemalloc_adaptive_configuration(available_parallelism).into()),
     }
+}
+
+#[cfg(any(feature = "allocator-jemalloc", test))]
+fn jemalloc_configuration_is_valid(configuration: &OsString) -> bool {
+    let Some(configuration) = configuration.to_str() else {
+        return false;
+    };
+    if configuration.is_empty() {
+        return false;
+    }
+    configuration.split(',').all(|entry| {
+        let Some((name, value)) = entry.split_once(':') else {
+            return false;
+        };
+        if name.is_empty()
+            || value.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            || value
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || byte == 0)
+        {
+            return false;
+        }
+        match name {
+            "background_thread" => matches!(value, "true" | "false"),
+            "max_background_threads" | "narenas" => {
+                value.parse::<usize>().is_ok_and(|value| value > 0)
+            }
+            "dirty_decay_ms" | "muzzy_decay_ms" => {
+                value.parse::<i64>().is_ok_and(|value| value >= -1)
+            }
+            "percpu_arena" => matches!(value, "disabled" | "percpu" | "phycpu"),
+            "lg_tcache_max" => value.parse::<u32>().is_ok_and(|value| value < usize::BITS),
+            // Preserve syntactically valid operator options that jemalloc itself owns;
+            // the runtime contract reports the effective product-critical opt.* values.
+            _ => true,
+        }
+    })
 }
 
 /// Ensures that immutable jemalloc options are present before the product
@@ -163,6 +203,29 @@ mod tests {
             decision.restart_configuration,
             Some(OsString::from(jemalloc_adaptive_configuration(1)))
         );
+    }
+
+    #[test]
+    fn invalid_effective_configuration_is_replaced_by_the_adaptive_default() {
+        for invalid in [
+            "not-a-malloc-conf",
+            "narenas:0",
+            "background_thread:maybe",
+            "dirty_decay_ms:-2",
+            "percpu_arena:unknown",
+        ] {
+            let decision = jemalloc_bootstrap_decision(Some(invalid.into()), 4);
+            assert_eq!(
+                decision.source,
+                JemallocConfigurationSource::AdaptiveDefault,
+                "{invalid}"
+            );
+            assert_eq!(
+                decision.restart_configuration,
+                Some(OsString::from(jemalloc_adaptive_configuration(4))),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

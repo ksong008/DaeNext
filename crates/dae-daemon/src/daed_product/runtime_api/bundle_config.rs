@@ -1,6 +1,7 @@
 use super::*;
 
 pub(in crate::daed_product) fn api_get_bundle(app: &AppState, user: &UserRecord) -> HttpResponse {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::LargeControl);
     match export_bundle(&app.state, user) {
         Ok(value) => {
             let response = HttpResponse::json(200, value);
@@ -43,6 +44,7 @@ pub(in crate::daed_product) fn api_put_bundle(
 }
 
 pub(in crate::daed_product) fn api_get_dae_config_file(app: &AppState) -> HttpResponse {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::LargeControl);
     match materialize_runtime(&app.state, None, true) {
         Ok(report) => HttpResponse::json(
             200,

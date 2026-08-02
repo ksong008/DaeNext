@@ -234,6 +234,7 @@ impl Drop for ProductUiStreamLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::allocator::allocator_take_reclaim_requests;
 
     fn request(page_id: &str) -> HttpRequest {
         HttpRequest {
@@ -299,7 +300,8 @@ mod tests {
     }
 
     #[test]
-    fn drained_workers_acknowledge_before_scoped_reclaim_completes() {
+    fn drained_workers_acknowledge_before_scoped_reclaim_is_coordinated() {
+        let _ = allocator_take_reclaim_requests();
         let runtime = Arc::new(ProductUiRuntime::new(4, 2, Duration::from_secs(10)));
         let metrics = ProductHttpMetrics::default();
         let mut first = runtime.register_reclaim_worker();
@@ -317,13 +319,30 @@ mod tests {
         assert_eq!(reclaim["expectedWorkers"], json!(2));
         assert_eq!(reclaim["acknowledgedWorkers"], json!(2));
         assert_eq!(
-            reclaim.pointer("/last/detail/arenaPurgeScope"),
+            reclaim.pointer("/last/detail/scope"),
+            Some(&json!("control-plane"))
+        );
+        assert_eq!(reclaim.pointer("/last/status"), Some(&json!("requested")));
+        assert_eq!(
+            allocator_pending_reclaim_scope(),
+            Some(AllocatorReclaimScope::ControlPlane)
+        );
+        let batch = allocator_take_reclaim_requests();
+        let scoped = allocator_reclaim_control_plane(
+            batch
+                .primary_reason()
+                .expect("UI reclaim request has a reason"),
+        );
+        assert_eq!(scoped["status"], json!("pass"));
+        assert_eq!(
+            scoped.pointer("/detail/arenaPurgeScope"),
             Some(&json!("control-plane-only"))
         );
     }
 
     #[test]
     fn headerless_control_requests_trigger_one_coalesced_idle_reclaim() {
+        let _ = allocator_take_reclaim_requests();
         let runtime = Arc::new(ProductUiRuntime::new(4, 2, Duration::from_secs(10)));
         let metrics = ProductHttpMetrics::default();
         let mut first = runtime.register_reclaim_worker();
@@ -344,5 +363,7 @@ mod tests {
         let snapshot = runtime.snapshot();
         assert_eq!(snapshot["reclaimHeaderlessDrainEpoch"], json!(1));
         assert_eq!(snapshot["reclaim"]["completedTotal"], json!(1));
+        let batch = allocator_take_reclaim_requests();
+        assert_eq!(batch.scope(), AllocatorReclaimScope::ControlPlane);
     }
 }

@@ -34,11 +34,19 @@ use sha3::{
 };
 
 use crate::allocator::{
-    AllocatorReclaimReason, AllocatorReclaimWorker, AllocatorStatsSnapshot, AllocatorWorkerKind,
+    AllocatorReclaimBusyKind, AllocatorReclaimReason, AllocatorReclaimScope,
+    AllocatorReclaimWorker, AllocatorStatsSnapshot, AllocatorWorkerKind,
     allocator_bind_control_plane_thread, allocator_derived_stats_json_from,
-    allocator_flush_current_thread_cache, allocator_profile, allocator_purge_control_plane_arena,
-    allocator_reclaim, allocator_reclaim_snapshot_json, allocator_register_reclaim_worker,
-    allocator_request_reclaim, allocator_stats_json_from, allocator_stats_snapshot,
+    allocator_effective_configuration_json, allocator_flush_current_thread_cache,
+    allocator_notify_reclaim_monitor, allocator_pending_reclaim_scope, allocator_profile,
+    allocator_reclaim, allocator_reclaim_busy, allocator_reclaim_busy_completion_count,
+    allocator_reclaim_busy_count, allocator_reclaim_control_plane,
+    allocator_reclaim_request_wake_epoch, allocator_reclaim_snapshot_json,
+    allocator_reclaimable_page_bytes, allocator_record_publication_reclaim,
+    allocator_record_trailing_reclaim_evaluation, allocator_register_reclaim_worker,
+    allocator_request_control_plane_reclaim, allocator_request_reclaim,
+    allocator_request_reclaim_for_publication, allocator_restore_reclaim_requests,
+    allocator_stats_json_from, allocator_stats_snapshot, allocator_wait_for_reclaim_request_since,
 };
 use crate::allocator_bootstrap::{
     JEMALLOC_AUTOMATIC_ARENA_MAX, JEMALLOC_BUILD_CONF_ENV, JEMALLOC_BUILD_CONF_SOURCE,
@@ -171,18 +179,18 @@ const ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV: &str = "ALLOCATOR_IDLE_RECLAIM_ENABLED
 const ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT: bool = true;
 const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV: &str =
     "ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS";
-const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT: u64 = 60;
-const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MIN: u64 = 10;
+const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT: u64 = 30;
+const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MIN: u64 = 5;
 const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MAX: u64 = 300;
 const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_ENV: &str =
     "ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS";
-const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT: u64 = 300;
+const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT: u64 = 120;
 const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_MIN: u64 = 60;
 const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_MAX: u64 = 3_600;
 const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_ENV: &str =
     "ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS";
-const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT: u64 = 300;
-const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MIN: u64 = 60;
+const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT: u64 = 60;
+const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MIN: u64 = 10;
 const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MAX: u64 = 3_600;
 const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV: &str = "ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES";
 const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT: u64 = 32 * 1024 * 1024;
@@ -675,6 +683,7 @@ fn product_runtime_defaults() -> Value {
                 "effectiveParallelism": available_parallelism,
                 "effectiveParallelismSource": "std::thread::available_parallelism (affinity/cgroup aware)",
                 "processConfiguration": jemalloc_process_configuration,
+                "effectiveOptions": allocator_effective_configuration_json(),
                 "startupApplication": "one-time same-PID process replacement before normal product startup",
                 "runtimeOverride": cfg!(feature = "allocator-jemalloc"),
                 "serviceUnitSetsEnv": false,
@@ -689,7 +698,7 @@ fn product_runtime_defaults() -> Value {
                     "enabledConfigKey": "allocator_idle_reclaim_enabled",
                     "enabledEnv": ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV,
                     "enabledDefault": ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT,
-                    "idleDetection": "traffic-rate-only",
+                    "idleDetection": "traffic-rate-plus-busy-leases-and-allocator-state",
                     "sessionCountGate": false,
                     "sampleIntervalConfigKey": "allocator_idle_reclaim_sample_interval",
                     "sampleIntervalSecondsEnv": ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV,
@@ -703,12 +712,12 @@ fn product_runtime_defaults() -> Value {
                     "pressureBytesConfigKey": "allocator_idle_reclaim_pressure_threshold_bytes",
                     "pressureBytesEnv": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
                     "pressureBytesDefault": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT.to_string(),
-                    "pressureBytesDefaultPolicy": "explicit config or env; otherwise effective memory capacity divided by the automatic divisor and clamped to the automatic bounds",
-                    "pressureBytesPrecedence": ["env", "config", "auto-capacity", "default"],
+                    "pressureBytesDefaultPolicy": "explicit config or env; otherwise application live excluding tcache divided by eight and clamped to 4-16 MiB",
+                    "pressureBytesPrecedence": ["env", "config", "application-live-working-set"],
                     "pressureBytesAutoCapacityDivisor": ALLOCATOR_IDLE_RECLAIM_AUTO_PRESSURE_CAPACITY_DIVISOR,
                     "pressureBytesAutoMin": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN.to_string(),
                     "pressureBytesAutoMax": ALLOCATOR_IDLE_RECLAIM_AUTO_PRESSURE_MAX_BYTES.to_string(),
-                    "pressureMetric": "allocator-resident-minus-active",
+                    "pressureMetric": "maximum-of-arena-dirty-plus-muzzy-pages-and-worker-tcache",
                     "retainedMetric": "diagnostic-virtual-address-space",
                     "maxTrafficRateBytesPerSecondConfigKey": "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
                     "maxTrafficRateBytesPerSecondEnv": ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,

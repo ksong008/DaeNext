@@ -8,6 +8,7 @@ fn fallback_view_uses_typed_runtime_traffic_counters() {
             download_total: 202,
             active_tcp_connections: 3,
             active_udp_sessions: 4,
+            ..ResidentTrafficCounters::default()
         }),
         60,
         10,

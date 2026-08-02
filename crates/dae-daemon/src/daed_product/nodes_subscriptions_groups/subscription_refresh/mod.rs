@@ -42,6 +42,7 @@ pub(crate) fn refresh_subscription_from_remote(
     config_dir: &Path,
     id: i64,
 ) -> io::Result<Value> {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
     ensure_state_schema(state)?;
     let source = subscription_source_by_id(state, id)?;
     let fetched_at = now_text();

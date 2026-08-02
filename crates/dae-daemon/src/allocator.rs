@@ -7,6 +7,11 @@ use serde_json::{Value, json};
 
 mod reclaim;
 use self::reclaim::allocator_reclaim_impl;
+mod activity;
+pub(crate) use self::activity::{
+    AllocatorReclaimBusyKind, allocator_reclaim_busy, allocator_reclaim_busy_completion_count,
+    allocator_reclaim_busy_count,
+};
 mod arena_stats;
 #[cfg(feature = "allocator-jemalloc")]
 mod cooperative;
@@ -25,8 +30,13 @@ pub(crate) use self::control_plane::{
 };
 mod requests;
 pub(crate) use self::requests::{
-    AllocatorReclaimRequestBatch, allocator_pending_reclaim_reason,
-    allocator_pending_reclaim_requests, allocator_request_reclaim, allocator_take_reclaim_requests,
+    AllocatorReclaimRequestBatch, AllocatorReclaimScope, allocator_notify_reclaim_monitor,
+    allocator_pending_reclaim_reason, allocator_pending_reclaim_requests,
+    allocator_pending_reclaim_scope, allocator_reclaim_request_wake_epoch,
+    allocator_record_publication_reclaim, allocator_record_trailing_reclaim_evaluation,
+    allocator_request_control_plane_reclaim, allocator_request_reclaim,
+    allocator_request_reclaim_for_publication, allocator_restore_reclaim_requests,
+    allocator_take_reclaim_requests, allocator_wait_for_reclaim_request_since,
 };
 
 #[cfg(not(feature = "allocator-jemalloc"))]
@@ -52,6 +62,7 @@ pub enum AllocatorReclaimReason {
     GroupHealthProbe,
     GeodataUpdate,
     RetiredGenerationReleased,
+    ControlPlaneIdle,
 }
 
 impl AllocatorReclaimReason {
@@ -66,6 +77,7 @@ impl AllocatorReclaimReason {
             Self::GroupHealthProbe => "group_health_probe",
             Self::GeodataUpdate => "geodata_update",
             Self::RetiredGenerationReleased => "retired_generation_released",
+            Self::ControlPlaneIdle => "control_plane_idle",
         }
     }
 }
@@ -143,6 +155,7 @@ struct LastAllocatorReclaim {
     reason: &'static str,
     profile: &'static str,
     status: String,
+    scope: &'static str,
     detail: Value,
 }
 
@@ -155,9 +168,11 @@ static MANUAL_LATENCY_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static GROUP_HEALTH_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static GEODATA_UPDATE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static RETIRED_GENERATION_RELEASED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static CONTROL_PLANE_IDLE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static EXECUTED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static COALESCED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static MERGED_PENDING_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static LAST_RECLAIM: OnceLock<Mutex<Option<LastAllocatorReclaim>>> = OnceLock::new();
 
 pub fn allocator_profile() -> &'static str {
@@ -166,6 +181,34 @@ pub fn allocator_profile() -> &'static str {
     } else {
         "system"
     }
+}
+
+#[cfg(feature = "allocator-jemalloc")]
+pub(crate) fn allocator_effective_configuration_json() -> Value {
+    fn value<T: ToString>(result: Result<T, String>) -> Value {
+        match result {
+            Ok(value) => json!({"available": true, "value": value.to_string()}),
+            Err(error) => json!({"available": false, "error": error}),
+        }
+    }
+    json!({
+        "available": true,
+        "optNarenas": value(mallctl::read_u32(b"opt.narenas\0")),
+        "backgroundThread": value(mallctl::read_bool(b"background_thread\0")),
+        "maxBackgroundThreads": value(mallctl::read_usize(b"max_background_threads\0")),
+        "optDirtyDecayMs": value(mallctl::read_isize(b"opt.dirty_decay_ms\0")),
+        "optMuzzyDecayMs": value(mallctl::read_isize(b"opt.muzzy_decay_ms\0")),
+        "optPercpuArena": value(mallctl::read_c_string(b"opt.percpu_arena\0")),
+        "optLgTcacheMax": value(mallctl::read_usize(b"opt.lg_tcache_max\0")),
+    })
+}
+
+#[cfg(not(feature = "allocator-jemalloc"))]
+pub(crate) fn allocator_effective_configuration_json() -> Value {
+    json!({
+        "available": false,
+        "reason": "effective jemalloc options require allocator-jemalloc",
+    })
 }
 
 pub fn allocator_stats_json_from(snapshot: Option<&AllocatorStatsSnapshot>) -> Value {
@@ -184,6 +227,10 @@ pub fn allocator_stats_json_from(snapshot: Option<&AllocatorStatsSnapshot>) -> V
 
 pub fn allocator_stats_snapshot() -> Option<AllocatorStatsSnapshot> {
     allocator_stats_bytes().and_then(AllocatorStatsSnapshot::from_bytes)
+}
+
+pub(crate) fn allocator_reclaimable_page_bytes() -> Option<u64> {
+    arena_stats::allocator_reclaimable_page_bytes()
 }
 
 pub fn allocator_derived_stats_json_from(
@@ -214,15 +261,30 @@ pub fn allocator_derived_stats_json_from(
 }
 
 pub fn allocator_reclaim(reason: AllocatorReclaimReason) -> Value {
+    allocator_reclaim_for_scope(reason, AllocatorReclaimScope::Global)
+}
+
+pub(crate) fn allocator_reclaim_control_plane(reason: AllocatorReclaimReason) -> Value {
+    allocator_reclaim_for_scope(reason, AllocatorReclaimScope::ControlPlane)
+}
+
+fn allocator_reclaim_for_scope(
+    reason: AllocatorReclaimReason,
+    scope: AllocatorReclaimScope,
+) -> Value {
     increment_reason_counter(reason);
     TOTAL_RECLAIMS.fetch_add(1, Ordering::Relaxed);
 
     let stats_before = allocator_stats_snapshot();
     let arenas_before = arena_stats::allocator_arena_stats_json();
     let started_at = Instant::now();
-    let (status, detail) = allocator_reclaim_impl();
-    if status == "coalesced" {
+    let (status, detail) = match scope {
+        AllocatorReclaimScope::Global => allocator_reclaim_impl(reason),
+        AllocatorReclaimScope::ControlPlane => allocator_purge_control_plane_arena(),
+    };
+    if matches!(status, "coalesced" | "merged_pending" | "subsumed") {
         COALESCED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        MERGED_PENDING_RECLAIMS.fetch_add(1, Ordering::Relaxed);
     } else {
         EXECUTED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
     }
@@ -241,6 +303,7 @@ pub fn allocator_reclaim(reason: AllocatorReclaimReason) -> Value {
         reason: reason.as_str(),
         profile: allocator_profile(),
         status: status.to_owned(),
+        scope: scope.as_str(),
         detail,
     };
     if let Ok(mut guard) = LAST_RECLAIM.get_or_init(|| Mutex::new(None)).lock() {
@@ -298,11 +361,14 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
         .and_then(|guard| guard.clone());
     json!({
         "profile": allocator_profile(),
+        "effectiveConfiguration": allocator_effective_configuration_json(),
         "total": TOTAL_RECLAIMS.load(Ordering::Relaxed),
         "requestedTotal": TOTAL_RECLAIMS.load(Ordering::Relaxed),
         "executedTotal": EXECUTED_RECLAIMS.load(Ordering::Relaxed),
         "coalescedTotal": COALESCED_RECLAIMS.load(Ordering::Relaxed),
+        "mergedPendingTotal": MERGED_PENDING_RECLAIMS.load(Ordering::Relaxed),
         "workers": cooperative::allocator_worker_reclaim_snapshot_json(),
+        "activity": activity::allocator_reclaim_busy_snapshot_json(),
         "deferred": requests::allocator_reclaim_request_snapshot_json(),
         "reasons": {
             "startup_control_built": STARTUP_CONTROL_BUILT_RECLAIMS.load(Ordering::Relaxed),
@@ -314,6 +380,7 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
             "group_health_probe": GROUP_HEALTH_PROBE_RECLAIMS.load(Ordering::Relaxed),
             "geodata_update": GEODATA_UPDATE_RECLAIMS.load(Ordering::Relaxed),
             "retired_generation_released": RETIRED_GENERATION_RELEASED_RECLAIMS.load(Ordering::Relaxed),
+            "control_plane_idle": CONTROL_PLANE_IDLE_RECLAIMS.load(Ordering::Relaxed),
         },
         "last": last.as_ref().map(last_allocator_reclaim_json),
     })
@@ -348,6 +415,9 @@ fn increment_reason_counter(reason: AllocatorReclaimReason) {
         AllocatorReclaimReason::RetiredGenerationReleased => {
             RETIRED_GENERATION_RELEASED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
+        AllocatorReclaimReason::ControlPlaneIdle => {
+            CONTROL_PLANE_IDLE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
     };
 }
 
@@ -356,6 +426,7 @@ fn last_allocator_reclaim_json(reclaim: &LastAllocatorReclaim) -> Value {
         "reason": reclaim.reason,
         "profile": reclaim.profile,
         "status": reclaim.status,
+        "scope": reclaim.scope,
         "detail": reclaim.detail,
     })
 }

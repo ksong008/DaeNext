@@ -23,14 +23,16 @@ pub(crate) enum AllocatorWorkerKind {
     Sse,
     ProductControl,
     ResidentData,
+    ControlAux,
 }
 
 impl AllocatorWorkerKind {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Http,
         Self::Sse,
         Self::ProductControl,
         Self::ResidentData,
+        Self::ControlAux,
     ];
 
     const fn as_str(self) -> &'static str {
@@ -39,6 +41,7 @@ impl AllocatorWorkerKind {
             Self::Sse => "sse",
             Self::ProductControl => "product-control",
             Self::ResidentData => "resident-data",
+            Self::ControlAux => "control-aux",
         }
     }
 }
@@ -303,18 +306,15 @@ pub(super) fn allocator_worker_reclaim_snapshot_json() -> Value {
     if let Ok(workers) = reclaim.workers.lock() {
         for worker in workers.iter().filter_map(Weak::upgrade) {
             if worker.active.load(Ordering::Acquire) {
-                *registered_by_kind
-                    .entry(worker.kind.as_str())
-                    .or_default() += 1;
+                *registered_by_kind.entry(worker.kind.as_str()).or_default() += 1;
             }
         }
     }
     if let Ok(runtimes) = reclaim.runtimes.lock() {
         for runtime in runtimes.iter().filter_map(Weak::upgrade) {
             if runtime.active.load(Ordering::Acquire) {
-                *registered_by_kind
-                    .entry(runtime.kind.as_str())
-                    .or_default() += runtime.worker_threads as u64;
+                *registered_by_kind.entry(runtime.kind.as_str()).or_default() +=
+                    runtime.worker_threads as u64;
             }
         }
     }

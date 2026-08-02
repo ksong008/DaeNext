@@ -1,5 +1,7 @@
 use super::*;
 
+const LARGE_CONTROL_LOG_QUERY_LIMIT: usize = 1_000;
+
 pub(in crate::daed_product) fn api_logs(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let level = match log_level_filter_from_request(request) {
         Ok(level) => level,
@@ -18,6 +20,8 @@ pub(in crate::daed_product) fn api_logs(app: &AppState, request: &HttpRequest) -
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|limit| *limit > 0)
         .unwrap_or(DEFAULT_LOG_QUERY_LIMIT);
+    let _reclaim_busy = (limit >= LARGE_CONTROL_LOG_QUERY_LIMIT)
+        .then(|| allocator_reclaim_busy(AllocatorReclaimBusyKind::LargeControl));
     match list_logs_value(
         &app.config_dir,
         &app.state,

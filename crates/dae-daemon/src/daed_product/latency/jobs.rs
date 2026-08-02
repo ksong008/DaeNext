@@ -114,6 +114,7 @@ fn run_node_latency_job(
     context: LatencyJobRuntimeContext,
     nodes: Vec<LatencyProbeNode>,
 ) {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::ManualLatency);
     debug_assert_eq!(cancellation.job_id(), job_id);
     context.jobs.mark_running(job_id);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -136,10 +136,8 @@ mod udp_resources;
 use self::udp_resources::*;
 #[path = "runtime/resource_profile.rs"]
 mod resource_profile;
+pub(crate) use self::resource_profile::effective_process_memory_capacity;
 use self::resource_profile::*;
-pub(crate) use self::resource_profile::{
-    EffectiveProcessMemoryCapacity, effective_process_memory_capacity,
-};
 pub(super) use self::resource_profile::{
     resident_datapath_postflight_interval_seconds_default, selected_resident_runtime_profile_name,
 };

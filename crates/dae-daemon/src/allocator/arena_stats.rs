@@ -1,6 +1,30 @@
 use super::*;
 
 #[cfg(feature = "allocator-jemalloc")]
+pub(super) fn allocator_reclaimable_page_bytes() -> Option<u64> {
+    let _ = tikv_jemalloc_ctl::epoch::advance();
+    let page_size = mallctl::read_usize(b"arenas.page\0").ok()? as u64;
+    let narenas = mallctl::read_u32(b"arenas.narenas\0").ok()?;
+    let mut pages = 0_u64;
+    for arena in 0..narenas {
+        let initialized_key = format!("arena.{arena}.initialized\0");
+        if mallctl::read_bool(initialized_key.as_bytes()).ok()? != true {
+            continue;
+        }
+        for field in ["pdirty", "pmuzzy"] {
+            let key = format!("stats.arenas.{arena}.{field}\0");
+            pages = pages.saturating_add(mallctl::read_usize(key.as_bytes()).ok()? as u64);
+        }
+    }
+    Some(pages.saturating_mul(page_size))
+}
+
+#[cfg(not(feature = "allocator-jemalloc"))]
+pub(super) fn allocator_reclaimable_page_bytes() -> Option<u64> {
+    None
+}
+
+#[cfg(feature = "allocator-jemalloc")]
 pub(super) fn allocator_arena_stats_json() -> Value {
     let narenas = match mallctl::read_u32(b"arenas.narenas\0") {
         Ok(narenas) => narenas,

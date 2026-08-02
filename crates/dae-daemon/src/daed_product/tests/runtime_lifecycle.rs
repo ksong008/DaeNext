@@ -149,6 +149,7 @@ pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
         inner.traffic_carry = RuntimeTrafficCarry {
             upload_total: 100,
             download_total: 200,
+            ..RuntimeTrafficCarry::default()
         };
         inner.runtime_started_at = Some("2026-06-15T01:00:00.000Z".to_owned());
     }
@@ -655,7 +656,7 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert!(overview["allocatorReclaim"]["total"].as_u64().is_some());
     assert_eq!(
         overview["allocatorIdleReclaim"]["policy"]["idleDetection"],
-        json!("traffic-rate-only")
+        json!("traffic-rate-plus-busy-leases-and-allocator-state")
     );
     assert_eq!(
         overview["allocatorIdleReclaim"]["policy"]["sessionCountGate"],
