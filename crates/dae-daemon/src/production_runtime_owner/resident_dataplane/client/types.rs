@@ -82,12 +82,6 @@ pub(crate) static BORING_CONNECTOR_CACHE: OnceLock<Mutex<ResidentTlsConfigCache<
 
 const RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES: usize = 64;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ResidentTlsConfigCacheClearReport {
-    pub(crate) rustls: usize,
-    pub(crate) boring: usize,
-}
-
 #[derive(Debug)]
 pub(crate) struct ResidentTlsConfigCache<T> {
     entries: BTreeMap<ResidentTlsClientConfigKey, ResidentTlsConfigCacheEntry<T>>,
@@ -163,51 +157,5 @@ impl<T> ResidentTlsConfigCache<T> {
         for (_, key) in removable.into_iter().take(remove_count) {
             self.entries.remove(&key);
         }
-    }
-
-    fn clear(&mut self) -> usize {
-        let cleared = self.entries.len();
-        self.entries.clear();
-        cleared
-    }
-}
-
-pub(crate) fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearReport {
-    let rustls = RUSTLS_CLIENT_CONFIG_CACHE
-        .get()
-        .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear()))
-        .unwrap_or(0);
-    let boring = BORING_CONNECTOR_CACHE
-        .get()
-        .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear()))
-        .unwrap_or(0);
-    ResidentTlsConfigCacheClearReport { rustls, boring }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn cache_key(flow: &str) -> ResidentTlsClientConfigKey {
-        ResidentTlsClientConfigKey {
-            flow: flow.to_owned(),
-            alpn: Vec::new(),
-            allow_insecure: false,
-            utls_fingerprint: None,
-            reality: None,
-        }
-    }
-
-    #[test]
-    fn resident_tls_config_cache_clear_releases_retained_entries() {
-        let mut cache = ResidentTlsConfigCache::<usize>::default();
-        let first = cache_key("first");
-        let second = cache_key("second");
-
-        cache.insert_or_get(first, Arc::new(1));
-        cache.insert_or_get(second, Arc::new(2));
-
-        assert_eq!(cache.clear(), 2);
-        assert_eq!(cache.clear(), 0);
     }
 }
