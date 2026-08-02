@@ -68,8 +68,8 @@ pub(crate) use resident::{
 };
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime_with_asset_dirs};
 pub(crate) use resident_dataplane::{
-    EffectiveProcessMemoryCapacity, ResidentDnsReloadSnapshot, ResidentEventLogDecision,
-    ResidentEventLogPolicy, ResidentEventLogPrefilter, ResidentEventLogSink, ResidentEventMetadata,
+    ResidentDnsReloadSnapshot, ResidentEventLogDecision, ResidentEventLogPolicy,
+    ResidentEventLogPrefilter, ResidentEventLogSink, ResidentEventMetadata,
     ResidentManualProbeHandle, ResidentNodeSourceAdmission, ResidentTrafficCounters,
     effective_process_memory_capacity, fetch_http_url_via_default_proxy_async,
     resident_live_adapter_config_assessment, resident_live_adapter_entry_missing,

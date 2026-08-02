@@ -3,22 +3,37 @@ use std::sync::{Mutex, OnceLock, TryLockError};
 
 static ALLOCATOR_RECLAIM_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 
-pub(super) fn allocator_reclaim_impl() -> (&'static str, Value) {
+pub(super) fn allocator_reclaim_impl(_reason: AllocatorReclaimReason) -> (&'static str, Value) {
+    allocator_with_reclaim_gate("global", || {}, allocator_reclaim_backend)
+}
+
+pub(super) fn allocator_with_reclaim_gate<F, B>(
+    scope: &'static str,
+    on_busy: B,
+    operation: F,
+) -> (&'static str, Value)
+where
+    F: FnOnce() -> (&'static str, Value),
+    B: FnOnce(),
+{
     let gate = ALLOCATOR_RECLAIM_GATE.get_or_init(|| Mutex::new(()));
     let _guard = match gate.try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::WouldBlock) => {
+            on_busy();
             return (
-                "coalesced",
+                "merged_pending",
                 json!({
                     "operation": "allocator_reclaim_gate",
                     "reason": "reclaim_in_progress",
+                    "scope": scope,
+                    "trailingEvaluation": true,
                 }),
             );
         }
         Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
     };
-    allocator_reclaim_backend()
+    operation()
 }
 
 #[cfg(feature = "allocator-jemalloc")]
@@ -102,16 +117,57 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
 #[cfg(all(test, feature = "allocator-jemalloc"))]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn generic_reclaim_purges_every_initialized_arena() {
-        let (status, report) = allocator_reclaim_impl();
+        let (status, report) = (0..200)
+            .find_map(|_| {
+                let result = allocator_reclaim_impl(AllocatorReclaimReason::IdleMemoryPressure);
+                if result.0 == "merged_pending" {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    None
+                } else {
+                    Some(result)
+                }
+            })
+            .expect("allocator reclaim gate remained occupied");
+        let _ = allocator_take_reclaim_requests();
 
         assert_eq!(status, "pass");
         assert_eq!(report["arenaPurgeScope"], json!("all-initialized-arenas"));
         assert!(report["arenasObserved"].as_u64().unwrap_or(0) > 0);
         assert!(report["arenasAttempted"].as_u64().unwrap_or(0) > 0);
         assert_eq!(report["failures"], json!([]));
+    }
+
+    #[test]
+    fn scoped_and_global_reclaim_never_overlap() {
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let worker_entered = Arc::clone(&entered);
+        let worker_release = Arc::clone(&release);
+        let global = std::thread::spawn(move || {
+            allocator_with_reclaim_gate(
+                "global",
+                || {},
+                || {
+                    worker_entered.wait();
+                    worker_release.wait();
+                    ("pass", json!({"operation": "test-global"}))
+                },
+            )
+        });
+
+        entered.wait();
+        let (status, detail) = allocator_purge_control_plane_arena();
+        release.wait();
+        let (global_status, _) = global.join().unwrap();
+
+        assert_eq!(global_status, "pass");
+        assert_eq!(status, "subsumed");
+        assert_eq!(detail["subsumedBy"], json!("global"));
+        assert_eq!(detail["gateDetail"]["trailingEvaluation"], json!(true));
     }
 }
 

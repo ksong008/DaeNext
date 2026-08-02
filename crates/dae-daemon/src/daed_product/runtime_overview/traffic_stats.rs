@@ -56,6 +56,7 @@ fn resident_runtime_traffic_stats_from_metrics(metrics: &Value) -> RuntimeTraffi
             download_total: event_u64(metrics, "downloadTotal"),
             active_tcp_connections: event_u64(metrics, "activeTcpConnections"),
             active_udp_sessions: event_u64(metrics, "activeUdpSessions"),
+            ..ResidentTrafficCounters::default()
         },
         unix_now(),
         Instant::now(),

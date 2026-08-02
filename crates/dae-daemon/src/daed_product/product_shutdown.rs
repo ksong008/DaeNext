@@ -25,6 +25,7 @@ impl ProductShutdown {
         self.requested.store(true, Ordering::Release);
         drop(guard);
         self.wake.notify_all();
+        allocator_notify_reclaim_monitor();
         true
     }
 

@@ -770,7 +770,7 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     );
     assert_eq!(
         defaults["allocator"]["reclaim"]["idleMemoryPressure"]["idleDetection"],
-        json!("traffic-rate-only")
+        json!("traffic-rate-plus-busy-leases-and-allocator-state")
     );
     assert_eq!(
         defaults["allocator"]["reclaim"]["idleMemoryPressure"]["sessionCountGate"],
@@ -1130,6 +1130,7 @@ fn runtime_traffic_carry_preserves_totals_when_live_metrics_reset() {
         download_total: 700,
         active_tcp_connections: 0,
         active_udp_sessions: 0,
+        ..ResidentTrafficCounters::default()
     });
     let mut summary = json!({
         "residentDataplane": {
@@ -1204,6 +1205,7 @@ fn runtime_traffic_stats_prefer_live_resident_metrics() {
             download_total: 200,
             active_tcp_connections: 3,
             active_udp_sessions: 2,
+            ..ResidentTrafficCounters::default()
         },
         100,
         first_at,
@@ -1221,6 +1223,7 @@ fn runtime_traffic_stats_prefer_live_resident_metrics() {
             download_total: 500,
             active_tcp_connections: 1,
             active_udp_sessions: 0,
+            ..ResidentTrafficCounters::default()
         },
         101,
         first_at + Duration::from_secs(1),

@@ -129,7 +129,13 @@ impl ProductUiReclaim {
         let flush_failures = self.flush_failures.load(Ordering::Relaxed);
         let owner_drained = runtime.owner_drained(metrics);
         let (status, detail) = if owner_drained && flush_failures == 0 {
-            allocator_purge_control_plane_arena()
+            let request = allocator_request_control_plane_reclaim();
+            let status = if request.get("status").and_then(Value::as_str) == Some("requested") {
+                "requested"
+            } else {
+                "fail"
+            };
+            (status, request)
         } else if !owner_drained {
             self.owner_retry.store(true, Ordering::Release);
             (

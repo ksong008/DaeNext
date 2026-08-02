@@ -6,6 +6,7 @@ pub(crate) enum AllocatorWorkerKind {
     Sse,
     ProductControl,
     ResidentData,
+    ControlAux,
 }
 
 pub(crate) struct AllocatorReclaimWorker;

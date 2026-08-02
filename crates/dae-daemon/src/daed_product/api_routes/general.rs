@@ -1,5 +1,8 @@
 use super::*;
 
+const LARGE_CONTROL_OVERVIEW_MAX_POINTS: usize = 256;
+const LARGE_CONTROL_OVERVIEW_WINDOW_SECONDS: u64 = 300;
+
 pub(super) fn api_general_state(app: &AppState) -> HttpResponse {
     match general_state_report(&app.state, &app.config_dir, &app.runtime) {
         Ok(report) => HttpResponse::json(200, report),
@@ -33,6 +36,12 @@ pub(super) fn api_general_interfaces(request: &HttpRequest) -> HttpResponse {
 }
 
 pub(super) fn api_runtime_overview(app: &AppState, request: &HttpRequest) -> HttpResponse {
+    let large = query_usize(request, "maxPoints")
+        .is_some_and(|points| points > LARGE_CONTROL_OVERVIEW_MAX_POINTS)
+        || query_u64(request, "windowSec")
+            .is_some_and(|seconds| seconds > LARGE_CONTROL_OVERVIEW_WINDOW_SECONDS);
+    let _reclaim_busy =
+        large.then(|| allocator_reclaim_busy(AllocatorReclaimBusyKind::LargeControl));
     HttpResponse::json(200, runtime_overview_report(app, request))
 }
 

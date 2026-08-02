@@ -129,7 +129,9 @@ fn product_geodata_update_worker_loop(
     metrics: Arc<ProductGeodataUpdateMetrics>,
     stopping: Arc<std::sync::atomic::AtomicBool>,
 ) {
+    let mut allocator_worker = allocator_register_reclaim_worker(AllocatorWorkerKind::ControlAux);
     loop {
+        allocator_worker.poll();
         let received = {
             let Ok(receiver) = receiver.lock() else {
                 return;
@@ -147,6 +149,7 @@ fn product_geodata_update_worker_loop(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
         };
         run_product_geodata_update_job(&context, &metrics, &stopping, job);
+        allocator_worker.poll();
     }
 }
 
@@ -156,6 +159,7 @@ fn run_product_geodata_update_job(
     stopping: &std::sync::atomic::AtomicBool,
     job: ProductGeodataUpdateJob,
 ) {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Geodata);
     let ProductGeodataUpdateJob {
         mut stream,
         request,

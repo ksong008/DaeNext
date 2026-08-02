@@ -5,6 +5,8 @@ use super::*;
 pub(in crate::daed_product) struct RuntimeTrafficCarry {
     pub(in crate::daed_product) upload_total: u64,
     pub(in crate::daed_product) download_total: u64,
+    pub(in crate::daed_product) packet_total: u64,
+    pub(in crate::daed_product) request_total: u64,
 }
 
 impl RuntimeTrafficCarry {
@@ -22,6 +24,8 @@ impl RuntimeTrafficCarry {
         Self {
             upload_total: self.upload_total.saturating_add(counters.upload_total),
             download_total: self.download_total.saturating_add(counters.download_total),
+            packet_total: self.packet_total.saturating_add(counters.packet_total),
+            request_total: self.request_total.saturating_add(counters.request_total),
         }
     }
 
@@ -47,6 +51,8 @@ impl RuntimeTrafficCarry {
         ResidentTrafficCounters {
             upload_total: counters.upload_total.saturating_add(self.upload_total),
             download_total: counters.download_total.saturating_add(self.download_total),
+            packet_total: counters.packet_total.saturating_add(self.packet_total),
+            request_total: counters.request_total.saturating_add(self.request_total),
             ..counters
         }
     }
@@ -78,17 +84,27 @@ mod tests {
         let counters = ResidentTrafficCounters {
             upload_total: 25,
             download_total: 50,
+            packet_total: 75,
+            request_total: 100,
+            queue_depth: 4,
+            inflight_work: 5,
             active_tcp_connections: 3,
             active_udp_sessions: 2,
         };
         let carried = RuntimeTrafficCarry {
             upload_total: 500,
             download_total: 700,
+            packet_total: 900,
+            request_total: 1_100,
         }
         .apply_to_counters(counters);
 
         assert_eq!(carried.upload_total, 525);
         assert_eq!(carried.download_total, 750);
+        assert_eq!(carried.packet_total, 975);
+        assert_eq!(carried.request_total, 1_200);
+        assert_eq!(carried.queue_depth, 4);
+        assert_eq!(carried.inflight_work, 5);
         assert_eq!(carried.active_tcp_connections, 3);
         assert_eq!(carried.active_udp_sessions, 2);
     }
@@ -98,17 +114,25 @@ mod tests {
         let counters = ResidentTrafficCounters {
             upload_total: u64::MAX - 1,
             download_total: u64::MAX,
+            packet_total: u64::MAX - 2,
+            request_total: u64::MAX - 3,
+            queue_depth: 4,
+            inflight_work: 5,
             active_tcp_connections: 7,
             active_udp_sessions: 8,
         };
         let carried = RuntimeTrafficCarry {
             upload_total: 2,
             download_total: 1,
+            packet_total: 4,
+            request_total: 6,
         }
         .apply_to_counters(counters);
 
         assert_eq!(carried.upload_total, u64::MAX);
         assert_eq!(carried.download_total, u64::MAX);
+        assert_eq!(carried.packet_total, u64::MAX);
+        assert_eq!(carried.request_total, u64::MAX);
         assert_eq!(carried.active_tcp_connections, 7);
         assert_eq!(carried.active_udp_sessions, 8);
     }

@@ -42,6 +42,7 @@ pub(crate) fn create_subscription(
     runtime: &ProductRuntimeManager,
     request: &HttpRequest,
 ) -> HttpResponse {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -153,6 +154,7 @@ pub(crate) fn get_subscription_value(state: &Path, id: i64) -> io::Result<Option
 }
 
 pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -230,6 +232,7 @@ pub(crate) fn refresh_subscription(
     runtime: &ProductRuntimeManager,
     id: i64,
 ) -> HttpResponse {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
     match refresh_subscription_from_remote(control_runtime, state, config_dir, id) {
         Ok(mut report) => {
             let outcome = SubscriptionRefreshOutcome::from_report(&report);
@@ -272,6 +275,7 @@ pub(crate) fn delete_subscriptions(
     runtime: &ProductRuntimeManager,
     request: &HttpRequest,
 ) -> HttpResponse {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
     let removed = match delete_subscriptions_by_ids(state, &ids) {
@@ -296,6 +300,7 @@ pub(crate) fn delete_subscription_by_id(
     runtime: &ProductRuntimeManager,
     id: i64,
 ) -> HttpResponse {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
     match delete_subscription(state, id) {
         Ok(removed) => {
             let mut response = json!({"removed": removed});

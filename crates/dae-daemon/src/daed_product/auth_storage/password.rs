@@ -4,12 +4,14 @@ const ARGON2ID_HASH_PREFIX: &str = "$argon2id$";
 const PASSWORD_MIN_LEN: usize = 8;
 
 pub(crate) fn hash_password(salt: &[u8], password: &str) -> String {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Auth);
     #[cfg(test)]
     record_password_execution_thread(password);
     hash_password_argon2id(salt, password)
 }
 
 pub(crate) fn verify_password_hash(stored_hash: &str, salt: &[u8], password: &str) -> bool {
+    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Auth);
     #[cfg(test)]
     record_password_execution_thread(password);
     if stored_hash.starts_with(ARGON2ID_HASH_PREFIX) {

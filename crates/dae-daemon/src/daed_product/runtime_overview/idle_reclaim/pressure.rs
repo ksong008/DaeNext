@@ -1,29 +1,71 @@
 use super::*;
 
-const CGROUP_RECLAIM_PRESSURE_USAGE_PERMILLE: u64 = 850;
+const CGROUP_RECLAIM_ELEVATED_USAGE_PERMILLE: u64 = 700;
+const CGROUP_RECLAIM_URGENT_USAGE_PERMILLE: u64 = 850;
+const CGROUP_RECLAIM_EMERGENCY_USAGE_PERMILLE: u64 = 900;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum CgroupReclaimPressureLevel {
+    #[default]
+    Normal,
+    Elevated,
+    Urgent,
+    Emergency,
+}
+
+impl CgroupReclaimPressureLevel {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Elevated => "elevated",
+            Self::Urgent => "urgent",
+            Self::Emergency => "emergency",
+        }
+    }
+
+    pub(super) const fn is_elevated(self) -> bool {
+        !matches!(self, Self::Normal)
+    }
+
+    pub(super) const fn is_urgent(self) -> bool {
+        matches!(self, Self::Urgent | Self::Emergency)
+    }
+
+    pub(super) const fn is_emergency(self) -> bool {
+        matches!(self, Self::Emergency)
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct CgroupReclaimPressure {
     pub(super) urgent: bool,
+    pub(super) level: CgroupReclaimPressureLevel,
     current_bytes: Option<u64>,
     limiting_bytes: Option<u64>,
     limiting_source: Option<&'static str>,
     high_events: Option<u64>,
-    high_event_increased: bool,
+    pub(super) high_event_increased: bool,
     high_event_latched: bool,
+    anonymous_bytes: Option<u64>,
+    non_allocator_bytes: Option<u64>,
 }
 
 impl CgroupReclaimPressure {
     pub(super) fn json(&self) -> Value {
         json!({
             "urgent": self.urgent,
+            "level": self.level.as_str(),
             "currentBytes": self.current_bytes.map(|value| value.to_string()),
             "limitingBytes": self.limiting_bytes.map(|value| value.to_string()),
             "limitingSource": self.limiting_source,
-            "usagePermilleThreshold": CGROUP_RECLAIM_PRESSURE_USAGE_PERMILLE,
+            "elevatedUsagePermille": CGROUP_RECLAIM_ELEVATED_USAGE_PERMILLE,
+            "urgentUsagePermille": CGROUP_RECLAIM_URGENT_USAGE_PERMILLE,
+            "emergencyUsagePermille": CGROUP_RECLAIM_EMERGENCY_USAGE_PERMILLE,
             "highEvents": self.high_events,
             "highEventIncreased": self.high_event_increased,
             "highEventLatched": self.high_event_latched,
+            "anonymousBytes": self.anonymous_bytes.map(|value| value.to_string()),
+            "nonAllocatorBytes": self.non_allocator_bytes.map(|value| value.to_string()),
         })
     }
 }
@@ -70,21 +112,42 @@ fn cgroup_reclaim_pressure_from_snapshot(
     let high_event_increased = high_events
         .zip(previous_high_events)
         .is_some_and(|(current, previous)| current > previous);
-    let near_limit = current_bytes
+    let usage_permille = current_bytes
         .zip(limiting_bytes)
-        .is_some_and(|(current, limit)| {
-            limit > 0
-                && current.saturating_mul(1_000)
-                    >= limit.saturating_mul(CGROUP_RECLAIM_PRESSURE_USAGE_PERMILLE)
-        });
+        .and_then(|(current, limit)| (limit > 0).then_some(current.saturating_mul(1_000) / limit));
+    let mut level = match usage_permille.unwrap_or_default() {
+        usage if usage >= CGROUP_RECLAIM_EMERGENCY_USAGE_PERMILLE => {
+            CgroupReclaimPressureLevel::Emergency
+        }
+        usage if usage >= CGROUP_RECLAIM_URGENT_USAGE_PERMILLE => {
+            CgroupReclaimPressureLevel::Urgent
+        }
+        usage if usage >= CGROUP_RECLAIM_ELEVATED_USAGE_PERMILLE => {
+            CgroupReclaimPressureLevel::Elevated
+        }
+        _ => CgroupReclaimPressureLevel::Normal,
+    };
+    if (high_event_increased || high_event_latched)
+        && !matches!(level, CgroupReclaimPressureLevel::Emergency)
+    {
+        level = CgroupReclaimPressureLevel::Urgent;
+    }
+    let anonymous_bytes = json_u64(snapshot.pointer("/stat/anon"));
+    let non_allocator_bytes = ["file", "slab", "sock", "kernel_stack", "pagetables"]
+        .into_iter()
+        .filter_map(|field| json_u64(snapshot.pointer(&format!("/stat/{field}"))))
+        .fold(0_u64, u64::saturating_add);
     CgroupReclaimPressure {
-        urgent: high_event_increased || high_event_latched || near_limit,
+        urgent: level.is_urgent(),
+        level,
         current_bytes,
         limiting_bytes,
         limiting_source,
         high_events,
         high_event_increased,
         high_event_latched,
+        anonymous_bytes,
+        non_allocator_bytes: Some(non_allocator_bytes),
     }
 }
 

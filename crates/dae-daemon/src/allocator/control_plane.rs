@@ -24,6 +24,28 @@ pub(crate) fn allocator_flush_current_thread_cache() -> Result<(), String> {
 }
 
 pub(crate) fn allocator_purge_control_plane_arena() -> (&'static str, Value) {
+    let (status, detail) = super::reclaim::allocator_with_reclaim_gate(
+        "control-plane",
+        || {},
+        allocator_purge_control_plane_arena_backend,
+    );
+    if status == "merged_pending" {
+        (
+            "subsumed",
+            json!({
+                "operation": "jemalloc_control_plane_arena_purge",
+                "reason": "process_wide_reclaim_in_progress",
+                "scope": "control-plane",
+                "subsumedBy": "global",
+                "gateDetail": detail,
+            }),
+        )
+    } else {
+        (status, detail)
+    }
+}
+
+fn allocator_purge_control_plane_arena_backend() -> (&'static str, Value) {
     #[cfg(feature = "allocator-jemalloc")]
     {
         use tikv_jemalloc_ctl::epoch;
@@ -94,7 +116,17 @@ mod tests {
         let arena = allocator_bind_control_plane_thread().unwrap().unwrap();
         assert_eq!(mallctl::read_u32(b"thread.arena\0").unwrap(), arena);
         allocator_flush_current_thread_cache().unwrap();
-        let (status, report) = allocator_purge_control_plane_arena();
+        let (status, report) = (0..200)
+            .find_map(|_| {
+                let result = allocator_purge_control_plane_arena();
+                if result.0 == "subsumed" {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    None
+                } else {
+                    Some(result)
+                }
+            })
+            .expect("allocator reclaim gate remained occupied");
         assert_eq!(status, "pass");
         assert_eq!(report["arena"], json!(arena));
         assert_eq!(report["arenaPurgeScope"], json!("control-plane-only"));

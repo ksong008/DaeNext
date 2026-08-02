@@ -1,5 +1,7 @@
 #[cfg(feature = "allocator-jemalloc")]
 use std::ffi::c_void;
+#[cfg(feature = "allocator-jemalloc")]
+use std::ffi::{CStr, c_char};
 
 #[cfg(feature = "allocator-jemalloc")]
 pub(super) fn read_u32(name: &[u8]) -> Result<u32, String> {
@@ -74,6 +76,58 @@ pub(super) fn read_usize(name: &[u8]) -> Result<usize, String> {
     } else {
         Err(error(result))
     }
+}
+
+#[cfg(feature = "allocator-jemalloc")]
+pub(super) fn read_isize(name: &[u8]) -> Result<isize, String> {
+    validate_name(name)?;
+    let mut value = 0_isize;
+    let mut length = std::mem::size_of::<isize>();
+    let result = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            name.as_ptr().cast(),
+            (&mut value as *mut isize).cast::<c_void>(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result == 0 && length == std::mem::size_of::<isize>() {
+        Ok(value)
+    } else if result == 0 {
+        Err(format!(
+            "mallctl returned an unexpected value size {length}"
+        ))
+    } else {
+        Err(error(result))
+    }
+}
+
+#[cfg(feature = "allocator-jemalloc")]
+pub(super) fn read_c_string(name: &[u8]) -> Result<String, String> {
+    validate_name(name)?;
+    let mut value: *const c_char = std::ptr::null();
+    let mut length = std::mem::size_of::<*const c_char>();
+    let result = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            name.as_ptr().cast(),
+            (&mut value as *mut *const c_char).cast::<c_void>(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 {
+        return Err(error(result));
+    }
+    if length != std::mem::size_of::<*const c_char>() || value.is_null() {
+        return Err(format!(
+            "mallctl returned an unexpected value size {length}"
+        ));
+    }
+    Ok(unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned())
 }
 
 #[cfg(feature = "allocator-jemalloc")]
