@@ -42,7 +42,15 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_ingress_packets: AtomicU64,
     udp_ingress_drain_batches: AtomicU64,
     udp_ingress_drain_budget_hits: AtomicU64,
+    udp_ingress_syscalls: AtomicU64,
+    udp_ingress_datagrams: AtomicU64,
+    udp_ingress_syscall_batches: AtomicU64,
+    udp_ingress_batch_datagrams_total: AtomicU64,
+    udp_ingress_batch_max: AtomicU64,
+    udp_ingress_would_block: AtomicU64,
     udp_ingress_truncated: AtomicU64,
+    udp_ingress_control_truncated: AtomicU64,
+    udp_ingress_invalid: AtomicU64,
     dns_fast_path_active: AtomicU64,
     dns_fast_path_maximum_active: AtomicU64,
     dns_fast_path_queued: AtomicU64,
@@ -61,6 +69,13 @@ pub(crate) struct ResidentDataplaneMetrics {
     dns_udp_id_exhausted: AtomicU64,
     dns_udp_retries: AtomicU64,
     dns_udp_shutdown_requests_failed: AtomicU64,
+    dns_udp_send_syscalls: AtomicU64,
+    dns_udp_send_datagrams: AtomicU64,
+    dns_udp_send_batches: AtomicU64,
+    dns_udp_send_batch_datagrams_total: AtomicU64,
+    dns_udp_send_batch_max: AtomicU64,
+    dns_udp_recv_syscalls: AtomicU64,
+    dns_udp_recv_datagrams: AtomicU64,
     proxy_dns_udp_executors_opened: AtomicU64,
     proxy_dns_udp_executors_reused: AtomicU64,
     proxy_dns_udp_executors_reset: AtomicU64,
@@ -102,10 +117,29 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_reply_queued: AtomicU64,
     udp_reply_queue_full: AtomicU64,
     udp_reply_sent: AtomicU64,
+    udp_reply_syscalls: AtomicU64,
+    udp_reply_datagrams: AtomicU64,
+    udp_reply_batches: AtomicU64,
+    udp_reply_batch_datagrams_total: AtomicU64,
+    udp_reply_batch_max: AtomicU64,
+    udp_reply_partial_failures: AtomicU64,
     udp_reply_send_would_block: AtomicU64,
     udp_reply_socket_recreated: AtomicU64,
     udp_reply_socket_idle_evicted: AtomicU64,
     udp_reply_failed: AtomicU64,
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) struct UdpIngressMetricObservation {
+    pub(super) packets: usize,
+    pub(super) truncated: usize,
+    pub(super) control_truncated: usize,
+    pub(super) invalid: usize,
+    pub(super) budget_hit: bool,
+    pub(super) syscalls: usize,
+    pub(super) syscall_batches: usize,
+    pub(super) batch_datagrams: usize,
+    pub(super) batch_max: usize,
+    pub(super) would_block: usize,
 }
 
 fn subtract_metric(metric: &AtomicU64, value: u64) {
@@ -347,16 +381,44 @@ impl ResidentDataplaneMetrics {
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn record_udp_ingress_batch(
-        &self,
-        packets: usize,
-        truncated: usize,
-        budget_hit: bool,
-    ) {
+    pub(super) fn record_udp_ingress_batch(&self, observation: UdpIngressMetricObservation) {
+        let UdpIngressMetricObservation {
+            packets,
+            truncated,
+            control_truncated,
+            invalid,
+            budget_hit,
+            syscalls,
+            syscall_batches,
+            batch_datagrams,
+            batch_max,
+            would_block,
+        } = observation;
         self.udp_ingress_packets
             .fetch_add(packets as u64, Ordering::Relaxed);
         self.udp_ingress_truncated
             .fetch_add(truncated as u64, Ordering::Relaxed);
+        self.udp_ingress_control_truncated
+            .fetch_add(control_truncated as u64, Ordering::Relaxed);
+        self.udp_ingress_invalid
+            .fetch_add(invalid as u64, Ordering::Relaxed);
+        self.udp_ingress_datagrams.fetch_add(
+            packets
+                .saturating_add(truncated)
+                .saturating_add(control_truncated)
+                .saturating_add(invalid) as u64,
+            Ordering::Relaxed,
+        );
+        self.udp_ingress_syscalls
+            .fetch_add(syscalls as u64, Ordering::Relaxed);
+        self.udp_ingress_syscall_batches
+            .fetch_add(syscall_batches as u64, Ordering::Relaxed);
+        self.udp_ingress_batch_datagrams_total
+            .fetch_add(batch_datagrams as u64, Ordering::Relaxed);
+        self.udp_ingress_batch_max
+            .fetch_max(batch_max as u64, Ordering::Relaxed);
+        self.udp_ingress_would_block
+            .fetch_add(would_block as u64, Ordering::Relaxed);
         self.udp_ingress_drain_batches
             .fetch_add(1, Ordering::Relaxed);
         if budget_hit {
@@ -425,6 +487,30 @@ impl ResidentDataplaneMetrics {
     pub(super) fn dns_udp_shutdown_failed_requests(&self, count: usize) {
         self.dns_udp_shutdown_requests_failed
             .fetch_add(count as u64, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_send_syscall(&self, batch_size: usize) {
+        self.dns_udp_send_syscalls.fetch_add(1, Ordering::Relaxed);
+        if batch_size > 1 {
+            self.dns_udp_send_batches.fetch_add(1, Ordering::Relaxed);
+            self.dns_udp_send_batch_datagrams_total
+                .fetch_add(batch_size as u64, Ordering::Relaxed);
+            self.dns_udp_send_batch_max
+                .fetch_max(batch_size as u64, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn dns_udp_datagrams_sent(&self, count: usize) {
+        self.dns_udp_send_datagrams
+            .fetch_add(count as u64, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_recv_syscall(&self) {
+        self.dns_udp_recv_syscalls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn dns_udp_datagram_received(&self) {
+        self.dns_udp_recv_datagrams.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(super) fn proxy_dns_udp_executor_opened(&self) {
@@ -581,6 +667,30 @@ impl ResidentDataplaneMetrics {
 
     pub(super) fn udp_reply_sent(&self) {
         self.udp_reply_sent.fetch_add(1, Ordering::Relaxed);
+        self.udp_reply_datagrams.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_reply_sent_count(&self, count: usize) {
+        self.udp_reply_sent
+            .fetch_add(count as u64, Ordering::Relaxed);
+        self.udp_reply_datagrams
+            .fetch_add(count as u64, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_reply_send_syscall(&self, batch_size: usize) {
+        self.udp_reply_syscalls.fetch_add(1, Ordering::Relaxed);
+        if batch_size > 1 {
+            self.udp_reply_batches.fetch_add(1, Ordering::Relaxed);
+            self.udp_reply_batch_datagrams_total
+                .fetch_add(batch_size as u64, Ordering::Relaxed);
+            self.udp_reply_batch_max
+                .fetch_max(batch_size as u64, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn udp_reply_partial_failure(&self) {
+        self.udp_reply_partial_failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(super) fn udp_reply_send_would_block(&self) {
@@ -704,6 +814,40 @@ impl ResidentDataplaneMetrics {
             "udpReplySocketIdleEvicted": self.udp_reply_socket_idle_evicted.load(Ordering::Relaxed),
             "udpReplyFailed": self.udp_reply_failed.load(Ordering::Relaxed),
         });
+        snapshot["udpIngressSyscalls"] = json!(self.udp_ingress_syscalls.load(Ordering::Relaxed));
+        snapshot["udpIngressDatagrams"] = json!(self.udp_ingress_datagrams.load(Ordering::Relaxed));
+        snapshot["udpIngressBatches"] =
+            json!(self.udp_ingress_syscall_batches.load(Ordering::Relaxed));
+        snapshot["udpIngressBatchDatagramsTotal"] = json!(
+            self.udp_ingress_batch_datagrams_total
+                .load(Ordering::Relaxed)
+        );
+        snapshot["udpIngressBatchMax"] = json!(self.udp_ingress_batch_max.load(Ordering::Relaxed));
+        snapshot["udpIngressWouldBlock"] =
+            json!(self.udp_ingress_would_block.load(Ordering::Relaxed));
+        snapshot["udpIngressControlTruncated"] =
+            json!(self.udp_ingress_control_truncated.load(Ordering::Relaxed));
+        snapshot["udpIngressInvalid"] = json!(self.udp_ingress_invalid.load(Ordering::Relaxed));
+        snapshot["udpReplySyscalls"] = json!(self.udp_reply_syscalls.load(Ordering::Relaxed));
+        snapshot["udpReplyDatagrams"] = json!(self.udp_reply_datagrams.load(Ordering::Relaxed));
+        snapshot["udpReplyBatches"] = json!(self.udp_reply_batches.load(Ordering::Relaxed));
+        snapshot["udpReplyBatchDatagramsTotal"] =
+            json!(self.udp_reply_batch_datagrams_total.load(Ordering::Relaxed));
+        snapshot["udpReplyBatchMax"] = json!(self.udp_reply_batch_max.load(Ordering::Relaxed));
+        snapshot["udpReplyPartialFailures"] =
+            json!(self.udp_reply_partial_failures.load(Ordering::Relaxed));
+        snapshot["dnsUdpSendSyscalls"] = json!(self.dns_udp_send_syscalls.load(Ordering::Relaxed));
+        snapshot["dnsUdpSendDatagrams"] =
+            json!(self.dns_udp_send_datagrams.load(Ordering::Relaxed));
+        snapshot["dnsUdpSendBatches"] = json!(self.dns_udp_send_batches.load(Ordering::Relaxed));
+        snapshot["dnsUdpSendBatchDatagramsTotal"] = json!(
+            self.dns_udp_send_batch_datagrams_total
+                .load(Ordering::Relaxed)
+        );
+        snapshot["dnsUdpSendBatchMax"] = json!(self.dns_udp_send_batch_max.load(Ordering::Relaxed));
+        snapshot["dnsUdpRecvSyscalls"] = json!(self.dns_udp_recv_syscalls.load(Ordering::Relaxed));
+        snapshot["dnsUdpRecvDatagrams"] =
+            json!(self.dns_udp_recv_datagrams.load(Ordering::Relaxed));
         snapshot["ss2022Replay"] = json!({
             "activeWindowsCurrent": self.ss2022_replay_active_windows_current.load(Ordering::Relaxed),
             "quarantinedSessionsCurrent": self.ss2022_replay_quarantined_sessions_current.load(Ordering::Relaxed),

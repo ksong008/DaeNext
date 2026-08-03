@@ -17,6 +17,10 @@ use super::udp_payload_admission::{
     ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
 };
 
+#[path = "udp_io/syscall_batch.rs"]
+mod syscall_batch;
+pub(super) use syscall_batch::{UdpBatchReceiver, UdpSendMessage, try_sendmmsg};
+
 pub(super) const UDP_RECV_DEFAULT_CAPACITY: usize = 2048;
 const UDP_RECV_MAX_RETAINED_CAPACITY: usize = 64 * 1024;
 const UDP_RECV_MAX_DATAGRAM_CAPACITY: usize = u16::MAX as usize;
@@ -34,6 +38,7 @@ impl UdpOriginalDstRecvError {
         matches!(self, Self::Io(err) if err.kind() == io::ErrorKind::WouldBlock)
     }
 
+    #[cfg(test)]
     pub(super) fn is_truncated(&self) -> bool {
         matches!(self, Self::Truncated { .. })
     }
@@ -323,8 +328,6 @@ fn recvmsg_udp_original_dst_with_capacity(
     recv_capacity: usize,
     payload_pool: Option<&UdpPayloadPool>,
 ) -> Result<UdpOriginalDstPacket, UdpOriginalDstRecvError> {
-    const IP_ORIGDSTADDR: libc::c_int = 20;
-    const IPV6_ORIGDSTADDR: libc::c_int = 74;
     let fd = socket.as_raw_fd();
     let (mut data, mut pool_lease) = match payload_pool {
         Some(pool) => {
@@ -379,23 +382,7 @@ fn recvmsg_udp_original_dst_with_capacity(
         }
         return Err(UdpOriginalDstRecvError::UnsupportedAddressFamily);
     };
-    let mut original_dst = None;
-    unsafe {
-        let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
-        while !cmsg.is_null() {
-            if (*cmsg).cmsg_level == libc::SOL_IP && (*cmsg).cmsg_type == IP_ORIGDSTADDR {
-                let addr = *(libc::CMSG_DATA(cmsg).cast::<libc::sockaddr_in>());
-                original_dst = Some(SocketAddr::V4(sockaddr_in_to_v4(addr)));
-                break;
-            }
-            if (*cmsg).cmsg_level == libc::SOL_IPV6 && (*cmsg).cmsg_type == IPV6_ORIGDSTADDR {
-                let addr = *(libc::CMSG_DATA(cmsg).cast::<libc::sockaddr_in6>());
-                original_dst = Some(sockaddr_in6_to_addr(addr));
-                break;
-            }
-            cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
-        }
-    }
+    let original_dst = original_dst_from_msghdr(&msg);
     let payload = match pool_lease {
         Some(lease) => UdpPayload::from_pool(data, lease),
         None => UdpPayload::from_vec(data),
@@ -405,6 +392,26 @@ fn recvmsg_udp_original_dst_with_capacity(
         peer,
         original_dst,
     })
+}
+
+fn original_dst_from_msghdr(msg: &libc::msghdr) -> Option<SocketAddr> {
+    const IP_ORIGDSTADDR: libc::c_int = 20;
+    const IPV6_ORIGDSTADDR: libc::c_int = 74;
+    unsafe {
+        let mut cmsg = libc::CMSG_FIRSTHDR(msg);
+        while !cmsg.is_null() {
+            if (*cmsg).cmsg_level == libc::SOL_IP && (*cmsg).cmsg_type == IP_ORIGDSTADDR {
+                let addr = *(libc::CMSG_DATA(cmsg).cast::<libc::sockaddr_in>());
+                return Some(SocketAddr::V4(sockaddr_in_to_v4(addr)));
+            }
+            if (*cmsg).cmsg_level == libc::SOL_IPV6 && (*cmsg).cmsg_type == IPV6_ORIGDSTADDR {
+                let addr = *(libc::CMSG_DATA(cmsg).cast::<libc::sockaddr_in6>());
+                return Some(sockaddr_in6_to_addr(addr));
+            }
+            cmsg = libc::CMSG_NXTHDR(msg, cmsg);
+        }
+    }
+    None
 }
 
 fn sockaddr_in_to_v4(addr: libc::sockaddr_in) -> SocketAddrV4 {

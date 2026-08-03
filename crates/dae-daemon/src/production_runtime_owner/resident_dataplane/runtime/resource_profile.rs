@@ -1516,6 +1516,14 @@ impl ResidentRuntimeProfile {
         }
     }
 
+    pub(crate) const fn udp_syscall_batch_limit(self) -> usize {
+        match self {
+            Self::LowMemory => 8,
+            Self::Balanced => 16,
+            Self::HighPerformance => 32,
+        }
+    }
+
     pub(crate) fn tcp_runtime_workers_default(self, available_parallelism: usize) -> usize {
         let profile_max = match self {
             Self::LowMemory => LOW_MEMORY_TCP_RUNTIME_WORKERS_MAX,

@@ -117,6 +117,7 @@ pub(super) use self::group_selector_summary::*;
 #[path = "runtime/metrics.rs"]
 mod metrics;
 pub(crate) use self::metrics::ResidentTrafficCounters;
+pub(in crate::production_runtime_owner::resident_dataplane) use self::metrics::UdpIngressMetricObservation;
 pub(super) use self::metrics::{
     ResidentDataplaneMetrics, ResidentTcpConnectionGuard, ResidentUdpActivityGuard,
 };
