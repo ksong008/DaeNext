@@ -176,6 +176,59 @@ async fn udp_multiplex_handles_out_of_order_responses() {
 }
 
 #[tokio::test]
+async fn udp_multiplex_batches_only_requests_already_ready_in_its_bounded_queue() {
+    let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let target = upstream.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut request = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+        for _ in 0..8 {
+            let (read, peer) = upstream.recv_from(&mut request).await.unwrap();
+            let response = dns_a_response_for_query(&request[..read], [192, 0, 2, 10]);
+            upstream.send_to(&response, peer).await.unwrap();
+        }
+    });
+    let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    runtime.queue_depth = 16;
+    runtime.pending_limit = 16;
+    runtime.inflight_window = 16;
+    runtime.send_batch_limit = 16;
+    let metrics = test_metrics();
+    let handle = open_udp_multiplex_handle_with_config(target, 0, &runtime, Arc::clone(&metrics))
+        .await
+        .unwrap();
+    let mut responses = Vec::new();
+    for index in 0..8_u16 {
+        let payload = build_dns_query_packet(index, "batch.example", DNS_QTYPE_A).unwrap();
+        let permit = handle.payload_admission.try_acquire(payload.len()).unwrap();
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        handle
+            .sender
+            .try_send(UdpMultiplexRequest {
+                payload,
+                deadline: time::Instant::now() + Duration::from_secs(2),
+                _payload_admission: permit,
+                response,
+            })
+            .unwrap();
+        responses.push(receiver);
+    }
+    for response in responses {
+        response.await.unwrap().unwrap();
+    }
+    server.await.unwrap();
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot["dnsUdpSendDatagrams"], 8);
+    assert_eq!(snapshot["dnsUdpRecvDatagrams"], 8);
+    if !cfg!(feature = "test-scalar-udp-send") {
+        assert!(snapshot["dnsUdpSendBatches"].as_u64().unwrap() >= 1);
+        assert!(snapshot["dnsUdpSendBatchMax"].as_u64().unwrap() >= 2);
+        assert!(snapshot["dnsUdpSendSyscalls"].as_u64().unwrap() < 8);
+    }
+}
+
+#[tokio::test]
 async fn udp_multiplex_discards_stale_response() {
     let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await
