@@ -31,6 +31,10 @@ allocator-jemalloc = [
     "dep:tikv-jemalloc-ctl",
     "dep:tikv-jemalloc-sys",
 ]
+# Diagnostic-only compile switches used by the transparent-UDP four-quadrant
+# A/B. Production builds leave both unset and use bounded syscall batching.
+test-scalar-udp-recv = []
+test-scalar-udp-send = []
 
 [[bin]]
 name = "daed"

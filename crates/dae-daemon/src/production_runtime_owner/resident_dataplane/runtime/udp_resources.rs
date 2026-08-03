@@ -16,7 +16,9 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) worker_stack_bytes: usize,
     pub(crate) dispatch_queue_depth: usize,
     pub(crate) ingress_drain_budget: usize,
+    pub(crate) ingress_syscall_batch_limit: usize,
     pub(crate) reply_queue_depth: usize,
+    pub(crate) reply_send_batch_limit: usize,
     pub(crate) reply_socket_cache_capacity: usize,
     pub(crate) reply_socket_idle_timeout: Duration,
     pub(crate) direct_response_buffer_idle_timeout: Duration,
@@ -42,6 +44,7 @@ pub(crate) struct ResidentDnsUdpRuntimeConfig {
     pub(crate) queue_depth: usize,
     pub(crate) pending_limit: usize,
     pub(crate) inflight_window: usize,
+    pub(crate) send_batch_limit: usize,
     pub(crate) attempts: usize,
     pub(crate) attempt_timeout: Duration,
     pub(crate) shard_idle_timeout: Duration,
@@ -83,7 +86,9 @@ impl ResidentUdpRuntimeConfig {
             worker_stack_bytes: resources.tcp_flow_stack_bytes.value(),
             dispatch_queue_depth,
             ingress_drain_budget: session_queue_depth,
+            ingress_syscall_batch_limit: runtime_profile.udp_syscall_batch_limit(),
             reply_queue_depth: dispatch_queue_depth,
+            reply_send_batch_limit: runtime_profile.udp_syscall_batch_limit(),
             reply_socket_cache_capacity: session_admission_limit.unwrap_or(session_soft_watermark),
             reply_socket_idle_timeout: resources
                 .runtime_profile
@@ -159,6 +164,7 @@ impl ResidentUdpRuntimeConfig {
                 .dns_udp_forwarder_inflight_window
                 .min(self.dns_udp_forwarder_pending_limit)
                 .max(1),
+            send_batch_limit: self.ingress_syscall_batch_limit,
             attempts: self.dns_udp_forwarder_attempts,
             attempt_timeout: resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts),
             shard_idle_timeout: self.dns_udp_shard_idle_timeout,
@@ -177,6 +183,7 @@ impl ResidentUdpRuntimeConfig {
             "ingress": {
                 "owner": "resident-udp-ingress",
                 "drainBudget": self.ingress_drain_budget,
+                "syscallBatchLimit": self.ingress_syscall_batch_limit,
             },
             "sessionShards": {
                 "owner": "resident-udp-session-shards",
@@ -200,6 +207,7 @@ impl ResidentUdpRuntimeConfig {
                 "queueDepth": self.reply_queue_depth,
                 "socketCacheCapacity": self.reply_socket_cache_capacity,
                 "socketIdleTimeoutMs": self.reply_socket_idle_timeout.as_millis(),
+                "sendBatchLimit": self.reply_send_batch_limit,
             },
             "queuedPayload": {
                 "limitBytes": self.payload_admission.limit(),
@@ -218,6 +226,7 @@ impl ResidentUdpRuntimeConfig {
                 "queueDepth": self.dns_udp_forwarder_queue_depth,
                 "pendingLimit": self.dns_udp_forwarder_pending_limit,
                 "inflightWindow": self.dns_udp_forwarder_inflight_window,
+                "sendBatchLimit": dns_udp.send_batch_limit,
                 "attempts": self.dns_udp_forwarder_attempts,
                 "attemptTimeoutMs": resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts).as_millis(),
                 "shardIdleTimeoutMs": dns_udp.shard_idle_timeout.as_millis(),
@@ -252,6 +261,7 @@ impl ResidentDnsUdpRuntimeConfig {
             queue_depth: profile.dns_udp_forwarder_queue_depth_default(),
             pending_limit: profile.dns_udp_forwarder_pending_limit_default(),
             inflight_window: profile.dns_udp_forwarder_inflight_window_default(),
+            send_batch_limit: profile.udp_syscall_batch_limit(),
             attempts: profile.dns_udp_forwarder_attempts_default(),
             attempt_timeout: resident_dns_udp_attempt_timeout(
                 profile.dns_udp_forwarder_attempts_default(),
@@ -330,7 +340,9 @@ mod tests {
             worker_stack_bytes: 512 * 1024,
             dispatch_queue_depth: 512,
             ingress_drain_budget: 128,
+            ingress_syscall_batch_limit: 16,
             reply_queue_depth: 512,
+            reply_send_batch_limit: 16,
             reply_socket_cache_capacity: 512,
             reply_socket_idle_timeout: Duration::from_secs(180),
             direct_response_buffer_idle_timeout: Duration::from_secs(30),
@@ -436,7 +448,9 @@ mod tests {
             worker_stack_bytes: 768 * 1024,
             dispatch_queue_depth: 96,
             ingress_drain_budget: 16,
+            ingress_syscall_batch_limit: 8,
             reply_queue_depth: 96,
+            reply_send_batch_limit: 8,
             reply_socket_cache_capacity: 64,
             reply_socket_idle_timeout: Duration::from_secs(180),
             direct_response_buffer_idle_timeout: Duration::from_secs(30),
