@@ -3,60 +3,131 @@ use super::*;
 pub(super) struct UdpIngressBatch {
     pub(super) packets: Vec<UdpOriginalDstPacket>,
     pub(super) truncated: usize,
+    pub(super) control_truncated: usize,
+    pub(super) invalid: usize,
     pub(super) budget_hit: bool,
-}
-
-enum UdpIngressAttempt {
-    Packet(UdpOriginalDstPacket),
-    Truncated,
+    pub(super) syscall_count: usize,
+    pub(super) batch_syscalls: usize,
+    pub(super) batch_datagrams: usize,
+    pub(super) batch_max: usize,
+    pub(super) would_block: usize,
+    pub(super) fallback_activated: Option<String>,
 }
 
 pub(super) async fn recv_udp_batch_with_original_dst_async(
     socket: &AsyncFd<UdpSocket>,
     payload_pool: &UdpPayloadPool,
+    batch_receiver: &mut UdpBatchReceiver,
     drain_budget: usize,
 ) -> Result<UdpIngressBatch, String> {
     let drain_budget = drain_budget.max(1);
     let mut packets = Vec::with_capacity(drain_budget.min(32));
     let mut truncated = 0_usize;
+    let mut control_truncated = 0_usize;
+    let mut invalid = 0_usize;
+    let mut syscall_count = 0_usize;
+    let mut batch_syscalls = 0_usize;
+    let mut batch_datagrams = 0_usize;
+    let mut batch_max = 0_usize;
+    let mut would_block = 0_usize;
+    let mut fallback_activated = None;
     loop {
         let mut guard = socket
             .readable()
             .await
             .map_err(|err| format!("await UDP socket readiness: {err}"))?;
         loop {
+            let remaining = drain_budget
+                .saturating_sub(
+                    packets
+                        .len()
+                        .saturating_add(truncated)
+                        .saturating_add(control_truncated)
+                        .saturating_add(invalid),
+                )
+                .max(1);
             let attempt = guard.try_io(|inner| {
-                match try_recv_udp_with_original_dst_from_pool(
-                    inner.get_ref(),
-                    UDP_RECV_DEFAULT_CAPACITY,
-                    payload_pool,
-                ) {
-                    Ok(packet) => Ok(UdpIngressAttempt::Packet(packet)),
-                    Err(err) if err.is_truncated() => Ok(UdpIngressAttempt::Truncated),
-                    Err(err) if err.is_would_block() => {
-                        Err(io::Error::from(io::ErrorKind::WouldBlock))
-                    }
-                    Err(err) => Err(io::Error::other(err.to_string())),
-                }
+                batch_receiver
+                    .try_recv(inner.get_ref(), payload_pool, remaining)
+                    .map_err(|err| {
+                        if err.is_would_block() {
+                            io::Error::from(io::ErrorKind::WouldBlock)
+                        } else {
+                            io::Error::other(err.to_string())
+                        }
+                    })
             });
             match attempt {
-                Ok(Ok(UdpIngressAttempt::Packet(packet))) => packets.push(packet),
-                Ok(Ok(UdpIngressAttempt::Truncated)) => truncated += 1,
+                Ok(Ok(mut outcome)) => {
+                    let received = outcome
+                        .packets
+                        .len()
+                        .saturating_add(outcome.truncated)
+                        .saturating_add(outcome.control_truncated)
+                        .saturating_add(outcome.invalid);
+                    syscall_count = syscall_count.saturating_add(outcome.syscall_count);
+                    if outcome.batch_datagrams != 0 {
+                        batch_syscalls = batch_syscalls.saturating_add(1);
+                        batch_datagrams = batch_datagrams.saturating_add(outcome.batch_datagrams);
+                        batch_max = batch_max.max(outcome.batch_datagrams);
+                    }
+                    truncated = truncated.saturating_add(outcome.truncated);
+                    control_truncated = control_truncated.saturating_add(outcome.control_truncated);
+                    invalid = invalid.saturating_add(outcome.invalid);
+                    packets.append(&mut outcome.packets);
+                    if fallback_activated.is_none() {
+                        fallback_activated = outcome.fallback_activated.take();
+                    }
+                    debug_assert_ne!(received, 0, "ready UDP receive made no progress");
+                }
                 Ok(Err(err)) => return Err(err.to_string()),
-                Err(_) if !packets.is_empty() || truncated != 0 => {
+                Err(_)
+                    if !packets.is_empty()
+                        || truncated != 0
+                        || control_truncated != 0
+                        || invalid != 0 =>
+                {
+                    would_block = would_block.saturating_add(1);
+                    syscall_count = syscall_count.saturating_add(1);
                     return Ok(UdpIngressBatch {
                         packets,
                         truncated,
+                        control_truncated,
+                        invalid,
                         budget_hit: false,
+                        syscall_count,
+                        batch_syscalls,
+                        batch_datagrams,
+                        batch_max,
+                        would_block,
+                        fallback_activated,
                     });
                 }
-                Err(_) => break,
+                Err(_) => {
+                    would_block = would_block.saturating_add(1);
+                    syscall_count = syscall_count.saturating_add(1);
+                    break;
+                }
             }
-            if packets.len().saturating_add(truncated) >= drain_budget {
+            if packets
+                .len()
+                .saturating_add(truncated)
+                .saturating_add(control_truncated)
+                .saturating_add(invalid)
+                >= drain_budget
+            {
                 return Ok(UdpIngressBatch {
                     packets,
                     truncated,
+                    control_truncated,
+                    invalid,
                     budget_hit: true,
+                    syscall_count,
+                    batch_syscalls,
+                    batch_datagrams,
+                    batch_max,
+                    would_block,
+                    fallback_activated,
                 });
             }
         }
@@ -78,17 +149,87 @@ mod tests {
         }
         let socket = AsyncFd::new(receiver).unwrap();
         let pool = UdpPayloadPool::new(4, 1);
+        let mut batch_receiver = UdpBatchReceiver::new(2);
 
-        let first = recv_udp_batch_with_original_dst_async(&socket, &pool, 2)
+        let first = recv_udp_batch_with_original_dst_async(&socket, &pool, &mut batch_receiver, 2)
             .await
             .unwrap();
         assert_eq!(first.packets.len(), 2);
         assert!(first.budget_hit);
-        let second = recv_udp_batch_with_original_dst_async(&socket, &pool, 2)
+        if !cfg!(feature = "test-scalar-udp-recv") {
+            assert_eq!(first.syscall_count, 1);
+            assert_eq!(first.batch_syscalls, 1);
+            assert_eq!(first.batch_datagrams, 2);
+        }
+        let second = recv_udp_batch_with_original_dst_async(&socket, &pool, &mut batch_receiver, 2)
             .await
             .unwrap();
         assert_eq!(second.packets.len(), 1);
         assert!(!second.budget_hit);
         assert_eq!(second.truncated, 0);
+    }
+
+    #[tokio::test]
+    async fn ingress_batch_preserves_zero_length_and_large_datagrams() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let target = receiver.local_addr().unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(&[], target).unwrap();
+        sender.send_to(&vec![0x5a; 16 * 1024], target).unwrap();
+        let socket = AsyncFd::new(receiver).unwrap();
+        let pool = UdpPayloadPool::new(4, 1);
+        let mut batch_receiver = UdpBatchReceiver::new(8);
+
+        let batch = recv_udp_batch_with_original_dst_async(&socket, &pool, &mut batch_receiver, 8)
+            .await
+            .unwrap();
+        assert_eq!(batch.packets.len(), 2);
+        assert_eq!(batch.packets[0].payload.len(), 0);
+        assert_eq!(batch.packets[1].payload.len(), 16 * 1024);
+        assert!(batch.packets[1].payload.iter().all(|byte| *byte == 0x5a));
+    }
+
+    #[cfg(not(feature = "test-scalar-udp-recv"))]
+    #[tokio::test]
+    async fn ingress_falls_back_to_scalar_for_socket_lifetime() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let target = receiver.local_addr().unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(b"fallback", target).unwrap();
+        let socket = AsyncFd::new(receiver).unwrap();
+        let pool = UdpPayloadPool::new(4, 1);
+        let mut batch_receiver = UdpBatchReceiver::new(8);
+        batch_receiver.force_next_errno(libc::ENOSYS);
+
+        let batch = recv_udp_batch_with_original_dst_async(&socket, &pool, &mut batch_receiver, 8)
+            .await
+            .unwrap();
+        assert_eq!(batch.packets.len(), 1);
+        assert!(batch.fallback_activated.is_some());
+        assert!(!batch_receiver.is_enabled());
+    }
+
+    #[cfg(not(feature = "test-scalar-udp-recv"))]
+    #[tokio::test]
+    async fn ingress_retries_interrupted_recvmmsg_without_losing_the_datagram() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let target = receiver.local_addr().unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(b"retry-eintr", target).unwrap();
+        let socket = AsyncFd::new(receiver).unwrap();
+        let pool = UdpPayloadPool::new(4, 1);
+        let mut batch_receiver = UdpBatchReceiver::new(8);
+        batch_receiver.force_next_errno(libc::EINTR);
+
+        let batch = recv_udp_batch_with_original_dst_async(&socket, &pool, &mut batch_receiver, 8)
+            .await
+            .unwrap();
+        assert_eq!(batch.packets.len(), 1);
+        assert_eq!(&*batch.packets[0].payload, b"retry-eintr");
+        assert!(batch.fallback_activated.is_none());
+        assert!(batch_receiver.is_enabled());
     }
 }

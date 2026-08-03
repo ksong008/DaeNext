@@ -54,8 +54,7 @@ use super::super::PRODUCTION_NETNS;
 #[cfg(test)]
 use super::super::udp_io::UdpOriginalDstRecvError;
 use super::super::udp_io::{
-    UDP_RECV_DEFAULT_CAPACITY, UdpOriginalDstPacket, UdpPayloadPool,
-    try_recv_udp_with_original_dst_from_pool,
+    UdpBatchReceiver, UdpOriginalDstPacket, UdpPayloadPool, UdpSendMessage, try_sendmmsg,
 };
 #[cfg(test)]
 use super::RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX;
