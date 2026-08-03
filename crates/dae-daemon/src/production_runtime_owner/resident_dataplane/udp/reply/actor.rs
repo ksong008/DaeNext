@@ -9,7 +9,7 @@ use crate::production_runtime_owner::udp_payload_admission::{
 };
 
 mod socket;
-use socket::{UdpReplySocketCache, send_udp_reply};
+use socket::{UdpReplySocketCache, send_udp_reply, send_udp_reply_batch};
 
 #[derive(Debug)]
 pub(in super::super) enum UdpReplyError {
@@ -221,6 +221,7 @@ impl UdpReplyDispatcher {
         queue_depth: usize,
         socket_cache_capacity: usize,
         socket_idle_timeout: Duration,
+        send_batch_limit: usize,
         payload_admission: ResidentUdpPayloadAdmission,
         metrics: Arc<ResidentDataplaneMetrics>,
     ) -> Self {
@@ -248,6 +249,7 @@ impl UdpReplyDispatcher {
                     stop_receiver,
                     shard_cache_capacity,
                     socket_idle_timeout,
+                    send_batch_limit,
                     task_metrics,
                 )
                 .await
@@ -332,6 +334,7 @@ async fn run_udp_reply_actor(
     mut stop: oneshot::Receiver<()>,
     socket_cache_capacity: usize,
     socket_idle_timeout: Duration,
+    send_batch_limit: usize,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> usize {
     let mut cache = UdpReplySocketCache::new(socket_cache_capacity);
@@ -355,14 +358,30 @@ async fn run_udp_reply_actor(
                 let Some(request) = request else {
                     break;
                 };
-                let result = send_udp_reply(&mut cache, &metrics, &request).await;
-                if result.is_err() {
-                    metrics.udp_reply_failed();
-                } else if request.download_bytes_on_success > 0 {
-                    metrics.add_download(request.download_bytes_on_success);
+                let mut requests = Vec::with_capacity(send_batch_limit.clamp(1, 32));
+                requests.push(request);
+                if !cfg!(feature = "test-scalar-udp-send") {
+                    while requests.len() < send_batch_limit.max(1) {
+                        match receiver.try_recv() {
+                            Ok(request) => requests.push(request),
+                            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => break,
+                        }
+                    }
                 }
-                if let Some(response) = request.response {
-                    let _ = response.send(result);
+                let results = if requests.len() > 1 {
+                    send_udp_reply_batch(&mut cache, &metrics, &requests).await
+                } else {
+                    vec![send_udp_reply(&mut cache, &metrics, &requests[0]).await]
+                };
+                for (request, result) in requests.into_iter().zip(results) {
+                    if result.is_err() {
+                        metrics.udp_reply_failed();
+                    } else if request.download_bytes_on_success > 0 {
+                        metrics.add_download(request.download_bytes_on_success);
+                    }
+                    if let Some(response) = request.response {
+                        let _ = response.send(result);
+                    }
                 }
             }
         }
@@ -384,6 +403,7 @@ mod tests {
             2,
             2,
             Duration::from_secs(1),
+            2,
             ResidentUdpPayloadAdmission::new(1, 1024),
             metrics,
         );
@@ -403,6 +423,7 @@ mod tests {
             2,
             2,
             Duration::from_secs(1),
+            2,
             ResidentUdpPayloadAdmission::new(1, 1024),
             metrics,
         );

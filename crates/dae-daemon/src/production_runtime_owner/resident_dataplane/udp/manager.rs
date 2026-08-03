@@ -16,6 +16,8 @@ use serde_json::Value;
 use tokio::io::unix::AsyncFd;
 use tokio::task::JoinSet;
 
+use crate::production_runtime_owner::resident_dataplane::UdpIngressMetricObservation;
+
 #[cfg(not(test))]
 use crate::allocator::{AllocatorReclaimReason, allocator_request_reclaim};
 
@@ -165,6 +167,7 @@ impl ResidentUdpGenerationRuntime {
             config.reply_queue_depth,
             config.reply_socket_cache_capacity,
             config.reply_socket_idle_timeout,
+            config.reply_send_batch_limit,
             config.payload_admission.clone(),
             Arc::clone(&generation.metrics),
         );
@@ -424,6 +427,8 @@ pub(super) async fn run_resident_udp_session_manager_async(
         initial_config.payload_pool_capacity(),
         initial_config.runtime_shards,
     );
+    let mut ingress_batch_receiver =
+        UdpBatchReceiver::new(initial_config.ingress_syscall_batch_limit);
     let ingress_drain_budget = initial_config.ingress_drain_budget;
     let mut generations = HashMap::<u64, ResidentUdpGenerationRuntime>::new();
     let mut pins = HashMap::<UdpGenerationPinKey, UdpGenerationPin>::new();
@@ -456,16 +461,31 @@ pub(super) async fn run_resident_udp_session_manager_async(
             batch = recv_udp_batch_with_original_dst_async(
                 &socket,
                 &payload_pool,
+                &mut ingress_batch_receiver,
                 ingress_drain_budget,
             ) => {
                 match batch {
                     Ok(batch) => {
                         let active = active_generation.load();
-                        active.metrics.record_udp_ingress_batch(
-                            batch.packets.len(),
-                            batch.truncated,
-                            batch.budget_hit,
-                        );
+                        active.metrics.record_udp_ingress_batch(UdpIngressMetricObservation {
+                            packets: batch.packets.len(),
+                            truncated: batch.truncated,
+                            control_truncated: batch.control_truncated,
+                            invalid: batch.invalid,
+                            budget_hit: batch.budget_hit,
+                            syscalls: batch.syscall_count,
+                            syscall_batches: batch.batch_syscalls,
+                            batch_datagrams: batch.batch_datagrams,
+                            batch_max: batch.batch_max,
+                            would_block: batch.would_block,
+                        });
+                        if let Some(reason) = &batch.fallback_activated {
+                            append_event(
+                                &event_file,
+                                &event_lock,
+                                json!({"event": "udp_recvmmsg_fallback", "reason": reason}),
+                            );
+                        }
                         for mut packet in batch.packets {
                             let now = Instant::now();
                             let pin_key = packet.original_dst.map(|original_dst| UdpGenerationPinKey {
