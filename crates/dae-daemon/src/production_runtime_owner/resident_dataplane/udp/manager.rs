@@ -133,6 +133,7 @@ struct UdpGenerationPin {
     route: Option<ResidentUdpPinnedRoute>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UdpGenerationChoice {
     Available(u64),
@@ -495,21 +496,76 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 peer: packet.peer,
                                 original_dst,
                             });
-                            let pinned = pin_key.and_then(|key| {
-                                udp_generation_pin_for_packet(&pins, key, now, active.id)
+                            let pinned_generation = pin_key.and_then(|key| {
+                                pins.get(&key)
+                                    .filter(|pin| pin.expires_at > now)
+                                    .filter(|pin| udp_generation_pin_is_eligible(pin, active.id))
+                                    .map(|pin| pin.generation)
                             });
-                            let pinned_route = pinned.and_then(|pin| pin.route.clone());
-                            let generation_id = match udp_generation_choice(
-                                pinned.map(|pin| pin.generation),
-                                active.id,
-                                |generation| generations.contains_key(&generation),
-                            ) {
-                                UdpGenerationChoice::Available(generation) => generation,
-                                UdpGenerationChoice::PinUnavailable => {
+                            if let (Some(pin_key), Some(generation_id)) =
+                                (pin_key, pinned_generation)
+                            {
+                                if generation_id == active.id {
+                                    generations.entry(generation_id).or_insert_with(|| {
+                                        ResidentUdpGenerationRuntime::start(
+                                            active.as_ref(),
+                                            &event_file,
+                                            &event_lock,
+                                            &active_sessions,
+                                        )
+                                    });
+                                } else if !generations.contains_key(&generation_id) {
                                     active.metrics.udp_generation_pin_unavailable();
                                     continue;
                                 }
-                            };
+                                let generation = generations
+                                    .get_mut(&generation_id)
+                                    .expect("eligible UDP generation runtime is installed");
+                                let runtime_config = &generation.runtime_config;
+                                let session_idle_timeout = runtime_config.session_idle_timeout;
+                                let proxy_session_idle_timeout =
+                                    runtime_config.proxy_session_idle_timeout;
+                                if packet
+                                    .payload
+                                    .admit(&runtime_config.payload_admission)
+                                    .is_err()
+                                {
+                                    continue;
+                                }
+                                let pin = pins
+                                    .get_mut(&pin_key)
+                                    .expect("eligible UDP generation pin is installed");
+                                if let Some(route) = pin.route.as_ref() {
+                                    generation.handle_pinned_packet(
+                                        packet,
+                                        route,
+                                        &event_file,
+                                        &event_lock,
+                                    );
+                                    pin.expires_at = now
+                                        + route.idle_timeout(
+                                            session_idle_timeout,
+                                            proxy_session_idle_timeout,
+                                        );
+                                    continue;
+                                }
+                                let route =
+                                    generation.handle_packet(packet, &event_file, &event_lock);
+                                let idle_timeout = route
+                                    .as_ref()
+                                    .map(|route| {
+                                        route.idle_timeout(
+                                            session_idle_timeout,
+                                            proxy_session_idle_timeout,
+                                        )
+                                    })
+                                    .unwrap_or(session_idle_timeout);
+                                pin.route = route;
+                                pin.expires_at = now + idle_timeout;
+                                continue;
+                            }
+
+                            let generation_id = active.id;
                             generations.entry(generation_id).or_insert_with(|| {
                                 ResidentUdpGenerationRuntime::start(
                                         active.as_ref(),
@@ -532,18 +588,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             {
                                 continue;
                             }
-                            let route = match pinned_route {
-                                Some(route) => {
-                                    generation.handle_pinned_packet(
-                                        packet,
-                                        &route,
-                                        &event_file,
-                                        &event_lock,
-                                    );
-                                    Some(route)
-                                }
-                                None => generation.handle_packet(packet, &event_file, &event_lock),
-                            };
+                            let route = generation.handle_packet(packet, &event_file, &event_lock);
                             if let Some(pin_key) = pin_key {
                                 let idle_timeout = route
                                     .as_ref()
@@ -718,6 +763,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
     report
 }
 
+#[cfg(test)]
 fn udp_generation_pin_for_packet(
     pins: &HashMap<UdpGenerationPinKey, UdpGenerationPin>,
     key: UdpGenerationPinKey,
@@ -737,6 +783,7 @@ fn udp_generation_pin_is_eligible(pin: &UdpGenerationPin, active_generation: u64
             .is_some_and(ResidentUdpPinnedRoute::follows_active_generation)
 }
 
+#[cfg(test)]
 fn udp_generation_choice(
     pinned: Option<u64>,
     active: u64,
