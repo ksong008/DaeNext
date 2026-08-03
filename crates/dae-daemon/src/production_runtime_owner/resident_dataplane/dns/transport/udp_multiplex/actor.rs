@@ -50,16 +50,20 @@ pub(super) async fn run_udp_multiplex_actor(
             }
 
             received = socket.recv(&mut buf) => {
+                config.metrics.dns_udp_recv_syscall();
                 idle_deadline = config
                     .idle_timeout
                     .map(|timeout| time::Instant::now() + timeout);
                 match received {
-                    Ok(read) => handle_udp_multiplex_response(
-                        &mut pending,
-                        &mut id_allocator,
-                        &buf[..read],
-                        &config.metrics,
-                    ),
+                    Ok(read) => {
+                        config.metrics.dns_udp_datagram_received();
+                        handle_udp_multiplex_response(
+                            &mut pending,
+                            &mut id_allocator,
+                            &buf[..read],
+                            &config.metrics,
+                        )
+                    }
                     Err(err) => {
                         receiver.close();
                         fail_pending_udp_requests(
@@ -85,9 +89,10 @@ pub(super) async fn run_udp_multiplex_actor(
                     }
                     continue;
                 };
-                handle_udp_multiplex_request(
+                handle_udp_multiplex_requests(
                     target,
                     &socket,
+                    &mut receiver,
                     &mut pending,
                     &mut id_allocator,
                     &mut deadlines,
@@ -143,28 +148,100 @@ fn fail_queued_udp_requests(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_udp_multiplex_request(
+async fn handle_udp_multiplex_requests(
     target: SocketAddr,
     socket: &tokio::net::UdpSocket,
+    receiver: &mut tokio::sync::mpsc::Receiver<UdpMultiplexRequest>,
+    pending: &mut HashMap<u16, PendingUdpRequest>,
+    id_allocator: &mut DnsRequestIdAllocator,
+    deadlines: &mut VecDeque<PendingUdpDeadline>,
+    next_generation: &mut u64,
+    request: UdpMultiplexRequest,
+    config: &UdpMultiplexActorConfig,
+) {
+    let ready_limit = config
+        .send_batch_limit
+        .min(config.inflight_window.saturating_sub(pending.len()).max(1));
+    let mut requests = Vec::with_capacity(ready_limit);
+    requests.push(request);
+    if !cfg!(feature = "test-scalar-udp-send") {
+        while requests.len() < ready_limit {
+            match receiver.try_recv() {
+                Ok(request) => requests.push(request),
+                Err(
+                    tokio::sync::mpsc::error::TryRecvError::Empty
+                    | tokio::sync::mpsc::error::TryRecvError::Disconnected,
+                ) => break,
+            }
+        }
+    }
+    let mut prepared = Vec::with_capacity(requests.len());
+    for request in requests {
+        if let Some(request) = prepare_udp_multiplex_request(
+            pending,
+            id_allocator,
+            deadlines,
+            next_generation,
+            request,
+            config,
+        ) {
+            prepared.push(request);
+        }
+    }
+    if prepared.len() <= 1 || cfg!(feature = "test-scalar-udp-send") {
+        for request in prepared {
+            send_prepared_udp_request(target, socket, pending, id_allocator, request, config).await;
+        }
+        return;
+    }
+
+    let writable = socket.writable().await;
+    let sent = match writable {
+        Ok(()) => {
+            let datagrams = prepared
+                .iter()
+                .map(|request| UdpSendMessage {
+                    payload: &request.payload,
+                    peer: None,
+                })
+                .collect::<Vec<_>>();
+            config.metrics.dns_udp_send_syscall(datagrams.len());
+            try_sendmmsg(socket.as_raw_fd(), &datagrams).unwrap_or(0)
+        }
+        Err(_) => 0,
+    };
+    config.metrics.dns_udp_datagrams_sent(sent);
+    for request in prepared.into_iter().skip(sent) {
+        send_prepared_udp_request(target, socket, pending, id_allocator, request, config).await;
+    }
+}
+
+struct PreparedUdpMultiplexRequest {
+    upstream_id: u16,
+    payload: Vec<u8>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_udp_multiplex_request(
     pending: &mut HashMap<u16, PendingUdpRequest>,
     id_allocator: &mut DnsRequestIdAllocator,
     deadlines: &mut VecDeque<PendingUdpDeadline>,
     next_generation: &mut u64,
     mut request: UdpMultiplexRequest,
     config: &UdpMultiplexActorConfig,
-) {
+) -> Option<PreparedUdpMultiplexRequest> {
     if pending.len() >= config.pending_capacity {
         config.metrics.dns_udp_pending_rejected();
         let _ = request
             .response
             .send(Err("DNS UDP multiplex pending queue is full".to_owned()));
-        return;
+        return None;
     }
     if request.deadline <= time::Instant::now() {
         let _ = request.response.send(Err(
             "DNS UDP multiplex request deadline expired before admission".to_owned(),
         ));
-        return;
+        return None;
     }
     let request_view = match DnsPacketView::parse(&request.payload) {
         Ok(view) => view,
@@ -172,7 +249,7 @@ async fn handle_udp_multiplex_request(
             let _ = request
                 .response
                 .send(Err(format!("parse DNS UDP multiplex request: {err}")));
-            return;
+            return None;
         }
     };
     let original_id = request_view.id();
@@ -182,7 +259,7 @@ async fn handle_udp_multiplex_request(
         Err(err) => {
             config.metrics.dns_udp_id_exhausted();
             let _ = request.response.send(Err(err));
-            return;
+            return None;
         }
     };
     rewrite_dns_packet_id_in_place(&mut request.payload, upstream_id);
@@ -208,14 +285,32 @@ async fn handle_udp_multiplex_request(
         generation,
         deadline,
     });
-    if let Err(err) = socket.send(&request.payload).await
-        && let Some(pending) = pending.remove(&upstream_id)
-    {
-        id_allocator.release(upstream_id);
-        config.metrics.dns_udp_pending_removed(1);
-        let _ = pending.response.send(Err(format!(
-            "send DNS UDP multiplex packet to {target}: {err}"
-        )));
+    Some(PreparedUdpMultiplexRequest {
+        upstream_id,
+        payload: request.payload,
+    })
+}
+
+async fn send_prepared_udp_request(
+    target: SocketAddr,
+    socket: &tokio::net::UdpSocket,
+    pending: &mut HashMap<u16, PendingUdpRequest>,
+    id_allocator: &mut DnsRequestIdAllocator,
+    request: PreparedUdpMultiplexRequest,
+    config: &UdpMultiplexActorConfig,
+) {
+    config.metrics.dns_udp_send_syscall(1);
+    match socket.send(&request.payload).await {
+        Ok(_) => config.metrics.dns_udp_datagrams_sent(1),
+        Err(err) => {
+            if let Some(pending) = pending.remove(&request.upstream_id) {
+                id_allocator.release(request.upstream_id);
+                config.metrics.dns_udp_pending_removed(1);
+                let _ = pending.response.send(Err(format!(
+                    "send DNS UDP multiplex packet to {target}: {err}"
+                )));
+            }
+        }
     }
 }
 

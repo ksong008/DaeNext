@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::os::fd::AsRawFd;
 use std::sync::{
     Weak,
     atomic::{AtomicBool, Ordering},
@@ -8,6 +9,7 @@ use std::time::Duration;
 use crate::production_runtime_owner::resident_dataplane::{
     ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
 };
+use crate::production_runtime_owner::udp_io::{UdpSendMessage, try_sendmmsg};
 use crate::production_runtime_owner::udp_payload_admission::{
     ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit,
 };
@@ -136,6 +138,7 @@ struct UdpMultiplexActorConfig {
     queue_capacity: usize,
     pending_capacity: usize,
     inflight_window: usize,
+    send_batch_limit: usize,
     attempt_timeout: Duration,
     idle_timeout: Option<Duration>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -148,6 +151,7 @@ impl UdpMultiplexActorConfig {
             queue_capacity: runtime.queue_depth.max(1),
             pending_capacity,
             inflight_window: runtime.inflight_window.clamp(1, pending_capacity),
+            send_batch_limit: runtime.send_batch_limit.clamp(1, 32),
             attempt_timeout: runtime.attempt_timeout,
             idle_timeout: runtime.actor_idle_timeout,
             metrics,
