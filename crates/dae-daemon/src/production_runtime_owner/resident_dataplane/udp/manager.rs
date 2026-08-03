@@ -430,6 +430,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
     let mut ingress_batch_receiver =
         UdpBatchReceiver::new(initial_config.ingress_syscall_batch_limit);
     let ingress_drain_budget = initial_config.ingress_drain_budget;
+    let mut ingress_packets = Vec::with_capacity(ingress_drain_budget.min(32));
     let mut generations = HashMap::<u64, ResidentUdpGenerationRuntime>::new();
     let mut pins = HashMap::<UdpGenerationPinKey, UdpGenerationPin>::new();
     let mut retired_shutdowns = JoinSet::new();
@@ -463,12 +464,13 @@ pub(super) async fn run_resident_udp_session_manager_async(
                 &payload_pool,
                 &mut ingress_batch_receiver,
                 ingress_drain_budget,
+                &mut ingress_packets,
             ) => {
                 match batch {
                     Ok(batch) => {
                         let active = active_generation.load();
                         active.metrics.record_udp_ingress_batch(UdpIngressMetricObservation {
-                            packets: batch.packets.len(),
+                            packets: ingress_packets.len(),
                             truncated: batch.truncated,
                             control_truncated: batch.control_truncated,
                             invalid: batch.invalid,
@@ -486,8 +488,9 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 json!({"event": "udp_recvmmsg_fallback", "reason": reason}),
                             );
                         }
-                        for mut packet in batch.packets {
-                            let now = Instant::now();
+                        let batch_now = Instant::now();
+                        for mut packet in ingress_packets.drain(..) {
+                            let now = batch_now;
                             let pin_key = packet.original_dst.map(|original_dst| UdpGenerationPinKey {
                                 peer: packet.peer,
                                 original_dst,

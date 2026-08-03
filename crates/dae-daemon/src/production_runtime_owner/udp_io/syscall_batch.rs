@@ -17,7 +17,6 @@ pub(in crate::production_runtime_owner) struct UdpBatchReceiver {
 }
 
 pub(in crate::production_runtime_owner) struct UdpBatchRecvOutcome {
-    pub(in crate::production_runtime_owner) packets: Vec<UdpOriginalDstPacket>,
     pub(in crate::production_runtime_owner) truncated: usize,
     pub(in crate::production_runtime_owner) control_truncated: usize,
     pub(in crate::production_runtime_owner) invalid: usize,
@@ -60,11 +59,12 @@ impl UdpBatchReceiver {
         socket: &UdpSocket,
         payload_pool: &UdpPayloadPool,
         remaining_budget: usize,
+        packets: &mut Vec<UdpOriginalDstPacket>,
     ) -> Result<UdpBatchRecvOutcome, UdpOriginalDstRecvError> {
         if !self.enabled || remaining_budget <= 1 {
-            return self.try_recv_scalar(socket, payload_pool);
+            return self.try_recv_scalar(socket, payload_pool, packets);
         }
-        match self.try_recvmmsg(socket, payload_pool, remaining_budget) {
+        match self.try_recvmmsg(socket, payload_pool, remaining_budget, packets) {
             Ok(outcome) => Ok(outcome),
             Err(UdpOriginalDstRecvError::Io(err))
                 if matches!(err.raw_os_error(), Some(libc::ENOSYS) | Some(libc::EINVAL)) =>
@@ -72,7 +72,7 @@ impl UdpBatchReceiver {
                 let reason = format!("recvmmsg unavailable for socket lifetime: {err}");
                 self.enabled = false;
                 self.slots = Vec::new().into_boxed_slice();
-                let mut outcome = self.try_recv_scalar(socket, payload_pool)?;
+                let mut outcome = self.try_recv_scalar(socket, payload_pool, packets)?;
                 outcome.fallback_activated = Some(reason);
                 Ok(outcome)
             }
@@ -84,23 +84,25 @@ impl UdpBatchReceiver {
         &self,
         socket: &UdpSocket,
         payload_pool: &UdpPayloadPool,
+        packets: &mut Vec<UdpOriginalDstPacket>,
     ) -> Result<UdpBatchRecvOutcome, UdpOriginalDstRecvError> {
         match try_recv_udp_with_original_dst_from_pool(
             socket,
             UDP_RECV_DEFAULT_CAPACITY,
             payload_pool,
         ) {
-            Ok(packet) => Ok(UdpBatchRecvOutcome {
-                packets: vec![packet],
-                truncated: 0,
-                control_truncated: 0,
-                invalid: 0,
-                syscall_count: 2,
-                batch_datagrams: 0,
-                fallback_activated: None,
-            }),
+            Ok(packet) => {
+                packets.push(packet);
+                Ok(UdpBatchRecvOutcome {
+                    truncated: 0,
+                    control_truncated: 0,
+                    invalid: 0,
+                    syscall_count: 2,
+                    batch_datagrams: 0,
+                    fallback_activated: None,
+                })
+            }
             Err(UdpOriginalDstRecvError::Truncated { .. }) => Ok(UdpBatchRecvOutcome {
-                packets: Vec::new(),
                 truncated: 1,
                 control_truncated: 0,
                 invalid: 0,
@@ -109,7 +111,6 @@ impl UdpBatchReceiver {
                 fallback_activated: None,
             }),
             Err(UdpOriginalDstRecvError::ControlTruncated) => Ok(UdpBatchRecvOutcome {
-                packets: Vec::new(),
                 truncated: 0,
                 control_truncated: 1,
                 invalid: 0,
@@ -118,7 +119,6 @@ impl UdpBatchReceiver {
                 fallback_activated: None,
             }),
             Err(UdpOriginalDstRecvError::UnsupportedAddressFamily) => Ok(UdpBatchRecvOutcome {
-                packets: Vec::new(),
                 truncated: 0,
                 control_truncated: 0,
                 invalid: 1,
@@ -135,6 +135,7 @@ impl UdpBatchReceiver {
         socket: &UdpSocket,
         payload_pool: &UdpPayloadPool,
         remaining_budget: usize,
+        packets: &mut Vec<UdpOriginalDstPacket>,
     ) -> Result<UdpBatchRecvOutcome, UdpOriginalDstRecvError> {
         let count = remaining_budget.min(self.slots.len());
         let mut iovecs: [libc::iovec; UDP_RECV_SYSCALL_BATCH_LIMIT_MAX] =
@@ -143,8 +144,6 @@ impl UdpBatchReceiver {
             unsafe { std::mem::zeroed() };
         for index in 0..count {
             let slot = &mut self.slots[index];
-            slot.control.fill(0);
-            slot.peer = unsafe { std::mem::zeroed() };
             iovecs[index] = libc::iovec {
                 iov_base: slot.payload.as_mut_ptr().cast::<libc::c_void>(),
                 iov_len: slot.payload.len(),
@@ -175,7 +174,6 @@ impl UdpBatchReceiver {
         };
 
         let mut outcome = UdpBatchRecvOutcome {
-            packets: Vec::with_capacity(received),
             truncated: 0,
             control_truncated: 0,
             invalid: 0,
@@ -203,7 +201,7 @@ impl UdpBatchReceiver {
             }
             let (mut payload, lease) = payload_pool.take(read.max(UDP_RECV_DEFAULT_CAPACITY));
             payload.extend_from_slice(&self.slots[index].payload[..read]);
-            outcome.packets.push(UdpOriginalDstPacket {
+            packets.push(UdpOriginalDstPacket {
                 payload: UdpPayload::from_pool(payload, lease),
                 peer,
                 original_dst: original_dst_from_msghdr(&message.msg_hdr),
