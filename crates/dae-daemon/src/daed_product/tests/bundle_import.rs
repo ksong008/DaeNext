@@ -205,3 +205,98 @@ fn bundle_null_defaults_clear_previous_user_defaults() {
         assert_eq!(storage[key], json!(""));
     }
 }
+
+#[test]
+fn bundle_group_sort_state_round_trips_as_structured_data() {
+    let source = FreshProductState::new("bundle-group-sort-source");
+    source.seed_selected_resources();
+    let group_sort_state = json!({
+        "version": 1,
+        "groupSortableKeys": ["2", "1"],
+        "groupSortOrders": {
+            "1": {"nodes": ["9", "8"], "subscriptions": ["3"]}
+        }
+    });
+    let source_storage = json!({
+        "mode": "rule",
+        "groupSortStateV1": group_sort_state.to_string(),
+    })
+    .to_string();
+    let source_user = insert_fixture_user(&source, &source_storage);
+
+    let bundle = export_bundle(source.state(), &source_user).unwrap();
+    assert_eq!(bundle["groupSortState"], group_sort_state);
+
+    let target = FreshProductState::new("bundle-group-sort-target");
+    let target_user = insert_fixture_user(
+        &target,
+        &json!({"groupSortStateV1": "stale-browser-order"}).to_string(),
+    );
+    import_bundle(target.state(), target.root(), &bundle, &target_user).unwrap();
+
+    let storage: String = target
+        .connection()
+        .query_row(
+            "SELECT json_storage FROM users WHERE id = ?1",
+            params![target_user.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let storage: Value = serde_json::from_str(&storage).unwrap();
+    let restored: Value =
+        serde_json::from_str(storage["groupSortStateV1"].as_str().unwrap()).unwrap();
+    assert_eq!(restored, group_sort_state);
+}
+
+#[test]
+fn legacy_bundle_without_group_sort_state_preserves_existing_server_order() {
+    let source = FreshProductState::new("legacy-bundle-group-sort-source");
+    source.seed_selected_resources();
+    let source_user = insert_fixture_user(&source, r#"{"mode":"rule"}"#);
+    let mut bundle = export_bundle(source.state(), &source_user).unwrap();
+    bundle.as_object_mut().unwrap().remove("groupSortState");
+
+    let target = FreshProductState::new("legacy-bundle-group-sort-target");
+    let existing = json!({
+        "version": 1,
+        "groupSortableKeys": ["1"],
+        "groupSortOrders": {}
+    });
+    let target_user = insert_fixture_user(
+        &target,
+        &json!({"groupSortStateV1": existing.to_string()}).to_string(),
+    );
+
+    import_bundle(target.state(), target.root(), &bundle, &target_user).unwrap();
+
+    let storage: String = target
+        .connection()
+        .query_row(
+            "SELECT json_storage FROM users WHERE id = ?1",
+            params![target_user.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let storage: Value = serde_json::from_str(&storage).unwrap();
+    assert_eq!(storage["groupSortStateV1"], json!(existing.to_string()));
+}
+
+#[test]
+fn malformed_bundle_group_sort_state_is_rejected_before_import() {
+    let fixture = FreshProductState::new("bundle-invalid-group-sort-state");
+    fixture.seed_selected_resources();
+    let user = insert_fixture_user(&fixture, r#"{"mode":"rule"}"#);
+    let mut bundle = export_bundle(fixture.state(), &user).unwrap();
+    bundle["groupSortState"] = json!({
+        "version": 1,
+        "groupSortableKeys": [1],
+        "groupSortOrders": {}
+    });
+
+    let error = import_bundle(fixture.state(), fixture.root(), &bundle, &user).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("groupSortState.groupSortableKeys values must be strings")
+    );
+}

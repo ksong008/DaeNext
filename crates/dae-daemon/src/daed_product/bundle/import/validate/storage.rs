@@ -25,5 +25,18 @@ pub(super) fn prepare_user_storage(body: &Value, user: &UserRecord) -> io::Resul
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         }
     }
+    if let Some(group_sort_state) = body.get("groupSortState") {
+        if group_sort_state.is_null() {
+            delete_value_at_path(&mut storage, "groupSortStateV1")
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        } else {
+            set_value_at_path(
+                &mut storage,
+                "groupSortStateV1",
+                Value::String(group_sort_state.to_string()),
+            )
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        }
+    }
     Ok(storage.to_string())
 }
