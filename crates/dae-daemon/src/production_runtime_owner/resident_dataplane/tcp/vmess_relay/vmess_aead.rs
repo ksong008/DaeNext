@@ -15,8 +15,10 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
         session,
         stats,
         metrics,
-        "VMess",
-        "resident VMess relay idle timeout",
+        VmessTransportRelayPolicy {
+            label: "VMess",
+            idle_error: "resident VMess relay idle timeout",
+        },
     )
     .await
 }
@@ -36,8 +38,10 @@ pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
         session,
         stats,
         metrics,
-        "VMess WebSocket",
-        "resident VMess WebSocket relay idle timeout",
+        VmessTransportRelayPolicy {
+            label: "VMess WebSocket",
+            idle_error: "resident VMess WebSocket relay idle timeout",
+        },
     )
     .await
 }

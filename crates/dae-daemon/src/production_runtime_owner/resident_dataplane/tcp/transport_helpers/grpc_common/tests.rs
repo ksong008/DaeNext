@@ -1,5 +1,19 @@
 use super::*;
 
+#[test]
+fn prefixed_owned_grpc_hunk_matches_the_allocating_encoder() {
+    for payload_len in [0, 1, 127, 128, 16 * 1024] {
+        let payload = vec![payload_len as u8; payload_len];
+        let mut owned = vec![0_u8; GRPC_HUNK_IN_PLACE_PREFIX_BYTES];
+        owned.extend_from_slice(&payload);
+
+        let actual =
+            grpc_hunk_from_prefixed_payload(owned, GRPC_HUNK_IN_PLACE_PREFIX_BYTES).unwrap();
+        let expected = grpc_hunk_frame(&payload).unwrap();
+        assert_eq!(&actual[..], expected);
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn h2_data_larger_than_the_stream_window_is_sent_incrementally() {
     const INITIAL_WINDOW_BYTES: u32 = 1024;

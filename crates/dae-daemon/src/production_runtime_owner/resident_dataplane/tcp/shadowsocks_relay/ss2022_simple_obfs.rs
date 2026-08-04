@@ -64,7 +64,8 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
     }
 
     let mut inbound_closed = false;
-    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut inbound_buf = Box::new([0_u8; SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE]);
+    let mut response_buffer = Vec::with_capacity(SS2022_TCP_RELAY_PAYLOAD_SIZE + 16);
     let mut stop_listener = stop.listener();
     let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
     let close_drain_deadline =
@@ -76,7 +77,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
     loop {
         tokio::select! {
             _ = stop_listener.cancelled() => break,
-            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+            inbound_read = inbound.read(encoder.chunk_payload_buffer(inbound_buf.as_mut())), if !inbound_closed => {
                 match inbound_read {
                     Ok(0) => {
                         inbound_closed = true;
@@ -89,12 +90,12 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
                         close_drain_active = true;
                     }
                     Ok(read) => {
-                        let encrypted = encoder.encode_chunk(&inbound_buf[..read]).map_err(|err| {
+                        let wire_len = encoder.encode_chunk_in_place(inbound_buf.as_mut(), read).map_err(|err| {
                             format!("encrypt Shadowsocks 2022 simple-obfs upload chunk: {err}")
                         })?;
                         proxy_reader
                             .stream
-                            .write_all(&encrypted)
+                            .write_all(&inbound_buf[..wire_len])
                             .await
                             .map_err(|err| {
                                 format!("write Shadowsocks 2022 simple-obfs upload chunk: {err}")
@@ -120,15 +121,15 @@ pub(crate) async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
                     }
                 }
             }
-            proxy_chunk = decoder.read_next_chunk_async(&mut proxy_reader) => {
+            proxy_chunk = decoder.read_next_chunk_in_place_async(&mut proxy_reader, &mut response_buffer) => {
                 match proxy_chunk {
-                    Ok(plain) => {
-                        if !plain.is_empty() {
-                            inbound.write_all(&plain).await.map_err(|err| {
+                    Ok(plain_len) => {
+                        if plain_len != 0 {
+                            inbound.write_all(&response_buffer[..plain_len]).await.map_err(|err| {
                                 format!("write Shadowsocks 2022 simple-obfs response to inbound: {err}")
                             })?;
-                            stats.direct_to_client += plain.len();
-                            metrics.add_download(plain.len());
+                            stats.direct_to_client += plain_len;
+                            metrics.add_download(plain_len);
                         }
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         if close_drain_active {

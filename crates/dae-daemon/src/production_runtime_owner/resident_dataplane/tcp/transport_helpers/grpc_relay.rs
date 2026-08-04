@@ -53,15 +53,20 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
                 return Ok(());
             };
             response_buf.extend_from_slice(&bytes);
-            while let Some(payload) = response_buf.pop_payload()? {
-                let payload = if let Some(stripper) = vless_response_stripper.as_mut() {
-                    stripper.consume(&payload)?
-                } else {
-                    payload
-                };
-                if !payload.is_empty() {
+            while let Some(payload) = response_buf.next_payload()? {
+                if let Some(stripper) = vless_response_stripper.as_mut() {
+                    let payload = stripper.consume(payload)?;
+                    if !payload.is_empty() {
+                        inbound_write
+                            .write_all(&payload)
+                            .await
+                            .map_err(|err| format!("write gRPC response to inbound: {err}"))?;
+                        download_progress.record_download(payload.len());
+                        metrics.add_download(payload.len());
+                    }
+                } else if !payload.is_empty() {
                     inbound_write
-                        .write_all(&payload)
+                        .write_all(payload)
                         .await
                         .map_err(|err| format!("write gRPC response to inbound: {err}"))?;
                     download_progress.record_download(payload.len());

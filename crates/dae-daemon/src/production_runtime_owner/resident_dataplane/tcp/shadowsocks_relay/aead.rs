@@ -40,40 +40,24 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
     }
     drop((first_plain, initial, initial_payload, client_salt));
 
-    let mut inbound_buf = [0_u8; 16 * 1024];
-    let inbound_closed = drain_pending_shadowsocks_aead_upload(
-        inbound,
-        proxy,
-        &mut encoder,
-        &mut stats,
-        metrics,
-        &mut inbound_buf,
-    )
-    .await?;
-
-    let mut server_salt = vec![0_u8; salt_len];
-    proxy
-        .read_exact(&mut server_salt)
-        .await
-        .map_err(|err| format!("read Shadowsocks server salt: {err}"))?;
-    let mut decoder = AeadStreamCodec::new(cipher, password, &server_salt)
-        .map_err(|err| format!("create Shadowsocks response decoder: {err}"))?;
+    let inbound_buf = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
     let (progress, activity) = resident_duplex_progress();
     if stats.client_to_direct != 0 {
         progress.record_upload(stats.client_to_direct);
     }
     let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
-    let (proxy_read, mut proxy_write) = proxy.split();
+    let (proxy_read, proxy_write) = proxy.split();
     let upload_progress = progress.clone();
+    let upload_stop = stop.clone();
     let upload = async move {
-        if inbound_closed {
-            let _ = proxy_write.shutdown().await;
-            return Ok(());
-        }
         let mut inbound_read = inbound_read;
         let mut proxy_write = proxy_write;
+        let mut inbound_buf = inbound_buf;
         loop {
-            let read = match inbound_read.read(&mut inbound_buf).await {
+            let read = match inbound_read
+                .read(encoder.chunk_payload_buffer(inbound_buf.as_mut()))
+                .await
+            {
                 Ok(0) => {
                     let _ = proxy_write.shutdown().await;
                     return Ok(());
@@ -87,13 +71,15 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
                     return Err(format!("read inbound TCP for Shadowsocks upload: {err}"));
                 }
             };
-            let encrypted = encoder
-                .encrypt_chunk(&inbound_buf[..read])
+            let wire_len = encoder
+                .encrypt_chunk_in_place(inbound_buf.as_mut(), read)
                 .map_err(|err| format!("encrypt Shadowsocks upload chunk: {err}"))?;
-            proxy_write
-                .write_all(&encrypted)
-                .await
-                .map_err(|err| format!("write Shadowsocks upload chunk: {err}"))?;
+            if let Err(err) = proxy_write.write_all(&inbound_buf[..wire_len]).await {
+                if upload_stop.load(Ordering::Acquire) || is_graceful_stream_close_error(&err) {
+                    return Ok(());
+                }
+                return Err(format!("write Shadowsocks upload chunk: {err}"));
+            }
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }
@@ -102,16 +88,33 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
     let download = async move {
         let mut proxy_read = proxy_read;
         let mut inbound_write = inbound_write;
+        let mut server_salt = vec![0_u8; salt_len];
+        proxy_read
+            .read_exact(&mut server_salt)
+            .await
+            .map_err(|err| format!("read Shadowsocks server salt: {err}"))?;
+        let mut decoder = AeadStreamCodec::new(cipher, password, &server_salt)
+            .map_err(|err| format!("create Shadowsocks response decoder: {err}"))?;
+        let mut buffer = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE]);
         loop {
-            match read_encrypted_chunk_from_async_stream(&mut proxy_read, &mut decoder).await {
-                Ok(plain) => {
-                    if !plain.is_empty() {
-                        inbound_write.write_all(&plain).await.map_err(|err| {
-                            format!("write Shadowsocks response to inbound: {err}")
-                        })?;
-                        metrics.add_download(plain.len());
+            match read_encrypted_chunk_in_place_from_async_stream(
+                &mut proxy_read,
+                &mut decoder,
+                buffer.as_mut(),
+            )
+            .await
+            {
+                Ok(plain_len) => {
+                    if plain_len != 0 {
+                        inbound_write
+                            .write_all(&buffer[..plain_len])
+                            .await
+                            .map_err(|err| {
+                                format!("write Shadowsocks response to inbound: {err}")
+                            })?;
+                        metrics.add_download(plain_len);
                     }
-                    download_progress.record_download(plain.len());
+                    download_progress.record_download(plain_len);
                 }
                 Err(err) => {
                     let message = err.to_string();
@@ -136,62 +139,16 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
     .await
 }
 
-async fn drain_pending_shadowsocks_aead_upload(
-    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin),
-    proxy: &mut TokioTcpStream,
-    encoder: &mut AeadStreamCodec,
-    stats: &mut DirectTcpRelayStats,
-    metrics: &ResidentDataplaneMetrics,
-    inbound_buf: &mut [u8],
-) -> Result<bool, String> {
-    let mut inbound_closed = false;
-    loop {
-        match time::timeout(Duration::from_millis(10), inbound.read(inbound_buf)).await {
-            Ok(Ok(0)) => {
-                inbound_closed = true;
-                let _ = proxy.shutdown().await;
-                break;
-            }
-            Ok(Ok(read)) => {
-                let encrypted = encoder
-                    .encrypt_chunk(&inbound_buf[..read])
-                    .map_err(|err| format!("encrypt Shadowsocks pending upload chunk: {err}"))?;
-                proxy
-                    .write_all(&encrypted)
-                    .await
-                    .map_err(|err| format!("write Shadowsocks pending upload chunk: {err}"))?;
-                stats.client_to_direct += read;
-                metrics.add_upload(read);
-            }
-            Ok(Err(err)) if is_graceful_stream_close_error(&err) => {
-                inbound_closed = true;
-                let _ = proxy.shutdown().await;
-                break;
-            }
-            Ok(Err(err)) => {
-                return Err(format!(
-                    "read inbound TCP for pending Shadowsocks upload: {err}"
-                ));
-            }
-            Err(_) => break,
-        }
-    }
-    Ok(inbound_closed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test(flavor = "current_thread")]
-    async fn pending_shadowsocks_aead_upload_is_flushed_before_response_salt() {
-        let pending_payload = b"split-client-hello-tail";
-
+    async fn continuous_shadowsocks_upload_does_not_block_response_salt() {
         let inbound_listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
         let inbound_addr = inbound_listener.local_addr().unwrap();
         let mut client = TokioTcpStream::connect(inbound_addr).await.unwrap();
         let (mut inbound, _) = inbound_listener.accept().await.unwrap();
-        client.write_all(pending_payload).await.unwrap();
 
         let proxy_listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy_addr = proxy_listener.local_addr().unwrap();
@@ -199,36 +156,57 @@ mod tests {
         let (mut upstream, _) = proxy_listener.accept().await.unwrap();
 
         let cipher = "aes-128-gcm";
-        let password = "resident-shadowsocks-aead-pending-upload";
-        let salt = [7_u8; 16];
-        let mut encoder = AeadStreamCodec::new(cipher, password, &salt).unwrap();
-        let mut decoder = AeadStreamCodec::new(cipher, password, &salt).unwrap();
+        let password = "resident-shadowsocks-aead-duplex";
+        let client_salt = [7_u8; 16];
+        let server_salt = [9_u8; 16];
+        let mut server_encoder = AeadStreamCodec::new(cipher, password, &server_salt).unwrap();
         let metrics = ResidentDataplaneMetrics::default();
-        let mut stats = DirectTcpRelayStats::default();
-        let mut inbound_buf = [0_u8; 1024];
-
-        let inbound_closed = drain_pending_shadowsocks_aead_upload(
+        let stop = ResidentStopSignal::shared();
+        let relay = relay_tcp_over_shadowsocks_aead_async(
             &mut inbound,
             &mut proxy,
-            &mut encoder,
-            &mut stats,
+            stop.clone(),
+            "example.com:443",
+            cipher,
+            password,
+            client_salt.len(),
+            Vec::new(),
             &metrics,
-            &mut inbound_buf,
-        )
-        .await
-        .unwrap();
+        );
 
-        assert!(!inbound_closed);
-        assert_eq!(stats.client_to_direct, pending_payload.len());
-        assert_eq!(metrics.snapshot()["uploadTotal"], pending_payload.len());
+        let peer = async move {
+            let mut observed_salt = [0_u8; 16];
+            upstream.read_exact(&mut observed_salt).await.unwrap();
+            let mut request_decoder =
+                AeadStreamCodec::new(cipher, password, &observed_salt).unwrap();
+            let _target = dae_outbound::shadowsocks::read_encrypted_chunk_from_async_stream(
+                &mut upstream,
+                &mut request_decoder,
+            )
+            .await
+            .unwrap();
+            upstream.write_all(&server_salt).await.unwrap();
+            let response = server_encoder.encrypt_chunk(b"response-ready").unwrap();
+            upstream.write_all(&response).await.unwrap();
 
-        let flushed = time::timeout(
-            Duration::from_secs(1),
-            read_encrypted_chunk_from_async_stream(&mut upstream, &mut decoder),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(flushed, pending_payload);
+            let mut sent = 0_usize;
+            while sent < 2 * 1024 * 1024 {
+                client.write_all(&[0x5a; 16 * 1024]).await.unwrap();
+                sent += 16 * 1024;
+                if sent == 64 * 1024 {
+                    let mut response = [0_u8; 14];
+                    time::timeout(Duration::from_secs(1), client.read_exact(&mut response))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(&response, b"response-ready");
+                    stop.store(true, Ordering::Release);
+                    break;
+                }
+            }
+        };
+
+        let (relay_result, ()) = tokio::join!(relay, peer);
+        relay_result.unwrap();
     }
 }

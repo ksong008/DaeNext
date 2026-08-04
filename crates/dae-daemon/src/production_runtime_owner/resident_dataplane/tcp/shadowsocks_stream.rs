@@ -2,7 +2,10 @@ use std::io::ErrorKind;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use dae_outbound::shadowsocks::{AeadStreamCodec, read_encrypted_chunk_from_async_stream};
+use dae_outbound::shadowsocks::{
+    AeadStreamCodec, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
+    read_encrypted_chunk_in_place_from_async_stream,
+};
 use dae_outbound::shared_transport::mux::{
     OPTION_DATA, SESSION_STATUS_END, SESSION_STATUS_KEEP, SESSION_STATUS_KEEPALIVE,
 };
@@ -13,49 +16,58 @@ use super::websocket::{
     WebSocketBinaryFrameDecoder, WebSocketControlPollSender, WebSocketControlSender,
 };
 
-pub(super) async fn read_shadowsocks_aead_chunk_from_websocket_tls<R>(
+#[derive(Clone, Copy)]
+pub(super) struct ShadowsocksAeadResponseParameters<'a> {
+    pub(super) cipher: &'a str,
+    pub(super) password: &'a str,
+    pub(super) salt_len: usize,
+}
+
+pub(super) async fn read_shadowsocks_aead_chunk_in_place_from_websocket_tls<R>(
     client: &mut R,
     state: &mut AsyncWebSocketPayloadChannelState,
     decoder: &mut Option<AeadStreamCodec>,
-    cipher: &str,
-    password: &str,
-    salt_len: usize,
-) -> Result<Vec<u8>, String>
+    parameters: ShadowsocksAeadResponseParameters<'_>,
+    buffer: &mut [u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE],
+) -> Result<usize, String>
 where
     R: AsyncRead + Unpin,
 {
     let mut reader = AsyncWebSocketPayloadChannelReader::new(client, state);
-    read_shadowsocks_aead_chunk_from_async_reader(&mut reader, decoder, cipher, password, salt_len)
+    read_shadowsocks_aead_chunk_in_place_from_async_reader(&mut reader, decoder, parameters, buffer)
         .await
 }
 
-pub(super) async fn read_shadowsocks_aead_chunk_from_v2ray_plugin_mux<R>(
+pub(super) async fn read_shadowsocks_aead_chunk_in_place_from_v2ray_plugin_mux<R>(
     client: &mut R,
     state: &mut AsyncV2rayPluginMuxPayloadState,
     mux_id: [u8; 2],
     decoder: &mut Option<AeadStreamCodec>,
-    cipher: &str,
-    password: &str,
-    salt_len: usize,
-) -> Result<Vec<u8>, String>
+    parameters: ShadowsocksAeadResponseParameters<'_>,
+    buffer: &mut [u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE],
+) -> Result<usize, String>
 where
     R: AsyncRead + Unpin,
 {
     let mut reader = AsyncV2rayPluginMuxPayloadReader::new(client, state, mux_id);
-    read_shadowsocks_aead_chunk_from_async_reader(&mut reader, decoder, cipher, password, salt_len)
+    read_shadowsocks_aead_chunk_in_place_from_async_reader(&mut reader, decoder, parameters, buffer)
         .await
 }
 
-async fn read_shadowsocks_aead_chunk_from_async_reader<R>(
+async fn read_shadowsocks_aead_chunk_in_place_from_async_reader<R>(
     reader: &mut R,
     decoder: &mut Option<AeadStreamCodec>,
-    cipher: &str,
-    password: &str,
-    salt_len: usize,
-) -> Result<Vec<u8>, String>
+    parameters: ShadowsocksAeadResponseParameters<'_>,
+    buffer: &mut [u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE],
+) -> Result<usize, String>
 where
     R: AsyncRead + Unpin,
 {
+    let ShadowsocksAeadResponseParameters {
+        cipher,
+        password,
+        salt_len,
+    } = parameters;
     if decoder.is_none() {
         let mut server_salt = vec![0_u8; salt_len];
         reader
@@ -70,7 +82,7 @@ where
     let decoder = decoder
         .as_mut()
         .ok_or_else(|| "missing Shadowsocks response decoder".to_owned())?;
-    read_encrypted_chunk_from_async_stream(reader, decoder)
+    read_encrypted_chunk_in_place_from_async_stream(reader, decoder, buffer)
         .await
         .map_err(|err| format!("read Shadowsocks response chunk: {err}"))
 }

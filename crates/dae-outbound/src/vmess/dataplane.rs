@@ -2,7 +2,7 @@ use std::io::{Cursor, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aes_gcm::aead::{Aead, KeyInit as AeadKeyInit, Payload};
+use aes_gcm::aead::{Aead, AeadInPlace, KeyInit as AeadKeyInit, Payload};
 use aes_gcm::aes::Aes128;
 use aes_gcm::aes::cipher::{
     BlockDecrypt, BlockEncrypt, KeyInit as BlockKeyInit, generic_array::GenericArray,
@@ -49,6 +49,12 @@ const REQUEST_OPTIONS_AEAD: u8 =
     OPTION_CHUNK_STREAM | OPTION_CHUNK_LENGTH_MASKING | OPTION_GLOBAL_PADDING;
 const REQUEST_OPTIONS_NONE: u8 = OPTION_CHUNK_STREAM | OPTION_CHUNK_LENGTH_MASKING;
 const MAX_CHUNK_SIZE: usize = 1 << 14;
+const MAX_CHUNK_AUTHENTICATION_SIZE: usize = 16;
+const MAX_CHUNK_PADDING_SIZE: usize = 63;
+
+pub const VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE: usize =
+    2 + MAX_CHUNK_SIZE + MAX_CHUNK_AUTHENTICATION_SIZE + MAX_CHUNK_PADDING_SIZE;
+pub const VMESS_AEAD_TCP_MAX_PAYLOAD_SIZE: usize = MAX_CHUNK_SIZE;
 
 pub const VMESS_AEAD_SECURITY_AES_128_GCM: u8 = 3;
 pub const VMESS_AEAD_SECURITY_CHACHA20_POLY1305: u8 = 4;

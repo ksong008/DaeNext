@@ -84,7 +84,7 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut uploaded = 0_usize;
-    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut inbound_buf = Box::new([0_u8; SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE]);
     let mut stop_listener = stop.listener();
     loop {
         tokio::select! {
@@ -92,18 +92,18 @@ where
                 let _ = proxy.shutdown().await;
                 break;
             }
-            inbound_read = inbound.read(&mut inbound_buf) => {
+            inbound_read = inbound.read(encoder.chunk_payload_buffer(inbound_buf.as_mut())) => {
                 match inbound_read {
                     Ok(0) => {
                         let _ = proxy.shutdown().await;
                         break;
                     }
                     Ok(read) => {
-                        let encrypted = encoder
-                            .encode_chunk(&inbound_buf[..read])
+                        let wire_len = encoder
+                            .encode_chunk_in_place(inbound_buf.as_mut(), read)
                             .map_err(|err| format!("encrypt Shadowsocks 2022 upload chunk: {err}"))?;
                         proxy
-                            .write_all(&encrypted)
+                            .write_all(&inbound_buf[..wire_len])
                             .await
                             .map_err(|err| format!("write Shadowsocks 2022 upload chunk: {err}"))?;
                         uploaded += read;
@@ -140,6 +140,7 @@ where
 {
     let mut downloaded = 0_usize;
     let mut decoder = None;
+    let mut response_buffer = Vec::with_capacity(SS2022_TCP_RELAY_PAYLOAD_SIZE + 16);
     let mut stop_listener = stop.listener();
     let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
     tokio::pin!(idle_deadline);
@@ -152,6 +153,7 @@ where
                 cipher,
                 password,
                 client_salt,
+                &mut response_buffer,
             ) => match result {
                 Ok(plain) => plain,
                 Err(err) => {
@@ -180,13 +182,16 @@ where
                     metrics.add_download(payload.len());
                 }
             }
-            Shadowsocks2022ProxyPlain::Chunk(plain) => {
-                if !plain.is_empty() {
-                    inbound.write_all(&plain).await.map_err(|err| {
-                        format!("write Shadowsocks 2022 response to inbound: {err}")
-                    })?;
-                    downloaded += plain.len();
-                    metrics.add_download(plain.len());
+            Shadowsocks2022ProxyPlain::Chunk(plain_len) => {
+                if plain_len != 0 {
+                    inbound
+                        .write_all(&response_buffer[..plain_len])
+                        .await
+                        .map_err(|err| {
+                            format!("write Shadowsocks 2022 response to inbound: {err}")
+                        })?;
+                    downloaded += plain_len;
+                    metrics.add_download(plain_len);
                 }
             }
         }
@@ -200,7 +205,7 @@ enum Shadowsocks2022ProxyPlain {
         decoder: Ss2022TcpServerStreamDecoder,
         payload: Vec<u8>,
     },
-    Chunk(Vec<u8>),
+    Chunk(usize),
 }
 
 async fn read_shadowsocks_2022_proxy_plain_async(
@@ -209,10 +214,11 @@ async fn read_shadowsocks_2022_proxy_plain_async(
     cipher: &str,
     password: &str,
     client_salt: &[u8],
+    response_buffer: &mut Vec<u8>,
 ) -> Result<Shadowsocks2022ProxyPlain, String> {
     if let Some(decoder) = decoder.as_mut() {
         return decoder
-            .read_next_chunk_async(proxy)
+            .read_next_chunk_in_place_async(proxy, response_buffer)
             .await
             .map(Shadowsocks2022ProxyPlain::Chunk)
             .map_err(|err| err.to_string());

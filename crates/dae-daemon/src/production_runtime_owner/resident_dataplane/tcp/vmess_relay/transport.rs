@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct VmessTransportRelayPolicy {
+    pub(super) label: &'static str,
+    pub(super) idle_error: &'static str,
+}
+
 pub(super) async fn relay_tcp_over_vmess_stream_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     proxy: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
@@ -7,9 +13,9 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
     session: VMessAeadTcpClientSessionStart,
     stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
-    label: &'static str,
-    idle_error: &'static str,
+    policy: VmessTransportRelayPolicy,
 ) -> Result<DirectTcpRelayStats, String> {
+    let VmessTransportRelayPolicy { label, idle_error } = policy;
     let (progress, activity) = resident_duplex_progress();
     if stats.client_to_direct != 0 {
         progress.record_upload(stats.client_to_direct);
@@ -25,9 +31,12 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
     let upload = async move {
         let mut inbound_read = inbound_read;
         let mut proxy_write = proxy_write;
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = Box::new([0_u8; VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
         loop {
-            let read = match inbound_read.read(&mut buffer).await {
+            let read = match inbound_read
+                .read(upload_codec.chunk_payload_buffer(buffer.as_mut()))
+                .await
+            {
                 Ok(0) => {
                     let _ = proxy_write.shutdown().await;
                     return Ok(());
@@ -39,11 +48,11 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
                 }
                 Err(err) => return Err(format!("read inbound TCP for {label} upload: {err}")),
             };
-            let encrypted = upload_codec
-                .seal_chunk(&buffer[..read])
+            let wire_len = upload_codec
+                .seal_chunk_in_place(buffer.as_mut(), read)
                 .map_err(|err| format!("encode {label} upload chunk: {err}"))?;
             proxy_write
-                .write_all(&encrypted)
+                .write_all(&buffer[..wire_len])
                 .await
                 .map_err(|err| format!("write {label} upload chunk: {err}"))?;
             proxy_write
@@ -78,13 +87,13 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
                     return Err(format!("read {label} response: {message}"));
                 }
             };
-            let chunks = response.push(&buffer[..read])?;
-            for plain in chunks {
+            response.extend_from_slice(&buffer[..read])?;
+            while let Some(plain) = response.next_chunk()? {
                 if plain.is_empty() {
                     continue;
                 }
                 inbound_write
-                    .write_all(&plain)
+                    .write_all(plain)
                     .await
                     .map_err(|err| format!("write {label} response to inbound: {err}"))?;
                 download_progress.record_download(plain.len());
@@ -111,9 +120,9 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
     session: VMessAeadTcpClientSessionStart,
     stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
-    label: &'static str,
-    idle_error: &'static str,
+    policy: VmessTransportRelayPolicy,
 ) -> Result<DirectTcpRelayStats, String> {
+    let VmessTransportRelayPolicy { label, idle_error } = policy;
     let (progress, activity) = resident_duplex_progress();
     if stats.client_to_direct != 0 {
         progress.record_upload(stats.client_to_direct);
@@ -130,7 +139,7 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
     let upload = async move {
         let mut inbound_read = inbound_read;
         let mut proxy_write = proxy_write;
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = Box::new([0_u8; VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
         loop {
             tokio::select! {
                 biased;
@@ -140,32 +149,26 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
                     };
                     write_websocket_control_response(&mut proxy_write, control, label).await?;
                 }
-                read = inbound_read.read(&mut buffer) => {
+                read = inbound_read.read(upload_codec.chunk_payload_buffer(buffer.as_mut())) => {
                     let read = match read {
                         Ok(0) => {
-                            let _ = proxy_write.shutdown().await;
                             return Ok(());
                         }
                         Ok(read) => read,
                         Err(err) if is_graceful_stream_close_error(&err) => {
-                            let _ = proxy_write.shutdown().await;
                             return Ok(());
                         }
                         Err(err) => return Err(format!("read inbound TCP for {label} upload: {err}")),
                     };
-                    let encrypted = upload_codec
-                        .seal_chunk(&buffer[..read])
+                    let wire_len = upload_codec
+                        .seal_chunk_in_place(buffer.as_mut(), read)
                         .map_err(|err| format!("encode {label} upload chunk: {err}"))?;
-                    write_websocket_binary_frame_to_async_stream(
+                    write_websocket_binary_frame_in_place_to_async_stream(
                         &mut proxy_write,
-                        &encrypted,
+                        &mut buffer[..wire_len],
                         "write VMess WebSocket upload frame",
                     )
                     .await?;
-                    proxy_write
-                        .flush()
-                        .await
-                        .map_err(|err| format!("flush {label} upload frame: {err}"))?;
                     upload_progress.record_upload(read);
                     metrics.add_upload(read);
                 }
@@ -177,7 +180,7 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
         let mut inbound_write = inbound_write;
         let mut proxy_read = proxy_read;
         let mut decoder = WebSocketBinaryFrameDecoder::default();
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
         loop {
             let read = match proxy_read.read(&mut buffer).await {
                 Ok(0) if response.response_header_received() => {
@@ -197,23 +200,27 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
                     return Err(format!("read {label} response: {message}"));
                 }
             };
-            let frames = decoder
-                .push(&buffer[..read])
+            decoder
+                .extend(&buffer[..read])
                 .map_err(|err| format!("decode {label} response frame: {err}"))?;
-            queue_websocket_control_responses(&mut decoder, &control_tx, label).await?;
-            for frame in frames {
-                for plain in response.push(&frame)? {
+            while let Some(frame) = decoder
+                .next_message()
+                .map_err(|err| format!("decode {label} response frame: {err}"))?
+            {
+                response.extend_from_slice(frame)?;
+                while let Some(plain) = response.next_chunk()? {
                     if plain.is_empty() {
                         continue;
                     }
                     inbound_write
-                        .write_all(&plain)
+                        .write_all(plain)
                         .await
                         .map_err(|err| format!("write {label} response to inbound: {err}"))?;
                     download_progress.record_download(plain.len());
                     metrics.add_download(plain.len());
                 }
             }
+            queue_websocket_control_responses(&mut decoder, &control_tx, label).await?;
             if decoder.is_closed() {
                 if !response.response_header_received() {
                     return Err(format!("{label} closed before the response header"));

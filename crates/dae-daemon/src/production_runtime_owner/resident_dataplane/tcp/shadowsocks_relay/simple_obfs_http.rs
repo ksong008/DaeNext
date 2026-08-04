@@ -68,12 +68,15 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_http_async(
         progress.record_upload(stats.client_to_direct);
     }
     let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
-    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut inbound_buf = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
     let upload_progress = progress.clone();
     let upload = async move {
         let mut inbound_read = inbound_read;
         loop {
-            let read = match inbound_read.read(&mut inbound_buf).await {
+            let read = match inbound_read
+                .read(encoder.chunk_payload_buffer(inbound_buf.as_mut()))
+                .await
+            {
                 Ok(0) => {
                     let _ = proxy_write.shutdown().await;
                     return Ok(());
@@ -89,11 +92,11 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_http_async(
                     ));
                 }
             };
-            let encrypted = encoder
-                .encrypt_chunk(&inbound_buf[..read])
+            let wire_len = encoder
+                .encrypt_chunk_in_place(inbound_buf.as_mut(), read)
                 .map_err(|err| format!("encrypt Shadowsocks simple-obfs upload chunk: {err}"))?;
             proxy_write
-                .write_all(&encrypted)
+                .write_all(&inbound_buf[..wire_len])
                 .await
                 .map_err(|err| format!("write Shadowsocks simple-obfs upload chunk: {err}"))?;
             upload_progress.record_upload(read);
@@ -103,16 +106,26 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_http_async(
     let download_progress = progress.clone();
     let download = async move {
         let mut inbound_write = inbound_write;
+        let mut buffer = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE]);
         loop {
-            match read_encrypted_chunk_from_async_stream(&mut proxy_reader, &mut decoder).await {
-                Ok(plain) => {
-                    if !plain.is_empty() {
-                        inbound_write.write_all(&plain).await.map_err(|err| {
-                            format!("write Shadowsocks simple-obfs response: {err}")
-                        })?;
-                        metrics.add_download(plain.len());
+            match read_encrypted_chunk_in_place_from_async_stream(
+                &mut proxy_reader,
+                &mut decoder,
+                buffer.as_mut(),
+            )
+            .await
+            {
+                Ok(plain_len) => {
+                    if plain_len != 0 {
+                        inbound_write
+                            .write_all(&buffer[..plain_len])
+                            .await
+                            .map_err(|err| {
+                                format!("write Shadowsocks simple-obfs response: {err}")
+                            })?;
+                        metrics.add_download(plain_len);
                     }
-                    download_progress.record_download(plain.len());
+                    download_progress.record_download(plain_len);
                 }
                 Err(err) => {
                     let message = err.to_string();
