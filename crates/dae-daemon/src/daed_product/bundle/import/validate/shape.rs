@@ -41,9 +41,64 @@ pub(super) fn validate_bundle_shape(body: &Value) -> io::Result<()> {
     validate_selected_id(selected, "routingId", &routing_ids)?;
 
     validate_optional_defaults(root.get("defaults"))?;
+    validate_optional_group_sort_state(root.get("groupSortState"))?;
     references::validate_subscription_fields(subscriptions)?;
     references::validate_node_references(nodes, &subscription_ids)?;
     references::validate_group_references(groups, &node_ids, &subscription_ids)?;
+    Ok(())
+}
+
+fn validate_optional_group_sort_state(state: Option<&Value>) -> io::Result<()> {
+    let Some(state) = state else {
+        return Ok(());
+    };
+    if state.is_null() {
+        return Ok(());
+    }
+
+    let state = required_object(state, "bundle groupSortState")?;
+    if state.get("version").and_then(Value::as_i64) != Some(1) {
+        return invalid("bundle groupSortState.version must be 1");
+    }
+    validate_sort_id_array(
+        state.get("groupSortableKeys"),
+        "bundle groupSortState.groupSortableKeys",
+    )?;
+
+    let orders = state
+        .get("groupSortOrders")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid_error("bundle groupSortState.groupSortOrders must be an object"))?;
+    for (group_id, order) in orders {
+        let order = required_object(
+            order,
+            &format!("bundle groupSortState.groupSortOrders[{group_id}]"),
+        )?;
+        validate_sort_id_array(
+            order.get("nodes"),
+            &format!("bundle groupSortState.groupSortOrders[{group_id}].nodes"),
+        )?;
+        validate_sort_id_array(
+            order.get("subscriptions"),
+            &format!("bundle groupSortState.groupSortOrders[{group_id}].subscriptions"),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_sort_id_array(value: Option<&Value>, scope: &str) -> io::Result<()> {
+    let values = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_error(&format!("{scope} must be an array")))?;
+    let mut seen = HashSet::new();
+    for value in values {
+        let value = value
+            .as_str()
+            .ok_or_else(|| invalid_error(&format!("{scope} values must be strings")))?;
+        if !seen.insert(value) {
+            return invalid(&format!("{scope} contains duplicate id {value}"));
+        }
+    }
     Ok(())
 }
 

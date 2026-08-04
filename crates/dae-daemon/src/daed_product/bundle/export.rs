@@ -28,7 +28,16 @@ pub(in crate::daed_product) fn export_bundle(state: &Path, user: &UserRecord) ->
         "subscriptions": bundle_subscriptions(&conn)?,
         "nodes": bundle_nodes(&conn)?,
         "groups": bundle_groups(&conn)?,
+        "groupSortState": exported_group_sort_state(&storage),
     }))
+}
+
+fn exported_group_sort_state(storage: &Value) -> Value {
+    storage
+        .get("groupSortStateV1")
+        .and_then(Value::as_str)
+        .and_then(|value| serde_json::from_str(value).ok())
+        .unwrap_or(Value::Null)
 }
 
 fn bundle_sections(conn: &Connection, kind: SectionKind) -> io::Result<Vec<Value>> {
